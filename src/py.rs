@@ -1,7 +1,8 @@
 //! The Python behaviors the scripts' output depends on, so the port stays byte-compatible:
 //! json.dumps (both styles, ensure_ascii), float repr/round, str methods, shlex/html/url quoting,
 //! subprocess.run with a timeout, the wall clock (GREENLIGHT_NOW), and the three ways a script dies.
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -284,6 +285,77 @@ extern "C" {
     pub fn kill(pid: i32, sig: i32) -> i32;
     pub fn killpg(pgrp: i32, sig: i32) -> i32;
     pub fn setsid() -> i32;
+}
+
+// ---- Python-style access to decoded JSON, so a malformed reply fails with the scripts' error text ----
+
+pub static NULL: Value = Value::Null;
+
+pub fn tname(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(n) if n.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+/// v[k]
+pub fn ix<'a>(v: &'a Value, k: &str) -> Res<&'a Value> {
+    match v {
+        Value::Object(m) => m.get(k).map_or_else(|| key_err(k), Ok),
+        Value::String(_) => raise("TypeError", "string indices must be integers, not 'str'"),
+        Value::Array(_) => raise("TypeError", "list indices must be integers or slices, not str"),
+        _ => raise("TypeError", format!("'{}' object is not subscriptable", tname(v))),
+    }
+}
+/// v[i] on a list (negative counts from the end)
+pub fn at(v: &Value, i: isize) -> Res<&Value> {
+    match v {
+        Value::Array(a) => {
+            let j = if i < 0 { a.len() as isize + i } else { i };
+            usize::try_from(j).ok().and_then(|j| a.get(j)).map_or_else(|| raise("IndexError", "list index out of range"), Ok)
+        }
+        Value::Object(_) => raise("KeyError", i.to_string()),
+        _ => raise("TypeError", format!("'{}' object is not subscriptable", tname(v))),
+    }
+}
+/// v.get(k). ponytail: a non-dict reads as None here, where Python raises AttributeError.
+pub fn g<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&NULL)
+}
+/// v.get(k, default)
+pub fn gd(v: &Value, k: &str, d: Value) -> Value {
+    v.get(k).cloned().unwrap_or(d)
+}
+/// `a or b`
+pub fn or<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
+    if truthy(a) { a } else { b }
+}
+/// iter(v): a list's items, a dict's keys, a str's chars.
+pub fn it(v: &Value) -> Res<Vec<Value>> {
+    match v {
+        Value::Array(a) => Ok(a.clone()),
+        Value::Object(m) => Ok(m.keys().map(|k| json!(k)).collect()),
+        Value::String(s) => Ok(s.chars().map(|c| json!(c.to_string())).collect()),
+        _ => raise("TypeError", format!("'{}' object is not iterable", tname(v))),
+    }
+}
+/// Sort key compare for `x or 0` keys (numbers, or ISO strings).
+pub fn cmp_key(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        _ => a.as_f64().unwrap_or(0.0).partial_cmp(&b.as_f64().unwrap_or(0.0)).unwrap_or(Ordering::Equal),
+    }
+}
+/// An io error as Python's OSError str(): `[Errno 2] No such file or directory: '<path>'`.
+pub fn oserr<T>(e: std::io::Error, p: &Path) -> Res<T> {
+    let msg = e.to_string();
+    let msg = msg.split(" (os error").next().unwrap_or(&msg);
+    let kind = if e.kind() == std::io::ErrorKind::NotFound { "FileNotFoundError" } else { "OSError" };
+    raise(kind, format!("[Errno {}] {msg}: {}", e.raw_os_error().unwrap_or(0), repr_str(&p.display().to_string())))
 }
 
 // ---- str methods ----

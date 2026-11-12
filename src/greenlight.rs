@@ -1,87 +1,16 @@
 //! Port of scripts/greenlight.py (lines 178-906; the top of the file is base.rs).
 use crate::base::{self, cfg, me, orca, orca_s, pid, ref_, OWNERS, ROOT, STATE};
-use crate::py::{self, truthy, PyErr, Res};
+use crate::py::{self, at, cmp_key, g, gd, ix, it, or, oserr, truthy, PyErr, Res, NULL};
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-// ---- Python-style access to decoded JSON, so a malformed reply fails with the scripts' error text ----
-
-static NULL: Value = Value::Null;
-
-fn tname(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(n) if n.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
-}
-/// v[k]
-fn ix<'a>(v: &'a Value, k: &str) -> Res<&'a Value> {
-    match v {
-        Value::Object(m) => m.get(k).map_or_else(|| py::key_err(k), Ok),
-        Value::String(_) => py::raise("TypeError", "string indices must be integers, not 'str'"),
-        Value::Array(_) => py::raise("TypeError", "list indices must be integers or slices, not str"),
-        _ => py::raise("TypeError", format!("'{}' object is not subscriptable", tname(v))),
-    }
-}
-/// v[i] on a list (negative counts from the end)
-fn at(v: &Value, i: isize) -> Res<&Value> {
-    match v {
-        Value::Array(a) => {
-            let j = if i < 0 { a.len() as isize + i } else { i };
-            usize::try_from(j).ok().and_then(|j| a.get(j)).map_or_else(|| py::raise("IndexError", "list index out of range"), Ok)
-        }
-        Value::Object(_) => py::raise("KeyError", i.to_string()),
-        _ => py::raise("TypeError", format!("'{}' object is not subscriptable", tname(v))),
-    }
-}
-/// v.get(k). ponytail: a non-dict reads as None here, where Python raises AttributeError.
-fn g<'a>(v: &'a Value, k: &str) -> &'a Value {
-    v.get(k).unwrap_or(&NULL)
-}
-/// v.get(k, default)
-fn gd(v: &Value, k: &str, d: Value) -> Value {
-    v.get(k).cloned().unwrap_or(d)
-}
-/// `a or b`
-fn or<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
-    if truthy(a) { a } else { b }
-}
-/// iter(v): a list's items, a dict's keys, a str's chars.
-fn it(v: &Value) -> Res<Vec<Value>> {
-    match v {
-        Value::Array(a) => Ok(a.clone()),
-        Value::Object(m) => Ok(m.keys().map(|k| json!(k)).collect()),
-        Value::String(s) => Ok(s.chars().map(|c| json!(c.to_string())).collect()),
-        _ => py::raise("TypeError", format!("'{}' object is not iterable", tname(v))),
-    }
-}
 /// `u.get("login") or u["username"]`: the forge handle (GitHub users carry both).
 fn login(u: &Value) -> Res<Value> {
     Ok(if truthy(g(u, "login")) { u["login"].clone() } else { ix(u, "username")?.clone() })
-}
-/// Sort key compare for `x or 0` keys (numbers, or ISO strings).
-fn cmp_key(a: &Value, b: &Value) -> Ordering {
-    match (a, b) {
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        _ => a.as_f64().unwrap_or(0.0).partial_cmp(&b.as_f64().unwrap_or(0.0)).unwrap_or(Ordering::Equal),
-    }
-}
-/// An io error as Python's OSError str(): `[Errno 2] No such file or directory: '<path>'`.
-fn oserr<T>(e: std::io::Error, p: &Path) -> Res<T> {
-    let msg = e.to_string();
-    let msg = msg.split(" (os error").next().unwrap_or(&msg);
-    let kind = if e.kind() == std::io::ErrorKind::NotFound { "FileNotFoundError" } else { "OSError" };
-    py::raise(kind, format!("[Errno {}] {msg}: {}", e.raw_os_error().unwrap_or(0), py::repr_str(&p.display().to_string())))
 }
 fn read(p: &Path) -> Res<String> {
     std::fs::read_to_string(p).or_else(|e| oserr(e, p))
