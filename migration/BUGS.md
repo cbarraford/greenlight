@@ -18,3 +18,4 @@ replaces those crashes with a clean error.
 | auto-exec-missing-name | `auto exec <unknown>` crashed with KeyError `'nope'` | `Error: nope: no such automation` | lifecycle.md §7.5 |
 | auto-malformed-json | a corrupt automations.json crashed with JSONDecodeError text only | `Error: <path>/automations.json: <parse error>` names the file | lifecycle.md §3 |
 | auto-runs-blank-line | a blank/corrupt runs.jsonl line crashed with JSONDecodeError text only | `Error: <path>/auto/runs.jsonl line N: <parse error>` | lifecycle.md §7.25 |
+| (none; output unchanged) | chat send/compact read the agent's stderr only after exit: >64 KB of stderr deadlocked the turn | stderr drained in a thread | backends.md §8.1 |

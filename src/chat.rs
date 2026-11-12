@@ -432,6 +432,12 @@ fn run(cmd: &[String], engine: &str, text: &str, norm: &mut Norm, check: bool) -
         Err(e) => return py::raise("OSError", format!("{}: {}", oserr(&e), py::repr_str(&cmd[0]))),
     };
     let pid = p.id() as i32;
+    // drained alongside stdout: a child writing >64 KB of stderr no longer deadlocks the turn (BUGS.md)
+    let errt = p.stderr.take().map(|mut e| std::thread::spawn(move || {
+        let mut b = vec![];
+        let _ = e.read_to_end(&mut b);
+        b
+    }));
     std::fs::write(pidfile(), pid.to_string())?;
     {
         let mut w = p.stdin.take().unwrap();
@@ -503,9 +509,7 @@ fn run(cmd: &[String], engine: &str, text: &str, norm: &mut Norm, check: bool) -
         if rc == -15 || rc == 143 {
             return Ok((sid, Some("Stopped".into()))); // SIGTERM from `chat stop`
         }
-        // ponytail: stderr is read after wait, as Python does (backends.md §8.1: a >64 KB stderr deadlocks)
-        let mut err = vec![];
-        p.stderr.take().unwrap().read_to_end(&mut err)?;
+        let err = errt.and_then(|t| t.join().ok()).unwrap_or_default();
         let err = String::from_utf8_lossy(&err).replace("\r\n", "\n").replace('\r', "\n");
         let err = py::strip(&err);
         return Ok((sid, Some(if err.is_empty() { format!("exit {rc}") } else { err.to_string() })));
