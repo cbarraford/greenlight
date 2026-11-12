@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> Expecting value: line 1 column 1 (char 0)
+<error> <W>/home/last.json: not JSON (expected value at line 1 column 1)
 --- calls
 glab api projects/acme%2Ftools/merge_requests/6
 glab api projects/acme%2Ftools/merge_requests/6/approvals
