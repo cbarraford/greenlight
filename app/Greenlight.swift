@@ -1,7 +1,7 @@
 // Greenlight: menubar chat with greenlight (on this Mac or an ssh host), live activity while it works, replyable notifications.
 // Chat: `chat.py send|compact|new|stop` streams JSON events (see chat.py's Norm).
 // Pings: greenlight appends JSON lines to <greenlightHome>/outbox.jsonl (`greenlight.py ping`); we tail it.
-// Where greenlight runs, set once with `defaults write <bundle id> <key> <value>` (read at launch):
+// Where greenlight runs: Settings › Hosts (or `defaults write <bundle id> <key> <value>`), read at launch:
 //   host       "local" (default) runs greenlight's Python here; anything else is an ssh host (GREENLIGHT_HOST overrides)
 //   greenlightHome  greenlight's state dir on that host (default ~/.greenlight)
 //   greenlightCode  where greenlight's *.py live there (default ~/.claude/skills/greenlight)
@@ -747,6 +747,27 @@ final class Core: ObservableObject {
     @Published var animations = ud.object(forKey: "animations") as? Bool ?? true { didSet { ud.set(animations, forKey: "animations") } }
     @Published var localName = ud.string(forKey: "localName") ?? "" { didSet { ud.set(localName, forKey: "localName") } }  // empty: this Mac's hostname
     var localShown: String { localName.trimmingCharacters(in: .whitespaces).isEmpty ? localDefault : localName.trimmingCharacters(in: .whitespaces) }
+    // Settings › Hosts: where greenlight runs. The globals host/greenlightHome/greenlightCode read these at launch, so a change asks for a relaunch.
+    @Published var runHost = ud.string(forKey: "host") ?? "local" { didSet { ud.set(runHost, forKey: "host"); hostCheck = "" } }
+    @Published var runHome = ud.string(forKey: "greenlightHome") ?? "" { didSet { runHome.isEmpty ? ud.removeObject(forKey: "greenlightHome") : ud.set(runHome, forKey: "greenlightHome"); hostCheck = "" } }  // empty: ~/.greenlight
+    @Published var runCode = ud.string(forKey: "greenlightCode") ?? "" { didSet { runCode.isEmpty ? ud.removeObject(forKey: "greenlightCode") : ud.set(runCode, forKey: "greenlightCode"); hostCheck = "" } }  // empty: ~/.claude/skills/greenlight
+    @Published var hostCheck = ""
+    var hostPending: Bool { ProcessInfo.processInfo.environment["GREENLIGHT_HOST"] == nil && runHost != host
+        || (runHome.isEmpty ? "~/.greenlight" : runHome) != greenlightHome || (runCode.isEmpty ? "~/.claude/skills/greenlight" : runCode) != greenlightCode }
+    /// Test: ssh in (or a shell here) and look for greenlight.py and python3 at the settings' paths.
+    func testHost() {
+        let h = runHost, code = runCode.isEmpty ? "~/.claude/skills/greenlight" : runCode
+        var out = ""
+        hostCheck = "Checking \(h)…"
+        ssh("command -v python3 >/dev/null || { echo nopy; exit 3; }; test -f \(code)/scripts/greenlight.py && echo ok", on: h, onLine: { out = $0 }) { [weak self] rc in
+            self?.hostCheck = out == "ok" ? "✓ \(h) is ready: greenlight is at \(code)." : out == "nopy" ? "✗ \(h) has no python3."
+                : rc == 255 || rc == -1 ? "✗ Can't reach \(h) over ssh (BatchMode: it needs key auth)." : "✗ \(h) has no \(code)/scripts/greenlight.py. Clone the repo there."
+        }
+    }
+    func relaunch() {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh"); p.arguments = ["-c", "sleep 1; open \"$0\"", Bundle.main.bundlePath]
+        try? p.run(); NSApp.terminate(nil)
+    }
     @Published var sidebarSlide = ud.object(forKey: "sidebarSlide") as? Double ?? 0.25 { didSet { ud.set(sidebarSlide, forKey: "sidebarSlide") } }  // seconds; 0: no slide
     @Published var orbStyle = ud.string(forKey: "orbStyle") ?? "matte" { didSet { ud.set(orbStyle, forKey: "orbStyle") } }  // the up face: "matte" or "light" (the traffic light)
     @Published var dockIcon = ud.string(forKey: "dockIcon") ?? "Orb" { didSet { ud.set(dockIcon, forKey: "dockIcon"); showDockIcon() } }  // Orb (the bundle's), MergeLight, ThreeFloors: brand/icons/*.icns
@@ -1530,7 +1551,7 @@ struct SettingsWindowView: View {
 struct SettingsView: View {
     @ObservedObject var c: Core
     @StateObject var rs = RulesStore()
-    static let tabs = [("General", "gearshape"), ("Appearance", "paintpalette"), ("Model", "bubble.left"), ("Terminal", "terminal"), ("Keyboard", "keyboard"),
+    static let tabs = [("General", "gearshape"), ("Hosts", "server.rack"), ("Appearance", "paintpalette"), ("Model", "bubble.left"), ("Terminal", "terminal"), ("Keyboard", "keyboard"),
                        ("Dashboard", "square.grid.2x2"), ("Repositories", "arrow.triangle.branch"), ("Memory", "brain")]
 
     var body: some View {
@@ -1571,6 +1592,7 @@ struct SettingsView: View {
                             switch c.settingsTab {
                             case "Appearance": appearanceTop; section("Preview") { preview }; appearanceRest  // narrow: right under Mode, in view while choosing
                             case "General": general
+                            case "Hosts": hosts
                             case "Terminal": terminal
                             case "Keyboard": keyboard
                             case "Dashboard": fluid
@@ -1651,12 +1673,42 @@ struct SettingsView: View {
         }.buttonStyle(.plain).accessibilityLabel("\(name) Dock icon\(on ? ", selected" : "")")
     }
 
-    @ViewBuilder var terminal: some View {
-        heading("Terminal", "The Basement's tabs. Which floor the app opens to, and the floating orbs, are in General.")
-        section("Hosts") {
+    @ViewBuilder var hosts: some View {
+        let ssh = sshHosts(), env = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"]
+        heading("Hosts", "Where Greenlight runs your agents and workspaces, and the machines the Basement can open shells on.")
+        section("Greenlight runs on") {
+            row("Host") {
+                Picker("Host", selection: $c.runHost) {
+                    Text("This Mac").tag("local")
+                    ForEach(ssh + (c.runHost == "local" || ssh.contains(c.runHost) ? [] : [c.runHost]), id: \.self) { Text($0).tag($0) }
+                }.labelsHidden().frame(width: menuWidth)
+            }
+            row("State") { TextField("~/.greenlight", text: $c.runHome).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
+            row("Code") { TextField("~/.claude/skills/greenlight", text: $c.runCode).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
+            note("Paths are on that host. Its workspaces, agents, automation timer and chat all live there; this Mac only shows them. An ssh host needs key auth (BatchMode).")
+                .padding(.leading, 110 + Theme.sp3)
+            HStack(spacing: Theme.sp2) {
+                Button("Test") { c.testHost() }
+                if c.hostPending { Button("Relaunch to apply") { c.relaunch() }.keyboardShortcut(.defaultAction) }
+            }.padding(.leading, 110 + Theme.sp3)
+            if !c.hostCheck.isEmpty { note(c.hostCheck).padding(.leading, 110 + Theme.sp3) }
+            if let env { note("GREENLIGHT_HOST=\(env) is set, and it wins over this setting.").padding(.leading, 110 + Theme.sp3) }
+        }
+        section("The Basement's hosts") {
             row("This Mac's name") { TextField(localDefault, text: $c.localName).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
             note("What the Basement's Hosts call this Mac. Empty: its hostname, \(localDefault). Also: right-click it in the sidebar, Rename.")
+            row("From ssh config") {
+                Text(ssh.isEmpty ? "None" : ssh.joined(separator: ", ")).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: Theme.sp2) {
+                Button("Edit ~/.ssh/config") { _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-t", NSHomeDirectory() + "/.ssh/config"]) }
+            }.padding(.leading, 110 + Theme.sp3)
+            note("Every Host in ~/.ssh/config (minus wildcards, git hosts and -ts twins) is a Hosts row in the Basement, and a choice above. A new one shows after a relaunch.")
         }
+    }
+
+    @ViewBuilder var terminal: some View {
+        heading("Terminal", "The Basement's tabs. Hosts, and which floor the app opens to, have their own pages (Hosts, General).")
         section("Tab names") {
             toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
             row("Naming model") { Picker("Naming model", selection: $c.termNameModel) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth) }
@@ -1819,7 +1871,7 @@ struct SettingsView: View {
             }.frame(maxWidth: 420, alignment: .leading)
         }
         shortcuts("In the app", nil, [("New window", "⌘N"), ("Settings", "⌘,"), ("Show/hide chat", "⇧⌘C"),
-                               ("Show/hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R")])
+                               ("Show/hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R"), ("Up or down a floor (B2 → B1 → L1)", "⌘↑|⌘↓")])
         shortcuts("While typing in the chat", nil, [("Search chat history", "⌃R"), ("Previous or next sent message", "↑|↓"), ("New line", "⇧↩")])
         shortcuts("In any app", nil, [("Show/hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
     }
@@ -2707,6 +2759,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = esc ? "\u{1b}" : m == .control ? "^" + (e.charactersIgnoringModifiers ?? "") : e.characters ?? ""
             return self.greenlight.vimKeys.key(k, tv) ? nil : e
         }
+        floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
+            guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+                  e.keyCode == kVK_UpArrow || e.keyCode == kVK_DownArrow,
+                  let w = e.window, let f = self.floorGo[ObjectIdentifier(w)] else { return e }
+            let order = Floors.levels.map(\.0), n = order.count, i = order.firstIndex(of: f.0.at) ?? 0
+            f.1(order[(i + (e.keyCode == kVK_UpArrow ? n - 1 : 1)) % n])
+            return nil
+        }
         hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
@@ -2810,8 +2870,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.minSize = NSSize(width: 480, height: 520)
         w.animationBehavior = greenlight.animations ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
-        floorBar(w, Floors(s: l1Floor, light: true, pick: { [unowned self] in l1Pick() }) { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
-            wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) })
+        let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) }
+        floorGo[ObjectIdentifier(w)] = (l1Floor, go)
+        floorBar(w, Floors(s: l1Floor, light: true, pick: { [unowned self] in l1Pick() }, go: go))
         let root = NSView()  // the dashboard and its overlays, left of the chat
         for v in [fluid, inboxHost] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -3218,6 +3280,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var termWins = [Int: NSWindow]()
     var wantFloor: String?  // the floor Greenlight's indicator asked for, if the terminal page wasn't loaded yet
     var floors = [Int: FloorState]()  // each terminal window's floor indicator
+    var floorGo = [ObjectIdentifier: (FloorState, (String) -> Void)]()  // every window with floors (L1's too): where it is, how it rides; ⌘↑/⌘↓ use it
     lazy var termWindow: NSWindow = makeTermWindow(0, only: ud.array(forKey: "termOnly0") as? [String])  // the orb's window shows all projects unless you narrowed it
     var termWebs: [WKWebView] { termWins.values.compactMap { $0.contentView as? WKWebView } }
     func termId(_ web: WKWebView?) -> Int? { termWins.first { $0.value.contentView === web }?.key }
@@ -3261,9 +3324,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.setFrameAutosaveName(name)
         termWins[id] = w
         let fs = FloorState(); floors[id] = fs
-        floorBar(w, Floors(s: fs, light: false, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }) { [unowned self, weak web] f in
+        let go: (String) -> Void = { [unowned self, weak web] f in
             if f != "greenlight" { web?.evaluateJavaScript("term.opens('\(f)')") } else if id == 0 { appGoUp() } else { show() }
-        })
+        }
+        floorGo[ObjectIdentifier(w)] = (fs, go)
+        floorBar(w, Floors(s: fs, light: false, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }, go: go))
         loadTerm(web, only: only)
         return w
     }
@@ -3294,7 +3359,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop() }
-            self.termWins[wid] = nil; self.floors[wid] = nil
+            self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
             web.configuration.userContentController.removeScriptMessageHandler(forName: "term")  // it holds the app, not the page, but the page would linger
@@ -3781,7 +3846,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
     var capture: Any?
-    var vimMonitor: Any?, orbMonitor: Any?
+    var vimMonitor: Any?, orbMonitor: Any?, floorMonitor: Any?
     @objc func setShortcut() {
         show()
         greenlight.hint = "Press the new voice shortcut, with ⌃, ⌥ or ⌘ (Esc cancels)"
