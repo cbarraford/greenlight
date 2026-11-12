@@ -536,8 +536,7 @@ pub fn main(args: Vec<String>) -> Res<i32> {
             return Ok(0);
         } else if a.len() > 2 && "--json".starts_with(a.as_str()) {
             json_ = true;
-        } else if let Some(v) = a.strip_prefix("--j").filter(|_| a.contains('=') && "--json".starts_with(a.split('=').next().unwrap())) {
-            let _ = v;
+        } else if a.starts_with("--j") && a.contains('=') && "--json".starts_with(a.split('=').next().unwrap()) {
             py::argparse_exit("cleanup", &format!("argument --json: ignored explicit argument '{}'", a.split_once('=').unwrap().1));
         } else if a.starts_with('-') || cmd_.is_some() {
             bad.push(a.as_str());
