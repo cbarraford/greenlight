@@ -179,6 +179,15 @@ final class RulesStore: ObservableObject {
     @Published var autoOn = [String: Int]()
     @Published var status = ""
     @Published var busy = false
+    @Published var repoPaths = [String: String]()  // repo → its path in orca, under its name in Repositories
+    // Settings' own UI state: the sidebar's search, the open project and repo tab, the add forms' drafts
+    @Published var q = ""
+    @Published var proj = ""
+    @Published var rtab = "stages"
+    @Published var adding = false
+    @Published var draftRepo = ""
+    @Published var draftProj = ""
+    @Published var draftDir = ""
     var loaded = false
 
     func call(_ op: String, _ arg: String, _ stdin: String = "", _ done: @escaping ([String: Any]) -> Void) {
@@ -194,7 +203,9 @@ final class RulesStore: ObservableObject {
         if loaded { return }
         loaded = true
         call("repos", "-") { j in
-            let names = ((j["repos"] as? [[String: Any]]) ?? []).compactMap { ($0["path"] as? String)?.split(separator: "/").last.map(String.init) }
+            let paths = ((j["repos"] as? [[String: Any]]) ?? []).compactMap { $0["path"] as? String }
+            let names = paths.compactMap { $0.split(separator: "/").last.map(String.init) }
+            self.repoPaths = Dictionary(zip(names, paths), uniquingKeysWith: { a, _ in a })
             self.repos = Array(Set(names + (self.repo.isEmpty ? [] : [self.repo]))).sorted()
             if self.repo.isEmpty, let r = self.repos.first { self.pick(r) }
         }
@@ -244,176 +255,6 @@ final class RulesStore: ObservableObject {
     }
     func saveNote() { call("memory-set", note, noteText) { self.gotNotes($0); self.status = "Saved \(self.note)." } }
     func deleteNote() { let n = note; call("memory-delete", n) { self.gotNotes($0); self.status = "Deleted \(n)." } }
-}
-
-extension SettingsView {
-    /// A multi-line field in the settings' own surface.
-    func editor(_ t: Binding<String>, _ label: String, height: CGFloat = 120) -> some View {
-        TextEditor(text: t).font(sys(size: Theme.fs2, design: .monospaced)).scrollContentBackground(.hidden).padding(Theme.sp2)
-            .frame(minHeight: height).background(RoundedRectangle(cornerRadius: Theme.r1).fill(card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge)).accessibilityLabel(label)
-    }
-
-    func saveRow(_ save: @escaping () -> Void, @ViewBuilder more: () -> some View = { EmptyView() }) -> some View {
-        HStack(spacing: Theme.sp3) {
-            Button("Save", action: save).keyboardShortcut("s").disabled(rs.busy)
-            more()
-            if rs.busy { ProgressView().controlSize(.small) }
-            note(rs.status)
-            Spacer(minLength: 0)
-        }
-    }
-
-    @ViewBuilder var instructionsSection: some View {
-        section("Instructions") {
-            note("Standing instructions for greenlight, in the chat and on every run: how to talk to you, what to never do, what to always check.")
-            editor($rs.instructions, "Instructions for greenlight")
-            saveRow(rs.saveInstructions)
-        }.onAppear { rs.load() }
-    }
-
-    func optBinding(_ k: String) -> Binding<Bool> {
-        Binding(get: { rs.options[k] != nil }, set: { v in if v { rs.options[k] = "" } else { rs.options[k] = nil } })
-    }
-
-    @ViewBuilder var repositories: some View {
-        heading("Repositories", "Each repo's lifecycle: the stages an MR goes through from open to merge, the rules greenlight holds its agents to, and the prompts behind the hover card's buttons.")
-        row("Repository") {
-            Picker("Repository", selection: Binding(get: { rs.repo }, set: { rs.pick($0) })) { ForEach(rs.repos, id: \.self) { Text($0).tag($0) } }
-                .labelsHidden().frame(width: menuWidth)
-        }
-        if !rs.source.isEmpty {
-            let own = rs.source == "yours"
-            HStack(spacing: Theme.sp2) {
-                Image(systemName: "doc.text").foregroundColor(own ? accent : dim)
-                note(own ? "Your own lifecycle: ~/.greenlight/lifecycles/\(rs.repo).md on \(host)." : "Using the \(rs.source) lifecycle. Saving makes it your own for \(rs.repo).")
-                Spacer(minLength: 0)
-            }.padding(Theme.sp3).background(RoundedRectangle(cornerRadius: Theme.r2).fill(own ? accent.opacity(0.12) : line.opacity(0.5)))
-        }
-        section("Auto-run") {
-            note("Greenlight runs these on its own in the MR's workspace when the condition is met: a tab with a bolt that doesn't take focus, titled like the hover card's button, closed once the job is gone. You get a notification when it's done or needs you. Never on a goal with (hold), don't merge, (parked) or (automation); once per head commit; one job at a time per workspace, never beside a tab already on that job.")
-            ForEach(rs.autoKinds, id: \.kind) { k in
-                toggleRow(RulesStore.kinds.first { $0.0 == k.kind }?.1 ?? k.kind.capitalized, k.when, Binding(get: { rs.autoOn[k.kind] != nil }, set: { rs.setAuto(k.kind, $0 ? 0 : nil) }))
-                if let g = rs.autoOn[k.kind], !k.gates.isEmpty {
-                    row("Then") {
-                        Picker("Then", selection: Binding(get: { g }, set: { rs.setAuto(k.kind, $0) })) { ForEach(k.gates.indices, id: \.self) { Text(k.gates[$0]).tag($0) } }
-                            .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    }
-                }
-            }
-        }
-        section("Stages") {
-            note("In order; the first one that isn't met is the MR's next step. Built-in stages greenlight checks itself. Your own pass on a label (the agent adds it once the requirement is met) or on your sign-off (greenlight asks once per MR).")
-            ForEach(rs.stages.indices, id: \.self) { i in stageRow(i) }
-            Menu("Add stage") {
-                ForEach(rs.builtins.keys.sorted().filter { k in !rs.stages.contains { $0.key == k } }, id: \.self) { k in
-                    Button(k) { rs.stages.insert(Stage(key: k, req: rs.builtins[k] ?? "", done: ""), at: max(0, rs.stages.count - 1)) }
-                }
-                Divider()
-                Button("Your own…") { rs.stages.insert(Stage(key: "stage\(rs.stages.count + 1)", req: "", done: "signoff"), at: max(0, rs.stages.count - 1)) }
-            }.fixedSize()
-        }
-        section("Options") {
-            toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
-            toggleRow("Merge into any branch", "Greenlight may merge an MR whose target isn't the default branch.", optBinding("merge_any_base"))
-        }
-        section("Rules") {
-            note("Requirements every agent on this repo is told to follow, e.g. \"every fix comes with a test\". Markdown.")
-            editor($rs.rules, "Rules for \(rs.repo)")
-        }
-        saveRow(rs.save) { Button("Use default", action: rs.reset).disabled(rs.busy || rs.source != "yours") }
-            .onAppear { rs.load(); takeRepo() }.onChange(of: c.settingsRepo) { takeRepo() }
-        section("Prompts") {
-            Picker("Button", selection: Binding(get: { rs.kind }, set: { rs.kind = $0; rs.getPrompt() })) {
-                ForEach(RulesStore.kinds, id: \.0) { Text($0.1).tag($0.0) }
-            }.pickerStyle(.segmented).labelsHidden().fixedSize()
-            note("What the hover card's \(RulesStore.kinds.first { $0.0 == rs.kind }?.1 ?? "") button hands Claude. Private to you: ~/.greenlight/prompts/\(rs.repo)/\(rs.kind).md on \(host), never in the repo. Filled in: \(rs.reviewVars.joined(separator: " ")); {default} pulls in the default.")
-            Picker("Prompt", selection: Binding(get: { rs.reviewOwn }, set: { rs.reviewOwn = $0; if $0 && rs.review.isEmpty { rs.review = "{default}\n\n" } })) {
-                Text("Your own").tag(true); Text("Default").tag(false)
-            }.pickerStyle(.segmented).labelsHidden().fixedSize()
-            if rs.reviewOwn { editor($rs.review, "\(rs.kind) prompt for \(rs.repo)", height: 220) }
-            else {
-                ScrollView { Text(rs.reviewDefault).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(sub).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                    .padding(Theme.sp2).frame(height: 220).background(RoundedRectangle(cornerRadius: Theme.r1).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge))
-            }
-            HStack { Button("Save prompt", action: rs.saveReview).disabled(rs.busy); Spacer(minLength: 0) }  // ponytail: not saveRow, its ⌘S belongs to the lifecycle
-        }
-    }
-
-    func takeRepo() {  // "repo" or "repo/kind": the card's "Edit <repo>'s prompt…"
-        let p = c.settingsRepo.split(separator: "/").map(String.init); if p.isEmpty { return }
-        if p.count > 1, RulesStore.kinds.contains(where: { $0.0 == p[1] }) { rs.kind = p[1] }
-        rs.pick(p[0]); c.settingsRepo = ""
-    }
-
-    func stageRow(_ i: Int) -> some View {
-        let s = $rs.stages[i], builtin = rs.builtins[rs.stages[i].key] != nil
-        return HStack(alignment: .top, spacing: Theme.sp2) {
-            Text("\(i + 1)").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
-            VStack(alignment: .leading, spacing: Theme.sp1) {
-                if builtin { Text(rs.stages[i].key).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
-                else { TextField("key", text: s.key).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
-                TextField("Requirement", text: s.req).accessibilityLabel("Stage \(i + 1) requirement")
-                if !builtin {
-                    HStack(spacing: Theme.sp2) {
-                        Picker("Done when", selection: Binding(get: { s.wrappedValue.done.hasPrefix("label=") ? "label" : "signoff" },
-                                                               set: { s.wrappedValue.done = $0 == "label" ? "label=" : "signoff" })) {
-                            Text("You sign off").tag("signoff"); Text("It has a label").tag("label")
-                        }.labelsHidden().frame(width: 150)
-                        if s.wrappedValue.done.hasPrefix("label=") {
-                            TextField("label", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "label=" + $0 }))
-                                .frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
-                        }
-                    }
-                }
-            }
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Button { rs.stages.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
-                    Button { rs.stages.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }.disabled(i == rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
-                    Button { rs.stages.remove(at: i) } label: { Image(systemName: "minus.circle") }.disabled(rs.stages.count == 1).accessibilityLabel("Remove stage \(i + 1)")
-                }.buttonStyle(.borderless).frame(height: 24)
-            }
-        }.padding(Theme.sp2).background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface))  // a row inside the Stages card
-    }
-
-    @ViewBuilder var memory: some View {
-        heading("Memory", "What greenlight has learned: decisions you've made and corrections you've given, one note each. Greenlight reads them before every run.")
-        HStack(alignment: .top, spacing: Theme.sp3) {
-            VStack(alignment: .leading, spacing: 1) {  // the notes, picked from a list beside the editor
-                HStack {
-                    Text("\(rs.notes.count) notes").font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(sub)
-                    Spacer()
-                    Button("New note…") { rs.note = ""; rs.noteText = "---\nname: \ndescription: \nmetadata:\n  type: project\n---\n\n" }
-                }.padding(.bottom, Theme.sp2)
-                ForEach(rs.notes, id: \.name) { n in
-                    let on = rs.note == n.name
-                    Button { rs.note = n.name; rs.noteText = n.text } label: {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(n.name).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(on ? accent : fg)
-                            Text(n.text.split(separator: "\n").first { $0.hasPrefix("description:") }.map { $0.dropFirst(12).trimmingCharacters(in: .whitespaces) } ?? "")
-                                .font(sys(size: Theme.fs1)).foregroundColor(sub).lineLimit(1)
-                        }.padding(.horizontal, Theme.sp2).padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            .background(RoundedRectangle(cornerRadius: Theme.r1).fill(on ? accent.opacity(0.15) : Color.clear))
-                    }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }.padding(Theme.sp3).frame(width: 210).background(RoundedRectangle(cornerRadius: Theme.r2).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(edge))
-            VStack(alignment: .leading, spacing: Theme.sp3) {
-                if rs.note.isEmpty || !rs.notes.contains(where: { $0.name == rs.note }) {
-                    row("Name") { TextField("my-decision", text: $rs.note).frame(width: menuWidth).accessibilityLabel("New note name") }
-                } else {
-                    Text(rs.note + ".md").font(sys(size: Theme.fs3, weight: .semibold, design: .monospaced)).foregroundColor(fg).frame(minHeight: 32)
-                }
-                editor($rs.noteText, "Note text", height: 360)
-            }
-        }
-        note("Keep the frontmatter: its description is the note's line in the index greenlight reads first.")
-        saveRow(rs.saveNote) {
-            Button("Delete", role: .destructive, action: rs.deleteNote).disabled(rs.busy || !rs.notes.contains { $0.name == rs.note })
-        }.disabled(rs.note.isEmpty)
-        note("Notes live in greenlight's memory folder on \(host). A note deleted here can come back from this Mac's copy on the next sync.sh.")
-            .onAppear { rs.load() }
-    }
 }
 
 // MARK: ssh
@@ -741,10 +582,12 @@ final class Core: ObservableObject {
     @Published var levels = [Float](repeating: 0, count: 28)  // recent mic levels 0...1, newest last
     @Published var settingsOpen = false
     @Published var settingsTab = "General"
+    @Published var settingsDark = ud.bool(forKey: "settingsDark") { didSet { ud.set(settingsDark, forKey: "settingsDark") } }  // Settings' own light or dark; the rest of the app keeps its themes
     @Published var settingsRepo = ""  // the hover card's "Edit <repo>'s prompt…": Repositories opens on it
     @Published var orbsHidden = ud.bool(forKey: "orbsHidden") { didSet { ud.set(orbsHidden, forKey: "orbsHidden") } }
     @Published var termOpens = ud.string(forKey: "termOpens") ?? "pipe" { didSet { ud.set(termOpens, forKey: "termOpens") } }  // the app opens to: greenlight | basement | pipe (New windows: the Pipe)
-    @Published var animations = ud.object(forKey: "animations") as? Bool ?? true { didSet { ud.set(animations, forKey: "animations") } }
+    /// The orb's ride between floors, in seconds; 0: a cut. Was the "animations" on/off.
+    @Published var rideTime = ud.object(forKey: "rideTime") as? Double ?? (ud.object(forKey: "animations") as? Bool == false ? 0 : 0.6) { didSet { ud.set(rideTime, forKey: "rideTime") } }
     @Published var localName = ud.string(forKey: "localName") ?? "" { didSet { ud.set(localName, forKey: "localName") } }  // empty: this Mac's hostname
     var localShown: String { localName.trimmingCharacters(in: .whitespaces).isEmpty ? localDefault : localName.trimmingCharacters(in: .whitespaces) }
     // Settings › Hosts: where greenlight runs. The globals host/greenlightHome/greenlightCode read these at launch, so a change asks for a relaunch.
@@ -1519,13 +1362,14 @@ struct InboxOverlay: View {
 struct AccentDot: View {
     @ObservedObject var c: Core
     let h: String
+    var ring = fg, rim = edge  // Settings passes its own theme's
     @FocusState private var focused: Bool
     static let names = ["F5A524": "Amber", "FF7A45": "Orange", "F7768E": "Rose", "FF79C6": "Pink", "BD93F9": "Purple", "7AA2F7": "Blue", "2AC3DE": "Cyan", "9ECE6A": "Green"]
     var body: some View {
         let on = h == accentHex, name = Self.names[h] ?? "#\(h)", hover = c.hint == name  // Tip sets the hint while hovered
         Button { c.restyle { accentHex = h } } label: {
             Circle().fill(Color(nsColor: hex(h))).frame(width: 20, height: 20)
-                .overlay(Circle().stroke(on ? fg : hover || focused ? edge : Color.clear, lineWidth: 2).padding(-3))
+                .overlay(Circle().stroke(on ? ring : hover || focused ? rim : Color.clear, lineWidth: 2).padding(-3))
                 .overlay { if on { Image(systemName: "checkmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(.black.opacity(0.7)) } }
                 .frame(width: 32, height: 32).contentShape(Rectangle())
         }.buttonStyle(.plain).focused($focused)
@@ -1535,391 +1379,482 @@ struct AccentDot: View {
 
 struct SettingsWindowView: View {
     @ObservedObject var c: Core
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Settings").font(sys(size: Theme.fs4, weight: .semibold)).foregroundColor(fg).padding(.leading, 64)  // the window's own buttons sit left of it
-                Spacer()
-                Button("Done") { c.settingsOpen = false }.keyboardShortcut(.cancelAction)  // one place on every page, not in the scrolling form
-            }.padding(.horizontal, Theme.sp4).frame(height: 52)
-            Divider().overlay(line)
-            SettingsView(c: c)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg)
-    }
+    var body: some View { SettingsView(c: c) }
 }
 
+/// Settings: a sidebar of panes, the pane, and a footer with Done. Its own light/dark (the header's toggle), from lightTheme or darkTheme.
 struct SettingsView: View {
     @ObservedObject var c: Core
     @StateObject var rs = RulesStore()
-    static let tabs = [("General", "gearshape"), ("Hosts", "server.rack"), ("Appearance", "paintpalette"), ("Model", "bubble.left"), ("Terminal", "terminal"), ("Keyboard", "keyboard"),
-                       ("Dashboard", "square.grid.2x2"), ("Repositories", "arrow.triangle.branch"), ("Memory", "brain")]
+    /// (pane, SF Symbol, words the sidebar's search also matches). This Mac's panes, then greenlight's on its host.
+    static let mac = [("General", "slider.horizontal.3", "startup opens dock icon assistant name"),
+                      ("Appearance", "circle.lefthalf.filled", "theme dark light accent color colour font size text dashboard source custom"),
+                      ("Chat & voice", "bubble.left", "model effort dictation voice whisper engine shortcut"),
+                      ("Keyboard", "keyboard", "vim shortcuts keys"),
+                      ("Terminal", "terminal", "tab names basement orbs floors sidebar slide ride animation up button"),
+                      ("Hosts", "server.rack", "ssh host state code relaunch connection")]
+    static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions"),
+                     ("Projects", "folder", "folders default folder new terminals open"),
+                     ("Repositories", "arrow.triangle.branch", "repo lifecycle stages rules prompts auto-run project solo merge"),
+                     ("Instructions", "doc.text", "standing rules"),
+                     ("Memory", "bookmark", "notes learned")]
+    static let wide: Set = ["Projects", "Repositories", "Memory"]
+
+    // Settings' own theme: these shadow the app's globals of the same names in every pane below.
+    var theme: Theme { c.settingsDark ? darkTheme : lightTheme }
+    var accentNS: NSColor { accentHex.map(hex) ?? theme.accent }
+    var accent: Color { Color(nsColor: accentNS) }
+    /// A glyph on the accent: dark on a light accent (Greenlight's amber), white on a dark one (GitHub's blue).
+    var onAccent: Color {
+        let c = accentNS.usingColorSpace(.sRGB) ?? accentNS
+        return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent > 0.6 ? Color(nsColor: hex("111113")) : .white
+    }
+    var bg: Color { Color(nsColor: theme.bg) }
+    var fg: Color { Color(nsColor: theme.fg) }
+    var card: Color { theme.mix(0.04) }
+    var surface: Color { theme.mix(0.07) }
+    var line: Color { theme.mix(0.1) }
+    var edge: Color { theme.mix(0.17) }
+    var dim: Color { theme.mix(theme.dark ? 0.62 : 0.7) }
+    var sub: Color { theme.mix(0.82) }
+    var hostLabel: String { host.isEmpty || host == "local" ? "this Mac" : host }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Self.tabs, id: \.0) { t, icon in
-                    if t == "Model" || t == "Dashboard" { Divider().overlay(line).padding(.vertical, Theme.sp2).padding(.horizontal, Theme.sp2) }
-                    if t == "Dashboard" {  // these three live in greenlight, on its host
-                        Text("GREENLIGHT · \(host.uppercased())").font(sys(size: Theme.fs1, weight: .semibold, design: .monospaced)).foregroundColor(dim)
-                            .padding(.horizontal, Theme.sp2).padding(.bottom, 2)
-                    }
-                    Button { c.settingsTab = t } label: {
-                        HStack(spacing: Theme.sp2) {
-                            Image(systemName: icon).font(sys(size: Theme.fs2)).frame(width: 16)
-                            Text(t == "Model" ? "Chat & voice" : t).font(sys(size: Theme.fs2, weight: c.settingsTab == t ? .semibold : .regular))
-                            Spacer(minLength: 0)
-                        }.padding(.horizontal, Theme.sp2).frame(height: 28).contentShape(Rectangle())
-                            .foregroundColor(c.settingsTab == t ? accent : sub)
-                            .background(RoundedRectangle(cornerRadius: Theme.r1).fill(c.settingsTab == t ? accent.opacity(0.15) : Color.clear))
-                    }.buttonStyle(.plain).accessibilityLabel("\(t) settings").accessibilityAddTraits(c.settingsTab == t ? .isSelected : [])
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: Theme.sp2) {
+                Text("Settings").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
+                Text("/").font(sys(size: Theme.fs3)).foregroundColor(dim)
+                Text(c.settingsTab).font(sys(size: Theme.fs3)).foregroundColor(sub)
                 Spacer()
-            }.padding(Theme.sp2).frame(width: 200).background(card)
+                TextField("Search settings", text: $rs.q).textFieldStyle(.roundedBorder).frame(width: 220)
+                Picker("Settings theme", selection: $c.settingsDark) {
+                    Image(systemName: "sun.max").accessibilityLabel("Light").tag(false)
+                    Image(systemName: "moon").accessibilityLabel("Dark").tag(true)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize().help("Settings in light or dark").padding(.leading, Theme.sp2)
+            }.padding(.leading, 80).padding(.trailing, Theme.sp4).frame(height: 52)  // the window's own buttons sit left of the title
             Divider().overlay(line)
-            GeometryReader { g in
-                if c.settingsTab == "Appearance" && g.size.width >= 1040 {  // room for the preview beside the controls
-                    VStack(alignment: .leading, spacing: Theme.sp4) {
-                        appearanceTop
-                        HStack(alignment: .top, spacing: Theme.sp5) {  // the gallery's first heading and Preview's share one top
-                            ScrollView { VStack(alignment: .leading, spacing: Theme.sp4) { appearanceRest }.frame(maxWidth: .infinity, alignment: .leading) }
-                                .frame(maxWidth: 592)
-                            VStack(alignment: .leading, spacing: 0) { section("Preview") { preview }; Spacer(minLength: 0) }.frame(width: 376, alignment: .leading)
-                        }
-                    }.padding(Theme.sp5)
-                } else {
+            HStack(spacing: 0) {
+                sidebar
+                Divider().overlay(line)
+                if Self.wide.contains(c.settingsTab) { widePane } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: Theme.sp4) {
-                            switch c.settingsTab {
-                            case "Appearance": appearanceTop; section("Preview") { preview }; appearanceRest  // narrow: right under Mode, in view while choosing
-                            case "General": general
-                            case "Hosts": hosts
-                            case "Terminal": terminal
-                            case "Keyboard": keyboard
-                            case "Dashboard": fluid
-                            case "Repositories": repositories
-                            case "Memory": memory
-                            default: model
-                            }
-                        }.padding(Theme.sp5).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 22) { pane }
+                            .padding(.horizontal, 40).padding(.top, 28).padding(.bottom, 40)
+                            .frame(maxWidth: 720, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+            }
+            Divider().overlay(line)
+            HStack(spacing: Theme.sp2) {
+                Image(systemName: foot.0).font(sys(size: Theme.fs2)).foregroundColor(dim)
+                Text(foot.1).font(sys(size: Theme.fs2)).foregroundColor(dim)
+                Spacer()
+                Button("Done") { c.settingsOpen = false }.keyboardShortcut(.cancelAction).buttonStyle(.borderedProminent).controlSize(.large)
+            }.padding(.leading, 20).padding(.trailing, Theme.sp4).frame(height: 60)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg).ignoresSafeArea()  // the header is the title bar
+            .environment(\.colorScheme, theme.dark ? .dark : .light).tint(accent)
+            .onAppear { rs.load(); rs.projs = delegate.savedProjects }
+            .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
+            .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects }
+    }
+
+    var foot: (String, String) {
+        switch c.settingsTab {
+        case "Projects": return ("internaldrive", "Projects are saved on this Mac as you change them.")
+        case "Repositories": return ("server.rack", "Project and Auto-run apply right away; the lifecycle, rules and prompts are saved on \(hostLabel) when you press Save.")
+        case "Instructions", "Memory": return ("server.rack", "Stored on \(hostLabel) in \(greenlightHome). Changes apply when you press Save.")
+        default: return ("checkmark", "Changes on this page apply right away.")
+        }
+    }
+
+    var sidebar: some View {
+        let q = rs.q.trimmingCharacters(in: .whitespaces).lowercased()
+        let hit = { (t: (String, String, String)) in q.isEmpty || "\(t.0) \(t.2)".lowercased().contains(q) }
+        let mac = Self.mac.filter(hit), gl = Self.gl.filter(hit)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                if !mac.isEmpty {
+                    Text("This Mac").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(dim).padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 4)
+                }
+                ForEach(mac, id: \.0) { navButton($0) }
+                if !gl.isEmpty {
+                    HStack(spacing: 10) {  // greenlight's own panes, on its host
+                        Circle().fill(Theme.done).frame(width: 8, height: 8)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Greenlight").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
+                            Text("on \(hostLabel)").font(sys(size: Theme.fs1)).foregroundColor(dim)
+                        }
+                        Spacer(minLength: 0)
+                    }.padding(.horizontal, 10).padding(.vertical, Theme.sp2)
+                        .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
+                        .accessibilityElement(children: .combine).padding(.top, 14).padding(.bottom, 6)
+                }
+                ForEach(gl, id: \.0) { navButton($0) }
+                if mac.isEmpty && gl.isEmpty { note("No settings match “\(rs.q)”.").padding(Theme.sp2) }
+            }.padding(.horizontal, 10).padding(.vertical, Theme.sp3)
+        }.frame(width: 228).background(card)
+    }
+
+    func navButton(_ t: (String, String, String)) -> some View {
+        let on = c.settingsTab == t.0
+        return Button { c.settingsTab = t.0; rs.adding = false } label: {
+            HStack(spacing: 10) {
+                tile(t.1, 22, on: on)
+                Text(t.0).font(sys(size: Theme.fs3, weight: on ? .semibold : .regular)).foregroundColor(fg)
+                Spacer(minLength: 0)
+                if let n = count(t.0) { Text("\(n)").font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim) }
+            }.padding(.horizontal, 6).frame(height: 32).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: 7).fill(on ? accent.opacity(0.15) : Color.clear))
+        }.buttonStyle(.plain).accessibilityLabel("\(t.0) settings").accessibilityAddTraits(on ? .isSelected : [])
+    }
+    func count(_ t: String) -> Int? { t == "Projects" ? rs.projs.count : t == "Repositories" ? allRepos.count : t == "Memory" ? rs.notes.count : nil }
+
+    @ViewBuilder var pane: some View {
+        switch c.settingsTab {
+        case "Appearance": appearance
+        case "Chat & voice": chat
+        case "Keyboard": keyboard
+        case "Terminal": terminal
+        case "Hosts": hosts
+        case "Automation": automation
+        case "Instructions": instructions
+        default: general
+        }
+    }
+    /// The list-and-detail panes fill the window: their own list column and scrolling.
+    @ViewBuilder var widePane: some View {
+        switch c.settingsTab {
+        case "Projects": projects
+        case "Repositories": repositories
+        default: memory
+        }
+    }
+
+    // MARK: the panes' parts
+
+    /// A pane's (or nav item's) SF Symbol on a rounded tile: the accent when it's the one you're on.
+    func tile(_ icon: String, _ size: CGFloat, on: Bool = true) -> some View {
+        Image(systemName: icon).font(.system(size: size * 0.48, weight: .semibold)).foregroundColor(on ? onAccent : sub)
+            .frame(width: size, height: size).background(RoundedRectangle(cornerRadius: size * 0.27).fill(on ? accent : surface)).accessibilityHidden(true)
+    }
+    static func icon(_ t: String) -> String { (mac + gl).first { $0.0 == t }?.1 ?? "gearshape" }
+
+    func heading(_ t: String, _ lede: String?, @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            tile(Self.icon(t), 42)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(t).font(sys(size: 20, weight: .bold)).foregroundColor(fg)
+                if let lede { Text(lede).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 560, alignment: .leading) }
+            }
+            Spacer(minLength: 0)
+            trailing()
+        }
+    }
+
+    /// Helper text: subordinate but not disabled-looking in either theme.
+    func note(_ t: String) -> some View { Text(t).font(sys(size: Theme.fs2)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true) }
+
+    /// A small accent label: "new terminals", "yours".
+    func chip(_ t: String) -> some View {
+        Text(t).font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(accent)
+            .padding(.horizontal, Theme.sp2).frame(height: 20).background(Capsule().fill(accent.opacity(0.12)))
+    }
+
+    /// A section: its title above a rounded group of rows; each row draws the hairline above it.
+    func box<V: View>(_ title: String? = nil, aside: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if let title {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
+                    Text(title).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(sub)
+                    Spacer(minLength: Theme.sp3)
+                    if let aside { Text(aside).font(sys(size: Theme.fs1)).foregroundColor(dim).multilineTextAlignment(.trailing) }
+                }.padding(.horizontal, 10)
+            }
+            VStack(alignment: .leading, spacing: 0) { v() }.padding(.top, -1)  // the first row's hairline tucks under the card's border
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12).fill(card)).overlay(RoundedRectangle(cornerRadius: 12).stroke(line))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+    func ruled(_ v: some View) -> some View { v.overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) } }
+
+    /// Label and hint on the left, the control on the right.
+    func row<V: View>(_ label: String, _ hint: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
+        let text = VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+            if let hint { note(hint) }
+        }
+        // The label keeps at least 180pt beside the control; a control too wide for that (Effort, Accent, Scan every) moves under it.
+        return ruled(ViewThatFits(in: .horizontal) {
+            HStack(spacing: 20) {
+                text.frame(minWidth: 180, idealWidth: 180, maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: Theme.sp2) { v() }.layoutPriority(1)
+            }
+            VStack(alignment: .leading, spacing: 10) { text.frame(maxWidth: .infinity, alignment: .leading); HStack(spacing: Theme.sp2) { v() } }
+        }.padding(.horizontal, Theme.sp4).padding(.vertical, 10).frame(minHeight: 48))
+    }
+
+    func toggleRow(_ title: String, _ help: String, _ on: Binding<Bool>) -> some View {
+        row(title, help) { Toggle(title, isOn: on).labelsHidden().toggleStyle(.switch) }
+    }
+
+    /// Rows that only matter while the row above is on: indented under an L, dimmed while it's off.
+    func dependent<V: View>(off: Bool, @ViewBuilder _ v: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 0) { v() }.padding(.leading, 22)
+            .overlay(alignment: .topLeading) {
+                Path { p in p.move(to: CGPoint(x: 0.5, y: 0)); p.addLine(to: CGPoint(x: 0.5, y: 24)); p.addLine(to: CGPoint(x: 12, y: 24)) }
+                    .stroke(edge, lineWidth: 1).frame(width: 12, height: 24).padding(.leading, Theme.sp4 + 4).accessibilityHidden(true)
+            }
+            .disabled(off).opacity(off ? 0.45 : 1)
+    }
+
+    /// Projects, Repositories, Memory: a full-height list on the left (its add button at the bottom), the detail scrolling on the right.
+    func split<L: View, D: View>(_ t: String, _ lede: String, add: (String, () -> Void), @ViewBuilder list: () -> L, @ViewBuilder detail: () -> D) -> some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 10) {
+                    tile(Self.icon(t), 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t).font(sys(size: Theme.fs4, weight: .bold)).foregroundColor(fg)
+                        Text(lede).font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(14)
+                ScrollView { VStack(spacing: 1) { list() }.padding(.horizontal, 8) }
+                Divider().overlay(line)
+                Button(action: add.1) { Label(add.0, systemImage: "plus").font(sys(size: Theme.fs3)) }.buttonStyle(.borderless)
+                    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }.frame(width: 220)
+            Divider().overlay(line)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) { detail() }
+                    .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 32)
+                    .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    @ViewBuilder var model: some View {
-        heading("Chat & voice", "The chat pane's model, and dictating into the chat.")
-        section("Chat model") {
-            row("Model") { Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth) }
-            row("Effort") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
-            note(!c.isClaude ? "\(c.modelName) doesn't use an effort level." : (Self.effortNotes[c.effort] ?? "") + " Changes apply from your next message.").padding(.leading, 110 + Theme.sp3)
-        }
-        section("Dictation") {  // the menubar icon's right-click Voice menu, here too
-            row("Engine") { Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().frame(width: menuWidth) }
-            note(engineStatus).padding(.leading, 110 + Theme.sp3)
-            row("Shortcut") { shortcutEditor }
-            if c.engine == "whisper" { row("Whisper model") { Button("Choose model…") { delegate.pickModel() } } }
-            if c.engine == "openai" { row("OpenAI key") { Button("Set key…") { delegate.setKey() } } }
-            note("Press the shortcut in any app to dictate to the chat.").padding(.leading, 110 + Theme.sp3)
-        }
-        instructionsSection
+    func banner(_ icon: String, _ text: String, tinted: Bool = false, @ViewBuilder action: () -> some View = { EmptyView() }) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundColor(tinted ? accent : sub)
+            Text(text).font(sys(size: Theme.fs2)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Theme.sp2)
+            action()
+        }.padding(.horizontal, 14).padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 9).fill(tinted ? accent.opacity(0.12) : surface))
     }
 
-    @ViewBuilder var appearanceTop: some View {
-        heading("Appearance", nil)
-        note("Greenlight Center (the dashboard and chat) is light; the Basement (the terminal) is dark. Each floor keeps its own theme.")
+    func listItem(_ title: String, _ meta: String, on: Bool, mono: Bool = false, icon: String? = nil, tag: String? = nil, _ pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
+            HStack(spacing: 10) {
+                if let icon { Image(systemName: icon).foregroundColor(on ? accent : sub).frame(width: 16) }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(sys(size: Theme.fs3, weight: .semibold, design: mono ? .monospaced : .default)).foregroundColor(fg).lineLimit(1)
+                    Text(meta).font(sys(size: Theme.fs1)).foregroundColor(dim).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let tag { chip(tag) }
+            }.padding(.horizontal, 10).padding(.vertical, Theme.sp2).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: 7).fill(on ? accent.opacity(0.15) : Color.clear))
+        }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
     }
+
+    /// A path or name in a card, with its buttons on the right.
+    func pathRow<V: View>(_ icon: String, _ text: String, @ViewBuilder _ actions: () -> V) -> some View {
+        ruled(HStack(spacing: 10) {
+            Image(systemName: icon).font(sys(size: Theme.fs2)).foregroundColor(sub).frame(width: 16)
+            Text(text).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(fg).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: Theme.sp2)
+            actions()
+        }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp3).frame(minHeight: 40))
+    }
+    func xButton(_ label: String, _ act: @escaping () -> Void) -> some View {
+        Button(action: act) { Image(systemName: "xmark").font(sys(size: Theme.fs2)) }.buttonStyle(.borderless).foregroundColor(sub).accessibilityLabel(label).help(label)
+    }
+
+    /// A multi-line field.
+    func editor(_ t: Binding<String>, _ label: String, height: CGFloat = 120) -> some View {
+        TextEditor(text: t).font(sys(size: Theme.fs2, design: .monospaced)).scrollContentBackground(.hidden).padding(Theme.sp2)
+            .frame(minHeight: height).background(RoundedRectangle(cornerRadius: Theme.r1).fill(bg))
+            .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge)).accessibilityLabel(label)
+    }
+
+    func saveRow(_ title: String = "Save", _ save: @escaping () -> Void, @ViewBuilder more: () -> some View = { EmptyView() }) -> some View {
+        HStack(spacing: Theme.sp3) {
+            more()
+            if rs.busy { ProgressView().controlSize(.small) }
+            note(rs.status)
+            Spacer(minLength: 0)
+            Button(title, action: save).keyboardShortcut("s").buttonStyle(.borderedProminent).disabled(rs.busy)
+        }
+    }
+
+    /// One width for every menu picker, so values line up down the form.
+    var menuWidth: CGFloat { 216 }
+
+    static let effortNotes = ["low": "Fastest replies, least reasoning.", "medium": "Balances reasoning against response time.",
+                              "high": "More reasoning; replies take longer.", "xhigh": "Extended reasoning for hard problems; noticeably slower.",
+                              "max": "The most reasoning; the slowest replies."]
+
+    /// Native segments; a menu when the five don't fit.
+    func effortPicker(_ label: String, _ v: Binding<String>, off: Bool = false) -> some View {
+        let p = Picker(label, selection: v) { ForEach(efforts, id: \.self) { Text(effortName($0)).tag($0) } }.labelsHidden()
+        return ViewThatFits(in: .horizontal) { p.pickerStyle(.segmented).fixedSize(); p.frame(width: menuWidth) }.disabled(off).opacity(off ? 0.45 : 1)
+    }
+    func claudeModelPicker(_ label: String, _ v: Binding<String>) -> some View {
+        Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+    }
+
+    // MARK: This Mac
 
     @ViewBuilder var general: some View {
-        heading("General", nil)
-        section("Opening") {
-            Picker("App opens to", selection: $c.termOpens) { Text("L1 · Greenlight").tag("greenlight"); Text("B1 · Basement").tag("basement"); Text("B2 · Pipe").tag("pipe") }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
-            note("Greenlight: the dashboard. Basement: the terminals and their sidebar. Pipe: just the terminals. New windows (⌘N) open to the Pipe.")
+        heading("General", "How Greenlight starts and how it shows up on this Mac.")
+        box("Opens to", aside: "New windows (⌘N) always open to the Pipe.") {
+            HStack(spacing: Theme.sp3) {
+                ForEach([("greenlight", "Greenlight", "L1"), ("basement", "Basement", "B1"), ("pipe", "Pipe", "B2")], id: \.0) { floorCard($0.0, $0.1, $0.2) }
+            }.padding(Theme.sp3)
         }
-        section("Dock icon") {
+        box("Assistant") {
+            row("Name", "What the chat calls itself. ⌃⌥M shows or hides it from any app.") {
+                TextField("Greenlight", text: $c.name).textFieldStyle(.roundedBorder).frame(width: 220)
+            }
+        }
+        box("Dock icon", aside: "Finder always shows the Orb.") {
             HStack(spacing: Theme.sp3) { ForEach([("Orb", "Orb"), ("MergeLight", "Merge Light"), ("ThreeFloors", "Three Floors")], id: \.0) { dockTile($0.0, $0.1) } }
-            note("The running app's Dock tile. Finder always shows the Orb.")
+                .padding(Theme.sp3)
         }
-        section("Between floors") {
-            toggleRow("Floating orbs", "Every floating orb, bottom right: the terminal button on L1 · Greenlight rides down to the Basement, the green light (with the Basement's sidebar open) rides back up. Off hides both, and the ride between floors runs without one.",
-                      Binding(get: { !c.orbsHidden }, set: { c.orbsHidden = !$0 }))
-            row("Up button") {
-                Picker("Up button", selection: $c.orbStyle) { Text("Matte").tag("matte"); Text("Traffic light").tag("light") }
-                    .pickerStyle(.segmented).labelsHidden().frame(width: menuWidth)
-            }
-            HStack(alignment: .top, spacing: Theme.sp3) {
-                VStack(alignment: .leading, spacing: 2) { Text("Sidebar slide").foregroundColor(fg)
-                    note("Seconds the Basement's sidebar takes to slide in from the Pipe, or back out. 0 turns it off: the sidebar just appears.") }
-                Spacer(minLength: Theme.sp4)
-                TextField("Sidebar slide", value: Binding(get: { c.sidebarSlide }, set: { c.sidebarSlide = min(max($0, 0), 5) }), format: .number.precision(.fractionLength(0...2)))
-                    .multilineTextAlignment(.trailing).frame(width: 56).labelsHidden()
-                Stepper("Sidebar slide", value: $c.sidebarSlide, in: 0...5, step: 0.05).labelsHidden()
-                Text("s").foregroundColor(sub)
-            }
-            toggleRow("Animations", "The orb's flip between Greenlight Center and the Basement. Off: you're just there.", $c.animations)
-        }
+    }
+
+    /// A floor the app opens to, with the three floors stacked and its own lit.
+    func floorCard(_ id: String, _ name: String, _ floor: String) -> some View {
+        let on = c.termOpens == id
+        return Button { c.termOpens = id } label: {
+            HStack(spacing: Theme.sp3) {
+                VStack(spacing: 3) { ForEach(["L1", "B1", "B2"], id: \.self) { f in RoundedRectangle(cornerRadius: 2).fill(f == floor ? accent : edge).frame(width: 30, height: 8) } }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
+                    Text(floor).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(dim)
+                }
+                Spacer(minLength: 0)
+            }.padding(Theme.sp3).frame(maxWidth: .infinity).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
+                .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
+        }.buttonStyle(.plain).accessibilityLabel("Open to \(name), \(floor)").accessibilityAddTraits(on ? .isSelected : [])
     }
 
     func dockTile(_ id: String, _ name: String) -> some View {
         let on = c.dockIcon == id
         return Button { c.dockIcon = id } label: {
             VStack(spacing: Theme.sp2) {
-                Image(nsImage: Bundle.main.image(forResource: id) ?? NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
+                Image(nsImage: Bundle.main.image(forResource: id) ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
                 Text(name).font(sys(size: Theme.fs2, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub)
-            }.padding(Theme.sp3).frame(width: 120)
-                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(on ? accent.opacity(0.12) : Color.clear))
+            }.padding(Theme.sp3).frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
                 .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
         }.buttonStyle(.plain).accessibilityLabel("\(name) Dock icon\(on ? ", selected" : "")")
     }
 
-    @ViewBuilder var hosts: some View {
-        let ssh = sshHosts(), env = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"]
-        heading("Hosts", "Where Greenlight runs your agents and workspaces, and the machines the Basement can open shells on.")
-        section("Greenlight runs on") {
-            row("Host") {
-                Picker("Host", selection: $c.runHost) {
-                    Text("This Mac").tag("local")
-                    ForEach(ssh + (c.runHost == "local" || ssh.contains(c.runHost) ? [] : [c.runHost]), id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: menuWidth)
-            }
-            row("State") { TextField("~/.greenlight", text: $c.runHome).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
-            row("Code") { TextField("~/.claude/skills/greenlight", text: $c.runCode).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
-            note("Paths are on that host. Its workspaces, agents, automation timer and chat all live there; this Mac only shows them. An ssh host needs key auth (BatchMode).")
-                .padding(.leading, 110 + Theme.sp3)
-            HStack(spacing: Theme.sp2) {
-                Button("Test") { c.testHost() }
-                if c.hostPending { Button("Relaunch to apply") { c.relaunch() }.keyboardShortcut(.defaultAction) }
-            }.padding(.leading, 110 + Theme.sp3)
-            if !c.hostCheck.isEmpty { note(c.hostCheck).padding(.leading, 110 + Theme.sp3) }
-            if let env { note("GREENLIGHT_HOST=\(env) is set, and it wins over this setting.").padding(.leading, 110 + Theme.sp3) }
-        }
-        section("The Basement's hosts") {
-            row("This Mac's name") { TextField(localDefault, text: $c.localName).textFieldStyle(.roundedBorder).frame(width: menuWidth) }
-            note("What the Basement's Hosts call this Mac. Empty: its hostname, \(localDefault). Also: right-click it in the sidebar, Rename.")
-            row("From ssh config") {
-                Text(ssh.isEmpty ? "None" : ssh.joined(separator: ", ")).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: Theme.sp2) {
-                Button("Edit ~/.ssh/config") { _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-t", NSHomeDirectory() + "/.ssh/config"]) }
-            }.padding(.leading, 110 + Theme.sp3)
-            note("Every Host in ~/.ssh/config (minus wildcards, git hosts and -ts twins) is a Hosts row in the Basement, and a choice above. A new one shows after a relaunch.")
-        }
-    }
-
-    @ViewBuilder var terminal: some View {
-        heading("Terminal", "The Basement's tabs. Hosts, and which floor the app opens to, have their own pages (Hosts, General).")
-        section("Tab names") {
-            toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
-            row("Naming model") { Picker("Naming model", selection: $c.termNameModel) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth) }
-                .disabled(!c.termAutoName).opacity(c.termAutoName ? 1 : 0.45)
-            note(c.termAutoName ? "AI names the tabs it can read; one you named keeps your name." : "Off: tabs show the folder their shell is in, unless you name them.")
-        }  // ponytail: the canvas's example tab strip skipped; the note says the same
-        section("Projects") {
-            note("Where each project window's new terminals open. Empty: the project's first folder. Projects are made in the Basement's Edit projects.")
-            if rs.projs.isEmpty { note("No projects yet.") }
-            ForEach(rs.projs.indices, id: \.self) { i in
-                row(rs.projs[i]["name"] as? String ?? "Project") {
-                    TextField("Default folder", text: Binding(get: { rs.projs.indices.contains(i) ? rs.projs[i]["dir"] as? String ?? "" : "" }, set: { rs.projs[i]["dir"] = $0; rs.projNote = "" }))
-                        .textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced))
-                }
-            }
-            if !rs.projs.isEmpty {
-                HStack(spacing: Theme.sp3) { Button("Save") { saveProjectDirs() }; if !rs.projNote.isEmpty { note(rs.projNote) } }
-            }
-        }.onAppear { rs.projs = delegate.savedProjects; rs.projNote = "" }
-    }
-    /// Settings → Terminal's Save: each default folder a full path (~ is this Mac's home only when the terminal is local), the same check the Basement makes.
-    func saveProjectDirs() {
-        var list = rs.projs
-        for i in list.indices {
-            var d = (list[i]["dir"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            if (host.isEmpty || host == "local") && (d == "~" || d.hasPrefix("~/")) { d = NSHomeDirectory() + d.dropFirst() }
-            while d.count > 1 && d.hasSuffix("/") { d.removeLast() }
-            if d.isEmpty { list[i].removeValue(forKey: "dir"); continue }
-            guard d.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !d.contains("..") else {
-                rs.projNote = "\(d) isn't a full path (letters, digits and ._-@+/ only)."; return
-            }
-            list[i]["dir"] = d
-        }
-        if delegate.saveProjects(list) { rs.projs = list; rs.projNote = "Saved." } else { rs.projNote = "Couldn't save the projects." }
-    }
-
-    @ViewBuilder var appearanceRest: some View {
-        themeGrid("Greenlight Center", dark: false)
-        themeGrid("The Basement", dark: true)
-        section("Accent") {
-            let themeAccent = Button { c.restyle { accentHex = nil } } label: {
-                    HStack(spacing: Theme.sp2) {
-                        Circle().fill(Color(nsColor: theme.accent)).frame(width: 14, height: 14)
-                        Text("Theme accent").font(sys(size: Theme.fs2))
-                        if accentHex == nil { Image(systemName: "checkmark").font(sys(size: Theme.glyph, weight: .bold)) }
-                    }.padding(.horizontal, Theme.sp3).frame(height: 28)
-                        .overlay(Capsule().stroke(accentHex == nil ? fg : edge))
-                }.buttonStyle(.plain).accessibilityLabel("Theme accent\(accentHex == nil ? ", selected" : "")")
-            let dots = HStack(spacing: 0) { ForEach(accents, id: \.self) { h in AccentDot(c: c, h: h) } }
-            ViewThatFits(in: .horizontal) {  // larger fonts or a narrow pane: the dots move under the theme accent, none drop
-                HStack(spacing: Theme.sp2) { themeAccent; dots }
-                VStack(alignment: .leading, spacing: Theme.sp2) { themeAccent; dots }
+    @ViewBuilder var appearance: some View {
+        heading("Appearance", "Each floor keeps its own theme: Greenlight Center (the dashboard and chat) is light, the Basement (the terminals) is dark.")
+        box("Floors") { HStack(spacing: Theme.sp3) { floorTheme(dark: false); floorTheme(dark: true) }.padding(Theme.sp3) }
+        box("Color & text") {
+            row("Accent", "Buttons, selection and focus. State colors (orange, red) never change.") { accentPicker }
+            row("Chat font", "Messages, the composer and questions.") { fontPicker("Chat font", chatFont) { chatFont = $0 } }
+            row("Code font", "Code blocks, logs and the terminal.") { fontPicker("Code font", codeFont) { codeFont = $0 } }
+            row("Text size", "Chat, settings and terminal. The dashboard keeps its own size.") {
+                Text("A").font(.system(size: 10)).foregroundColor(sub).accessibilityHidden(true)
+                Slider(value: Binding(get: { fontSize }, set: { v in c.restyle { fontSize = v } }), in: 11...17, step: 1).frame(width: 140).accessibilityLabel("Text size")
+                Text("A").font(.system(size: 16)).foregroundColor(sub).accessibilityHidden(true)
+                Text("\(Int(fontSize)) pt").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(sub).frame(width: 36, alignment: .trailing)
             }
         }
-        section("Fonts") {
-            row("Chat text") { fontPicker("Chat font", chatFont) { chatFont = $0 } }
-            note("Messages, the composer and questions. Settings and menus keep the system font.").padding(.leading, 110 + Theme.sp3)
-            row("Code") { fontPicker("Code font", codeFont) { codeFont = $0 } }
-            row("Text size") {
-                Slider(value: Binding(get: { fontSize }, set: { v in c.restyle { fontSize = v } }), in: 11...17, step: 1).frame(maxWidth: 140)
-                Text("\(Int(fontSize)) pt").font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim)
-            }
-            note("Scales the chat, these settings and the terminal. The dashboard keeps its own size.").padding(.leading, 110 + Theme.sp3)
-        }
-        reset
-    }
-
-    @ViewBuilder var fluid: some View {
-        heading("Dashboard", "What greenlight does on its own between your visits, and what the dashboard shows.")
-        section("Workspace automation") {
-            let failed = !c.greenlightEveryNote.isEmpty && !c.greenlightEveryLoading
-            row("Scan every") {
-                Picker("Scan interval", selection: Binding(get: { c.greenlightEvery }, set: c.setGreenlightEvery)) {
-                    Text("Off").tag(0)
-                    ForEach([10, 15, 30, 60], id: \.self) { Text("\($0) min").tag($0) }
-                }.labelsHidden().pickerStyle(.segmented).fixedSize().onAppear(perform: c.loadGreenlightEvery).disabled(c.greenlightEveryLoading)
-                if c.greenlightEveryLoading {
-                    ProgressView().controlSize(.small)
-                    Text("Checking \(host)…").font(sys(size: Theme.fs2)).foregroundColor(dim)
-                } else if failed {
-                    Text("Last known").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(Theme.needsInk)
-                        .padding(.horizontal, Theme.sp2).frame(height: 20).background(Capsule().fill(Theme.needs.opacity(0.15)))
-                }
-            }
-            Text("Scans all workspaces on \(host) and starts agents when work is available").font(sys(size: Theme.fs2, weight: .medium)).foregroundColor(fg)
-                .padding(.leading, 110 + Theme.sp3).fixedSize(horizontal: false, vertical: true)  // what turning this on does, always in view
-            if failed {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(Theme.needs)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(c.greenlightEveryNote).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(fg)
-                        note("The schedule shown is the last one this Mac read; it may be out of date.")
-                    }
-                    Spacer(minLength: Theme.sp3)
-                    Button("Retry", action: c.loadGreenlightEvery)
-                }.padding(Theme.sp3).background(RoundedRectangle(cornerRadius: Theme.r2).fill(Theme.needs.opacity(0.1)))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(Theme.needs.opacity(0.4)))
-            } else {
-                note(c.greenlightEvery == 0 ? "Off: nothing scans or starts agents on a schedule." : "Every \(c.greenlightEvery) minutes; each scan also refreshes the dashboard.")
-                    .padding(.leading, 110 + Theme.sp3)
-            }
-        }
-        section("Dashboard display") {
-            row("Source") {
-                Picker("Source", selection: Binding(get: { c.customPage || !c.fluidURL.isEmpty }, set: { v in
+        let custom = c.customPage || !c.fluidURL.isEmpty
+        box("Dashboard") {
+            row("Source", custom ? "Your own page, on the left of the window." : "The live workspace dashboard, on the left of the window.") {
+                Picker("Source", selection: Binding(get: { custom }, set: { v in
                     c.customPage = v
                     if !v && !c.fluidURL.isEmpty { c.fluidURL = ""; c.reloadFluid() }
                 })) { Text("Built-in").tag(false); Text("Custom").tag(true) }.labelsHidden().pickerStyle(.segmented).fixedSize()
             }
-            if c.customPage || !c.fluidURL.isEmpty {
-                row("Location") {
-                    TextField("File on this Mac or http(s) URL", text: $c.fluidURL).textFieldStyle(.roundedBorder).onSubmit(c.reloadFluid)
-                    Button("Reload", action: c.reloadFluid)
-                }
-                note("Shown on the left of the window. Return reloads it.")
-            } else {
-                note("The live workspace dashboard, on the left of the window.")
-            }
-        }
-        Text("Background agents").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(sub).padding(.leading, Theme.sp1).padding(.top, Theme.sp2)  // ponytail: a heading over agentCards, not a card around them
-        agentCard("Workspace pages", "Builds each workspace's page on the dashboard.", "doc.richtext") {
-            row("Model") { Picker("Model", selection: $c.designModel) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth) }
-            row("Effort") { effortPicker("Effort", $c.designEffort) }
-            row("Rebuild pages") {
-                Picker("Rebuild pages", selection: Binding(get: { c.designParallel > 0 }, set: { c.designParallel = $0 ? max(c.designParallel, 3) : 0 })) {
-                    Text("On demand").tag(false); Text("Background").tag(true)
-                }.labelsHidden().pickerStyle(.segmented).fixedSize()
-            }
-            if c.designParallel > 0 {  // depends on Background: right under it, indented
-                HStack(spacing: Theme.sp2) {
-                    Text("At most").foregroundColor(sub)
-                    Stepper("\(c.designParallel)", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
-                    Text(c.designParallel == 1 ? "page at once" : "pages at once").foregroundColor(sub)
-                }.font(sys(size: Theme.fs3)).padding(.leading, 110 + Theme.sp3 + Theme.sp4)
-            }
-            note(c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild their pages in the background.")
-                .padding(.leading, 110 + Theme.sp3)
-        }
-        agentCard("Next-step suggestions", "Suggests the next action on each workspace hex, whenever its state moves.", "lightbulb") {
-            row("Model") { Picker("Model", selection: $c.nextModel) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth) }
-            row("Effort") { effortPicker("Effort", $c.nextEffort) }
-        }
-    }
-
-    @ViewBuilder var keyboard: some View {
-        heading("Keyboard", "Editing in the chat input, and the app's shortcuts.")
-        section("Vim") {
-            VStack(alignment: .leading, spacing: Theme.sp3) {
-                toggleRow("Vim editing in chat", "Use Vim keys in the chat input", $c.vim)
-                VStack(alignment: .leading, spacing: Theme.sp1) {
-                    VStack(alignment: .leading, spacing: Theme.sp1) {  // one neutral disabled block while Vim is off
-                        row("Starting mode") {
-                            Picker("Starting mode", selection: $c.vimStart) { Text("Insert").tag("insert"); Text("Normal").tag("normal") }
-                                .labelsHidden().pickerStyle(.segmented).fixedSize()
-                        }
-                        note("Mode used for the next message after sending.")
-                    }.disabled(!c.vim).opacity(c.vim ? 1 : 0.45)
-                    note(c.vim ? "Esc normal mode · i or a insert · v select" : "Enable Vim editing to change this.")
-                }.padding(.leading, Theme.sp3).overlay(alignment: .leading) { Rectangle().fill(line).frame(width: 2) }  // depends on the toggle above
-            }.frame(maxWidth: 420, alignment: .leading)
-        }
-        shortcuts("In the app", nil, [("New window", "⌘N"), ("Settings", "⌘,"), ("Show/hide chat", "⇧⌘C"),
-                               ("Show/hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R"), ("Up or down a floor (B2 → B1 → L1)", "⌘↑|⌘↓")])
-        shortcuts("While typing in the chat", nil, [("Search chat history", "⌃R"), ("Previous or next sent message", "↑|↓"), ("New line", "⇧↩")])
-        shortcuts("In any app", nil, [("Show/hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
-    }
-
-    func shortcuts(_ t: String, _ help: String?, _ keys: [(String, String)]) -> some View {
-        section(t) {
-            if let help { note(help) }
-            VStack(alignment: .leading, spacing: Theme.sp2) {
-                ForEach(keys, id: \.0) { a, k in
-                    let caps = Group { if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) } }  // the voice shortcut is edited where it's listed
-                    ViewThatFits(in: .horizontal) {  // one keys column across App, Chat input and Global; stacked when narrow
-                        HStack(spacing: Theme.sp3) { Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub).frame(width: 230, alignment: .leading); caps }
-                        VStack(alignment: .leading, spacing: Theme.sp1) { Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub); caps }
-                    }.frame(minHeight: 24)
+            if custom {
+                dependent(off: false) {
+                    row("Location", "A file on this Mac or an http(s) URL. Return reloads it.") {
+                        TextField("File on this Mac or http(s) URL", text: $c.fluidURL).textFieldStyle(.roundedBorder).onSubmit(c.reloadFluid).frame(width: 240)
+                        Button("Reload", action: c.reloadFluid)
+                    }
                 }
             }
         }
+        HStack {
+            Spacer()
+            Button("Reset appearance to defaults") { c.restyle { darkTheme = named("", "Greenlight"); lightTheme = named("", "GitHub Light"); accentHex = nil; chatFont = "System"; codeFont = "SF Mono"; fontSize = 13 } }
+                .buttonStyle(.link).font(sys(size: Theme.fs2))
+        }
     }
 
-    /// "↑|↓" is either key, as separate caps; a chord is one cap with its modifiers spaced.
-    func keycaps(_ k: String) -> some View {
+    /// A floor's theme: a small picture of it in that theme, and the theme menu.
+    func floorTheme(dark: Bool) -> some View {
+        let t = dark ? darkTheme : lightTheme, tfg = Color(nsColor: t.fg)
+        return VStack(alignment: .leading, spacing: Theme.sp2) {
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 2).fill(tfg).frame(width: 70, height: 6)
+                RoundedRectangle(cornerRadius: 2).fill(tfg.opacity(0.3)).frame(width: 120, height: 5)
+                RoundedRectangle(cornerRadius: 2).fill(tfg.opacity(0.3)).frame(width: 96, height: 5)
+                Capsule().fill(Color(nsColor: t.accent)).frame(width: 40, height: 12)
+            }.padding(Theme.sp3).frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: t.bg))).overlay(RoundedRectangle(cornerRadius: 8).stroke(edge)).accessibilityHidden(true)
+            Text(dark ? "The Basement" : "Greenlight Center").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
+            note(dark ? "Terminals and their sidebar." : "Dashboard and chat.")
+            Picker(dark ? "Basement theme" : "Greenlight Center theme", selection: Binding(get: { t.name }, set: { n in
+                c.restyle { if let t = themes.first(where: { $0.name == n }) { if dark { darkTheme = t } else { lightTheme = t } } }
+            })) { ForEach(themes.filter { $0.dark == dark }, id: \.name) { Text($0.name).tag($0.name) } }.labelsHidden()
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var accentPicker: some View {
+        let themeAccent = Button { c.restyle { accentHex = nil } } label: {
+            HStack(spacing: Theme.sp2) {
+                Circle().fill(Color(nsColor: lightTheme.accent)).frame(width: 12, height: 12)
+                Text("Theme accent").font(sys(size: Theme.fs2, weight: accentHex == nil ? .semibold : .regular)).foregroundColor(fg)
+            }.padding(.horizontal, Theme.sp3).frame(height: 28)
+                .overlay(Capsule().stroke(accentHex == nil ? fg : edge))
+        }.buttonStyle(.plain).accessibilityLabel("Theme accent\(accentHex == nil ? ", selected" : "")")
+        let dots = HStack(spacing: 0) { ForEach(accents, id: \.self) { h in AccentDot(c: c, h: h, ring: fg, rim: edge) } }
+        return ViewThatFits(in: .horizontal) {  // larger fonts or a narrow pane: the dots move under the theme accent, none drop
+            HStack(spacing: Theme.sp2) { themeAccent; dots }
+            VStack(alignment: .leading, spacing: Theme.sp2) { themeAccent; dots }
+        }
+    }
+
+    func fontPicker(_ label: String, _ current: String, _ set: @escaping (String) -> Void) -> some View {
+        Picker(label, selection: Binding(get: { current }, set: { v in c.restyle { set(v) } })) {
+            ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
+        }.labelsHidden().frame(width: menuWidth)
+    }
+
+    @ViewBuilder var chat: some View {
+        heading("Chat & voice", "The chat pane's model, and dictating into it from any app.")
+        box("Model") {
+            row("Chat model", "Changes apply from your next message.") {
+                Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+            }
+            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+        }
+        let status = engineStatus, ready = !status.hasPrefix("Not ready")
+        box("Dictation") {
+            row("Engine", status) {
+                Circle().fill(ready ? Theme.done : Theme.needs).frame(width: 8, height: 8).accessibilityLabel(ready ? "Ready" : "Not ready")
+                Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().frame(width: menuWidth)
+            }
+            if c.engine == "whisper" { dependent(off: false) { row("Whisper model") { Button("Choose model…") { delegate.pickModel() } } } }
+            if c.engine == "openai" { dependent(off: false) { row("OpenAI key", "Stored in your Keychain.") { Button("Set key…") { delegate.setKey() } } } }
+            row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
+        }
         HStack(spacing: Theme.sp1) {
-            ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
-                if i > 0 { Text("or").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-                Text(key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
-                    .padding(.horizontal, Theme.sp2).frame(minWidth: 26).frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge))
-            }
-        }
+            note("Standing instructions for Greenlight have their own page:")
+            Button("Instructions") { c.settingsTab = "Instructions" }.buttonStyle(.link).font(sys(size: Theme.fs2))
+        }.padding(.horizontal, 10)
     }
-
-    var reset: some View {
-        Button("Reset appearance") { c.restyle { darkTheme = named("", "Greenlight"); lightTheme = named("", "GitHub Light"); accentHex = nil; chatFont = "System"; codeFont = "SF Mono"; fontSize = 13 } }
-            .buttonStyle(.plain).font(sys(size: Theme.fs2)).foregroundColor(sub)
-    }
-
-    static let effortNotes = ["low": "Fastest replies, least reasoning.", "medium": "Balances reasoning against response time.",
-                              "high": "More reasoning; replies take longer.", "xhigh": "Extended reasoning for hard problems; noticeably slower.",
-                              "max": "The most reasoning; the slowest replies."]
-
-    /// Native segments, as Mode and Rebuild pages; a menu when the five don't fit.
-    func effortPicker(_ label: String, _ v: Binding<String>, off: Bool = false) -> some View {
-        let p = Picker(label, selection: v) { ForEach(efforts, id: \.self) { Text(effortName($0)).tag($0) } }.labelsHidden()
-        return ViewThatFits(in: .horizontal) { p.pickerStyle(.segmented).fixedSize(); p.frame(width: menuWidth) }.disabled(off).opacity(off ? 0.45 : 1)
-    }
-
-    /// One width for every menu picker, so values line up down the form.
-    var menuWidth: CGFloat { 216 }
 
     /// Under Engine: what the chosen engine will actually do, and whether it's ready.
     var engineStatus: String {
@@ -1932,7 +1867,7 @@ struct SettingsView: View {
             let m = UserDefaults.standard.string(forKey: "openaiModel") ?? "whisper-1"
             return keychain("openai") == nil ? "Not ready: no API key. Set one below." : "Ready · key set · model \(m)"
         default:
-            return appleOnDevice ? "Transcribes on this Mac; audio never leaves it." : "On-device recognition isn't available here, so audio goes to Apple's servers."
+            return appleOnDevice ? "Ready · transcribes on this Mac; audio never leaves it." : "Ready · on-device recognition isn't available here, so audio goes to Apple's servers."
         }
     }
 
@@ -1947,114 +1882,471 @@ struct SettingsView: View {
         }
     }
 
-    /// The page title (Done is in SettingsWindowView's header).
-    func heading(_ t: String, _ sub: String?) -> some View {
-        VStack(alignment: .leading, spacing: Theme.sp1) {
-            Text(t).font(sys(size: Theme.fs5, weight: .semibold)).foregroundColor(fg)
-            if let sub { note(sub) }
-        }.padding(.bottom, Theme.sp1)
-    }
-
-    /// Helper text: 12pt, subordinate but not disabled-looking in either theme.
-    func note(_ t: String) -> some View {
-        Text(t).font(sys(size: Theme.fs2)).foregroundColor(theme.mix(theme.dark ? 0.62 : 0.7)).fixedSize(horizontal: false, vertical: true)
-    }
-
-    func section<V: View>(_ t: String, @ViewBuilder _ v: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: Theme.sp3) {
-            Text(t).font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(sub).padding(.leading, Theme.sp1)
-            VStack(alignment: .leading, spacing: Theme.sp3) { v() }.padding(Theme.sp4).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(edge))
-        }.padding(.top, Theme.sp2)
-    }
-
-    func group<V: View>(@ViewBuilder _ v: () -> V) -> some View { VStack(alignment: .leading, spacing: Theme.sp3) { v() } }
-
-    /// One background agent's settings on its own surface: what it is, then its controls.
-    func agentCard<V: View>(_ t: String, _ what: String, _ icon: String, @ViewBuilder _ v: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: Theme.sp3) {
-            HStack(spacing: Theme.sp2) {
-                Image(systemName: icon).font(sys(size: Theme.fs3)).foregroundColor(accent).frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(t).font(sys(size: Theme.fs4, weight: .semibold)).foregroundColor(fg)
-                    Text(what).font(sys(size: Theme.fs2)).foregroundColor(sub)
+    @ViewBuilder var keyboard: some View {
+        heading("Keyboard", "Editing in the chat input, and every shortcut in one place.")
+        box("Chat input") {
+            toggleRow("Vim editing", "Esc for normal mode · i or a to insert · v to select.", $c.vim)
+            dependent(off: !c.vim) {
+                row("Starting mode", "The mode each new message starts in.") {
+                    Picker("Starting mode", selection: $c.vimStart) { Text("Insert").tag("insert"); Text("Normal").tag("normal") }.labelsHidden().pickerStyle(.segmented).fixedSize()
                 }
             }
-            v()
-        }.padding(Theme.sp4).frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(edge))
-            .padding(.top, Theme.sp2)
+        }
+        shortcuts("In the app", [("New window", "⌘N"), ("Settings", "⌘,"), ("Show or hide chat", "⇧⌘C"),
+                                 ("Show or hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R"), ("Up or down a floor", "⌘↑|⌘↓")])
+        shortcuts("While typing in the chat", [("Search chat history", "⌃R"), ("Previous or next sent message", "↑|↓"), ("New line", "⇧↩")])
+        shortcuts("In any app", [("Show or hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
     }
 
-    func toggleRow(_ title: String, _ help: String, _ on: Binding<Bool>) -> some View {
-        HStack(alignment: .top, spacing: Theme.sp3) {
-            VStack(alignment: .leading, spacing: 2) { Text(title).foregroundColor(fg); note(help) }
-            Spacer(minLength: Theme.sp4)
-            Toggle(title, isOn: on).labelsHidden().toggleStyle(.switch).tint(accent)  // full size: on and off read at a glance
+    /// Two columns of shortcuts.
+    func shortcuts(_ t: String, _ keys: [(String, String)]) -> some View {
+        box(t) {
+            let even = keys.count / 2 * 2
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
+                ForEach(keys[..<even], id: \.0) { a, k in shortcut(a, k) }
+            }
+            if even < keys.count { shortcut(keys[even].0, keys[even].1) }  // an odd one out takes the full row, no empty cell
         }
     }
+    func shortcut(_ a: String, _ k: String) -> some View {
+        ruled(HStack(spacing: Theme.sp2) {
+            Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Theme.sp2)
+            if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) }  // the voice shortcut is edited where it's listed
+        }.padding(.horizontal, Theme.sp4).frame(minHeight: 40))
+    }
 
-    func themeGrid(_ title: String, dark: Bool) -> some View {
-        section(title) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: Theme.sp2)], spacing: Theme.sp2) {
-                ForEach(themes.filter { $0.dark == dark }, id: \.name) { t in swatch(t) }
+    /// "↑|↓" is either key, as separate caps; a chord is one cap with its modifiers spaced.
+    func keycaps(_ k: String) -> some View {
+        HStack(spacing: Theme.sp1) {
+            ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
+                if i > 0 { Text("or").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+                Text(key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
+                    .padding(.horizontal, Theme.sp2).frame(minWidth: 26).frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(surface)).overlay(RoundedRectangle(cornerRadius: 5).stroke(edge))
             }
         }
     }
 
-    func row<V: View>(_ label: String, @ViewBuilder _ v: () -> V) -> some View {
-        HStack(spacing: Theme.sp3) { Text(label).font(sys(size: Theme.fs3)).frame(width: 110, alignment: .leading).foregroundColor(sub).fixedSize(horizontal: false, vertical: true); v(); Spacer(minLength: 0) }
-            .frame(minHeight: 32).controlSize(.regular)
+    @ViewBuilder var terminal: some View {
+        heading("Terminal", "The Basement's tabs, and the orbs that ride between it and Greenlight Center.")
+        box("Floating orbs") {
+            toggleRow("Show floating orbs", "The buttons bottom right that ride between floors. Off: ⌘↑ / ⌘↓ still ride.",
+                      Binding(get: { !c.orbsHidden }, set: { c.orbsHidden = !$0 }))
+            dependent(off: c.orbsHidden) {
+                row("Up button") {
+                    Picker("Up button", selection: $c.orbStyle) { Text("Matte").tag("matte"); Text("Traffic light").tag("light") }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                }
+            }
+            row("Ride animation", "The orb's flip between floors. 0: you're just there.") { seconds("Ride animation", $c.rideTime) }
+            row("Sidebar slide", "How long the Basement's sidebar takes to slide in. 0: it's just there.") { seconds("Sidebar slide", $c.sidebarSlide) }
+        }
+        box("Tab names") {
+            toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
+            dependent(off: !c.termAutoName) { row("Naming model") { claudeModelPicker("Naming model", $c.termNameModel) } }
+        }
     }
 
-    func fontPicker(_ label: String, _ current: String, _ set: @escaping (String) -> Void) -> some View {
-        Picker(label, selection: Binding(get: { current }, set: { v in c.restyle { set(v) } })) {
-            ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
-        }.labelsHidden().frame(width: menuWidth)
+    /// A duration: a slider for the usual 0–2s, a field for up to 5s, and whether it's on at all.
+    func seconds(_ label: String, _ v: Binding<Double>) -> some View {
+        let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) }), on = v.wrappedValue > 0
+        return HStack(spacing: Theme.sp2) {
+            Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)  // no `step:`, which draws 41 tick marks.frame(width: 130).accessibilityLabel(label)
+            TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
+            Text("s").foregroundColor(sub)
+            Text(on ? "On" : "Off").font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(on ? accent : dim)
+                .frame(width: 34, height: 18).background(Capsule().fill(on ? accent.opacity(0.12) : surface))
+        }
     }
 
-    /// A mini terminal in the theme's own colors.
-    func swatch(_ t: Theme) -> some View {
-        let on = t.name == (t.dark ? darkTheme : lightTheme).name
-        return Button { c.restyle { if t.dark { darkTheme = t } else { lightTheme = t } } } label: {
-            HStack(spacing: Theme.sp2) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(t.name).font(sys(size: Theme.fs2, weight: .medium)).foregroundColor(Color(nsColor: t.fg)).lineLimit(1)
-                    HStack(spacing: 3) {
-                        ForEach(Array([t.accent, t.bubble, t.fg].enumerated()), id: \.offset) { _, col in
-                            Circle().fill(Color(nsColor: col)).frame(width: 10, height: 10).overlay(Circle().stroke(t.mix(0.25), lineWidth: 0.5))
+    @ViewBuilder var hosts: some View {
+        let ssh = sshHosts(), env = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"]
+        heading("Hosts", "Where Greenlight runs your agents and workspaces, and the machines the Basement opens shells on.")
+        box("Greenlight runs on") {
+            row("Host", c.hostCheck.isEmpty ? "Needs ssh key auth. Its workspaces, agents, timer and chat live there; this Mac only shows them." : c.hostCheck) {
+                Picker("Host", selection: $c.runHost) {
+                    Text("This Mac").tag("local")
+                    ForEach(ssh + (c.runHost == "local" || ssh.contains(c.runHost) ? [] : [c.runHost]), id: \.self) { Text($0).tag($0) }
+                }.labelsHidden().frame(width: 180)
+                Button("Test") { c.testHost() }.help("Test the connection")
+            }
+            dependent(off: false) {
+                row("State folder", "On that host.") { TextField("~/.greenlight", text: $c.runHome).textFieldStyle(.roundedBorder).frame(width: 240) }
+                row("Code folder", "Where greenlight.py lives on that host.") { TextField("~/.claude/skills/greenlight", text: $c.runCode).textFieldStyle(.roundedBorder).frame(width: 240) }
+            }
+        }
+        if c.hostPending {
+            banner("arrow.clockwise", "Greenlight reads the host at launch. Relaunch to apply.", tinted: true) { Button("Relaunch") { c.relaunch() }.buttonStyle(.borderedProminent) }
+        }
+        if let env { banner("exclamationmark.triangle", "GREENLIGHT_HOST=\(env) is set, and it wins over this setting.") }
+        box("The Basement's hosts", aside: "From ~/.ssh/config") {
+            row("This Mac's name", "Shown in the Basement's sidebar. Empty: its hostname.") { TextField(localDefault, text: $c.localName).textFieldStyle(.roundedBorder).frame(width: 240) }
+            pathRow("laptopcomputer", c.localShown) { Text("local").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+            ForEach(ssh, id: \.self) { h in pathRow("server.rack", h) { if h == host { chip("runs Greenlight") } else { Text("ssh").font(sys(size: Theme.fs1)).foregroundColor(dim) } } }
+            ruled(HStack {
+                note("Every Host in ~/.ssh/config, minus wildcards, git hosts and -ts twins. A new one shows after a relaunch.")
+                Spacer(minLength: Theme.sp3)
+                Button("Edit ~/.ssh/config") { _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-t", NSHomeDirectory() + "/.ssh/config"]) }
+            }.padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3))
+        }
+    }
+
+    // MARK: Greenlight, on its host
+
+    @ViewBuilder var automation: some View {
+        heading("Automation", "What Greenlight does on \(hostLabel) between your visits: scanning workspaces, and the background agents that build the dashboard.")
+        let failed = !c.greenlightEveryNote.isEmpty && !c.greenlightEveryLoading
+        box("Workspace scan") {
+            row("Scan every", c.greenlightEveryLoading ? "Checking \(hostLabel)…" : c.greenlightEvery == 0 ? "Off: nothing scans or starts agents on a schedule."
+                : "Scans every workspace on \(hostLabel), starts agents when work is waiting, and refreshes the dashboard.") {
+                if c.greenlightEveryLoading { ProgressView().controlSize(.small) }
+                Picker("Scan interval", selection: Binding(get: { c.greenlightEvery }, set: c.setGreenlightEvery)) {
+                    Text("Off").tag(0)
+                    ForEach([10, 15, 30, 60], id: \.self) { Text($0 == 60 ? "1 hour" : "\($0) min").tag($0) }
+                }.labelsHidden().pickerStyle(.segmented).fixedSize().onAppear(perform: c.loadGreenlightEvery).disabled(c.greenlightEveryLoading)
+            }
+            if failed {
+                ruled(HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(Theme.needs)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(c.greenlightEveryNote).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(fg)
+                        note("The schedule shown is the last one this Mac read; it may be out of date.")
+                    }
+                    Spacer(minLength: Theme.sp3)
+                    Button("Retry", action: c.loadGreenlightEvery)
+                }.padding(Theme.sp4).background(Theme.needs.opacity(0.1)))
+            }
+        }
+        box("Background agents") {
+            row("Workspace pages", "Builds each workspace's page on the dashboard.") { claudeModelPicker("Workspace pages model", $c.designModel) }
+            dependent(off: false) {
+                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort) }
+                row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
+                    if c.designParallel > 0 {
+                        Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
+                    }
+                    Picker("Rebuild pages", selection: Binding(get: { c.designParallel > 0 }, set: { c.designParallel = $0 ? max(c.designParallel, 3) : 0 })) {
+                        Text("On demand").tag(false); Text("Background").tag(true)
+                    }.labelsHidden().pickerStyle(.segmented).fixedSize()
+                }
+            }
+            row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { claudeModelPicker("Suggestions model", $c.nextModel) }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
+        }
+        // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
+        banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
+    }
+
+    // Projects: the Basement's projects.json on this Mac ([{id, name, repos, dirs, dir?}]), saved as you change them.
+    func pid(_ p: [String: Any]) -> String { p["id"] as? String ?? "" }
+    func pname(_ p: [String: Any]) -> String { p["name"] as? String ?? "Project" }
+    func pstrings(_ p: [String: Any], _ k: String) -> [String] { p[k] as? [String] ?? [] }
+    func projectOf(_ r: String) -> [String: Any]? { rs.projs.first { pstrings($0, "repos").contains(r) } }
+    var allRepos: [String] { Array(Set(rs.repos + rs.projs.flatMap { pstrings($0, "repos") })).sorted() }
+
+    func commitProjects(_ edit: (inout [[String: Any]]) -> Void) {
+        var list = rs.projs; edit(&list)
+        if delegate.saveProjects(list) { rs.projs = list; rs.projNote = "" } else { rs.projNote = "Couldn't save the projects." }
+    }
+    /// A repo in one project (to: "" takes it out of every project).
+    func setProject(_ r: String, _ to: String) {  // ponytail: a repo the Basement put in two projects ends up in one
+        commitProjects { l in for j in l.indices { l[j]["repos"] = pstrings(l[j], "repos").filter { $0 != r } + (pid(l[j]) == to ? [r] : []) } }
+    }
+    @discardableResult func addProject() -> String {
+        let id = "p" + String(UUID().uuidString.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12))
+        commitProjects { $0.append(["id": id, "name": "New project", "repos": [String](), "dirs": [String]()]) }
+        rs.proj = id
+        return id
+    }
+    func deleteProject(_ id: String) {
+        let a = NSAlert(); a.messageText = "Delete \(pname(rs.projs.first { pid($0) == id } ?? [:]))?"
+        a.informativeText = "Its repositories stay; they just aren't in a project. Folders and terminals aren't touched."
+        a.addButton(withTitle: "Delete"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        commitProjects { $0.removeAll { pid($0) == id } }
+        rs.proj = rs.projs.first.map(pid) ?? ""
+    }
+    func addDir() {
+        var d = rs.draftDir.trimmingCharacters(in: .whitespaces)
+        if (host.isEmpty || host == "local") && (d == "~" || d.hasPrefix("~/")) { d = NSHomeDirectory() + d.dropFirst() }
+        while d.count > 1 && d.hasSuffix("/") { d.removeLast() }
+        guard d.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !d.contains("..") else {
+            rs.projNote = "\(d) isn't a full path (letters, digits and ._-@+/ only)."; return
+        }
+        let id = rs.proj
+        commitProjects { l in if let j = l.firstIndex(where: { pid($0) == id }), !pstrings(l[j], "dirs").contains(d) { l[j]["dirs"] = pstrings(l[j], "dirs") + [d] } }
+        rs.draftDir = ""
+    }
+
+    @ViewBuilder var projects: some View {
+        split("Projects", "Repositories and the folders they're checked out in. Each gets its own Basement window.", add: ("New project", { _ = addProject() })) {
+            ForEach(rs.projs.indices, id: \.self) { i in
+                let p = rs.projs[i], n = pstrings(p, "repos").count, d = pstrings(p, "dirs").count
+                listItem(pname(p), "\(n) \(n == 1 ? "repo" : "repos") · \(d) \(d == 1 ? "folder" : "folders")", on: pid(p) == rs.proj, icon: "folder") { rs.proj = pid(p); rs.draftDir = ""; rs.projNote = "" }
+            }
+            if rs.projs.isEmpty { note("No projects yet.").padding(Theme.sp3) }
+        } detail: {
+            if let i = rs.projs.firstIndex(where: { pid($0) == rs.proj }) { projectDetail(i) } else { note("Pick a project, or make a new one.") }
+            if !rs.projNote.isEmpty { note(rs.projNote) }
+        }.onAppear { if !rs.projs.contains(where: { pid($0) == rs.proj }) { rs.proj = rs.projs.first.map(pid) ?? "" } }
+    }
+
+    @ViewBuilder func projectDetail(_ i: Int) -> some View {
+        let p = rs.projs[i], id = pid(p), dirs = pstrings(p, "dirs"), repos = pstrings(p, "repos"), opensIn = p["dir"] as? String ?? dirs.first
+        HStack(spacing: Theme.sp3) {
+            TextField("Project name", text: Binding(get: { pname(p) }, set: { v in commitProjects { l in l[i]["name"] = String(v.prefix(80)) } }))
+                .textFieldStyle(.plain).font(sys(size: 20, weight: .bold)).foregroundColor(fg)
+            Button("Delete", role: .destructive) { deleteProject(id) }
+        }
+        box("Terminal") {
+            row("New terminals open in", "Empty: the project's first folder.") {
+                Picker("New terminals open in", selection: Binding(get: { p["dir"] as? String ?? "" }, set: { v in commitProjects { l in l[i]["dir"] = v.isEmpty ? nil : v } })) {
+                    Text("First folder").tag("")
+                    ForEach(dirs, id: \.self) { Text($0).tag($0) }
+                }.labelsHidden().frame(maxWidth: 260)
+            }
+        }
+        box("Folders", aside: "Full paths on \(hostLabel)") {
+            ForEach(dirs, id: \.self) { d in
+                pathRow("folder", d) {
+                    if d == opensIn { chip("new terminals") }
+                    else { Button("Open terminals here") { commitProjects { l in l[i]["dir"] = d } }.buttonStyle(.borderless).font(sys(size: Theme.fs2)) }
+                    xButton("Remove \(d)") { commitProjects { l in l[i]["dirs"] = dirs.filter { $0 != d }; if l[i]["dir"] as? String == d { l[i]["dir"] = nil } } }
+                }
+            }
+            ruled(HStack(spacing: 10) {
+                TextField("/home/you/src/another-repo", text: $rs.draftDir).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).onSubmit(addDir)
+                    .accessibilityLabel("New folder path")
+                Button("Add folder", action: addDir).disabled(rs.draftDir.trimmingCharacters(in: .whitespaces).isEmpty)
+            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+        }
+        box("Repositories", aside: "\(repos.count) \(repos.count == 1 ? "repo" : "repos")") {
+            ForEach(repos, id: \.self) { r in
+                pathRow("arrow.triangle.branch", r) {
+                    Button("Open") { c.settingsTab = "Repositories"; rs.adding = false; rs.pick(r) }.buttonStyle(.borderless)
+                    xButton("Remove \(r) from this project") { setProject(r, "") }
+                }
+            }
+            if repos.isEmpty { ruled(note("No repositories in this project yet.").padding(Theme.sp4).frame(maxWidth: .infinity, alignment: .leading)) }
+            ruled(HStack {
+                Menu("Add a repository…") {
+                    ForEach(allRepos.filter { !repos.contains($0) }, id: \.self) { r in
+                        Button(r + (projectOf(r).map { " (from \(pname($0)))" } ?? "")) { setProject(r, id) }
+                    }
+                }.fixedSize()
+                Spacer()
+            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+        }
+    }
+
+    @ViewBuilder var repositories: some View {
+        split("Repositories", "Each repo's project, its lifecycle, and the prompts behind the hover card's buttons.",
+              add: ("Add repository", { rs.adding = true; rs.draftRepo = ""; rs.draftProj = rs.projs.first.map(pid) ?? ""; rs.projNote = "" })) {
+            ForEach(allRepos, id: \.self) { r in
+                let on = !rs.adding && rs.repo == r
+                listItem(r, projectOf(r).map(pname) ?? "No project", on: on, mono: true, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
+            }
+            if allRepos.isEmpty { note(rs.busy ? "Loading…" : "No repositories yet.").padding(Theme.sp3) }
+        } detail: {
+            if rs.adding { addRepoForm } else if !rs.repo.isEmpty { repoDetail } else { note("Pick a repository.") }
+        }.onAppear { takeRepo() }.onChange(of: c.settingsRepo) { takeRepo() }
+    }
+
+    func takeRepo() {  // "repo" or "repo/kind": the card's "Edit <repo>'s prompt…"
+        let p = c.settingsRepo.split(separator: "/").map(String.init); if p.isEmpty { return }
+        if p.count > 1, RulesStore.kinds.contains(where: { $0.0 == p[1] }) { rs.kind = p[1]; rs.rtab = "prompts" }
+        rs.adding = false; rs.pick(p[0]); c.settingsRepo = ""
+    }
+
+    @ViewBuilder var addRepoForm: some View {
+        box("Add a repository") {
+            row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
+                TextField("widgets", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
+            }
+            row("Project") {
+                Picker("Project", selection: $rs.draftProj) { ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) } }.labelsHidden().frame(width: 180)
+                Button("New project…") { rs.draftProj = addProject(); rs.proj = rs.draftProj }
+            }
+        }
+        if !rs.projNote.isEmpty { note(rs.projNote) }
+        HStack {
+            Spacer()
+            Button("Cancel") { rs.adding = false }
+            Button("Add repository", action: addRepo).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                .disabled(rs.draftRepo.trimmingCharacters(in: .whitespaces).isEmpty || rs.draftProj.isEmpty)
+        }
+    }
+    func addRepo() {
+        var name = String(rs.draftRepo.trimmingCharacters(in: .whitespaces).split(separator: "/").last ?? "")
+        if name.hasSuffix(".git") { name.removeLast(4) }
+        guard name.range(of: #"^[\w.-]{1,100}$"#, options: .regularExpression) != nil else { rs.projNote = "A repo name is letters, digits and ._- only."; return }  // it reaches a shell command
+        guard !rs.draftProj.isEmpty else { rs.projNote = "Pick a project for it."; return }
+        setProject(name, rs.draftProj)
+        rs.adding = false; rs.rtab = "stages"; rs.pick(name)
+    }
+
+    @ViewBuilder var repoDetail: some View {
+        let proj = projectOf(rs.repo), own = rs.source == "yours"
+        VStack(alignment: .leading, spacing: 3) {
+            Text(rs.repo).font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg)
+            if let path = rs.repoPaths[rs.repo] { note(path) }
+        }
+        HStack(spacing: Theme.sp2) {  // under the name: the detail column can be ~300pt
+            Picker("Project", selection: Binding(get: { proj.map(pid) ?? "" }, set: { setProject(rs.repo, $0) })) {
+                Text("No project").tag("")
+                ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) }
+            }.labelsHidden().frame(maxWidth: 160).help("Opens with the project's folders in the Basement.")
+            Button("New project…") { setProject(rs.repo, addProject()); c.settingsTab = "Projects" }
+            Spacer(minLength: 0)
+            Button("Remove", role: .destructive) { setProject(rs.repo, "") }.disabled(proj == nil).help("Take it out of its project")
+        }
+        if !rs.projNote.isEmpty { note(rs.projNote) }
+        VStack(alignment: .leading, spacing: Theme.sp2) {
+            Picker("Repository settings", selection: $rs.rtab) {
+                Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
+                Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
+                    .font(sys(size: Theme.fs2)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
+                if own { Button("Use default", action: rs.reset).buttonStyle(.link).font(sys(size: Theme.fs2)).disabled(rs.busy) }
+            } }
+        }
+        switch rs.rtab {
+        case "auto": autoRun
+        case "rules":
+            box("Rules", aside: "Markdown · every agent on \(rs.repo) follows these") { editor($rs.rules, "Rules for \(rs.repo)", height: 260).padding(Theme.sp3) }
+            saveRow("Save", rs.save)
+        case "prompts": prompts
+        default: lifecycle
+        }
+    }
+
+    func optBinding(_ k: String) -> Binding<Bool> {
+        Binding(get: { rs.options[k] != nil }, set: { v in if v { rs.options[k] = "" } else { rs.options[k] = nil } })
+    }
+
+    @ViewBuilder var lifecycle: some View {
+        box("Stages", aside: "In order. The first unmet stage is the MR's next step.") {
+            ForEach(rs.stages.indices, id: \.self) { i in stageRow(i) }
+            ruled(HStack {
+                Menu("Add stage…") {
+                    ForEach(rs.builtins.keys.sorted().filter { k in !rs.stages.contains { $0.key == k } }, id: \.self) { k in
+                        Button("\(k) (built-in)") { rs.stages.insert(Stage(key: k, req: rs.builtins[k] ?? "", done: ""), at: max(0, rs.stages.count - 1)) }
+                    }
+                    Divider()
+                    Button("Your own (sign-off or label)…") { rs.stages.insert(Stage(key: "stage\(rs.stages.count + 1)", req: "", done: "signoff"), at: max(0, rs.stages.count - 1)) }
+                }.fixedSize()
+                Spacer()
+            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+        }
+        box("Options") {
+            toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
+            toggleRow("Merge into any branch", "Greenlight may merge an MR whose target isn't the default branch.", optBinding("merge_any_base"))
+        }
+        saveRow("Save", rs.save)
+    }
+
+    func stageRow(_ i: Int) -> some View {
+        let s = $rs.stages[i], builtin = rs.builtins[rs.stages[i].key] != nil
+        return ruled(HStack(alignment: .top, spacing: Theme.sp3) {
+            Text("\(i + 1)").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
+            VStack(alignment: .leading, spacing: Theme.sp1) {
+                HStack(spacing: Theme.sp2) {
+                    if builtin { Text(rs.stages[i].key).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
+                    else { TextField("key", text: s.key).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
+                    Text(builtin ? "Built-in" : s.wrappedValue.done.hasPrefix("label=") ? "Label" : "Your sign-off").font(sys(size: Theme.fs1, weight: .medium))
+                        .foregroundColor(builtin ? sub : accent).padding(.horizontal, Theme.sp2).frame(height: 20)
+                        .background(Capsule().fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
+                }
+                if builtin { note(rs.stages[i].req) }
+                else {
+                    TextField("Requirement", text: s.req).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
+                    HStack(spacing: Theme.sp2) {
+                        Picker("Done when", selection: Binding(get: { s.wrappedValue.done.hasPrefix("label=") ? "label" : "signoff" },
+                                                               set: { s.wrappedValue.done = $0 == "label" ? "label=" : "signoff" })) {
+                            Text("You sign off").tag("signoff"); Text("It has a label").tag("label")
+                        }.labelsHidden().frame(width: 150)
+                        if s.wrappedValue.done.hasPrefix("label=") {
+                            TextField("label", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "label=" + $0 }))
+                                .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
                         }
                     }
                 }
-                Spacer(minLength: 0)
-                if on { Image(systemName: "checkmark.circle.fill").font(sys(size: Theme.fs3)).foregroundColor(Color(nsColor: t.accent)) }
-            }.padding(.horizontal, Theme.sp3).frame(height: 56).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(Color(nsColor: t.bg)))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(on ? accent : t.mix(0.2), lineWidth: on ? 2 : 1))
-        }.buttonStyle(.plain).accessibilityLabel("\(t.name) theme\(on ? ", selected" : "")")
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 0) {
+                Button { rs.stages.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
+                Button { rs.stages.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }.disabled(i == rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
+                Button { rs.stages.remove(at: i) } label: { Image(systemName: "xmark") }.disabled(rs.stages.count == 1).accessibilityLabel("Remove stage \(i + 1)")
+            }.buttonStyle(.borderless).foregroundColor(sub).frame(height: 24)
+        }.padding(.leading, Theme.sp3).padding(.trailing, Theme.sp3).padding(.vertical, 10))
     }
 
+    @ViewBuilder var autoRun: some View {
+        banner("bolt", "Runs in the MR's workspace in a background tab, once per head commit, one job at a time. Never on goals marked hold, parked or automation. You're notified when it finishes or needs you. Saved as you change it.")
+        box {
+            ForEach(rs.autoKinds, id: \.kind) { k in
+                toggleRow(RulesStore.kinds.first { $0.0 == k.kind }?.1 ?? k.kind.capitalized, k.when, Binding(get: { rs.autoOn[k.kind] != nil }, set: { rs.setAuto(k.kind, $0 ? 0 : nil) }))
+                if let g = rs.autoOn[k.kind], !k.gates.isEmpty {
+                    dependent(off: false) {
+                        row("Then") {
+                            Picker("\(k.kind): then", selection: Binding(get: { g }, set: { rs.setAuto(k.kind, $0) })) { ForEach(k.gates.indices, id: \.self) { Text(k.gates[$0]).tag($0) } }
+                                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                        }
+                    }
+                }
+            }
+            if rs.autoKinds.isEmpty { note(rs.busy ? "Loading…" : "No auto-run jobs from \(hostLabel).").padding(Theme.sp4) }
+        }
+    }
 
-    /// The app's own visual language: a hex, the state colors (never the accent), chat text and code.
-    var preview: some View {
-        VStack(alignment: .leading, spacing: Theme.sp2) {
-            let pills = ForEach([("Working", Theme.working, Theme.workingInk), ("Needs you", Theme.needs, Theme.needsInk), ("Crashed", Theme.crashed, Theme.crashedInk)], id: \.0) { t, dotc, ink in
-                HStack(spacing: Theme.sp1) { Circle().fill(dotc).frame(width: 6, height: 6); Text(t) }
-                    .font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(ink)
-                    .padding(.horizontal, Theme.sp2).frame(height: 20).background(Capsule().fill(dotc.opacity(0.15)))
+    @ViewBuilder var prompts: some View {
+        let kindName = RulesStore.kinds.first { $0.0 == rs.kind }?.1 ?? ""
+        box {
+            HStack(spacing: Theme.sp3) {
+                Picker("Button", selection: Binding(get: { rs.kind }, set: { rs.kind = $0; rs.getPrompt() })) { ForEach(RulesStore.kinds, id: \.0) { Text($0.1).tag($0.0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Spacer(minLength: Theme.sp2)
+                Picker("Prompt", selection: Binding(get: { rs.reviewOwn }, set: { rs.reviewOwn = $0; if $0 && rs.review.isEmpty { rs.review = "{default}\n\n" } })) {
+                    Text("Your own").tag(true); Text("Default").tag(false)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            }.padding(.horizontal, Theme.sp3).padding(.vertical, 10)
+            VStack(alignment: .leading, spacing: Theme.sp2) {
+                note("What the \(kindName) button hands Claude. Private to you: \(greenlightHome)/prompts/\(rs.repo)/\(rs.kind).md on \(hostLabel), never in the repo. Fills in \(rs.reviewVars.joined(separator: " ")); {default} pulls in the default.")
+                if rs.reviewOwn { editor($rs.review, "\(kindName) prompt for \(rs.repo)", height: 240) }
+                else {
+                    ScrollView { Text(rs.reviewDefault).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(sub).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                        .padding(Theme.sp2).frame(height: 240).background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge))
+                }
+            }.padding(Theme.sp3).overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) }
+        }
+        saveRow("Save prompt", rs.saveReview)
+    }
+
+    @ViewBuilder var instructions: some View {
+        heading("Instructions", "Standing instructions Greenlight reads in the chat and on every run: how to talk to you, what to never do, what to always check. A repo's own rules live in Repositories › Rules.")
+        box("Instructions.md", aside: "On \(hostLabel)") { editor($rs.instructions, "Instructions for Greenlight", height: 380).padding(Theme.sp3) }
+        saveRow("Save instructions", rs.saveInstructions)
+    }
+
+    @ViewBuilder var memory: some View {
+        split("Memory", "What Greenlight has learned, one note each. It reads them before every run.",
+              add: ("New note", { rs.note = ""; rs.noteText = "---\nname: \ndescription: \nmetadata:\n  type: project\n---\n\n" })) {
+            ForEach(rs.notes, id: \.name) { n in
+                listItem(n.name, n.text.split(separator: "\n").first { $0.hasPrefix("description:") }.map { $0.dropFirst(12).trimmingCharacters(in: .whitespaces) } ?? "",
+                         on: rs.note == n.name, mono: true) { rs.note = n.name; rs.noteText = n.text }
             }
-            let hex = Image(systemName: "hexagon.fill").font(sys(size: Theme.fs5)).foregroundColor(Theme.working)
-            ViewThatFits(in: .horizontal) {  // larger text: the pills stack beside the hex
-                HStack(spacing: Theme.sp2) { hex; pills }
-                HStack(alignment: .top, spacing: Theme.sp2) { hex; VStack(alignment: .leading, spacing: Theme.sp1) { pills } }
-            }
-            Text(c.name.uppercased()).font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(accent)
-            Text("widgets !101 is green and ready to merge.")
-                .font(chatFace(size: Theme.fs3))
-            Text("glab ci status --live").font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(sub)
-                .padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(RoundedRectangle(cornerRadius: Theme.r1).fill(card))
-        }.padding(Theme.sp3).frame(maxWidth: 440, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(edge))
+            if rs.notes.isEmpty { note(rs.busy ? "Loading…" : "No notes yet.").padding(Theme.sp3) }
+        } detail: {
+            let existing = rs.notes.contains { $0.name == rs.note }
+            if existing { Text(rs.note + ".md").font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg) }
+            else { TextField("my-decision", text: $rs.note).textFieldStyle(.roundedBorder).frame(width: 260).accessibilityLabel("New note name") }
+            box("Note", aside: "Keep the frontmatter: it's the index line.") { editor($rs.noteText, "Note text", height: 340).padding(Theme.sp3) }
+            saveRow("Save note", rs.saveNote) {
+                Button("Delete note", role: .destructive, action: rs.deleteNote).disabled(rs.busy || !existing)
+            }.disabled(rs.note.isEmpty)
+            note("Notes live in greenlight's memory folder on \(hostLabel). A note deleted here can come back from this Mac's copy on the next sync.sh.")
+        }
     }
 }
 
@@ -2792,7 +3084,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     lazy var settingsHost: NSHostingView<SettingsWindowView> = { let h = NSHostingView(rootView: SettingsWindowView(c: greenlight)); h.sizingOptions = []; return h }()
     /// Settings: its own window, over whichever floor you're on; closing it leaves you there
     lazy var settingsWindow: NSWindow = {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = "Settings"; w.titleVisibility = .hidden; w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false; w.minSize = NSSize(width: 560, height: 420)
@@ -2868,7 +3160,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.titleVisibility = .hidden  // the floors say L1 · GREENLIGHT; the title stays for the Window menu and Mission Control
         w.isReleasedWhenClosed = false  // the close button hides it; the menubar star, Dock or ⌃⌥M bring it back
         w.minSize = NSSize(width: 480, height: 520)
-        w.animationBehavior = greenlight.animations ? .default : .none
+        w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
             wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) }
@@ -2889,7 +3181,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         settingsSub = greenlight.$settingsOpen.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
-            if open { self.greenlight.hint = ""; self.settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }  // the gear's hover-exit never comes
+            if open { self.greenlight.hint = ""; self.settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
             else if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
         }
         split.isVertical = true
@@ -2995,7 +3287,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
 
-    var pushedRepos = "", pushedMono = "", pushedBell = "", pushedChat = "", pushedOrb = "", pushedMotion = true, pushedSlide = 0.25, pushedLocal = localDefault
+    var pushedRepos = "", pushedMono = "", pushedBell = "", pushedChat = "", pushedOrb = "", pushedMotion = 0.6, pushedSlide = 0.25, pushedLocal = localDefault
     func pushBuilds() {
         let names = (try? JSONSerialization.data(withJSONObject: building.sorted())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         broadcast("window.mc && mc.builds({building: \(names), parallel: \(greenlight.designParallel)})")
@@ -3312,7 +3604,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.appearance = NSAppearance(named: .darkAqua)  // the Basement is always dark
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 300, height: 160)
-        w.animationBehavior = greenlight.animations ? .default : .none
+        w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         w.delegate = self
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "term")
@@ -3620,7 +3912,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let from = orbHost, to = up ? window : termWindow
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
-        guard greenlight.animations else { if !up { from.orderOut(nil); hideFloaters() }; return up ? show() : basement() }  // Settings → Appearance → Animations off: a cut
+        guard greenlight.rideTime > 0 else { if !up { from.orderOut(nil); hideFloaters() }; return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
         riding = true
         let S = scr.frame, reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
@@ -3629,8 +3921,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             Shot(img: img, band: w === window ? NSColor(white: 0.93, alpha: 1) : w.backgroundColor,
                  rect: CGRect(x: w.frame.minX - S.minX, y: S.maxY - w.frame.maxY, width: w.frame.width, height: w.frame.height), top: w.frame.height - w.contentLayoutRect.height)
         }
+        let k = reduce ? 1 : greenlight.rideTime / 0.6  // every beat below is written for a 0.6s ride
+        func later(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t * k, execute: f) }
         func at(_ t: Double, _ d: Double, _ curve: (Double) -> Animation = Animation.easeInOut, _ f: @escaping () -> Void) {
-            let a = curve(d); DispatchQueue.main.asyncAfter(deadline: .now() + t) { withAnimation(a, f) }
+            let a = curve(d * k); later(t) { withAnimation(a, f) }
         }
         snap(from) { [self] img in
             let s = RideState(); s.tone = up ? 0 : 1; s.faceUp = up
@@ -3651,15 +3945,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
             if reduce { at(0.23, 0) { s.faceUp = !up } }
             at(0, 0.3) { s.tone = up ? 1 : 0 }  // the backdrop is the new level's color before that level grows
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.3 * k, 0.1)) { [self] in  // ponytail: a 0.1s floor so a very short ride doesn't snap the level before it's drawn
                 snap(to) { [self] img in
                     s.toShot = shot(to, img)
                     if reduce { s.to = Squash(a: 0); at(0, 0.2) { s.to.a = 1; s.veil = 0 } } else {
                         at(0, 0.3, Animation.easeOut) { s.to = Squash() }
                     }
                     // the backdrop lifts only once the level is in place, so what's behind the app never shows through mid-ride
-                    DispatchQueue.main.asyncAfter(deadline: .now() + (reduce ? 0.22 : 0.3)) { [self] in to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + (reduce ? 0.22 : 0.5)) { [self] in
+                    later(reduce ? 0.22 : 0.3) { [self] in to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
+                    later(reduce ? 0.22 : 0.5) { [self] in
                         rideWin?.orderOut(nil); rideWin = nil; riding = false
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
                     }
@@ -3750,8 +4044,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
         if pushedSlide != greenlight.sidebarSlide { pushedSlide = greenlight.sidebarSlide; termWebs.forEach { $0.evaluateJavaScript("window.term && term.slide(\(greenlight.sidebarSlide))") } }
-        if pushedMotion != greenlight.animations { pushedMotion = greenlight.animations
-            (Array(termWins.values) + [window]).forEach { $0.animationBehavior = greenlight.animations ? .default : .none } }  // Animations off: no zoom in or out as a level comes or goes
+        if pushedMotion != greenlight.rideTime { pushedMotion = greenlight.rideTime
+            (Array(termWins.values) + [window]).forEach { $0.animationBehavior = greenlight.rideTime > 0 ? .default : .none } }  // Animations off: no zoom in or out as a level comes or goes
         let chat = "\(!chatHidden),\(greenlight.missed)"
         if pushedChat != chat { pushedChat = chat; broadcast("window.mc && mc.chat(\(chat))") }
         let colors = themeVars()
