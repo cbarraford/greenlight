@@ -1,6 +1,6 @@
 rc=0
 --- stdout
-{"op": "new", "arg": "widgets", "error": "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"}
+{"op": "new", "arg": "widgets", "error": "stdin is not JSON (key must be a string at line 1 column 2)"}
 --- stderr
 --- calls
 --- files

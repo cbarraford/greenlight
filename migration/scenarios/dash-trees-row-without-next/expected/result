@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> 'agent'
+<error> <W>/home/last.json: the row for /nonexistent/ws/a has no agent
 --- calls
 orca worktree ps --limit 10000 --json
 --- files

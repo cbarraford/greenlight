@@ -1,6 +1,6 @@
 rc=0
 --- stdout
-{"op": "new", "arg": "widgets", "error": "cannot access local variable 'res' where it is not associated with a value"}
+{"op": "new", "arg": "widgets", "error": "no agents configured (config.json agents is empty)"}
 --- stderr
 --- calls
 orca repo list --json

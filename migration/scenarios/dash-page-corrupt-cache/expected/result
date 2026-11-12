@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+<error> <W>/home/dash/pages/pc.json: not JSON (key must be a string at line 1 column 2)
 --- calls
 orca worktree ps --limit 10000 --json
 --- files
