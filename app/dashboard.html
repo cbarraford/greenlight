@@ -1424,7 +1424,7 @@ function renderNone(main){  // no workspaces at all: start one; all hidden by th
 function renderMain(){
   const main = document.getElementById("main");
   const keep = main.scrollTop, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
-  const fe = document.activeElement, fid = fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
+  const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
   main.replaceChildren(); main.classList.remove("ov");
   if (!ui.snap) { main.classList.add("ov"); const bad = CONN.failed, retrying = !bad && CONN.tries > 0;
     const retry = () => { CONN.tries++; CONN.refocus = true; post({cmd: "ready"}); armConn(); renderMain(); footer(); document.querySelector("#main .empty").focus() };  // the page's own hello again: the app answers with the latest update
@@ -1447,7 +1447,7 @@ function renderMain(){
   if (fi) { fi.focus(); try { fi.setSelectionRange(...fsel) } catch {} }
 }
 function render(){
-  const ae = document.activeElement, q = ae && (["q", "areply", "preply"].includes(ae.id) || /^ps-/.test(ae.id)) && ae.id;
+  const ae = document.activeElement, q = document.hasFocus() && ae && (["q", "areply", "preply"].includes(ae.id) || /^ps-/.test(ae.id)) && ae.id;
   const sel = q && /^ps-/.test(q) && [ae.selectionStart, ae.selectionEnd, ae.scrollTop];
   document.querySelectorAll(".toast").forEach(e => e.remove());
   topBar(); renderDock(); renderPark(); renderMain(); footer();  // the dock first: it sets the gutter the field is laid out in
