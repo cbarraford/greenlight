@@ -1,7 +1,7 @@
 rc=2
 --- stdout
 --- stderr
-scan failed: not enough values to unpack (expected 2, got 1)
+scan failed: r1: can't parse origin URL 'git@gitlab.com/acme/widgets.git' (git@ without host:path)
 --- calls
 git -C r1 fetch --quiet --prune origin
 git -C r1 remote get-url origin
