@@ -16,7 +16,7 @@ fn read(p: &Path) -> Res<String> {
     std::fs::read_to_string(p).or_else(|e| oserr(e, p))
 }
 /// glab api, naming the call when the reply isn't JSON (Python said only "Expecting value: line 1 column 1 (char 0)").
-fn gl(path: &str) -> Res<Value> {
+pub fn gl(path: &str) -> Res<Value> {
     base::gl(path).map_err(|e| match py::kind(&*e) {
         "JSONDecodeError" => PyErr { kind: "JSONDecodeError", msg: format!("glab api {path}: not JSON ({e})") }.into(),
         _ => e,
@@ -1301,9 +1301,8 @@ fn arg(args: &[String], i: usize) -> Res<&str> {
 }
 
 /// MRs with no workspace yet: adopt creates them, so a run should follow.
-fn adopt_plan_creates(_rows: &[Value], _ts: &Value) -> Res<usize> {
-    // TODO(wave2): crate::adopt::plan(rows, ts)["create"].len()
-    py::err("adopt not ported yet")
+fn adopt_plan_creates(rows: &[Value], ts: &Value) -> Res<usize> {
+    Ok(crate::adopt::plan(Some((rows, ts)), &crate::adopt::cap())?.create.len())
 }
 
 pub fn main(args: Vec<String>) -> Res<i32> {
