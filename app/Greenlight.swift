@@ -1452,7 +1452,7 @@ struct SettingsView: View {
                 Spacer()
                 Button("Done") { c.settingsOpen = false }.keyboardShortcut(.cancelAction).buttonStyle(.borderedProminent).controlSize(.large)
             }.padding(.leading, 20).padding(.trailing, Theme.sp4).frame(height: 60)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg).ignoresSafeArea()  // the header is the title bar
             .environment(\.colorScheme, theme.dark ? .dark : .light).tint(accent)
             .onAppear { rs.load(); rs.projs = delegate.savedProjects }
             .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
@@ -1581,12 +1581,17 @@ struct SettingsView: View {
 
     /// Label and hint on the left, the control on the right.
     func row<V: View>(_ label: String, _ hint: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
-        ruled(HStack(spacing: 20) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
-                if let hint { note(hint) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: Theme.sp2) { v() }.layoutPriority(1)  // the control gets its width first; the label wraps (ViewThatFits still falls back)
+        let text = VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+            if let hint { note(hint) }
+        }
+        // The label keeps at least 180pt beside the control; a control too wide for that (Effort, Accent, Scan every) moves under it.
+        return ruled(ViewThatFits(in: .horizontal) {
+            HStack(spacing: 20) {
+                text.frame(minWidth: 180, idealWidth: 180, maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: Theme.sp2) { v() }.layoutPriority(1)
+            }
+            VStack(alignment: .leading, spacing: 10) { text.frame(maxWidth: .infinity, alignment: .leading); HStack(spacing: Theme.sp2) { v() } }
         }.padding(.horizontal, Theme.sp4).padding(.vertical, 10).frame(minHeight: 48))
     }
 
@@ -1619,11 +1624,11 @@ struct SettingsView: View {
                 Divider().overlay(line)
                 Button(action: add.1) { Label(add.0, systemImage: "plus").font(sys(size: Theme.fs3)) }.buttonStyle(.borderless)
                     .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            }.frame(width: 260)
+            }.frame(width: 220)
             Divider().overlay(line)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) { detail() }
-                    .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
+                    .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 32)
                     .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -1943,7 +1948,7 @@ struct SettingsView: View {
     func seconds(_ label: String, _ v: Binding<Double>) -> some View {
         let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) }), on = v.wrappedValue > 0
         return HStack(spacing: Theme.sp2) {
-            Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = $0 }), in: 0...2, step: 0.05).frame(width: 130).accessibilityLabel(label)
+            Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)  // no `step:`, which draws 41 tick marks.frame(width: 130).accessibilityLabel(label)
             TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
             Text("s").foregroundColor(sub)
             Text(on ? "On" : "Off").font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(on ? accent : dim)
@@ -2095,7 +2100,7 @@ struct SettingsView: View {
                 Picker("New terminals open in", selection: Binding(get: { p["dir"] as? String ?? "" }, set: { v in commitProjects { l in l[i]["dir"] = v.isEmpty ? nil : v } })) {
                     Text("First folder").tag("")
                     ForEach(dirs, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: 260)
+                }.labelsHidden().frame(maxWidth: 260)
             }
         }
         box("Folders", aside: "Full paths on \(hostLabel)") {
@@ -2179,30 +2184,29 @@ struct SettingsView: View {
 
     @ViewBuilder var repoDetail: some View {
         let proj = projectOf(rs.repo), own = rs.source == "yours"
-        HStack(alignment: .top, spacing: Theme.sp2) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(rs.repo).font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg)
-                if let path = rs.repoPaths[rs.repo] { note(path) }
-            }
-            Spacer(minLength: Theme.sp3)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(rs.repo).font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg)
+            if let path = rs.repoPaths[rs.repo] { note(path) }
+        }
+        HStack(spacing: Theme.sp2) {  // under the name: the detail column can be ~300pt
             Picker("Project", selection: Binding(get: { proj.map(pid) ?? "" }, set: { setProject(rs.repo, $0) })) {
                 Text("No project").tag("")
                 ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) }
-            }.labelsHidden().frame(width: 160).help("Opens with the project's folders in the Basement.")
+            }.labelsHidden().frame(maxWidth: 160).help("Opens with the project's folders in the Basement.")
             Button("New project…") { setProject(rs.repo, addProject()); c.settingsTab = "Projects" }
+            Spacer(minLength: 0)
             Button("Remove", role: .destructive) { setProject(rs.repo, "") }.disabled(proj == nil).help("Take it out of its project")
         }
         if !rs.projNote.isEmpty { note(rs.projNote) }
-        HStack(spacing: Theme.sp3) {
+        VStack(alignment: .leading, spacing: Theme.sp2) {
             Picker("Repository settings", selection: $rs.rtab) {
                 Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
             }.pickerStyle(.segmented).labelsHidden().fixedSize()
-            Spacer(minLength: Theme.sp2)
-            if !rs.source.isEmpty {
+            if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
                 Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
-                    .font(sys(size: Theme.fs2)).foregroundColor(own ? accent : dim).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    .font(sys(size: Theme.fs2)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
                 if own { Button("Use default", action: rs.reset).buttonStyle(.link).font(sys(size: Theme.fs2)).disabled(rs.busy) }
-            }
+            } }
         }
         switch rs.rtab {
         case "auto": autoRun
