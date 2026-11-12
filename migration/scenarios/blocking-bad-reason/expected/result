@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> list.index(x): x not in list
+<error> <W>/home/blocks.json: unknown block reason 'mystery' on x!1
 --- calls
 --- files
 == home/blocks.json
