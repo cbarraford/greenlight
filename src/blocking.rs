@@ -55,14 +55,14 @@ fn strs(v: &Value) -> BTreeSet<String> {
     v.as_array().into_iter().flatten().map(py::str_).collect()
 }
 /// v[k], KeyError when missing (check() errors are swallowed per MR, as Python's are).
-fn k<'a>(v: &'a Value, key: &str) -> Res<&'a Value> {
+pub fn k<'a>(v: &'a Value, key: &str) -> Res<&'a Value> {
     v.get(key).ok_or_else(|| py::key_err::<()>(key).unwrap_err())
 }
 fn user(v: &Value, key: &str) -> Res<String> {
     Ok(py::str_(k(k(v, key)?, "username")?))
 }
 /// v.get(key, []) iterated: missing is empty, anything but a list is an error.
-fn list<'a>(v: &'a Value, key: &str) -> Res<&'a [Value]> {
+pub fn list<'a>(v: &'a Value, key: &str) -> Res<&'a [Value]> {
     match v.get(key) {
         None => Ok(&[]),
         Some(Value::Array(a)) => Ok(a),

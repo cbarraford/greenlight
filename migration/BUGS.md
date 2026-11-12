@@ -13,3 +13,4 @@ replaces those crashes with a clean error.
 |---|---|---|---|
 | gl-config-corrupt | a corrupt `config.json` crashed with JSONDecodeError text only | `Error: <path>/config.json: <parse error>` names the file | core.md §7 |
 | blocking-bad-reason | a `blocks.json` reason outside the known five crashed with `list.index(x): x not in list` | `Error: <path>/blocks.json: unknown block reason 'mystery' on x!1` | core.md blocking §1 |
+| cleanup-bad-url | an scp-style origin with no `:` after the host (`git@gitlab.com/acme/widgets.git`) crashed the whole scan with `not enough values to unpack (expected 2, got 1)` | `scan failed: r1: can't parse origin URL '<url>' (git@ without host:path)` names the repo and URL | lifecycle.md §7 |
