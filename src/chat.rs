@@ -10,7 +10,7 @@
 //!   chat bgstop <task_id>              # kill one background shell
 use crate::base::{orca_s, ROOT};
 use crate::harness;
-use crate::py::{self, Res};
+use crate::py::{self, kill, killpg, setsid, Res};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -59,12 +59,6 @@ const RETRY_PREFIX: &str = "Your previous reply ignored the user's message. Answ
 // empty, or the model answering only a notification
 static IGNORED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\s*(no response requested\.?)?\s*$").unwrap());
 
-// ponytail: libc is linked by std anyway; no crate for three calls
-extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-    fn killpg(pgrp: i32, sig: i32) -> i32;
-    fn setsid() -> i32;
-}
 const SIGTERM: i32 = 15;
 const ESRCH: i32 = 3;
 

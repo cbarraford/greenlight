@@ -5,7 +5,7 @@
 //! (herdr has no workspace description). GREENLIGHT_HERDR_SESSION targets a named session instead of the default.
 use crate::ade_common::{self as c, default_agent, draft, git_info, goals, plain, repo_list, set_goal};
 use crate::base;
-use crate::py::{self, Obj, Res};
+use crate::py::{self, arr, Obj, Res};
 use serde_json::{json, Value};
 
 /// herdr -> Orca agent state
@@ -41,9 +41,6 @@ fn herdr(args: &[&str]) -> Res<Value> {
     herdr_(args, true)
 }
 
-fn arr(v: &Value) -> &[Value] {
-    v.as_array().map_or(&[], Vec::as_slice)
-}
 fn now() -> i64 {
     (py::time() * 1000.0) as i64
 }

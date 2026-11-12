@@ -1,6 +1,6 @@
 //! Port of scripts/auto.py: greenlight's own automations, Orca-style scheduled agent runs, no Orca needed.
 use crate::base::{cfg, LIMIT_RE, ROOT, STATE};
-use crate::py::{self, Res};
+use crate::py::{self, kill, setsid, Res};
 use crate::{greenlight, harness};
 use serde_json::{json, Map, Value};
 use std::io::{Read, Write};
@@ -157,9 +157,6 @@ fn due(cron: &str, t: &Tm) -> Res<bool> {
 }
 
 fn alive(name: &str) -> bool {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
     let Ok(s) = std::fs::read_to_string(dir().join(format!("{name}.pid"))) else { return false };
     // ponytail: a pid beyond i32 is OverflowError in Python (a crash); here it reads as dead
     match py_int(&s).and_then(|p| i32::try_from(p).ok()) {
@@ -335,9 +332,6 @@ fn spawn(name: &str) -> Res<()> {
     // a crash before the run log exists lands here
     let err = std::fs::OpenOptions::new().create(true).append(true).open(d.join("errors.log"))?;
     use std::os::unix::process::CommandExt;
-    extern "C" {
-        fn setsid() -> i32;
-    }
     // cutover: Python respawned `sys.executable auto.py exec <name>`; this binary respawns itself.
     let mut c = Command::new(std::env::current_exe()?);
     c.args(["auto", "exec", name]).stdout(Stdio::null()).stderr(err);

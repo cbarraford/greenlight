@@ -7,7 +7,7 @@
 //! (automation.socketControlMode in ~/.config/cmux/cmux.json).
 use crate::ade_common::{self as c, default_agent, draft, git_info, repo_list, worktree_add, worktree_remove};
 use crate::harness;
-use crate::py::{self, Obj, Res};
+use crate::py::{self, arr, Obj, Res};
 use serde_json::{json, Value};
 
 /// cmux lifecycle -> Orca agent state
@@ -93,9 +93,6 @@ fn terminals() -> Res<Value> {
     Ok(Value::Array(out))
 }
 
-fn arr(v: &Value) -> &[Value] {
-    v.as_array().map_or(&[], Vec::as_slice)
-}
 
 fn num(v: Option<&Value>) -> f64 {
     v.filter(|x| py::truthy(x)).and_then(Value::as_f64).unwrap_or(0.0)

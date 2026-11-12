@@ -274,6 +274,17 @@ pub fn get_or<'a>(v: &'a Value, k: &str) -> Option<&'a Value> {
 pub fn gs<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
 }
+/// The list itself, or [] when it isn't one.
+pub fn arr(v: &Value) -> &[Value] {
+    v.as_array().map_or(&[], Vec::as_slice)
+}
+
+// ponytail: libc is linked by std anyway; no crate for three calls
+extern "C" {
+    pub fn kill(pid: i32, sig: i32) -> i32;
+    pub fn killpg(pgrp: i32, sig: i32) -> i32;
+    pub fn setsid() -> i32;
+}
 
 // ---- str methods ----
 
