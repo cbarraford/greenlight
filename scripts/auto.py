@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Greenlight's own automations: Orca-style scheduled agent runs, no Orca needed.
+
+  auto.py list
+  auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
+              [--provider claude|codex|opencode|pi] [--model M] [--effort E] [--timeout MIN]
+  auto.py edit <name> [any add option] [--enabled | --disabled]
+  auto.py rm <name>
+  auto.py show <name>       # its JSON
+  auto.py run <name>        # now, in the background, skipping the schedule (not the precheck)
+  auto.py runs [name]       # last 20 runs
+  auto.py tick              # the timer calls this every minute
+  auto.py install           # writes and starts the timer: a systemd user timer, or a launchd agent on macOS
+
+Automations live in ~/.greenlight/automations.json, runs in ~/.greenlight/auto/.
+Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday=0).
+A precheck that exits non-zero means "nothing to do": the run is skipped.
+The provider (default: config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
+Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import harness  # noqa: E402
+from greenlight import CONFIG, LIMIT_RE, STATE, ping  # noqa: E402
+
+FILE = STATE / "automations.json"
+DIR = STATE / "auto"
+OPTS = ("schedule", "prompt", "cwd", "precheck", "provider", "model", "effort", "timeout")
+
+
+def load():
+    return json.loads(FILE.read_text()) if FILE.exists() else {}
+
+
+def save(autos):
+    STATE.mkdir(exist_ok=True)
+    FILE.write_text(json.dumps(autos, indent=2))
+
+
+def field(spec, lo, hi):
+    out = set()
+    for part in spec.split(","):
+        rng, _, step = part.partition("/")
+        a, b = (lo, hi) if rng == "*" else map(int, (rng.split("-") * 2)[:2])
+        out |= set(range(a, b + 1, int(step or 1)))
+    return out
+
+
+def due(cron, t):
+    """Does a 5-field cron match struct_time t (to the minute)?"""
+    m, h, dom, mon, dow = cron.split()
+    ok_dom, ok_dow = t.tm_mday in field(dom, 1, 31), (t.tm_wday + 1) % 7 in field(dow, 0, 7) | ({0} if "7" in dow else set())
+    day = (ok_dom and ok_dow) if "*" in (dom, dow) else (ok_dom or ok_dow)  # cron: both restricted → either matches
+    return t.tm_min in field(m, 0, 59) and t.tm_hour in field(h, 0, 23) and t.tm_mon in field(mon, 1, 12) and day
+
+
+def alive(name):
+    f = DIR / f"{name}.pid"
+    try:
+        os.kill(int(f.read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def provider(a):
+    return a.get("provider") or CONFIG["agents"][0]
+
+
+def agent(a, engine, log):
+    own = engine == provider(a)  # a model name only means something to its own harness
+    try:
+        cmd, text = harness.argv(engine, a["prompt"], model=own and a.get("model"), effort=own and a.get("effort"))
+        p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(a.get("timeout") or 120) * 60)
+        out, code = p.stdout, p.returncode
+    except subprocess.TimeoutExpired as e:
+        out, code = (e.stdout or b"").decode(errors="replace") + "\n[timed out]", 124
+    except (ValueError, OSError) as e:  # an unusable harness: unknown, pi without bypass, binary missing
+        out, code = str(e), 127
+    log.write(f"$ {engine}\n{out}\n[exit {code}]\n")
+    return out, code
+
+
+def execute(name):
+    """One run, start to finish: precheck, agent (the next of config agents on a limit), log, record."""
+    a = load()[name]
+    DIR.mkdir(parents=True, exist_ok=True)
+    (DIR / f"{name}.pid").write_text(str(os.getpid()))
+    start = time.time()
+    logf = DIR / name / f"{time.strftime('%Y%m%d-%H%M%S')}.log"
+    logf.parent.mkdir(exist_ok=True)
+    rec = {"name": name, "ts": int(start), "log": str(logf)}
+    with logf.open("w") as log:
+        if a.get("precheck"):
+            # shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
+            p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),
+                               text=True, capture_output=True, timeout=300)
+            log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
+            if p.returncode:
+                rec |= {"status": "skipped", "summary": (p.stdout or p.stderr).strip()[-200:]}
+        if "status" not in rec:
+            for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
+                out, code = agent(a, engine, log)
+                if not (code and LIMIT_RE.search(out)):
+                    break
+            rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:]}
+    rec["secs"] = int(time.time() - start)
+    with (DIR / "runs.jsonl").open("a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+    (DIR / f"{name}.pid").unlink(missing_ok=True)
+    if rec["status"] == "failed":
+        ping(f"Automation {name} failed: {rec['summary'][-150:]}\nLog: {logf}\nOptions: look into it | ignore")
+
+
+def spawn(name):
+    if alive(name):
+        return print(f"{name}: still running, skipped")
+    DIR.mkdir(parents=True, exist_ok=True)
+    with (DIR / "errors.log").open("a") as err:  # a crash before the run log exists lands here
+        subprocess.Popen([sys.executable, __file__, "exec", name], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=err)
+    print(f"{name}: started")
+
+
+def tick(now=None):
+    t = time.localtime(now)
+    # ponytail: a minute the timer misses (machine down) is skipped, not caught up; add a last-run check if that matters
+    for name, a in load().items():
+        if a.get("enabled", True) and due(a["schedule"], t):
+            spawn(name)
+
+
+UNIT = """[Unit]
+Description=Greenlight automations tick
+[Service]
+Type=oneshot
+KillMode=process
+ExecStart={exe} {path} tick
+"""
+TIMER = """[Unit]
+Description=Run greenlight automations every minute
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+[Install]
+WantedBy=timers.target
+"""
+PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>greenlight-auto</string>
+  <key>ProgramArguments</key><array><string>{exe}</string><string>{path}</string><string>tick</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>{env_path}</string></dict>
+  <key>StartInterval</key><integer>60</integer>
+</dict></plist>
+"""
+
+
+def main():
+    args = sys.argv[1:]
+    cmd, name = (args or ["list"])[0], (args[1] if len(args) > 1 else None)
+    opt = lambda k: args[args.index(f"--{k}") + 1] if f"--{k}" in args else None
+    autos = load()
+    if cmd == "list":
+        for n, a in autos.items():
+            print(f"{n:24} {'on ' if a.get('enabled', True) else 'off'}  {a['schedule']:15} {provider(a):8}"
+                  f" {'running' if alive(n) else ''}\n    {a['prompt'][:100]}")
+    elif cmd in ("add", "edit"):
+        if (cmd == "add") == (name in autos):
+            sys.exit(f"{name}: {'already exists' if cmd == 'add' else 'no such automation'}")
+        a = autos.get(name, {"enabled": True}) | {k: opt(k) for k in OPTS if opt(k) is not None}
+        if "--enabled" in args or "--disabled" in args:
+            a["enabled"] = "--enabled" in args
+        if not a.get("schedule") or not a.get("prompt"):
+            sys.exit("--schedule and --prompt are required")
+        due(a["schedule"], time.localtime())  # fails loudly on a bad cron
+        autos[name] = a
+        save(autos)
+        print(json.dumps({name: a}, indent=2))
+    elif cmd == "show":
+        print(json.dumps(autos[name]) if name in autos else sys.exit(f"{name}: no such automation"))
+    elif cmd == "rm":
+        autos.pop(name) if name in autos else sys.exit(f"{name}: no such automation")
+        save(autos)
+        print(f"removed {name}")
+    elif cmd == "run":
+        spawn(name) if name in autos else sys.exit(f"{name}: no such automation")
+    elif cmd == "exec":
+        execute(name)
+    elif cmd == "runs":
+        f = DIR / "runs.jsonl"
+        rows = [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+        for r in [r for r in rows if not name or r["name"] == name][-20:]:
+            print(f"{time.strftime('%m-%d %H:%M', time.localtime(r['ts']))} {r['name']:24} {r['status']:8}"
+                  f" {r.get('engine', ''):6} {r['secs']}s  {r['summary'][-80:]!r}")
+    elif cmd == "tick":
+        tick()
+    elif cmd == "install" and sys.platform == "darwin":
+        f = Path.home() / "Library/LaunchAgents/greenlight-auto.plist"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        # launchd starts with a bare PATH: keep this shell's, so glab/gh/orca and the agents are found
+        f.write_text(PLIST.format(exe=sys.executable, path=Path(__file__).resolve(), env_path=os.environ.get("PATH", "")))
+        subprocess.run(["launchctl", "unload", str(f)], capture_output=True)
+        subprocess.run(["launchctl", "load", "-w", str(f)], check=True)
+        print(f"greenlight-auto launch agent loaded ({f})")
+    elif cmd == "install":
+        d = Path.home() / ".config/systemd/user"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "greenlight-auto.service").write_text(UNIT.format(exe=sys.executable, path=Path(__file__).resolve()))
+        (d / "greenlight-auto.timer").write_text(TIMER)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "--user", "enable", "--now", "greenlight-auto.timer"], check=True)
+        print("greenlight-auto.timer enabled")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

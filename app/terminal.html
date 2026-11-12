@@ -1,0 +1,1554 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Terminal</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px -apple-system,BlinkMacSystemFont,sans-serif}
+body{display:flex}
+#main{display:flex;flex-direction:column;flex:1;min-width:0}
+/* the sidebar: projects → workspaces (two lines: name + what needs you; branch + MR, CI, threads, rebase) → their terminals */
+#side{display:flex;flex-direction:column;flex-shrink:0;width:280px;min-width:200px;max-width:520px;background:var(--strip);box-shadow:inset -1px 0 0 var(--hair);-webkit-user-select:none;user-select:none}
+body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /* .sliding: still showing while it slides out */
+#sdv{flex:0 0 5px;margin-left:-3px;cursor:col-resize;z-index:1} #sdv:hover,#sdv.drag{background:color-mix(in srgb,var(--focus) 50%,transparent)}
+#shead{display:flex;align-items:center;gap:6px;height:40px;flex-shrink:0;padding:0 6px 0 14px}
+#shead .ttl{border:0;padding:2px 4px;margin-left:-4px;border-radius:5px;background:none;color:var(--fg);cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;font-weight:700;white-space:nowrap} #shead .sp{flex:1} #shead .ttl:hover{background:var(--hair)}
+#shead .host{display:flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:10px;background:var(--hair);color:var(--dim);font-size:10.5px;font-weight:500}
+#shead .host::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--g)}
+#jump{display:flex;align-items:center;gap:8px;flex-shrink:0;height:28px;margin:0 10px 8px;padding:0 6px 0 9px;border:0;border-radius:7px;background:color-mix(in srgb,var(--fg) 5%,transparent);box-shadow:inset 0 0 0 1px var(--hair);color:var(--dim);font:inherit;text-align:left}
+#jump:hover{color:var(--fg)} #jump span{flex:1} #jump kbd{font:10.5px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;box-shadow:inset 0 0 0 1px var(--hair)}
+#tree{flex:1;overflow-y:auto;padding:0 6px 10px;scrollbar-width:thin}
+.grp{display:flex;align-items:center;gap:6px;height:26px;margin-top:8px;padding:0 6px;border-radius:6px;color:var(--dim);font-size:11px;font-weight:600}
+/* a status section: a box washed in its color (--c); the selected row takes a stronger tint */
+.box{margin-top:8px;padding:2px 4px 6px;border-radius:10px;background:color-mix(in srgb,var(--c) 6%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 18%,transparent)}
+.box.shut{padding-bottom:2px} .s-host{--c:var(--t)} .s-ws{--c:var(--b)} .s-quiet{--c:var(--y)} .s-done{--c:var(--g)}
+.grp.sec,.grp.sec:hover{height:30px;margin:0;padding:0 8px;color:var(--c);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.grp.prj{height:22px;margin-top:4px;padding-left:12px;font-size:10.5px}
+.box .ws.on{background:color-mix(in srgb,var(--c) 15%,transparent);box-shadow:none} .ws .wy{flex-shrink:0;color:var(--c);font-size:10.5px}
+.grp:hover{color:var(--fg)} .grp .cv{transition:transform .12s} .grp.shut .cv{transform:rotate(-90deg)}
+.grp .gn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .grp .ct{font-weight:500;font-variant-numeric:tabular-nums}
+.ws{position:relative;display:flex;flex-direction:column;justify-content:center;gap:3px;min-height:26px;padding:5px 6px 5px 12px;box-sizing:border-box;border-radius:7px}
+.ws:hover,.tm:hover{background:var(--hair)}
+.ws.on{background:color-mix(in srgb,var(--fg) 8%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair)}
+.l1,.l2{display:flex;align-items:center;gap:7px;min-width:0}
+.l2{padding-left:14px;gap:9px;color:var(--dim);font-size:11px}
+.wn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws .wn{font-weight:500} .ws.on .wn{font-weight:650} .ws.main .wn{color:var(--dim)}
+.br{display:flex;align-items:center;gap:4px;flex:1;min-width:0;font:10.5px ui-monospace,"SF Mono",Menlo,monospace}
+.br span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chips{display:flex;align-items:center;gap:8px;flex-shrink:0;font-variant-numeric:tabular-nums} .chip{display:flex;align-items:center;gap:3px}
+.badge{display:flex;align-items:center;gap:4px;flex-shrink:0;height:17px;padding:0 6px;border-radius:9px;font-size:10px;font-weight:650}
+.k-o{color:var(--o)} .k-r{color:var(--r)} .k-g{color:var(--g)} .k-b{color:var(--b)} .k-p{color:var(--p)}
+.badge.k-o{background:color-mix(in srgb,var(--o) 15%,transparent)} .badge.k-r{background:color-mix(in srgb,var(--r) 15%,transparent)}
+.badge.k-g{background:color-mix(in srgb,var(--g) 14%,transparent)} .badge.k-b{background:color-mix(in srgb,var(--b) 14%,transparent)}
+@keyframes spin{to{transform:rotate(360deg)}} .spin{animation:spin 1.4s linear infinite} @media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.tm{position:relative;display:flex;align-items:center;gap:7px;height:24px;padding:0 4px 0 28px;border-radius:6px;color:var(--dim);font-size:11.5px}
+.tm.ns{margin-top:6px} /* a new set of tabs */ .tm.on{background:var(--bg);color:var(--fg);box-shadow:inset 0 0 0 1px var(--hair)}
+.dot{width:8px;height:8px;flex-shrink:0;border-radius:50%;background:transparent;box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--dim) 60%,transparent)}
+.dot.working{background:var(--b);box-shadow:none} .dot.waiting,.dot.needs{background:var(--o);box-shadow:none} .dot.done{background:var(--g);box-shadow:none} .dot.crashed,.dot.error{background:var(--r);box-shadow:none} .dot.open{background:var(--dim);box-shadow:none}
+.tag{font-size:9.5px;padding:0 4px;border-radius:4px;background:var(--hair);font-weight:500}
+.ws .ib,.grp .ib{width:22px;height:22px;display:none} .ws .ib{margin:-4px 0} /* hover controls must not grow the row */ .ws:hover .ib,.grp:hover .ib{display:flex}
+.tm .ib{width:20px;height:20px;margin-left:auto;display:none} .tm:hover .ib{display:flex}
+/* Hosts: a host with shells open is a card (its shells, Close all, +); the idle ones are chips; most used first */
+.hc{margin:4px 2px 0;padding:4px;border-radius:8px;background:color-mix(in srgb,var(--fg) 4%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair)}
+.hc .ws{padding-left:6px} .hc .tm{padding-left:21px} .dot.live{background:var(--g);box-shadow:none}
+.ca{display:none;height:20px;margin:-3px 0;padding:0 7px;border:0;border-radius:5px;background:none;color:var(--dim);font:500 10.5px -apple-system,sans-serif} .ws:hover .ca{display:block} .ca:hover{background:var(--hair);color:var(--fg)}
+.hchips{display:flex;flex-wrap:wrap;gap:6px;padding:6px 2px 2px}
+.hchip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 8px;border:0;border-radius:13px;background:color-mix(in srgb,var(--fg) 5%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair);color:var(--fg);font:500 11.5px -apple-system,sans-serif}
+.hchip:hover{background:var(--hair)} .hchip.on{box-shadow:inset 0 0 0 1.5px var(--c)} .hchip .dot{width:7px;height:7px}
+#toast{position:fixed;z-index:12;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:6px 6px 6px 12px;border-radius:9px;background:var(--strip);box-shadow:0 0 0 1px var(--hair),0 10px 30px rgba(0,0,0,.4);font-size:12px}
+#adopt{position:fixed;z-index:12;top:48px;right:12px;display:flex;flex-direction:column;gap:8px;width:230px;padding:10px 12px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:12px;background:var(--strip);color:var(--fg);border:1px solid var(--hair)}
+#adopt[hidden]{display:none} #adopt .dots{display:flex;gap:4px} #adopt i{width:12px;height:12px;border-radius:50%;box-shadow:0 0 0 1px var(--hair)} #adopt .btns{display:flex;gap:6px}
+#adopt button{flex:1;height:24px;border:0;border-radius:6px;font:inherit;font-weight:600;cursor:pointer;background:var(--hair);color:inherit} #adopt button:first-child{background:var(--accent);color:#fff} #adopt button:hover{filter:brightness(1.15)}
+#toast[hidden]{display:none} #toast button{height:24px;padding:0 10px;border:0;border-radius:6px;background:var(--hair);color:var(--fg);font:inherit;font-weight:600} #toast button:hover{filter:brightness(1.2)} #toast button[hidden]{display:none}
+/* a link under the mouse: open it in the browser or copy it */
+#lnk{position:fixed;z-index:20;display:flex;gap:2px;padding:1px;border-radius:7px;background:var(--strip);box-shadow:0 0 0 1px var(--hair),0 4px 14px rgba(0,0,0,.28);font-size:11px}
+#lnk[hidden]{display:none} #lnk button{height:18px;padding:0 8px;border:0;border-radius:5px;background:none;color:var(--fg);font:inherit;font-weight:500}
+#lnk button:hover{background:var(--hair)}
+/* ⌘J: jump to any terminal or workspace */
+#pal{position:fixed;inset:0;z-index:10;display:flex;justify-content:center;align-items:flex-start;padding-top:8vh;background:rgba(0,0,0,.5);--amb:#FFB340;--ring:rgba(255,179,64,.6)} #pal[hidden]{display:none}
+#pal .pbox{width:min(760px,94vw);height:min(548px,84vh);display:flex;flex-direction:column;border-radius:14px;overflow:hidden;background:var(--strip);color:var(--fg);box-shadow:0 0 0 1px var(--hair),0 24px 60px rgba(0,0,0,.6)}
+#pal .hd{height:54px;flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 16px;color:var(--dim);box-shadow:inset 0 -1px 0 var(--hair)}
+#pal input{flex:1;min-width:0;height:36px;border:0;outline:0;background:none;color:var(--fg);font:15px -apple-system,sans-serif}
+#pal .mode{height:22px;display:flex;align-items:center;padding:0 8px;border-radius:6px;background:color-mix(in srgb,var(--p) 16%,transparent);color:var(--p);font-size:12px;font-weight:650} #pal [hidden]{display:none}
+#pal .scope{display:flex;gap:2px;padding:2px;border-radius:8px;background:color-mix(in srgb,black 35%,var(--strip))} #pal .scope button{height:24px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--dim);font:550 12px -apple-system,sans-serif} #pal .scope button:hover{color:var(--fg)} #pal .scope button[aria-selected=true]{background:color-mix(in srgb,var(--amb) 16%,transparent);color:var(--amb)}
+#pal .hint{font-size:12px;color:var(--dim);white-space:nowrap}
+#pal kbd{flex-shrink:0;height:18px;display:inline-flex;align-items:center;padding:0 5px;border-radius:4px;background:color-mix(in srgb,var(--fg) 7%,transparent);color:var(--dim);font:11px -apple-system,sans-serif} #pal kbd.amb{background:var(--amb);color:#1C1C1F;font-weight:700}
+#pal .bd{flex:1;min-height:0;display:flex}
+#pres{flex:1;min-width:0;overflow-y:auto;padding:6px 8px}
+#pres .gh{height:26px;display:flex;align-items:flex-end;gap:6px;padding:0 10px 5px;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)} #pres .gh span{font-weight:600;letter-spacing:0;text-transform:none;opacity:.75}
+#pres .gh.g-needs{color:var(--o)} #pres .gh.g-ws{color:var(--b)} #pres .gh.g-host{color:var(--t)} #pres .gh.g-act{color:var(--p)} #pres .gh.g-top{color:var(--amb)}
+#pres .r{height:34px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px}
+#pres .r.sel,#pres .hit.sel{background:color-mix(in srgb,var(--fg) 9%,var(--strip));box-shadow:inset 0 0 0 1px var(--ring)}
+#pres .ic{width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--dim)} #pres .r-act .ic{color:var(--p)} #pres .r-host .ic{color:var(--t)}
+#pres .m{flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:550}
+#pres .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dim)}
+#pres b{font-weight:inherit;color:var(--amb);text-decoration:underline;text-underline-offset:3px}
+#pal .pl{flex-shrink:0;height:20px;display:inline-flex;align-items:center;align-self:flex-start;padding:0 8px;border-radius:99px;font-size:11px;font-weight:650;background:color-mix(in srgb,currentColor 14%,transparent)} #pres .pl{align-self:center} #pv .pl::before{content:"";width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor}
+#pres .hit{display:flex;flex-direction:column;gap:12px;margin:0 2px 4px;padding:14px;border-radius:10px;background:color-mix(in srgb,var(--fg) 6%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair)}
+#pres .hit .l{display:flex;align-items:center;gap:10px;min-width:0} #pres .hit .m{font-size:17px;font-weight:650} #pres .hit .pl{margin-left:auto}
+#pres .hit .bt{display:flex;flex-wrap:wrap;gap:6px} #pres .hit button{height:28px;display:flex;align-items:center;gap:8px;padding:0 10px;border:0;border-radius:7px;background:color-mix(in srgb,var(--fg) 8%,transparent);color:var(--fg);font:550 12.5px -apple-system,sans-serif}
+#pres .hit button:hover{background:color-mix(in srgb,var(--fg) 14%,transparent)} #pres .hit button span{color:var(--dim)} #pres .hit button.pri{background:var(--amb);color:#1C1C1F;font-weight:650} #pres .hit button.pri span{color:inherit;opacity:.7}
+#pres .nil{display:flex;flex-direction:column;align-items:center;gap:6px;padding:48px 0;color:var(--dim);font-size:12px} #pres .nil div{color:var(--fg);font-size:14px;font-weight:600}
+#pv{width:290px;flex-shrink:0;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;padding:18px 18px 16px;overflow:hidden;background:color-mix(in srgb,black 18%,var(--strip));box-shadow:inset 1px 0 0 var(--hair)}
+#pv .k{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)} #pv h3{margin:3px 0 0;font-size:18px;font-weight:650;line-height:22px;overflow-wrap:anywhere}
+#pv dl{display:grid;grid-template-columns:76px minmax(0,1fr);row-gap:7px;margin:0;font-size:12px} #pv dt{color:var(--dim)} #pv dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pv p{margin:0;font-size:12.5px;line-height:1.5;white-space:pre-line} #pv .sc{margin-top:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+#pv .tl{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px} #pv pre{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,black 45%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair);font:11px/17px ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+#pal .ft{height:36px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 16px;overflow:hidden;white-space:nowrap;font-size:11.5px;color:var(--dim);box-shadow:inset 0 1px 0 var(--hair)} #pal .ft span{display:flex;align-items:center;gap:6px} #pal .ft .end{margin-left:auto}
+@media (max-width:640px){#pv{display:none}}
+button{font:inherit;color:inherit}
+svg{display:block;flex-shrink:0}
+/* the strip: the active tab is lifted into the terminal's color (it covers the strip's bottom hairline) with an amber top line; the rest are flat text. The window's title band above shares the strip color */
+#bar{display:flex;align-items:stretch;height:36px;flex-shrink:0;background:var(--strip);box-shadow:inset 0 -1px 0 var(--hair);-webkit-user-select:none;user-select:none;-webkit-user-select:none}
+#tabs{display:flex;align-items:flex-end;gap:2px;flex:1;min-width:0;padding-left:8px;overflow-x:auto;scrollbar-width:none} #tabs::-webkit-scrollbar{display:none}  /* many tabs scroll; none shrinks past its name */
+.tab{position:relative;display:flex;align-items:center;gap:8px;flex:0 1 240px;min-width:100px;height:32px;padding:0 6px 0 12px;border:0;border-radius:9px 9px 0 0;background:none;color:var(--dim);text-align:left;cursor:default}
+.tab:hover{color:var(--fg);background:color-mix(in srgb,var(--fg) 4%,transparent)}
+.tab.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:inset 0 2px 0 #FFB340} .tab.on>svg:first-child{color:#FFB340}  /* the shell glyph takes the amber; Claude and codex keep their own */
+.tab:not(.on)+.tab:not(.on)::before{content:"";position:absolute;left:-2px;top:9px;width:1px;height:14px;background:var(--hair)}  /* a hairline between two flat tabs */
+.tab .nm{flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab .nm.busy{font-style:italic;color:var(--dim)}
+.tab input,.tm input{flex:1;min-width:0;height:22px;padding:0 6px;border:0;border-radius:5px;background:var(--strip);color:var(--fg);font:inherit;outline:1.5px solid var(--accent)}
+.ib{display:flex;align-items:center;justify-content:center;width:28px;height:28px;flex-shrink:0;border:0;padding:0;border-radius:6px;background:none;color:var(--dim)} .ib:hover{background:var(--hair);color:var(--fg)}
+.tab .x{width:22px;height:22px;border-radius:5px;visibility:hidden} .tab.on .x,.tab:hover .x,.tab:focus-within .x{visibility:visible}
+#add{flex:0 0 28px;height:28px;align-self:center;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:none;color:var(--dim)} #add:hover{color:var(--fg);background:var(--hair)}
+.tools{display:flex;align-items:center;gap:2px;padding:0 8px}
+.tools button{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:6px;background:none;color:var(--dim)} .tools button:hover{background:var(--hair);color:var(--fg)}
+/* panes: each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal. Split: every pane gets a header; the focused one carries the blue line, the rest dim */
+#stage{position:relative;flex:1;min-height:0}
+.root{position:absolute;inset:0;display:flex} .root[hidden]{display:none}
+.split{display:flex;flex:1 1 0;min-width:0;min-height:0} .split.col{flex-direction:column}
+.pane{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;overflow:hidden}
+.ph{display:none;align-items:center;gap:8px;height:28px;flex-shrink:0;padding:0 8px 0 14px;box-shadow:inset 0 -1px 0 var(--hair);color:var(--dim);font-size:11.5px;-webkit-user-select:none;user-select:none;-webkit-user-select:none}
+.multi .ph{display:flex}
+.ph .pn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .ib{width:28px;height:28px;visibility:hidden}
+.multi .pane.on{box-shadow:inset 0 0 0 1px var(--accent)}  /* one pane: no frame, it is always the focused one */
+.pane.on .ph{color:var(--fg);box-shadow:inset 0 2px 0 var(--focus),inset 0 -1px 0 var(--hair)}
+.pane.on .ph .ib,.pane:hover .ph .ib{visibility:visible}
+.t{position:relative;flex:1;min-height:0;overflow:hidden;margin:8px 6px 4px 14px}
+.t{caret-color:transparent;outline:0} .t textarea{opacity:0!important}  /* ghostty-web makes the host contenteditable: its caret was a 1px line down the left */
+.dv{flex:0 0 9px;display:flex;justify-content:center;cursor:col-resize} .dv::after{content:"";width:1px;background:var(--hair)}
+.col>.dv{cursor:row-resize;flex-direction:column} .col>.dv::after{width:auto;height:1px}
+.dv:hover::after,.dv.drag::after{background:var(--focus)}
+.ico-bell{color:#F5B83D}
+button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
+/* right-click menu */
+#menu{position:fixed;z-index:10;min-width:190px;padding:4px;border-radius:8px;background:var(--strip);box-shadow:0 0 0 1px var(--hair),0 10px 30px rgba(0,0,0,.45)} #menu[hidden]{display:none}
+#menu button{display:flex;align-items:center;gap:8px;width:100%;height:26px;padding:0 10px;border:0;border-radius:5px;background:none;text-align:left}
+#menu button:hover,#menu button:focus-visible{background:var(--focus);color:#fff;outline:0}
+#menu hr{border:0;height:1px;margin:4px 6px;background:var(--hair)}
+#menu kbd{margin-left:auto;font:inherit;color:var(--dim)} #menu button:hover kbd{color:#fff}
+#menu{max-width:320px} #menu button:disabled{color:var(--dim);background:none} #menu button.danger:not(:disabled){color:var(--r)} #menu button.danger:hover,#menu button.danger:focus-visible{color:#fff;background:var(--r)}
+/* workspace card */
+#card{position:fixed;z-index:9;width:348px;max-width:calc(100vw - 12px);box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:14px;border-radius:12px;background:color-mix(in srgb,var(--strip),var(--fg) 4%);box-shadow:0 0 0 1px var(--hair),0 18px 50px rgba(0,0,0,.55)} #card[hidden]{display:none} #card:focus{outline:0}
+#card .hd{display:flex;align-items:center;gap:8px} #card .hd b{flex:1;min-width:0;font-size:14px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#card .k-dim{color:var(--dim)} #card .pill,#card .tag{display:flex;align-items:center;gap:5px;flex-shrink:0;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;background:color-mix(in srgb,currentColor 14%,transparent)} #card .pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
+#card .br{display:flex;align-items:center;gap:6px;margin-top:-6px;color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;white-space:nowrap} #card .br span{overflow:hidden;text-overflow:ellipsis}  /* minmax(0,1fr): a long branch can't widen the card past 348px */
+#card .by{display:flex;align-items:center;gap:5px;margin-top:-6px;color:var(--dim);font-size:11px} #card .by i{display:flex;margin-left:2px} #card .av{position:relative;display:grid;place-items:center;width:18px;height:18px;margin-left:-4px;border-radius:50%;overflow:hidden;background:var(--hair);color:var(--fg);font:600 9px/1 inherit;font-style:normal;text-transform:uppercase;box-shadow:0 0 0 2px var(--strip)} #card .av:first-child{margin-left:0} #card .av img{position:absolute;inset:0;width:100%;height:100%}
+#card .goal .lb{display:block;margin-bottom:1px;color:var(--dim);font:600 9.5px/1.3 inherit;font-style:normal;letter-spacing:.06em;text-transform:uppercase}
+#card .goal{display:flex;align-items:flex-start;gap:7px;width:100%;padding:7px 9px;border:0;border-radius:7px;background:var(--bg);color:var(--fg);font:inherit;font-style:italic;line-height:1.4;text-align:left} #card .goal svg{flex-shrink:0;margin-top:2px;color:var(--dim)} #card .goal.none{color:var(--dim)}
+#card textarea{box-sizing:border-box;width:100%;padding:7px 9px;border:0;border-radius:7px;background:var(--bg);color:var(--fg);font:inherit;line-height:1.4;resize:none;outline:2px solid var(--accent)}
+#card .hint{display:flex;align-items:center;gap:10px;margin-top:-4px;color:var(--dim);font-size:10.5px} #card .hint .sp{flex:1} #card .hint .n{font-variant-numeric:tabular-nums} #card kbd{padding:0 5px;border-radius:4px;font:inherit;box-shadow:inset 0 0 0 1px var(--hair)}
+#card .tags{display:flex;flex-wrap:wrap;gap:6px} #card .tag{border-radius:5px;padding:2px 7px;font-weight:500}
+#card .st{display:grid;grid-template-columns:repeat(3,1fr);border-radius:8px;background:var(--bg)} #card .st div{display:grid;gap:1px;padding:8px 10px} #card .st div+div{box-shadow:inset 1px 0 0 var(--hair)}
+#card .st b{font-size:15px;font-weight:650;font-variant-numeric:tabular-nums} #card .st span{color:var(--dim);font-size:10.5px}
+#card .meta{margin-top:-4px;color:var(--dim);font-size:11px}
+#card .acts{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px} #card .acts button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;height:58px;border:0;border-radius:8px;background:var(--hair);color:var(--fg);font:inherit;font-size:11.5px;font-weight:500}
+#card .acts button.pri{background:var(--accent);color:#fff} #card .acts button:hover:not(:disabled){filter:brightness(1.15)} #card button:disabled{opacity:.45}
+#card .nx{display:flex;align-items:flex-start;gap:10px;width:100%;padding:9px 11px;border:0;border-radius:8px;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--fg);font:inherit;text-align:left} #card .nx[hidden]{display:none}
+#card .nx svg{flex-shrink:0;margin-top:1px;color:var(--accent)} #card .nx span{display:grid;gap:2px;min-width:0} #card .nx b{font-size:12px;font-weight:600}
+#card .nx small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dim);font-size:11px;line-height:1.35} #card .nx:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 22%,transparent)}
+#card .rv{display:flex} #card .rv button{border:0;color:#fff;font:inherit} #card .rv button:hover:not(:disabled){filter:brightness(1.08)}
+#card .rv.or button{background:#FF9F0A;color:#1C1C1F} #card .rv.pu button{background:#9B4DDB} #card .rv.rd button{background:#D7382D} #card .rv.bl button{background:#0071E3}  /* review orange, threads purple, CI and conflicts red; several fixes at once: blue */
+#card .rv .go{flex:1;display:flex;align-items:center;gap:10px;min-width:0;padding:9px 11px;border-radius:8px 0 0 8px;text-align:left} #card .rv .go svg{flex:none}
+#card .rv .mn{display:flex;align-items:center;justify-content:center;width:34px;border-radius:0 8px 8px 0;box-shadow:inset 1px 0 0 rgba(0,0,0,.25)}
+#card .rv .go span{display:grid;gap:1px;min-width:0} #card .rv b{font-size:12.5px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #card .rv small{font-size:11px;line-height:1.35;opacity:.85}
+#card .also{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--dim)} #card .also button{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border:0;border-radius:6px;background:none;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg) 20%,transparent);color:var(--fg);font:inherit;font-size:11.5px;font-weight:500} #card .also button:hover:not(:disabled){background:var(--hair)}
+#card .also i{width:6px;height:6px;border-radius:50%}
+#card .mg{display:flex;align-items:center;gap:10px} #card .mg .go{position:relative;overflow:hidden;flex:1;display:flex;align-items:center;gap:10px;min-width:0;padding:9px 11px;border:0;border-radius:8px;background:#30D158;color:#0B1F10;font:inherit;text-align:left}  /* green: ready to land */
+#card .mg .go span{display:grid;gap:1px;min-width:0} #card .mg b{font-size:12px;font-weight:650} #card .mg small{font-size:11px;opacity:.8} #card .mg .go:hover:not(:disabled){filter:brightness(1.06)}
+#card .mg .go i{position:absolute;left:0;bottom:0;height:3px;width:100%;background:rgba(0,0,0,.35);animation:drain 5s linear forwards} @keyframes drain{to{width:0}}
+#card .mg .lnk{border:0;background:none;color:var(--dim);font:inherit;font-size:11.5px;text-decoration:underline;text-underline-offset:2px}
+#card .mg.st .go{background:color-mix(in srgb,#30D158 16%,transparent);color:#5BE07F;opacity:1} #card .mg.st svg{animation:spin 1s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
+#card .mg.ok{padding:9px 11px;border-radius:8px;background:color-mix(in srgb,#BF5AF2 18%,transparent);color:#D9A6F7} #card .mg.ok span{display:grid;gap:1px}
+#card .mg.no{display:grid;gap:5px;padding:9px 11px;border-radius:8px;background:color-mix(in srgb,#FF453A 15%,transparent);color:#FF9F94} #card .mg.no code{font:11px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+#card .rvp{max-height:160px;overflow:auto;margin:0;padding:8px 10px;border-radius:7px;background:var(--bg);color:var(--dim);font:10.5px/1.4 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap} #card .rvp[hidden]{display:none}
+#card .ft{display:flex;align-items:center;gap:4px;padding-top:10px;box-shadow:inset 0 1px 0 var(--hair)} #card .ft button{display:flex;align-items:center;gap:5px;height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--fg);font:inherit;font-size:11.5px}
+#card .ft button:hover:not(:disabled){background:var(--hair)} #card .ft .del{margin-left:auto;color:var(--r)} #card .ft .del:hover{background:color-mix(in srgb,var(--r) 18%,transparent)!important}
+#dlg{position:fixed;inset:0;z-index:11;display:flex;justify-content:center;align-items:flex-start;padding-top:18vh;background:rgba(0,0,0,.25)} #dlg[hidden]{display:none} #dlg:has(form.big){align-items:center;padding-top:0}
+#dlg form{width:min(320px,90vw);box-sizing:border-box;padding:18px;border-radius:12px;background:color-mix(in srgb,var(--strip),var(--fg) 4%);box-shadow:0 0 0 1px var(--hair),0 18px 50px rgba(0,0,0,.6);display:grid;gap:12px}
+#dlg .ic{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:color-mix(in srgb,currentColor 18%,transparent)}
+#dlg h3{margin:0 0 4px;font-size:13.5px;font-weight:650} #dlg p{margin:0;color:var(--dim);line-height:1.45} #dlg code{color:var(--fg);font:11px ui-monospace,"SF Mono",Menlo,monospace}
+#dlg .note{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:7px;background:var(--bg);font-size:11.5px}
+#dlg ul{margin:0;padding:0;list-style:none;border-radius:7px;background:var(--bg)} #dlg li{display:flex;align-items:center;gap:8px;padding:8px 10px} #dlg li+li{box-shadow:inset 0 1px 0 var(--hair)}
+#dlg li i{width:6px;height:6px;border-radius:50%;background:currentColor} #dlg li span{flex:1;color:var(--fg)} #dlg li em{font-style:normal;font-size:11px} #dlg .k-dim{color:var(--dim)}
+#dlg label{display:flex;align-items:center;gap:7px;color:var(--dim)} #dlg label input{margin:0}
+#dlg .btns{display:flex;gap:8px} #dlg button{flex:1;height:30px;border:0;border-radius:7px;background:var(--hair);color:var(--fg);font:inherit;font-weight:500}
+/* the project editor and the new-window picker: forms in the same modal */
+#dlg .dz{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .dz button{height:auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px;border:0;border-radius:8px;font:inherit;text-align:left;cursor:pointer}
+#dlg .dz button[aria-pressed=true]{outline:2px solid var(--focus);outline-offset:2px} #dlg .dz .dots{display:flex;gap:4px} #dlg .dz i{width:12px;height:12px;border-radius:50%}
+#dlg form.wide{width:min(520px,92vw);max-height:72vh;overflow-y:auto} #dlg h4{margin:4px 0 0;color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+#dlg input[type=text],#dlg select,#dlg textarea{box-sizing:border-box;width:100%;padding:5px 8px;border:0;border-radius:6px;background:var(--bg);color:var(--fg);font:inherit;outline:0;box-shadow:inset 0 0 0 1px var(--hair)}
+#dlg input[type=text]:focus,#dlg select:focus,#dlg textarea:focus{box-shadow:inset 0 0 0 1.5px var(--accent)} #dlg textarea{resize:vertical;font:11px ui-monospace,"SF Mono",Menlo,monospace}
+#dlg .pj{display:grid;grid-template-columns:1fr auto;gap:6px;padding:8px;border-radius:8px;background:color-mix(in srgb,var(--fg) 4%,transparent)} #dlg .pj textarea{grid-column:1/-1}
+#dlg .rp{display:grid;grid-template-columns:1fr 160px;align-items:center;gap:8px} #dlg .rp span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px ui-monospace,"SF Mono",Menlo,monospace}
+#dlg button.lite{flex:0 0 auto;height:26px;padding:0 9px;background:none;color:var(--dim)} #dlg button.lite:hover{background:var(--hair);color:var(--fg)}
+#dlg input[type=color]{width:100%;height:24px;padding:0;border:0;background:none;cursor:pointer}
+#dlg .err{color:var(--r)} #dlg .err:empty{display:none} #dlg label.sub{padding-left:22px} #dlg .grid{display:grid;gap:8px}
+#dlg button.pri{background:var(--accent);color:#fff;font-weight:600} #dlg button.danger{background:var(--r);color:#fff;font-weight:600} #dlg button.pri~button.danger{background:var(--hair);color:var(--r)}
+/* the roomy dialogs (projects, colors, open projects): a title bar, a body, a footer bar */
+/* the roomy dialogs (projects, colors, open projects): greys mixed from this window's own colors, amber for the thing to press */
+#dlg form.big{--d0:color-mix(in srgb,var(--fg) 6%,var(--bg));--d1:color-mix(in srgb,var(--fg) 4%,var(--bg));--d2:color-mix(in srgb,var(--fg) 1.5%,var(--bg));--ln:color-mix(in srgb,var(--fg) 12%,var(--bg));--rg:color-mix(in srgb,var(--fg) 17%,var(--bg));--mid:color-mix(in srgb,var(--fg) 80%,var(--bg));--amb:#FFB340;--ink:#1C1C1F;
+  width:min(880px,94vw);height:min(620px,86vh);max-height:none;padding:0;gap:0;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;border-radius:14px;background:var(--d0);box-shadow:0 0 0 1px var(--rg),0 24px 70px rgba(0,0,0,.6);font-size:13px}
+#dlg form.big.cc{width:min(980px,94vw);height:min(660px,88vh)} #dlg form.big.nw{width:min(640px,92vw);height:auto;max-height:86vh}
+#dlg .gap{flex:1} #dlg .sq{flex:0 0 auto;width:9px;height:9px;border-radius:3px}
+#dlg .big>.dh{display:flex;align-items:center;gap:12px;min-width:0;padding:16px 20px;box-shadow:inset 0 -1px 0 var(--ln)} #dlg .nw>.dh{padding:18px 20px 12px;box-shadow:none}
+#dlg .dh h3{margin:0;font-size:15px;font-weight:650;white-space:nowrap} #dlg .dh .sub{min-width:0;overflow:hidden;color:var(--dim);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+#dlg .big>.btns{align-items:center;gap:10px;padding:12px 20px;background:var(--d1);box-shadow:inset 0 1px 0 var(--ln)}
+#dlg .big>.btns .err,#dlg .big>.btns .note2{display:flex;align-items:center;gap:8px;margin:0;font-size:11.5px} #dlg .note2,#dlg .tot{color:var(--dim);font-size:11.5px} #dlg .big>.btns .err:empty{display:none}
+#dlg .big button{flex:0 0 auto;height:32px;padding:0 16px;border-radius:8px;background:var(--ln);color:var(--fg);font-size:13px;font-weight:500;cursor:pointer}
+#dlg .big button.pri,#dlg .big button.go{display:flex;align-items:center;gap:8px;padding:0 18px;background:var(--amb);color:var(--ink);font-weight:650} #dlg .big button.pri kbd{font:11px ui-monospace,Menlo,monospace;opacity:.7}
+#dlg .big button.lite{display:flex;align-items:center;gap:6px;padding:0 10px;background:none;color:var(--mid);font-size:12.5px} #dlg .big button.lite:hover{background:var(--ln);color:var(--fg)} #dlg .big button.lite:disabled{opacity:.45;background:none}
+#dlg .big button.lite.red{color:var(--r)}
+#dlg .big button.x{display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border-radius:6px;background:none;color:var(--dim)} #dlg .big button.x:hover{background:var(--ln);color:var(--fg)} #dlg .dh button.x{width:28px;height:28px;border-radius:7px}
+#dlg .big input[type=text],#dlg .big select{height:34px;padding:0 10px;border-radius:8px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg .big input[type=text]:focus{box-shadow:inset 0 0 0 1.5px var(--amb)}
+#dlg .big h4{margin:0;color:var(--fg);font-size:12.5px;font-weight:650;letter-spacing:0;text-transform:none} #dlg .big h4 small{margin-left:8px;color:var(--dim);font-size:11.5px;font-weight:400}
+#dlg .big section{display:flex;flex-direction:column;gap:8px;min-height:0}
+#dlg .big ul{flex-shrink:0;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg .big li{gap:10px;padding:9px 12px} #dlg .big li+li{box-shadow:inset 0 1px 0 var(--ln)}
+#dlg .seg{display:flex;padding:3px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg .big .seg button{display:flex;align-items:center;gap:6px;height:26px;padding:0 12px;border-radius:6px;background:none;color:var(--dim);font-size:12px}
+#dlg .big .seg [aria-pressed=true]{background:var(--ln);color:var(--fg);font-weight:600} #dlg .seg kbd{color:var(--dim);font:10.5px ui-monospace,Menlo,monospace}
+/* open projects: a filter, then a tile per project */
+#dlg .nwb{display:grid;align-content:start;gap:12px;padding:0 20px 16px;overflow-y:auto}
+#dlg label.find{gap:10px;height:36px;padding:0 12px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:var(--dim)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1.5px var(--amb)}
+#dlg .big .find input[type=text]{flex:1;height:30px;padding:0;background:none;box-shadow:none;font-size:13px}
+#dlg .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .tiles label:first-child{grid-column:1/-1}
+#dlg label.tile{gap:11px;padding:11px 12px;border-radius:10px;background:color-mix(in srgb,var(--fg) 5%,var(--bg));box-shadow:inset 0 0 0 1px var(--ln);color:var(--fg);cursor:pointer}
+#dlg label.tile:has(input:checked){background:color-mix(in srgb,var(--amb) 8%,var(--d0));box-shadow:inset 0 0 0 1.5px var(--amb)}
+#dlg .tile input{appearance:none;flex:0 0 auto;width:18px;height:18px;margin:0;border-radius:5px;box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--fg) 35%,var(--bg));cursor:pointer} #dlg .tile input:focus-visible{outline:2px solid var(--amb);outline-offset:2px}
+#dlg .tile input:checked{box-shadow:none;background:var(--amb) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231C1C1F' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E") center/11px no-repeat}
+#dlg .tile>span,#dlg .pn button>span{flex:1;min-width:0} #dlg .tile b,#dlg .tile small,#dlg .pn b,#dlg .pn small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .tile b,#dlg .pn b{font-weight:600}
+#dlg .tile small,#dlg .pn small{color:var(--dim);font-size:11.5px;font-weight:400}
+/* projects: the list on the left, the one you picked on the right */
+#dlg .peb{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:0}
+#dlg .pn{display:flex;flex-direction:column;gap:4px;padding:12px;overflow-y:auto;background:var(--d1);box-shadow:inset -1px 0 0 var(--ln)}
+#dlg .big .pn button{height:auto;display:flex;align-items:center;gap:10px;padding:9px 10px;background:none;text-align:left} #dlg .big .pn button:hover{background:color-mix(in srgb,var(--fg) 5%,transparent)}
+#dlg .big .pn [aria-current=true]{background:color-mix(in srgb,var(--fg) 10%,var(--bg));box-shadow:inset 0 0 0 1px var(--rg)} #dlg .pn svg{flex:0 0 auto;color:var(--dim)}
+#dlg .big .pn button.add{gap:8px;margin-top:4px;padding:8px 10px;border:1px dashed var(--rg);color:var(--mid);font-size:12.5px}
+#dlg .pd{display:flex;flex-direction:column;gap:18px;padding:18px 22px;overflow-y:auto}
+#dlg .pd .nm{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end} #dlg .pd .nm label{flex-direction:column;align-items:stretch;gap:6px;font-size:11.5px;font-weight:600}
+#dlg .big .pd .nm input{font-size:14px;font-weight:600} #dlg .big .pd .nm button{height:34px;padding:0 12px}
+#dlg .pd li{color:var(--dim)} #dlg .pd li svg{flex:0 0 auto} #dlg .pd code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);font:12px ui-monospace,"SF Mono",Menlo,monospace} #dlg .fl .n{flex:0 0 auto;font-size:11.5px}
+#dlg .big .fl .addp{gap:8px;padding:8px 10px} #dlg .big .fl .addp button{height:28px;padding:0 11px;border-radius:7px;font-size:12px}
+#dlg .big .fl .addp input[type=text]{flex:1;height:28px;padding:0 9px;background:none;box-shadow:none;font:12px ui-monospace,"SF Mono",Menlo,monospace}
+#dlg .rl li{display:grid;grid-template-columns:minmax(0,1fr) 170px;align-items:center;gap:12px;padding:8px 12px} #dlg .rl li.k-dim{display:block}
+#dlg .rl li>span b{display:block;overflow:hidden;color:var(--fg);font:600 12.5px ui-monospace,"SF Mono",Menlo,monospace;text-overflow:ellipsis;white-space:nowrap} #dlg .rl em{display:block;font-size:11px}
+#dlg .big .rl select{height:28px;padding:0 8px;border-radius:7px;background:color-mix(in srgb,var(--fg) 5%,var(--bg));box-shadow:inset 0 0 0 1px var(--rg);font-size:12px} #dlg .rl select:disabled{color:var(--dim)}
+/* colors: a preview of this window on the left; premade, your words or every color on the right */
+#dlg .ccb{display:grid;grid-template-columns:380px minmax(0,1fr);min-height:0}
+#dlg .pv{display:flex;flex-direction:column;gap:12px;padding:20px;overflow-y:auto;background:var(--d1);box-shadow:inset -1px 0 0 var(--ln)}
+#dlg .pvh{display:flex;align-items:baseline;justify-content:space-between} #dlg .pvh span{color:var(--dim);font-size:11.5px}
+#dlg .mini{display:flex;height:300px;flex-shrink:0;overflow:hidden;border-radius:10px;background:var(--bg);box-shadow:0 0 0 1px var(--rg)}
+#dlg .ms{width:118px;flex-shrink:0;display:flex;flex-direction:column;gap:5px;padding:10px 8px;box-sizing:border-box;background:var(--strip);box-shadow:inset -1px 0 0 var(--hair)} #dlg .ms b{padding:0 4px 2px;color:var(--dim);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+#dlg .ms span{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:5px;color:var(--fg);font-size:10.5px;font-weight:500} #dlg .ms .on{background:var(--hair);box-shadow:inset 2px 0 0 var(--accent);font-weight:600} #dlg .ms .k-dim{color:var(--dim)} #dlg .ms i{width:6px;height:6px;border-radius:50%}
+#dlg .mm{flex:1;min-width:0;display:flex;flex-direction:column} #dlg .mt{display:flex;align-items:flex-end;gap:2px;height:28px;flex-shrink:0;padding:0 6px;box-sizing:border-box;background:var(--strip);box-shadow:inset 0 -1px 0 var(--hair);font-size:10px;font-weight:500}
+#dlg .mt span{padding:5px 9px;color:var(--dim)} #dlg .mt .on{border-radius:5px 5px 0 0;background:var(--bg);color:var(--fg);box-shadow:inset 0 2px 0 var(--focus)}
+#dlg .mm pre{flex:1;margin:0;padding:10px;color:color-mix(in srgb,var(--fg) 72%,var(--bg));font:10px/1.7 ui-monospace,Menlo,monospace}
+#dlg .mf{display:flex;align-items:center;justify-content:flex-end;height:22px;flex-shrink:0;padding:0 8px;background:var(--strip);box-shadow:inset 0 1px 0 var(--hair)} #dlg .mf span{height:14px;padding:0 8px;border-radius:4px;background:var(--accent);color:#fff;font:600 9px/14px -apple-system,sans-serif}
+#dlg .st{display:flex;gap:6px} #dlg .st i{width:14px;height:14px;border-radius:50%}
+#dlg .pv .tip{display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 12px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:var(--mid);font-size:11.5px} #dlg .tip svg{flex:0 0 auto;color:var(--amb)}
+#dlg .prt{display:flex;flex-direction:column;gap:16px;padding:18px 22px;overflow-y:auto} #dlg .prt>*{flex-shrink:0} #dlg .prt label.h{color:var(--fg);font-size:12.5px;font-weight:650} #dlg .prt p{font-size:11.5px}
+#dlg .dz.sm{grid-template-columns:repeat(4,1fr);gap:8px} #dlg .big .dz.sm button{height:auto;display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;overflow:hidden;border-radius:9px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+#dlg .big .dz.sm button[aria-pressed=true]{outline:0;box-shadow:0 0 0 2px var(--d0),0 0 0 4px var(--amb)}
+#dlg .dz.sm .th{display:flex;gap:4px;height:34px;box-sizing:border-box;padding:8px 8px 0} #dlg .dz.sm .th i{width:22px;height:auto;border-radius:4px 4px 0 0} #dlg .dz.sm .th i+i{flex:1;background:#0b0b0c}
+#dlg .dz.sm .nm{display:flex;align-items:center;gap:6px;padding:7px 9px;font-size:11.5px;font-weight:600} #dlg .dz.sm .nm i{width:8px;height:8px}
+#dlg .ask{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 12px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg .ask:focus-within{box-shadow:inset 0 0 0 1.5px var(--amb)}
+#dlg .big .ask input[type=text]{flex:1;height:28px;padding:0;background:none;box-shadow:none;font-size:13px} #dlg .big .ask button{height:28px;padding:0 12px;border-radius:7px;font-size:12px}
+#dlg details{flex-shrink:0;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg summary{padding:10px 12px;color:var(--fg);font-size:12.5px;font-weight:650;cursor:pointer}
+#dlg .ev{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;padding:0 12px 10px} #dlg .ev label{gap:10px;padding:5px 0;color:var(--mid);font-size:12px} #dlg .ev input[type=color]{flex:0 0 auto;width:26px;height:20px;padding:0;border:0;border-radius:5px;background:none;cursor:pointer}
+#dlg .ev span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .ev code{color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace}
+</style>
+<script src="ghostty-web.js"></script>
+</head><body class="noside">
+<nav id="side" aria-label="Workspaces"><div id="shead"><button type="button" class="ttl">Workspaces</button><span class="sp"></span></div>
+<button id="jump" type="button"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/></svg><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
+<div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
+<div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
+<div id="stage"></div></div>
+<div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
+<div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><svg id="pico" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
+<script>
+"use strict";
+// The T orb's terminal: Ghostty's VT core (ghostty-web, wasm) drawing login shells the app runs on ptys, one per pane; tabs hold split panes.
+// The sidebar groups tabs by workspace (a worktree path; "" is Local, your home): the strip shows the current workspace's tabs.
+// Each pane is a tmux session the app keeps alive across restarts; the layout is saved through the app (terminals.json).
+// app → page: term.restore(state), term.workspaces({trees}), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
+// page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
+const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
+// look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
+const look = JSON.parse(q.get("look") || "{}"), {font, size, ...colors} = look, root = document.documentElement.style;
+const own = !colors.background, sys = matchMedia("(prefers-color-scheme: light)"), base = {...colors};  // own: no app/Ghostty background, so the page follows macOS live
+const LIGHT = {black: "#24292F", red: "#CF222E", green: "#116329", yellow: "#7D4E00", blue: "#0550AE", magenta: "#8250DF", cyan: "#1B7C83", white: "#6E7781",
+  brightBlack: "#57606A", brightRed: "#A40E26", brightGreen: "#1A7F37", brightYellow: "#633C01", brightBlue: "#0969DA", brightMagenta: "#A475F9", brightCyan: "#3192AA", brightWhite: "#8C959F"};
+let light, bg, fg;
+function paint(){
+  light = own && sys.matches;
+  for (const k in colors) delete colors[k];
+  Object.assign(colors, light ? LIGHT : {}, base);  // your colors win over the light palette
+  bg = colors.background || (light ? "#FFFFFF" : "#111113"); fg = colors.foreground || (light ? "#1D1D1F" : "#F5F5F7");
+  root.setProperty("--bg", bg); root.setProperty("--fg", fg); root.setProperty("--accent", "#0A84FF"); root.setProperty("--focus", "#0A84FF");
+  root.setProperty("--strip", `color-mix(in srgb, black ${light ? 5 : 22}%, ${bg})`);  // 22% matches the title band Greenlight.swift paints
+  Object.entries(light ? {o: "#B25000", r: "#C9372C", g: "#1A7F37", b: "#0969DA", p: "#8250DF", y: "#8A6A00", t: "#0E7C77"} : {o: "#FF9F0A", r: "#FF6259", g: "#30D158", b: "#4DA3FF", p: "#C597FF", y: "#FFD60A", t: "#66D4CF"})
+    .forEach(([k, v]) => root.setProperty("--" + k, v));
+  root.setProperty("--dim", `color-mix(in srgb, ${fg} 62%, ${bg})`); root.setProperty("--hair", `color-mix(in srgb, ${fg} 13%, ${bg})`);
+  Object.entries(preview || worn()).forEach(([k, v]) => root.setProperty("--" + k, v));  // CSS only: the terminals draw from the JS theme, so they keep theirs
+  requestAnimationFrame(() => post({cmd: "band", color: getComputedStyle($("bar")).backgroundColor}));  // the app paints the title band to match
+}
+// a window's look: your prompt → CSS variables over the chrome (sidebar, strip, menus), never the terminals; undo walks back
+const SKIN = {strip: "sidebar and tab strip background", fg: "chrome text", dim: "secondary text", hair: "lines, borders and hover", accent: "buttons and selection",
+  focus: "focus line and highlights", o: "orange: needs you", r: "red: failed", g: "green: done/passing", b: "blue: working", p: "purple: merged", y: "yellow: waiting", t: "teal: hosts"};
+const skinOk = o => Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {}).filter(([k, v]) => k in SKIN && typeof v === "string" && v.length <= 80 && CSS.supports("color", v)));
+// a look is a pair, {dark, light}: the Basement wears the dark half; the light one is kept for Greenlight Center. A flat look (older files) is the dark half
+const half = (o, k) => o && typeof o === "object" && (o.dark || o.light) ? o[k] : k === "dark" ? o : {};
+// premade looks (the dark half; the status colors stay the app's)
+const PRESETS = [["Midnight", "#141a26", "#dfe6f2", "#8b97ab", "#262e3d", "#3b78e7"], ["Nord", "#232833", "#d8dee9", "#8a93a6", "#343a47", "#5e81ac"],
+  ["Forest", "#151d18", "#dbe7dc", "#8aa08f", "#26332a", "#3f9a5f"], ["Ember", "#1f1714", "#f0e2d8", "#a8928a", "#33261f", "#e0662a"],
+  ["Plum", "#1c1522", "#ebdff2", "#9d8dab", "#2f2538", "#8a5cf0"], ["Rosé", "#201619", "#f2dfe3", "#a98d94", "#352529", "#d9507a"],
+  ["Lagoon", "#12201f", "#d6ece9", "#86a8a4", "#213432", "#1f9488"], ["Graphite", "#18181a", "#e8e8ea", "#9a9aa0", "#2a2a2e", "#6b7a99"]]
+  .map(([name, strip, fg, dim, hair, accent]) => ({name, colors: {strip, fg, dim, hair, accent, focus: accent}}));
+let skin = {}, skinLight = {}, skinHist = [], preview = null, acctCfg = {};  // preview: a /design option you're looking at, not yet chosen; acctCfg: this window's project's .greenlight.json
+// what the window wears: "local" (local-lights: the look its repo checked in), "default" (the app's colors) or "own" (skin: yours, kept when you switch away);
+// null: not asked yet, so the app's colors, and a repo that checks in a look asks, top right, whether to adopt it
+let lights = null;
+const localLights = () => skinOk(half(acctCfg.look, "dark"));
+const worn = () => lights === "own" ? skin : lights === "local" ? localLights() : {};
+paint();
+// ponytail: the app always passes its theme's background, so in Greenlight this only fires for a page opened without one; the app re-themes on the next window
+if (own) sys.addEventListener("change", () => { paint(); panes.forEach(p => { try { p.t.renderer.setTheme({cursor: fg, ...colors, background: bg, foreground: fg}); p.t.refresh?.(0, p.t.rows - 1) } catch { } }) });
+window.onerror = (msg, src, line) => post({cmd: "error", text: `${msg} @${line}`});
+const $ = id => document.getElementById(id), el = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || "", innerHTML: html || ""});
+const svg = (d, w = 14, cls = "") => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const svg16 = (d, w = 16) => `<svg width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const I = {
+  claude: w => `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="#D97757" aria-hidden="true"><path d="M11 1h2l.6 7.4 4.6-5.8 1.4 1.4-5.8 4.6L23 11v2l-7.2.6 5.8 4.6-1.4 1.4-4.6-5.8L13 23h-2l-.6-7.2-4.6 5.8-1.4-1.4 5.8-4.6L1 13v-2l7.4-.6-5.8-4.6 1.4-1.4 4.6 5.8z"/></svg>`,
+  codex: w => svg('<path d="M12 2.5l8.2 4.75v9.5L12 21.5l-8.2-4.75v-9.5z"/><path d="M8.5 10l2.5 2-2.5 2M13 14.5h3"/>', w),  // ponytail: a stand-in mark, not Codex's logo
+  shell: w => svg('<path d="M4 17l6-5-6-5M12 19h8"/>', w),
+  bell: w => svg('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>', w, "ico-bell"),
+  splitR: w => svg16('M8 2.5v11M2.5 2.5h11v11h-11z"/><path d="M8 2.5h5.5v11H8z" fill="currentColor" fill-opacity=".45" stroke="none', w),
+  splitD: w => svg16('M2.5 8h11M2.5 2.5h11v11h-11z"/><path d="M2.5 8h11v5.5h-11z" fill="currentColor" fill-opacity=".45" stroke="none', w),
+  plus: w => svg16("M8 3v10M3 8h10", w), x: w => svg16("M4 4l8 8M12 4l-8 8", w),
+  chev: w => svg('<path d="M6 9l6 6 6-6"/>', w, "cv"),
+  host: w => svg16("M1.5 2.5h13V11h-13zM5.5 14h5M8 11v3", w),
+  sidebar: w => svg16("M2.5 2.5h11v11h-11zM6 2.5v11", w),
+  brush: w => svg16("M13.5 2.5 7 9M7 9c-2 0-3 1-3 2.5S3 13.5 2.5 13.5c3 0 5.5-1 5.5-3.5z", w),
+  win: w => svg16("M2.5 3.5h11v9h-11zM2.5 6h11", w), edit: w => svg16("M11 2.5l2.5 2.5-8 8H3v-2.5zM9.5 4l2.5 2.5", w),
+  refresh: w => svg16("M13 3v3.5H9.5M3 13V9.5h3.5M12.6 6.5A5 5 0 0 0 3.6 6M3.4 9.5a5 5 0 0 0 9 .5", w),
+  bolt: w => `<svg width="${w}" height="${w}" viewBox="0 0 16 16" fill="#FFB340" aria-hidden="true"><path d="M9.2 1 3 9h4.2L6.6 15 13 7H8.8z"/></svg>`,  // an auto-run's tab
+  merge: svg('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M6 7c0 4 4 5 10 5"/>', 18),
+  check: svg('<path d="M5 12l5 5 9-10"/>', 18), spin: svg('<path d="M12 3a9 9 0 1 0 9 9"/>', 18),
+  spark: w => svg('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>', w),
+};
+const iconBtn = (cls, icon, label, fn, aria = label) => { const b = el("button", cls, icon); b.type = "button"; b.title = label; b.setAttribute("aria-label", aria); b.onclick = e => { e.stopPropagation(); fn() }; return b };
+const tabs = [], panes = new Map(), paneOf = tab => [...panes.values()].filter(p => p.tab === tab);
+let cur = null, seq = 0, tabSeq = 0, ready = false, editing = null, editSide = false, restored = false;  // editSide: renaming in the sidebar row, not the tab
+let trees = [], curWs = "", shut = new Set(), sideW = 280;  // trees: every ADE's worktrees (dash.py trees); shut: collapsed sections and projects ("§done" means opened)
+const wsTabs = ws => tabs.filter(t => t.ws === ws);
+const setTabs = t => tabs.filter(x => x.set === t?.set);  // the tab strip: a set of tabs; a workspace can have several (the sidebar's + starts one)
+let setSeq = Date.now();  // ponytail: ms-seeded counter, unique enough across restarts
+const sid = () => "mc-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// font size: ⌘= / ⌘- / ⌘0, remembered; starts at your Ghostty font-size, else 15 (WKWebView px read smaller than Orca's xterm at 13)
+const store = (k, v) => { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v) } catch { } };
+let px = +(store("termSize") || size || 15);
+function zoom(n){
+  px = Math.max(8, Math.min(32, n)); store("termSize", px);
+  panes.forEach(p => { p.t.options.fontSize = px; p.fit.fit() });
+}
+
+// a pane: one terminal on one pty, with a header that shows once its tab is split
+function newPane(tab, cmd, session = sid()){
+  const id = ++seq, box = el("div", "pane"), head = el("div", "ph"), host = el("div", "t");
+  box.append(head, host);
+  const t = new GhosttyWeb.Terminal({fontSize: px,
+    // non-Mono Nerd Fonts: their icons are full-size like Orca's; the Mono variants squeeze each icon into one cell
+    fontFamily: `"${font || "SF Mono"}", "Symbols Nerd Font", "Hack Nerd Font", "MesloLGS Nerd Font", "MesloLGS NF", Menlo, monospace`,
+    cursorBlink: true, scrollback: 10000, theme: {cursor: fg, ...colors, background: bg, foreground: fg}});
+  const fit = new GhosttyWeb.FitAddon(), p = {id, session, t, fit, box, head, tab, title: "", bell: false, dec: new TextDecoder()};
+  panes.set(id, p); box._p = p;
+  box.addEventListener("mousedown", () => { if (p.tab.focus !== p) focusPane(p) });
+  return {p, mount(){
+    t.loadAddon(fit); t.open(host); fit.fit(); fit.observeResize();
+    host.addEventListener("mousemove", e => setTimeout(() => linkHover(p, e), 40));  // after ghostty-web's own 16ms-throttled hover
+    host.addEventListener("mouseleave", lnkHide);
+    host.addEventListener("click", e => { const l = t.currentHoveredLink;  // a plain click opens it too; ⌘-click is ghostty-web's own
+      if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
+    t.onData(d => { if (!p.dead) return post({cmd: "in", id, d}); p.dead = false; t.write("\r\n"); post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows}) });
+    t.onResize(({cols, rows}) => post({cmd: "size", id, cols, rows}));
+    post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
+    if (cmd) post({cmd: "in", id, d: cmd + "\r"});
+  }};
+}
+// links: ghostty-web finds URLs (its OSC 8 lookup is a stub that returns null) and ⌘-click calls window.open, which a WKWebView ignores, so the app opens it.
+// Hovering one offers Open / Copy.
+window.open = u => { u = String(u); const f = $("lnk")._url; post({cmd: "url", url: f?.startsWith(u) ? f : u}); return null };  // a wrapped URL: the joined one
+let lnkT;
+function linkHover(p, e){
+  const l = p.t.currentHoveredLink, b = $("lnk");
+  if (!l) return lnkHide();
+  clearTimeout(lnkT);
+  if (!b.hidden && b._at === l.range.start.y + ":" + l.range.start.x) return;
+  b._at = l.range.start.y + ":" + l.range.start.x;
+  const r = host0(p).getBoundingClientRect(), h = p.t.renderer.charHeight, row = r.top + Math.floor((e.clientY - r.top) / h) * h;
+  b._url = fullUrl(p.t, l); $("lnkCopy").textContent = "Copy"; b.hidden = false;
+  // beside the link on its own row, so the rows around it stay hoverable; below it only when the link fills the row
+  const cw = p.t.renderer.charWidth, w = b.offsetWidth, x1 = r.left + (l.range.end.x + 1) * cw + 8, x0 = r.left + l.range.start.x * cw - w - 8;
+  const side = x1 + w < r.right ? x1 : x0 > r.left ? x0 : null;
+  b.style.left = (side ?? Math.max(4, Math.min(innerWidth - w - 4, e.clientX - 16))) + "px";
+  b.style.top = (side != null ? row + (h - b.offsetHeight) / 2 : row + h + b.offsetHeight + 4 < innerHeight ? row + h + 2 : row - b.offsetHeight - 2) + "px";
+}
+// ponytail: ghostty-web matches URLs one row at a time, so a long one that wraps is rejoined here; hovering only its
+// wrapped tail (no scheme on that row) finds nothing
+function fullUrl(t, l){
+  const buf = t.buffer.active, row = y => buf.getLine(y);
+  let y0 = l.range.start.y, y1 = y0, s = "", at = 0;
+  while (y0 > 0 && row(y0)?.isWrapped) y0--;
+  while (row(y1 + 1)?.isWrapped) y1++;
+  if (y0 === y1) return l.text;
+  for (let y = y0; y <= y1; y++) { if (y === l.range.start.y) at = s.length + l.range.start.x; s += row(y).translateToString(y === y1) }
+  for (const m of s.matchAll(/(?:https?|ftp|ssh|git):\/\/[\w\-.~:\/?#@!$&*+,;=%]+/gi))
+    if (m.index <= at && at < m.index + m[0].length) return m[0].replace(/[.,;!?)\]]+$/, "");
+  return l.text;
+}
+const host0 = p => p.box.querySelector("canvas");
+function lnkHide(){ clearTimeout(lnkT); lnkT = setTimeout(() => $("lnk").hidden = true, 400) }
+$("lnk").onmouseenter = () => clearTimeout(lnkT); $("lnk").onmouseleave = lnkHide;
+$("lnkOpen").onclick = () => { post({cmd: "url", url: $("lnk")._url}); $("lnk").hidden = true; cur?.focus.t.focus() };
+$("lnkCopy").onclick = () => { post({cmd: "copy", text: $("lnk")._url}); $("lnkCopy").textContent = "Copied"; cur?.focus.t.focus() };
+function newTab(ws = curWs || acct()?.dir || "", cmd, fresh){  // a project window's home tab: its default folder. fresh: its own set of tabs (the sidebar's +)
+  if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
+  const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
+  const {p, mount} = newPane(tab, cmd);
+  tab.r.append(p.box); tab.focus = p; mount(); show(tab);
+}
+function mkTab(ws, o = {}){
+  const r = el("div", "root"), tab = {key: ++tabSeq, r, ws, set: o.set ?? ++setSeq, focus: null, name: o.name || "", manual: !!o.manual, sig: o.sig || "", naming: false, used: 0, auto: o.auto, job: o.job};
+  tabs.push(tab); $("stage").append(r); return tab;
+}
+const divider = down => { const dv = el("div", "dv"); dv.setAttribute("role", "separator"); dv.setAttribute("aria-orientation", down ? "horizontal" : "vertical"); dv.onmousedown = e => drag(e, dv, down); return dv };
+// a split is always two children with a divider between; dragging the divider trades size between them
+function split(p, down){
+  const wrap = el("div", "split" + (down ? " col" : ""));
+  wrap.style.flex = p.box.style.flex; p.box.style.flex = "";
+  p.box.replaceWith(wrap);
+  const {p: n, mount} = newPane(p.tab), dv = divider(down);
+  wrap.append(p.box, dv, n.box); mount(); focusPane(n); refit(p.tab);
+}
+const refit = tab => setTimeout(() => paneOf(tab).forEach(p => p.fit.fit()), 80);  // ghostty-web's FitAddon ignores resizes for 50ms after one, so a split right after a fit was missed
+function drag(e, dv, down){
+  e.preventDefault();
+  const a = dv.previousElementSibling, b = dv.nextElementSibling, ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+  const total = down ? ra.height + rb.height : ra.width + rb.width, start = down ? e.clientY : e.clientX, from = down ? ra.height : ra.width;
+  dv.classList.add("drag"); document.body.style.cursor = down ? "row-resize" : "col-resize";
+  const move = m => { const s = Math.max(60, Math.min(total - 60, from + (down ? m.clientY : m.clientX) - start)); a.style.flex = `${s} 1 0`; b.style.flex = `${total - s} 1 0` };
+  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
+  addEventListener("mousemove", move); addEventListener("mouseup", up);
+}
+function kill(p){ post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
+function closePane(p){
+  kill(p);
+  const tab = p.tab, parent = p.box.parentElement;
+  if (parent.classList.contains("split")) {  // the sibling takes the split's place
+    p.box.remove(); parent.querySelector(":scope > .dv").remove();
+    const kid = parent.firstElementChild; kid.style.flex = parent.style.flex; parent.replaceWith(kid);
+  } else p.box.remove();
+  const left = paneOf(tab);
+  if (!left.length) return dropTab(tab);
+  if (tab.focus === p) focusPane(left[left.length - 1]); else render();
+  refit(tab);
+}
+function closeTab(tab = cur){ if (tab) { paneOf(tab).forEach(kill); dropTab(tab) } }
+function dropTab(tab){
+  const i = tabs.indexOf(tab); tabs.splice(i, 1); tab.r.remove();
+  if (!tabs.length) { cur = null; render(); return post({cmd: "hide"}) }  // the last tab: the window goes; T brings a new shell
+  // the closed tab's workspace keeps the focus while it has tabs; else the tab you used last
+  const last = a => a.sort((a, b) => b.used - a.used)[0];
+  if (tab === cur) show(last(setTabs(tab)) || wsTabs(tab.ws).sort((a, b) => b.used - a.used)[0] || [...tabs].sort((a, b) => b.used - a.used)[0]); else render();
+}
+function focusPane(p){
+  p.tab.focus = p; p.bell = false;
+  if (p.tab !== cur) return show(p.tab);
+  render(); p.t.focus();
+}
+function show(tab){
+  cur = tab; curWs = tab.ws; tab.used = Date.now();
+  tabs.forEach(x => x.r.hidden = x !== tab);
+  paneOf(tab).forEach(p => { p.bell = false; p.fit.fit() });
+  render(); tab.focus.t.focus();
+}
+
+// names: one you typed (or AI picked) wins; else the focused pane's terminal title. Claude Code titles its terminal "✳ name" (a spinner while busy).
+const SPIN = /^[\s✳✻✽✶✢·⠀-⣿⌬]+/, HOME = q.get("home") || "";
+const paneTitle = p => { const t = (p.title || "").replace(SPIN, "").replace(/^[^\s@]+@[^\s:]+:\s*/, ""); return t && t !== "~" ? t : p.cwd || p.tab.ws || t || "~" };  // zsh's "user@host:~" → "~"; a bare "~" says less than the folder the shell is in
+const isClaude = p => /^[✳✻✽✶✢⠀-⣿]/.test(p.title || "");
+const paneIcon = (p, w) => isClaude(p) ? I.claude(w) : (p.title || "")[0] === "⌬" ? I.codex(w) : I.shell(w);  // ⌬: tmux marks a pane running codex (set-titles-string)
+const tabName = tab => tab.name || paneTitle(tab.focus);
+const shown = t => t === "~" || t === HOME ? "Session" : /^[~/]\S*\/\S/.test(t) ? t.split("/").filter(Boolean).pop() : t;  // display only: "~" reads as noise, a path by its last folder (the tooltip has it all)
+// titles (OSC 0/2) and real bells, read here: ghostty-web only checks titles on string writes and rings on any BEL, OSC terminators included
+// ponytail: per-chunk regex, a sequence split across two reads is missed; buffer the tail if that ever shows
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+function sniff(p, s){
+  let changed = false;
+  for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
+  for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { const d = decodeURIComponent(v); if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
+  if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true }
+  if (changed && !editing) render();
+}
+function rename(tab, side = false){
+  if (tab !== cur) show(tab);
+  editing = tab; editSide = side; render();
+}
+// the inline name field (tab bar or sidebar row): a name you type is manual, so nothing auto-names over it again
+function nameField(x, into){
+  const inp = el("input"); inp.value = x.name || paneTitle(x.focus); inp.setAttribute("aria-label", "Tab name"); inp.placeholder = "Tab name";
+  let done = false;
+  const commit = keep => { if (done) return; done = true; if (keep && inp.value.trim() !== (x.name || paneTitle(x.focus))) { x.name = inp.value.trim(); x.manual = !!x.name } editing = null; render(); x.focus.t.focus() };
+  inp.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") commit(true); else if (e.key === "Escape") commit(false) };
+  inp.onblur = () => setTimeout(() => commit(true), 0);
+  inp.onmousedown = inp.onclick = e => e.stopPropagation();
+  into.append(inp, iconBtn("ib", I.spark(13), "Name it with AI", () => { done = true; aiName(x) }));
+  requestAnimationFrame(() => { inp.focus(); inp.select() });
+}
+// AI names a tab from what's on screen in its panes (claude -p on this Mac, Haiku)
+function aiName(tab, auto){
+  if (auto) { tab.sig = sigOf(tab); tab.namedAt = Date.now(); naming++; autoKeys.add(tab.key) }
+  const text = paneOf(tab).map(p => {
+    const b = p.t.buffer.active, lines = [];
+    for (let y = Math.max(0, b.length - 200); y < b.length; y++) { const l = b.getLine(y); if (l) lines.push(l.translateToString(true)) }
+    return `# pane titled "${p.title}"\n` + lines.filter(l => l.trim()).slice(-40).join("\n");
+  }).join("\n\n");
+  if (!auto) { tab.naming = true; editing = null; render() } else tab.autoBusy = true;  // auto: the old name stays until the new one lands
+  post({cmd: "name", tab: tab.key, text, auto: !!auto});
+}
+// auto names: once a tab's output has been quiet 4s and its titles moved on since the last name; 2 at a time, 60s apart per tab
+let naming = 0;
+const autoQ = [], autoKeys = new Set(), sigOf = tab => paneOf(tab).map(p => (p.title || "").replace(SPIN, "")).join("|") + "@" + tab.ws;
+function settle(tab){
+  clearTimeout(tab.quiet);
+  tab.quiet = setTimeout(() => {
+    if (tab.manual || !tabs.includes(tab) || tab.autoBusy || autoQ.includes(tab) || (tab.name && sigOf(tab) === tab.sig)) return;
+    const wait = (tab.namedAt || 0) + 60000 - Date.now();
+    if (wait > 0) return settle.later(tab, wait);
+    autoQ.push(tab); pump();
+  }, 4000);
+}
+settle.later = (tab, ms) => { clearTimeout(tab.retry); tab.retry = setTimeout(() => settle(tab), ms) };
+function pump(){ while (naming < 2 && autoQ.length) { const t = autoQ.shift(); if (tabs.includes(t) && !t.manual) aiName(t, true) } }
+function render(){
+  if (editing && document.activeElement?.matches("#tabs input, #tree input")) return;  // a refresh mid-rename would wipe what you typed; the commit renders
+  panes.forEach(p => {
+    p.box.classList.toggle("on", p === p.tab.focus);
+    p.head.replaceChildren();
+    p.head.insertAdjacentHTML("beforeend", paneIcon(p, 12));
+    const pn = el("span", "pn"); pn.textContent = shown(paneTitle(p)); p.head.append(pn);
+    if (p.bell) p.head.insertAdjacentHTML("beforeend", I.bell(12));
+    p.head.append(iconBtn("ib", I.splitR(16), "Split right  ⌘D", () => split(p, false), "Split right"), iconBtn("ib", I.splitD(16), "Split down  ⌘⇧D", () => split(p, true), "Split down"), iconBtn("ib", I.x(16), "Close pane", () => closePane(p)));
+  });
+  tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
+  renderSide(); save();
+  $("tabs").replaceChildren(...setTabs(cur).map((x, i) => {
+    const b = el("div", "tab" + (x === cur ? " on" : "")), name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell);
+    b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x === cur); b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
+    b.onkeydown = e => {
+      if (e.target !== b || e.metaKey || e.ctrlKey || e.altKey) return;
+      const all = [...$("tabs").querySelectorAll(".tab")], k = all.indexOf(b), n = all.length;
+      const to = {ArrowRight: (k + 1) % n, ArrowLeft: (k + n - 1) % n, Home: 0, End: n - 1}[e.key];
+      if (to !== undefined) { e.preventDefault(); all.forEach(t => t.tabIndex = -1); all[to].tabIndex = 0; all[to].focus() }
+      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(x) }
+    };
+    b.title = `${tabName(x)}${i < 9 ? `  ⌘${i + 1}` : ""} · double-click to rename`;
+    b.onclick = () => x !== cur && show(x);
+    b.ondblclick = e => { if (e.target.closest(".ib")) return; rename(x) };
+    b.oncontextmenu = e => { e.preventDefault(); menu(e, x) };
+    const multi = paneOf(x).length > 1;
+    b.insertAdjacentHTML("beforeend", x.auto ? I.bolt(13) : multi ? I.splitR(14) : paneIcon(x.focus, 14));
+    if (editing === x && !editSide) { nameField(x, b); return b }
+    const nm = el("span", "nm" + (x.naming ? " busy" : "")); nm.textContent = x.naming ? "Naming…" : (multi && !x.name ? `${name} · ${paneOf(x).length} panes` : name);
+    b.append(nm);
+    if (bell && x !== cur) b.insertAdjacentHTML("beforeend", I.bell(13));
+    else b.append(iconBtn("ib x", I.x(14), `Close ${name}`, () => closeTab(x), "Close tab"));
+    return b;
+  }), iconBtn("", I.plus(16), "New tab  ⌘T", () => newTab(), "New tab"));
+  $("tabs").lastElementChild.id = "add";
+  const on = $("tabs").querySelector(".tab.on"); if (on) on.scrollIntoView({block: "nearest", inline: "nearest"});  // the active tab stays in view
+}
+function menu(e, tab, side = false){
+  const m = $("menu"), items = [["Rename…", "", () => rename(tab, side)], ["Name with AI", "", () => aiName(tab)]];
+  if (tab.name) items.push(["Use the terminal's title", "", () => { tab.name = ""; tab.manual = true; render() }]);
+  if (tab.manual) items.push(["Name automatically", "", () => { tab.manual = false; tab.sig = ""; aiName(tab) }]);
+  items.push(null, ["Split right", "⌘D", () => { show(tab); split(tab.focus, false) }], ["Split down", "⌘⇧D", () => { show(tab); split(tab.focus, true) }], null, ["Close tab", "⌘W", () => closeTab(tab)]);
+  showMenu(e, items);
+}
+// items: [label, kbd, fn, {danger, off: "why it's disabled"}] or null (a rule); head: a header above them
+function showMenu(e, items, head){
+  const m = $("menu");
+  m.replaceChildren(...(head ? [head, el("hr")] : []), ...items.filter((it, i, a) => it || (i && a[i - 1] && i < a.length - 1)).map(it => {
+    if (!it) return el("hr");
+    const b = el("button", it[3]?.danger ? "danger" : ""); b.type = "button"; b.setAttribute("role", "menuitem"); b.textContent = it[0];
+    if (it[3]?.off) { b.disabled = true; b.title = it[3].off }
+    if (it[1]) b.append(Object.assign(el("kbd"), {textContent: it[1]}));
+    b.onclick = () => { m.hidden = true; it[2]() }; return b;
+  }));
+  m.hidden = false;
+  m.style.left = Math.max(6, Math.min(e.clientX, innerWidth - m.offsetWidth - 6)) + "px"; m.style.top = Math.max(6, Math.min(e.clientY, innerHeight - m.offsetHeight - 6)) + "px";
+  m.querySelector("button:not(:disabled)")?.focus();
+}
+// a workspace's card: what it is and how it's doing (git facts arrive from dash.py tree info), then what you can do with it
+let cardWs = null, cardHover = false, noAskDel = false;
+const dur = ms => { const s = (Date.now() - ms) / 1000; return s < 60 ? "now" : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d` };
+const ago = ms => dur(ms) === "now" ? "just now" : dur(ms) + " ago";
+const when = ms => ms ? `<span title="${new Date(ms).toLocaleString()}">${ago(ms)}</span>` : "";
+const shq = s => "'" + s.replace(/'/g, "'\\''") + "'";
+const ansi = s => "$'" + s.replace(/[\\']/g, "\\$&").replace(/[\x00-\x1f]/g, c => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")) + "'";  // one typed line, no tab completing (bash and zsh)
+const AGENT = {working: ["b", "Agent working"], waiting: ["o", "Agent waiting"], done: ["g", "Agent done"], idle: ["dim", "Agent idle"], crashed: ["r", "Agent crashed"], error: ["r", "Agent error"]};  // "Agent": the card's pill is Claude's state, not the MR's
+const IC = {
+  ext: svg('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 12),
+  copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/>', 12), trash: w => svg('<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4h6v2"/>', w),
+  goal: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>', 13),
+  warn: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>', 17),
+};
+// forge avatar, username on hover; the initial shows through if the image fails (bots, offline)
+const face = u => `<span class="av" title="${esc(u.name)}">${esc(u.name[0] || "?")}${u.avatar ? `<img src="${esc(u.avatar)}" alt="" onerror="this.remove()">` : ""}</span>`;
+const stats = o => [[o?.dirty, "uncommitted", o?.dirty ? "k-o" : ""], [o?.unpushed, "unpushed", ""], [o?.commit && dur(o.commit), "last commit", "", o?.commit && new Date(o.commit).toLocaleString()]]
+  .map(([v, l, k, t]) => `<div class="${k}"${t ? ` title="${t}"` : ""}><b>${!o ? "·" : v ?? "–"}</b><span>${l}</span></div>`).join("");
+const meta = (w, o) => [w.why && esc(w.why), w.created && "Created " + when(w.created), w.active && "last output " + when(w.active), o?.error && `<span class="k-r">Git: ${esc(o.error)}</span>`].filter(Boolean).join(" · ");
+function renameLocal(){
+  const inp = Object.assign(el("input"), {type: "text", value: LOCALNAME, maxLength: 60}); inp.setAttribute("aria-label", "This Mac's name");
+  dlgForm("Rename this Mac", inp, "Rename", () => { post({cmd: "localName", name: inp.value.trim()}); return true }, null, {sub: "Empty: its hostname"});
+  inp.select();
+}
+function wsMenu(e, ws, w){
+  const closeAll = ["Close all terminals here", "", () => wsTabs(ws).forEach(closeTab), wsTabs(ws).length ? {} : {off: "No terminals open here"}];
+  if (!ws || ws[0] === "@") return showMenu(e, [["New terminal here", "", () => newTab(ws)], ...hostOf(ws) === "local" ? [["Rename…", "", renameLocal]] : [], null, closeAll]);
+  if (!w?.ade) return showMenu(e, [["New terminal here", "", () => newTab(ws)], ["Copy path", "", () => post({cmd: "copy", text: ws})], null, closeAll]);  // gone from every ADE
+  const c = $("card"), m = w.mr || {}, open = m.state === "opened", busy = ["working", "waiting"].includes(w.agent) && "Its agent is " + w.agent, n = wsTabs(ws).length;
+  const [k, label] = AGENT[w.agent] || [];
+  const btn = (cls, html, fn, off) => { const b = el("button", cls, html); b.type = "button"; if (off) { b.disabled = true; b.title = off } b.onclick = fn; return b };
+  const act = fn => () => { c.hidden = true; fn() };
+  const tag = (k, glyph, text, t = "") => `<span class="tag k-${k}" title="${t}">${g16(glyph)}${text}</span>`;
+  const tags = [m.ref && tag(open ? (m.draft ? "dim" : "g") : m.state === "merged" ? "p" : "dim", G.mr, esc(m.ref) + (open ? "" : " " + m.state), esc(m.title || "")),
+    open && m.conflicts && tag("r", G.rebase, "Conflicts"), open && !m.conflicts && m.rebase && tag("o", G.rebase, "Needs rebase"),
+    open && CI[m.pipeline] && tag(CI[m.pipeline][0], CI[m.pipeline][1], CI[m.pipeline][2]),
+    open && m.threads && tag("o", G.thread, `${m.threads} thread${m.threads > 1 ? "s" : ""}`)].filter(Boolean);
+  c.replaceChildren();
+  c.insertAdjacentHTML("beforeend", `<div class="hd"><b>${esc(w.name)}</b>${label ? `<span class="pill k-${k}"><i></i>${label}${w.since ? " · " + dur(w.since) : ""}</span>` : ""}</div>`
+    + (w.branch ? `<div class="br" title="${esc(ws)}">${g16(G.branch)}<span>${esc(w.branch)}</span></div>` : "")
+    + (m.by ? `<div class="by">by <i>${face(m.by)}</i>${m.assignees?.length ? ` · assigned <i>${m.assignees.map(face).join("")}</i>` : ""}</div>` : ""));
+  const goal = () => btn("goal" + (w.goal ? "" : " none"), IC.goal + `<span><em class="lb">Goal</em>${esc(w.goal || "What does done look like? Set the end state to work toward")}</span>`, editGoal);
+  function editGoal(){
+    const box = Object.assign(el("textarea"), {value: w.goal || "", rows: 3, maxLength: 500}), hint = el("div", "hint", `<span><kbd>↩</kbd> save</span><span><kbd>esc</kbd> cancel</span><span class="sp"></span><span class="n"></span>`);
+    box.setAttribute("aria-label", "Goal"); const cnt = () => hint.querySelector(".n").textContent = `${box.value.length} / 500`; cnt(); box.oninput = cnt;
+    const done = () => { box.replaceWith(g = goal()); hint.remove(); g.focus() };
+    box.onkeydown = e => {
+      if (e.key === "Escape") { e.stopPropagation(); done() }
+      else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = box.value.trim(); if (v !== (w.goal || "")) { w.goal = v; post({cmd: "tree", op: "goal", path: ws, text: v}) } done() }
+    };
+    g.replaceWith(box); box.after(hint); box.focus(); box.select();
+  }
+  let g = goal(); c.append(g);
+  if (tags.length) c.append(el("div", "tags", tags.join("")));
+  const st = el("div", "st", stats(facts.get(ws))), mt = el("div", "meta", meta(w, facts.get(ws)));
+  c.append(st); if (mt.innerHTML) c.append(mt);
+  const acts = el("div", "acts");
+  acts.append(btn("", I.shell(18) + "Terminal", act(() => newTab(ws))), btn("pri", I.claude(18) + "Claude", act(() => newTab(ws, "claude")), busy));
+  const ft = el("div", "ft");
+  if (m.web_url) ft.append(btn("", `Open ${esc(m.ref || "MR")} ` + IC.ext, act(() => post({cmd: "url", url: m.web_url}))));
+  const cp = btn("", IC.copy + "Copy " + I.chev(10), () => { const r = cp.getBoundingClientRect(); showMenu({clientX: r.left, clientY: r.bottom + 4}, [
+    w.branch && ["Branch name", "", () => post({cmd: "copy", text: w.branch})], ["Worktree path", "", () => post({cmd: "copy", text: ws})], m.web_url && ["MR link", "", () => post({cmd: "copy", text: m.web_url})]].filter(Boolean)) });
+  ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
+  if (!w.main) { const d = btn("del", IC.trash(14), act(() => delWs(ws, w))); d.title = "Delete workspace"; d.setAttribute("aria-label", d.title); ft.append(d) }
+  // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
+  const mv = open ? (w.moves || []) : [], top = [];
+  const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
+  if (mv[0]?.kind === "merge") top.push(mergeBtn(ws, m, mv[0]));
+  else if (mv[0]) {
+    const x = mv[0], [label, sub] = MOVE[x.kind](m, x), pv = el("pre", "rvp");
+    const go = btn("go", svg(`<path d="${MI[x.kind]}"/>`, 20) + `<span><b>${esc(label)}</b><small>${esc(sub)}</small></span>`, run(x), busy);
+    go.title = label;
+    pv.textContent = x.prompt; pv.hidden = true;
+    const mn = btn("mn", I.chev(11), () => { const r = mn.getBoundingClientRect(); showMenu({clientX: r.left, clientY: r.bottom + 4}, [
+      [pv.hidden ? "Show the prompt" : "Hide the prompt", "", () => pv.hidden = !pv.hidden], ["Copy prompt", "", () => post({cmd: "copy", text: x.prompt})],
+      [`Edit ${x.repo}'s prompt…`, "", act(() => post({cmd: "settings", repo: x.repo, kind: x.kind}))]]) });
+    mn.setAttribute("aria-label", label + " options");
+    const box = el("div", "rv " + (mv.length > 1 ? "bl" : TONE[x.kind])); box.append(go, mn);
+    top.push(box, pv);
+  }
+  const also = mv.slice(1);
+  if (also.length) { const a = el("div", "also", "<span>Also</span>"); also.forEach(x => a.append(btn("", `<i style="background:${DOT[x.kind]}"></i>` + esc(MOVE[x.kind](m, x)[2]), run(x), busy))); top.push(a) }
+  const pk = !mv.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
+  if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (dash.py suggest: the Next model, Haiku by default)
+    const nx = btn("nx", "", act(() => newTab(ws, "claude " + shq(sugg.get(pk).prompt))));
+    nx.dataset.pk = pk; if (busy) nx.dataset.busy = busy;
+    top.push(nx);
+    if (!(Date.now() - (sugg.get(pk)?.at || 0) < 60e3)) post({cmd: "suggest", name: pk});
+  }
+  c.append(...top, acts, ft); drawNext();
+  c.setAttribute("aria-label", w.name); c.hidden = false; cardWs = ws; cardHover = !!e.hover;
+  const r = e.currentTarget?.getBoundingClientRect?.() || {right: e.clientX, top: e.clientY};
+  c.style.left = (r.right + 8 + c.offsetWidth > innerWidth - 6 ? Math.max(6, innerWidth - c.offsetWidth - 6) : r.right + 8) + "px";
+  c.style.top = Math.max(6, Math.min(r.top - 4, innerHeight - c.offsetHeight - 6)) + "px";
+  c.tabIndex = -1; if (!e.hover) c.focus();  // Tab reaches the buttons; a hover leaves your typing in the terminal
+  if (!e.hover || !(Date.now() - (facts.get(ws)?.at || 0) < 30e3)) post({cmd: "tree", op: "info", path: ws});  // hovering along the list doesn't ssh for every row
+}
+const sugg = new Map();  // greenlight's name → dash.py suggest's {label, prompt} (or {error}), stamped when it came
+// a move's [button, its subline, its "Also" label]
+const MOVE = {
+  review: m => [`Review ${m.ref || ""}`, "Claude drafts it; nothing posts until you pick", "Review"],
+  threads: (m, x) => [`Resolve ${x.n} thread${x.n > 1 ? "s" : ""}`, "Claude fixes and drafts replies; you OK the push", `Resolve ${x.n}`],
+  ci: (m, x) => [x.jobs?.length ? "Fix CI: " + x.jobs.join(", ") : "Fix CI", "Claude finds the first real error; you OK the push", "Fix CI"],
+  conflicts: m => [`Fix conflicts with ${m.target_branch || "the target"}`, "Claude rebases, keeps both sides; you OK the push", "Fix conflicts"],
+};
+const MI = {review: "M15.5 15.5L20 20M11 17.5a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13zM8.5 11l1.8 1.8 3.5-3.5", threads: "M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12zM8.5 12l2.2 2.2 4.8-4.8",
+  ci: "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01", conflicts: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"};
+const TONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {review: "#FF9F0A", threads: "#BF5AF2", ci: "#FF453A", conflicts: "#FF453A"};
+// Merge: green, only when greenlight says it can merge now. The first click arms it for 5s; the second merges, pinned to the head greenlight saw.
+function mergeBtn(ws, m, x){
+  const box = el("div", "mg"), b = el("button", "go"); b.type = "button";
+  const cancel = Object.assign(el("button", "lnk", "Cancel"), {type: "button"});
+  let t = 0;
+  const idle = () => { clearTimeout(t); box.classList.remove("arm"); cancel.remove(); b.innerHTML = I.merge + `<span><b>Merge ${esc(m.ref)}</b><small>${esc(x.how)} into ${esc(x.target || "its target")}</small></span>` };
+  b.onclick = () => {
+    if (!box.classList.contains("arm")) {
+      box.classList.add("arm"); b.innerHTML = I.check + `<span><b>Confirm merge ${esc(m.ref)}</b><small>Can't be undone · click again within 5s</small></span><i></i>`;
+      box.append(cancel); t = setTimeout(idle, 5000); return;
+    }
+    clearTimeout(t); cancel.remove(); box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>Merging ${esc(m.ref)}…</b></span>`;
+    post({cmd: "tree", op: "merge", path: ws});
+  };
+  cancel.onclick = idle; idle(); box.append(b); box.dataset.ws = ws;
+  return box;
+}
+function mergeDone(o){
+  if (autoMerge.delete(o.path)) return post({cmd: "notify", title: o.error ? `Didn't merge ${wsName(o.path)}` : `Merged ${o.ref} into ${o.target}`, body: o.error || "Auto-run: greenlight merged it"});
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg");
+  if (!box) return o.error ? ask({icon: "warn", title: `Didn't merge ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`Merged ${o.ref} into ${o.target}`);
+  box.className = "mg " + (o.error ? "no" : "ok");
+  box.innerHTML = o.error ? `<b>Didn't merge</b><code>${esc(o.error)}</code>` : I.merge + `<span><b>Merged ${esc(o.ref)} into ${esc(o.target)}</b><small>${esc(o.how)}</small></span>`;
+}
+function drawNext(){
+  const nx = $("card").querySelector(".nx"); if (!nx) return;
+  const s = sugg.get(nx.dataset.pk), busy = nx.dataset.busy;
+  nx.hidden = !!s && !s.prompt;  // no goal to work toward, or the model had nothing
+  nx.disabled = !s || !!busy; nx.title = busy || s?.prompt || "";
+  nx.innerHTML = I.spark(16) + `<span><b>${esc(s?.label || (s ? "Next step" : "Suggesting a next step…"))}</b><small>${esc(s?.prompt || "Reading the workspace")}</small></span>`;
+}
+const facts = new Map();  // path → dash.py tree info, so the next open (and Delete) starts from the last answer
+// a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
+function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, cancel = "Cancel", safe}){
+  const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
+  f.innerHTML = (icon ? `<span class="ic ${icon === "trash" ? "k-r" : "k-o"}">${icon === "trash" ? IC.trash(17) : IC.warn}</span>` : "")
+    + `<div><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}</div>` + (note ? `<div class="note k-g">${g16(G.ok)}${note}</div>` : "")
+    + (rows.length ? `<ul>${rows.map(([k, s, x]) => `<li><i class="k-${k}"></i><span>${esc(s)}</span>${x ? `<em class="k-${k === "r" ? "r" : "dim"}">${x}</em>` : ""}</li>`).join("")}</ul>` : "");
+  const cb = check && Object.assign(el("input"), {type: "checkbox"});
+  if (cb) { const l = el("label"); l.append(cb, check); f.append(l) }
+  const no = Object.assign(el("button", safe ? "pri" : ""), {type: "button", textContent: cancel}), yes = Object.assign(el("button", danger ? "danger" : "pri"), {type: "submit", textContent: ok});
+  const btns = el("div", "btns"); btns.append(...(cancel ? [no] : []), yes); f.append(btns);
+  d.replaceChildren(f); d.hidden = false; (safe ? no : yes).focus();
+  return new Promise(res => {
+    const end = v => { d.hidden = true; d.replaceChildren(); res(v); cur?.focus.t.focus() };
+    no.onclick = () => end(null);
+    f.onsubmit = e => { e.preventDefault(); end({checked: !!cb?.checked}) };
+    f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end(null) };
+  });
+}
+// Delete: the worktree only (the branch stays). Asks first unless you said not to; dash.py refuses a pinned, dirty or unpushed tree, and that always asks.
+async function delWs(ws, w){
+  if (!noAskDel) {
+    const o = facts.get(ws), clean = o && !o.error && !o.dirty && !o.unpushed;
+    const r = await ask({icon: "trash", title: `Delete ${w.name}?`, text: `The worktree folder goes and its terminals close.${w.branch ? ` The branch <code>${esc(w.branch)}</code> stays.` : ""}`,
+      note: clean && "Clean and pushed", check: "Don't ask again when it's clean", ok: "Delete", danger: true});
+    if (!r) return;
+    if (r.checked) { noAskDel = true; save() }
+  }
+  post({cmd: "tree", op: "rm", path: ws});
+}
+async function treeDone(o){
+  if (o.op === "merge") return mergeDone(o);
+  if (o.op === "cfg") {  // Save to repo: the file is the look now, so yours goes (Undo brings it back)
+    if (o.error) return ask({icon: "warn", title: "Couldn't save to the repo", text: esc(o.error), cancel: false});
+    const w = wsInfo(o.path); if (w) w.cfg = o.cfg; merge(); setLook("local", {}); toast(`Saved to ${o.path.split("/").pop()}/.greenlight.json: commit it to share`, true);
+  } else if (o.op === "info") {
+    facts.set(o.path, {...o, at: Date.now()});
+    const c = $("card"), w = wsInfo(o.path);
+    if (cardWs === o.path && !c.hidden) {
+      c.querySelector(".st").innerHTML = stats(o);
+      const mt = c.querySelector(".meta") || c.querySelector(".st").insertAdjacentElement("afterend", el("div", "meta"));
+      mt.innerHTML = meta(w || {}, o); mt.hidden = !mt.innerHTML;
+    }
+  } else if (o.risks) {
+    const rows = o.risks.map(s => /uncommitted/.test(s) ? ["r", s, "lost"] : /commit/.test(s) ? ["o", s.replace(/ \(.*\)/, ""), /keeps/.test(s) && "branch keeps it"] : ["dim", s[0].toUpperCase() + s.slice(1)]);
+    const r = await ask({icon: "warn", title: `${wsName(o.path)} has unsaved work`, text: "Deleting the worktree loses what's not committed.", rows, cancel: "Keep it", safe: true, ok: "Delete anyway", danger: true});
+    if (r) post({cmd: "tree", op: "rm", path: o.path, force: true});
+  } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
+  else if (o.op === "rm") { facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
+}
+addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) $("card").hidden = true; else cardHover = false }, true);
+// hover: resting on a workspace row opens its card (sooner when one is already up); leaving both row and card closes a card that hover opened.
+// Using the card (any click in it) or a right-click keeps it until Esc or a click outside.
+let hoverT = 0, hoverRow = null, pt = [0, 0], was = [0, 0];
+addEventListener("mousemove", e => { was = pt; pt = [e.clientX, e.clientY] }, {passive: true});
+// heading for the open card: the last move points between its left corners, so rows crossed on the way don't take it over
+const aiming = () => {
+  const c = $("card"); if (c.hidden) return false;
+  const b = c.getBoundingClientRect(), dx = pt[0] - was[0], gap = b.left - pt[0], k = (pt[1] - was[1]) / dx;
+  return dx > 0 && gap > 0 && k >= (b.top - pt[1]) / gap && k <= (b.bottom - pt[1]) / gap;
+};
+const unhover = () => { clearTimeout(hoverT); if (cardHover && !$("card").hidden) hoverT = setTimeout(() => { if (cardHover) $("card").hidden = true }, 250) };
+addEventListener("mouseover", e => {
+  if (e.target.closest("#card, #menu")) return clearTimeout(hoverT);
+  const r = e.target.closest(".ws"); if (r === hoverRow) return;
+  hoverRow = r; clearTimeout(hoverT);
+  if (r?._ws && r._ws === cardWs && !$("card").hidden) return;  // already showing (or the sidebar re-rendered under the pointer)
+  const c = $("card"), quiet = !e.buttons && $("menu").hidden && $("dlg").hidden && $("pal").hidden && (c.hidden || cardHover);
+  const go = () => hoverRow === r && r.isConnected && wsInfo(r._ws) && wsMenu({currentTarget: r, hover: true}, r._ws, wsInfo(r._ws));
+  // ponytail: fixed delays (350ms to open, 0 to switch, 180ms when aiming); tune here if it feels off
+  if (r?._ws && quiet) c.hidden ? hoverT = setTimeout(go, 350) : aiming() ? hoverT = setTimeout(go, 180) : go();
+  else unhover();
+});
+document.documentElement.addEventListener("mouseleave", () => { hoverRow = null; unhover() });
+// right side: split the focused pane
+$("tools").append(iconBtn("", I.splitR(18), "Split right  ⌘D", () => cur && split(cur.focus, false), "Split right"), iconBtn("", I.splitD(18), "Split down  ⌘⇧D", () => cur && split(cur.focus, true), "Split down"));
+
+// the sidebar: Local, then each project's workspaces (from every installed ADE), each with its open terminals under it
+const wsInfo = ws => trees.find(w => w.path === ws);
+const HOST = q.get("host") || "local";  // GREENLIGHT_HOST: shells (and the home group) live there, over ssh
+// the Hosts rows: "" is GREENLIGHT_HOST's home (where workspaces live), "@name" another host's home (~/.ssh/config, from the app)
+const hostOf = ws => ws?.[0] === "@" ? ws.slice(1) : HOST;
+let uses = {};  // how many shells each Hosts row has opened: the Hosts sort
+const HOMES = ["", ...(HOST !== "local" ? ["@local"] : []), ...JSON.parse(q.get("hosts") || "[]").filter(h => h !== HOST).map(h => "@" + h)];
+let LOCALNAME = q.get("localname") || "Local";  // this Mac: its hostname unless renamed (Settings › Terminal › Hosts, or Rename here)
+const wsName = ws => !ws || ws[0] === "@" ? (hostOf(ws) === "local" ? LOCALNAME : hostOf(ws)) : wsInfo(ws)?.name || ws.split("/").pop();
+const LOCAL = HOST === "local" ? "" : "@local";
+// Local first, then most used; ties keep GREENLIGHT_HOST, then ~/.ssh/config order. A project window whose .greenlight.json lists "hosts" shows
+// only those (and Local, and any host with shells open)
+const homes = () => { const only = Array.isArray(acctCfg.hosts) ? acctCfg.hosts : null;
+  return HOMES.filter(h => !only || h === LOCAL || only.includes(hostOf(h)) || wsTabs(h).length).sort((a, b) => (b === LOCAL) - (a === LOCAL) || (uses[b] || 0) - (uses[a] || 0)) };
+const hostKey = h => h === HOST ? "" : "@" + h;  // a host's name → its Hosts row
+// where a project window's first shell opens: its .greenlight.json "host" (when it's one of yours), else GREENLIGHT_HOST
+const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES.includes(hostKey(acctCfg.host)) ? hostKey(acctCfg.host) : "");
+// projects: named groups of repos (an ADE's w.project) and folders. Yours are projects.json (through the app); a repo's own .greenlight.json
+// (its main checkout, read by dash.py trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
+// or ONLY these ids ("" is No Man's Land: in no project). A window of one project is that project's account: its file's look, host and hosts.
+const NML = "No Man's Land";
+let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
+const pid = n => "p" + n.toLowerCase().replace(/\W+/g, "_").slice(0, 40);
+const acct = () => ONLY?.length === 1 ? allP.find(p => p.id === ONLY[0]) : null;
+function merge(){
+  allP = projects.map(p => ({...p, repos: [...p.repos], own: true}));
+  for (const w of trees) {
+    const n = w.main && w.project && typeof w.cfg?.name === "string" ? w.cfg.name.trim().slice(0, 80) : "";
+    if (!n || n.toLowerCase() === NML.toLowerCase() || projects.some(p => p.repos.includes(w.project))) continue;  // a repo you placed yourself stays put
+    let p = allP.find(p => p.name.toLowerCase() === n.toLowerCase());
+    if (!p) allP.push(p = {id: pid(n), name: n, repos: [], dirs: []});
+    if (!p.repos.includes(w.project)) { p.repos.push(w.project); (p.file ||= []).push(w.project) }
+  }
+  allP.forEach(p => { const m = trees.filter(w => w.main && p.repos.includes(w.project)); p.home = m.find(w => w.cfg) || m[0] });  // where Save to repo writes
+  if (treesIn) acctCfg = acct()?.home?.cfg || {};  // until the trees come, the copy the layout saved
+  offer();
+}
+let ONLY = (() => { try { const o = JSON.parse(q.get("only") || "null"); return Array.isArray(o) ? o : null } catch { return null } })();
+const under = (path, d) => path === d || path?.startsWith(d + "/");
+const projOf = w => allP.find(p => p.repos.includes(w.project) || p.dirs.some(d => under(w.path, d)));
+const inView = w => !ONLY || ONLY.includes(projOf(w)?.id ?? "");
+const fullDir = d => (HOME && /^~(\/|$)/.test(d) ? HOME + d.slice(1) : d).replace(/(.)\/+$/, "$1");
+const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as the app's paneWhere
+// what this window lists: in-view trees, plus each in-view project's folders that aren't a tree already
+const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !ONLY || ONLY.includes(p.id)).flatMap(p => p.dirs)
+  .filter((d, i, a) => a.indexOf(d) === i && !wsInfo(d)).map(d => ({project: "", name: d.split("/").pop() || d, path: d, dir: true}))];
+function openWs(ws){ const t = wsTabs(ws).sort((a, b) => b.used - a.used)[0]; t ? show(t) : newTab(ws) }
+// status glyphs (16-unit grid, 1.5 stroke, as the design)
+const g16 = (d, cls = "", label = "", w = 12) => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${d}</svg>`;
+const G = {
+  branch: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5" r="1.5"/><path d="M5 5v6M11 6.5c0 3-6 2.5-6 4.5"/>',
+  mr: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="12.5" r="1.5"/><path d="M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6"/>',
+  ok: '<circle cx="8" cy="8" r="6.25"/><path d="m5.5 8.2 1.8 1.8 3.2-3.6"/>', bad: '<circle cx="8" cy="8" r="6.25"/><path d="m6 6 4 4m0-4-4 4"/>',
+  run: '<circle cx="8" cy="8" r="6.25" stroke-dasharray="3 2.4"/>', thread: '<path d="M2.75 3.25h10.5v7.5h-6l-3 2.5v-2.5h-1.5z"/>',
+  rebase: '<path d="M8 2.5v8M4.75 7.5 8 10.75l3.25-3.25M3.5 13.5h9"/>', q: '<circle cx="8" cy="8" r="6.25"/><path d="M6.3 6.2a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.7.6-.7 1.1M8 11.2v.1"/>',
+  err: '<path d="M8 2.2 14 13H2z"/><path d="M8 6.5v3M8 11.3v.1"/>',
+};
+// the one most urgent thing about a workspace: [label, colour, glyph]
+function badge(w){
+  const m = w.mr?.state === "opened" ? w.mr : {};
+  if (w.agent === "waiting") return ["Question", "o", G.q];
+  if (w.state === "crashed") return ["Error", "r", G.err];
+  if (m.pipeline === "failed") return ["CI failed", "r", G.bad];
+  if (m.conflicts) return ["Conflicts", "r", G.rebase];
+  if (w.state === "needs") return ["Blocking", "o", G.q];
+  if (w.state === "raised") return ["Your move", "o", G.q];
+  if (w.agent === "working") return ["Working", "b", G.run];
+  if (m.mergeable && !m.draft) return ["Ready", "g", G.ok];
+}
+const CI = {success: ["g", G.ok, "CI passed"], failed: ["r", G.bad, "CI failed"], running: ["b", G.run, "CI running"], pending: ["b", G.run, "CI pending"], created: ["b", G.run, "CI queued"]};
+function chips(m){
+  const c = [], chip = (k, glyph, text, label) => c.push(`<span class="chip k-${k}" title="${label}">${g16(glyph, glyph === G.run ? "spin" : "", text ? "" : label)}${text}</span>`);
+  chip({opened: m.draft ? "dim" : "g", merged: "p"}[m.state] || "dim", G.mr, esc(m.ref || ""), `${m.draft ? "Draft " : ""}${m.state}: ${esc(m.title || "")}`);
+  if (m.state !== "opened") return c.join("");
+  if (CI[m.pipeline]) { const [k, glyph, label] = CI[m.pipeline]; chip(k, glyph, "", label) }
+  if (m.threads) chip("o", G.thread, m.threads, `${m.threads} unresolved thread${m.threads > 1 ? "s" : ""}`);
+  if (m.conflicts) chip("r", G.rebase, "", "Conflicts with the target branch");
+  else if (m.rebase) chip("o", G.rebase, "", "Needs a rebase");
+  return c.join("");
+}
+// sections by greenlight's state, then projects: Workspaces (yours to move, what needs you first), Waiting on others, Done
+const SECS = [["ws", "Workspaces"], ["quiet", "Waiting on others"], ["done", "Done"]];
+const isShut = k => k === "§done" ? !shut.has(k) : shut.has(k);  // ponytail: Done starts shut, so "§done" in `shut` means open
+function sideGroups(){
+  // a workspace that's gone from every ADE stays while it has open terminals
+  const vis = visTrees();
+  const all = [...vis, ...[...new Set(tabs.map(x => x.ws))].filter(ws => ws && ws[0] !== "@" && !vis.some(w => w.path === ws)).map(ws => ({project: "", name: ws.split("/").pop(), path: ws}))];
+  const mine = w => ["needs", "raised"].includes(w.state) ? 0 : 1;
+  all.sort((a, b) => mine(a) - mine(b));
+  const label = w => projOf(w)?.name || w.project || NML;  // a repo in no project keeps its own header
+  return SECS.map(([k, name]) => [k, name, all.filter(w => (["quiet", "done"].includes(w.state) ? w.state : "ws") === k)
+    .reduce((m, w) => m.set(label(w), [...(m.get(label(w)) || []), w]), new Map())]).filter(x => x[2].size);
+}
+const sideOrder = () => sideGroups().flatMap(([k, , m]) => isShut("§" + k) ? [] : [...m].flatMap(([p, ws]) => isShut(k + "/" + p) ? [] : ws.map(w => w.path)));
+const esc = s => String(s).replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+function renderSide(){
+  const ades = new Set(trees.map(w => w.ade)).size > 1, rows = [];
+  const tmRows = ws => { const ts = wsTabs(ws), first = new Map();
+    ts.forEach((x, i) => first.has(x.set) || first.set(x.set, i)); ts.sort((a, b) => first.get(a.set) - first.get(b.set));  // a set's tabs together
+    return ts.map((x, i) => {
+    const r = el("div", "tm" + (x === cur ? " on" : "") + (i && x.set !== ts[i - 1].set ? " ns" : "")); r.setAttribute("role", "treeitem");
+    r.insertAdjacentHTML("beforeend", x.auto ? I.bolt(12) : paneIcon(x.focus, 12));
+    r.onclick = () => x !== cur && show(x); r.oncontextmenu = e => { e.preventDefault(); menu(e, x, true) };  // the current one: no re-render or refocus, so a double-click lands and its field keeps focus
+    if (editing === x && editSide) { nameField(x, r); return r }
+    const n = el("span", "wn"); n.textContent = shown(tabName(x)); r.append(n); r.title = "Double-click to rename";
+    if (x !== cur && paneOf(x).some(p => p.bell)) r.insertAdjacentHTML("beforeend", I.bell(12));
+    r.append(iconBtn("ib", I.x(11), `Close ${shown(tabName(x))}`, () => closeTab(x), "Close terminal"));
+    r.ondblclick = e => { if (!e.target.closest(".ib")) rename(x, true) };
+    return r;
+  }) };
+  const wsRow = (ws, w) => {
+    const r = el("div", "ws" + (ws === curWs ? " on" : "") + (w?.main ? " main" : "")); r.setAttribute("role", "treeitem");
+    const bd = w && badge(w), l1 = el("span", "l1");
+    if (!w?.ade) r.title = !ws || ws[0] === "@" ? `Shells on ${wsName(ws)}` : ws;  // a workspace row has its card instead (a tooltip would cover it)
+    l1.append(el("span", "dot " + (w?.agent || "")));
+    const n = el("span", "wn"); n.textContent = wsName(ws); l1.append(n);
+    if (!bd && w?.state === "quiet" && w.why) { const y = el("span", "wy"); y.textContent = w.why.replace(/^waiting on /, ""); l1.append(y) }
+    if (bd) { l1.insertAdjacentHTML("beforeend", `<span class="badge k-${bd[1]}" title="${esc(w.why || bd[0])}">${bd[1] === "b" ? g16(G.run, "spin") : ""}${bd[0]}</span>`) }
+    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3"}[w.ade] || w.ade; l1.append(g) }
+    if (wsTabs(ws).some(x => x !== cur && paneOf(x).some(p => p.bell))) l1.insertAdjacentHTML("beforeend", I.bell(12));
+    l1.append(iconBtn("ib", I.plus(13), "New set of tabs here", () => newTab(ws, undefined, true)));
+    r.append(l1);
+    if (w?.branch || w?.mr) r.append(el("span", "l2", `<span class="br">${w.branch ? g16(G.branch) + `<span>${esc(w.branch)}</span>` : ""}</span><span class="chips">${w.mr ? chips(w.mr) : ""}</span>`));
+    if (w?.ade) r._ws = ws;
+    r.onclick = () => openWs(ws); r.oncontextmenu = e => { e.preventDefault(); wsMenu(e, ws, w) };
+    if ((!ws || ws[0] === "@") && hostOf(ws) === "local") r.ondblclick = e => { if (!e.target.closest(".ib")) renameLocal() };
+    rows.push(r, ...tmRows(ws));
+  };
+  const grp = (k, label, n, cls, into = rows) => {
+    const g = el("div", "grp " + cls + (isShut(k) ? " shut" : "")); g.setAttribute("role", "treeitem"); g.setAttribute("aria-expanded", !isShut(k));
+    g.insertAdjacentHTML("beforeend", I.chev(11)); const t = el("span", "gn"); t.textContent = label; g.append(t);
+    if (isShut(k) || cls === "sec") g.append(el("span", "ct", String(n)));
+    g.onclick = () => { shut.has(k) ? shut.delete(k) : shut.add(k); render() };
+    into.push(g);
+  };
+  const out = [];  // a box per section holding its rows: Hosts, then the workspaces by status
+  rows.length = 0; grp("§host", "Hosts", homes().length, "sec");
+  if (!isShut("§host")) {
+    const idle = el("div", "hchips");
+    for (const h of homes()) {
+      const n = wsTabs(h).length;
+      if (!n) { const c = el("button", "hchip" + (h === curWs ? " on" : "")); c.type = "button"; c.title = `New shell on ${wsName(h)}`;
+        c.append(el("span", "dot")); c.append(wsName(h)); c.onclick = () => openWs(h); c.oncontextmenu = e => { e.preventDefault(); wsMenu(e, h) }; idle.append(c); continue }
+      const at = rows.length; wsRow(h);
+      const l1 = rows[at].querySelector(".l1"); l1.querySelector(".dot").classList.add("live");
+      l1.lastChild.before(iconBtn("ca", "Close all", `Close ${n} terminal${n > 1 ? "s" : ""} on ${wsName(h)}`, () => wsTabs(h).forEach(closeTab)));
+      const card = el("div", "hc"); card.append(...rows.splice(at)); rows.push(card);
+    }
+    if (idle.children.length) rows.push(idle);
+  }
+  const hb = el("div", "box s-host" + (isShut("§host") ? " shut" : "")); hb.setAttribute("role", "group"); hb.append(...rows); out.push(hb);
+  for (const [sk, label, byProj] of sideGroups()) {
+    rows.length = 0;
+    grp("§" + sk, label, [...byProj.values()].flat().length, "sec");
+    if (!isShut("§" + sk)) for (const [proj, ws] of byProj) {
+      grp(sk + "/" + proj, proj, ws.length, "prj");
+      if (!isShut(sk + "/" + proj)) ws.forEach(w => wsRow(w.path, w));
+    }
+    const b = el("div", `box s-${sk}` + (isShut("§" + sk) ? " shut" : "")); b.setAttribute("role", "group"); b.append(...rows); out.push(b);
+  }
+  $("tree").replaceChildren(...out);
+  $("tree").querySelector(".ws.on")?.scrollIntoView({block: "nearest"});
+}
+// Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
+// The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
+let slide = .25, sliding;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut
+function toggleSide(){
+  const b = document.body, s = $("side"), st = $("stage"), sw = st.offsetWidth, from = sliding && getComputedStyle(s).marginLeft;  // a re-toggle mid-slide turns back from where it is
+  sliding?.cancel(); sliding = null;
+  const open = !b.classList.toggle("noside"); post({cmd: "side", open}); render();
+  const end = () => { sliding = null; b.classList.remove("sliding"); st.style.width = ""; setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
+  if (!(slide > 0) || matchMedia("(prefers-reduced-motion: reduce)").matches) return end();
+  b.classList.add("sliding"); st.style.width = sw + "px";
+  const w = "-" + s.offsetWidth + "px";
+  sliding = s.animate({marginLeft: [from || (open ? w : "0px"), open ? "0px" : w]}, {duration: slide * 1000, easing: open ? "cubic-bezier(.2,.8,.2,1)" : "cubic-bezier(.4,0,.8,.2)"});
+  sliding.onfinish = end;
+}
+if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
+$("shead").append(iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
+  iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
+const setTitle = () => { const t = $("shead").querySelector(".ttl");
+  t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
+  // the window bar names it too, left of the floors, with each project's square (none: All projects)
+  const hex = i => i < 0 ? "#8E8E93" : getComputedStyle(document.documentElement).getPropertyValue("--" + "obgptyr"[i % 7]).trim();
+  t.title = t.textContent + " · Show projects…"; post({cmd: "title", text: ONLY ? t.textContent : "All projects", colors: ONLY ? ONLY.map(id => hex(allP.findIndex(p => p.id === id))) : [],
+    list: [...allP, null].map((p, i) => { const rs = reposOf(allP, p ?? undefined); return {id: p ? p.id : "", name: p ? p.name : NML, color: hex(p ? i : -1), repos: rs, paths: trees.filter(w => rs.includes(w.project)).map(w => w.path),
+      busy: trees.filter(w => w.agent === "working" && rs.includes(w.project)).length} })}) };  // list: every project and No Man's Land, for L1's Open projects
+$("shead").querySelector(".ttl").onclick = () => pickProjects(true);  // the title names the window's projects: a click changes them (or edits them)
+setTitle();
+// a form in the modal: onOk() true closes it, false keeps it (a field said why). opt: cls "big" for the roomy layout (a title bar, a footer bar),
+// sub (a line by the title), head (nodes at the title bar's end), left/right (footer nodes either side of the gap), done (one Done button; the body has its own submit)
+function dlgForm(title, body, ok, onOk, onEnd, {cls = "wide", sub = "", head = [], left = [], right = [], done} = {}){
+  const d = $("dlg"), f = el("form", cls); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
+  const h = el("div", "dh", `<h3>${esc(title)}</h3>` + (sub ? `<span class="sub">${esc(sub)}</span>` : "")); h.append(el("span", "gap"), ...head); f.append(h, body);
+  const no = Object.assign(el("button", done ? "go" : ""), {type: "button", textContent: done ? "Done" : "Cancel"}), yes = Object.assign(el("button", "pri"), {type: "submit", textContent: ok});
+  const btns = el("div", "btns"); btns.append(...left, ...left.length || right.length ? [el("span", "gap")] : [], ...right, no, ...done ? [] : [yes]); f.append(btns);
+  const end = () => { d.hidden = true; d.replaceChildren(); onEnd?.(); cur?.focus.t.focus() };
+  if (/\bbig\b/.test(cls) && !head.length) { const x = Object.assign(el("button", "x", svg('<path d="M6 6l12 12M18 6L6 18"/>', 14)), {type: "button", onclick: end}); x.setAttribute("aria-label", "Close"); h.append(x) }
+  no.onclick = end; f.onsubmit = e => { e.preventDefault(); if (onOk()) end() };
+  f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end() };
+  d.replaceChildren(f); d.hidden = false; f.querySelector(".dh ~ * :is(input, select, textarea, button)")?.focus();
+}
+// which project holds a repo: the one that names it, else one with a folder its main checkout sits in (projOf goes by each worktree)
+function repoIn(ps, r){ return ps.find(p => p.repos.includes(r)) ?? ps.find(p => trees.some(w => w.main && w.project === r && p.dirs.some(d => under(w.path, d)))) }
+function reposOf(ps, p){ return [...new Set(trees.filter(w => w.project && repoIn(ps, w.project) === p).map(w => w.project))] }  // hoisted: setTitle runs first
+const nRepos = n => `${n} repo${n === 1 ? "" : "s"}`;
+// a project's color square, by its place in the list (ponytail: moves when projects reorder; store one per project if that bothers)
+const pcol = i => i < 0 ? "color-mix(in srgb,var(--fg) 30%,var(--bg))" : `var(--${"obgptyr"[i % 7]})`, sq = c => `<i class="sq" style="background:${c}"></i>`;
+const tilde = p => HOME && under(p, HOME) ? "~" + p.slice(HOME.length) : p;
+// Open projects: in a new window (the app opens one, to put on any display) or this one (its shells stay); all projects, or the ones you tick
+// (No Man's Land: repos in none)
+function pickProjects(here){
+  const some = here && ONLY, body = el("div", "nwb"), find = Object.assign(el("input"), {type: "text", placeholder: "Filter projects"}), grid = el("div", "tiles");
+  find.setAttribute("aria-label", "Filter projects");
+  const tile = (v, name, sub, on, c) => `<label class="tile"><input type="checkbox" value="${esc(v)}" ${on ? "checked" : ""}>${sq(c)}<span><b>${esc(name)}</b><small>${esc(sub)}</small></span></label>`;
+  const busy = rs => { const n = trees.filter(w => w.agent === "working" && rs.includes(w.project)).length; return n ? ` · ${n} agent${n === 1 ? "" : "s"} working` : "" };
+  const rsOf = [...allP, null].map(p => reposOf(allP, p ?? undefined));
+  grid.innerHTML = tile("*", "All projects", "Everything, and new projects as you add them", !some, "var(--dim)")
+    + [...allP, null].map((p, i) => { const rs = rsOf[i]; return tile(p ? p.id : "", p ? p.name : NML, p || rs.length ? nRepos(rs.length) + busy(rs) : "Repos in no project", some && ONLY.includes(p ? p.id : ""), pcol(p ? i : -1)) }).join("");
+  const boxes = [...grid.querySelectorAll("input")], all = boxes[0], tot = el("span", "tot");
+  const count = () => { const on = all.checked ? rsOf.map((_, i) => i) : boxes.slice(1).flatMap((b, i) => b.checked ? [i] : []);
+    tot.textContent = `${on.length} project${on.length === 1 ? "" : "s"} · ${nRepos(on.reduce((n, i) => n + rsOf[i].length, 0))}` };
+  boxes.forEach(b => b.onchange = () => { if (b.checked) (b === all ? boxes.slice(1) : [all]).forEach(x => x.checked = false); count() }); count();
+  find.oninput = () => grid.querySelectorAll("label").forEach(l => l.hidden = !l.textContent.toLowerCase().includes(find.value.trim().toLowerCase()));
+  const lf = el("label", "find", svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>')); lf.append(find);
+  const err = el("p", "err"); body.append(lf, grid, ...allP.length ? [] : [el("p", "", "No projects yet: <b>Edit projects…</b> makes them.")], err);
+  let inPlace = here; const seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Where");
+  const mode = () => { seg.querySelectorAll("button").forEach((b, i) => b.setAttribute("aria-pressed", !i === !inPlace)); const y = $("dlg").querySelector("button.pri"); if (y) y.innerHTML = (inPlace ? "Show" : "Open window") + "<kbd>↩</kbd>" };
+  [["New window", "⌘⇧N"], ["This window", ""]].forEach(([t, k], i) => { const b = Object.assign(el("button", "", esc(t) + (k ? `<kbd>${k}</kbd>` : "")), {type: "button"}); b.onclick = () => { inPlace = !!i; mode() }; seg.append(b) });
+  const ed = Object.assign(el("button", "lite"), {type: "button", textContent: "Edit projects…"}); ed.onclick = () => editProjects();
+  dlgForm("Open projects", body, "", () => {
+    const only = boxes.filter(b => b.checked).map(b => b.value), any = only.includes("*");
+    if (!only.length) { err.textContent = "Tick a project, or All projects."; return false }
+    if (!inPlace) { post({cmd: "window", only: any ? null : only}); return true }
+    ONLY = any ? null : only; post({cmd: "only", only: ONLY}); merge(); paint(); setTitle(); render(); save(); return true;
+  }, null, {cls: "big nw", head: [seg], left: [ed], right: [tot]});
+  mode();
+}
+function newWindow(){ pickProjects(false) }
+// Customize look: your words → Claude (the app runs claude -p) → CSS colors over this window's chrome; Undo walks back, one restyle at a time
+let restyling = false, toastT;
+function toast(text, undo){
+  const t = $("toast"); clearTimeout(toastT); t.querySelector("span").textContent = text; t.hidden = false;
+  const b = t.querySelector("button"); b.hidden = !undo; b.onclick = () => { undoLook(); t.hidden = true; cur?.focus.t.focus() };
+  if (!restyling) toastT = setTimeout(() => t.hidden = true, 10e3);
+}
+// ponytail: asked per window; a new window of the same repo asks again, and a look the repo changes later doesn't re-ask
+function offer(){
+  const a = $("adopt"), c = localLights(); if (!a) return;
+  if (lights !== null || !Object.keys(c).length) { a.hidden = true; return }
+  if (!a.hidden) return;
+  const yes = Object.assign(el("button"), {type: "button", textContent: "Yes"}), no = Object.assign(el("button"), {type: "button", textContent: "No"}), dots = el("span", "dots");
+  [...new Set(Object.values(c))].slice(0, 10).forEach(v => { const d = el("i"); d.style.background = v; dots.append(d) });  // its colors, as swatches
+  const pick = l => { lights = l; a.hidden = true; paint(); save(); cur?.focus.t.focus() };
+  yes.onclick = () => pick("local"); no.onclick = () => pick("default");
+  const row = el("div", "btns"); row.append(yes, no);
+  a.replaceChildren(el("span", "", `Wear the colors ${esc(acct()?.home?.project.split("/").pop() || "this repo")} checked in? Its Local Lights.`), dots, row); a.hidden = false;
+}
+function setLook(l, next = skin, light = skinLight){ skinHist = [...skinHist, {lights, skin}].slice(-30); lights = l; skin = next; skinLight = light; paint(); save() }
+function undoLook(){ if (!skinHist.length) return; skinLight = {};  // ponytail: undo walks the dark half only; the light one goes with it, keep pairs in skinHist if that matters
+  ({lights, skin} = skinHist[skinHist.length - 1]); skinHist = skinHist.slice(0, -1); paint(); save() }
+// Colors for this window: wear the app's or the repo's; a premade look; your words (→ claude -p); or every color by hand. Each choice is worn at once and
+// the dialog stays (Undo walks back); the preview on the left is this window's own variables, so it's always what you're wearing
+function lookDialog(text = ""){
+  const again = fn => () => { fn(); lookDialog(box.value) };
+  const home = acct()?.home, repo = home?.project.split("/").pop(), local = Object.keys(localLights()).length, w = worn();
+  const seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Wear");
+  [["default", "Default", false, "The app's colors"],
+   ["local", "Local Lights", !local, local ? `The look ${repo || "this repo"} checked in (.greenlight.json)` : "This window's repo checks in no look"]].forEach(([l, t, off, tip]) => {
+    const b = Object.assign(el("button"), {type: "button", textContent: t, disabled: off, title: tip}); b.setAttribute("aria-pressed", l === (lights || "default"));
+    b.onclick = again(() => l !== lights && setLook(l)); seg.append(b) });
+  const on = PRESETS.find(o => Object.entries(o.colors).every(([k, v]) => w[k] === v));
+  const pv = el("div", "pv", `<div class="pvh"><h4>Preview</h4><span>${esc(on?.name || {local: "Local Lights", own: "Your own"}[lights] || "Default")}</span></div><div class="mini" role="img" aria-label="Preview of this window's colors"><div class="ms"><b>${esc(repo || "greenlight")}</b><span class="on"><i style="background:var(--o)"></i>sidebar</span>`
+    + `<span><i style="background:var(--b)"></i>fix-login</span><span class="k-dim"><i style="background:var(--g)"></i>main</span></div><div class="mm"><div class="mt"><span class="on">Session</span><span>tests</span></div>`
+    + `<pre>$ make test\nok  37 passed\n$ _</pre><div class="mf"><span>Open</span></div></div></div><div class="st">${[..."orgbpyt"].map(k => `<i title="${esc(SKIN[k])}" style="background:var(--${k})"></i>`).join("")}</div>`
+    + (home ? `<div class="tip">${svg('<path d="M9 18h6M10 21h4M12 3a6 6 0 00-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0012 3z"/>')}<span>Save it to ${esc(repo)} as Local Lights, and anyone who opens the repo is asked to wear it.</span></div>` : ""));
+  // premade looks: a click wears it, and the dialog stays to try another
+  const pre = el("div", "dz sm");
+  PRESETS.forEach(o => {
+    const c = o.colors, b = Object.assign(el("button", "", `<span class="th"><i style="background:${c.hair}"></i><i style="box-shadow:inset 0 2px 0 ${c.accent}"></i></span><span class="nm"><i style="background:${c.accent}"></i><b>${esc(o.name)}</b></span>`), {type: "button"});
+    b.style.background = c.strip; b.style.color = c.fg; b.setAttribute("aria-pressed", o === on);
+    b.onclick = again(() => setLook("own", {...w, ...c})); pre.append(b);
+  });
+  const box = Object.assign(el("input"), {type: "text", id: "look-ask", maxLength: 500, placeholder: "warm and earthy, a purple accent", value: text}), go = Object.assign(el("button"), {type: "submit", textContent: restyling ? "Restyling…" : "Restyle", disabled: restyling});
+  const ask = el("div", "ask"); ask.append(box, go);
+  // every color: one picker each, previewed as you drag, worn when you let go
+  const ev = el("div", "ev"), cx = el("canvas").getContext("2d", {willReadFrequently: true}), probe = el("span"), undo = Object.assign(el("button", "lite"), {type: "button"});
+  const hex = k => {  // whatever the variable is now (a color-mix too), as #rrggbb for <input type=color>
+    probe.style.color = `var(--${k})`; cx.clearRect(0, 0, 1, 1); cx.fillStyle = getComputedStyle(probe).color; cx.fillRect(0, 0, 1, 1);
+    return "#" + [...cx.getImageData(0, 0, 1, 1).data.slice(0, 3)].map(n => n.toString(16).padStart(2, "0")).join("");
+  };
+  const undoLabel = () => { undo.innerHTML = svg('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/>', 13) + `Undo${skinHist.length ? ` (${skinHist.length})` : ""}`; undo.disabled = !skinHist.length };
+  document.body.append(probe);
+  Object.entries(SKIN).forEach(([k, d]) => {
+    const row = el("label"), inp = Object.assign(el("input"), {type: "color", value: hex(k)}), code = el("code", "", hex(k));
+    inp.setAttribute("aria-label", d); inp.oninput = () => { preview = {...worn(), [k]: inp.value}; code.textContent = inp.value; paint() };
+    inp.onchange = () => { preview = null; setLook("own", {...worn(), [k]: inp.value}); undoLabel() };
+    row.append(inp, el("span", "", esc(d[0].toUpperCase() + d.slice(1))), code); ev.append(row);
+  });
+  probe.remove();
+  const every = el("details", "", "<summary>Every color</summary>"); every.open = true; every.append(ev);
+  const err = el("p", "err"), side = el("div", "prt");
+  const sec = (...n) => { const s = el("section"); s.append(...n); return s };
+  side.append(sec(el("h4", "", "Premade"), pre), sec(Object.assign(el("label", "h", "Or describe it"), {htmlFor: "look-ask"}), ask,
+    el("p", "", "Start with <code>/design</code> to get a few options to pick from."), err), every);
+  const body = el("div", "ccb"); body.append(pv, side);
+  undoLabel(); undo.onclick = again(undoLook);
+  const right = [];
+  if (home) { const b = Object.assign(el("button"), {type: "button", textContent: `Save to ${repo}`, title: `Write this look to ${home.path}/.greenlight.json; commit it to share`}); b.onclick = again(() => saveToRepo(acct())); right.push(b) }
+  dlgForm("Colors for this window", body, "", () => {
+    const text = box.value.trim(); if (!text) { err.textContent = "Say how it should look."; return false }
+    if (restyling) { err.textContent = "Still restyling the last one."; return false }
+    restyle(text); lookDialog(text); return false;
+  }, () => { preview = null; paint() }, {cls: "big cc", sub: "Sidebar, tabs and menus. Terminals keep their own colors.", head: [seg], left: [undo], right, done: true});
+  box.focus();
+}
+// Save to repo: this look (the repo's, yours over it) into the main checkout's .greenlight.json, with the project's name; you commit it
+function saveToRepo(a){ post({cmd: "tree", op: "cfg", path: a.home.path, text: JSON.stringify({...a.home.cfg, name: a.name, look: {dark: worn(), light: {...skinOk(half(a.home.cfg?.look, "light")), ...skinLight}}}, null, 2)}) }
+function restyle(text){
+  const css = getComputedStyle(document.documentElement), now = Object.entries(SKIN).map(([k, d]) => `${k} (${d}): ${css.getPropertyValue("--" + k).trim()}`).join("\n");
+  const design = /^\/design\b/i.test(text), ask = text.replace(/^\/design\b\s*/i, "") || "surprise me";
+  restyling = true; toast(design ? "Designing a few looks…" : "Restyling…");
+  const rules = "Design like a professional UI designer: one cohesive palette, not a pile of loud colors. Every look is a pair: dark is this window; light is the same palette for a light window (a pale strip near #F5F3EE, dark text), with the same contrast rules. "
+    + `The strip should sit close to the terminal area's background (${bg}) in lightness so the window reads as one surface; tint it, don't flood it. `
+    + "Text (fg) on the strip needs at least 7:1 contrast, dim at least 4.5:1. hair is a quiet line, about 12% of the way from the strip toward fg. "
+    + "accent and focus share one hue that suits the palette. The status colors (o r g b p y t) must stay recognizably orange, red, green, blue, purple, yellow and teal, "
+    + "readable on the strip, and tuned to the palette's saturation. Use #hex values.";
+  post({cmd: "look", text: "You restyle the chrome of a terminal app's window: its sidebar, tab strip, menus and dialogs, never the terminal text area. "
+    + `${rules}\n\nThe CSS variables now:\n${now}\n\nThe request: ${ask}\n\n`
+    + (design ? "Make 4 distinct options: one close to the request, one bolder, one quieter, one unexpected. Set every variable in each. "
+        + 'Reply with only a JSON array: [{"name": "2 or 3 words", "dark": {"strip": "#…", …}, "light": {"strip": "#…", …}}]. No prose.'
+      : "Change every variable the request needs to stay cohesive. Reply with only a JSON object: {\"dark\": {the variables to change (keys as above)}, \"light\": {the same look for a light window, every variable}}. No prose.")});
+}
+// /design's answer: each option a card in its own colors; choosing one previews it on the whole window, Use this keeps it
+function pickDesign(opts, title = "Pick a design"){
+  let sel = 0; const body = el("div", "dz");
+  const pick = i => { sel = i; preview = opts[i].colors; paint(); body.querySelectorAll("button").forEach((b, j) => b.setAttribute("aria-pressed", i === j)) };
+  opts.forEach((o, i) => {
+    const c = {...skin, ...o.colors}, b = Object.assign(el("button"), {type: "button"}), dots = el("span", "dots");
+    b.append(el("b", "", esc(o.name)), dots); b.style.background = c.strip || ""; b.style.color = c.fg || ""; b.style.boxShadow = `inset 0 0 0 1px ${c.hair || "transparent"}`;
+    ["accent", "o", "r", "g", "b", "p", "y", "t"].forEach(k => { const d = el("i"); d.style.background = c[k] || "transparent"; dots.append(d) });
+    b.onclick = () => pick(i); body.append(b);
+  });
+  pick(0);
+  dlgForm(title, body, "Use this", () => { setLook("own", {...worn(), ...opts[sel].colors}, opts[sel].light); toast("Restyled this window", true); return true }, () => { preview = null; paint() });
+}
+// Edit projects: the projects down the left (No Man's Land last), the one you pick on the right: its name, its folders, its repos (a menu moves one);
+// saved through the app (projects.json) to every window
+function editProjects(){
+  // a project a repo's .greenlight.json makes is named there (file), and so are the repos it claims; folders and other repos you add are yours
+  const list = allP.map(p => ({id: p.id, name: p.name, repos: [...p.repos], dirs: [...p.dirs], dir: p.dir || "", file: p.file || [], own: p.own}));
+  const repos = [...new Set([...trees.map(w => w.project), ...list.flatMap(p => p.repos)].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const nav = el("nav", "pn"), pane = el("div", "pd"), err = el("p", "err"), body = el("div", "peb"); nav.setAttribute("aria-label", "Projects"); body.append(nav, pane);
+  const lock = svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', 13);
+  let sel = list[0]?.id ?? "";  // "": No Man's Land
+  const at = r => repoIn(list, r)?.id ?? "", mine = id => repos.filter(r => at(r) === id);
+  const pick = id => { sel = id; err.textContent = ""; drawNav(); drawPane() };
+  function drawNav(){
+    const item = (id, name, sub, locked, ic) => { const b = Object.assign(el("button", "", ic + `<span><b></b><small>${esc(sub)}</small></span>` + (locked ? lock : "")), {type: "button"});
+      b.querySelector("b").textContent = name; if (locked) b.title = "Named by its repo's .greenlight.json"; b.setAttribute("aria-current", id === sel); b.onclick = () => pick(id); return b };
+    const add = Object.assign(el("button", "add", svg('<path d="M12 5v14M5 12h14"/>', 13) + "New project"), {type: "button"});
+    add.onclick = () => { const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); list.push({id, name: "", repos: [], dirs: [], dir: "", file: [], own: true}); pick(id); pane.querySelector("input")?.focus() };
+    nav.replaceChildren(...list.map((p, i) => item(p.id, p.name || "(unnamed)", nRepos(mine(p.id).length) + (p.dirs.length ? ` · ${p.dirs.length} folder${p.dirs.length === 1 ? "" : "s"}` : ""), !p.own, sq(pcol(i)))),
+      add, el("span", "gap"), item("", NML, `${nRepos(mine("").length)} in no project`, false, svg('<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>', 13)));
+  }
+  function repoList(id){
+    const ul = el("ul", "rl"), rs = mine(id);
+    ul.replaceChildren(...rs.length ? rs.map(r => {
+      const li = el("li"), n = el("span", "", `<b></b><em class="k-dim"></em>`), s = el("select"), file = list.some(p => p.file.includes(r));
+      n.querySelector("b").textContent = n.title = r; n.querySelector("em").textContent = file ? "set by its .greenlight.json" : tilde(trees.find(w => w.main && w.project === r)?.path || "");
+      s.setAttribute("aria-label", `Project for ${r}`); s.append(new Option(NML, ""), ...list.map(p => new Option(p.name || "(unnamed)", p.id))); s.value = id; s.disabled = file;
+      // ponytail: moving a repo that's here by a folder to No Man's Land keeps it here (the folder still holds it); drop the folder for that
+      s.onchange = () => { list.forEach(p => p.repos = p.repos.filter(x => x !== r)); list.find(p => p.id === s.value)?.repos.push(r); drawNav(); drawPane() };
+      li.append(n, s); return li;
+    }) : [el("li", "k-dim", id ? "None yet: add a folder, or move one here from another project." : "None: every repo is in a project.")]);
+    return ul;
+  }
+  function drawPane(){
+    const p = list.find(p => p.id === sel);
+    const sec = (...n) => { const s = el("section"); s.append(...n); return s };
+    if (!p) { pane.replaceChildren(sec(el("h4", "", `Repositories in no project <small>Move one by picking a project.</small>`), repoList(""))); return }
+    const nm = el("div", "nm"), lab = el("label", "", "Name"), name = Object.assign(el("input"), {type: "text", value: p.name, placeholder: "Project name", maxLength: 60, disabled: !p.own});
+    name.setAttribute("aria-label", "Project name"); name.oninput = () => { p.name = name.value; drawNav() }; lab.append(name); nm.append(lab);
+    if (p.own) { const x = Object.assign(el("button", "lite red"), {type: "button", textContent: "Remove project"}); x.onclick = () => { list.splice(list.indexOf(p), 1); pick(list[0]?.id ?? "") }; nm.append(x) }
+    const fl = el("ul", "fl"), path = Object.assign(el("input"), {type: "text", placeholder: "Paste a path, ~/code/…"});
+    path.setAttribute("aria-label", "Add a folder");
+    const addDir = () => {
+      const d = path.value.trim(); if (!d) return; const full = fullDir(d);
+      if (!DIR_OK(full)) { err.textContent = `${d} isn't a full path (letters, digits and ._-@+/ only).`; return }
+      if (!p.dirs.includes(full)) p.dirs.push(full); err.textContent = ""; drawNav(); drawPane(); pane.querySelector("[aria-label='Add a folder']").focus();
+    };
+    path.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); addDir() } };
+    // Choose folder…: the app's folder picker, this Mac only (a remote host's folders: paste the path)
+    const choose = HOST === "local" ? [Object.assign(el("button"), {type: "button", textContent: "Choose folder…", onclick: () => { picked = d => { path.value = d; addDir() }; post({cmd: "pickdir"}) }})] : [];
+    fl.replaceChildren(...p.dirs.map(d => {
+      const li = el("li", "", svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>', 14) + "<code></code>"), x = Object.assign(el("button", "x", svg('<path d="M6 6l12 12M18 6L6 18"/>', 12)), {type: "button"});
+      li.querySelector("code").textContent = tilde(d); li.append(el("span", "n", nRepos(new Set(trees.filter(w => w.main && under(w.path, d)).map(w => w.project)).size))); x.setAttribute("aria-label", `Remove ${d}`); x.onclick = () => { p.dirs = p.dirs.filter(y => y !== d); drawNav(); drawPane() };
+      li.append(x); return li;
+    }), el("li", "addp"));
+    fl.lastChild.append(...choose, path);
+    // the default folder: a project window's first shell, and its new tabs from home, open here
+    const near = [...new Set([...p.dirs, ...mine(p.id).map(r => trees.find(w => w.main && w.project === r)?.path).filter(Boolean)])];
+    const dl = el("datalist"), dir = Object.assign(el("input"), {type: "text", value: p.dir ? tilde(p.dir) : "", placeholder: `Home folder${HOST === "local" ? "" : " on " + HOST}`});
+    dl.id = "pdirs"; dl.append(...near.map(d => new Option(tilde(d)))); dir.setAttribute("list", "pdirs"); dir.setAttribute("aria-label", "Default folder");
+    dir.oninput = () => { p.dir = dir.value };
+    pane.replaceChildren(nm, sec(el("h4", "", "Default folder <small>Where this project's new terminals open.</small>"), dir, dl), sec(el("h4", "", `Folders on ${HOST === "local" ? "this Mac" : esc(HOST)} <small>Every repo inside joins this project.</small>`), fl),
+      sec(el("h4", "", "Repositories <small>Move one by picking another project.</small>"), repoList(p.id)));
+  }
+  drawNav(); drawPane();
+  const note = list.some(p => p.file.length) ? [el("span", "note2", lock + "Locked rows come from a repo's .greenlight.json. Edit that file to change them.")] : [];
+  dlgForm("Projects", body, "Save", () => {
+    const seen = new Set();
+    for (const p of list) {
+      p.name = p.name.trim(); p.dir = p.dir.trim() && fullDir(p.dir.trim());
+      if (p.dir && !DIR_OK(p.dir)) { pick(p.id); err.textContent = `${p.dir} isn't a full path (letters, digits and ._-@+/ only).`; return false }
+      if (!p.name || p.name.toLowerCase() === NML.toLowerCase()) { pick(p.id); err.textContent = p.name ? `"${NML}" is taken: it means in no project.` : "Every project needs a name."; return false }
+      if (seen.has(p.name.toLowerCase())) { err.textContent = `Two projects are named ${p.name}.`; return false }
+      seen.add(p.name.toLowerCase());
+    }
+    // what's yours: your projects, and a file's project only for the folders and repos you added to it
+    projects = list.filter(p => p.own || p.dirs.length || p.dir || p.repos.some(r => !p.file.includes(r))).map(({id, name, repos, dirs, dir, file}) => ({id, name, repos: repos.filter(r => !file.includes(r)), dirs, ...dir ? {dir} : {}}));
+    merge(); setTitle(); render(); post({cmd: "projects", projects}); return true;
+  }, null, {cls: "big pe", sub: "Group repos so a window can show only the ones you're working on.", left: [...note, err]});
+}
+$("jump").onclick = () => palette(true);
+$("sdv").onmousedown = e => {
+  e.preventDefault(); $("sdv").classList.add("drag"); document.body.style.cursor = "col-resize";
+  const move = m => { sideW = Math.max(200, Math.min(520, m.clientX)); $("side").style.width = sideW + "px" };
+  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); $("sdv").classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()); save() };
+  addEventListener("mousemove", move); addEventListener("mouseup", up);
+};
+
+// the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
+const ser = n => n.classList.contains("pane") ? {s: n._p.session} : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
+let saveT, lastSaved = "";
+const snap = () => JSON.stringify({cur: tabs.indexOf(cur), side: sideW, shut: [...shut], noAskDel, uses, lights, skin, skinLight, skinHist, acct: acctCfg,
+  tabs: tabs.map(x => ({ws: x.ws, set: x.set, name: x.name, manual: x.manual, sig: x.sig, auto: x.auto, job: x.job, tree: ser(x.r.firstElementChild)})), autoDone});
+function save(){
+  if (!restored) return;  // never overwrite the saved layout with the empty page that's about to restore it
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { if (!restored) return; const st = snap(); if (st !== lastSaved) { lastSaved = st; post({cmd: "save", state: JSON.parse(st)}) } }, 500);
+}
+// rebuild a saved tab: panes mount while their tab is showing, so each fits a real size
+function build(tab, n, mounts){
+  if (n.s) { const {p, mount} = newPane(tab, undefined, n.s); mounts.push(mount); tab.focus ||= p; return p.box }
+  const wrap = el("div", "split" + (n.col ? " col" : ""));
+  const a = build(tab, n.kids[0], mounts), b = build(tab, n.kids[1], mounts);
+  a.style.flex = n.flex?.[0] || ""; b.style.flex = n.flex?.[1] || "";
+  wrap.append(a, divider(n.col), b); return wrap;
+}
+let firstWait = false;
+const firstShell = () => { if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };
+function restore(st){
+  try {
+    if (st?.side && st.side !== 240) { sideW = st.side;  // ponytail: 240 was the old default; drop this once saved layouts have moved on
+      $("side").style.width = sideW + "px" }
+    (st?.shut || []).forEach(x => shut.add(x)); noAskDel = !!st?.noAskDel; uses = st?.uses || {}; autoDone = st?.autoDone || [];
+    if (!treesIn && ONLY?.length === 1 && st?.acct && typeof st.acct === "object") acctCfg = st.acct;  // its look and host before the trees come
+    skin = skinOk(st?.skin); skinLight = skinOk(st?.skinLight);
+    const was = o => ({lights: Object.keys(o).length ? "own" : null, skin: {...localLights(), ...o}});  // ponytail: older layouts kept only your edits over the repo's look
+    lights = ["local", "default", "own"].includes(st?.lights) ? st.lights : Object.keys(skin).length ? (skin = was(skin).skin, "own") : null;
+    skinHist = (st?.skinHist || []).map(h => h?.skin ? {lights: h.lights, skin: skinOk(h.skin)} : was(skinOk(h))).slice(-30); paint(); offer();
+    for (const t of st?.tabs || []) {
+      if (!t.tree) continue;
+      const tab = mkTab(t.ws || "", {...t, set: t.set ?? t.ws ?? ""}), mounts = [];  // older layouts: a set per workspace
+      tab.r.append(build(tab, t.tree, mounts));
+      tabs.forEach(x => x.r.hidden = x !== tab); mounts.forEach(m => m());
+    }
+  } catch (e) { post({cmd: "error", text: "restore: " + e}) }
+  restored = true;
+  if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
+  show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
+  lastSaved = snap();  // what was just restored is what's saved
+}
+
+// ⌘J Jump: terminals, workspaces and hosts (or, after ">", the Basement's actions). The name matches fuzzily (a subsequence, scored up for runs and word starts);
+// everything else about a workspace (MR number, title, description, branch, target, labels, people, goal, state, failing jobs) and a tab (pane titles, folders) matches by words.
+// With a query the best match is a card with its moves; the selection previews on the right.
+function fuzzy(qs, s){
+  if (!qs) return {score: 0, hit: []};
+  const l = s.toLowerCase(), hit = []; let score = 0, j = 0, prev = -2;
+  for (let i = 0; i < l.length && j < qs.length; i++) if (l[i] === qs[j]) {
+    score += 1 + (i === prev + 1 ? 3 : 0) + (i === 0 || /[\s/_.-]/.test(l[i - 1]) ? 2 : 0);
+    hit.push(i); prev = i; j++;
+  }
+  return j === qs.length ? {score: score - s.length / 100, hit} : null;
+}
+const pal = {items: [], sel: 0, scope: "all", act: false};
+const SCOPES = [["all", "All"], ["tab", "Terminals"], ["ws", "Workspaces"], ["host", "Hosts"]];
+const GROUPS = {needs: "Needs you", tab: "Recent terminals", ws: "Workspaces", host: "Hosts", act: "Actions"};
+const mark = (s, hit) => [...s].map((c, i) => { const t = esc(c); return hit.includes(i) ? `<b>${t}</b>` : t }).join("");
+const kbd = (k, c = "") => k ? `<kbd class="${c}">${k}</kbd>` : "";
+// [label, text] pairs a query's words can hit, besides the name
+const hay = (w, tab) => [
+  ...(tab ? paneOf(tab).flatMap(p => [["Pane", (p.title || "").replace(SPIN, "")], ["Folder", p.cwd]]) : []),
+  ...(w ? [["Project", projOf(w)?.name], ["Repo", w.project], ["Branch", w.branch], ["Goal", w.goal], ["Status", w.why], ["State", badge(w)?.[0]], ["Agent", AGENT[w.agent]?.[1]], ["greenlight", w.puck], ["Path", w.path]] : []),
+  ...(m => m ? [["MR", m.ref && `${m.ref} ${m.ref.replace(/^\D+/, "")}`], ["MR", m.title], ["Target", m.target_branch], ["Milestone", m.milestone], ["Author", m.by?.name],
+    ["Assigned", (m.assignees || []).map(a => a.name).join(", ")], ["Labels", (m.labels || []).join(", ")], ["Failing", (w.moves || []).flatMap(x => x.jobs || []).join(", ")], ["Description", m.description]] : [])(w?.mr),
+].filter(x => x[1]);
+const near = (s, i, n) => (i > 12 ? "…" : "") + s.slice(Math.max(0, i - 12), i + n + 28).replace(/\s+/g, " ");
+function palette(open = $("pal").hidden){
+  $("pal").hidden = !open;
+  if (!open) return cur && cur.focus.t.focus();
+  Object.assign(pal, {scope: "all", act: false}); $("pq").value = ""; palRender(); $("pq").focus();
+}
+function palAll(){
+  const strip = setTabs(cur), ws = visTrees().map(w => { const b = !w.dir && badge(w);
+    return {kind: "ws", group: b?.[1] === "o" ? "needs" : "ws", main: w.name, sub: [projOf(w)?.name || w.project, w.branch].filter(Boolean).join(" · "),
+      icon: b ? g16(b[2], `k-${b[1]}${b[2] === G.run ? " spin" : ""}`, b[0], 15) : g16(G.branch, "", "Idle", 15), pill: b, ws: w.path, w: w.dir ? null : w, go: () => openWs(w.path)} });
+  return [...ws.filter(x => x.group === "needs"),
+    ...[...tabs].sort((a, b) => b.used - a.used).map(x => { const n = strip.indexOf(x);
+      return {kind: "tab", group: "tab", main: shown(tabName(x)), sub: wsName(x.ws), icon: paneIcon(x.focus, 15), key: n >= 0 && n < 9 ? "⌘" + (n + 1) : "", ws: x.ws, tab: x, w: wsInfo(x.ws), go: () => show(x)} }),
+    ...ws.filter(x => x.group === "ws"),
+    ...homes().map(h => ({kind: "host", group: "host", main: wsName(h), sub: hostOf(h) === "local" ? "this Mac" : "host", icon: I.host(15), ws: h, go: () => openWs(h)}))];
+}
+function palActs(){
+  const up = svg16("M8 13V3M4 7l4-4 4 4"), gear = svg16("M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"), side = document.body.classList.contains("noside");
+  return [
+    cur && ["This tab", "Split right", I.splitR(16), "⌘D", `Opens a shell beside the pane you're in, in ${wsName(curWs)}. From a result, ⌥↵ jumps there and splits right.`, () => split(cur.focus)],
+    cur && ["This tab", "Split down", I.splitD(16), "⌘⇧D", "Opens a shell under the pane you're in.", () => split(cur.focus, true)],
+    cur && ["This tab", "Rename tab…", I.edit(16), "", "A name you type sticks: nothing auto-names over it again.", () => rename(cur)],
+    cur && ["This tab", "Close tab", I.x(16), "⌘W", "Closes its panes and ends their sessions.", () => closeTab(cur)],
+    ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
+    ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],
+    ["Basement", side ? "Show the sidebar (the Basement)" : "Hide the sidebar (the Pipe)", I.sidebar(16), "⌘B", "Slides the sidebar in or out.", toggleSide],
+    ["Basement", "Rename this Mac…", I.edit(16), "", `How ${LOCALNAME} shows in Hosts. Empty: its hostname.`, renameLocal],
+    ["Go to", "Greenlight Center", up, "", "Rides up to the dashboard and the chat.", () => post({cmd: "up"})],
+    ["Go to", "Settings", gear, "⌘,", "Opens Settings over the floor you're on.", () => post({cmd: "settings"})],
+  ].filter(Boolean).map(([where, main, icon, key, desc, go]) => ({kind: "act", group: "act", where, main, sub: "", icon, key, desc, go}));
+}
+function palRender(){
+  const raw = $("pq").value;
+  if (!pal.act && raw[0] === ">") { pal.act = true; $("pq").value = raw.slice(1); return palRender() }
+  const qs = raw.toLowerCase().replace(/\s+/g, ""), words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+  let items = pal.act ? palActs() : [...palAll().filter(x => pal.scope === "all" || x.kind === pal.scope), ...(qs && pal.scope === "all" ? palActs() : [])];
+  items = items.map(it => {
+    const m = fuzzy(qs, it.main), s = !m && fuzzy(qs, it.main + " " + it.sub), fs = m ? m.score + 5 : s ? s.score : -1;
+    const h = it.kind === "act" || !qs ? [] : hay(it.w, it.tab), all = h.map(x => x[1]).join(" ").toLowerCase();
+    // whole words in a field score like a contiguous run, so "ada" the author beats a…d…a scattered over a name and its project
+    const i = words.every(w => all.includes(w)) ? h.findIndex(x => x[1].toLowerCase().includes(words[0])) : -1, hs = i < 0 ? -1 : words.reduce((a, w) => a + 4 * w.length - 3, 0) - i / 100;
+    if (fs < 0 && hs < 0) return null;
+    if (fs >= hs) return {...it, score: fs, hit: m?.hit || []};
+    const [label, text] = h[i];
+    return {...it, score: hs, hit: [], via: `${label}: ${near(text, text.toLowerCase().indexOf(words[0]), words[0].length)}`};  // the field it matched, shown in place of the sub
+  }).filter(Boolean);
+  if (qs) { items.sort((a, b) => b.score - a.score); const top = items.shift(); const by = pal.act ? "where" : "group"; items = top ? [{...top, top: true}, ...(pal.act ? ["This tab", "Basement", "Go to"] : Object.keys(GROUPS)).flatMap(g => items.filter(x => x[by] === g))] : [] }
+  else if (!pal.act && pal.scope === "all") { let n = 0; items = items.filter(x => x.kind !== "tab" || n++ < 5) }  // ponytail: the 5 latest terminals until you type
+  pal.items = items.slice(0, 60); pal.sel = 0; palDraw();
+}
+const palMoves = it => { const m = it.w?.mr, ci = it.w?.moves?.find(x => x.kind === "ci");
+  return it.kind === "act" ? [["Run", "↵", it.go, 1]] : [["Jump", "↵", it.go, 1], ["New set of tabs", "⌘↵", () => newTab(it.ws, undefined, true)],
+    ci && ["Fix CI", "⌘F", () => newTab(it.ws, "claude " + ansi(ci.prompt))], m?.web_url && [`Open ${m.ref || "MR"}`, "⌘O", () => post({cmd: "url", url: m.web_url})]].filter(Boolean) };
+const palRun = fn => { palette(false); fn() };
+const palSplit = it => { const had = it.tab || wsTabs(it.ws).length; it.go(); if (had && cur) split(cur.focus) };  // ⌥↵: there, then a shell beside it (a pane lives in its tab's workspace)
+function palDraw(){
+  const out = [], pill = it => it.pill ? `<span class="pl k-${it.pill[1]}">${esc(it.pill[0])}</span>` : "";
+  let last = null; const cnt = {}; pal.items.forEach(x => { if (!x.top) cnt[x.group] = (cnt[x.group] || 0) + 1 });
+  pal.items.forEach((it, i) => {
+    const on = i === pal.sel, g = pal.act ? it.where : it.group, name = `<span class="m">${mark(it.main, it.hit || [])}</span>`;
+    if (it.top) out.push(el("div", "gh g-top", "Top hit"));
+    else if (g !== last) out.push(el("div", "gh g-" + it.group, esc(pal.act ? g : GROUPS[g]) + (pal.act ? (g === "This tab" && cur ? `<span>${esc(shown(tabName(cur)))} · ${esc(wsName(curWs))}</span>` : "") : `<span>${cnt[g]}</span>`)));
+    last = it.top ? null : g;
+    const sub = `<span class="sub">${esc(it.via || (it.top ? [{tab: "terminal", ws: "workspace", host: "host", act: "action"}[it.kind], it.sub].filter(Boolean).join(" · ") : it.sub))}</span>`;
+    const r = it.top ? el("div", "hit" + (on ? " sel" : ""), `<div class="l"><span class="ic">${it.icon}</span>${name}${sub}${pill(it)}</div><div class="bt"></div>`)
+      : el("div", `r r-${it.kind}${on ? " sel" : ""}`, `<span class="ic">${it.icon}</span>${name}${sub}${pill(it)}${on ? kbd("↵", "amb") : kbd(it.key)}`);  // r-/g- prefixes: bare .ws/.tab/.box are the sidebar's and tab strip's classes
+    if (it.top) r.querySelector(".bt").append(...palMoves(it).map(([label, key, fn, pri]) => {
+      const b = el("button", pri ? "pri" : "", `${esc(label)} <span>${key}</span>`); b.type = "button"; b.tabIndex = -1;
+      b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.stopPropagation(); palRun(fn) }; return b }));
+    r.setAttribute("role", "option"); r.setAttribute("aria-selected", on);
+    r.onmousemove = () => { if (pal.sel !== i) { pal.sel = i; palDraw() } };
+    r.onclick = () => palRun(it.go);
+    out.push(r);
+  });
+  if (!pal.items.length) out.push(el("div", "nil", `<div>Nothing here by that name.</div>${pal.act ? "⌫ goes back to Jump" : pal.scope !== "all" ? "⇥ widens the scope" : "Type > for actions"}`));
+  $("pres").replaceChildren(...out);
+  $("pres").querySelector(".sel")?.scrollIntoView({block: "nearest"});
+  const qs = $("pq").value.trim();
+  $("pmode").hidden = !pal.act; $("phint").hidden = !pal.act && !qs; $("phint").textContent = pal.act ? "⌫ back to Jump" : `${pal.items.length} match${pal.items.length === 1 ? "" : "es"}`; $("pico").style.display = pal.act ? "none" : ""; $("pscope").hidden = pal.act;
+  $("pq").placeholder = pal.act ? "Do something in the Basement" : "Jump to a terminal, workspace or host";
+  $("pscope").replaceChildren(...SCOPES.map(([k, label]) => { const b = el("button", "", label); b.type = "button"; b.tabIndex = -1; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", pal.scope === k);
+    b.onmousedown = e => e.preventDefault(); b.onclick = () => { pal.scope = k; palRender() }; return b }));
+  $("pft").innerHTML = pal.act ? `<span>${kbd("↵", "amb")}Run</span><span>Every action lists its shortcut</span>`
+    : qs ? `<span>${kbd("↵", "amb")}Jump</span><span>${kbd("⌥↵")}Split right</span><span>Matches the name, then MR, title, branch, people…</span><span class="end">Esc clears · Esc again closes</span>`
+    : `<span>${kbd("↵", "amb")}Jump</span><span>${kbd("⌘↵")}New set of tabs</span><span>${kbd("⌥↵")}Split right</span><span>${kbd("⇥")}Scope</span><span class="end">Type ${kbd(">")} for actions</span>`;
+  palPv(pal.items[pal.sel]);
+}
+function palPv(it){
+  const pv = $("pv"); if (!it) return pv.replaceChildren();
+  const w = it.w, m = w?.mr, rows = [], f = (k, v, c = "") => v && rows.push(`<dt>${k}</dt><dd class="${c}" title="${esc(v)}">${esc(v)}</dd>`);
+  let text = "", tt = "Last lines", body = "", prose = "";
+  if (it.kind === "act") body = `<p>${esc(it.desc)}</p>${it.key ? `<div class="sc">Shortcut ${kbd(it.key)}</div>` : ""}`;
+  else {
+    const ts = wsTabs(it.ws).sort((a, b) => b.used - a.used), sets = [...new Set(ts.map(x => x.set))], jobs = (w?.moves || []).flatMap(x => x.jobs || []);
+    const home = it.kind === "host", hh = hostOf(it.ws);
+    if (it.tab) f("Workspace", wsName(it.ws));
+    if (w) { f("Project", projOf(w)?.name || w.project); f("Branch", w.branch); AGENT[w.agent] && f("Agent", AGENT[w.agent][1].slice(6));
+      if (m) { f("MR", `${m.ref} · ${m.draft ? "draft" : m.state}`); f("Title", m.title); m.state === "opened" && CI[m.pipeline] && f("CI", CI[m.pipeline][2] + (jobs.length ? ": " + jobs.join(", ") : ""), "k-" + CI[m.pipeline][0]) } }
+    if (home) { f("Workspaces", String(visTrees().filter(x => hostOf(x.path) === hh).length)); f("Tabs", `${tabs.filter(x => hostOf(x.ws) === hh).length} open`); hh === "local" && f("Rename", "> Rename this Mac") }
+    else f("Host", hh === "local" ? LOCALNAME : hh);
+    if (home) ;
+    else if (it.tab) { const st = setTabs(it.tab); f("Tabs", `set ${sets.indexOf(it.tab.set) + 1} · tab ${st.indexOf(it.tab) + 1} of ${st.length}`) }
+    else f("Tabs", ts.length ? `${sets.length} set${sets.length > 1 ? "s" : ""} · ${ts.length} tab${ts.length > 1 ? "s" : ""}` : "none open");
+    const src = it.tab || ts[0];
+    if (src) { const b = src.focus.t.buffer.active, l = []; for (let y = Math.max(0, b.length - 80); y < b.length; y++) { const s = b.getLine(y)?.translateToString(true); if (s?.trim()) l.push(s) } text = l.slice(-12).join("\n") }
+    if (w?.agent === "waiting") tt = "Asking you";
+    else if (!text) [tt, prose] = w?.why ? ["Latest", w.why] : w?.goal ? ["Goal", w.goal] : home ? ["Here", `↵ opens a shell ${hh === "local" ? "here" : "on " + hh}.\n⌘↵ opens it as its own set.`] : ["", ""];  // prose, not a terminal box
+  }
+  const pl = it.pill || (w && badge(w));
+  pv.innerHTML = `<div><div class="k">${it.kind === "act" ? "Action · " + esc(it.where.toLowerCase()) : {tab: "Terminal", ws: "Workspace", host: hostOf(it.ws) === "local" ? "Host · this Mac" : "Host · ssh"}[it.kind]}</div><h3>${esc(it.main)}</h3></div>`
+    + (pl ? `<span class="pl k-${pl[1]}">${esc(pl[0])}</span>` : "") + (rows.length ? `<dl>${rows.join("")}</dl>` : "") + body
+    + (text || prose ? `<div class="tl"><div class="k">${tt}</div>${text ? "<pre></pre>" : "<p></p>"}</div>` : "");
+  if (text || prose) pv.querySelector(".tl pre, .tl p").textContent = text || prose;
+}
+$("pq").oninput = palRender;
+$("pq").onkeydown = e => {
+  e.stopPropagation();
+  const k = e.key, it = pal.items[pal.sel], n = pal.items.length, top = pal.items[0]?.top && pal.items[0];
+  const run = fn => { e.preventDefault(); if (fn) palRun(fn) };
+  if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); pal.sel = (pal.sel + (k === "ArrowDown" ? 1 : -1) + n) % (n || 1); palDraw() }
+  else if (k === "Enter") run(!it ? null : it.kind === "act" ? it.go : e.metaKey ? () => newTab(it.ws, undefined, true) : e.altKey ? () => palSplit(it) : it.go);
+  else if (k === "Tab" && !pal.act) { e.preventDefault(); const i = SCOPES.findIndex(s => s[0] === pal.scope); pal.scope = SCOPES[(i + (e.shiftKey ? 3 : 1)) % 4][0]; palRender() }
+  else if (k === "Backspace" && pal.act && !e.target.value) { e.preventDefault(); pal.act = false; palRender() }
+  else if (k === "Escape") { e.preventDefault(); if (e.target.value) { e.target.value = ""; palRender() } else palette(false) }
+  else if (e.metaKey && k.toLowerCase() === "j") { e.preventDefault(); palette(false) }
+  else if (e.metaKey && top && (k === "f" || k === "o")) run(palMoves(top).find(x => x[1] === "⌘" + k.toUpperCase())?.[2]);  // the top hit's Fix CI / Open MR
+};
+$("pal").onmousedown = e => { if (e.target === $("pal")) { e.preventDefault(); palette(false) } };
+
+// ⌘T new tab, ⌘D / ⌘⇧D split, ⌘= / ⌘- / ⌘0 size, ⌘1–9 jump, ⌘⇧[ / ⌘⇧] tab, ⌘[ / ⌘] pane, ⌘⌥↑/↓ workspace, ⌘B sidebar, ⌘J jump
+// (⌘W comes from the app's Close menu item as term.closeTab); tabs and ⌘1–9 count within the workspace
+addEventListener("keydown", e => {
+  if (e.target.closest?.("#card textarea")) return;  // the goal box keeps its own keys (this listener captures)
+  if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
+  if (!e.metaKey || !cur || editing || !$("pal").hidden || !$("dlg").hidden) return;
+  const k = e.key.toLowerCase(), ws = setTabs(cur), i = ws.indexOf(cur), mine = paneOf(cur), j = mine.indexOf(cur.focus);
+  const wss = [...(isShut("§host") ? [] : homes()), ...sideOrder()];
+  if (k === "j" && !e.shiftKey) palette(true);
+  else if (k === "b" && !e.shiftKey) toggleSide();
+  else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) openWs(wss[(wss.indexOf(curWs) + (e.key === "ArrowDown" ? 1 : -1) + wss.length) % wss.length]);
+  else if (k === "t" && !e.shiftKey) newTab();
+  else if (k === "n" && e.shiftKey) newWindow();
+  else if (k === "d") split(cur.focus, e.shiftKey);
+  else if (k === "=" || k === "+") zoom(px + 1);
+  else if (k === "-") zoom(px - 1);
+  else if (k === "0") zoom(+(size || 15));
+  else if (/^[1-9]$/.test(k)) show(ws[Math.min(+k, ws.length) - 1]);
+  else if (e.shiftKey && "[{]}".includes(k)) show(ws[(i + ("]}".includes(k) ? 1 : -1) + ws.length) % ws.length]);
+  else if (!e.shiftKey && "[]".includes(k)) focusPane(mine[(j + (k === "]" ? 1 : -1) + mine.length) % mine.length]);
+  // ghostty-web preventDefaults ⌘W, ⌘Q, ⌘M, ⌘H, ⌘, …, so the app's menu never got them: it sees only copy, paste, select all, clear
+  else { if (k.length === 1 && !"cvak".includes(k)) e.stopImmediatePropagation(); return }
+  e.preventDefault(); e.stopPropagation();
+}, true);
+
+function looked(out){  // claude -p's answer to a restyle: a JSON object of colors, maybe wrapped in prose or a fence
+  restyling = false; let o = null; const s = String(out), a = s.indexOf("["), b = s.indexOf("{");
+  try { o = a >= 0 && a < b ? JSON.parse(s.slice(a, s.lastIndexOf("]") + 1)) : JSON.parse(s.slice(b, s.lastIndexOf("}") + 1)) } catch { }
+  if (Array.isArray(o)) {  // /design: options to pick from
+    const opts = o.slice(0, 6).map(d => ({name: String(d?.name || "Untitled").slice(0, 40), colors: skinOk(d?.dark || d?.colors), light: skinOk(d?.light)})).filter(d => Object.keys(d.colors).length);
+    if (!opts.length) return toast("Couldn't design: Claude didn't answer with colors. Try saying it another way.");
+    $("toast").hidden = true; return pickDesign(opts);
+  }
+  const v = skinOk(half(o, "dark"));
+  if (!Object.keys(v).length) return toast("Couldn't restyle: Claude didn't answer with colors. Try saying it another way.");
+  setLook("own", {...worn(), ...v}, {...skinLight, ...skinOk(half(o, "light"))}); toast("Restyled this window", true);
+}
+let picked;  // Choose folder…'s answer, from the app
+window.term = {
+  only(o){ ONLY = o; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
+  picked: d => picked?.(d),
+  slide: v => { slide = +v || 0 },
+  localName: v => { LOCALNAME = v || "Local"; render() },
+  opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide() },  // Settings → Terminal → App opens to
+  ws: path => { if (restored && typeof path === "string") openWs(path) },  // Greenlight's Basement button: that worktree's latest tab, or a new shell in it
+  suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext() },
+  feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
+  exited: (id, code) => {
+    const p = panes.get(id); if (!p) return;
+    // ssh couldn't connect, or lost it (sleep, wifi): the session lives on remotely, so the pane (and the saved layout) stays
+    if (code === 255) { p.dead = true; return p.t.write(`\r\n\x1b[2m[lost the connection to ${hostOf(p.tab.ws)}: press any key to reconnect]\x1b[0m`) }
+    closePane(p);  // exit closes its pane; the last one hides the window, and T starts fresh
+  },
+  closeTab: () => cur && (paneOf(cur).length > 1 ? closePane(cur.focus) : closeTab()),  // ⌘W: the focused pane first
+  named: (key, name) => {
+    const x = tabs.find(x => x.key === key);
+    if (autoKeys.delete(key)) { naming--; setTimeout(pump, 0) }  // an auto run is done, even for a tab since closed
+    if (!x) return;
+    // an auto name landing after you typed one loses
+    if (x.autoBusy) { x.autoBusy = false; if (name && !x.manual) x.name = name } else { x.naming = false; if (name) { x.name = name; x.manual = false; x.sig = sigOf(x) } }
+    render();
+  },
+  focus: () => { if (!ready || !restored) return; if (!tabs.length) newTab(acctHome()); else cur.focus.t.focus() },
+  restore,
+  tree: o => { treeDone(o) },  // not the promise: a dialog it opens waits on you, not on the caller
+  looked: out => { looked(out); const a = !$("dlg").hidden && $("dlg").querySelector("#look-ask"); if (a) lookDialog(a.value) },  // the Colors dialog, if open, shows it
+  projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
+    merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
+  // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
+  closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
+    panes.forEach(p => p.t.dispose?.()); panes.clear(); tabs.forEach(t => t.r.remove()); tabs.length = 0; cur = null; return out },
+  workspaces: o => { trees = o?.trees || []; treesIn = true; const was = JSON.stringify(acctCfg); merge(); firstShell();
+    if (JSON.stringify(acctCfg) !== was) { paint(); save() }
+    setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
+  palette: open => restored && palette(open),
+};
+// Auto-run (Settings › Repositories › Auto-run): dash.py marks a move `auto` (its prompt plus what the run may do; merge: true).
+// The main window runs it once per workspace, job and head commit, in a tab of its own that doesn't take focus; one job per workspace,
+// none beside a tab already on that job. The tab closes once its job is gone from the moves and Claude is idle; idle with nothing pushed: it needs you.
+const MAIN = q.get("main") === "1", autoMerge = new Set();
+let autoDone = [];  // "path|kind|sha" tried; saved with the layout
+const AUTO_NAME = {ci: () => "Fix CI", conflicts: () => "Fix conflicts", review: () => "Review", threads: x => `Resolve ${x.n} thread${x.n > 1 ? "s" : ""}`};
+const tabBusy = t => paneOf(t).some(p => Date.now() - (p.out || 0) < 5000);  // output in the last 5s: Claude Code's TUI animates its spinner while it works, tool calls included, and goes quiet when idle (its title doesn't change). ponytail: a pane tailing a log reads busy
+function autoRun(){
+  if (!MAIN || !restored) return;
+  for (const w of trees) {
+    const mv = w.moves || [], here = wsTabs(w.path);
+    for (const t of here.filter(t => t.auto)) {
+      if (tabBusy(t)) { t.auto.ran = true; continue }
+      if (!t.auto.ran) continue;
+      if (!mv.some(x => x.kind === t.auto.kind)) {
+        if (t === cur && document.hasFocus()) continue;  // you're in it: it closes once you look away
+        if (t.auto.kind === "ci" && /^(created|waiting|preparing|pending|running|scheduled)/.test(w.mr?.pipeline || "")) continue;  // done when it passes, not while it runs
+        post({cmd: "notify", title: `Done: ${tabName(t)}`, body: `Auto-run on ${wsName(w.path)} finished; its tab closed`}); closeTab(t);
+      } else if (!t.auto.told && (!w.pushed || w.pushed === w.mr?.sha)) {  // still there once greenlight has seen what's pushed: it stopped at its gate, or couldn't fix it
+        t.auto.told = true; save(); post({cmd: "notify", title: `${tabName(t)} needs you`, body: `Auto-run on ${wsName(w.path)} stopped; its tab is waiting in the Basement`});
+      }
+    }
+    const key = x => `${w.path}|${x.kind}|${x.sha}`, x = mv.find(x => x.auto && !autoDone.includes(key(x)));  // the most urgent not yet tried on this head
+    if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working") continue;
+    autoDone = [...autoDone, key(x)].slice(-300); save();
+    if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "merge", path: w.path}); continue }
+    const was = cur; newTab(w.path, "claude " + ansi(x.auto));
+    Object.assign(cur, {name: `${AUTO_NAME[x.kind](x)} · ${w.mr?.ref || wsName(w.path)}`, manual: true, auto: {kind: x.kind, sha: x.sha}});
+    if (was) show(was); else render();
+  }
+}
+// ready → the app answers with term.restore(saved layout or null)
+(async () => { await GhosttyWeb.init(); ready = true; post({cmd: "ready"}) })();
+</script></body></html>
