@@ -480,10 +480,6 @@ pub fn strftime_local(fmt: &str, ts: f64) -> String {
     use chrono::TimeZone;
     chrono::Local.timestamp_opt(ts.floor() as i64, 0).unwrap().format(fmt).to_string()
 }
-/// time.strftime(fmt, time.gmtime(ts))
-pub fn strftime_utc(fmt: &str, ts: f64) -> String {
-    chrono::DateTime::from_timestamp(ts.floor() as i64, 0).unwrap().format(fmt).to_string()
-}
 
 // ---- processes ----
 

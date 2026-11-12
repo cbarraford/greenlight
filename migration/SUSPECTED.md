@@ -65,3 +65,21 @@ Crash-text cleanups are not listed here; those are already done and recorded in 
 40. `git merge-base --is-ancestor` inherits stdio and has no timeout, which can pollute `--json` stdout. Fix: capture its output and add a timeout.
 41. `repo_map` is keyed only by the owner/repo path, so the same path on gitlab and github collides. Fix: key by `(forge, path)`.
 42. The page compares the role to `"reviewer"`, but candidates carry `"review"`, so that test never matches. Fix: compare to `"review"`.
+
+## dash
+43. `page` for a missing workspace writes `{"error"}` to stderr and exits 1.
+44. The `N-` prefix used to resolve `_files` name collisions can itself collide. Fix: keep incrementing N until the name is free.
+45. `task_new` leaves the task dir behind when it fails. Fix: create the dir after the workspace exists, or remove it on error.
+46. `tree_merge` reads and rewrites last.json with no lock, so it races a running scan. Fix: re-read under a lock.
+47. Name drift: `facts`/`page` look workspaces up by the scan name, while `park`/`run` use Orca's live displayName.
+48. MENU_RE only matches one-digit options, so a menu with 10 or more choices breaks.
+49. `git rev-parse @{u}` in `trees` has no timeout. Fix: add a 10s timeout.
+50. STATE isn't run through expanduser.
+51. `autorun-set` and `instructions-set` don't mkdir first, so they hit FileNotFoundError on a fresh state dir. Fix: `create_dir_all`.
+52. Transcript paging is off by one at the limit.
+53. `mr.role == "reviewer"` is never produced (same bug as #42), so the review move relies only on next-step and block reason.
+
+## Rust-only divergences (no golden covers them; these are `ponytail:` choices, not Python behavior)
+- Where Python calls `.get` on JSON that isn't a dict (e.g. a list), it raises AttributeError. Rust reads None and carries on (greenlight, dash).
+- `dash stream nan|inf` gives a clean "not a finite number of seconds" error. Python raised ValueError or OverflowError.
+- A codex rollout whose first line isn't valid UTF-8 is skipped. Python would probably crash.
