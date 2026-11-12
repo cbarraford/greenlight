@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> slice(None, 160, None)
+<error> orca worktree ps: the agent's toolInput is a dict, not text
 --- calls
 orca worktree ps --limit 10000 --json
 --- files
