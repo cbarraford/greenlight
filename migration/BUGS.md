@@ -11,3 +11,4 @@ replaces those crashes with a clean error.
 
 | scenario(s) | was (Python) | now (Rust) | ref |
 |---|---|---|---|
+| gl-config-corrupt | a corrupt `config.json` crashed with JSONDecodeError text only | `Error: <path>/config.json: <parse error>` names the file | core.md §7 |

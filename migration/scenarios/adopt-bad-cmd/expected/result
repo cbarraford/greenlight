@@ -1,6 +1,6 @@
 rc=2
 --- stdout
 --- stderr
-adopt.py: error: argument cmd: invalid choice: 'create' (choose from 'scan', 'precheck', 'apply')
+adopt: error: argument cmd: invalid choice: 'create' (choose from 'scan', 'precheck', 'apply')
 --- calls
 --- files

@@ -21,7 +21,7 @@ M=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$M")
 S="$M/scenarios"
 PY=$(command -v python3)
-RS=${GREENLIGHT_BIN:-$REPO/target/release/greenlight}
+RS=${GREENLIGHT_BIN:-$REPO/target/release/greenlight}; [ -e "$RS" ] && RS=$(cd "$(dirname "$RS")" && pwd -P)/$(basename "$RS")
 # Every CLI greenlight might shell out to. All are faked so nothing reaches a real forge, agent or
 # scheduler; git is real unless a scenario fakes it.
 FAKED="glab gh orca cmux herdr t3 claude codex opencode pi launchctl systemctl ssh osascript open notify-send crontab"
@@ -32,9 +32,11 @@ norm() {  # $1 = sandbox root
     s#(?:\b[A-Z][a-z]{2} )?\b[A-Z][a-z]{2} +\d+ \d\d:\d\d(?::\d\d)?(?: \d{4})?#<TS>#g;
     s#\b17\d{8}(\d{3})?(\.\d+)?\b#<EPOCH>#g;
     s#"tps": [\d.]+#"tps": <N>#g;
-    s#^Error: #<error> #' | perl -0pe '
+    s#^Error: #<error> #' | B="$RS" perl -0pe '
     s/Traceback \(most recent call last\):\n(?:[ \t].*\n)*(?:\w+\.)*\w+(?:: (.*))?$/<error> $1/mg;
-    s/^usage: .*\n(?:[ \t]+.*\n)*(?=\S+: error: )//mg'  # argparse usage text is Python's, the error line is ours
+    s/^usage: .*\n(?:[ \t]+.*\n)*(?=\S+: error: )//mg;  # argparse usage text is Python-only, the error line is ours
+    s/^(\w+)\.py: error: /$1: error: /mg;  # argparse prog: adopt.py (Python) vs adopt (Rust)
+    s/"python3",\s*"<W>\/repo\/scripts\/greenlight\.py"/"<BIN>"/g; s/"\Q$ENV{B}\E"/"<BIN>"/g'  # a next.cmd that runs greenlight
 }
 
 run() {  # $1 = py|rs, $2 = scenario; prints the normalized result

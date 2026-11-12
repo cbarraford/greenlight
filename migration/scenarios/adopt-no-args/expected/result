@@ -1,6 +1,6 @@
 rc=2
 --- stdout
 --- stderr
-adopt.py: error: the following arguments are required: cmd
+adopt: error: the following arguments are required: cmd
 --- calls
 --- files
