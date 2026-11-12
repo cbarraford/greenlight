@@ -2,7 +2,7 @@ rc=1
 --- stdout
 first: still running, skipped
 --- stderr
-<error> invalid literal for int() with base 10: 'x'
+<error> bad schedule 'x * * * *': 'x' is not a number
 --- calls
 --- files
 == home/auto/bad.pid

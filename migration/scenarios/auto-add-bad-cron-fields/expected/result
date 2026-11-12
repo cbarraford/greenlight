@@ -1,6 +1,6 @@
 rc=1
 --- stdout
 --- stderr
-<error> not enough values to unpack (expected 5, got 4)
+<error> bad schedule '* * * *': needs 5 fields (minute hour day month weekday), got 4
 --- calls
 --- files

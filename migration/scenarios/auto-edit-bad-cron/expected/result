@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> not enough values to unpack (expected 5, got 3)
+<error> bad schedule '1 2 3': needs 5 fields (minute hour day month weekday), got 3
 --- calls
 --- files
 == home/automations.json

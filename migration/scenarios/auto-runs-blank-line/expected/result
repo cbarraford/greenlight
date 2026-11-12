@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> Expecting value: line 1 column 1 (char 0)
+<error> <W>/home/auto/runs.jsonl line 2: EOF while parsing a value at line 1 column 0
 --- calls
 --- files
 == home/auto/runs.jsonl

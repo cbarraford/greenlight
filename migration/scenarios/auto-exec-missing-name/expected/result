@@ -1,6 +1,6 @@
 rc=1
 --- stdout
 --- stderr
-<error> 'nope'
+<error> nope: no such automation
 --- calls
 --- files

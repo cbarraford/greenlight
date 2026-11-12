@@ -1,6 +1,6 @@
 rc=1
 --- stdout
 --- stderr
-<error> not enough values to unpack (expected 5, got 1)
+<error> bad schedule '@daily': needs 5 fields (minute hour day month weekday), got 1
 --- calls
 --- files

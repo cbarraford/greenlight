@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> Expecting value: line 2 column 1 (char 7)
+<error> <W>/home/automations.json: EOF while parsing a value at line 2 column 0
 --- calls
 --- files
 == home/automations.json
