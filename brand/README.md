@@ -120,7 +120,7 @@ These are inline SVGs on a 24px or 16px grid, 1.5–2px round strokes, `currentC
 
 ## Motion
 - Pipe → Basement: the sidebar slides in, ease-out `cubic-bezier(.2,.8,.2,1)`. Basement → Pipe: it slides out, ease-in `cubic-bezier(.4,0,.8,.2)`. The default is 0.25 s; Settings › General › Sidebar slide changes it, and 0 or Reduce Motion turns the slide into a cut.
-- Between floors the orb flips (Settings › Animations).
+- Between floors the orb flips (Settings › Terminal › Ride animation; 0 is off).
 
 ## Voice
 - Plain and short, in second person: "needs you", "your move", "Agent working", "Agent done".
