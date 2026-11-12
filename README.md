@@ -24,7 +24,7 @@ app/build.sh                           # optional: ~/Applications/Greenlight.app
 
 Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add` (see `SKILL.md`).
 
-Greenlight can run on another machine (a dev box that's always on): put the checkout there, and set the menubar app's **host** setting (or `GREENLIGHT_HOST`) to its ssh name. `scripts/sync.sh` copies a local checkout to that host.
+Greenlight can run on another machine (a dev box that's always on): put the checkout there, and pick it in the app's **Settings › Hosts** (any `Host` in `~/.ssh/config`; **Test** checks it, then relaunch), or set `GREENLIGHT_HOST`. `scripts/sync.sh` copies a local checkout to that host.
 
 ## Configuration
 
