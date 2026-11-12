@@ -1,0 +1,1 @@
+api 'projects/acme%2Fwidgets/pipelines/99/jobs?scope[]=failed&scope[]=success&scope[]=running&scope[]=pending&per_page=100&page=1' 

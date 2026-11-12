@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"name": "nope", "error": "no workspace nope"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

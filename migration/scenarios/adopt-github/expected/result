@@ -1,0 +1,54 @@
+rc=0
+--- stdout
+
+## WOULD CREATE (5)
+- acme/tools!5 [review] PR number 5 — review MR with no workspace
+- acme/tools!1 [author] PR number 1 — author MR with no workspace
+- acme/tools!3 [author] PR number 3 — author MR with no workspace
+- acme/tools!6 [review] PR number 6 — review MR with no workspace
+- acme/tools!8 [review] PR number 8 — review MR with no workspace
+
+## SKIPPED (4)
+- acme/tools!4 [review] PR number 4 — approved by me
+- acme/tools!7 [review] PR number 7 — tombstoned (manual): its workspace was removed
+- acme/tools!10 [review] PR number 10 — someone else's draft
+- acme/tools!9 [author] PR number 9 — covered: a workspace already has it
+--- stderr
+--- calls
+gh api graphql -f q=is:pr\ is:open\ archived:false\ author:@me -f $'query=query($q: String!) { search(type: ISSUE, first: 100, query: $q) { nodes { ... on PullRequest {\n  number title isDraft headRefName headRefOid updatedAt url author { login } repository { nameWithOwner } } } } }'
+gh api graphql -f q=is:pr\ is:open\ archived:false\ review-requested:@me -f $'query=query($q: String!) { search(type: ISSUE, first: 100, query: $q) { nodes { ... on PullRequest {\n  number title isDraft headRefName headRefOid updatedAt url author { login } repository { nameWithOwner } } } } }'
+gh api repos/acme/tools
+gh api user
+gh pr view 10 -R acme/tools --json latestReviews
+gh pr view 4 -R acme/tools --json latestReviews
+gh pr view 5 -R acme/tools --json latestReviews
+gh pr view 6 -R acme/tools --json latestReviews
+gh pr view 6 -R acme/tools --json reviewRequests
+gh pr view 7 -R acme/tools --json reviewRequests
+gh pr view 8 -R acme/tools --json latestReviews
+git -C tools worktree list --porcelain
+orca repo list --json
+--- files
+== home/dismissed.json
+{
+ "acme/tools!6": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/tools!7": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ }
+}== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-t9",
+   "name": "t9",
+   "project": "acme/tools",
+   "branch": "x",
+   "linked_mr": 9
+  }
+ ]
+}

@@ -1,0 +1,120 @@
+rc=0
+--- stdout
+
+## WOULD CREATE (1)
+- acme/widgets!200 [author] Change number 200 — author MR with no workspace
+
+## NO ADE REPO (pinged) (100)
+- acme/other!119 [author] Change number 119 — no repo in the ADE for acme/other
+- acme/other!179 [author] Change number 179 — no repo in the ADE for acme/other
+- acme/other!118 [author] Change number 118 — no repo in the ADE for acme/other
+- acme/other!178 [author] Change number 178 — no repo in the ADE for acme/other
+- acme/other!117 [author] Change number 117 — no repo in the ADE for acme/other
+- acme/other!177 [author] Change number 177 — no repo in the ADE for acme/other
+- acme/other!116 [author] Change number 116 — no repo in the ADE for acme/other
+- acme/other!176 [author] Change number 176 — no repo in the ADE for acme/other
+- acme/other!115 [author] Change number 115 — no repo in the ADE for acme/other
+- acme/other!175 [author] Change number 175 — no repo in the ADE for acme/other
+- acme/other!114 [author] Change number 114 — no repo in the ADE for acme/other
+- acme/other!174 [author] Change number 174 — no repo in the ADE for acme/other
+- acme/other!113 [author] Change number 113 — no repo in the ADE for acme/other
+- acme/other!173 [author] Change number 173 — no repo in the ADE for acme/other
+- acme/other!112 [author] Change number 112 — no repo in the ADE for acme/other
+- acme/other!172 [author] Change number 172 — no repo in the ADE for acme/other
+- acme/other!111 [author] Change number 111 — no repo in the ADE for acme/other
+- acme/other!171 [author] Change number 171 — no repo in the ADE for acme/other
+- acme/other!110 [author] Change number 110 — no repo in the ADE for acme/other
+- acme/other!170 [author] Change number 170 — no repo in the ADE for acme/other
+- acme/other!109 [author] Change number 109 — no repo in the ADE for acme/other
+- acme/other!169 [author] Change number 169 — no repo in the ADE for acme/other
+- acme/other!108 [author] Change number 108 — no repo in the ADE for acme/other
+- acme/other!168 [author] Change number 168 — no repo in the ADE for acme/other
+- acme/other!107 [author] Change number 107 — no repo in the ADE for acme/other
+- acme/other!167 [author] Change number 167 — no repo in the ADE for acme/other
+- acme/other!106 [author] Change number 106 — no repo in the ADE for acme/other
+- acme/other!166 [author] Change number 166 — no repo in the ADE for acme/other
+- acme/other!105 [author] Change number 105 — no repo in the ADE for acme/other
+- acme/other!165 [author] Change number 165 — no repo in the ADE for acme/other
+- acme/other!104 [author] Change number 104 — no repo in the ADE for acme/other
+- acme/other!164 [author] Change number 164 — no repo in the ADE for acme/other
+- acme/other!103 [author] Change number 103 — no repo in the ADE for acme/other
+- acme/other!163 [author] Change number 163 — no repo in the ADE for acme/other
+- acme/other!102 [author] Change number 102 — no repo in the ADE for acme/other
+- acme/other!162 [author] Change number 162 — no repo in the ADE for acme/other
+- acme/other!101 [author] Change number 101 — no repo in the ADE for acme/other
+- acme/other!161 [author] Change number 161 — no repo in the ADE for acme/other
+- acme/other!100 [author] Change number 100 — no repo in the ADE for acme/other
+- acme/other!160 [author] Change number 160 — no repo in the ADE for acme/other
+- acme/other!159 [author] Change number 159 — no repo in the ADE for acme/other
+- acme/other!158 [author] Change number 158 — no repo in the ADE for acme/other
+- acme/other!157 [author] Change number 157 — no repo in the ADE for acme/other
+- acme/other!156 [author] Change number 156 — no repo in the ADE for acme/other
+- acme/other!155 [author] Change number 155 — no repo in the ADE for acme/other
+- acme/other!154 [author] Change number 154 — no repo in the ADE for acme/other
+- acme/other!153 [author] Change number 153 — no repo in the ADE for acme/other
+- acme/other!152 [author] Change number 152 — no repo in the ADE for acme/other
+- acme/other!151 [author] Change number 151 — no repo in the ADE for acme/other
+- acme/other!150 [author] Change number 150 — no repo in the ADE for acme/other
+- acme/other!149 [author] Change number 149 — no repo in the ADE for acme/other
+- acme/other!148 [author] Change number 148 — no repo in the ADE for acme/other
+- acme/other!147 [author] Change number 147 — no repo in the ADE for acme/other
+- acme/other!146 [author] Change number 146 — no repo in the ADE for acme/other
+- acme/other!145 [author] Change number 145 — no repo in the ADE for acme/other
+- acme/other!144 [author] Change number 144 — no repo in the ADE for acme/other
+- acme/other!143 [author] Change number 143 — no repo in the ADE for acme/other
+- acme/other!142 [author] Change number 142 — no repo in the ADE for acme/other
+- acme/other!141 [author] Change number 141 — no repo in the ADE for acme/other
+- acme/other!140 [author] Change number 140 — no repo in the ADE for acme/other
+- acme/other!139 [author] Change number 139 — no repo in the ADE for acme/other
+- acme/other!199 [author] Change number 199 — no repo in the ADE for acme/other
+- acme/other!138 [author] Change number 138 — no repo in the ADE for acme/other
+- acme/other!198 [author] Change number 198 — no repo in the ADE for acme/other
+- acme/other!137 [author] Change number 137 — no repo in the ADE for acme/other
+- acme/other!197 [author] Change number 197 — no repo in the ADE for acme/other
+- acme/other!136 [author] Change number 136 — no repo in the ADE for acme/other
+- acme/other!196 [author] Change number 196 — no repo in the ADE for acme/other
+- acme/other!135 [author] Change number 135 — no repo in the ADE for acme/other
+- acme/other!195 [author] Change number 195 — no repo in the ADE for acme/other
+- acme/other!134 [author] Change number 134 — no repo in the ADE for acme/other
+- acme/other!194 [author] Change number 194 — no repo in the ADE for acme/other
+- acme/other!133 [author] Change number 133 — no repo in the ADE for acme/other
+- acme/other!193 [author] Change number 193 — no repo in the ADE for acme/other
+- acme/other!132 [author] Change number 132 — no repo in the ADE for acme/other
+- acme/other!192 [author] Change number 192 — no repo in the ADE for acme/other
+- acme/other!131 [author] Change number 131 — no repo in the ADE for acme/other
+- acme/other!191 [author] Change number 191 — no repo in the ADE for acme/other
+- acme/other!130 [author] Change number 130 — no repo in the ADE for acme/other
+- acme/other!190 [author] Change number 190 — no repo in the ADE for acme/other
+- acme/other!129 [author] Change number 129 — no repo in the ADE for acme/other
+- acme/other!189 [author] Change number 189 — no repo in the ADE for acme/other
+- acme/other!128 [author] Change number 128 — no repo in the ADE for acme/other
+- acme/other!188 [author] Change number 188 — no repo in the ADE for acme/other
+- acme/other!127 [author] Change number 127 — no repo in the ADE for acme/other
+- acme/other!187 [author] Change number 187 — no repo in the ADE for acme/other
+- acme/other!126 [author] Change number 126 — no repo in the ADE for acme/other
+- acme/other!186 [author] Change number 186 — no repo in the ADE for acme/other
+- acme/other!125 [author] Change number 125 — no repo in the ADE for acme/other
+- acme/other!185 [author] Change number 185 — no repo in the ADE for acme/other
+- acme/other!124 [author] Change number 124 — no repo in the ADE for acme/other
+- acme/other!184 [author] Change number 184 — no repo in the ADE for acme/other
+- acme/other!123 [author] Change number 123 — no repo in the ADE for acme/other
+- acme/other!183 [author] Change number 183 — no repo in the ADE for acme/other
+- acme/other!122 [author] Change number 122 — no repo in the ADE for acme/other
+- acme/other!182 [author] Change number 182 — no repo in the ADE for acme/other
+- acme/other!121 [author] Change number 121 — no repo in the ADE for acme/other
+- acme/other!181 [author] Change number 181 — no repo in the ADE for acme/other
+- acme/other!120 [author] Change number 120 — no repo in the ADE for acme/other
+- acme/other!180 [author] Change number 180 — no repo in the ADE for acme/other
+--- stderr
+--- calls
+git -C widgets worktree list --porcelain
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=2
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+orca repo list --json
+--- files
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": []
+}

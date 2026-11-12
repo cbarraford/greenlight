@@ -1,0 +1,13 @@
+rc=2
+--- stdout
+--- stderr
+adopt plan failed: glab api merge_requests?scope=all&state=opened&author_username=me&per_page=100&page=1: glab: 401 Unauthorized
+--- calls
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+orca repo list --json
+--- files
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": []
+}

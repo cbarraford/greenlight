@@ -1,0 +1,5 @@
+worktree create --repo id:r1 --name fix-the-flake --setup skip --comment 'Fix the flake' --no-parent --agent codex --prompt 'Your task in acme/widgets: Fix the flake. My whole request is below (verbatim in <W>/home/tasks/fix-the-flake/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.
+
+My request:
+
+Fix the flake' --json 

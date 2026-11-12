@@ -1,0 +1,21 @@
+rc=0
+--- stdout
+2 actionable workspace(s) or adoption(s)
+--- stderr
+--- calls
+glab api projects/acme%2Ftools/merge_requests/5
+glab api projects/acme%2Ftools/merge_requests/5/approvals
+glab api projects/acme%2Ftools/merge_requests/5/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/6
+glab api projects/acme%2Ftools/merge_requests/6/approvals
+glab api projects/acme%2Ftools/merge_requests/6/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests\?source_branch=tools-idea\&state=all\&order_by=created_at
+glab api projects/acme%2Ftools/merge_requests\?state=opened\&per_page=100\&page=1
+orca repo list --json
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "wt-mergeable", "name": "mergeable", "next": {"step": "ready", "owner": "greenlight"}}, {"id": "wt-ci-running", "name": "ci-running", "next": {"step": "ci_green", "owner": "ci"}}, {"id": "wt-vanished", "name": "vanished", "next": {"step": "merge", "owner": "ci"}}]}== home/pinged.json
+{"ci-running": <EPOCH>, "vanished": <EPOCH>, "@puck!1": <EPOCH>, "hold": <EPOCH>, "wt-conflicts": <EPOCH>}

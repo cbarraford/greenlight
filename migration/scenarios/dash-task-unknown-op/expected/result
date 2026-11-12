@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "frob", "arg": "x", "error": "no task op frob"}
+--- stderr
+--- calls
+--- files

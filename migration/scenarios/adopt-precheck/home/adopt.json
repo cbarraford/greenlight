@@ -1,0 +1,25 @@
+{
+ "seen": {
+  "acme/widgets!18": {
+   "id": "ws-18",
+   "name": "feat-18"
+  },
+  "acme/widgets!19": {
+   "id": "ws-19",
+   "name": "feat-19"
+  },
+  "acme/widgets!27": {
+   "id": "ws-2",
+   "name": "renamed-ws"
+  },
+  "acme/widgets!99": {
+   "id": "ws-99",
+   "name": "gone"
+  }
+ },
+ "created": {
+  "acme/widgets!3": 1794484770,
+  "acme/widgets!4": 1794481200,
+  "acme/widgets!99": 1794477600
+ }
+}

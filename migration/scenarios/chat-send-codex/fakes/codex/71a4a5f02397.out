@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"t1"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"i0","type":"reasoning"}}
+{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"/usr/bin/zsh -lc 'ls ~'"}}
+{"type":"error","message":"Reconnecting... 2/5 (401)"}
+{"type":"item.completed","item":{"id":"i1","type":"command_execution","exit_code":0,"aggregated_output":"a\nb"}}
+{"type":"item.started","item":{"id":"i2","type":"command_execution","command":"false"}}
+{"type":"item.completed","item":{"id":"i2","type":"command_execution","exit_code":1,"aggregated_output":""}}
+{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"a and b"}}
+{"type":"turn.completed","usage":{"input_tokens":30640,"output_tokens":12}}

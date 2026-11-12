@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> range() arg 3 must not be zero
+--- calls
+--- files

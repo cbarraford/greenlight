@@ -1,0 +1,19 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "th-1",
+  "tail": [
+   "\u276f Fix the build",
+   "\u23fa Looking.",
+   "Found it.",
+   "Fixed.",
+   "\u276f thanks"
+  ],
+  "draft": ""
+ }
+}
+--- stderr
+--- calls
+t3 thread show th-1 --json --messages 20
+--- files

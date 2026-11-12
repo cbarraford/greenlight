@@ -1,0 +1,1 @@
+adopt.py dismiss 'acme/widgets!5' --json 'acme/other!2'

@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"op": "memory-delete", "arg": "a-note", "notes": [{"name": "old", "text": "keep\n"}]}
+--- stderr
+--- calls
+--- files
+== repo/memory/MEMORY.md
+- [old](old.md) — kept
+== repo/memory/old.md
+keep

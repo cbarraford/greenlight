@@ -1,0 +1,5 @@
+worktree create --repo id:r1 --name fix-it --setup skip --comment 'Fix it' --no-parent --agent claude --prompt 'Your task in acme/widgets: Fix it. My whole request is below (verbatim in <W>/home/tasks/fix-it/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.
+
+My request:
+
+Fix it' --json 

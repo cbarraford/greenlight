@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca worktree rm --worktree id:nope: no such worktree
+--- calls
+orca worktree rm --worktree id:nope --json
+--- files

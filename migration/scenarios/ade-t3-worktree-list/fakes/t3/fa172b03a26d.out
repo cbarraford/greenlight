@@ -1,0 +1,1 @@
+[{"threadId": "th-1", "updatedAt": "2019-06-01T10:00:00Z", "status": "idle", "providerInstanceId": "claudeAgent"}, {"threadId": "th-2", "updatedAt": "2019-06-01T11:00:00.250Z", "status": "running", "providerInstanceId": "codex"}, {"threadId": "th-3", "updatedAt": "2019-06-01T09:00:00", "status": "waiting", "providerInstanceId": "opencode"}]

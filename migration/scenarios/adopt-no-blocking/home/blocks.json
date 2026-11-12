@@ -1,0 +1,20 @@
+{
+ "ts": 1794484740,
+ "blocks": {
+  "acme/widgets!23": {
+   "reason": "discussion"
+  },
+  "acme/widgets!24": {
+   "reason": "approval"
+  },
+  "acme/widgets!30": {
+   "reason": "pipeline"
+  },
+  "acme/widgets!31": {
+   "reason": "approval"
+  },
+  "acme/widgets!32": {
+   "reason": "approval"
+  }
+ }
+}

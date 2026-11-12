@@ -1,0 +1,176 @@
+rc=0
+--- stdout
+{
+ "ts": <EPOCH>,
+ "prev_ts": null,
+ "skipped": 0,
+ "gone": [],
+ "rows": [
+  {
+   "id": "wt-r-401",
+   "name": "r-401",
+   "path": "/nonexistent/r-401",
+   "branch": "r-401",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !4",
+   "comment": "Merge !4",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": null,
+   "next": {
+    "step": "error",
+    "owner": "me",
+    "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/4: {\"message\":\"401 Unauthorized\"}"
+   }
+  },
+  {
+   "id": "wt-r-404-after-503",
+   "name": "r-404-after-503",
+   "path": "/nonexistent/r-404-after-503",
+   "branch": "r-404-after-503",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !2",
+   "comment": "Merge !2",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": null,
+   "next": {
+    "step": "error",
+    "owner": "me",
+    "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/2: glab: 404 Not Found"
+   }
+  },
+  {
+   "id": "wt-r-exhausted",
+   "name": "r-exhausted",
+   "path": "/nonexistent/r-exhausted",
+   "branch": "r-exhausted",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !3",
+   "comment": "Merge !3",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": null,
+   "next": {
+    "step": "error",
+    "owner": "me",
+    "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/3: HTTP 502 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   }
+  },
+  {
+   "id": "wt-r-ok-after-502",
+   "name": "r-ok-after-502",
+   "path": "/nonexistent/r-ok-after-502",
+   "branch": "r-ok-after-502",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !1",
+   "comment": "Merge !1",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": {
+    "iid": 1,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/1",
+    "title": "MR 1",
+    "state": "opened",
+    "draft": false,
+    "ref": "!1",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [
+     {
+      "name": "review-bot",
+      "avatar": null
+     }
+    ],
+    "pipeline": "success",
+    "conflicts": false,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "r-ok-after-502",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 1.",
+    "milestone": "Release-1.2.0",
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/101",
+    "sha": "sha1",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "merge",
+    "owner": "greenlight",
+    "action": "merge",
+    "cmd": [
+     "glab",
+     "mr",
+     "merge",
+     "1",
+     "-R",
+     "acme/tools",
+     "--yes"
+    ],
+    "lifecycle": "default.md"
+   }
+  }
+ ]
+}
+--- stderr
+--- calls
+glab api projects/acme%2Ftools/merge_requests/1
+glab api projects/acme%2Ftools/merge_requests/1
+glab api projects/acme%2Ftools/merge_requests/1/approvals
+glab api projects/acme%2Ftools/merge_requests/1/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/2
+glab api projects/acme%2Ftools/merge_requests/2
+glab api projects/acme%2Ftools/merge_requests/3
+glab api projects/acme%2Ftools/merge_requests/3
+glab api projects/acme%2Ftools/merge_requests/3
+glab api projects/acme%2Ftools/merge_requests/4
+glab api projects/acme%2Ftools/merge_requests\?state=opened\&per_page=100\&page=1
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "prev_ts": null, "skipped": 0, "gone": [], "rows": [{"id": "wt-r-401", "name": "r-401", "path": "/nonexistent/r-401", "branch": "r-401", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !4", "comment": "Merge !4", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": null, "next": {"step": "error", "owner": "me", "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/4: {\"message\":\"401 Unauthorized\"}"}}, {"id": "wt-r-404-after-503", "name": "r-404-after-503", "path": "/nonexistent/r-404-after-503", "branch": "r-404-after-503", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !2", "comment": "Merge !2", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": null, "next": {"step": "error", "owner": "me", "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/2: glab: 404 Not Found"}}, {"id": "wt-r-exhausted", "name": "r-exhausted", "path": "/nonexistent/r-exhausted", "branch": "r-exhausted", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !3", "comment": "Merge !3", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": null, "next": {"step": "error", "owner": "me", "action": "greenlight couldn't evaluate: glab api projects/acme%2Ftools/merge_requests/3: HTTP 502 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}, {"id": "wt-r-ok-after-502", "name": "r-ok-after-502", "path": "/nonexistent/r-ok-after-502", "branch": "r-ok-after-502", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !1", "comment": "Merge !1", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {"iid": 1, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/1", "title": "MR 1", "state": "opened", "draft": false, "ref": "!1", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [{"name": "review-bot", "avatar": null}], "pipeline": "success", "conflicts": false, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "r-ok-after-502", "target_branch": "main", "labels": [], "description": "Does thing 1.", "milestone": "Release-1.2.0", "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/101", "sha": "sha1", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "merge", "owner": "greenlight", "action": "merge", "cmd": ["glab", "mr", "merge", "1", "-R", "acme/tools", "--yes"], "lifecycle": "default.md"}}]}

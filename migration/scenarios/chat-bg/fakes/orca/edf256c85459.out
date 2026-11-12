@@ -1,0 +1,7 @@
+{"ok": true, "result": {"worktrees": [
+ {"displayName": "alpha", "agents": [
+   {"state": "working", "agentType": "claude", "prompt": "<pasted_content id=\"x\">\n/goal Fix the lint job\nmore</pasted_content>", "stateStartedAt": 1794484000000},
+   {"state": "idle", "agentType": "codex", "taskTitle": "Idle one"},
+   {"state": "working", "taskTitle": "Resolve threads", "prompt": "x"}]},
+ {"agents": [{"state": "working", "agentType": "codex", "displayName": "Review MR"}, {"state": "working", "agentType": "pi"}]},
+ {"displayName": "gamma"}]}}

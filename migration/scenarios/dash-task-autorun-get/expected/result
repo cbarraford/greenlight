@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"op": "autorun-get", "arg": "widgets", "on": {"conflicts": 0}, "kinds": [{"kind": "ci", "when": "The pipeline failed on your MR", "gates": ["Stop before push", "Push the fix"]}, {"kind": "conflicts", "when": "Your MR has merge conflicts", "gates": ["Stop before push", "Force-push"]}, {"kind": "threads", "when": "Your MR has unresolved threads", "gates": ["Stop before push", "Push, draft replies", "Push, post & resolve"]}, {"kind": "review", "when": "Your review is the next move", "gates": ["Draft only", "Post comments"]}, {"kind": "merge", "when": "greenlight says it can merge now", "gates": []}]}
+--- stderr
+--- calls
+--- files
+== home/autorun.json
+{"widgets": {"conflicts": 0}}

@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"ok": false}
+--- stderr
+--- calls
+--- files
+== home/chat/bg.json
+[{"id": "b1", "title": "Sleep 15", "cmd": "sleep 15", "started": <EPOCH>}]

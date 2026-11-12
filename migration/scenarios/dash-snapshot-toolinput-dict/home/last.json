@@ -1,0 +1,1 @@
+{"ts": 1794484500, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "mr_open", "owner": "agent", "action": ""}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}]}

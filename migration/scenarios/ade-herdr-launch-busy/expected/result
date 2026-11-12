@@ -1,0 +1,14 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "s1:p6"
+ }
+}
+--- stderr
+--- calls
+herdr agent start claude-s1-p6 --kind claude --pane s1:p6 --timeout 60000 -- fix\ it
+herdr agent start claude-s1-p6 --kind claude --pane s1:p6 --timeout 60000 -- fix\ it
+herdr pane list --workspace w-3
+herdr pane split p-5 --direction right --no-focus
+--- files

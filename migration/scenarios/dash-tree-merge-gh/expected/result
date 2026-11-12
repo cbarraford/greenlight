@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"op": "merge", "path": "/nonexistent/ws/m", "ok": true, "ref": "#23", "target": "main", "how": "Rebase"}
+--- stderr
+--- calls
+gh pr merge 23 --rebase --match-head-commit abc123
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "m", "path": "/nonexistent/ws/m", "project": "acme/widgets", "goal": "", "mr": {"iid": 7, "ref": "#23", "state": "merged", "role": "author", "sha": "abc123", "target_branch": "main"}, "next": {"step": "done", "owner": "done", "action": "merged from Greenlight"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "m"}]}

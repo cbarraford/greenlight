@@ -1,0 +1,12 @@
+rc=1
+--- stdout
+--- stderr
+adopt plan failed: orca repo list --json: orca: no running app
+--- calls
+orca repo list --json
+--- files
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": []
+}

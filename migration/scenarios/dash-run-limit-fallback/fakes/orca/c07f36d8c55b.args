@@ -1,0 +1,2 @@
+agent launch --agent claude --worktree id:w1 --prompt 'Fix the threads
+  then push.' --json 

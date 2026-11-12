@@ -1,0 +1,15 @@
+rc=1
+--- stdout
+first: still running, skipped
+--- stderr
+<error> invalid literal for int() with base 10: 'x'
+--- calls
+--- files
+== home/auto/bad.pid
+0
+== home/auto/first.pid
+0
+== home/auto/last.pid
+0
+== home/automations.json
+{"first": {"schedule": "* * * * *", "prompt": "p"}, "bad": {"schedule": "x * * * *", "prompt": "p"}, "last": {"schedule": "* * * * *", "prompt": "p"}}

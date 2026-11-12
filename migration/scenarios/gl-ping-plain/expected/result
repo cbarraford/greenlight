@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/outbox.jsonl
+{"ts": <EPOCH>, "text": "just x\nOptions: a | b"}

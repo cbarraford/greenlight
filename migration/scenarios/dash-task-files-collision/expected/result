@@ -1,0 +1,16 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "ok": true, "name": "look", "repo": "widgets"}
+--- stderr
+--- calls
+orca repo list --json
+orca worktree create --repo id:r1 --name look --setup skip --comment Look --no-parent --agent claude --prompt $'Your task in acme/widgets: Look. My whole request is below (verbatim in <W>/home/tasks/look/request.md). I attached 3 files, in <W>/home/tasks/look/files: 3-a, a, 3-a. Read them first. Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\nLook' --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/history/look.md
+- <TS> task started (claude, 3 files): Look
+== home/tasks/look/files/3-a
+x== home/tasks/look/files/a
+panic: boom
+== home/tasks/look/request.md
+Look

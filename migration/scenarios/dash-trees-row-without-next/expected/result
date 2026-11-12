@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+--- stderr
+<error> 'agent'
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets"}]}

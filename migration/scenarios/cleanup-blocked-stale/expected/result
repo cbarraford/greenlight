@@ -1,0 +1,24 @@
+rc=0
+--- stdout
+
+## WOULD DELETE (1)
+- wt [mr-40] — MR !40 approved by me
+--- stderr
+--- calls
+git -C r fetch --quiet --prune origin
+git -C r remote get-url origin
+git -C r symbolic-ref --short refs/remotes/origin/HEAD
+git -C wt config branch.mr-40.merge
+git -C wt rev-parse HEAD
+git -C wt status --porcelain --untracked-files=normal
+glab api projects/acme%2Fwidgets/merge_requests/40
+glab api projects/acme%2Fwidgets/merge_requests/40/approvals
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-40\&state=all\&order_by=created_at
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files
+== home/blocks.json
+{"ts": <EPOCH>, "blocks": {"acme/widgets!40": {"who": "me"}}}
+== home/config.json
+{"blocking": {"repos": {"acme/widgets": null}}}

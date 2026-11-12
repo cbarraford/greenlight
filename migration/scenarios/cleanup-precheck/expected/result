@@ -1,0 +1,48 @@
+rc=0
+--- stdout
+12 workspace(s) to delete
+--- stderr
+--- calls
+glab api projects/acme%2Fwidgets/merge_requests/14/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/15/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/22
+glab api projects/acme%2Fwidgets/merge_requests/22/approvals
+glab api projects/acme%2Fwidgets/merge_requests/23
+glab api projects/acme%2Fwidgets/merge_requests/23/approvals
+glab api projects/acme%2Fwidgets/merge_requests/24/approvals
+glab api projects/acme%2Fwidgets/merge_requests/25
+glab api projects/acme%2Fwidgets/merge_requests/25/approvals
+glab api projects/acme%2Fwidgets/merge_requests/26
+glab api projects/acme%2Fwidgets/merge_requests/27
+glab api projects/acme%2Fwidgets/merge_requests/28
+glab api projects/acme%2Fwidgets/merge_requests/29
+glab api projects/acme%2Fwidgets/merge_requests/31
+glab api projects/acme%2Fwidgets/merge_requests/33/approvals
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-feature\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-other\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-busy\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-closed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-err\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-fresh\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-idle\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-landed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-linked\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-merged\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-mrhead\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-noact\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-open\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-rebased\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-reopen\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twice\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twin\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-unpushed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-weird\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-wip\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-22\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-23\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-25\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=remote-name\&state=all\&order_by=created_at
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

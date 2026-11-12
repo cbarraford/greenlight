@@ -1,0 +1,4 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q1"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q2", "name": "AskUserQuestion", "input": {"questions": [{"question": "Again?", "options": [{"label": "y"}]}]}}]}}
+not json

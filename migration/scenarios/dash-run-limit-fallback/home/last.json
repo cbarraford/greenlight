@@ -1,0 +1,1 @@
+{"ts": 1794484500, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": {"iid": 7, "ref": "!7", "forge": "gitlab", "web_url": "u", "state": "opened", "role": "author"}, "next": {"step": "threads", "owner": "agent", "action": "", "agent": "codex"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}]}

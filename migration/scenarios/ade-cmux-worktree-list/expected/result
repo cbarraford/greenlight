@@ -1,0 +1,93 @@
+rc=0
+--- stdout
+{
+ "worktrees": [
+  {
+   "path": "/nonexistent/widgets",
+   "branch": "refs/heads/main",
+   "isMainWorktree": true,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:gitlab.com/acme/widgets",
+   "id": "ws-main",
+   "worktreeId": "ws-main",
+   "displayName": "widgets",
+   "comment": "Merge !5",
+   "isPinned": true,
+   "linkedGitLabMR": null,
+   "lastOutputAt": 1559383200000,
+   "agents": [
+    {
+     "state": "waiting",
+     "agentType": "claude",
+     "lastAssistantMessage": "Which option?",
+     "updatedAt": 1559383200000,
+     "stateStartedAt": 1559383200000
+    },
+    {
+     "state": "unknown",
+     "agentType": "claude",
+     "lastAssistantMessage": "older",
+     "updatedAt": 1559383140000,
+     "stateStartedAt": 1559383140000
+    }
+   ]
+  },
+  {
+   "path": "/nonexistent/widgets-feat",
+   "branch": "refs/heads/feat",
+   "isMainWorktree": false,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:git@gitlab.com/22/acme/widgets",
+   "id": "ws-feat",
+   "worktreeId": "ws-feat",
+   "displayName": "feat",
+   "comment": "",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": 1559383300500.0,
+   "agents": [
+    {
+     "state": "working",
+     "agentType": "codex",
+     "lastAssistantMessage": "",
+     "updatedAt": 1559383300500.0,
+     "stateStartedAt": 1559383300500.0
+    }
+   ]
+  },
+  {
+   "path": "",
+   "branch": "",
+   "isMainWorktree": false,
+   "repoId": "",
+   "repo": "",
+   "projectId": "",
+   "id": "ws-shell",
+   "worktreeId": "ws-shell",
+   "displayName": "scratch",
+   "comment": "",
+   "isPinned": null,
+   "linkedGitLabMR": null,
+   "lastOutputAt": null,
+   "agents": []
+  }
+ ]
+}
+--- stderr
+--- calls
+cmux --id-format uuids --json list-windows
+cmux --id-format uuids --json workspace list --window win-1
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+--- files
+== u/.cmuxterm/claude-hook-sessions.json
+{"activeSessionsBySurface": {"s-1": {"sessionId": "sess-a"}, "s-3": {"sessionId": "sess-c"}, "s-4": {"sessionId": "sess-d"}}, "sessions": {"a": {"sessionId": "sess-a", "surfaceId": "s-1", "workspaceId": "ws-main", "agentLifecycle": "needsInput", "lastBody": "Which option?", "updatedAt": 1559383200}, "b": {"sessionId": "sess-b", "surfaceId": "s-2", "workspaceId": "ws-main", "agentLifecycle": "running", "updatedAt": 1559384199}, "c": {"sessionId": "sess-c", "surfaceId": "s-3", "workspaceId": "ws-feat", "agentLifecycle": "running", "updatedAt": 1559383300.5, "launchCommand": {"launcher": "codex"}}, "d": {"sessionId": "sess-d", "surfaceId": "s-4", "workspaceId": "ws-main", "agentLifecycle": "compacting", "updatedAt": 1559383140, "lastBody": "older"}}}== u/.cmuxterm/codex-hook-sessions.json
+{not json

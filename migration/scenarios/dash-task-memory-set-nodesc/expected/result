@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"op": "memory-set", "arg": "fresh", "notes": [{"name": "fresh", "text": "just a fact\n"}]}
+--- stderr
+--- calls
+--- files
+== repo/memory/MEMORY.md
+- [fresh](fresh.md) — fresh
+== repo/memory/fresh.md
+just a fact

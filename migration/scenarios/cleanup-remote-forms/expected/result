@@ -1,0 +1,48 @@
+rc=0
+--- stdout
+
+## WOULD DELETE (1)
+- wt3 [b3] — no MR/PR, branch merged into origin/trunk
+
+## SKIPPED (needs a human) (3)
+- wt1 [b1] — repo: unsupported forge gitlab.com:22
+- wt4 [b4] — repo: unsupported forge bitbucket.org
+- wt5 [b5] — repo: git -C r5 fetch --quiet --prune origin: fatal: Could not read from remote repository.
+
+## KEPT (2)
+- wt2 [b2] — no MR/PR, branch not merged
+- wt6 [stable] — default branch
+--- stderr
+--- calls
+gh pr list -R acme/gadgets --head b3 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+git -C r1 fetch --quiet --prune origin
+git -C r1 remote get-url origin
+git -C r1 symbolic-ref --short refs/remotes/origin/HEAD
+git -C r2 fetch --quiet --prune origin
+git -C r2 remote get-url origin
+git -C r2 symbolic-ref --short refs/remotes/origin/HEAD
+git -C r3 fetch --quiet --prune origin
+git -C r3 remote get-url origin
+git -C r3 symbolic-ref --short refs/remotes/origin/HEAD
+git -C r4 fetch --quiet --prune origin
+git -C r4 remote get-url origin
+git -C r4 symbolic-ref --short refs/remotes/origin/HEAD
+git -C r5 fetch --quiet --prune origin
+git -C r5 remote get-url origin
+git -C r6 fetch --quiet --prune origin
+git -C r6 remote get-url origin
+git -C r6 remote set-head origin --auto
+git -C r6 symbolic-ref --short refs/remotes/origin/HEAD
+git -C r6 symbolic-ref --short refs/remotes/origin/HEAD
+git -C wt2 config branch.b2.merge
+git -C wt2 merge-base --is-ancestor aaaa origin/main
+git -C wt2 rev-parse HEAD
+git -C wt3 config branch.b3.merge
+git -C wt3 merge-base --is-ancestor bbbb origin/trunk
+git -C wt3 rev-parse HEAD
+git -C wt3 status --porcelain --untracked-files=normal
+glab api projects/acme%2Fwidgets.git%2F/merge_requests\?source_branch=b2\&state=all\&order_by=created_at
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

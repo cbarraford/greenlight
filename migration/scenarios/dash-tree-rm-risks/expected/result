@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "rm", "path": "<W>/cwd/repo-feat", "risks": ["it's pinned", "2 uncommitted files", "2 commits no remote has (the local branch keeps them)"]}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

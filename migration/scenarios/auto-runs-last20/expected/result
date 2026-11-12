@@ -1,0 +1,49 @@
+rc=0
+--- stdout
+11-12 00:04 n4                       ok       claude 4s  'run 4'
+11-12 00:05 n5                       ok       claude 5s  'run 5'
+11-12 00:06 n6                       ok       claude 6s  'run 6'
+11-12 00:07 n7                       ok       claude 7s  'run 7'
+11-12 00:08 n8                       ok       claude 8s  'run 8'
+11-12 00:09 n9                       ok       claude 9s  'run 9'
+11-12 00:10 n10                      ok       claude 10s  'run 10'
+11-12 00:11 n11                      ok       claude 11s  'run 11'
+11-12 00:12 n12                      ok       claude 12s  'run 12'
+11-12 00:13 n13                      ok       claude 13s  'run 13'
+11-12 00:14 n14                      ok       claude 14s  'run 14'
+11-12 00:15 n15                      ok       claude 15s  'run 15'
+11-12 00:16 n16                      ok       claude 16s  'run 16'
+11-12 00:17 n17                      ok       claude 17s  'run 17'
+11-12 00:18 n18                      ok       claude 18s  'run 18'
+11-12 00:19 n19                      ok       claude 19s  'run 19'
+11-12 00:20 n20                      ok       claude 20s  'run 20'
+11-12 00:21 n21                      ok       claude 21s  'run 21'
+11-12 00:22 n22                      ok       claude 22s  'run 22'
+11-12 00:23 n23                      ok       claude 23s  'run 23'
+--- stderr
+--- calls
+--- files
+== home/auto/runs.jsonl
+{"name": "n1", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 1", "secs": 1}
+{"name": "n2", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 2", "secs": 2}
+{"name": "n3", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 3", "secs": 3}
+{"name": "n4", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 4", "secs": 4}
+{"name": "n5", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 5", "secs": 5}
+{"name": "n6", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 6", "secs": 6}
+{"name": "n7", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 7", "secs": 7}
+{"name": "n8", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 8", "secs": 8}
+{"name": "n9", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 9", "secs": 9}
+{"name": "n10", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 10", "secs": 10}
+{"name": "n11", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 11", "secs": 11}
+{"name": "n12", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 12", "secs": 12}
+{"name": "n13", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 13", "secs": 13}
+{"name": "n14", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 14", "secs": 14}
+{"name": "n15", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 15", "secs": 15}
+{"name": "n16", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 16", "secs": 16}
+{"name": "n17", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 17", "secs": 17}
+{"name": "n18", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 18", "secs": 18}
+{"name": "n19", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 19", "secs": 19}
+{"name": "n20", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 20", "secs": 20}
+{"name": "n21", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 21", "secs": 21}
+{"name": "n22", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 22", "secs": 22}
+{"name": "n23", "ts": <EPOCH>, "log": "l", "status": "ok", "engine": "claude", "summary": "run 23", "secs": 23}

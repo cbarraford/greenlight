@@ -1,0 +1,5 @@
+worktree create --repo id:r1 --name look --setup skip --comment Look --no-parent --agent claude --prompt 'Your task in acme/widgets: Look. My whole request is below (verbatim in <W>/home/tasks/look/request.md). I attached 3 files, in <W>/home/tasks/look/files: 3-a, a, 3-a. Read them first. Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.
+
+My request:
+
+Look' --json 

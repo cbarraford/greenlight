@@ -1,0 +1,1 @@
+{"intro": "Mine.", "options": {"solo": "", "approvals": "2"}, "rules": "Always add a test.", "stages": [{"key": "mr_open", "req": "An MR"}, {"key": "qa", "req": "QA  signs\noff"}, {"key": "lbl", "req": "Labelled", "done": "label=ok"}, {"key": "merge"}]}

@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+--- files
+== home/goals.json
+{
+ "/nonexistent/widgets-feat": "Merge !7"
+}

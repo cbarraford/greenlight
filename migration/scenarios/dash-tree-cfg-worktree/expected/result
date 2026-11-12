@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "cfg", "path": "<W>/cwd/repo-feat", "error": "only a repo's main checkout holds .greenlight.json"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

@@ -1,0 +1,39 @@
+{
+ "ts": 1794484200,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}

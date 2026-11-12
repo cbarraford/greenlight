@@ -1,0 +1,1 @@
+--id-format uuids --json rpc terminal.paste \{\"surface_id\":\ \"s-1\"\,\ \"text\":\ true\} 

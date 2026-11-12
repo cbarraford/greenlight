@@ -1,0 +1,85 @@
+rc=0
+--- stdout
+{"name": "a", "entries": [{"id": "sess-1:15", "role": "assistant", "text": "line 15"}, {"id": "sess-1:16", "role": "user", "text": "line 16"}, {"id": "sess-1:17", "role": "assistant", "text": "line 17"}, {"id": "sess-1:18", "role": "user", "text": "line 18"}, {"id": "sess-1:19", "role": "assistant", "text": "line 19"}, {"id": "sess-1:20", "role": "user", "text": "line 20"}, {"id": "sess-1:21", "role": "assistant", "text": "line 21"}, {"id": "sess-1:22", "role": "user", "text": "line 22"}, {"id": "sess-1:23", "role": "assistant", "text": "line 23"}, {"id": "sess-1:24", "role": "user", "text": "line 24"}, {"id": "sess-1:25", "role": "assistant", "text": "line 25"}, {"id": "sess-1:26", "role": "user", "text": "line 26"}, {"id": "sess-1:27", "role": "assistant", "text": "line 27"}, {"id": "sess-1:28", "role": "user", "text": "line 28"}, {"id": "sess-1:29", "role": "assistant", "text": "line 29"}, {"id": "sess-1:30", "role": "user", "text": "line 30"}, {"id": "sess-1:31", "role": "assistant", "text": "line 31"}, {"id": "sess-1:32", "role": "user", "text": "line 32"}, {"id": "sess-1:33", "role": "assistant", "text": "line 33"}, {"id": "sess-1:34", "role": "user", "text": "line 34"}, {"id": "sess-1:35", "role": "assistant", "text": "line 35"}, {"id": "sess-1:36", "role": "user", "text": "line 36"}, {"id": "sess-1:37", "role": "assistant", "text": "line 37"}, {"id": "sess-1:38", "role": "user", "text": "line 38"}, {"id": "sess-1:39", "role": "assistant", "text": "line 39"}, {"id": "sess-1:40", "role": "user", "text": "line 40"}, {"id": "sess-1:41", "role": "assistant", "text": "line 41"}, {"id": "sess-1:42", "role": "user", "text": "line 42"}, {"id": "sess-1:43", "role": "assistant", "text": "line 43"}, {"id": "sess-1:44", "role": "user", "text": "line 44"}, {"id": "sess-1:45", "role": "assistant", "text": "line 45"}, {"id": "sess-1:46", "role": "user", "text": "line 46"}, {"id": "sess-1:47", "role": "assistant", "text": "line 47"}, {"id": "sess-1:48", "role": "user", "text": "line 48"}, {"id": "sess-1:49", "role": "assistant", "text": "line 49"}, {"id": "sess-1:50", "role": "user", "text": "line 50"}, {"id": "sess-1:51", "role": "assistant", "text": "line 51"}, {"id": "sess-1:52", "role": "user", "text": "line 52"}, {"id": "sess-1:53", "role": "assistant", "text": "line 53"}, {"id": "sess-1:54", "role": "user", "text": "line 54"}, {"id": "sess-1:55", "role": "assistant", "text": "line 55"}, {"id": "sess-1:56", "role": "user", "text": "line 56"}, {"id": "sess-1:57", "role": "assistant", "text": "line 57"}, {"id": "sess-1:58", "role": "user", "text": "line 58"}, {"id": "sess-1:59", "role": "assistant", "text": "line 59"}, {"id": "sess-1:60", "role": "user", "text": "line 60"}, {"id": "sess-1:61", "role": "assistant", "text": "line 61"}, {"id": "sess-1:62", "role": "user", "text": "line 62"}, {"id": "sess-1:63", "role": "assistant", "text": "line 63"}, {"id": "sess-1:64", "role": "user", "text": "line 64"}, {"id": "sess-1:65", "role": "assistant", "text": "line 65"}, {"id": "sess-1:66", "role": "user", "text": "line 66"}, {"id": "sess-1:67", "role": "assistant", "text": "line 67"}, {"id": "sess-1:68", "role": "user", "text": "line 68"}, {"id": "sess-1:69", "role": "assistant", "text": "line 69"}, {"id": "sess-1:70", "role": "user", "text": "/some-skill now"}, {"id": "sess-1:71", "role": "assistant", "text": "hi"}, {"id": "sess-1:72", "role": "tool", "text": "Bash ls -la"}, {"id": "sess-1:73", "role": "tool", "text": "Read /a/b.py"}, {"id": "sess-1:74", "role": "tool", "text": "Weird "}], "more": "sess-1:15", "before": null}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== u/.claude/projects/-nonexistent-ws-a/sess-1.jsonl
+{"type": "user", "message": {"content": "line 0"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 1"}]}}
+{"type": "user", "message": {"content": "line 2"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 3"}]}}
+{"type": "user", "message": {"content": "line 4"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 5"}]}}
+{"type": "user", "message": {"content": "line 6"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 7"}]}}
+{"type": "user", "message": {"content": "line 8"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 9"}]}}
+{"type": "user", "message": {"content": "line 10"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 11"}]}}
+{"type": "user", "message": {"content": "line 12"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 13"}]}}
+{"type": "user", "message": {"content": "line 14"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 15"}]}}
+{"type": "user", "message": {"content": "line 16"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 17"}]}}
+{"type": "user", "message": {"content": "line 18"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 19"}]}}
+{"type": "user", "message": {"content": "line 20"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 21"}]}}
+{"type": "user", "message": {"content": "line 22"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 23"}]}}
+{"type": "user", "message": {"content": "line 24"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 25"}]}}
+{"type": "user", "message": {"content": "line 26"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 27"}]}}
+{"type": "user", "message": {"content": "line 28"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 29"}]}}
+{"type": "user", "message": {"content": "line 30"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 31"}]}}
+{"type": "user", "message": {"content": "line 32"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 33"}]}}
+{"type": "user", "message": {"content": "line 34"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 35"}]}}
+{"type": "user", "message": {"content": "line 36"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 37"}]}}
+{"type": "user", "message": {"content": "line 38"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 39"}]}}
+{"type": "user", "message": {"content": "line 40"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 41"}]}}
+{"type": "user", "message": {"content": "line 42"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 43"}]}}
+{"type": "user", "message": {"content": "line 44"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 45"}]}}
+{"type": "user", "message": {"content": "line 46"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 47"}]}}
+{"type": "user", "message": {"content": "line 48"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 49"}]}}
+{"type": "user", "message": {"content": "line 50"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 51"}]}}
+{"type": "user", "message": {"content": "line 52"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 53"}]}}
+{"type": "user", "message": {"content": "line 54"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 55"}]}}
+{"type": "user", "message": {"content": "line 56"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 57"}]}}
+{"type": "user", "message": {"content": "line 58"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 59"}]}}
+{"type": "user", "message": {"content": "line 60"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 61"}]}}
+{"type": "user", "message": {"content": "line 62"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 63"}]}}
+{"type": "user", "message": {"content": "line 64"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 65"}]}}
+{"type": "user", "message": {"content": "line 66"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 67"}]}}
+{"type": "user", "message": {"content": "line 68"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "line 69"}]}}
+{"type": "user", "message": {"content": "<command-name>/some-skill</command-name><command-args>now</command-args>"}}
+{"type": "user", "message": {"content": "<system-reminder>x</system-reminder>"}}
+{"type": "user", "isMeta": true, "message": {"content": "meta"}}
+{"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "sub"}]}}
+{"type": "summary", "summary": "x"}
+{"type": "assistant", "message": {"content": [{"type": "thinking"}, {"type": "text", "text": "hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls\n -la"}}, {"type": "tool_use", "name": "Read", "input": {"file_path": "/a/b.py"}}, {"type": "tool_use", "name": "Weird", "input": {}}]}}
+{bad

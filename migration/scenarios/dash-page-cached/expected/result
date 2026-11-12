@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"name": "pc", "facts": {"puck": {"name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "state": "raised", "why": "your move", "progress": 0.42857142857142855, "steps": ["mr_open", "ci_green", "no_conflicts", "ready", "threads", "approved", "merge"], "step_index": 3, "step": "ready", "owner": "me", "hidden": false, "action": "mark it ready", "changed": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {}, "branch": "pc", "puck": null, "blocking": null, "moves": [], "sig": "192feb4e7886", "built": true, "suggestion": null}, "history": [], "git": {"commits": [], "files": []}}, "v": 2, "sig": "192feb4e7886", "designed": <EPOCH>, "layout": {"puck": null, "tiles": [{"widget": "note", "title": "Old", "props": {"text": "old"}}], "wide": null}}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/dash/pages/pc.json
+{"v": 2, "sig": "192feb4e7886", "designed": <EPOCH>, "layout": {"puck": null, "tiles": [{"widget": "note", "title": "Old", "props": {"text": "old"}}], "wide": null}}== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "ready", "owner": "me", "action": "mark it ready"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "pc"}]}

@@ -1,0 +1,14 @@
+rc=0
+--- stdout
+{"name": "a", "question": "Which way now?", "kind": "menu", "questions": [{"question": "Again?", "options": [{"label": "y"}]}], "options": [{"key": "1", "label": "Keep it (Recommended)", "detail": "Leave it as is."}, {"key": "2", "label": "Port it", "detail": "New MR, more review."}, {"key": "3", "label": "Chat about this", "detail": ""}]}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t2 --limit 60 --json
+orca worktree ps --limit 10000 --json
+--- files
+== u/.claude/projects/-nonexistent-ws-a/s.jsonl
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q1"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q2", "name": "AskUserQuestion", "input": {"questions": [{"question": "Again?", "options": [{"label": "y"}]}]}}]}}
+not json

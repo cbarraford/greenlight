@@ -1,0 +1,23 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "ok": true, "name": "retry-stuck-outbound-txs-after-a-churn", "repo": "widgets"}
+--- stderr
+--- calls
+orca repo list --json
+orca worktree create --repo id:r1 --name retry-stuck-outbound-txs-after-a-churn --setup skip --comment Retry\ stuck\ outbound\ txs\ after\ a\ churn. --no-parent --agent claude --prompt $'Your task in acme/widgets: Retry stuck outbound txs after a churn.. My whole request is below (verbatim in <W>/home/tasks/retry-stuck-outbound-txs-after-a-churn/request.md). I attached 3 files, in <W>/home/tasks/retry-stuck-outbound-txs-after-a-churn/files: passwd, 2-passwd, hidden-log. Read them first. Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\nRetry stuck outbound txs after a churn.\n\nThey sit in the queue forever forever forever forever forever forever \n- see the log' --json
+orca worktree ps --limit 10000 --json
+orca worktree set --worktree id:w9 --display-name retry-stuck-outbound-txs-after-a-churn --json
+--- files
+== home/history/retry-stuck-outbound-txs-after-a-churn.md
+- <TS> task started (claude, 3 files): Retry stuck outbound txs after a churn.
+== home/tasks/retry-stuck-outbound-txs-after-a-churn/files/2-passwd
+panic: boom
+== home/tasks/retry-stuck-outbound-txs-after-a-churn/files/hidden-log
+panic: boom
+== home/tasks/retry-stuck-outbound-txs-after-a-churn/files/passwd
+panic: boom
+== home/tasks/retry-stuck-outbound-txs-after-a-churn/request.md
+Retry stuck outbound txs after a churn.
+
+They sit in the queue forever forever forever forever forever forever 
+- see the log

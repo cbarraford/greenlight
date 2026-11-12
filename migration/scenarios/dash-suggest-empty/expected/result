@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+{"name": "pc", "sig": "192feb4e7886", "prompt": "", "label": ""}
+--- stderr
+--- calls
+claude -p --permission-mode acceptEdits --model claude-haiku-5-5 --effort low <<< $'You are greenlight, a developer\'s agent manager. Write the ONE prompt the developer should send to a fresh coding agent working in this workspace so it does the next thing toward the workspace goal. Ground it on greenlight\'s next step (puck.step, puck.owner, puck.action) and the lifecycle; be concrete (MR number, failing job, file, thread) using only the facts. If the next move is the developer\'s own (a review, an approval, an answer), the prompt prepares it for them (e.g. summarize the diff and open threads, draft a reply) and must not approve, comment or push. Rules: don\'t suggest merging (greenlight merges). Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n{"puck": {"name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "state": "raised", "why": "your move", "progress": 0.42857142857142855, "steps": ["mr_open", "ci_green", "no_conflicts", "ready", "threads", "approved", "merge"], "step_index": 3, "step": "ready", "owner": "me", "hidden": false, "action": "mark it ready", "changed": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {}, "branch": "pc", "puck": null, "blocking": null, "moves": [], "sig": "192feb4e7886", "built": false, "suggestion": null}, "history": [], "git": {"commits": [], "files": []}}'
+orca worktree ps --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "ready", "owner": "me", "action": "mark it ready"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "pc"}]}

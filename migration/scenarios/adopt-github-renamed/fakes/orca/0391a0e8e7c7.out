@@ -1,0 +1,1 @@
+{"ok": true, "result": {"repos": [{"id": "r-o", "path": "old-tools", "gitRemoteIdentity": {"canonicalKey": "github.com/acme/old-tools"}}, {"id": "r-x", "path": "gone", "gitRemoteIdentity": {"canonicalKey": "git@github.com:acme/gone.git"}}]}}

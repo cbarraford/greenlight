@@ -1,0 +1,1 @@
+pr list -R acme/gadgets --head review-9 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews 

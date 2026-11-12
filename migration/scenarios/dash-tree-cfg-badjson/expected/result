@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "cfg", "path": "<W>/cwd/repo", "error": "not a JSON object"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

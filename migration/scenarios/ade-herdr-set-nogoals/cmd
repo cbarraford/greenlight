@@ -1,0 +1,1 @@
+greenlight.py ade worktree set --worktree id:w-3 --comment 'try it'

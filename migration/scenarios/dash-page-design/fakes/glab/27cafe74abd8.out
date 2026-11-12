@@ -1,0 +1,1 @@
+[{"name": "lint", "stage": "test", "web_url": "https://ci/lint", "allow_failure": false}]

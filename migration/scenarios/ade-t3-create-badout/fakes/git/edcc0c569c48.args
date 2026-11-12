@@ -1,0 +1,1 @@
+-C /nonexistent/tools rev-parse --path-format=absolute --git-dir 

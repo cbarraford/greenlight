@@ -1,0 +1,1 @@
+pr list -R acme/gadgets --head fix-1 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews 

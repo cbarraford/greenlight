@@ -1,0 +1,13 @@
+rc=0
+--- stdout
+{"op": "memory-zap", "arg": "a-note", "error": "no op memory-zap"}
+--- stderr
+--- calls
+--- files
+== repo/memory/MEMORY.md
+- [old](old.md) — kept
+- [a-note](a-note.md) — v1
+== repo/memory/a-note.md
+v1
+== repo/memory/old.md
+keep

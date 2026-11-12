@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/dismissed.json
+{
+ "acme/widgets!9": {
+  "ts": <EPOCH>,
+  "why": "ignored"
+ }
+}

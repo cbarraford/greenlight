@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "prompt-get", "arg": "widgets/nope", "error": "bad repo or kind"}
+--- stderr
+--- calls
+--- files

@@ -1,0 +1,2 @@
+{"payload": {"cwd": "/nonexistent/ws/a"}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "old"}]}}

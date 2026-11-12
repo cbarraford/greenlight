@@ -1,0 +1,1 @@
+greenlight.py ade terminal send --terminal p-2 --text 'ls -la' --enter

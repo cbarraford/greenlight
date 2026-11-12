@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+local7: still running, skipped
+--- stderr
+--- calls
+--- files
+== home/auto/local7.pid
+0
+== home/auto/utc12.pid
+0
+== home/automations.json
+{"local7": {"schedule": "0 7 * * 4", "prompt": "p"}, "utc12": {"schedule": "0 12 * * *", "prompt": "p"}}

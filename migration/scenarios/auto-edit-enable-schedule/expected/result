@@ -1,0 +1,32 @@
+rc=0
+--- stdout
+{
+  "a-very-long-automation-name-here": {
+    "enabled": true,
+    "schedule": "*/10 * * * *",
+    "prompt": "Review every open merge request in the repository, summarise the state of each pipeline, and post a short digest of anything that needs a human decision today",
+    "model": "opus"
+  }
+}
+--- stderr
+--- calls
+--- files
+== home/automations.json
+{
+  "nightly": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "prompt": "tidy up",
+    "provider": "codex"
+  },
+  "a-very-long-automation-name-here": {
+    "enabled": true,
+    "schedule": "*/10 * * * *",
+    "prompt": "Review every open merge request in the repository, summarise the state of each pipeline, and post a short digest of anything that needs a human decision today",
+    "model": "opus"
+  },
+  "busy": {
+    "schedule": "* * * * *",
+    "prompt": "line one\nline two"
+  }
+}

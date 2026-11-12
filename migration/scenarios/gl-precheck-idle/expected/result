@@ -1,0 +1,21 @@
+rc=1
+--- stdout
+0 actionable workspace(s) or adoption(s)
+--- stderr
+--- calls
+glab api projects/acme%2Ftools/merge_requests/6
+glab api projects/acme%2Ftools/merge_requests/6/approvals
+glab api projects/acme%2Ftools/merge_requests/6/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests\?state=opened\&per_page=100\&page=1
+orca repo list --json
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "prev_ts": null, "skipped": 0, "gone": [], "rows": [{"id": "wt-tools-ci", "name": "tools-ci", "path": "/nonexistent/tools-ci", "branch": "tools-ci", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !6", "comment": "Merge !6", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {"iid": 6, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/6", "title": "MR 6", "state": "opened", "draft": false, "ref": "!6", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [{"name": "review-bot", "avatar": null}], "pipeline": "pending", "conflicts": false, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "tools-ci", "target_branch": "main", "labels": [], "description": "Does thing 6.", "milestone": "Release-1.2.0", "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/9", "sha": "sha6", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "ci_green", "owner": "ci", "action": "pipeline pending", "cmd": null, "lifecycle": "default.md"}}]}== home/outbox.jsonl
+{"ts": <EPOCH>, "resolve": "tools-ci", "why": "now ci: pipeline pending"}
+{"ts": <EPOCH>, "resolve": "wt-tools-ci", "why": "now ci: pipeline pending"}
+{"ts": <EPOCH>, "resolve": "gone-ws", "why": "workspace removed"}
+== home/pinged.json
+{"@x!1": <EPOCH>}

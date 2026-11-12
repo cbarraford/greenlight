@@ -1,0 +1,87 @@
+rc=0
+--- stdout
+
+## WOULD DELETE (12)
+- detached-review [-] — MR !26 merged
+- idle [feat-idle] — no MR/PR, branch merged into origin/develop
+- landed [feat-landed] — no MR/PR, branch merged into origin/develop
+- linked [feat-linked] — MR !29 merged
+- Merged ✓ [feat-merged] — MR !11 merged
+- mrhead [feat-mrhead] — MR !16 merged
+- rebased [feat-rebased] — MR !15 merged
+- renamed [local-name] — MR !30 merged
+- review-approved [mr-22] — MR !22 approved by me
+- review-approved-own [bob-other] — MR !33 approved by me
+- review-cant [mr-23] — MR !23 not mine to approve
+- twice [feat-twice] — MR !19 merged (older !18 open, stale)
+
+## SKIPPED (needs a human) (8)
+- busy [feat-busy] — MR !17 merged, but a terminal was active in the last 30m
+- closed [feat-closed] — MR !13 closed, but has uncommitted/untracked changes
+- elsewhere [x] — unknown repo
+- Gone One [feat-gone] — path missing on disk
+- lookup-err [feat-err] — MR lookup failed: glab api projects/acme%2Fwidgets/merge_requests?source_branch=feat-err&state=all&order_by=created_at: boom: 500 Internal Server Error
+- twin [feat-twin] — MR !31 merged, but a terminal was active in the last 30m
+- unpushed [feat-unpushed] — MR !14 merged, but local commits aren't in the MR head or any remote
+- weird [feat-weird] — MR lookup failed: 'reopened'
+
+## KEPT (14)
+- widgets [develop] — main checkout
+- cache [-] — detached HEAD
+- default-dir [develop] — default branch
+- detached-linked [-] — MR !28 is open
+- detached-missing [-] — detached HEAD, its MR wasn't found
+- fresh [feat-fresh] — no MR/PR, tip in origin/develop but never pushed and idle only 5h (fresh branch?)
+- noact [feat-noact] — no MR/PR, tip in origin/develop but never pushed and idle only 0h (fresh branch?)
+- open [feat-open] — MR !12 is open
+- pinned [feat-pinned] — pinned
+- plan [feat-plan] — a planner: the Plan view owns it
+- reopen [feat-reopen] — MR !21 is open
+- review-own [bob-feature] — MR !24 is open
+- review-pending [mr-25] — MR !25 is open
+- wip [feat-wip] — no MR/PR, branch not merged
+--- stderr
+--- calls
+glab api projects/acme%2Fwidgets/merge_requests/14/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/15/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/22
+glab api projects/acme%2Fwidgets/merge_requests/22/approvals
+glab api projects/acme%2Fwidgets/merge_requests/23
+glab api projects/acme%2Fwidgets/merge_requests/23/approvals
+glab api projects/acme%2Fwidgets/merge_requests/24/approvals
+glab api projects/acme%2Fwidgets/merge_requests/25
+glab api projects/acme%2Fwidgets/merge_requests/25/approvals
+glab api projects/acme%2Fwidgets/merge_requests/26
+glab api projects/acme%2Fwidgets/merge_requests/27
+glab api projects/acme%2Fwidgets/merge_requests/28
+glab api projects/acme%2Fwidgets/merge_requests/29
+glab api projects/acme%2Fwidgets/merge_requests/31
+glab api projects/acme%2Fwidgets/merge_requests/33/approvals
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-feature\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-other\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-busy\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-closed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-err\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-fresh\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-idle\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-landed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-linked\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-merged\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-mrhead\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-noact\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-open\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-rebased\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-reopen\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twice\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twin\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-unpushed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-weird\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-wip\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-22\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-23\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-25\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=remote-name\&state=all\&order_by=created_at
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

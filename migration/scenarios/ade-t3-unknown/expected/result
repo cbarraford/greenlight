@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca terminal close has no t3 equivalent
+--- calls
+--- files

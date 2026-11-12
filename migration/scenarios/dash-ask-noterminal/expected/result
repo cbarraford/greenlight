@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"name": "a", "error": "no agent terminal found there"}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files

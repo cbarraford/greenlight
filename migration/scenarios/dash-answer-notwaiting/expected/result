@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"name": "a", "error": "its agent isn't waiting on you any more"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

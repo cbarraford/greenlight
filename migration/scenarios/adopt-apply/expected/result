@@ -1,0 +1,256 @@
+rc=0
+--- stdout
+leaked stdout
+leaked stdout
+
+## CREATED (10)
+- ✓ acme/widgets!4 [author] A title that is long enough to be truncated at sixty charact — author MR with no workspace
+- ✓ acme/widgets!6 [review] Change number 6 — review MR with no workspace
+- ✓ acme/widgets!16 [review] Change number 16 — review MR with no workspace
+- ✓ acme/widgets!17 [author] Change number 17 — author MR with no workspace
+- ✓ acme/gadgets!20 [author] Change number 20 — author MR with no workspace
+- ✗ acme/legacy!21 [author] Change number 21 — author MR with no workspace — git fetch origin feat-21: fatal: couldn't find remote ref feat-21
+- ✓ acme/widgets!22 [review] Change number 22 — review MR with no workspace
+- ✗ acme/widgets!27 [author] Change number 27 — author MR with no workspace — orca worktree create --name feat-27 --repo id:r-w --base-branch origin/feat-27 --gitlab-mr 27 --comment Merge !27: Change number 27 --setup skip: worktree name taken
+- ✓ acme/widgets!23 [review/discussion] Change number 23 — review MR with no workspace (I'm blocking it: discussion)
+- ✓ acme/widgets!24 [review/approval] Change number 24 — review MR with no workspace (I'm blocking it: approval)
+
+## DEFERRED (cap) (1)
+- acme/widgets!30 [review/pipeline] Change number 30 — over the 10-per-run cap: next run
+
+## BRANCH BUSY (pinged) (2)
+- acme/widgets!14 [author] Change number 14 — busy-branch is checked out in /src/wt/busy
+- acme/widgets!15 [review] Change number 15 — mr-15 is checked out in /src/wt/r15
+
+## NO ADE REPO (pinged) (2)
+- acme/other!12 [author] Change number 12 — no repo in the ADE for acme/other
+- acme/other!13 [review] Change number 13 — no repo in the ADE for acme/other
+
+## SKIPPED (12)
+- acme/widgets!1 [author] Change number 1 — covered: a workspace already has it
+- acme/widgets!2 [author] Change number 2 — covered: a workspace already has it
+- acme/widgets!3 [author] Change number 3 — covered: created by an earlier adopt run, not scanned yet
+- acme/widgets!7 [review] Change number 7 — tombstoned (manual): its workspace was removed
+- acme/widgets!8 [author] Change number 8 — tombstoned (cleanup): its workspace was removed
+- acme/widgets!9 [review] Change number 9 — approved by me
+- acme/widgets!10 [review] Change number 10 — I can't approve it (my commits are in it)
+- acme/widgets!11 [review] Change number 11 — someone else's draft
+- acme/widgets!25 [author] Change number 25 — covered: a workspace already has it
+- acme/widgets!5 [review] Change number 5 — tombstoned (manual): its workspace was removed
+- acme/widgets!19 [author] Change number 19 — tombstoned (manual): its workspace was removed
+- acme/widgets!18 [author] Change number 18 — tombstoned (cleanup): its workspace was removed
+--- stderr
+leaked stderr
+leaked stderr
+skipped: @adopt-busy was pinged in the last 24h
+--- calls
+git -C gadgets fetch origin feat-20
+git -C gadgets worktree list --porcelain
+git -C legacy fetch origin feat-21
+git -C legacy remote get-url origin
+git -C legacy worktree list --porcelain
+git -C widgets fetch origin +refs/merge-requests/16/head:mr-16
+git -C widgets fetch origin +refs/merge-requests/22/head:mr-22
+git -C widgets fetch origin +refs/merge-requests/23/head:mr-23
+git -C widgets fetch origin +refs/merge-requests/24/head:mr-24
+git -C widgets fetch origin +refs/merge-requests/6/head:mr-6
+git -C widgets fetch origin feat-17
+git -C widgets fetch origin feat-27
+git -C widgets fetch origin feat-4
+git -C widgets worktree list --porcelain
+git -C wt/feat-17 branch --set-upstream-to=origin/feat-17 feat-17
+git -C wt/feat-17 branch -D feat-17-2
+git -C wt/feat-17 merge-base --is-ancestor feat-17 HEAD
+git -C wt/feat-17 rev-parse --verify -q refs/heads/feat-17
+git -C wt/feat-17 switch -C feat-17
+git -C wt/feat-17 symbolic-ref --short -q HEAD
+git -C wt/feat-20 branch --set-upstream-to=origin/feat-20 feat-20-2
+git -C wt/feat-20 merge-base --is-ancestor feat-20 HEAD
+git -C wt/feat-20 rev-parse --verify -q refs/heads/feat-20
+git -C wt/feat-20 symbolic-ref --short -q HEAD
+git -C wt/feat-4 branch --set-upstream-to=origin/feat-4 feat-4
+git -C wt/feat-4 branch -D feat-4-2
+git -C wt/feat-4 rev-parse --verify -q refs/heads/feat-4
+git -C wt/feat-4 switch -c feat-4
+git -C wt/feat-4 symbolic-ref --short -q HEAD
+git -C wt/mr-16 symbolic-ref --short -q HEAD
+git -C wt/mr-22 symbolic-ref --short -q HEAD
+git -C wt/mr-24 merge-base --is-ancestor mr-24 HEAD
+git -C wt/mr-24 rev-parse --verify -q refs/heads/mr-24
+git -C wt/mr-24 switch -C mr-24
+git -C wt/mr-24 symbolic-ref --short -q HEAD
+git -C wt/mr-6 symbolic-ref --short -q HEAD
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+glab api projects/7/merge_requests/10/approvals
+glab api projects/7/merge_requests/11/approvals
+glab api projects/7/merge_requests/15/approvals
+glab api projects/7/merge_requests/16/approvals
+glab api projects/7/merge_requests/22/approvals
+glab api projects/7/merge_requests/22/reviewers
+glab api projects/7/merge_requests/6/approvals
+glab api projects/7/merge_requests/6/reviewers
+glab api projects/7/merge_requests/7/reviewers
+glab api projects/7/merge_requests/9/approvals
+glab api projects/9/merge_requests/13/approvals
+glab api projects/acme%2Fwidgets/merge_requests/30
+glab api projects/acme%2Fwidgets/merge_requests/31
+glab api projects/acme%2Fwidgets/merge_requests/32
+orca repo list --json
+orca worktree create --name feat-17 --repo id:r-w --base-branch origin/feat-17 --gitlab-mr 17 --comment Merge\ \!17:\ Change\ number\ 17 --setup skip --json
+orca worktree create --name feat-20 --repo id:r-g --base-branch origin/feat-20 --gitlab-mr 20 --comment Merge\ \!20:\ Change\ number\ 20 --setup skip --json
+orca worktree create --name feat-27 --repo id:r-w --base-branch origin/feat-27 --gitlab-mr 27 --comment Merge\ \!27:\ Change\ number\ 27 --setup skip --json
+orca worktree create --name feat-4 --repo id:r-w --base-branch origin/feat-4 --gitlab-mr 4 --comment Merge\ \!4:\ A\ title\ that\ is\ long\ enough\ to\ be\ truncated\ at\ sixty\ characters\ for\ sure --setup skip --json
+orca worktree create --name mr-16 --repo id:r-w --base-branch mr-16 --gitlab-mr 16 --comment Review\ \!16:\ Change\ number\ 16 --setup skip --json
+orca worktree create --name mr-22 --repo id:r-w --base-branch mr-22 --gitlab-mr 22 --comment Review\ \!22:\ Change\ number\ 22 --setup skip --json
+orca worktree create --name mr-23 --repo id:r-w --base-branch mr-23 --gitlab-mr 23 --comment Review\ \!23:\ Change\ number\ 23 --setup skip --json
+orca worktree create --name mr-24 --repo id:r-w --base-branch mr-24 --gitlab-mr 24 --comment Review\ \!24:\ Change\ number\ 24 --setup skip --json
+orca worktree create --name mr-6 --repo id:r-w --base-branch mr-6 --gitlab-mr 6 --comment Review\ \!6:\ Change\ number\ 6 --setup skip --json
+--- files
+== home/adopt.json
+{
+ "seen": {
+  "acme/widgets!1": {
+   "id": "ws-1",
+   "name": "feat-covered-mr"
+  },
+  "acme/widgets!25": {
+   "id": "ws-25",
+   "name": "linked"
+  }
+ },
+ "created": {
+  "acme/widgets!3": <EPOCH>,
+  "acme/widgets!4": <EPOCH>,
+  "acme/widgets!99": <EPOCH>,
+  "acme/widgets!6": <EPOCH>,
+  "acme/widgets!16": <EPOCH>,
+  "acme/widgets!17": <EPOCH>,
+  "acme/gadgets!20": <EPOCH>,
+  "acme/widgets!22": <EPOCH>,
+  "acme/widgets!23": <EPOCH>,
+  "acme/widgets!24": <EPOCH>
+ }
+}== home/blocks.json
+{
+ "ts": <EPOCH>,
+ "blocks": {
+  "acme/widgets!23": {
+   "reason": "discussion"
+  },
+  "acme/widgets!24": {
+   "reason": "approval"
+  },
+  "acme/widgets!30": {
+   "reason": "pipeline"
+  },
+  "acme/widgets!31": {
+   "reason": "approval"
+  },
+  "acme/widgets!32": {
+   "reason": "approval"
+  }
+ }
+}== home/config.json
+{
+ "blocking": {
+  "repos": {
+   "acme/widgets": null
+  }
+ }
+}== home/dismissed.json
+{
+ "acme/widgets!5": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!7": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!8": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!18": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!19": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ }
+}== home/history/feat-17.md
+- <TS> adopted !17 (author): no workspace existed
+== home/history/feat-20.md
+- <TS> adopted !20 (author): no workspace existed
+== home/history/feat-4.md
+- <TS> adopted !4 (author): no workspace existed
+== home/history/mr-16.md
+- <TS> adopted !16 (review): no workspace existed
+== home/history/mr-22.md
+- <TS> adopted !22 (review): no workspace existed
+== home/history/mr-23.md
+- <TS> adopted !23 (review): no workspace existed
+== home/history/mr-24.md
+- <TS> adopted !24 (review): no workspace existed
+== home/history/mr-6.md
+- <TS> adopted !6 (review): no workspace existed
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}== home/log.jsonl
+{"ts": <EPOCH>, "name": "feat-18", "removed": true}
+{"ts": <EPOCH>, "name": "feat-19", "did": "x"}
+not json
+{"ts": <EPOCH>, "ws": "feat-4", "mr": "!4", "did": "adopt", "project": "acme/widgets", "role": "author"}
+{"ts": <EPOCH>, "ws": "mr-6", "mr": "!6", "did": "adopt", "project": "acme/widgets", "role": "review"}
+{"ts": <EPOCH>, "ws": "mr-16", "mr": "!16", "did": "adopt", "project": "acme/widgets", "role": "review"}
+{"ts": <EPOCH>, "ws": "feat-17", "mr": "!17", "did": "adopt", "project": "acme/widgets", "role": "author"}
+{"ts": <EPOCH>, "ws": "feat-20", "mr": "!20", "did": "adopt", "project": "acme/gadgets", "role": "author"}
+{"ts": <EPOCH>, "ws": "feat-21", "mr": "!21", "did": "adopt failed", "error": "git fetch origin feat-21: fatal: couldn't find remote ref feat-21"}
+{"ts": <EPOCH>, "ws": "mr-22", "mr": "!22", "did": "adopt", "project": "acme/widgets", "role": "review"}
+{"ts": <EPOCH>, "ws": "feat-27", "mr": "!27", "did": "adopt failed", "error": "orca worktree create --name feat-27 --repo id:r-w --base-branch origin/feat-27 --gitlab-mr 27 --comment Merge !27: Change number 27 --setup skip: worktree name taken"}
+{"ts": <EPOCH>, "ws": "mr-23", "mr": "!23", "did": "adopt", "project": "acme/widgets", "role": "review"}
+{"ts": <EPOCH>, "ws": "mr-24", "mr": "!24", "did": "adopt", "project": "acme/widgets", "role": "review"}
+== home/outbox.jsonl
+{"ts": <EPOCH>, "text": "earlier", "key": "@adopt-busy"}
+{"ts": <EPOCH>, "text": "adopt: acme/other has no repo in the ADE, so 2 open MR(s) get no workspace: !12 !13. Add the repo to the ADE?\nhttps://gitlab.com/acme/other/-/merge_requests/12\nOptions: add the repo | ignore its MRs", "key": "@no-repo:acme/other"}
+== home/pinged.json
+{"@no-repo:acme/other": <EPOCH>}

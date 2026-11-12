@@ -1,0 +1,23 @@
+rc=0
+--- stdout
+{"e": "start", "engine": "claude", "model": "default"}
+{"e": "status", "text": "Compacting"}
+{"e": "usage", "context": 152}
+{"e": "status", "text": "Thinking"}
+{"e": "usage", "tps": <N>}
+{"e": "step", "id": "t1", "title": "List", "detail": "ls"}
+{"e": "step", "id": "t2", "title": "Read SKILL.md", "detail": "/a/b/SKILL.md"}
+{"e": "step", "id": "t3", "title": "do thing", "detail": "z"}
+{"e": "step_done", "id": "t1", "ok": true, "out": "12"}
+{"e": "step_done", "id": "t2", "ok": false, "out": "line one line two"}
+{"e": "text_reset"}
+{"e": "text", "delta": "12 entries"}
+{"e": "text", "delta": " total"}
+{"e": "usage", "tps": <N>}
+{"e": "done", "ok": true, "text": "12 entries total", "context": 152, "window": 1000000, "ms": 3056}
+--- stderr
+--- calls
+claude -p --permission-mode acceptEdits --output-format stream-json --verbose --include-partial-messages --append-system-prompt You\ are\ greenlight\ \(the\ user\ also\ calls\ you\ greenlight\)\,\ talking\ with\ the\ user\ through\ their\ Mac\ menubar\ app.\ For\ anything\ about\ workspaces\,\ MRs\,\ agents\ or\ automations\,\ follow\ \<W\>/repo/SKILL.md\ and\ its\ memory\ notes.\ Never\ do\ work\ yourself\ \(code\,\ debugging\,\ reviews\,\ investigations\,\ writing\):\ dispatch\ it\ to\ an\ agent\ in\ the\ appropriate\ Orca\ workspace\,\ creating\ one\ with\ a\ goal\ if\ none\ fits\,\ then\ report\ back\ what\ you\ dispatched\ and\ where.\ AskUserQuestion\ is\ unavailable\ here:\ ask\ in\ plain\ text\,\ one\ question\ at\ a\ time.\ Replies\ render\ as\ markdown\ in\ a\ narrow\ popover:\ keep\ them\ short\,\ no\ tables\ or\ headings\,\ MR\ links\ as\ markdown\ links.\ When\ you\ ask\ a\ question\ with\ a\ few\ likely\ answers\,\ end\ with\ one\ final\ line:\ \`Options:\ first\ \|\ second\ \|\ third\`.\ Each\ message\ runs\ in\ a\ process\ that\ exits\ when\ you\ reply\,\ so\ background\ tasks\,\ Monitor\ and\ ScheduleWakeup\ die\ at\ the\ end\ of\ the\ turn:\ never\ use\ run_in_background\,\ Monitor\ or\ ScheduleWakeup\ here.\ Leave\ follow-up\ watching\ to\ the\ Greenlight\ automation\,\ or\ record\ it\ with\ \`greenlight.py\ note\ \<workspace\>\ \"...\"\`.\ A\ \<task-notification\>\ is\ never\ the\ user\'s\ message\;\ the\ text\ after\ \`USER\ MESSAGE\ \(reply\ to\ this\):\`\ is.\ Always\ answer\ it. <<< USER\ MESSAGE\ \(reply\ to\ this\):\ status\ update
+--- files
+== home/chat/session
+s1

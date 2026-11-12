@@ -1,0 +1,1 @@
+auto.py add x --schedule '*/0 * * * *' --prompt p

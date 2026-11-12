@@ -1,0 +1,1 @@
+[{"name": "unit", "stage": "test", "web_url": "https://gitlab.com/acme/widgets/-/jobs/9001", "allow_failure": false}, {"name": "lint", "stage": "test", "web_url": "https://gitlab.com/acme/widgets/-/jobs/9002", "allow_failure": true}]

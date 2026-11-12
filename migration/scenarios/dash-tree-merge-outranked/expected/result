@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"op": "merge", "path": "/nonexistent/ws/m", "error": "greenlight doesn't say this can merge now"}
+--- stderr
+--- calls
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "m", "path": "/nonexistent/ws/m", "project": "acme/widgets", "goal": "", "mr": {"iid": 7, "ref": "!7", "state": "opened", "role": "author", "sha": "abc123", "target_branch": "main", "conflicts": true}, "next": {"step": "merge", "owner": "greenlight", "action": "merge it", "cmd": ["glab", "mr", "merge", "7"]}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "m"}]}

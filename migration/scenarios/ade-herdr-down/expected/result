@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+<error> herdr agent list: error: could not connect to herdr server
+--- calls
+herdr agent list
+--- files

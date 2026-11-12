@@ -1,0 +1,1 @@
+worktree create --name feat-4 --repo id:r-w --base-branch origin/feat-4 --gitlab-mr 4 --comment 'Merge !4: A title that is long enough to be truncated at sixty characters for sure' --setup skip --json 

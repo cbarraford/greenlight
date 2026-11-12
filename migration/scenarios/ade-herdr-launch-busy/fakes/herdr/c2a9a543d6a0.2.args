@@ -1,0 +1,1 @@
+agent start claude-s1-p6 --kind claude --pane s1:p6 --timeout 60000 -- fix\ it 

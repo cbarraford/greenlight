@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+(no history)
+--- stderr
+--- calls
+gh api user
+glab api user
+--- files

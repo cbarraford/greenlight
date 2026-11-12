@@ -1,0 +1,2 @@
+{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}},"session_id":"s0"}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Partial"}},"session_id":"s0"}

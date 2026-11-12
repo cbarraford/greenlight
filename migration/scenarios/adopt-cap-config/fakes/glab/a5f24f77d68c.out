@@ -1,0 +1,1 @@
+{"iid": 23, "project_id": 7, "title": "Change number 23", "source_branch": "feat-23", "author": {"username": "bob"}, "draft": false, "updated_at": "2026-11-12T11:20:00.000Z", "sha": "0000000000000000000000000000000000000017", "state": "opened", "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/23", "references": {"full": "acme/widgets!23"}}

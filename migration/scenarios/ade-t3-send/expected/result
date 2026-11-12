@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+t3 thread send th-1 - <<< hello\ there
+--- files

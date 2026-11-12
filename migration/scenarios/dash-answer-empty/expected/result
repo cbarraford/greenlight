@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"name": "a", "error": "empty answer"}
+--- stderr
+--- calls
+--- files

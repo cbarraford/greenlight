@@ -1,0 +1,6 @@
+rc=2
+--- stdout
+--- stderr
+cleanup.py: error: argument cmd: invalid choice: 'purge' (choose from 'scan', 'precheck', 'apply')
+--- calls
+--- files

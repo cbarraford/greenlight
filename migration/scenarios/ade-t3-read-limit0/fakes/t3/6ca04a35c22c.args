@@ -1,0 +1,1 @@
+thread show th-1 --json --messages 20 

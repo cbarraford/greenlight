@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "rm", "path": "<W>/cwd/repo", "error": "the repo's main checkout is never removed"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

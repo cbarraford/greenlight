@@ -1,0 +1,1 @@
+{"ok": true, "result": {"workspaces": [{"workspace_id": "w-1", "label": "widgets"}, {"workspace_id": "w-2", "label": "feat", "worktree": {"checkout_path": "/nonexistent/widgets-feat"}}, {"workspace_id": "w-3", "label": "plain"}]}}

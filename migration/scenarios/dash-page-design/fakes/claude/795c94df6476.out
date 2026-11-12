@@ -1,0 +1,4 @@
+Here is the layout:
+```json
+{"puck": {"widget": "files", "props": {}}, "tiles": [{"widget": "stat", "title": "Jobs failing right now", "props": {"value": "1", "label": "failed"}}, {"widget": "script", "props": {}}, {"widget": "note", "props": "x"}, {"widget": "kv", "props": {"rows": []}}, {"widget": "spark", "props": {"points": [1, 2]}}, {"widget": "grid", "props": {}}, {"widget": "meter", "props": {}}], "wide": {"widget": "log", "props": {}}}
+```

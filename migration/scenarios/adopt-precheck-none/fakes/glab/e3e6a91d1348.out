@@ -1,0 +1,1 @@
+[{"iid": 1, "project_id": 7, "title": "Change number 1", "source_branch": "feat-covered-mr", "author": {"username": "me"}, "draft": false, "updated_at": "2026-11-12T09:00:00.000Z", "sha": "0000000000000000000000000000000000000001", "state": "opened", "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/1", "references": {"full": "acme/widgets!1"}}]

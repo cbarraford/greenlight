@@ -1,0 +1,1 @@
+greenlight.py ade agent launch --worktree id:w-3 --prompt $'Step 1: read.\nStep 2: fix.'

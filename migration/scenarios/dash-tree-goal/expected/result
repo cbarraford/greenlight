@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"op": "goal", "path": "/nonexistent/ws/a", "ok": true}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+orca worktree set --worktree id:w1 --comment ship\ it --json
+--- files

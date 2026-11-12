@@ -1,0 +1,8 @@
+rc=1
+--- stdout
+--- stderr
+<error> 'NoneType' object is not a mapping
+--- calls
+--- files
+== home/config.json
+null

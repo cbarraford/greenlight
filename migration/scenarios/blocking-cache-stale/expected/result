@@ -1,0 +1,14 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+glab api projects/acme%2Fempty
+glab api projects/acme%2Fempty/merge_requests\?state=opened\&per_page=100\&page=1
+--- files
+== home/blocks.json
+{
+ "ts": <EPOCH>,
+ "blocks": {}
+}== home/config.json
+{"blocking": {"repos": {"acme/empty": null}, "people": ["me"]}}

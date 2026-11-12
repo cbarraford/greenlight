@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+nothing is blocked on me
+--- stderr
+--- calls
+--- files

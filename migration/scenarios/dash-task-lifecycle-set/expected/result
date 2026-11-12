@@ -1,0 +1,21 @@
+rc=0
+--- stdout
+{"op": "lifecycle-set", "arg": "widgets", "stages": [{"key": "mr_open", "req": "An MR", "done": ""}, {"key": "qa", "req": "QA signs off", "done": "signoff"}, {"key": "lbl", "req": "Labelled", "done": "label=ok"}, {"key": "merge", "req": "", "done": ""}], "options": {"solo": "", "approvals": "2"}, "rules": "Always add a test.", "intro": "Mine.", "file": "<W>/home/lifecycles/widgets.md", "source": "yours", "builtins": {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipeline succeeded (or there's no CI).", "no_conflicts": "No merge conflicts.", "review_bot": "The review bot is assignee and reviewer.", "milestone": "A release milestone is set.", "ready": "Not a draft.", "threads": "No unresolved threads.", "approved": "The required approvals are in.", "merge": "The forge reports it mergeable."}}
+--- stderr
+--- calls
+--- files
+== home/lifecycles/widgets.md
+# widgets lifecycle
+
+Mine.
+
+Options: `solo` `approvals=2`
+
+1. `mr_open` — An MR
+2. `qa` — QA signs off Done: `signoff`
+3. `lbl` — Labelled Done: `label=ok`
+4. `merge` — 
+
+## Rules
+
+Always add a test.

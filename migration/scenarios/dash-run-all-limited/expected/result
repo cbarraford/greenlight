@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+{"name": "a", "error": "orca agent launch --agent codex --worktree id:w1 --prompt go: 429 Too Many Requests"}
+--- stderr
+--- calls
+orca agent launch --agent claude --worktree id:w1 --prompt go --json
+orca agent launch --agent codex --worktree id:w1 --prompt go --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": []}

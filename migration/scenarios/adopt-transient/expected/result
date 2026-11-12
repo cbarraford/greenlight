@@ -1,0 +1,18 @@
+rc=0
+--- stdout
+
+## WOULD CREATE (1)
+- acme/widgets!4 [author] Change number 4 — author MR with no workspace
+--- stderr
+--- calls
+git -C widgets worktree list --porcelain
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+orca repo list --json
+--- files
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": []
+}

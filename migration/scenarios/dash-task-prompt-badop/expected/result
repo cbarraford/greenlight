@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "prompt-zap", "arg": "widgets/ci", "error": "no op prompt-zap"}
+--- stderr
+--- calls
+--- files

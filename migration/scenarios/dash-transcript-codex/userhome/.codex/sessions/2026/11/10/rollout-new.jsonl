@@ -1,0 +1,71 @@
+{"type": "session_meta", "payload": {"cwd": "/nonexistent/ws/a"}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c0"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c1"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c2"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c3"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c4"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c5"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c6"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c7"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c8"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c9"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c10"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c11"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c12"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c13"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c14"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c15"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c16"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c17"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c18"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c19"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c20"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c21"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c22"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c23"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c24"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c25"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c26"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c27"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c28"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c29"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c30"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c31"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c32"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c33"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c34"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c35"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c36"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c37"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c38"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c39"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c40"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c41"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c42"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c43"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c44"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c45"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c46"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c47"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c48"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c49"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c50"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c51"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c52"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c53"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c54"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c55"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c56"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c57"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c58"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c59"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c60"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c61"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "c62"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "c63"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "<environment_context>x"}, {"text": "  "}, {"text": "real ask"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"text": "dev"}]}}
+{"type": "response_item", "payload": {"type": "reasoning", "summary": []}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "{\"command\": [\"ls\",\n \"-la\"]}"}}
+{"type": "response_item", "payload": {"type": "custom_tool_call", "name": "apply_patch", "input": "*** Begin\n*** End"}}
+{"type": "response_item", "payload": {"type": "local_shell_call", "action": {}}}

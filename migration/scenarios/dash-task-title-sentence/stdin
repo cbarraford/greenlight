@@ -1,0 +1,1 @@
+{"text": "Retry stuck outbound txs after a churn. They sit in the outbound queue forever and nobody notices until a user complains They sit in the outbound queue forever and nobody notices until a user complains "}

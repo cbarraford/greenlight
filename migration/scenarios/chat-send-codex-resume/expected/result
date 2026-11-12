@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"e": "start", "engine": "codex", "model": "default"}
+{"e": "done", "ok": false, "text": "{'message': 'rate limited'}", "context": 0, "window": 272000, "ms": null}
+--- stderr
+--- calls
+codex exec resume t0 --skip-git-repo-check -c sandbox_mode=workspace-write --json - <<< USER\ MESSAGE\ \(reply\ to\ this\):\ again
+--- files
+== home/chat/session_codex
+t0

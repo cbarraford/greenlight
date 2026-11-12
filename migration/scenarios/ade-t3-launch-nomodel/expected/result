@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> 'pi'
+--- calls
+--- files

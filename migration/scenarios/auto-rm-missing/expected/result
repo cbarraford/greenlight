@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+nope: no such automation
+--- calls
+--- files

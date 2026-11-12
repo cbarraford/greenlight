@@ -1,0 +1,3 @@
+worktree /src/old-tools
+HEAD abc
+branch refs/heads/main

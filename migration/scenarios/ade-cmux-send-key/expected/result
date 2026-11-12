@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+cmux --id-format uuids send --surface s-1 -- 2
+--- files

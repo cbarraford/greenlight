@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+- <TS> created
+- <TS> merged
+
+--- stderr
+--- calls
+--- files
+== home/history/me__feat-1.md
+- <TS> created
+- <TS> merged

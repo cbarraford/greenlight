@@ -1,0 +1,1 @@
+auto.py edit a-very-long-automation-name-here --enabled --schedule '*/10 * * * *' --model opus

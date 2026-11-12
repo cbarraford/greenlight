@@ -1,0 +1,1 @@
+api 'merge_requests?scope=all&state=opened&author_username=me&per_page=100&page=1' 

@@ -1,0 +1,58 @@
+rc=0
+--- stdout
+every30: still running, skipped
+thu-noon: still running, skipped
+or-dom: still running, skipped
+dom-step-bug: still running, skipped
+zero-step: still running, skipped
+weird-range: still running, skipped
+november: still running, skipped
+list: still running, skipped
+--- stderr
+--- calls
+--- files
+== home/auto/bad-minute.pid
+0
+== home/auto/disabled-due.pid
+0
+== home/auto/dom-step-bug.pid
+0
+== home/auto/every30.pid
+0
+== home/auto/five-step.pid
+0
+== home/auto/list.pid
+0
+== home/auto/minute-miss.pid
+0
+== home/auto/november.pid
+0
+== home/auto/or-dom-miss.pid
+0
+== home/auto/or-dom.pid
+0
+== home/auto/sunday7.pid
+0
+== home/auto/thu-noon.pid
+0
+== home/auto/weird-range.pid
+0
+== home/auto/zero-step.pid
+0
+== home/automations.json
+{
+ "every30": {"schedule": "*/30 * * * *", "prompt": "p"},
+ "thu-noon": {"schedule": "0 12 * * 4", "prompt": "p"},
+ "or-dom": {"schedule": "0 12 12 * 1", "prompt": "p"},
+ "or-dom-miss": {"schedule": "0 12 13 * 1", "prompt": "p"},
+ "dom-step-bug": {"schedule": "0 12 */1 * 1", "prompt": "p"},
+ "zero-step": {"schedule": "0/10 * * * *", "prompt": "p"},
+ "five-step": {"schedule": "5/10 * * * *", "prompt": "p"},
+ "weird-range": {"schedule": "0 12-12-30 * * *", "prompt": "p"},
+ "bad-minute": {"schedule": "70 * * * *", "prompt": "p"},
+ "disabled-due": {"enabled": false, "schedule": "* * * * *", "prompt": "p"},
+ "sunday7": {"schedule": "0 12 * * 7", "prompt": "p"},
+ "november": {"schedule": "0 12 * 11 *", "prompt": "p"},
+ "minute-miss": {"schedule": "1 * * * *", "prompt": "p"},
+ "list": {"schedule": "0,30 11,12 1-15 10-12 3,4", "prompt": "p"}
+}

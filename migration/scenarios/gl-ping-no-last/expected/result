@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+greenlight.py ping: unknown workspace feat-025 (not in the last scan); nothing sent
+--- calls
+--- files

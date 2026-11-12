@@ -1,0 +1,3 @@
+{"name": "nightly", "ts": 1794441600, "log": "/x/1.log", "status": "ok", "engine": "claude", "summary": "all good", "secs": 42}
+{"name": "busy", "ts": 1794445200, "log": "/x/2.log", "status": "skipped", "summary": "nothing to do", "secs": 0}
+{"name": "nightly", "ts": 1794448800, "log": "/x/3.log", "status": "failed", "engine": "codex", "summary": "it's \"broken\"\nsecond line ✓ Review every open merge request in the repository, summarise the state of each pipeline, and post a short digest of anything that needs a human decision today", "secs": 301}

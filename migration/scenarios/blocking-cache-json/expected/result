@@ -1,0 +1,52 @@
+rc=0
+--- stdout
+{
+ "acme/widgets!9": {
+  "reason": "pipeline",
+  "why": "CI failed: test",
+  "n": 1,
+  "url": "https://gitlab.com/acme/widgets/-/merge_requests/9",
+  "title": "b pipeline"
+ },
+ "acme/widgets!2": {
+  "reason": "conflict",
+  "why": "needs a rebase onto main",
+  "n": 1,
+  "url": "u2",
+  "title": "a conflict"
+ },
+ "acme/widgets!3": {
+  "reason": "orphan",
+  "why": "falling through the cracks (pipeline)",
+  "n": 1,
+  "url": "u3",
+  "title": "orphan"
+ },
+ "acme/widgets-private!1": {
+  "reason": "discussion",
+  "why": "3 threads are waiting on you",
+  "n": 3,
+  "url": "u4",
+  "title": "Rework the release-train settlement path so stuck outbound transactions are retried on the next block"
+ },
+ "acme/widgets!1": {
+  "reason": "approval",
+  "why": "awaiting your review",
+  "n": 1,
+  "url": "u5",
+  "title": "z approval"
+ },
+ "acme/widgets!10": {
+  "reason": "approval",
+  "why": "awaiting your review",
+  "n": 1,
+  "url": "u6",
+  "title": "y approval"
+ }
+}
+--- stderr
+--- calls
+--- files
+== home/blocks.json
+{"ts": <EPOCH>, "blocks": {"acme/widgets!9": {"reason": "pipeline", "why": "CI failed: test", "n": 1, "url": "https://gitlab.com/acme/widgets/-/merge_requests/9", "title": "b pipeline"}, "acme/widgets!2": {"reason": "conflict", "why": "needs a rebase onto main", "n": 1, "url": "u2", "title": "a conflict"}, "acme/widgets!3": {"reason": "orphan", "why": "falling through the cracks (pipeline)", "n": 1, "url": "u3", "title": "orphan"}, "acme/widgets-private!1": {"reason": "discussion", "why": "3 threads are waiting on you", "n": 3, "url": "u4", "title": "Rework the release-train settlement path so stuck outbound transactions are retried on the next block"}, "acme/widgets!1": {"reason": "approval", "why": "awaiting your review", "n": 1, "url": "u5", "title": "z approval"}, "acme/widgets!10": {"reason": "approval", "why": "awaiting your review", "n": 1, "url": "u6", "title": "y approval"}}}== home/config.json
+{"blocking": {"repos": {"acme/widgets": "Release-1.2", "acme/widgets-private": null}, "people": ["me", "bob", "carol", "dave", "erin"], "teams": {"dev-team": ["me", "bob", "carol"], "ops": ["erin"]}, "lead": "me"}}

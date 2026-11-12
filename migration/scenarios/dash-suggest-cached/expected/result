@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"name": "pc", "sig": "192feb4e7886", "prompt": "Mark it ready.", "label": "Mark ready"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/dash/suggest/pc.json
+{"name": "pc", "sig": "192feb4e7886", "prompt": "Mark it ready.", "label": "Mark ready"}== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "ready", "owner": "me", "action": "mark it ready"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "pc"}]}

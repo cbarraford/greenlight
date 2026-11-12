@@ -1,0 +1,22 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+git -C /nonexistent/plain rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+herdr agent list
+herdr pane list
+herdr workspace list
+--- files
+== home/goals.json
+{
+ "/nonexistent/plain": "try it"
+}

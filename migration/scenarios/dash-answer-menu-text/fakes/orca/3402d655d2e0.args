@@ -1,0 +1,1 @@
+terminal send --terminal t2 --text 'Queue order: FIFO. Cap: 3.' --enter --json 

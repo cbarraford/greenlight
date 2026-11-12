@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"op": "rm", "path": "<W>/cwd/repo-feat", "ok": true}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+orca worktree rm --worktree id:w2 --force --json
+--- files

@@ -1,0 +1,321 @@
+rc=0
+--- stdout
+[
+ {
+  "id": "w-main",
+  "name": "widgets",
+  "path": "widgets",
+  "branch": "develop",
+  "verdict": "keep",
+  "reason": "main checkout"
+ },
+ {
+  "id": "w-cache",
+  "name": "cache",
+  "path": "wt/cache",
+  "branch": "",
+  "verdict": "keep",
+  "reason": "detached HEAD"
+ },
+ {
+  "id": "w-pinned",
+  "name": "pinned",
+  "path": "wt/pinned",
+  "branch": "feat-pinned",
+  "verdict": "keep",
+  "reason": "pinned"
+ },
+ {
+  "id": "w-plan",
+  "name": "plan",
+  "path": "wt/plan",
+  "branch": "feat-plan",
+  "verdict": "keep",
+  "reason": "a planner: the Plan view owns it"
+ },
+ {
+  "id": "w-gone",
+  "name": "Gone One",
+  "path": "wt/gone",
+  "branch": "feat-gone",
+  "verdict": "skip",
+  "reason": "path missing on disk"
+ },
+ {
+  "id": "w-default",
+  "name": "default-dir",
+  "path": "wt/default-dir",
+  "branch": "develop",
+  "verdict": "keep",
+  "reason": "default branch"
+ },
+ {
+  "id": "w-merged",
+  "name": "Merged \u2713",
+  "path": "wt/merged",
+  "branch": "feat-merged",
+  "verdict": "candidate",
+  "reason": "MR !11 merged"
+ },
+ {
+  "id": "w-open",
+  "name": "open",
+  "path": "wt/open",
+  "branch": "feat-open",
+  "verdict": "keep",
+  "reason": "MR !12 is open"
+ },
+ {
+  "id": "w-closed",
+  "name": "closed",
+  "path": "wt/closed",
+  "branch": "feat-closed",
+  "verdict": "skip",
+  "reason": "MR !13 closed, but has uncommitted/untracked changes"
+ },
+ {
+  "id": "w-unpushed",
+  "name": "unpushed",
+  "path": "wt/unpushed",
+  "branch": "feat-unpushed",
+  "verdict": "skip",
+  "reason": "MR !14 merged, but local commits aren't in the MR head or any remote"
+ },
+ {
+  "id": "w-rebased",
+  "name": "rebased",
+  "path": "wt/rebased",
+  "branch": "feat-rebased",
+  "verdict": "candidate",
+  "reason": "MR !15 merged"
+ },
+ {
+  "id": "w-mrhead",
+  "name": "mrhead",
+  "path": "wt/mrhead",
+  "branch": "feat-mrhead",
+  "verdict": "candidate",
+  "reason": "MR !16 merged"
+ },
+ {
+  "id": "w-busy",
+  "name": "busy",
+  "path": "wt/busy",
+  "branch": "feat-busy",
+  "verdict": "skip",
+  "reason": "MR !17 merged, but a terminal was active in the last 30m"
+ },
+ {
+  "id": "w-fresh",
+  "name": "fresh",
+  "path": "wt/fresh",
+  "branch": "feat-fresh",
+  "verdict": "keep",
+  "reason": "no MR/PR, tip in origin/develop but never pushed and idle only 5h (fresh branch?)"
+ },
+ {
+  "id": "w-idle",
+  "name": "idle",
+  "path": "wt/idle",
+  "branch": "feat-idle",
+  "verdict": "candidate",
+  "reason": "no MR/PR, branch merged into origin/develop"
+ },
+ {
+  "id": "w-noact",
+  "name": "noact",
+  "path": "wt/noact",
+  "branch": "feat-noact",
+  "verdict": "keep",
+  "reason": "no MR/PR, tip in origin/develop but never pushed and idle only 0h (fresh branch?)"
+ },
+ {
+  "id": "w-wip",
+  "name": "wip",
+  "path": "wt/wip",
+  "branch": "feat-wip",
+  "verdict": "keep",
+  "reason": "no MR/PR, branch not merged"
+ },
+ {
+  "id": "w-twice",
+  "name": "twice",
+  "path": "wt/twice",
+  "branch": "feat-twice",
+  "verdict": "candidate",
+  "reason": "MR !19 merged (older !18 open, stale)"
+ },
+ {
+  "id": "w-reopen",
+  "name": "reopen",
+  "path": "wt/reopen",
+  "branch": "feat-reopen",
+  "verdict": "keep",
+  "reason": "MR !21 is open"
+ },
+ {
+  "id": "w-rev-ok",
+  "name": "review-approved",
+  "path": "wt/review-approved",
+  "branch": "mr-22",
+  "verdict": "candidate",
+  "reason": "MR !22 approved by me"
+ },
+ {
+  "id": "w-rev-cant",
+  "name": "review-cant",
+  "path": "wt/review-cant",
+  "branch": "mr-23",
+  "verdict": "candidate",
+  "reason": "MR !23 not mine to approve"
+ },
+ {
+  "id": "w-rev-own",
+  "name": "review-own",
+  "path": "wt/review-own",
+  "branch": "bob-feature",
+  "verdict": "keep",
+  "reason": "MR !24 is open"
+ },
+ {
+  "id": "w-rev-pend",
+  "name": "review-pending",
+  "path": "wt/review-pending",
+  "branch": "mr-25",
+  "verdict": "keep",
+  "reason": "MR !25 is open"
+ },
+ {
+  "id": "w-rev-appr-own",
+  "name": "review-approved-own",
+  "path": "wt/review-approved-own",
+  "branch": "bob-other",
+  "verdict": "candidate",
+  "reason": "MR !33 approved by me"
+ },
+ {
+  "id": "w-det-rev",
+  "name": "detached-review",
+  "path": "wt/detached-review",
+  "branch": "",
+  "verdict": "candidate",
+  "reason": "MR !26 merged"
+ },
+ {
+  "id": "w-det-miss",
+  "name": "detached-missing",
+  "path": "wt/detached-missing",
+  "branch": "",
+  "verdict": "keep",
+  "reason": "detached HEAD, its MR wasn't found"
+ },
+ {
+  "id": "w-det-link",
+  "name": "detached-linked",
+  "path": "wt/detached-linked",
+  "branch": "",
+  "verdict": "keep",
+  "reason": "MR !28 is open"
+ },
+ {
+  "id": "w-linked",
+  "name": "linked",
+  "path": "wt/linked",
+  "branch": "feat-linked",
+  "verdict": "candidate",
+  "reason": "MR !29 merged"
+ },
+ {
+  "id": "w-err",
+  "name": "lookup-err",
+  "path": "wt/lookup-err",
+  "branch": "feat-err",
+  "verdict": "skip",
+  "reason": "MR lookup failed: glab api projects/acme%2Fwidgets/merge_requests?source_branch=feat-err&state=all&order_by=created_at: boom: 500 Internal Server Error"
+ },
+ {
+  "id": "w-renamed",
+  "name": "renamed",
+  "path": "wt/renamed",
+  "branch": "local-name",
+  "verdict": "candidate",
+  "reason": "MR !30 merged"
+ },
+ {
+  "id": "w-weird",
+  "name": "weird",
+  "path": "wt/weird",
+  "branch": "feat-weird",
+  "verdict": "skip",
+  "reason": "MR lookup failed: 'reopened'"
+ },
+ {
+  "id": "w-landed",
+  "name": "landed",
+  "path": "wt/landed",
+  "branch": "feat-landed",
+  "verdict": "candidate",
+  "reason": "no MR/PR, branch merged into origin/develop"
+ },
+ {
+  "id": "w-twin-a",
+  "name": "twin",
+  "path": "wt/twin",
+  "branch": "feat-twin",
+  "verdict": "skip",
+  "reason": "MR !31 merged, but a terminal was active in the last 30m"
+ },
+ {
+  "id": "w-unknown",
+  "name": "elsewhere",
+  "path": "wt/elsewhere",
+  "branch": "x",
+  "verdict": "skip",
+  "reason": "unknown repo"
+ }
+]
+--- stderr
+--- calls
+glab api projects/acme%2Fwidgets/merge_requests/14/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/15/versions\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/22
+glab api projects/acme%2Fwidgets/merge_requests/22/approvals
+glab api projects/acme%2Fwidgets/merge_requests/23
+glab api projects/acme%2Fwidgets/merge_requests/23/approvals
+glab api projects/acme%2Fwidgets/merge_requests/24/approvals
+glab api projects/acme%2Fwidgets/merge_requests/25
+glab api projects/acme%2Fwidgets/merge_requests/25/approvals
+glab api projects/acme%2Fwidgets/merge_requests/26
+glab api projects/acme%2Fwidgets/merge_requests/27
+glab api projects/acme%2Fwidgets/merge_requests/28
+glab api projects/acme%2Fwidgets/merge_requests/29
+glab api projects/acme%2Fwidgets/merge_requests/31
+glab api projects/acme%2Fwidgets/merge_requests/33/approvals
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-feature\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=bob-other\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-busy\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-closed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-err\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-fresh\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-idle\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-landed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-linked\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-merged\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-mrhead\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-noact\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-open\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-rebased\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-reopen\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twice\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-twin\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-unpushed\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-weird\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=feat-wip\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-22\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-23\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=mr-25\&state=all\&order_by=created_at
+glab api projects/acme%2Fwidgets/merge_requests\?source_branch=remote-name\&state=all\&order_by=created_at
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

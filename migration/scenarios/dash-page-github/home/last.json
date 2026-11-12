@@ -1,0 +1,1 @@
+{"ts": 1794484500, "rows": [{"id": "w1", "name": "gh", "path": "/nonexistent/ws/gh", "project": "octo/greenlight", "goal": "", "mr": {"iid": 23, "ref": "#23", "forge": "github", "web_url": "u", "state": "opened", "role": "author"}, "next": {"step": "ready", "owner": "greenlight", "action": "mark ready"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "gh"}]}

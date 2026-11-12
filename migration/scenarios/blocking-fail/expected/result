@@ -1,0 +1,10 @@
+rc=1
+--- stdout
+--- stderr
+blocking scan failed: glab api projects/acme%2Fgone/milestones?state=active&per_page=100&page=1: glab: 404 Project Not Found
+blocking: GitLab couldn't answer, so this is no answer (not 'nothing blocked')
+--- calls
+glab api projects/acme%2Fgone/milestones\?state=active\&per_page=100\&page=1
+--- files
+== home/config.json
+{"blocking": {"repos": {"acme/gone": "Release-"}, "people": ["me"]}}

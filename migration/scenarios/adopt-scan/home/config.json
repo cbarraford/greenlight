@@ -1,0 +1,7 @@
+{
+ "blocking": {
+  "repos": {
+   "acme/widgets": null
+  }
+ }
+}

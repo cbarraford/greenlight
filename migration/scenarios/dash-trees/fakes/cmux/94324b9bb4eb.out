@@ -1,0 +1,1 @@
+{"workspaces": [{"id": "c1", "title": "dup-cmux", "current_directory": "/nonexistent/ws/dup"}, {"id": "c2", "title": "cmux-only", "current_directory": "/nonexistent/cmux/only", "description": "from cmux", "pinned": true}]}

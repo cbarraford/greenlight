@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca worktree prune has no herdr equivalent
+--- calls
+--- files

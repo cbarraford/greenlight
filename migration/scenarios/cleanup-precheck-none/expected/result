@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+0 workspace(s) to delete
+--- stderr
+--- calls
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

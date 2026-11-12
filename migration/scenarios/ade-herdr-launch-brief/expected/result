@@ -1,0 +1,16 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "s1:p6"
+ }
+}
+--- stderr
+--- calls
+herdr agent start claude-s1-p6 --kind claude --pane s1:p6 --timeout 60000 -- Your\ brief\ is\ in\ \$W/home/briefs/s1-p6-<EPOCH>.md.\ Read\ it\ and\ follow\ it.
+herdr pane list --workspace w-3
+herdr pane split p-5 --direction right --no-focus
+--- files
+== home/briefs/s1-p6-<EPOCH>.md
+Step 1: read.
+Step 2: fix.

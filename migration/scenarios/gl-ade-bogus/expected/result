@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> No module named 'ade_bogus'
+--- calls
+--- files

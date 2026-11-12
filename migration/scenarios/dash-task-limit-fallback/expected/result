@@ -1,0 +1,15 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "ok": true, "name": "fix-the-flake", "repo": "widgets"}
+--- stderr
+--- calls
+orca repo list --json
+orca worktree create --repo id:r1 --name fix-the-flake --setup skip --comment Fix\ the\ flake --no-parent --agent claude --prompt $'Your task in acme/widgets: Fix the flake. My whole request is below (verbatim in <W>/home/tasks/fix-the-flake/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\nFix the flake' --json
+orca worktree create --repo id:r1 --name fix-the-flake --setup skip --comment Fix\ the\ flake --no-parent --agent codex --prompt $'Your task in acme/widgets: Fix the flake. My whole request is below (verbatim in <W>/home/tasks/fix-the-flake/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\nFix the flake' --json
+orca worktree ps --limit 10000 --json
+orca worktree set --worktree id:w9 --display-name fix-the-flake --json
+--- files
+== home/history/fix-the-flake.md
+- <TS> task started (codex, 0 files): Fix the flake
+== home/tasks/fix-the-flake/request.md
+Fix the flake

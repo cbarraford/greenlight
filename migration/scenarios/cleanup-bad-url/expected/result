@@ -1,0 +1,12 @@
+rc=2
+--- stdout
+--- stderr
+scan failed: not enough values to unpack (expected 2, got 1)
+--- calls
+git -C r1 fetch --quiet --prune origin
+git -C r1 remote get-url origin
+git -C r1 symbolic-ref --short refs/remotes/origin/HEAD
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

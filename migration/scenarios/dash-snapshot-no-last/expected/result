@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> [Errno 2] No such file or directory: '<W>/home/last.json'
+--- calls
+--- files

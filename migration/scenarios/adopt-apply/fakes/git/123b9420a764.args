@@ -1,0 +1,1 @@
+-C wt/mr-22 symbolic-ref --short -q HEAD 

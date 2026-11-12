@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"All quiet."}]},"session_id":"s0"}
+{"type":"result","result":"All quiet.","is_error":false,"duration_ms":5,"session_id":"s0"}

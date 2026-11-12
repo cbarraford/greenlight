@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+{"name": "a", "ok": true, "agent": "claude"}
+--- stderr
+--- calls
+orca agent launch --agent claude --worktree id:w1 --prompt go --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/history/a.md
+- <TS> console → launched claude: go
+== home/last.json
+{"ts": <EPOCH>, "rows": []}

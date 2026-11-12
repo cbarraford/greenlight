@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "error": "cannot access local variable 'res' where it is not associated with a value"}
+--- stderr
+--- calls
+orca repo list --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/config.json
+{"agents": []}== home/tasks/fix-it/request.md
+Fix it

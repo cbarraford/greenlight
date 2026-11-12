@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+herdr pane send-text p-1 1
+--- files

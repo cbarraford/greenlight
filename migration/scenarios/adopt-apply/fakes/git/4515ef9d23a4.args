@@ -1,0 +1,1 @@
+-C wt/mr-24 merge-base --is-ancestor mr-24 HEAD 

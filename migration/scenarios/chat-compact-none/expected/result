@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"e": "done", "ok": true, "text": "Nothing to compact yet.", "context": 0, "window": null, "ms": null}
+--- stderr
+--- calls
+--- files

@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/outbox.jsonl
+{"ts": <EPOCH>, "resolve": "@puck!5", "why": "merged by hand"}
+== home/pinged.json
+{}

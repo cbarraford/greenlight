@@ -1,0 +1,1 @@
+{"ok": true, "result": {"worktrees": [{"id": "m", "repoId": "r1", "path": "nowhere", "branch": "refs/heads/main", "isMainWorktree": true}, {"id": "p", "repoId": "r1", "path": "plain", "branch": "refs/heads/x"}]}}

@@ -1,0 +1,632 @@
+rc=0
+--- stdout
+{
+ "ts": <EPOCH>,
+ "prev_ts": null,
+ "skipped": 0,
+ "gone": [],
+ "rows": [
+  {
+   "id": "wt-a-dead",
+   "name": "a-dead",
+   "path": "/nonexistent/a-dead",
+   "branch": "a-dead",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !3",
+   "comment": "Merge !3",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "idle",
+    "type": null,
+    "last": "",
+    "idle_h": null,
+    "terminal": "t-dead"
+   },
+   "mr": {
+    "iid": 3,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/3",
+    "title": "MR 3",
+    "state": "opened",
+    "draft": false,
+    "ref": "!3",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-dead",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 3.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/103",
+    "sha": "sha3",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "me",
+    "action": "agent logged out: /login in t-dead, then greenlight re-dispatches",
+    "cmd": null,
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-waiting",
+   "name": "a-waiting",
+   "path": "/nonexistent/a-waiting",
+   "branch": "a-waiting",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !1",
+   "comment": "Merge !1",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "waiting",
+    "type": "claude",
+    "last": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxShould I force-push?",
+    "idle_h": null
+   },
+   "mr": {
+    "iid": 1,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/1",
+    "title": "MR 1",
+    "state": "opened",
+    "draft": false,
+    "ref": "!1",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": false,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-waiting",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 1.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/101",
+    "sha": "sha1",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "merge",
+    "owner": "me",
+    "action": "agent is waiting on you: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "cmd": [
+     "glab",
+     "mr",
+     "merge",
+     "1",
+     "-R",
+     "acme/tools",
+     "--yes"
+    ],
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-not-agent",
+   "name": "a-not-agent",
+   "path": "/nonexistent/a-not-agent",
+   "branch": "a-not-agent",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !9",
+   "comment": "Merge !9",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "working",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": {
+    "iid": 9,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/9",
+    "title": "MR 9",
+    "state": "opened",
+    "draft": false,
+    "ref": "!9",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": false,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-not-agent",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 9.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/109",
+    "sha": "sha9",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "merge",
+    "owner": "greenlight",
+    "action": "merge",
+    "cmd": [
+     "glab",
+     "mr",
+     "merge",
+     "9",
+     "-R",
+     "acme/tools",
+     "--yes"
+    ],
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-fine",
+   "name": "a-fine",
+   "path": "/nonexistent/a-fine",
+   "branch": "a-fine",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !8",
+   "comment": "Merge !8",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "done",
+    "type": null,
+    "last": "",
+    "idle_h": null,
+    "terminal": "t-fine"
+   },
+   "mr": {
+    "iid": 8,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/8",
+    "title": "MR 8",
+    "state": "opened",
+    "draft": false,
+    "ref": "!8",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-fine",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 8.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/108",
+    "sha": "sha8",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "agent",
+    "action": "Rebase Branch (merge conflicts)",
+    "cmd": null,
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-limit",
+   "name": "a-limit",
+   "path": "/nonexistent/a-limit",
+   "branch": "a-limit",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !4",
+   "comment": "Merge !4",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null,
+    "terminal": "t-limit"
+   },
+   "mr": {
+    "iid": 4,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/4",
+    "title": "MR 4",
+    "state": "opened",
+    "draft": false,
+    "ref": "!4",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-limit",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 4.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/104",
+    "sha": "sha4",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "agent",
+    "action": "Rebase Branch (merge conflicts) [claude out of tokens: dispatch with codex]",
+    "cmd": null,
+    "lifecycle": "default.md",
+    "agent": "codex"
+   }
+  },
+  {
+   "id": "wt-a-limit-list",
+   "name": "a-limit-list",
+   "path": "/nonexistent/a-limit-list",
+   "branch": "a-limit-list",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !5",
+   "comment": "Merge !5",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null,
+    "terminal": "t-list"
+   },
+   "mr": {
+    "iid": 5,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/5",
+    "title": "MR 5",
+    "state": "opened",
+    "draft": false,
+    "ref": "!5",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-limit-list",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 5.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/105",
+    "sha": "sha5",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "agent",
+    "action": "Rebase Branch (merge conflicts) [claude out of tokens: dispatch with codex]",
+    "cmd": null,
+    "lifecycle": "default.md",
+    "agent": "codex"
+   }
+  },
+  {
+   "id": "wt-a-noident",
+   "name": "a-noident",
+   "path": "/nonexistent/a-noident",
+   "branch": "a-noident",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !7",
+   "comment": "Merge !7",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null
+   },
+   "mr": {
+    "iid": 7,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/7",
+    "title": "MR 7",
+    "state": "opened",
+    "draft": false,
+    "ref": "!7",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-noident",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 7.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/107",
+    "sha": "sha7",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "agent",
+    "action": "Rebase Branch (merge conflicts)",
+    "cmd": null,
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-readfail",
+   "name": "a-readfail",
+   "path": "/nonexistent/a-readfail",
+   "branch": "a-readfail",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !6",
+   "comment": "Merge !6",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "none",
+    "type": null,
+    "last": "",
+    "idle_h": null,
+    "terminal": "t-gone"
+   },
+   "mr": {
+    "iid": 6,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/6",
+    "title": "MR 6",
+    "state": "opened",
+    "draft": false,
+    "ref": "!6",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-readfail",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 6.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/106",
+    "sha": "sha6",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "agent",
+    "action": "Rebase Branch (merge conflicts)",
+    "cmd": null,
+    "lifecycle": "default.md"
+   }
+  },
+  {
+   "id": "wt-a-working",
+   "name": "a-working",
+   "path": "/nonexistent/a-working",
+   "branch": "a-working",
+   "project": "acme/tools",
+   "forge": "gitlab",
+   "goal": "Merge !2",
+   "comment": "Merge !2",
+   "pinned": false,
+   "linked_mr": null,
+   "agent": {
+    "state": "working",
+    "type": "codex",
+    "last": "",
+    "idle_h": null
+   },
+   "mr": {
+    "iid": 2,
+    "web_url": "https://gitlab.com/acme/tools/-/merge_requests/2",
+    "title": "MR 2",
+    "state": "opened",
+    "draft": false,
+    "ref": "!2",
+    "forge": "gitlab",
+    "author": "me",
+    "role": "author",
+    "by": {
+     "name": "me",
+     "avatar": "https://gitlab.com/uploads/me.png"
+    },
+    "assignees": [],
+    "pipeline": "success",
+    "conflicts": true,
+    "threads": 0,
+    "approvals": 1,
+    "approvals_required": 1,
+    "mergeable": true,
+    "rebase": false,
+    "source_branch": "a-working",
+    "target_branch": "main",
+    "labels": [],
+    "description": "Does thing 2.",
+    "milestone": null,
+    "approved_by": [
+     "alice"
+    ],
+    "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/102",
+    "sha": "sha2",
+    "reviewed_sha": null,
+    "todo_threads": [],
+    "failed_jobs": [],
+    "threads_total": 0
+   },
+   "next": {
+    "step": "no_conflicts",
+    "owner": "working",
+    "action": "Rebase Branch (merge conflicts)",
+    "cmd": null,
+    "lifecycle": "default.md"
+   }
+  }
+ ]
+}
+--- stderr
+--- calls
+glab api projects/acme%2Ftools/merge_requests/1
+glab api projects/acme%2Ftools/merge_requests/1/approvals
+glab api projects/acme%2Ftools/merge_requests/1/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/2
+glab api projects/acme%2Ftools/merge_requests/2/approvals
+glab api projects/acme%2Ftools/merge_requests/2/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/3
+glab api projects/acme%2Ftools/merge_requests/3/approvals
+glab api projects/acme%2Ftools/merge_requests/3/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/4
+glab api projects/acme%2Ftools/merge_requests/4/approvals
+glab api projects/acme%2Ftools/merge_requests/4/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/5
+glab api projects/acme%2Ftools/merge_requests/5/approvals
+glab api projects/acme%2Ftools/merge_requests/5/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/6
+glab api projects/acme%2Ftools/merge_requests/6/approvals
+glab api projects/acme%2Ftools/merge_requests/6/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/7
+glab api projects/acme%2Ftools/merge_requests/7/approvals
+glab api projects/acme%2Ftools/merge_requests/7/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/8
+glab api projects/acme%2Ftools/merge_requests/8/approvals
+glab api projects/acme%2Ftools/merge_requests/8/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests/9
+glab api projects/acme%2Ftools/merge_requests/9/approvals
+glab api projects/acme%2Ftools/merge_requests/9/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests\?state=opened\&per_page=100\&page=1
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t-dead --limit 200 --json
+orca terminal read --terminal t-fine --limit 200 --json
+orca terminal read --terminal t-gone --limit 200 --json
+orca terminal read --terminal t-limit --limit 200 --json
+orca terminal read --terminal t-list --limit 200 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "prev_ts": null, "skipped": 0, "gone": [], "rows": [{"id": "wt-a-dead", "name": "a-dead", "path": "/nonexistent/a-dead", "branch": "a-dead", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !3", "comment": "Merge !3", "pinned": false, "linked_mr": null, "agent": {"state": "idle", "type": null, "last": "", "idle_h": null, "terminal": "t-dead"}, "mr": {"iid": 3, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/3", "title": "MR 3", "state": "opened", "draft": false, "ref": "!3", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-dead", "target_branch": "main", "labels": [], "description": "Does thing 3.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/103", "sha": "sha3", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "me", "action": "agent logged out: /login in t-dead, then greenlight re-dispatches", "cmd": null, "lifecycle": "default.md"}}, {"id": "wt-a-waiting", "name": "a-waiting", "path": "/nonexistent/a-waiting", "branch": "a-waiting", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !1", "comment": "Merge !1", "pinned": false, "linked_mr": null, "agent": {"state": "waiting", "type": "claude", "last": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxShould I force-push?", "idle_h": null}, "mr": {"iid": 1, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/1", "title": "MR 1", "state": "opened", "draft": false, "ref": "!1", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": false, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-waiting", "target_branch": "main", "labels": [], "description": "Does thing 1.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/101", "sha": "sha1", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "merge", "owner": "me", "action": "agent is waiting on you: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "cmd": ["glab", "mr", "merge", "1", "-R", "acme/tools", "--yes"], "lifecycle": "default.md"}}, {"id": "wt-a-not-agent", "name": "a-not-agent", "path": "/nonexistent/a-not-agent", "branch": "a-not-agent", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !9", "comment": "Merge !9", "pinned": false, "linked_mr": null, "agent": {"state": "working", "type": null, "last": "", "idle_h": null}, "mr": {"iid": 9, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/9", "title": "MR 9", "state": "opened", "draft": false, "ref": "!9", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": false, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-not-agent", "target_branch": "main", "labels": [], "description": "Does thing 9.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/109", "sha": "sha9", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "merge", "owner": "greenlight", "action": "merge", "cmd": ["glab", "mr", "merge", "9", "-R", "acme/tools", "--yes"], "lifecycle": "default.md"}}, {"id": "wt-a-fine", "name": "a-fine", "path": "/nonexistent/a-fine", "branch": "a-fine", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !8", "comment": "Merge !8", "pinned": false, "linked_mr": null, "agent": {"state": "done", "type": null, "last": "", "idle_h": null, "terminal": "t-fine"}, "mr": {"iid": 8, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/8", "title": "MR 8", "state": "opened", "draft": false, "ref": "!8", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-fine", "target_branch": "main", "labels": [], "description": "Does thing 8.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/108", "sha": "sha8", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "agent", "action": "Rebase Branch (merge conflicts)", "cmd": null, "lifecycle": "default.md"}}, {"id": "wt-a-limit", "name": "a-limit", "path": "/nonexistent/a-limit", "branch": "a-limit", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !4", "comment": "Merge !4", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null, "terminal": "t-limit"}, "mr": {"iid": 4, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/4", "title": "MR 4", "state": "opened", "draft": false, "ref": "!4", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-limit", "target_branch": "main", "labels": [], "description": "Does thing 4.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/104", "sha": "sha4", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "agent", "action": "Rebase Branch (merge conflicts) [claude out of tokens: dispatch with codex]", "cmd": null, "lifecycle": "default.md", "agent": "codex"}}, {"id": "wt-a-limit-list", "name": "a-limit-list", "path": "/nonexistent/a-limit-list", "branch": "a-limit-list", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !5", "comment": "Merge !5", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null, "terminal": "t-list"}, "mr": {"iid": 5, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/5", "title": "MR 5", "state": "opened", "draft": false, "ref": "!5", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-limit-list", "target_branch": "main", "labels": [], "description": "Does thing 5.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/105", "sha": "sha5", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "agent", "action": "Rebase Branch (merge conflicts) [claude out of tokens: dispatch with codex]", "cmd": null, "lifecycle": "default.md", "agent": "codex"}}, {"id": "wt-a-noident", "name": "a-noident", "path": "/nonexistent/a-noident", "branch": "a-noident", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !7", "comment": "Merge !7", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {"iid": 7, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/7", "title": "MR 7", "state": "opened", "draft": false, "ref": "!7", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-noident", "target_branch": "main", "labels": [], "description": "Does thing 7.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/107", "sha": "sha7", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "agent", "action": "Rebase Branch (merge conflicts)", "cmd": null, "lifecycle": "default.md"}}, {"id": "wt-a-readfail", "name": "a-readfail", "path": "/nonexistent/a-readfail", "branch": "a-readfail", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !6", "comment": "Merge !6", "pinned": false, "linked_mr": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null, "terminal": "t-gone"}, "mr": {"iid": 6, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/6", "title": "MR 6", "state": "opened", "draft": false, "ref": "!6", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-readfail", "target_branch": "main", "labels": [], "description": "Does thing 6.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/106", "sha": "sha6", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "agent", "action": "Rebase Branch (merge conflicts)", "cmd": null, "lifecycle": "default.md"}}, {"id": "wt-a-working", "name": "a-working", "path": "/nonexistent/a-working", "branch": "a-working", "project": "acme/tools", "forge": "gitlab", "goal": "Merge !2", "comment": "Merge !2", "pinned": false, "linked_mr": null, "agent": {"state": "working", "type": "codex", "last": "", "idle_h": null}, "mr": {"iid": 2, "web_url": "https://gitlab.com/acme/tools/-/merge_requests/2", "title": "MR 2", "state": "opened", "draft": false, "ref": "!2", "forge": "gitlab", "author": "me", "role": "author", "by": {"name": "me", "avatar": "https://gitlab.com/uploads/me.png"}, "assignees": [], "pipeline": "success", "conflicts": true, "threads": 0, "approvals": 1, "approvals_required": 1, "mergeable": true, "rebase": false, "source_branch": "a-working", "target_branch": "main", "labels": [], "description": "Does thing 2.", "milestone": null, "approved_by": ["alice"], "pipeline_url": "https://gitlab.com/acme/tools/-/pipelines/102", "sha": "sha2", "reviewed_sha": null, "todo_threads": [], "failed_jobs": [], "threads_total": 0}, "next": {"step": "no_conflicts", "owner": "working", "action": "Rebase Branch (merge conflicts)", "cmd": null, "lifecycle": "default.md"}}]}

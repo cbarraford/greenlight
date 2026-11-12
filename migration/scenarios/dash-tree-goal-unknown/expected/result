@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "goal", "path": "/nonexistent/ws/b", "error": "no workspace at /nonexistent/ws/b"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

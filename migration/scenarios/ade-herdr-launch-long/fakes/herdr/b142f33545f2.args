@@ -1,0 +1,1 @@
+agent start codex-p-8 --kind codex --pane p-8 --timeout 60000 -- Your\ brief\ is\ in\ \$W/home/briefs/p-8-1794484800.md.\ Read\ it\ and\ follow\ it. 

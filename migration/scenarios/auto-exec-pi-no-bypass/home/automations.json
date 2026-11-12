@@ -1,0 +1,1 @@
+{"pi": {"schedule": "* * * * *", "prompt": "p", "provider": "pi"}}

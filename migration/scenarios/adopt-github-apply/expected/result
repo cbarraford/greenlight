@@ -1,0 +1,77 @@
+rc=0
+--- stdout
+
+## CREATED (2)
+- ✓ acme/tools!5 [review] PR number 5 — review MR with no workspace
+- ✓ acme/tools!1 [author] PR number 1 — author MR with no workspace
+
+## DEFERRED (cap) (3)
+- acme/tools!3 [author] PR number 3 — over the 2-per-run cap: next run
+- acme/tools!6 [review] PR number 6 — over the 2-per-run cap: next run
+- acme/tools!8 [review] PR number 8 — over the 2-per-run cap: next run
+
+## SKIPPED (4)
+- acme/tools!4 [review] PR number 4 — approved by me
+- acme/tools!7 [review] PR number 7 — tombstoned (manual): its workspace was removed
+- acme/tools!10 [review] PR number 10 — someone else's draft
+- acme/tools!9 [author] PR number 9 — covered: a workspace already has it
+--- stderr
+--- calls
+gh api graphql -f q=is:pr\ is:open\ archived:false\ author:@me -f $'query=query($q: String!) { search(type: ISSUE, first: 100, query: $q) { nodes { ... on PullRequest {\n  number title isDraft headRefName headRefOid updatedAt url author { login } repository { nameWithOwner } } } } }'
+gh api graphql -f q=is:pr\ is:open\ archived:false\ review-requested:@me -f $'query=query($q: String!) { search(type: ISSUE, first: 100, query: $q) { nodes { ... on PullRequest {\n  number title isDraft headRefName headRefOid updatedAt url author { login } repository { nameWithOwner } } } } }'
+gh api repos/acme/tools
+gh api user
+gh pr view 10 -R acme/tools --json latestReviews
+gh pr view 4 -R acme/tools --json latestReviews
+gh pr view 5 -R acme/tools --json latestReviews
+gh pr view 6 -R acme/tools --json latestReviews
+gh pr view 6 -R acme/tools --json reviewRequests
+gh pr view 7 -R acme/tools --json reviewRequests
+gh pr view 8 -R acme/tools --json latestReviews
+git -C tools fetch origin +refs/pull/5/head:mr-5
+git -C tools fetch origin br-1
+git -C tools worktree list --porcelain
+git -C wt/br-1 branch --set-upstream-to=origin/br-1 br-1
+git -C wt/br-1 symbolic-ref --short -q HEAD
+git -C wt/mr-5 symbolic-ref --short -q HEAD
+orca repo list --json
+orca worktree create --name br-1 --repo id:r-t --base-branch origin/br-1 --pr 1 --comment Merge\ #1:\ PR\ number\ 1 --setup skip --json
+orca worktree create --name mr-5 --repo id:r-t --base-branch mr-5 --pr 5 --comment Review\ #5:\ PR\ number\ 5 --setup skip --json
+--- files
+== home/adopt.json
+{
+ "seen": {
+  "acme/tools!9": {
+   "id": "ws-t9",
+   "name": "t9"
+  }
+ },
+ "created": {
+  "acme/tools!5": <EPOCH>,
+  "acme/tools!1": <EPOCH>
+ }
+}== home/dismissed.json
+{
+ "acme/tools!7": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ }
+}== home/history/br-1.md
+- <TS> adopted #1 (author): no workspace existed
+== home/history/mr-5.md
+- <TS> adopted #5 (review): no workspace existed
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-t9",
+   "name": "t9",
+   "project": "acme/tools",
+   "branch": "x",
+   "linked_mr": 9
+  }
+ ]
+}== home/log.jsonl
+{"ts": <EPOCH>, "ws": "mr-5", "mr": "#5", "did": "adopt", "project": "acme/tools", "role": "review"}
+{"ts": <EPOCH>, "ws": "br-1", "mr": "#1", "did": "adopt", "project": "acme/tools", "role": "author"}

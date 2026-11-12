@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"e": "start", "engine": "pi", "model": "default"}
+{"e": "done", "ok": false, "text": "pi has no permission sandbox: set harnesses.pi.bypass true in config.json to use it", "context": 0, "window": null, "ms": null}
+--- stderr
+--- calls
+--- files

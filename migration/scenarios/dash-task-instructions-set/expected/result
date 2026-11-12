@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{"op": "instructions-set", "arg": "-", "text": "be terse\n"}
+--- stderr
+--- calls
+--- files
+== home/instructions.md
+be terse

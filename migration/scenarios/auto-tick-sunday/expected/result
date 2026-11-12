@@ -1,0 +1,29 @@
+rc=0
+--- stdout
+sun0: still running, skipped
+sun7: still running, skipped
+sun-range: still running, skipped
+dom-or: still running, skipped
+mon-step: still running, skipped
+--- stderr
+--- calls
+--- files
+== home/auto/dom-or.pid
+0
+== home/auto/mon-step.pid
+0
+== home/auto/sun-range.pid
+0
+== home/auto/sun0.pid
+0
+== home/auto/sun7.pid
+0
+== home/automations.json
+{
+ "sun0": {"schedule": "0 0 * * 0", "prompt": "p"},
+ "sun7": {"schedule": "0 0 * * 7", "prompt": "p"},
+ "sun-range": {"schedule": "0 0 * * 5-7", "prompt": "p"},
+ "dom-or": {"schedule": "0 0 15 * 1", "prompt": "p"},
+ "mon-step": {"schedule": "0 0 */1 * 1", "prompt": "p"},
+ "sat": {"schedule": "0 0 * * 6", "prompt": "p"}
+}

@@ -1,0 +1,17 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "s-1",
+  "tail": [
+   "done.",
+   "",
+   "\u276f half typed"
+  ],
+  "draft": "half typed"
+ }
+}
+--- stderr
+--- calls
+cmux --id-format uuids --json read-screen --surface s-1 --lines 3
+--- files

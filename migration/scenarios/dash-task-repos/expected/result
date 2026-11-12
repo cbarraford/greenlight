@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "repos", "arg": "-", "repos": [{"name": "widgets", "host": "gitlab", "path": "acme/widgets"}, {"name": "octo", "host": "github", "path": "octo/greenlight"}]}
+--- stderr
+--- calls
+orca repo list --json
+--- files

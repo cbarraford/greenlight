@@ -1,0 +1,1 @@
+{"thread": {"threadId": "th-1"}, "messages": [{"role": "user", "text": "Fix the build"}, {"role": "assistant", "text": "Looking.\nFound it.\nFixed."}, {"role": "user", "text": "thanks"}]}

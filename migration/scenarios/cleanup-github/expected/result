@@ -1,0 +1,34 @@
+rc=0
+--- stdout
+
+## WOULD DELETE (3)
+- approved [review-6] — MR #6 approved by me
+- linked [fix-10] — MR #10 merged
+- merged [fix-1] — MR #5 merged
+
+## SKIPPED (needs a human) (1)
+- closed [fix-8] — MR #8 closed, but local commits aren't in the MR head or any remote
+
+## KEPT (3)
+- gadgets [main] — main checkout
+- commented [review-9] — MR #9 is open
+- open [fix-7] — MR #7 is open
+--- stderr
+--- calls
+gh api user
+gh api user
+gh api user
+gh pr list -R acme/gadgets --head fix-1 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr list -R acme/gadgets --head fix-10 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr list -R acme/gadgets --head fix-7 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr list -R acme/gadgets --head fix-8 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr list -R acme/gadgets --head review-6 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr list -R acme/gadgets --head review-9 --state all --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr view 10 -R acme/gadgets --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr view 5 -R acme/gadgets --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr view 6 -R acme/gadgets --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+gh pr view 9 -R acme/gadgets --json number\,state\,headRefOid\,headRefName\,author\,latestReviews
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "lifecycle-set", "arg": "widgets", "error": "stage keys must be unique words: ['a', 'a']"}
+--- stderr
+--- calls
+--- files

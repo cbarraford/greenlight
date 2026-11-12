@@ -1,0 +1,2 @@
+ORCA_ENVIRONMENT=staging
+ORCA_CLI_COMMAND=orca-x

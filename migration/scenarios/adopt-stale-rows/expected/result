@@ -1,0 +1,61 @@
+rc=0
+--- stdout
+
+## WOULD CREATE (2)
+- acme/widgets!1 [author] Change number 1 — author MR with no workspace
+- acme/widgets!4 [author] Change number 4 — author MR with no workspace
+--- stderr
+--- calls
+git -C widgets worktree list --porcelain
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+orca repo list --json
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/automations.json
+{
+ "greenlight": {
+  "schedule": "*/5 * * * *"
+ }
+}== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}

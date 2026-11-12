@@ -1,0 +1,1 @@
+-C wt/mr-24 rev-parse --verify -q refs/heads/mr-24 

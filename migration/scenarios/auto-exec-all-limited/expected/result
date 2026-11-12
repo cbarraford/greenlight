@@ -1,0 +1,22 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+claude -p --permission-mode acceptEdits <<< fix\ it
+codex exec --skip-git-repo-check -c sandbox_mode=workspace-write - <<< fix\ it
+--- files
+== home/auto/fb/20261112-120000.log
+$ claude
+5-hour limit reached
+
+[exit 1]
+$ codex
+429 Too Many Requests
+
+[exit 1]
+== home/auto/runs.jsonl
+{"name": "fb", "ts": <EPOCH>, "log": "<W>/home/auto/fb/20261112-120000.log", "status": "failed", "engine": "codex", "summary": "429 Too Many Requests", "secs": 0}
+== home/automations.json
+{"fb": {"schedule": "* * * * *", "prompt": "fix it"}}
+== home/outbox.jsonl
+{"ts": <EPOCH>, "text": "Automation fb failed: 429 Too Many Requests\nLog: <W>/home/auto/fb/20261112-120000.log\nOptions: look into it | ignore"}

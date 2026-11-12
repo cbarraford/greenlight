@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+{"name": "a", "question": "Pick one, please.", "kind": "prompt", "options": []}
+--- stderr
+--- calls
+claude -p --permission-mode acceptEdits --model claude-x --effort high <<< $'A coding agent ended its turn with this message to the developer. If it asks the developer to choose or confirm something, list up to 3 short replies (each under 12 words, in the developer\'s voice) that answer it. If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\nPick one, please.'
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t2 --limit 60 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/dash/ask/a.json
+{"key": "7cd6d76c7390", "out": {"name": "a", "question": "Pick one, please.", "kind": "prompt", "options": []}}

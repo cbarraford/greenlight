@@ -1,0 +1,1 @@
+{"thread": {"threadId": "th-2", "updatedAt": "2019-06-01T11:00:00.250Z", "status": "running", "providerInstanceId": "codex", "pendingRequestCount": 1}, "messages": [{"role": "user", "text": "go"}, {"role": "assistant", "text": "Working on it"}, {"role": "user", "text": "ok?"}]}

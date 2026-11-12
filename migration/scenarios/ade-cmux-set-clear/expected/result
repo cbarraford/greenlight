@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+cmux --id-format uuids workspace-action --workspace ws-main --action clear-description
+--- files

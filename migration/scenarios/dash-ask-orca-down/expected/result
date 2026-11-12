@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"name": "a", "error": "orca worktree ps --limit 10000 --json: orca: the Orca app isn't running"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

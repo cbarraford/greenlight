@@ -1,0 +1,3 @@
+worktree /src/widgets
+HEAD abc
+branch refs/heads/main

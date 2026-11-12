@@ -1,0 +1,1 @@
+{"iid": 24, "project_id": 7, "title": "Change number 24", "source_branch": "feat-24", "author": {"username": "carol"}, "draft": false, "updated_at": "2026-11-12T09:00:00.000Z", "sha": "0000000000000000000000000000000000000018", "state": "closed", "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/24", "references": {"full": "acme/widgets!24"}}

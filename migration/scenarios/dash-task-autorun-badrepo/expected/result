@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "autorun-get", "arg": ".hidden", "error": "bad repo"}
+--- stderr
+--- calls
+--- files

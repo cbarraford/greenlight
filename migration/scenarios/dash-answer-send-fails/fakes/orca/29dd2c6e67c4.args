@@ -1,0 +1,1 @@
+terminal send --terminal t2 --text ok --enter --json 

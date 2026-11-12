@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca worktree ps --limit 10000 --json: fake orca: no reply for key c1a11a0484e3
+--- calls
+orca worktree ps --limit 10000 --json UNMATCHED[c1a11a0484e3]
+--- files

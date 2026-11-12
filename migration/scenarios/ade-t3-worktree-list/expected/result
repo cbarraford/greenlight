@@ -1,0 +1,104 @@
+rc=0
+--- stdout
+{
+ "worktrees": [
+  {
+   "path": "/nonexistent/widgets",
+   "branch": "refs/heads/main",
+   "isMainWorktree": true,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:gitlab.com/acme/widgets",
+   "id": "prj-1",
+   "worktreeId": "prj-1",
+   "displayName": "widgets",
+   "comment": "",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": 1559386800250,
+   "agents": [
+    {
+     "state": "waiting",
+     "agentType": "codex",
+     "lastAssistantMessage": "Working on it",
+     "updatedAt": 1559386800250,
+     "stateStartedAt": 1559386800250
+    },
+    {
+     "state": "done",
+     "agentType": "claude",
+     "lastAssistantMessage": "",
+     "updatedAt": 1559383200000,
+     "stateStartedAt": 1559383200000
+    },
+    {
+     "state": "waiting",
+     "agentType": "opencode",
+     "lastAssistantMessage": "",
+     "updatedAt": 1559379600000,
+     "stateStartedAt": 1559379600000
+    }
+   ]
+  },
+  {
+   "path": "/nonexistent/widgets-feat",
+   "branch": "refs/heads/feat",
+   "isMainWorktree": false,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:git@gitlab.com/22/acme/widgets",
+   "id": "prj-2",
+   "worktreeId": "prj-2",
+   "displayName": "feat",
+   "comment": "",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": null,
+   "agents": []
+  },
+  {
+   "path": "/nonexistent/tools",
+   "branch": "",
+   "isMainWorktree": true,
+   "repoId": "/nonexistent/tools",
+   "repo": "tools",
+   "projectId": "git:ci-token@gitlab.com/acme/tools",
+   "id": "prj-3",
+   "worktreeId": "prj-3",
+   "displayName": "tools",
+   "comment": "",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": 1559469600000,
+   "agents": [
+    {
+     "state": "working",
+     "agentType": "claude",
+     "lastAssistantMessage": "",
+     "updatedAt": 1559469600000,
+     "stateStartedAt": 1559469600000
+    }
+   ]
+  }
+ ]
+}
+--- stderr
+--- calls
+git -C /nonexistent/tools remote get-url origin
+git -C /nonexistent/tools rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/tools rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/tools symbolic-ref -q HEAD
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+t3 thread list --project prj-1 --json
+t3 thread list --project prj-2 --json
+t3 thread list --project prj-3 --json
+t3 thread show th-2 --json --messages 4
+t3 thread show th-9 --json --messages 4
+--- files

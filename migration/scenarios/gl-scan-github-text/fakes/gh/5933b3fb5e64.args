@@ -1,0 +1,1 @@
+pr list -R someone/tool --state open --limit 500 --json number\,headRefName\,closingIssuesReferences 

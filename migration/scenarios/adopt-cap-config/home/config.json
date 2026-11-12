@@ -1,0 +1,13 @@
+{
+ "adopt": {
+  "cap": 2,
+  "roles": [
+   "author"
+  ]
+ },
+ "blocking": {
+  "repos": {
+   "acme/widgets": null
+  }
+ }
+}

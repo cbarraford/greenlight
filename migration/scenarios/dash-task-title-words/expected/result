@@ -1,0 +1,14 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "ok": true, "name": "word-word-word-word-word-word-word-word", "repo": "widgets"}
+--- stderr
+--- calls
+orca repo list --json
+orca worktree create --repo id:r1 --name word-word-word-word-word-word-word-word --setup skip --comment $'word word word word word word word word word word word word word word word word word word word word word word word wordâ\200¦' --no-parent --agent claude --prompt $'Your task in acme/widgets: word word word word word word word word word word word word word word word word word word word word word word word wordâ\200¦. My whole request is below (verbatim in <W>/home/tasks/word-word-word-word-word-word-word-word/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\nword word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end\nsecond line' --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/history/word-word-word-word-word-word-word-word.md
+- <TS> task started (claude, 0 files): word word word word word word word word word word word word word word word word word word word word word word word word…
+== home/tasks/word-word-word-word-word-word-word-word/request.md
+word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end
+second line

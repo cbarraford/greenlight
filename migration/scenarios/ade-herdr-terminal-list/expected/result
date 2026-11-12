@@ -1,0 +1,43 @@
+rc=0
+--- stdout
+{
+ "terminals": [
+  {
+   "handle": "p-1",
+   "worktreeId": "w-1",
+   "agentIdentity": "claude",
+   "lastOutputAt": null
+  },
+  {
+   "handle": "p-2",
+   "worktreeId": "w-1",
+   "agentIdentity": null,
+   "lastOutputAt": null
+  },
+  {
+   "handle": "p-3",
+   "worktreeId": "w-2",
+   "agentIdentity": "codex",
+   "lastOutputAt": <EPOCH>
+  },
+  {
+   "handle": "p-4",
+   "worktreeId": "w-1",
+   "agentIdentity": "pi",
+   "lastOutputAt": null
+  },
+  {
+   "handle": "p-5",
+   "worktreeId": "w-3",
+   "agentIdentity": null,
+   "lastOutputAt": null
+  }
+ ]
+}
+--- stderr
+--- calls
+herdr --session night agent list
+herdr --session night pane list
+--- files
+== home/goals.json
+{"/nonexistent/widgets": "Merge !5", "/nonexistent/widgets-feat": "Merge !7", "/gone": "stale goal"}

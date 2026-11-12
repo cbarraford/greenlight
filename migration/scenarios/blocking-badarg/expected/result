@@ -1,0 +1,6 @@
+rc=2
+--- stdout
+--- stderr
+blocking.py: error: unrecognized arguments: --bogus
+--- calls
+--- files

@@ -1,0 +1,1 @@
+greenlight.py ade agent launch --worktree id:ws-main --prompt "fix CI; don't push"

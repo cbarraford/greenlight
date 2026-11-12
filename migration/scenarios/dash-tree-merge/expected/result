@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"op": "merge", "path": "/nonexistent/ws/m", "ok": true, "ref": "!7", "target": "main", "how": "Squash"}
+--- stderr
+--- calls
+glab mr merge 7 --squash -R acme/widgets --sha abc123
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w2", "name": "o", "path": "/nonexistent/ws/o", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "ci_green", "owner": "ci", "action": ""}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "o"}, {"id": "w1", "name": "m", "path": "/nonexistent/ws/m", "project": "acme/widgets", "goal": "", "mr": {"iid": 7, "ref": "!7", "state": "merged", "role": "author", "sha": "abc123", "target_branch": "main"}, "next": {"step": "done", "owner": "done", "action": "merged from Greenlight"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "m"}]}

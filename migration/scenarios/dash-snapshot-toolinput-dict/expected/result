@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+--- stderr
+<error> slice(None, 160, None)
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "mr_open", "owner": "agent", "action": ""}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}]}

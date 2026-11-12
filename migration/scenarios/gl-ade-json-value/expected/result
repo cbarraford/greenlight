@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{
+ "sent": true
+}
+--- stderr
+--- calls
+orca terminal send --terminal t1 --text --json
+--- files

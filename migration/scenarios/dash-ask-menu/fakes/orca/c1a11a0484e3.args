@@ -1,0 +1,1 @@
+worktree ps --limit 10000 --json 

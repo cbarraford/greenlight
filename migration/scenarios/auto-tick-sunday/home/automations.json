@@ -1,0 +1,8 @@
+{
+ "sun0": {"schedule": "0 0 * * 0", "prompt": "p"},
+ "sun7": {"schedule": "0 0 * * 7", "prompt": "p"},
+ "sun-range": {"schedule": "0 0 * * 5-7", "prompt": "p"},
+ "dom-or": {"schedule": "0 0 15 * 1", "prompt": "p"},
+ "mon-step": {"schedule": "0 0 */1 * 1", "prompt": "p"},
+ "sat": {"schedule": "0 0 * * 6", "prompt": "p"}
+}

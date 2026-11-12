@@ -1,0 +1,32 @@
+rc=0
+--- stdout
+{
+  "nightly": {
+    "enabled": true,
+    "schedule": "*/15 * * * *",
+    "prompt": "h\u00e9llo \u2713 \"quoted\"",
+    "cwd": "/tmp",
+    "precheck": "test -f x",
+    "provider": "codex",
+    "model": "gpt-5",
+    "effort": "high",
+    "timeout": "5"
+  }
+}
+--- stderr
+--- calls
+--- files
+== home/automations.json
+{
+  "nightly": {
+    "enabled": true,
+    "schedule": "*/15 * * * *",
+    "prompt": "h\u00e9llo \u2713 \"quoted\"",
+    "cwd": "/tmp",
+    "precheck": "test -f x",
+    "provider": "codex",
+    "model": "gpt-5",
+    "effort": "high",
+    "timeout": "5"
+  }
+}

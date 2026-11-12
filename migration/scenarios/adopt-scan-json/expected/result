@@ -1,0 +1,628 @@
+rc=0
+--- stdout
+[
+ {
+  "key": "acme/widgets!1",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 1,
+  "forge": "gitlab",
+  "title": "Change number 1",
+  "source_branch": "feat-covered-mr",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000001",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/1",
+  "verdict": "skip",
+  "reason": "covered: a workspace already has it"
+ },
+ {
+  "key": "acme/widgets!2",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 2,
+  "forge": "gitlab",
+  "title": "Change number 2",
+  "source_branch": "feat-covered-branch",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000002",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/2",
+  "verdict": "skip",
+  "reason": "covered: a workspace already has it"
+ },
+ {
+  "key": "acme/widgets!3",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 3,
+  "forge": "gitlab",
+  "title": "Change number 3",
+  "source_branch": "feat-3",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000003",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/3",
+  "verdict": "skip",
+  "reason": "covered: created by an earlier adopt run, not scanned yet"
+ },
+ {
+  "key": "acme/widgets!4",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 4,
+  "forge": "gitlab",
+  "title": "A title that is long enough to be truncated at sixty characters for sure",
+  "source_branch": "feat-4",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000004",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/4",
+  "name": "feat-4",
+  "verdict": "create",
+  "reason": "author MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!6",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 6,
+  "forge": "gitlab",
+  "title": "Change number 6",
+  "source_branch": "feat-6",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000006",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/6",
+  "cleared": true,
+  "name": "mr-6",
+  "verdict": "create",
+  "reason": "review MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!7",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 7,
+  "forge": "gitlab",
+  "title": "Change number 7",
+  "source_branch": "feat-7",
+  "draft": false,
+  "role": "review",
+  "author": "carol",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000007",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/7",
+  "verdict": "skip",
+  "reason": "tombstoned (manual): its workspace was removed"
+ },
+ {
+  "key": "acme/widgets!8",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 8,
+  "forge": "gitlab",
+  "title": "Change number 8",
+  "source_branch": "feat-8",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000008",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/8",
+  "verdict": "skip",
+  "reason": "tombstoned (cleanup): its workspace was removed"
+ },
+ {
+  "key": "acme/widgets!9",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 9,
+  "forge": "gitlab",
+  "title": "Change number 9",
+  "source_branch": "feat-9",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000009",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/9",
+  "verdict": "skip",
+  "reason": "approved by me"
+ },
+ {
+  "key": "acme/widgets!10",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 10,
+  "forge": "gitlab",
+  "title": "Change number 10",
+  "source_branch": "feat-10",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000a",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/10",
+  "verdict": "skip",
+  "reason": "I can't approve it (my commits are in it)"
+ },
+ {
+  "key": "acme/widgets!11",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 11,
+  "forge": "gitlab",
+  "title": "Change number 11",
+  "source_branch": "feat-11",
+  "draft": true,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000b",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/11",
+  "verdict": "skip",
+  "reason": "someone else's draft"
+ },
+ {
+  "key": "acme/other!12",
+  "project": "acme/other",
+  "project_id": 9,
+  "iid": 12,
+  "forge": "gitlab",
+  "title": "Change number 12",
+  "source_branch": "feat-12",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000c",
+  "web_url": "https://gitlab.com/acme/other/-/merge_requests/12",
+  "verdict": "no-repo",
+  "reason": "no repo in the ADE for acme/other"
+ },
+ {
+  "key": "acme/other!13",
+  "project": "acme/other",
+  "project_id": 9,
+  "iid": 13,
+  "forge": "gitlab",
+  "title": "Change number 13",
+  "source_branch": "feat-13",
+  "draft": false,
+  "role": "review",
+  "author": "carol",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000d",
+  "web_url": "https://gitlab.com/acme/other/-/merge_requests/13",
+  "verdict": "no-repo",
+  "reason": "no repo in the ADE for acme/other"
+ },
+ {
+  "key": "acme/widgets!14",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 14,
+  "forge": "gitlab",
+  "title": "Change number 14",
+  "source_branch": "busy-branch",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000e",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/14",
+  "verdict": "busy",
+  "reason": "busy-branch is checked out in /src/wt/busy"
+ },
+ {
+  "key": "acme/widgets!15",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 15,
+  "forge": "gitlab",
+  "title": "Change number 15",
+  "source_branch": "feat-15",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000000f",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/15",
+  "verdict": "busy",
+  "reason": "mr-15 is checked out in /src/wt/r15"
+ },
+ {
+  "key": "acme/widgets!16",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 16,
+  "forge": "gitlab",
+  "title": "Change number 16",
+  "source_branch": "feat-16",
+  "draft": false,
+  "role": "review",
+  "author": "carol",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000010",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/16",
+  "name": "mr-16",
+  "verdict": "create",
+  "reason": "review MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!17",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 17,
+  "forge": "gitlab",
+  "title": "Change number 17",
+  "source_branch": "feat-17",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000011",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/17",
+  "name": "feat-17",
+  "verdict": "create",
+  "reason": "author MR with no workspace"
+ },
+ {
+  "key": "acme/gadgets!20",
+  "project": "acme/gadgets",
+  "project_id": 8,
+  "iid": 20,
+  "forge": "gitlab",
+  "title": "Change number 20",
+  "source_branch": "feat-20",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000014",
+  "web_url": "https://gitlab.com/acme/gadgets/-/merge_requests/20",
+  "name": "feat-20",
+  "verdict": "create",
+  "reason": "author MR with no workspace"
+ },
+ {
+  "key": "acme/legacy!21",
+  "project": "acme/legacy",
+  "project_id": 10,
+  "iid": 21,
+  "forge": "gitlab",
+  "title": "Change number 21",
+  "source_branch": "feat-21",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000015",
+  "web_url": "https://gitlab.com/acme/legacy/-/merge_requests/21",
+  "name": "feat-21",
+  "verdict": "create",
+  "reason": "author MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!25",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 25,
+  "forge": "gitlab",
+  "title": "Change number 25",
+  "source_branch": "linked-src",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000019",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/25",
+  "verdict": "skip",
+  "reason": "covered: a workspace already has it"
+ },
+ {
+  "key": "acme/widgets!22",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 22,
+  "forge": "gitlab",
+  "title": "Change number 22",
+  "source_branch": "feat-22",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000016",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/22",
+  "cleared": true,
+  "name": "mr-22",
+  "verdict": "create",
+  "reason": "review MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!27",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 27,
+  "forge": "gitlab",
+  "title": "Change number 27",
+  "source_branch": "feat-27",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000001b",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/27",
+  "name": "feat-27",
+  "verdict": "create",
+  "reason": "author MR with no workspace"
+ },
+ {
+  "key": "acme/widgets!23",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 23,
+  "forge": "gitlab",
+  "title": "Change number 23",
+  "source_branch": "feat-23",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000017",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/23",
+  "block": "discussion",
+  "name": "mr-23",
+  "verdict": "create",
+  "reason": "review MR with no workspace (I'm blocking it: discussion)"
+ },
+ {
+  "key": "acme/widgets!24",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 24,
+  "forge": "gitlab",
+  "title": "Change number 24",
+  "source_branch": "feat-24",
+  "draft": false,
+  "role": "review",
+  "author": "carol",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000018",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/24",
+  "block": "approval",
+  "cleared": true,
+  "name": "mr-24",
+  "verdict": "create",
+  "reason": "review MR with no workspace (I'm blocking it: approval)"
+ },
+ {
+  "key": "acme/widgets!30",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 30,
+  "forge": "gitlab",
+  "title": "Change number 30",
+  "source_branch": "feat-30",
+  "draft": false,
+  "role": "review",
+  "author": "carol",
+  "updated_at": "<TS>",
+  "sha": "000000000000000000000000000000000000001e",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/30",
+  "block": "pipeline",
+  "verdict": "deferred",
+  "reason": "over the 10-per-run cap: next run"
+ },
+ {
+  "key": "acme/widgets!5",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 5,
+  "forge": "gitlab",
+  "title": "Change number 5",
+  "source_branch": "feat-5",
+  "draft": false,
+  "role": "review",
+  "author": "bob",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000005",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/5",
+  "verdict": "skip",
+  "reason": "tombstoned (manual): its workspace was removed"
+ },
+ {
+  "key": "acme/widgets!19",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 19,
+  "forge": "gitlab",
+  "title": "Change number 19",
+  "source_branch": "feat-19",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000013",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/19",
+  "verdict": "skip",
+  "reason": "tombstoned (manual): its workspace was removed"
+ },
+ {
+  "key": "acme/widgets!18",
+  "project": "acme/widgets",
+  "project_id": 7,
+  "iid": 18,
+  "forge": "gitlab",
+  "title": "Change number 18",
+  "source_branch": "feat-18",
+  "draft": false,
+  "role": "author",
+  "author": "me",
+  "updated_at": "<TS>",
+  "sha": "0000000000000000000000000000000000000012",
+  "web_url": "https://gitlab.com/acme/widgets/-/merge_requests/18",
+  "verdict": "skip",
+  "reason": "tombstoned (cleanup): its workspace was removed"
+ }
+]
+--- stderr
+--- calls
+git -C gadgets worktree list --porcelain
+git -C legacy remote get-url origin
+git -C legacy worktree list --porcelain
+git -C widgets worktree list --porcelain
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+glab api projects/7/merge_requests/10/approvals
+glab api projects/7/merge_requests/11/approvals
+glab api projects/7/merge_requests/15/approvals
+glab api projects/7/merge_requests/16/approvals
+glab api projects/7/merge_requests/22/approvals
+glab api projects/7/merge_requests/22/reviewers
+glab api projects/7/merge_requests/6/approvals
+glab api projects/7/merge_requests/6/reviewers
+glab api projects/7/merge_requests/7/reviewers
+glab api projects/7/merge_requests/9/approvals
+glab api projects/9/merge_requests/13/approvals
+glab api projects/acme%2Fwidgets/merge_requests/30
+glab api projects/acme%2Fwidgets/merge_requests/31
+glab api projects/acme%2Fwidgets/merge_requests/32
+orca repo list --json
+--- files
+== home/adopt.json
+{
+ "seen": {
+  "acme/widgets!18": {
+   "id": "ws-18",
+   "name": "feat-18"
+  },
+  "acme/widgets!19": {
+   "id": "ws-19",
+   "name": "feat-19"
+  },
+  "acme/widgets!27": {
+   "id": "ws-2",
+   "name": "renamed-ws"
+  },
+  "acme/widgets!99": {
+   "id": "ws-99",
+   "name": "gone"
+  }
+ },
+ "created": {
+  "acme/widgets!3": <EPOCH>,
+  "acme/widgets!4": <EPOCH>,
+  "acme/widgets!99": <EPOCH>
+ }
+}== home/blocks.json
+{
+ "ts": <EPOCH>,
+ "blocks": {
+  "acme/widgets!23": {
+   "reason": "discussion"
+  },
+  "acme/widgets!24": {
+   "reason": "approval"
+  },
+  "acme/widgets!30": {
+   "reason": "pipeline"
+  },
+  "acme/widgets!31": {
+   "reason": "approval"
+  },
+  "acme/widgets!32": {
+   "reason": "approval"
+  }
+ }
+}== home/config.json
+{
+ "blocking": {
+  "repos": {
+   "acme/widgets": null
+  }
+ }
+}== home/dismissed.json
+{
+ "acme/widgets!5": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!6": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!7": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!8": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!22": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!24": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!98": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ }
+}== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}== home/log.jsonl
+{"ts": <EPOCH>, "name": "feat-18", "removed": true}
+{"ts": <EPOCH>, "name": "feat-19", "did": "x"}
+not json

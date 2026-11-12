@@ -1,0 +1,5 @@
+worktree create --repo id:r1 --name retry-stuck-outbound-txs-after-a-churn --setup skip --comment 'Retry stuck outbound txs after a churn.' --no-parent --agent claude --prompt 'Your task in acme/widgets: Retry stuck outbound txs after a churn.. My whole request is below (verbatim in <W>/home/tasks/retry-stuck-outbound-txs-after-a-churn/request.md). Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.
+
+My request:
+
+Retry stuck outbound txs after a churn. They sit in the outbound queue forever and nobody notices until a user complains They sit in the outbound queue forever and nobody notices until a user complains' --json 

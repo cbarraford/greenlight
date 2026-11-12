@@ -1,0 +1,2 @@
+{"payload": {"cwd": "/elsewhere"}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "x"}]}}

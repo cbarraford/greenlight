@@ -1,0 +1,1 @@
+{"ok": true, "result": {"worktrees": [{"worktreeId": "w2", "id": "w2", "displayName": "retry-stuck-outbound-txs-after-a-churn-2", "path": "/nonexistent/ws/retry-stuck-outbound-txs-after-a-churn-2", "repo": "widgets", "branch": "refs/heads/retry-stuck-outbound-txs-after-a-churn-2", "comment": "", "agents": []}]}}

@@ -1,0 +1,10 @@
+rc=1
+--- stdout
+{"error": "orca worktree ps --limit 10000 --json: orca: the Orca app isn't running"}
+--- stderr
+<error> sleep length must be non-negative
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "threads", "owner": "agent", "action": ""}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}]}

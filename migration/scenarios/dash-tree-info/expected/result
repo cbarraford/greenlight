@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "info", "path": "<W>/cwd/repo-feat", "dirty": 2, "unpushed": 2, "commit": <EPOCH>}
+--- stderr
+--- calls
+--- files

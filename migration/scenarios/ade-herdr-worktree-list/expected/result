@@ -1,0 +1,94 @@
+rc=0
+--- stdout
+{
+ "worktrees": [
+  {
+   "path": "/nonexistent/widgets",
+   "branch": "refs/heads/main",
+   "isMainWorktree": true,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:gitlab.com/acme/widgets",
+   "id": "w-1",
+   "worktreeId": "w-1",
+   "displayName": "widgets",
+   "comment": "Merge !5",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": null,
+   "agents": [
+    {
+     "state": "waiting",
+     "agentType": "claude",
+     "lastAssistantMessage": "",
+     "updatedAt": 0,
+     "stateStartedAt": null
+    },
+    {
+     "state": "unknown",
+     "agentType": "pi",
+     "lastAssistantMessage": "",
+     "updatedAt": 0,
+     "stateStartedAt": null
+    }
+   ]
+  },
+  {
+   "path": "/nonexistent/widgets-feat",
+   "branch": "refs/heads/feat",
+   "isMainWorktree": false,
+   "repoId": "/nonexistent/widgets",
+   "repo": "widgets",
+   "projectId": "git:git@gitlab.com/22/acme/widgets",
+   "id": "w-2",
+   "worktreeId": "w-2",
+   "displayName": "feat",
+   "comment": "Merge !7",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": <EPOCH>,
+   "agents": [
+    {
+     "state": "working",
+     "agentType": "codex",
+     "lastAssistantMessage": "",
+     "updatedAt": 0,
+     "stateStartedAt": null
+    }
+   ]
+  },
+  {
+   "path": "/nonexistent/plain",
+   "branch": "",
+   "isMainWorktree": false,
+   "repoId": "",
+   "repo": "",
+   "projectId": "",
+   "id": "w-3",
+   "worktreeId": "w-3",
+   "displayName": "plain",
+   "comment": "",
+   "isPinned": false,
+   "linkedGitLabMR": null,
+   "lastOutputAt": null,
+   "agents": []
+  }
+ ]
+}
+--- stderr
+--- calls
+git -C /nonexistent/plain rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+herdr agent list
+herdr pane list
+herdr workspace list
+--- files
+== home/goals.json
+{"/nonexistent/widgets": "Merge !5", "/nonexistent/widgets-feat": "Merge !7", "/gone": "stale goal"}

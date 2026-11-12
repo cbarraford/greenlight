@@ -1,0 +1,2 @@
+GIT_SSH_COMMAND=$W/cwd/gitssh
+GIT_SSH_VARIANT=ssh

@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+<error> t3 thread send: t3: server not running (start the desktop app or `t3 serve`)
+--- calls
+t3 thread send th-1 - <<< hi
+--- files

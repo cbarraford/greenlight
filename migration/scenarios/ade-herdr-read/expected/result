@@ -1,0 +1,17 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "p-1",
+  "tail": [
+   "Done.",
+   "Next?",
+   "\u276f try: run the tests"
+  ],
+  "draft": ""
+ }
+}
+--- stderr
+--- calls
+herdr pane read p-1 --source visible --lines 6 --format ansi
+--- files

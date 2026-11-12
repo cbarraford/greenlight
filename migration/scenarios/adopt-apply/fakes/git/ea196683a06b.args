@@ -1,0 +1,1 @@
+-C wt/feat-17 symbolic-ref --short -q HEAD 

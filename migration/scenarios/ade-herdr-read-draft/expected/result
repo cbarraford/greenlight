@@ -1,0 +1,16 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "p-1",
+  "tail": [
+   "Next?",
+   "\u276f half typed"
+  ],
+  "draft": "half typed"
+ }
+}
+--- stderr
+--- calls
+herdr pane read p-1 --source visible --lines 200 --format ansi
+--- files

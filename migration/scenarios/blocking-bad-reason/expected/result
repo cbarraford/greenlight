@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+--- stderr
+<error> list.index(x): x not in list
+--- calls
+--- files
+== home/blocks.json
+{"ts": <EPOCH>, "blocks": {"x!1": {"reason": "mystery", "why": "?", "n": 1, "url": "u", "title": "t"}}}== home/config.json
+{"blocking": {"repos": {"acme/widgets": "Release-1.2", "acme/widgets-private": null}, "people": ["me", "bob", "carol", "dave", "erin"], "teams": {"dev-team": ["me", "bob", "carol"], "ops": ["erin"]}, "lead": "me"}}

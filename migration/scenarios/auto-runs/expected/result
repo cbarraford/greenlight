@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+11-12 00:00 nightly                  ok       claude 42s  'all good'
+11-12 01:00 busy                     skipped         0s  'nothing to do'
+11-12 02:00 nightly                  failed   codex  301s  ' pipeline, and post a short digest of anything that needs a human decision today'
+--- stderr
+--- calls
+--- files
+== home/auto/runs.jsonl
+{"name": "nightly", "ts": <EPOCH>, "log": "/x/1.log", "status": "ok", "engine": "claude", "summary": "all good", "secs": 42}
+{"name": "busy", "ts": <EPOCH>, "log": "/x/2.log", "status": "skipped", "summary": "nothing to do", "secs": 0}
+{"name": "nightly", "ts": <EPOCH>, "log": "/x/3.log", "status": "failed", "engine": "codex", "summary": "it's \"broken\"\nsecond line ✓ Review every open merge request in the repository, summarise the state of each pipeline, and post a short digest of anything that needs a human decision today", "secs": 301}

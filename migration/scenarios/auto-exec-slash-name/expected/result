@@ -1,0 +1,8 @@
+rc=1
+--- stdout
+--- stderr
+<error> [Errno 2] No such file or directory: '<W>/home/auto/a/b.pid'
+--- calls
+--- files
+== home/automations.json
+{"a/b": {"schedule": "* * * * *", "prompt": "p"}}

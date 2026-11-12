@@ -1,0 +1,13 @@
+rc=0
+--- stdout
+{
+ "repos": [
+  {
+   "id": "r1"
+  }
+ ]
+}
+--- stderr
+--- calls
+orca-x repo list --environment staging --json
+--- files

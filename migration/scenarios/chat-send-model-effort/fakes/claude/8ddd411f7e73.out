@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"Deleted it."}]},"session_id":"s1"}
+{"type":"result","result":"Deleted it.","is_error":false,"duration_ms":10,"session_id":"s1"}

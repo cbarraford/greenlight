@@ -1,0 +1,1 @@
+pane read p-1 --source visible --lines 200 --format ansi 

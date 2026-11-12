@@ -1,0 +1,1 @@
+terminal read --terminal t2 --limit 60 --json 

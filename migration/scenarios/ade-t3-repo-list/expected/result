@@ -1,0 +1,42 @@
+rc=0
+--- stdout
+{
+ "repos": [
+  {
+   "id": "/nonexistent/widgets",
+   "path": "/nonexistent/widgets",
+   "displayName": "widgets",
+   "gitRemoteIdentity": {
+    "canonicalKey": "gitlab.com/acme/widgets"
+   }
+  },
+  {
+   "id": "/nonexistent/tools",
+   "path": "/nonexistent/tools",
+   "displayName": "tools",
+   "gitRemoteIdentity": {
+    "canonicalKey": "ci-token@gitlab.com/acme/tools"
+   }
+  }
+ ]
+}
+--- stderr
+--- calls
+git -C /nonexistent/tools remote get-url origin
+git -C /nonexistent/tools rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/tools rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/tools symbolic-ref -q HEAD
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+t3 thread list --project prj-1 --json
+t3 thread list --project prj-2 --json
+t3 thread list --project prj-3 --json
+t3 thread show th-2 --json --messages 4
+t3 thread show th-9 --json --messages 4
+--- files

@@ -1,0 +1,6 @@
+rc=1
+--- stdout
+--- stderr
+<error> not enough values to unpack (expected 3, got 2)
+--- calls
+--- files

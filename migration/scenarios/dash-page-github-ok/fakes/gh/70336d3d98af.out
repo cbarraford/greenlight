@@ -1,0 +1,11 @@
+{"data": {"viewer": {"login": "octocat"}, "repository": {"defaultBranchRef": {"name": "main"}, "pullRequest": {
+ "number": 23, "url": "https://github.com/octo/greenlight/pull/23", "title": "GH feat", "body": "desc", "state": "OPEN", "isDraft": false,
+ "author": {"login": "octocat", "avatarUrl": "a"}, "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED",
+ "assignees": {"nodes": []}, "milestone": null, "labels": {"nodes": [{"name": "ui"}]},
+ "headRefName": "gh", "baseRefName": "main", "headRefOid": "fff999", "updatedAt": "2026-11-12T10:00:00Z",
+ "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
+   {"__typename": "CheckRun", "name": "unit", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/unit", "checkSuite": {"workflowRun": {"workflow": {"name": "test"}}}},
+   {"__typename": "StatusContext", "context": "lint", "state": "SUCCESS", "targetUrl": "https://ci/lint"}]}}}}]},
+ "reviewThreads": {"nodes": [{"isResolved": false, "first": {"nodes": [{"author": {"login": "sam"}, "body": "fix", "path": "a.py", "line": 3}]}, "last": {"nodes": [{"author": {"login": "octocat"}}]}}]},
+ "latestOpinionatedReviews": {"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]},
+ "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "bob"}}]}, "myReviews": {"nodes": []}}}}}

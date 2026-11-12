@@ -1,0 +1,1 @@
+{"blocking": {"repos": {"acme/widgets": "Release-1.2", "acme/widgets-private": null}, "people": ["me", "bob", "carol", "dave", "erin"], "teams": {"dev-team": ["me", "bob", "carol"], "ops": ["erin"]}, "lead": "me"}}

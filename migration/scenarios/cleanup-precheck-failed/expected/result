@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+scan failed: orca worktree list --limit 10000: Orca is not running
+--- calls
+orca worktree list --limit 10000 --json
+--- files

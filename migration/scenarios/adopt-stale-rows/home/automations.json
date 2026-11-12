@@ -1,0 +1,5 @@
+{
+ "greenlight": {
+  "schedule": "*/5 * * * *"
+ }
+}

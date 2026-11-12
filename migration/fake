@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# A stand-in for an external CLI (glab, gh, orca, git, claude, ...), symlinked under that name.
+# Logs every call to $FAKE_LOG and replies from $FAKES/<tool>/<key>.{out,rc,err} where
+# key = sha1 of the NUL-joined argv with the sandbox root $W written as <W> (and <W> in replies
+# expanded back), so keys survive sandboxes; <key>.args holds the argv for humans.
+# The nth call with one argv answers from <key>.<n>.* when that exists (a retry that fails, then works).
+# No reply on file: logs it as UNMATCHED and exits 97, so a call the scenario didn't plan for
+# never reaches a real forge or agent.
+tool=$(basename "$0")
+args=(); for a in "$@"; do args+=("${a//$W/<W>}"); done
+key=$(printf '%s\0' ${args[@]+"${args[@]}"} | shasum | cut -c1-12)
+stdin=""; [ -t 0 ] || stdin=$(cat)
+d="$FAKES/$tool"
+until mkdir "$FAKE_COUNT.lock" 2>/dev/null; do :; done  # threads call us concurrently
+n=$(( $(grep -c "^$tool $key\$" "$FAKE_COUNT" 2>/dev/null) + 1 )); echo "$tool $key" >> "$FAKE_COUNT"
+rmdir "$FAKE_COUNT.lock"
+{ [ -f "$d/$key.$n.out" ] || [ -f "$d/$key.$n.rc" ]; } && key=$key.$n
+line=$tool; for a in "$@"; do line+=" $(printf '%q' "$a")"; done
+[ -n "$stdin" ] && line+=" <<< $(printf '%q' "$stdin")"
+[ -f "$d/$key.out" ] || [ -f "$d/$key.rc" ] || line+=" UNMATCHED[$key]"
+printf '%s\n' "$line" >> "$FAKE_LOG"  # one write: concurrent calls don't interleave
+export W
+if [ -f "$d/$key.out" ] || [ -f "$d/$key.rc" ]; then
+  [ -f "$d/$key.out" ] && perl -pe 's/<W>/$ENV{W}/g' "$d/$key.out"
+  [ -f "$d/$key.err" ] && perl -pe 's/<W>/$ENV{W}/g' "$d/$key.err" >&2
+  exit "$(cat "$d/$key.rc" 2>/dev/null || echo 0)"
+fi
+echo "fake $tool: no reply for key $key" >&2
+exit 97

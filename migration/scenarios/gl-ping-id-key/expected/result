@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "feat-025-id", "name": "feat-025", "next": {"owner": "reviewers", "action": "x"}}, {"id": "fix-001-id", "name": "fix-001", "next": {"owner": "reviewers", "action": "x"}}, {"id": "fix-018-id", "name": "fix-018", "next": {"owner": "reviewers", "action": "x"}}]}== home/outbox.jsonl
+{"ts": <EPOCH>, "text": "x\nOptions: a | b", "key": "fix-018-id", "ws": ["fix-018"]}
+== home/pinged.json
+{"fix-018-id": <EPOCH>}

@@ -1,0 +1,15 @@
+worktree /src/widgets
+HEAD abc
+branch refs/heads/main
+
+worktree /src/wt/busy
+HEAD def
+branch refs/heads/busy-branch
+
+worktree /src/wt/r15
+HEAD 123
+branch refs/heads/mr-15
+
+worktree /src/wt/det
+HEAD 456
+detached

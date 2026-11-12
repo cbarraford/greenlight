@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "cfg", "path": "<W>/cwd/repo", "ok": true, "cfg": {"name": "Greenlight", "look": {"strip": "#222"}}}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files

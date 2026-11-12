@@ -1,0 +1,6 @@
+rc=2
+--- stdout
+--- stderr
+cleanup.py: error: the following arguments are required: cmd
+--- calls
+--- files

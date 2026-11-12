@@ -1,0 +1,6 @@
+{"type":"step_start","sessionID":"ses_1","part":{}}
+{"type":"reasoning","sessionID":"ses_1","part":{"text":"hm"}}
+{"type":"tool_use","sessionID":"ses_1","part":{"id":"p1","tool":"bash","state":{"status":"completed","input":{"command":"ls","description":"List"},"output":"x\ny"}}}
+{"type":"tool_use","sessionID":"ses_1","part":{"id":"p2","tool":"read","state":{"status":"error","title":"Read secret","input":{"filePath":"/etc/x"},"error":"denied"}}}
+{"type":"text","sessionID":"ses_1","part":{"text":"Hi there."}}
+{"type":"step_finish","sessionID":"ses_1","part":{"tokens":{"input":10,"cache":{"read":5,"write":1}}}}

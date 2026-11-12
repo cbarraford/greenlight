@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+herdr agent list
+herdr agent prompt p-1 $'two\nlines'
+--- files
+== home/goals.json
+{"/nonexistent/widgets": "Merge !5", "/nonexistent/widgets-feat": "Merge !7", "/gone": "stale goal"}

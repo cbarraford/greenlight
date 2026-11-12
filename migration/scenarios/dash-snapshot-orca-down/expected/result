@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca worktree ps --limit 10000 --json: orca: the Orca app isn't running
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": []}

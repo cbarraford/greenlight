@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/chat/bg.json
+x
+== home/chat/other
+x
+== home/chat/pid
+x

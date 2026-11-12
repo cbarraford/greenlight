@@ -1,0 +1,20 @@
+rc=1
+--- stdout
+--- stderr
+<error> git worktree add: fatal: a branch named 'feat/x' already exists
+--- calls
+cmux --id-format uuids --json list-windows
+cmux --id-format uuids --json workspace list --window win-1
+git -C /elsewhere/repo worktree add -b feat/x /elsewhere/repo-feat-x
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+--- files
+== u/.cmuxterm/claude-hook-sessions.json
+{"activeSessionsBySurface": {"s-1": {"sessionId": "sess-a"}, "s-3": {"sessionId": "sess-c"}, "s-4": {"sessionId": "sess-d"}}, "sessions": {"a": {"sessionId": "sess-a", "surfaceId": "s-1", "workspaceId": "ws-main", "agentLifecycle": "needsInput", "lastBody": "Which option?", "updatedAt": 1559383200}, "b": {"sessionId": "sess-b", "surfaceId": "s-2", "workspaceId": "ws-main", "agentLifecycle": "running", "updatedAt": 1559384199}, "c": {"sessionId": "sess-c", "surfaceId": "s-3", "workspaceId": "ws-feat", "agentLifecycle": "running", "updatedAt": 1559383300.5, "launchCommand": {"launcher": "codex"}}, "d": {"sessionId": "sess-d", "surfaceId": "s-4", "workspaceId": "ws-main", "agentLifecycle": "compacting", "updatedAt": 1559383140, "lastBody": "older"}}}== u/.cmuxterm/codex-hook-sessions.json
+{not json

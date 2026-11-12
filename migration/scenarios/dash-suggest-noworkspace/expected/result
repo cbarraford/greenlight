@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"name": "nope", "error": "no workspace nope"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "pc", "path": "/nonexistent/ws/pc", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "ready", "owner": "me", "action": "mark it ready"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "pc"}]}

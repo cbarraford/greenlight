@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "instructions-set", "arg": "-", "text": ""}
+--- stderr
+--- calls
+--- files

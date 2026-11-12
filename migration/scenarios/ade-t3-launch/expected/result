@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "th-new"
+ }
+}
+--- stderr
+--- calls
+t3 thread start prj-1 - --provider claudeAgent --model claude-opus-x --json <<< fix\ it
+--- files

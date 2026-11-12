@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "nope", "error": "no repo nope with a GitHub/GitLab remote"}
+--- stderr
+--- calls
+orca repo list --json
+--- files

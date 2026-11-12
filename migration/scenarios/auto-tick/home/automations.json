@@ -1,0 +1,16 @@
+{
+ "every30": {"schedule": "*/30 * * * *", "prompt": "p"},
+ "thu-noon": {"schedule": "0 12 * * 4", "prompt": "p"},
+ "or-dom": {"schedule": "0 12 12 * 1", "prompt": "p"},
+ "or-dom-miss": {"schedule": "0 12 13 * 1", "prompt": "p"},
+ "dom-step-bug": {"schedule": "0 12 */1 * 1", "prompt": "p"},
+ "zero-step": {"schedule": "0/10 * * * *", "prompt": "p"},
+ "five-step": {"schedule": "5/10 * * * *", "prompt": "p"},
+ "weird-range": {"schedule": "0 12-12-30 * * *", "prompt": "p"},
+ "bad-minute": {"schedule": "70 * * * *", "prompt": "p"},
+ "disabled-due": {"enabled": false, "schedule": "* * * * *", "prompt": "p"},
+ "sunday7": {"schedule": "0 12 * * 7", "prompt": "p"},
+ "november": {"schedule": "0 12 * 11 *", "prompt": "p"},
+ "minute-miss": {"schedule": "1 * * * *", "prompt": "p"},
+ "list": {"schedule": "0,30 11,12 1-15 10-12 3,4", "prompt": "p"}
+}

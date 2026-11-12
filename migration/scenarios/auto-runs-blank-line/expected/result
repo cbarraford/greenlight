@@ -1,0 +1,9 @@
+rc=1
+--- stdout
+--- stderr
+<error> Expecting value: line 1 column 1 (char 0)
+--- calls
+--- files
+== home/auto/runs.jsonl
+{"name": "n", "ts": <EPOCH>, "log": "l", "status": "ok", "summary": "s", "secs": 1}
+

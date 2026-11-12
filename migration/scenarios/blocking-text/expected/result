@@ -1,0 +1,160 @@
+rc=0
+--- stdout
+- [approval] acme/widgets!18 acme/widgets MR 18 — needs 1 more approval
+  https://gitlab.com/acme/widgets/-/merge_requests/18
+- [approval] acme/widgets!8 acme/widgets MR 8 — awaiting your review
+  https://gitlab.com/acme/widgets/-/merge_requests/8
+- [approval] acme/widgets!9 acme/widgets MR 9 — needs 2 more approvals
+  https://gitlab.com/acme/widgets/-/merge_requests/9
+- [discussion] acme/widgets!7 acme/widgets MR 7 — 2 threads are waiting on you
+  https://gitlab.com/acme/widgets/-/merge_requests/7
+- [orphan] acme/widgets!1 acme/widgets MR 1 — falling through the cracks (unknown author @stranger)
+  https://gitlab.com/acme/widgets/-/merge_requests/1
+- [orphan] acme/widgets!17 acme/widgets MR 17 — falling through the cracks (discussion)
+  https://gitlab.com/acme/widgets/-/merge_requests/17
+- [orphan] acme/widgets!6 acme/widgets MR 6 — falling through the cracks (pipeline)
+  https://gitlab.com/acme/widgets/-/merge_requests/6
+- [conflict] acme/widgets!15 acme/widgets MR 15 — needs a rebase onto develop
+  https://gitlab.com/acme/widgets/-/merge_requests/15
+- [conflict] acme/widgets!3 acme/widgets MR 3 — needs a rebase onto main
+  https://gitlab.com/acme/widgets/-/merge_requests/3
+- [conflict] acme/widgets-private!1 acme/widgets-private MR 1 — needs a rebase onto main
+  https://gitlab.com/acme/widgets-private/-/merge_requests/1
+- [pipeline] acme/widgets!4 Rework the release-train settlement path so stuck outbound transaction — CI failed: test
+  https://gitlab.com/acme/widgets/-/merge_requests/4
+--- stderr
+--- calls
+glab api projects/acme%2Fwidgets
+glab api projects/acme%2Fwidgets-private
+glab api projects/acme%2Fwidgets-private/merge_requests/3/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets-private/merge_requests\?state=opened\&per_page=100\&page=1
+glab api projects/acme%2Fwidgets-private/pipelines/30/jobs\?per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/1/approvals
+glab api projects/acme%2Fwidgets/merge_requests/10/approvals
+glab api projects/acme%2Fwidgets/merge_requests/10/commits\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/10/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/10/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/10/reviewers
+glab api projects/acme%2Fwidgets/merge_requests/16/approvals
+glab api projects/acme%2Fwidgets/merge_requests/16/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/16/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/17/approvals
+glab api projects/acme%2Fwidgets/merge_requests/17/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/17/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/18/approvals
+glab api projects/acme%2Fwidgets/merge_requests/18/commits\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/18/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/18/notes\?sort=desc\&per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/18/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/18/reviewers
+glab api projects/acme%2Fwidgets/merge_requests/2/approvals
+glab api projects/acme%2Fwidgets/merge_requests/4/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/5/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/6/approvals
+glab api projects/acme%2Fwidgets/merge_requests/6/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/7/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/7/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/8/approvals
+glab api projects/acme%2Fwidgets/merge_requests/8/commits\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/8/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/8/notes\?sort=desc\&per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/8/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/8/reviewers
+glab api projects/acme%2Fwidgets/merge_requests/9/approvals
+glab api projects/acme%2Fwidgets/merge_requests/9/commits\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/9/discussions\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/merge_requests/9/notes\?sort=desc\&per_page=100
+glab api projects/acme%2Fwidgets/merge_requests/9/pipelines\?per_page=1
+glab api projects/acme%2Fwidgets/merge_requests/9/reviewers
+glab api projects/acme%2Fwidgets/milestones/11/merge_requests\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/milestones/12/merge_requests\?per_page=100\&page=1
+glab api projects/acme%2Fwidgets/milestones\?state=active\&per_page=100\&page=1
+glab api projects/acme%2Fwidgets/pipelines/180/jobs\?per_page=100
+glab api projects/acme%2Fwidgets/pipelines/40/jobs\?per_page=100
+glab api projects/acme%2Fwidgets/pipelines/50/jobs\?per_page=100
+glab api projects/acme%2Fwidgets/pipelines/60/jobs\?per_page=100
+--- files
+== home/blocks.json
+{
+ "ts": <EPOCH>,
+ "blocks": {
+  "acme/widgets!1": {
+   "reason": "orphan",
+   "why": "falling through the cracks (unknown author @stranger)",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/1",
+   "title": "acme/widgets MR 1"
+  },
+  "acme/widgets!3": {
+   "reason": "conflict",
+   "why": "needs a rebase onto main",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/3",
+   "title": "acme/widgets MR 3"
+  },
+  "acme/widgets!4": {
+   "reason": "pipeline",
+   "why": "CI failed: test",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/4",
+   "title": "Rework the release-train settlement path so stuck outbound transactions are retried on the next block"
+  },
+  "acme/widgets!6": {
+   "reason": "orphan",
+   "why": "falling through the cracks (pipeline)",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/6",
+   "title": "acme/widgets MR 6"
+  },
+  "acme/widgets!7": {
+   "reason": "discussion",
+   "why": "2 threads are waiting on you",
+   "n": 2,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/7",
+   "title": "acme/widgets MR 7"
+  },
+  "acme/widgets!8": {
+   "reason": "approval",
+   "why": "awaiting your review",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/8",
+   "title": "acme/widgets MR 8"
+  },
+  "acme/widgets!9": {
+   "reason": "approval",
+   "why": "needs 2 more approvals",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/9",
+   "title": "acme/widgets MR 9"
+  },
+  "acme/widgets!17": {
+   "reason": "orphan",
+   "why": "falling through the cracks (discussion)",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/17",
+   "title": "acme/widgets MR 17"
+  },
+  "acme/widgets!18": {
+   "reason": "approval",
+   "why": "needs 1 more approval",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/18",
+   "title": "acme/widgets MR 18"
+  },
+  "acme/widgets!15": {
+   "reason": "conflict",
+   "why": "needs a rebase onto develop",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets/-/merge_requests/15",
+   "title": "acme/widgets MR 15"
+  },
+  "acme/widgets-private!1": {
+   "reason": "conflict",
+   "why": "needs a rebase onto main",
+   "n": 1,
+   "url": "https://gitlab.com/acme/widgets-private/-/merge_requests/1",
+   "title": "acme/widgets-private MR 1"
+  }
+ }
+}== home/config.json
+{"blocking": {"repos": {"acme/widgets": "Release-1.2", "acme/widgets-private": null}, "people": ["me", "bob", "carol", "dave", "erin"], "teams": {"dev-team": ["me", "bob", "carol"], "ops": ["erin"]}, "lead": "me"}}

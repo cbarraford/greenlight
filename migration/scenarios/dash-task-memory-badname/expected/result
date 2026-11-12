@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "memory-set", "arg": "MEMORY", "error": "bad note name"}
+--- stderr
+--- calls
+--- files

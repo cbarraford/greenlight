@@ -1,0 +1,1 @@
+{"workspaces": [{"id": "ws-main", "title": "widgets", "current_directory": "/nonexistent/widgets", "description": "Merge !5", "pinned": true}, {"id": "ws-feat", "title": "feat", "current_directory": "/nonexistent/widgets-feat", "description": "", "pinned": false}, {"id": "ws-shell", "title": "scratch"}]}

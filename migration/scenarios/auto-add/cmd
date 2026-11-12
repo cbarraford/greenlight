@@ -1,0 +1,1 @@
+auto.py add nightly --schedule '*/15 * * * *' --prompt 'héllo ✓ "quoted"' --cwd /tmp --precheck 'test -f x' --provider codex --model gpt-5 --effort high --timeout 5

@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "instructions-set", "arg": "-", "error": "[Errno 2] No such file or directory: '<W>/home/fresh/instructions.md'"}
+--- stderr
+--- calls
+--- files

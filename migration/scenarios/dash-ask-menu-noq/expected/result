@@ -1,0 +1,12 @@
+rc=0
+--- stdout
+{"name": "a", "question": "Pick one, please.", "kind": "menu", "questions": null, "options": [{"key": "1", "label": "Wait for !5187", "detail": ""}, {"key": "2", "label": "Drop the dependency", "detail": ""}]}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t2 --limit 60 --json
+orca worktree ps --limit 10000 --json
+--- files
+== u/.claude/projects/-nonexistent-ws-a/s.jsonl
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q1"}]}}

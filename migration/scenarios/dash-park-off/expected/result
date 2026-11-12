@@ -1,0 +1,10 @@
+rc=0
+--- stdout
+{"name": "a", "ok": true, "goal": "Merge !5131 for now"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+orca worktree set --worktree id:w1 --comment Merge\ \!5131\ for\ now --json
+--- files
+== home/history/a.md
+- <TS> unparked from the dashboard dock

@@ -1,0 +1,13 @@
+rc=0
+--- stdout
+{"name": "a", "ok": true, "agent": "claude"}
+--- stderr
+--- calls
+orca agent launch --agent claude --worktree id:w1 --prompt $'Fix the threads\n  then push.' --json
+orca agent launch --agent codex --worktree id:w1 --prompt $'Fix the threads\n  then push.' --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/history/a.md
+- <TS> !7 console → launched claude: Fix the threads then push.
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": {"iid": 7, "ref": "!7", "forge": "gitlab", "web_url": "u", "state": "opened", "role": "author"}, "next": {"step": "threads", "owner": "agent", "action": "", "agent": "codex"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}]}

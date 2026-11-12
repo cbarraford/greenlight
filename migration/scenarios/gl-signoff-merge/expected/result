@@ -1,0 +1,15 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+--- files
+== home/signoffs.json
+{
+ "acme/x#7": [
+  "docs",
+  "qa"
+ ],
+ "acme/y#1": [
+  "z"
+ ]
+}

@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+[]
+--- stderr
+--- calls
+orca repo list --json
+orca terminal list --json
+orca worktree list --limit 10000 --json
+--- files

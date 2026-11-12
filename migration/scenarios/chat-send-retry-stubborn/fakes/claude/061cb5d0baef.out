@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"<task-notification> status: stopped. NOT user input. No human input has been received."},"session_id":"s1"}
+{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}},"session_id":"s1"}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"No response requested."}},"session_id":"s1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"No response requested."}]},"session_id":"s1"}
+{"type":"result","result":"No response requested.","is_error":false,"duration_ms":10,"session_id":"s1"}

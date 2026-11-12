@@ -1,0 +1,1 @@
+{"ok": true, "result": {"repos": [{"id": "r-w", "path": "widgets", "gitRemoteIdentity": {"canonicalKey": "gitlab.com/acme/widgets"}}]}}

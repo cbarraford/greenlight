@@ -1,0 +1,17 @@
+rc=0
+--- stdout
+{
+ "terminal": {
+  "handle": "s-1",
+  "tail": [
+   "Which one?",
+   "\u276f 1. Keep it",
+   "  2. Port it"
+  ],
+  "draft": ""
+ }
+}
+--- stderr
+--- calls
+cmux --id-format uuids --json read-screen --surface s-1 --lines 200
+--- files

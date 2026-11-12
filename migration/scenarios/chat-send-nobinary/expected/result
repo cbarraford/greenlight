@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"e": "start", "engine": "opencode", "model": "default"}
+{"e": "done", "ok": false, "text": "[Errno 2] No such file or directory: 'opencode'", "context": 0, "window": null, "ms": null}
+--- stderr
+--- calls
+--- files

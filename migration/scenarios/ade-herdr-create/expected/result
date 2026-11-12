@@ -1,0 +1,32 @@
+rc=0
+--- stdout
+{
+ "worktree": {
+  "id": "w-9",
+  "path": "/nonexistent/widgets-feat-y"
+ }
+}
+--- stderr
+--- calls
+git -C /nonexistent/plain rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+herdr agent list
+herdr agent start codex-p-9 --kind codex --pane p-9 --timeout 60000 -- hi
+herdr pane list
+herdr workspace list
+herdr worktree create --cwd /nonexistent/widgets --branch feat/y --label feat/y --no-focus --base main
+--- files
+== home/goals.json
+{
+ "/nonexistent/widgets": "Merge !5",
+ "/nonexistent/widgets-feat": "Merge !7",
+ "/gone": "stale goal",
+ "/nonexistent/widgets-feat-y": "Merge it"
+}

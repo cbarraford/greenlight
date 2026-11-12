@@ -1,0 +1,7 @@
+rc=0
+--- stdout
+{"op": "new", "arg": "widgets", "error": "a didn't come through"}
+--- stderr
+--- calls
+orca repo list --json
+--- files

@@ -1,0 +1,22 @@
+rc=0
+--- stdout
+--- stderr
+--- calls
+claude -p --permission-mode bypassPermissions <<< go
+codex exec --skip-git-repo-check -c sandbox_mode=workspace-write -m gpt-5 -c model_reasoning_effort=high - <<< go
+--- files
+== home/auto/cx/20261112-120000.log
+$ codex
+You are out of extra usage
+
+[exit 1]
+$ claude
+claude finished
+
+[exit 0]
+== home/auto/runs.jsonl
+{"name": "cx", "ts": <EPOCH>, "log": "<W>/home/auto/cx/20261112-120000.log", "status": "ok", "engine": "claude", "summary": "claude finished", "secs": 0}
+== home/automations.json
+{"cx": {"schedule": "* * * * *", "prompt": "go", "provider": "codex", "model": "gpt-5", "effort": "xhigh"}}
+== home/config.json
+{"harnesses": {"claude": {"bypass": true}}}

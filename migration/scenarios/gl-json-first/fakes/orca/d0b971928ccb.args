@@ -1,0 +1,1 @@
+worktree list --limit 10000 --json 

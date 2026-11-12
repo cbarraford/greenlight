@@ -1,0 +1,1 @@
+-C /nonexistent/plain rev-parse --path-format=absolute --git-common-dir 

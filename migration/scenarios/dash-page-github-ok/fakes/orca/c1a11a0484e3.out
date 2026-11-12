@@ -1,0 +1,1 @@
+{"ok": true, "result": {"worktrees": [{"worktreeId": "w1", "id": "w1", "displayName": "gh", "path": "/nonexistent/ws/gh", "repo": "widgets", "branch": "refs/heads/gh", "comment": "", "agents": []}]}}

@@ -1,0 +1,7 @@
+rc=1
+--- stdout
+--- stderr
+<error> orca repo list --json: Error: Orca app is not running
+--- calls
+orca repo list --json
+--- files

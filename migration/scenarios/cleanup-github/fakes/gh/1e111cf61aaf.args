@@ -1,0 +1,1 @@
+pr view 9 -R acme/gadgets --json number\,state\,headRefOid\,headRefName\,author\,latestReviews 

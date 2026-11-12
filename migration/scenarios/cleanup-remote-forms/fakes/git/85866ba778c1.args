@@ -1,0 +1,1 @@
+-C wt3 merge-base --is-ancestor bbbb origin/trunk 

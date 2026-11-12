@@ -1,0 +1,17 @@
+rc=0
+--- stdout
+{
+ "ts": <EPOCH>,
+ "prev_ts": null,
+ "skipped": 0,
+ "gone": [],
+ "rows": []
+}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "prev_ts": null, "skipped": 0, "gone": [], "rows": []}

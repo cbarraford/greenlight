@@ -1,0 +1,11 @@
+rc=0
+--- stdout
+{"shells": [{"id": "b1", "title": "Sleep 15", "started": <EPOCH>}], "agents": [{"title": "Fix the lint job", "agent": "claude", "workspace": "alpha", "started": <EPOCH>}, {"title": "Resolve threads", "agent": "agent", "workspace": "alpha", "started": 0.0}, {"title": "Review MR", "agent": "codex", "workspace": "", "started": 0.0}, {"title": "Agent", "agent": "pi", "workspace": "", "started": 0.0}]}
+--- stderr
+--- calls
+orca worktree ps --json
+--- files
+== home/chat/bg.json
+[{"id": "b1", "title": "Sleep 15", "cmd": "sleep 15", "started": <EPOCH>}]
+== home/chat/pid
+x

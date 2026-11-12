@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "lifecycle-zap", "arg": "widgets", "error": "no op lifecycle-zap"}
+--- stderr
+--- calls
+--- files

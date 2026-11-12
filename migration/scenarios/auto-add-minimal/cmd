@@ -1,0 +1,1 @@
+auto.py add hourly --schedule '0 * * * *' --prompt hi

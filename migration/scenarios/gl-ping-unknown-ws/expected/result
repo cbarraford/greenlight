@@ -1,0 +1,8 @@
+rc=1
+--- stdout
+--- stderr
+greenlight.py ping: unknown workspace nope, nada (not in the last scan); nothing sent
+--- calls
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "feat-025-id", "name": "feat-025", "next": {"owner": "reviewers", "action": "x"}}, {"id": "fix-001-id", "name": "fix-001", "next": {"owner": "reviewers", "action": "x"}}, {"id": "fix-018-id", "name": "fix-018", "next": {"owner": "reviewers", "action": "x"}}]}

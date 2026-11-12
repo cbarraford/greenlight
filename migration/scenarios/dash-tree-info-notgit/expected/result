@@ -1,0 +1,6 @@
+rc=0
+--- stdout
+{"op": "info", "path": "/nonexistent/x", "error": "fatal: cannot change to '/nonexistent/x': No such file or directory"}
+--- stderr
+--- calls
+--- files

@@ -1,0 +1,1 @@
+{"ts": 1794481200, "rows": [{"id": "wt-mergeable", "name": "mergeable", "next": {"step": "ready", "owner": "greenlight"}}, {"id": "wt-ci-running", "name": "ci-running", "next": {"step": "ci_green", "owner": "ci"}}, {"id": "wt-vanished", "name": "vanished", "next": {"step": "merge", "owner": "ci"}}]}

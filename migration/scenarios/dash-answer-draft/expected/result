@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"name": "a", "error": "there's unsent text in that agent's input box; answer it in its workspace"}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t2 --limit 60 --json
+orca worktree ps --limit 10000 --json
+--- files

@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"name": "a", "question": "Pick one, please.", "kind": "menu", "questions": null, "options": [{"key": "1", "label": "file1.py", "detail": ""}, {"key": "2", "label": "file2.py", "detail": ""}, {"key": "3", "label": "file3.py", "detail": ""}, {"key": "4", "label": "file4.py", "detail": ""}, {"key": "5", "label": "file5.py", "detail": ""}, {"key": "6", "label": "file6.py", "detail": ""}, {"key": "7", "label": "file7.py", "detail": ""}, {"key": "8", "label": "file8.py", "detail": ""}, {"key": "9", "label": "file9.py", "detail": "10. file10.py"}]}
+--- stderr
+--- calls
+orca terminal list --limit 10000 --json
+orca terminal read --terminal t2 --limit 60 --json
+orca worktree ps --limit 10000 --json
+--- files

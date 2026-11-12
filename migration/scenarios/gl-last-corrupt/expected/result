@@ -1,0 +1,15 @@
+rc=1
+--- stdout
+--- stderr
+<error> Expecting value: line 1 column 1 (char 0)
+--- calls
+glab api projects/acme%2Ftools/merge_requests/6
+glab api projects/acme%2Ftools/merge_requests/6/approvals
+glab api projects/acme%2Ftools/merge_requests/6/discussions\?per_page=100\&page=1
+glab api projects/acme%2Ftools/merge_requests\?state=opened\&per_page=100\&page=1
+orca terminal list --limit 10000 --json
+orca worktree list --limit 10000 --json
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+old

@@ -1,0 +1,8 @@
+rc=0
+--- stdout
+{}
+--- stderr
+--- calls
+--- files
+== home/config.json
+{"blocking": {"repos": {}}}

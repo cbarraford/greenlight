@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"name": "a", "error": "its agent is waiting on an answer; answer it in its workspace or the chat"}
+--- stderr
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/last.json
+{"ts": <EPOCH>, "rows": []}

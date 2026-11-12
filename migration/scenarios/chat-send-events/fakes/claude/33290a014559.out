@@ -1,0 +1,9 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"sleep 15","run_in_background":true}},{"type":"text","text":"Started it."}]},"session_id":"s1"}
+{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"tu1","description":"Sleep 15","is_backgrounded":true,"session_id":"s1"}
+{"type":"system","subtype":"task_started","task_id":"b2","tool_use_id":"tu9","is_backgrounded":true,"session_id":"s1"}
+{"type":"system","subtype":"task_started","task_id":"b3","tool_use_id":"tu1","session_id":"s1"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b2"}],"session_id":"s1"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":false}]},"session_id":"s1"}
+{"type":"system","subtype":"compact_boundary","compact_metadata":{"post_tokens":7810},"session_id":"s1"}
+{"type":"system","subtype":"status","status":null,"session_id":"s1"}
+{"type":"result","result":"","is_error":true,"duration_ms":42,"session_id":"s1"}

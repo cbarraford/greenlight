@@ -1,0 +1,49 @@
+rc=1
+--- stdout
+0 workspace(s) to adopt
+--- stderr
+--- calls
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+orca repo list --json
+--- files
+== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}

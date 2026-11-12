@@ -1,0 +1,3 @@
+{"type":"step_start","sessionID":"ses_2","part":{}}
+{"type":"error","sessionID":"ses_2","error":{"name":"ProviderAuthError","data":{"message":"no key"}}}
+{"type":"error","sessionID":"ses_2","error":{"name":"ProviderAuthError","data":{"message":"no key"}}}

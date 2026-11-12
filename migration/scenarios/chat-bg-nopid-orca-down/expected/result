@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{"shells": [], "agents": []}
+--- stderr
+--- calls
+orca worktree ps --json
+--- files
+== home/chat/bg.json
+[{"id": "b1", "title": "Sleep 15", "cmd": "sleep 15", "started": <EPOCH>}]

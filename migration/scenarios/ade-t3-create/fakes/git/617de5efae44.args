@@ -1,0 +1,1 @@
+-C /nonexistent/tools symbolic-ref -q HEAD 

@@ -1,0 +1,36 @@
+rc=0
+--- stdout
+{
+ "terminals": [
+  {
+   "handle": "th-1",
+   "worktreeId": "prj-1",
+   "agentIdentity": "claude",
+   "lastOutputAt": 1559383200000
+  },
+  {
+   "handle": "th-2",
+   "worktreeId": "prj-1",
+   "agentIdentity": "codex",
+   "lastOutputAt": <EPOCH>
+  },
+  {
+   "handle": "th-3",
+   "worktreeId": "prj-1",
+   "agentIdentity": "opencode",
+   "lastOutputAt": 1559379600000
+  },
+  {
+   "handle": "th-9",
+   "worktreeId": "prj-3",
+   "agentIdentity": "claude",
+   "lastOutputAt": <EPOCH>
+  }
+ ]
+}
+--- stderr
+--- calls
+t3 thread list --project prj-1 --json
+t3 thread list --project prj-2 --json
+t3 thread list --project prj-3 --json
+--- files

@@ -1,0 +1,1 @@
+-C wt2 merge-base --is-ancestor aaaa origin/main 

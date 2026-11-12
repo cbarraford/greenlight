@@ -1,0 +1,3 @@
+{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}
+{"type":"system","subtype":"compact_boundary","compact_metadata":{"post_tokens":7810},"session_id":"s1"}
+{"type":"result","result":"","is_error":false,"duration_ms":900,"modelUsage":{"m":{"contextWindow":200000}},"session_id":"s1"}

@@ -1,0 +1,14 @@
+rc=1
+--- stdout
+{"ts": <EPOCH>, "scanned": <EPOCH>, "pucks": [{"name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "state": "needs", "why": "agent is waiting on your answer", "progress": 0.5714285714285714, "steps": ["mr_open", "ci_green", "no_conflicts", "ready", "threads", "approved", "merge"], "step_index": 4, "step": "threads", "owner": "agent", "hidden": false, "action": "fix the threads", "changed": null, "agent": {"state": "waiting", "type": "claude", "last": "", "task": "", "tool": "", "input": "", "since": <EPOCH>, "idle_h": null}, "mr": {}, "branch": "a", "puck": null, "blocking": null, "moves": [], "sig": "b4e63b0e18b5", "built": false, "suggestion": null}, {"name": "b", "path": "/nonexistent/ws/b", "project": "acme/widgets", "goal": "", "state": "quiet", "why": "waiting on reviewers", "progress": 0.7142857142857143, "steps": ["mr_open", "ci_green", "no_conflicts", "ready", "threads", "approved", "merge"], "step_index": 5, "step": "approved", "owner": "reviewers", "hidden": false, "action": "waiting on review", "changed": null, "agent": {"state": "none", "type": null, "last": "", "idle_h": null}, "mr": {}, "branch": "b", "puck": null, "blocking": null, "moves": [], "sig": "bc6f908a4cb5", "built": false, "suggestion": null}], "trees": []}
+--- stderr
+<error> sleep length must be non-negative
+--- calls
+orca worktree ps --limit 10000 --json
+--- files
+== home/dash/b.jsonl
+{"ts": <EPOCH>, "from": ["working", "ci_green", "ci"], "to": ["quiet", "ci_green", "ci"], "action": "older"}
+{"ts": <EPOCH>, "from": ["quiet", "ci_green", "ci"], "to": ["quiet", "approved", "reviewers"], "action": "waiting on review"}
+== home/dash/state.json
+{"a": ["needs", "threads", "agent"], "b": ["quiet", "approved", "reviewers"]}== home/last.json
+{"ts": <EPOCH>, "rows": [{"id": "w1", "name": "a", "path": "/nonexistent/ws/a", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "threads", "owner": "agent", "action": "fix the threads"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "a"}, {"id": "w2", "name": "b", "path": "/nonexistent/ws/b", "project": "acme/widgets", "goal": "", "mr": null, "next": {"step": "approved", "owner": "reviewers", "action": "waiting on review"}, "agent": {"state": "none", "type": null, "last": ""}, "branch": "b"}]}

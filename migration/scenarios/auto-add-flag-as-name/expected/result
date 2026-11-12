@@ -1,0 +1,20 @@
+rc=0
+--- stdout
+{
+  "--schedule": {
+    "enabled": true,
+    "schedule": "* * * * *",
+    "prompt": "p"
+  }
+}
+--- stderr
+--- calls
+--- files
+== home/automations.json
+{
+  "--schedule": {
+    "enabled": true,
+    "schedule": "* * * * *",
+    "prompt": "p"
+  }
+}

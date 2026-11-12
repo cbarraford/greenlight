@@ -1,0 +1,26 @@
+rc=0
+--- stdout
+{
+ "removed": "w-2"
+}
+--- stderr
+--- calls
+git -C /nonexistent/plain rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets remote get-url origin
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets symbolic-ref -q HEAD
+git -C /nonexistent/widgets-feat remote get-url origin
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-common-dir
+git -C /nonexistent/widgets-feat rev-parse --path-format=absolute --git-dir
+git -C /nonexistent/widgets-feat symbolic-ref -q HEAD
+herdr agent list
+herdr pane list
+herdr workspace list
+herdr worktree remove --workspace w-2
+--- files
+== home/goals.json
+{
+ "/nonexistent/widgets": "Merge !5",
+ "/gone": "stale goal"
+}

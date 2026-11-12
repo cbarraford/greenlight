@@ -1,0 +1,178 @@
+rc=0
+--- stdout
+
+## WOULD CREATE (8)
+- acme/widgets!4 [author] A title that is long enough to be truncated at sixty charact — author MR with no workspace
+- acme/widgets!6 [review] Change number 6 — review MR with no workspace
+- acme/widgets!16 [review] Change number 16 — review MR with no workspace
+- acme/widgets!17 [author] Change number 17 — author MR with no workspace
+- acme/gadgets!20 [author] Change number 20 — author MR with no workspace
+- acme/legacy!21 [author] Change number 21 — author MR with no workspace
+- acme/widgets!22 [review] Change number 22 — review MR with no workspace
+- acme/widgets!27 [author] Change number 27 — author MR with no workspace
+
+## BRANCH BUSY (pinged) (2)
+- acme/widgets!14 [author] Change number 14 — busy-branch is checked out in /src/wt/busy
+- acme/widgets!15 [review] Change number 15 — mr-15 is checked out in /src/wt/r15
+
+## NO ADE REPO (pinged) (2)
+- acme/other!12 [author] Change number 12 — no repo in the ADE for acme/other
+- acme/other!13 [review] Change number 13 — no repo in the ADE for acme/other
+
+## SKIPPED (14)
+- acme/widgets!1 [author] Change number 1 — covered: a workspace already has it
+- acme/widgets!2 [author] Change number 2 — covered: a workspace already has it
+- acme/widgets!3 [author] Change number 3 — covered: created by an earlier adopt run, not scanned yet
+- acme/widgets!7 [review] Change number 7 — tombstoned (manual): its workspace was removed
+- acme/widgets!8 [author] Change number 8 — tombstoned (cleanup): its workspace was removed
+- acme/widgets!9 [review] Change number 9 — approved by me
+- acme/widgets!10 [review] Change number 10 — I can't approve it (my commits are in it)
+- acme/widgets!11 [review] Change number 11 — someone else's draft
+- acme/widgets!25 [author] Change number 25 — covered: a workspace already has it
+- acme/widgets!23 [review] Change number 23 — approved by me
+- acme/widgets!24 [review] Change number 24 — tombstoned (cleanup): its workspace was removed
+- acme/widgets!5 [review] Change number 5 — tombstoned (manual): its workspace was removed
+- acme/widgets!19 [author] Change number 19 — tombstoned (manual): its workspace was removed
+- acme/widgets!18 [author] Change number 18 — tombstoned (cleanup): its workspace was removed
+--- stderr
+--- calls
+git -C gadgets worktree list --porcelain
+git -C legacy remote get-url origin
+git -C legacy worktree list --porcelain
+git -C widgets worktree list --porcelain
+glab api merge_requests\?scope=all\&state=opened\&author_username=me\&per_page=100\&page=1
+glab api merge_requests\?scope=all\&state=opened\&reviewer_username=me\&per_page=100\&page=1
+glab api projects/7/merge_requests/10/approvals
+glab api projects/7/merge_requests/11/approvals
+glab api projects/7/merge_requests/15/approvals
+glab api projects/7/merge_requests/16/approvals
+glab api projects/7/merge_requests/22/approvals
+glab api projects/7/merge_requests/22/reviewers
+glab api projects/7/merge_requests/23/approvals
+glab api projects/7/merge_requests/24/reviewers
+glab api projects/7/merge_requests/6/approvals
+glab api projects/7/merge_requests/6/reviewers
+glab api projects/7/merge_requests/7/reviewers
+glab api projects/7/merge_requests/9/approvals
+glab api projects/9/merge_requests/13/approvals
+orca repo list --json
+--- files
+== home/adopt.json
+{
+ "seen": {
+  "acme/widgets!18": {
+   "id": "ws-18",
+   "name": "feat-18"
+  },
+  "acme/widgets!19": {
+   "id": "ws-19",
+   "name": "feat-19"
+  },
+  "acme/widgets!27": {
+   "id": "ws-2",
+   "name": "renamed-ws"
+  },
+  "acme/widgets!99": {
+   "id": "ws-99",
+   "name": "gone"
+  }
+ },
+ "created": {
+  "acme/widgets!3": <EPOCH>,
+  "acme/widgets!4": <EPOCH>,
+  "acme/widgets!99": <EPOCH>
+ }
+}== home/blocks.json
+{
+ "ts": <EPOCH>,
+ "blocks": {
+  "acme/widgets!23": {
+   "reason": "discussion"
+  },
+  "acme/widgets!24": {
+   "reason": "approval"
+  },
+  "acme/widgets!30": {
+   "reason": "pipeline"
+  },
+  "acme/widgets!31": {
+   "reason": "approval"
+  },
+  "acme/widgets!32": {
+   "reason": "approval"
+  }
+ }
+}== home/config.json
+{}== home/dismissed.json
+{
+ "acme/widgets!5": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!6": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!7": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!8": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!22": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ },
+ "acme/widgets!24": {
+  "ts": <EPOCH>,
+  "why": "cleanup"
+ },
+ "acme/widgets!98": {
+  "ts": <EPOCH>,
+  "why": "manual"
+ }
+}== home/last.json
+{
+ "ts": <EPOCH>,
+ "rows": [
+  {
+   "id": "ws-1",
+   "name": "feat-covered-mr",
+   "project": "acme/widgets",
+   "branch": "feat-covered-mr",
+   "mr": {
+    "iid": 1,
+    "state": "opened"
+   }
+  },
+  {
+   "id": "ws-2",
+   "name": "renamed-ws",
+   "project": "acme/widgets",
+   "branch": "feat-covered-branch",
+   "mr": null
+  },
+  {
+   "id": "ws-25",
+   "name": "linked",
+   "project": "acme/widgets",
+   "branch": "other",
+   "linked_mr": 25
+  },
+  {
+   "id": "ws-26",
+   "name": "old",
+   "project": "acme/widgets",
+   "branch": "old",
+   "mr": {
+    "iid": 26,
+    "state": "merged"
+   }
+  }
+ ]
+}== home/log.jsonl
+{"ts": <EPOCH>, "name": "feat-18", "removed": true}
+{"ts": <EPOCH>, "name": "feat-19", "did": "x"}
+not json

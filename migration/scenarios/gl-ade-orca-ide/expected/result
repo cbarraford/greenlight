@@ -1,0 +1,9 @@
+rc=0
+--- stdout
+{
+ "repos": []
+}
+--- stderr
+--- calls
+orca-ide repo list --json
+--- files

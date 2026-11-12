@@ -1,0 +1,13 @@
+rc=0
+--- stdout
+{
+ "worktree": {
+  "id": "wt-1",
+  "comment": "Merge !5: x (hold)",
+  "\u00fc": "ok"
+ }
+}
+--- stderr
+--- calls
+orca worktree set --worktree id:wt-1 --comment Merge\ \!5:\ x\ \(hold\) --json
+--- files
