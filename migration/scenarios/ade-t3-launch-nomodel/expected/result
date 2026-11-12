@@ -1,6 +1,6 @@
 rc=1
 --- stdout
 --- stderr
-<error> 'pi'
+<error> <W>/t3/userdata/model-manifest.json has no current model for provider 'pi'
 --- calls
 --- files
