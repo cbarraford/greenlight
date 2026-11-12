@@ -2401,7 +2401,6 @@ struct ChatView: View {
 
     var header: some View {
         HStack(spacing: Theme.sp3) {
-            Image(systemName: "star.fill").foregroundColor(accent).font(sys(size: Theme.fs4))
             VStack(alignment: .leading, spacing: 1) {
                 if c.editingName {  // double-click the name to rename the assistant; Return or click away saves
                     TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } })
