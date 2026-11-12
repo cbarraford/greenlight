@@ -1901,16 +1901,19 @@ struct SettingsView: View {
     /// Two columns of shortcuts.
     func shortcuts(_ t: String, _ keys: [(String, String)]) -> some View {
         box(t) {
+            let even = keys.count / 2 * 2
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
-                ForEach(keys, id: \.0) { a, k in
-                    ruled(HStack(spacing: Theme.sp2) {
-                        Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: Theme.sp2)
-                        if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) }  // the voice shortcut is edited where it's listed
-                    }.padding(.horizontal, Theme.sp4).frame(minHeight: 40))
-                }
+                ForEach(keys[..<even], id: \.0) { a, k in shortcut(a, k) }
             }
+            if even < keys.count { shortcut(keys[even].0, keys[even].1) }  // an odd one out takes the full row, no empty cell
         }
+    }
+    func shortcut(_ a: String, _ k: String) -> some View {
+        ruled(HStack(spacing: Theme.sp2) {
+            Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Theme.sp2)
+            if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) }  // the voice shortcut is edited where it's listed
+        }.padding(.horizontal, Theme.sp4).frame(minHeight: 40))
     }
 
     /// "↑|↓" is either key, as separate caps; a chord is one cap with its modifiers spaced.
@@ -2338,7 +2341,7 @@ struct SettingsView: View {
             let existing = rs.notes.contains { $0.name == rs.note }
             if existing { Text(rs.note + ".md").font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg) }
             else { TextField("my-decision", text: $rs.note).textFieldStyle(.roundedBorder).frame(width: 260).accessibilityLabel("New note name") }
-            box("Note", aside: "Keep the frontmatter: its description is the note's line in the index.") { editor($rs.noteText, "Note text", height: 340).padding(Theme.sp3) }
+            box("Note", aside: "Keep the frontmatter: it's the index line.") { editor($rs.noteText, "Note text", height: 340).padding(Theme.sp3) }
             saveRow("Save note", rs.saveNote) {
                 Button("Delete note", role: .destructive, action: rs.deleteNote).disabled(rs.busy || !existing)
             }.disabled(rs.note.isEmpty)
@@ -3178,7 +3181,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         settingsSub = greenlight.$settingsOpen.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
-            if open { self.greenlight.hint = ""; self.settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }  // the gear's hover-exit never comes
+            if open { self.greenlight.hint = ""; self.settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
             else if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
         }
         split.isVertical = true
