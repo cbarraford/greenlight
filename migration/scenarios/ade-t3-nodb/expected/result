@@ -1,6 +1,6 @@
 rc=1
 --- stdout
 --- stderr
-<error> unable to open database file
+<error> no T3 Code state db at <W>/t3/userdata/statev2.sqlite (is T3 Code installed? T3CODE_HOME overrides ~/.t3)
 --- calls
 --- files

@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-<error> list index out of range
+<error> t3 project add: can't find the project id in its output 'ok'
 --- calls
 git -C /nonexistent/tools remote get-url origin
 git -C /nonexistent/tools rev-parse --path-format=absolute --git-common-dir
