@@ -3953,8 +3953,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             } else if bid == "dev.zed.Zed" {  // zed's cli opens ssh://host/path as a remote project
                 let p = Process(); p.executableURL = app.appendingPathComponent("Contents/MacOS/cli"); p.arguments = ["ssh://\(at.host)\(at.cwd)"]; try? p.run()
-            } else if bid == "com.microsoft.VSCode", !((try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/.vscode/extensions")) ?? []).contains(where: { $0.hasPrefix("ms-vscode-remote.remote-ssh-") }) {
-                toastTerm(web, "VS Code needs its Remote - SSH extension to open \(at.host)")  // without it the link opens VS Code and fails there, unexplained
             } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
                 NSWorkspace.shared.open(u)
             }
