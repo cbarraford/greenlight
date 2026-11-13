@@ -39,4 +39,7 @@ W = [{"repoId": "/r/widgets", "projectId": "git:gitlab.com/acme/widgets"}, {"rep
      {"repoId": "/r/local", "projectId": None}, {"repoId": ""}]
 with mock.patch.object(dash.greenlight, "orca", return_value=ade_common.repo_list(W)):
     assert dash.repos() == [{"id": "/r/widgets", "name": "widgets", "host": "gitlab", "path": "acme/widgets"}], dash.repos()
+import ade_basement
+assert ade_basement.state("⠙ Running tests") == "working" and ade_basement.state("bash") is None
+assert ade_basement.state("✳ Claude", ["Pick one", "❯ 1. Yes", "  2. No"]) == "waiting" and ade_basement.state("✳ Claude", ["❯ "]) == "done"
 print("ok")
