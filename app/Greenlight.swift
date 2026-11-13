@@ -5,6 +5,7 @@
 //   host       "local" (default) runs greenlight's Python here; anything else is an ssh host (GREENLIGHT_HOST overrides)
 //   greenlightHome  greenlight's state dir on that host (default ~/.greenlight)
 //   greenlightCode  where greenlight's *.py live there (default ~/.claude/skills/greenlight)
+// A dev copy (greenlight-<workspace>, scripts/dev.py) is this app under another name with settings of its own: see devDir.
 // No @State/@Observable: those are macros, and the Command Line Tools swiftc has no SwiftUI macro plugin.
 import AppKit
 import Combine
@@ -23,11 +24,27 @@ let greenlightCode = UserDefaults.standard.string(forKey: "greenlightCode") ?? "
 let py = "GREENLIGHT_HOME=\(greenlightHome) python3 \(greenlightCode)/scripts"  // + "/greenlight.py ..."
 let selftest = CommandLine.arguments.contains("--selftest")  // scratch chat session + transcript, see selfTest()
 let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(py)/chat.py"
+let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
+/// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
+/// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
+let devDir = Bundle.main.object(forInfoDictionaryKey: "GreenlightDev") as? String
+/// A dev copy's extra ssh options to a host dev.py has a tunnel to: the tunnel's socket, so nothing connects in the copy's
+/// name and a firewall (Little Snitch) has no new app to ask about, however many copies there are. Empty otherwise.
+func devSsh(_ h: String) -> [String] {
+    guard let devDir else { return [] }
+    let sock = URL(fileURLWithPath: devDir).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("ssh/\(h).sock").path
+    return FileManager.default.fileExists(atPath: sock) ? ["-o", "ProxyCommand=/usr/bin/nc -U '\(sock)'"] : []
+}
+/// A bundled page (dashboard, terminal): in a dev copy, the workspace's live one.
+func page(_ name: String) -> URL? {
+    if let devDir, FileManager.default.fileExists(atPath: "\(devDir)/web/\(name).html") { return URL(fileURLWithPath: "\(devDir)/web/\(name).html") }
+    return Bundle.main.url(forResource: name, withExtension: "html")
+}
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
     if host.isEmpty || host == "local" { return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote]) }
-    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", host, remote])
+    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + [host, remote])
 }
 
 /// The terminal sidebar's Hosts: ~/.ssh/config's Host names, minus wildcards, git hosts and the -ts (Tailscale) twin of a listed host.
@@ -343,7 +360,7 @@ struct Question: Codable, Identifiable {
 }
 
 /// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
-let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Greenlight")
+let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(appName)")  // a copy's own: its tabs' tmux sessions die with its tabs
 let transcript = support.appendingPathComponent(selftest ? "transcript-test.json" : "transcript.json")
 let questionsFile = support.appendingPathComponent(selftest ? "questions-test.json" : "questions.json")
 
@@ -425,7 +442,7 @@ let engines = [("apple", appleOnDevice ? "Apple (on-device)" : "Apple (Apple ser
 let voiceFile = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-voice.wav")
 var recognizer: SFSpeechRecognizer?  // must outlive its task
 func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin") ?? "/opt/homebrew/bin/whisper-cli" }
-func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
+func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.deletingLastPathComponent().appendingPathComponent("Greenlight/ggml-large-v3-turbo-q5_0.bin").path }  // one model, copies included
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
 @discardableResult
@@ -975,7 +992,7 @@ final class Core: ObservableObject {
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
     func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil) {
-        if selftest { return }  // fake pings shouldn't pop banners on the real Mac
+        if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
         let c = UNMutableNotificationContent()
         c.title = title
         if let subtitle { c.subtitle = subtitle }
@@ -3079,10 +3096,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
         if ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden
+        if let devDir { watchPages(devDir + "/web") }
 
         let un = UNUserNotificationCenter.current()
         un.delegate = self
-        un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        if devDir == nil { un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }  // a copy never posts (notify), so never asks
         let reply = UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Answer greenlight…")
         un.setNotificationCategories([UNNotificationCategory(identifier: "greenlight", actions: [reply], intentIdentifiers: [])])
         greenlight.tailOutbox()
@@ -3145,7 +3163,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.appearance = window.appearance
         let web = makeWeb()
         w.contentView = web
-        if let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
+        if let u = page("dashboard") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
         if !w.setFrameUsingName("view-" + v) { w.center() }
         w.setFrameAutosaveName("view-" + v)
         viewWindows[v] = w
@@ -3217,9 +3235,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return w
     }()
 
+    /// A dev copy: reload a page when dev.py lays down a new one (the Swift takes a rebuild, and dev.py relaunches us after it).
+    var pageTimes = [String: Date](), pageTimer: Timer?
+    func watchPages(_ dir: String) {
+        func times() -> [String: Date] {
+            var t = [String: Date]()
+            for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where !f.hasPrefix(".") {
+                t[f] = (try? FileManager.default.attributesOfItem(atPath: dir + "/" + f))?[.modificationDate] as? Date
+            }
+            return t
+        }
+        pageTimes = times()
+        pageTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = times(), moved = Set(now.filter { self.pageTimes[$0.key] != $0.value }.keys)
+            self.pageTimes = now
+            if moved.contains("dashboard.html") { self.webs.forEach { $0.reloadFromOrigin() } }
+            if !moved.subtracting(["dashboard.html"]).isEmpty { self.termWebs.forEach { $0.reloadFromOrigin() } }  // terminal.html, or a script of its
+        }
+    }
+
     func loadFluid() {
         let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
-        if s.isEmpty, let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") {
+        if s.isEmpty, let u = page("dashboard") {
             fluid.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent())
         } else if s.hasPrefix("http://") || s.hasPrefix("https://"), let u = URL(string: s) {
             fluid.load(URLRequest(url: u))
@@ -3717,7 +3755,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
     func loadTerm(_ web: WKWebView, only: [String]?) {
-        guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
+        guard let u = page("terminal") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
@@ -3759,6 +3797,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// claude -p on this Mac at low effort: its stdout, "" when it fails.
     func claudeP(_ prompt: String, model: String, done: @escaping (String) -> Void) {
+        if !devSsh(host).isEmpty {  // a dev copy asks the host's claude: one here would connect in the copy's name
+            var out = ""
+            ssh("exec $SHELL -lc " + shellQuote("cd /tmp && exec claude -p --model \(shellQuote(model)) --effort low"), stdin: prompt,
+                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? out : "") })
+            return
+        }
         DispatchQueue.global().async {
             let p = Process(), inPipe = Pipe(), out = Pipe()
             p.executableURL = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
@@ -3794,7 +3838,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
-        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
+        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + [host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
     var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast
     /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
