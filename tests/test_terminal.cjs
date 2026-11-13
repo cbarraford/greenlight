@@ -444,6 +444,17 @@ test("tab icon: Claude's ✳ title, tmux's ⌬ for codex (not shown in the name)
   assert.equal((await lastSave(page)).tabs[0].manual, true);
 });
 
+test("alerts: Claude's spinner line going away in a tab you're not on pings once and badges the Dock", async page => {
+  const id = (await posts(page, "open"))[0].id, feed = s => page.evaluate(([id, s]) => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode(s)))), [id, s]);
+  await page.evaluate(() => newTab()); await page.waitForTimeout(200);
+  await feed("\x1b]0;✳ Fix it\x07\r\n❯ Write a poem… (2 lines)\r\n"); await page.waitForTimeout(700);
+  await feed("✶\x1b[CSkedaddling…\r\n"); await page.waitForTimeout(700);  // as tmux draws it: the space skipped, no timer in its first second
+  assert.equal((await posts(page, "notify")).length, 0, "the prompt you typed isn't the spinner; working isn't done");
+  await feed("\x1b[1A\x1b[2K✻ Churned for 3s · done\r\n"); await page.waitForTimeout(700);
+  assert.deepEqual((await posts(page, "notify")).map(m => m.title), ["Local: Claude finished"]);
+  assert.equal((await posts(page, "badge")).pop().n, 1);
+});
+
 test("links: hovering one offers Open / Copy through the app; a click or ⌘-click opens it", async page => {
   const id = (await posts(page, "open"))[0].id, url = "https://gitlab.com/acme/widgets/-/merge_requests/5131";
   await page.evaluate(([id, s]) => term.feed(id, btoa(s)), [id, `see ${url} now\r\n`]);

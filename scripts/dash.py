@@ -371,7 +371,7 @@ def tree_rm(path, force=False, teardown=""):
         return {"risks": risks}
     if teardown and teardown == (repo_cfg(main_of(path)) or {}).get("teardown"):
         hook(teardown, path)  # ponytail: a failed teardown doesn't stop the delete; surface its error if that bites
-    # ponytail: only Orca honours --force; the git-backed ADEs still refuse a dirty tree, and that error reaches the page
+    # ponytail: only Orca and the Basement honour --force; the other git-backed ADEs still refuse a dirty tree, and that error reaches the page
     call("worktree", "rm", "--worktree", f"id:{w.get('worktreeId') or w['id']}", *(["--force"] if force else []))
     return {"ok": True}
 
@@ -475,8 +475,13 @@ def tree_diff(path, mode):
     if num.returncode:
         return {"error": (num.stderr.strip() or "not a git checkout")[:200]}
     patch = git("diff", "--no-color", "--no-ext-diff", base).stdout
-    return {"mode": mode, "base": label, "files": [[f, a, d] for a, d, f in (l.split("\t", 2) for l in num.stdout.splitlines())],  # path, +, − ("-" = binary)
-            "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
+    files = [[f, a, d] for a, d, f in (l.split("\t", 2) for l in num.stdout.splitlines())]  # path, +, − ("-" = binary)
+    # an agent's new files are untracked, which `git diff` never shows; ponytail: first 100, one git call each
+    for f in [x for x in git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0") if x][:100]:
+        a, d = (git("diff", "--no-index", "--numstat", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
+        files.append([f, a, d])
+        patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
+    return {"mode": mode, "base": label, "files": files, "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
 def listeners(lsof):

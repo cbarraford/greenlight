@@ -224,7 +224,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg .nwb{display:grid;align-content:start;gap:12px;padding:0 20px 16px;overflow-y:auto}
 #dlg label.find{gap:10px;height:36px;padding:0 12px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:var(--dim)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1.5px var(--amb)}
 #dlg .big .find input[type=text]{flex:1;height:30px;padding:0;background:none;box-shadow:none;font-size:13px}
-#dlg .nws .fld{display:grid;gap:6px} #dlg .nws .fld>span{color:var(--dim);font-size:11.5px} #dlg .nws .chk{display:flex;align-items:center;gap:8px} #dlg .nws code{font:11.5px ui-monospace,"SF Mono",Menlo,monospace;color:var(--mid)}
+#dlg .nws .fld{display:grid;gap:6px} #dlg .nws .fld>span{color:var(--dim);font-size:11.5px} #dlg .nws .chk{display:flex;align-items:center;gap:8px} #dlg .nws [hidden]{display:none} #dlg .nws code{font:11.5px ui-monospace,"SF Mono",Menlo,monospace;color:var(--mid)}
 #dlg .nws textarea,#dlg .dn textarea{padding:8px 10px;border:0;border-radius:8px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:inherit;font:inherit;resize:vertical}
 /* Diff: files on the left, the patch on the right; a click on a line opens a note to Claude under it */
 #dlg .dfb{display:flex;min-height:0} #dlg .dfb nav{flex:0 0 240px;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;box-shadow:inset -1px 0 0 var(--ln)}
@@ -544,11 +544,21 @@ function sniff(p, s){
   for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
   for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { const d = decodeURIComponent(v); if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
   if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true; if (isClaude(p)) ping(p, "needs you", paneTitle(p)) }
-  const was = p.st; p.st = /^[\u2800-\u28ff]/.test(p.title || "") ? "work" : isClaude(p) ? "idle" : "";  // Claude's title: braille spinner while it works, ✳ idle
-  if (was === "work" && p.st === "idle") ping(p, "Claude finished", paneTitle(p));
+  if (isClaude(p) && !p.scanT) p.scanT = setTimeout(() => { p.scanT = 0; working(p) }, 500);  // at most twice a second, and once after the last chunk
+  else if (!isClaude(p)) p.st = "";
   // ponytail: OSC 9/777 only arrive when tmux passes them through (allow-passthrough); the bell and the title always do
   for (const [, v] of s.matchAll(/\x1b\](?:9;(?!4;)|777;notify;)([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) ping(p, "says", v.replace(/;/, ": "));
   if (changed && !editing) render();
+}
+// Claude works while its spinner line ("✶ Skedaddling… (3s · …)") is on screen; inside tmux it doesn't animate its title
+const BUSY = /^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)/;  // ? : tmux skips the unchanged space with a cursor move, which reads back as nothing; $: the first second has no timer
+function working(p){
+  const b = p.t.buffer.active, was = p.st; let spin = /^[⠀-⣿]/.test(p.title || "");
+  for (let y = b.length - 1, n = 0; y >= Math.max(0, b.length - 80) && n < 15 && !spin; y--) {  // the last 15 lines with text
+    const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = BUSY.test(l) } }
+  p.st = spin ? "work" : "idle";
+  if (was === "work" && p.st === "idle") ping(p, "Claude finished", paneTitle(p));
+  if (was !== p.st && !editing) render();
 }
 function rename(tab, side = false){
   if (tab !== cur) show(tab);

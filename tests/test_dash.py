@@ -334,6 +334,8 @@ with tempfile.TemporaryDirectory() as _d:
     open(os.path.join(_d, "f.txt"), "w").write("hi\n"); _g("add", "f.txt")
     _df = dash.tree_diff(_d, "head")
     assert _df["files"] == [["f.txt", "1", "0"]] and "+hi" in _df["patch"] and not _df["cut"], _df
+    open(os.path.join(_d, "new.py"), "w").write("a\nb\n"); open(os.path.join(_d, "empty"), "w").close()  # untracked: an agent's new files
+    assert dash.tree_diff(_d, "head")["files"] == [["f.txt", "1", "0"], ["empty", "0", "0"], ["new.py", "2", "0"]], dash.tree_diff(_d, "head")
     assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
     assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
 print("basement ok")
