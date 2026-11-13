@@ -590,6 +590,7 @@ final class Core: ObservableObject {
     @Published var termOpens = ud.string(forKey: "termOpens") ?? "pipe" { didSet { ud.set(termOpens, forKey: "termOpens") } }  // the app opens to: greenlight | basement | pipe (New windows: the Pipe)
     /// The orb's ride between floors, in seconds; 0: a cut. Was the "animations" on/off.
     @Published var rideTime = ud.object(forKey: "rideTime") as? Double ?? (ud.object(forKey: "animations") as? Bool == false ? 0 : 0.6) { didSet { ud.set(rideTime, forKey: "rideTime") } }
+    @Published var rideStyle = ud.string(forKey: "rideStyle") ?? "elevator" { didSet { ud.set(rideStyle, forKey: "rideStyle") } }  // elevator | orb
     @Published var localName = ud.string(forKey: "localName") ?? "" { didSet { ud.set(localName, forKey: "localName") } }  // empty: this Mac's hostname
     var localShown: String { localName.trimmingCharacters(in: .whitespaces).isEmpty ? localDefault : localName.trimmingCharacters(in: .whitespaces) }
     // Settings › Hosts: where greenlight runs. The globals host/greenlightHome/greenlightCode read these at launch, so a change asks for a relaunch.
@@ -1940,7 +1941,10 @@ struct SettingsView: View {
                     Picker("Up button", selection: $c.orbStyle) { Text("Matte").tag("matte"); Text("Traffic light").tag("light") }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
             }
-            row("Ride animation", "The orb's flip between floors. 0: you're just there.") { seconds("Ride animation", $c.rideTime) }
+            row("Ride animation", "The ride between floors. 0: you're just there.") { seconds("Ride animation", $c.rideTime) }
+            row("Ride style", "Elevator: the window slides like a car in a shaft. Orb flip: it shrinks into the orb and grows out of it.") {
+                Picker("Ride style", selection: $c.rideStyle) { Text("Elevator").tag("elevator"); Text("Orb flip").tag("orb") }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
             row("Sidebar slide", "How long the Basement's sidebar takes to slide in. 0: it's just there.") { seconds("Sidebar slide", $c.sidebarSlide) }
         }
         box("Tab names") {
@@ -2905,21 +2909,49 @@ final class RideState: ObservableObject {
     @Published var flip = 0.0
     @Published var faceUp = true
     @Published var toShot: Shot?
+    @Published var p = 0.0  // the elevator's travel, 0 → 1
 }
 /// The ride: the window you leave shrinks into the orb, the orb flips, the other grows out of the same spot.
+/// With a shaft (Settings → Terminal → Ride style: Elevator): the window is the shaft; its floor slides off, a slab named for the next level passes, the next floor slides in.
 struct RideView: View {
     let up: Bool, from: Shot, orb: CGPoint, matte: Bool; var face = true
     @ObservedObject var s: RideState
-    func win(_ w: Shot, _ q: Squash) -> some View {
+    var shaft: (String, String)?  // the slab's label and lamp color
+    func pic(_ w: Shot) -> some View {
         VStack(spacing: 0) {
             Color(nsColor: w.band).frame(height: w.top)
             if let i = w.img { Image(nsImage: i).resizable() } else { Color(nsColor: w.band) }
         }
-        .background(Color(nsColor: w.band)).frame(width: w.rect.width, height: w.rect.height).clipShape(RoundedRectangle(cornerRadius: q.r))
+        .background(Color(nsColor: w.band)).frame(width: w.rect.width, height: w.rect.height)
+    }
+    func win(_ w: Shot, _ q: Squash) -> some View {
+        pic(w).clipShape(RoundedRectangle(cornerRadius: q.r))
         .scaleEffect(x: q.sx, y: q.sy, anchor: UnitPoint(x: (orb.x - w.rect.minX) / w.rect.width, y: (orb.y - w.rect.minY) / w.rect.height))
         .opacity(q.a).offset(x: w.rect.minX, y: w.rect.minY)
     }
+    /// The shaft's frame goes from the window you leave to the one you reach (they keep their own sizes), the floors and slab ride inside it.
+    func car(_ label: String, _ lamp: String) -> some View {
+        let a = from.rect, b = (s.toShot ?? from).rect, p = s.p, g: CGFloat = 56
+        let lit = HStack(spacing: 10) {
+            Circle().fill(hc(lamp)).frame(width: 8, height: 8).shadow(color: hc(lamp), radius: 5)
+            Text(label).font(.system(size: 11, weight: .bold, design: .monospaced)).tracking(2.2).foregroundColor(hc(lamp))
+            Circle().fill(hc(lamp)).frame(width: 8, height: 8).shadow(color: hc(lamp), radius: 5)
+        }.frame(width: max(a.width, b.width), height: g).background(hc("141416"))
+            .overlay(VStack { Color.white.opacity(0.08).frame(height: 1); Spacer(); Color.white.opacity(0.08).frame(height: 1) })
+        return VStack(alignment: .leading, spacing: 0) {
+            if up { if let t = s.toShot { pic(t) }; lit; pic(from) } else { pic(from); lit; if let t = s.toShot { pic(t) } }
+        }
+        .offset(y: up ? -(b.height + g) * (1 - p) : -(a.height + g) * p)
+        .frame(width: a.width + (b.width - a.width) * p, height: a.height + (b.height - a.height) * p, alignment: .topLeading)
+        .background(hc("141416")).clipShape(RoundedRectangle(cornerRadius: 12)).shadow(color: .black.opacity(0.35), radius: 20, y: 10)
+        .offset(x: a.minX + (b.minX - a.minX) * p, y: a.minY + (b.minY - a.minY) * p)
+    }
     var body: some View {
+        if let (label, lamp) = shaft {
+            ZStack(alignment: .topLeading) { car(label, lamp) }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else { flip }
+    }
+    var flip: some View {
         ZStack(alignment: .topLeading) {
             ZStack { hc("0A0A0C"); hc("E8E4DA").opacity(s.tone) }.opacity(s.veil)
             win(from, s.from)
@@ -3179,7 +3211,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
-            wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) }
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false, floor: f) }
         floorGo[ObjectIdentifier(w)] = (l1Floor, go)
         floorBar(w, Floors(s: l1Floor, c: greenlight, pick: { [unowned self] in l1Pick() }, go: go))
         let root = NSView()  // the dashboard and its overlays, left of the chat
@@ -3334,7 +3366,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "pickNew" { l1Pick(here: false) }  // ⌘⇧N on L1
         if cmd == "editProjects" {  // L1's Edit projects…: down to the Basement, where the editor lives
-            wantFloor = "basement"; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('basement'); window.editProjects && editProjects()"); ride(up: false)
+            wantFloor = "basement"; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('basement'); window.editProjects && editProjects()"); ride(up: false, floor: "basement")
         }
         // A click in one window that belongs to a view in another: forward it there and bring that window up.
         if cmd == "openPage", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
@@ -3741,7 +3773,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term ? (term.opens('basement'), term.ws(\(p)), 1) : 0") { [weak self] r, _ in
             if r as? Int == 1 { self?.wantWs = nil; self?.wantFloor = nil }
         }
-        upstairs ? ride(up: false) : basement()
+        upstairs ? ride(up: false, floor: "basement") : basement()
     }
     func basement() {
         upstairs = false
@@ -3930,7 +3962,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     var upstairs = false, riding = false, termSide = false, rideWin: NSPanel?, keepAt: NSPoint?
     @objc func appGoUp() { if !upstairs { ride(up: true) } else { show() } }
-    func ride(up: Bool) {
+    /// floor: where a ride down lands (basement | pipe); nil: wherever the terminal page last was.
+    func ride(up: Bool, floor: String? = nil) {
         guard !riding, up != upstairs else { return }
         let from = orbHost, to = up ? window : termWindow
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
@@ -3948,6 +3981,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func later(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t * k, execute: f) }
         func at(_ t: Double, _ d: Double, _ curve: (Double) -> Animation = Animation.easeInOut, _ f: @escaping () -> Void) {
             let a = curve(d * k); later(t) { withAnimation(a, f) }
+        }
+        if greenlight.rideStyle == "elevator" && !reduce {  // Reduce Motion: the orb ride's crossfade below
+            let lvl = Floors.levels.first { $0.0 == (up ? "greenlight" : floor ?? floors[0]?.at ?? "pipe") } ?? Floors.levels[0]
+            snap(from) { [self] img in
+                let s = RideState(); s.toShot = shot(to, nil)  // the floor below: its color until its picture is taken
+                let p = NSPanel(contentRect: S, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true; p.level = .floating
+                p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, matte: false, face: false, s: s, shaft: ("\(lvl.1) · \(lvl.2)", lvl.5)))
+                p.setFrame(S, display: true); p.orderFrontRegardless(); rideWin = p
+                hideFloaters()
+                termWindow.parent?.removeChildWindow(termWindow)
+                to.alphaValue = 0.01
+                DispatchQueue.main.async { [self] in from.orderOut(nil); if up { show() } else { basement() } }
+                at(0, 0.6, { Animation.timingCurve(0.65, 0, 0.35, 1, duration: $0) }) { s.p = 1 }  // one stroke: slow off, the slab passes, slow in
+                // ponytail: the next floor enters ~25% in (the curve's slow start), so its picture is taken at 20%; slower snapshots show its color a beat
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0.12 * k, 0.1)) { [self] in snap(to) { s.toShot = shot(to, $0) } }
+                later(0.6) { [self] in
+                    to.alphaValue = 1
+                    DispatchQueue.main.async { [self] in rideWin?.orderOut(nil); rideWin = nil; riding = false; keepAt = c; syncOrbs() }
+                }
+            }
+            return
         }
         snap(from) { [self] img in
             let s = RideState(); s.tone = up ? 0 : 1; s.faceUp = up
