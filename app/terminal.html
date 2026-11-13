@@ -372,6 +372,44 @@ function zoom(n){
   panes.forEach(p => { p.t.options.fontSize = px; p.fit.fit() });
 }
 
+// Block elements (U+2580–259F: █ ▌ ▄ ░▒▓ …) are drawn here, as Orca and Ghostty draw them: ghostty-web leaves them to the font,
+// whose shades are coarse dots and whose blocks stop short of the cell. A block fills its part of the cell to the device pixel; a shade
+// is a 2×2 dither (1, 2 or 3 of its 4 device pixels lit) tiled from the canvas's origin, so neighbouring cells join without a seam.
+const DITHER = new Map();  // fill colour + pixels lit → its CanvasPattern
+function dither(ctx, n){
+  const k = ctx.fillStyle + n; let pat = DITHER.get(k);
+  if (!pat) {
+    const c = Object.assign(document.createElement("canvas"), {width: 2, height: 2}), g = c.getContext("2d");
+    g.fillStyle = ctx.fillStyle; [[0, 0], [1, 1], [1, 0]].slice(0, n).forEach(([x, y]) => g.fillRect(x, y, 1, 1));
+    if (DITHER.size > 255) DITHER.clear();  // truecolor output: every colour is a key
+    DITHER.set(k, pat = ctx.createPattern(c, "repeat"));
+  }
+  return pat;
+}
+function blockParts(c){  // what a block element fills, in eighths of its cell: [x0, y0, x1, y1]
+  if (c === 0x2580) return [[0, 0, 8, 4]];              // ▀
+  if (c <= 0x2588) return [[0, 0x2588 - c, 8, 8]];      // ▁ … █: from the bottom
+  if (c <= 0x258F) return [[0, 0, 0x2590 - c, 8]];      // ▉ … ▏: from the left
+  if (c <= 0x2593) return c === 0x2590 ? [[4, 0, 8, 8]] : [[0, 0, 8, 8]];  // ▐, and ░▒▓ (the whole cell, dithered)
+  if (c <= 0x2595) return c === 0x2594 ? [[0, 0, 8, 1]] : [[7, 0, 8, 8]];  // ▔ ▕
+  const q = [4, 8, 1, 13, 9, 7, 11, 2, 6, 14][c - 0x2596];  // ▖ … ▟: which quadrants (1 upper left, 2 upper right, 4 lower left, 8 lower right)
+  return [[0, 0, 4, 4], [4, 0, 8, 4], [0, 4, 4, 8], [4, 4, 8, 8]].filter((_, i) => q >> i & 1);
+}
+function ownBlocks(t){
+  const r = t.renderer, ctx = r?.ctx, text = ctx?.fillText;
+  if (!text) return;  // a ghostty-web without a 2d renderer: the font draws them, as before
+  ctx.fillText = function(s, x, y, ...more){
+    const c = s.length === 1 ? s.charCodeAt(0) : 0;
+    if (c < 0x2580 || c > 0x259F) return text.call(this, s, x, y, ...more);
+    const d = r.devicePixelRatio || 1, m = r.metrics, X = Math.round(x * d), Y = Math.round((y - m.baseline) * d), W = Math.round(m.width * d), H = Math.round(m.height * d);
+    this.save(); this.setTransform(1, 0, 0, 1, 0, 0);  // device pixels; the colour and the faint alpha carry over
+    if (c >= 0x2591 && c <= 0x2593) this.fillStyle = dither(this, c - 0x2590);
+    for (const [x0, y0, x1, y1] of blockParts(c)) { const l = X + Math.round(W * x0 / 8), u = Y + Math.round(H * y0 / 8);
+      this.fillRect(l, u, X + Math.round(W * x1 / 8) - l, Y + Math.round(H * y1 / 8) - u) }
+    this.restore();
+  };
+}
+
 // a pane: one terminal on one pty, with a header that shows once its tab is split
 function newPane(tab, cmd, session = sid()){
   const id = ++seq, box = el("div", "pane"), head = el("div", "ph"), host = el("div", "t");
@@ -384,7 +422,7 @@ function newPane(tab, cmd, session = sid()){
   panes.set(id, p); box._p = p;
   box.addEventListener("mousedown", () => { if (p.tab.focus !== p) focusPane(p) });
   return {p, mount(){
-    t.loadAddon(fit); t.open(host); fit.fit(); fit.observeResize();
+    t.loadAddon(fit); t.open(host); ownBlocks(t); fit.fit(); fit.observeResize();
     t.attachCustomKeyEventHandler(e => { const s = e.metaKey || e.isComposing ? null : ghostKey(t, e); if (s) t.input(s, true); return typeof s === "string" });
     host.addEventListener("mousemove", e => setTimeout(() => linkHover(p, e), 40));  // after ghostty-web's own 16ms-throttled hover
     host.addEventListener("mouseleave", lnkHide);
