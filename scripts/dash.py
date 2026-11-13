@@ -9,9 +9,11 @@
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the console)
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
-    dash.py tree info|rm|goal|cfg <path> [--force]  the sidebar's workspace menu: git facts; remove the worktree (refuses a dirty,
-                                                    unpushed or pinned one without --force); set the goal (stdin); write the main
-                                                    checkout's .greenlight.json (stdin)
+    dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
+                                                    the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
+                                                    teardown to run); set the goal (stdin); write the main checkout's .greenlight.json
+                                                    (stdin); a new worktree of path's repo (stdin {name, base, goal, agent, setup});
+                                                    the diff (stdin: head | branch)
     dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
     dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
     dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
@@ -27,6 +29,7 @@ import base64
 import hashlib
 import importlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -34,6 +37,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade_common  # noqa: E402
 import blocking  # noqa: E402
 import greenlight  # noqa: E402
 import harness  # noqa: E402
@@ -272,7 +276,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     return {"ts": int(time.time()), "scanned": snap["ts"], "pucks": pucks, "trees": trees}
 
 
-ADES = ("orca", "cmux", "herdr", "t3")
+ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in
 
 
 def trees():
@@ -345,13 +349,27 @@ def tree_info(path):
     if st.returncode:
         return {"error": (st.stderr.strip() or "not a git checkout")[:200]}
     last = git("log", "-1", "--format=%ct").stdout.strip()
-    return {"dirty": len(st.stdout.splitlines()), "unpushed": len(git("rev-list", "HEAD", "--not", "--remotes").stdout.split()),
-            "commit": int(last) * 1000 if last.isdigit() else None}
+    try:
+        lp = ports(path)
+    except (OSError, subprocess.SubprocessError, ValueError):  # no tmux server or no lsof: no ports, not an error
+        lp = []
+    lines = st.stdout.splitlines()
+    ahead = git("log", "--format=%h %s", "HEAD", "--not", "--remotes").stdout.splitlines()
+    cmd = (repo_cfg(main_of(path)) or {}).get("teardown")
+    base = git("merge-base", "HEAD", "origin/HEAD").stdout.strip() or "HEAD"
+    # the card's Diff counts, branch plus uncommitted; ponytail: untracked files aren't counted (the Diff dialog has them)
+    sh = git("diff", "--shortstat", base).stdout
+    n = lambda w: int(m[1]) if (m := re.search(rf"(\d+) {w}", sh)) else 0
+    # ports/dirty/unpushed as before; the rest is what Delete lists (first 20 files, 10 commits) and the port rows' process names
+    return {"dirty": len(lines), "unpushed": len(ahead), "commit": int(last) * 1000 if last.isdigit() else None, "ports": [p for p, _ in lp],
+            "procs": {str(p): c for p, c in lp}, "untracked": sum(l[:2] == "??" for l in lines), "files": [[l[:2].strip(), l[3:]] for l in lines[:20]],
+            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "",
+            "added": n("insertion"), "removed": n("deletion")}
 
 
-def tree_rm(path, force=False):
+def tree_rm(path, force=False, teardown=""):
     """Remove the worktree (never its branch). Refuses the main checkout always, and, unless forced, a pinned or dirty
-    tree or one with commits no remote has."""
+    tree or one with commits no remote has. The repo's teardown runs in it first when the page named it (as tree_new's setup)."""
     call, w = tree(path)
     if w.get("isMainWorktree"):
         return {"error": "the repo's main checkout is never removed"}
@@ -361,9 +379,15 @@ def tree_rm(path, force=False):
              *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else [])]
     if risks and not force:
         return {"risks": risks}
-    # ponytail: only Orca honours --force; the git-backed ADEs still refuse a dirty tree, and that error reaches the page
+    warn = None
+    if teardown:  # a failed teardown doesn't stop the delete; the page toasts why
+        if teardown != (repo_cfg(main_of(path)) or {}).get("teardown"):
+            warn = "Teardown skipped: the repo's .greenlight.json changed"
+        elif err := hook(teardown, path):
+            warn = f"Teardown failed ({err}); deleted anyway"
+    # ponytail: only Orca and the Basement honour --force; the other git-backed ADEs still refuse a dirty tree, and that error reaches the page
     call("worktree", "rm", "--worktree", f"id:{w.get('worktreeId') or w['id']}", *(["--force"] if force else []))
-    return {"ok": True}
+    return {"ok": True, **({"warn": warn} if warn else {})}
 
 
 def tree_goal(path, goal):
@@ -399,6 +423,119 @@ def tree_cfg(path, text):
         return {"error": "not a JSON object"}
     (Path(path) / CFG).write_text(json.dumps(o, indent=2) + "\n")
     return {"ok": True, "cfg": o}
+
+
+BRANCH_RE = re.compile(r"\w[\w./-]{0,99}")
+
+
+def main_of(path):
+    """The main checkout of path's repo (where .greenlight.json lives)."""
+    return ade_common.git_info(path)["repoId"] or path
+
+
+def hook(cmd, path):
+    """.greenlight.json's setup or teardown: one shell command, run in the worktree. None when it passed, else why not."""
+    try:
+        p = subprocess.run(cmd, shell=True, cwd=path, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return "it ran over 10 minutes"
+    return None if p.returncode == 0 else f"exit {p.returncode}: " + (p.stderr or p.stdout).strip()[-300:]
+
+
+def tree_new(path, o):
+    """The sidebar's New workspace: branch `name` off `base` as a worktree of path's repo, made by the ADE that holds path;
+    then the repo's setup command in it, then the default agent on the goal. Setup runs only when the page showed it (o.setup)
+    and the file still says the same: a repo can't slip a new command in between."""
+    name, base = str(o.get("name") or "").strip(), str(o.get("base") or "").strip()
+    if not BRANCH_RE.fullmatch(name) or ".." in name or base and (not BRANCH_RE.fullmatch(base) or ".." in base):
+        return {"error": "a branch name is letters, digits, and . _ - /"}
+    goal = " ".join(str(o.get("goal") or "").split())[:500]
+    call, w = tree(path)
+    res = call("worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
+               *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else []))
+    made = res.get("worktree") or {}
+    if not made.get("path"):  # ponytail: Orca's create answer isn't pinned down here; find it by branch instead
+        made = next((x for x in call("worktree", "ps", "--limit", "10000")["worktrees"]
+                     if (x.get("branch") or "").removeprefix("refs/heads/").endswith(name)), {})
+    new, wid = made.get("path"), made.get("worktreeId") or made.get("id")
+    if not new:
+        return {"error": "the worktree was made but its folder didn't come back; refresh the sidebar"}
+    cmd = (repo_cfg(main_of(path)) or {}).get("setup")
+    if o.get("setup") and o["setup"] == cmd and (err := hook(cmd, new)):
+        return {"ok": True, "path": new, "warn": f"Setup failed ({err}); no agent started"}
+    out = {"ok": True, "path": new}
+    if o.get("agent") and wid:
+        r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}", *(["--prompt", goal] if goal else []))
+        if s := (r.get("terminal") or {}).get("session"):
+            out["session"] = s  # a Basement-made agent: the page opens a tab on its tmux session
+    return out
+
+
+DIFF_CAP = 300_000  # chars of patch: the answer is one JSON line back over ssh
+
+
+def tree_diff(path, mode):
+    """The Diff dialog: uncommitted changes (mode head), or everything the branch changes from where it left the default branch."""
+    git = lambda *a: subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, timeout=30)
+    base, label = "HEAD", "HEAD"
+    if mode == "branch":  # ponytail: origin's default branch, else the usual names; a stacked branch diffs against the trunk
+        for r in ("origin/HEAD", "origin/main", "origin/master", "origin/develop"):
+            if b := git("merge-base", "HEAD", r).stdout.strip():
+                base, label = b, git("rev-parse", "--abbrev-ref", r).stdout.strip().removeprefix("origin/") or r  # origin/HEAD names main
+                break
+        else:
+            return {"error": "no origin/HEAD, main, master or develop to compare with"}
+    num = git("diff", "--numstat", base)
+    if num.returncode:
+        return {"error": (num.stderr.strip() or "not a git checkout")[:200]}
+    patch = git("diff", "--no-color", "--no-ext-diff", base).stdout
+    files = [[f, a, d] for a, d, f in (l.split("\t", 2) for l in num.stdout.splitlines())]  # path, +, − ("-" = binary)
+    kind = {x[-1]: x[0][0] for x in (l.split("\t") for l in git("diff", "--name-status", base).stdout.splitlines()) if len(x) > 1}  # M A D R…
+    # an agent's new files are untracked, which `git diff` never shows; ponytail: first 100, one git call each
+    for f in [x for x in git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0") if x][:100]:
+        a, d = (git("diff", "--no-index", "--numstat", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
+        files.append([f, a, d]); kind[f] = "U"
+        if len(patch) <= DIFF_CAP:  # past the cap only the counts: a big un-ignored file isn't read whole
+            patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
+    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f, "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
+
+
+def listeners(lsof):
+    """`lsof -Fpcn` output → {pid: (command, {port})}."""
+    out, pid, cmd = {}, None, ""
+    for l in lsof.splitlines():
+        if l[:1] == "p":
+            pid, cmd = int(l[1:]), ""
+        elif l[:1] == "c":
+            cmd = l[1:]
+        elif l[:1] == "n" and pid and (port := l.rpartition(":")[2]).isdigit():
+            out.setdefault(pid, (cmd, set()))[1].add(int(port))
+    return out
+
+
+def under(pairs, roots):
+    """pids in the process trees under roots, from (pid, ppid) pairs."""
+    kids, seen, todo = {}, set(), list(roots)
+    for p, pp in pairs:
+        kids.setdefault(pp, []).append(p)
+    while todo:
+        p = todo.pop()
+        if p not in seen:
+            seen.add(p)
+            todo += kids.get(p, [])
+    return seen
+
+
+def ports(path):
+    """[(port, command)] listening from processes started in this worktree's Basement terminals (tmux panes whose folder is in it)."""
+    run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=10).stdout
+    roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run("tmux", "-L", "greenlight", "list-panes", "-a", "-F",
+             "#{pane_pid} #{pane_current_path}").splitlines()) if pid.isdigit() and (cwd == path or cwd.startswith(path + "/"))]
+    if not roots:
+        return []
+    pids = under([tuple(map(int, l.split())) for l in run("ps", "-A", "-o", "pid=,ppid=").splitlines() if len(l.split()) == 2], roots)
+    # ponytail: lsof on both (Linux shows your own processes without root); `ss -ltnp` if a host lacks lsof
+    return sorted({(p, c[:40]) for pid, (c, ps) in listeners(run("lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn")).items() if pid in pids for p in ps})
 
 
 def safe(name):
@@ -1087,10 +1224,12 @@ def main():
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
-            out = tree_info(a[2]) if a[1] == "info" else tree_merge(a[2]) if a[1] == "merge" else tree_rm(a[2], "--force" in a[3:]) if a[1] == "rm" \
-                else tree_goal(a[2], sys.stdin.read()[:2000]) if a[1] == "goal" else tree_cfg(a[2], sys.stdin.read(8193))
+            op, arg = a[1], a[2]
+            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
+                else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
+                else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:
             out = {"error": str(e)[:300]}
         print(json.dumps({"op": a[1], "path": a[2], **out}))
