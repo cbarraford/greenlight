@@ -444,6 +444,25 @@ test("tab icon: Claude's ✳ title, tmux's ⌬ for codex (not shown in the name)
   assert.equal((await lastSave(page)).tabs[0].manual, true);
 });
 
+test("block elements are drawn to the cell, not by the font: ░▒▓ a seamless 2×2 device-pixel dither, █▌▄ their exact part", async page => {
+  const id = (await posts(page, "open"))[0].id;
+  await page.evaluate(([id, s]) => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode(s)))), [id, "\x1b[38;2;255;200;0m░░▒▓█▌▄x\x1b[0m"]);
+  await page.waitForTimeout(150);
+  const cells = await page.evaluate(() => { const r = [...panes.values()][0].t.renderer, d = r.devicePixelRatio, W = r.metrics.width * d, H = r.metrics.height * d;
+    return {W, H, lit: [...Array(8)].map((_, i) => { const px = r.ctx.getImageData(i * W, 0, W, H).data, on = [];
+      for (let k = 0; k < W * H; k++) if (px[4 * k] === 255 && px[4 * k + 1] === 200 && px[4 * k + 2] === 0) on.push([i * W + k % W, Math.floor(k / W)]);
+      return on })} });
+  const {W, H, lit} = cells, n = c => lit[c].length, all = (c, ok) => lit[c].every(([x, y]) => ok(x, y, x - c * W));
+  assert.ok(Number.isInteger(W) && Number.isInteger(H), "whole device pixels");
+  for (const c of [0, 1]) { assert.equal(n(c), Math.ceil(H / 2) * [...Array(W)].filter((_, x) => (c * W + x) % 2 === 0).length, "░: one pixel in four");
+    assert.ok(all(c, (x, y) => x % 2 === 0 && y % 2 === 0), "on the canvas's grid, so the next cell continues it") }
+  assert.ok(n(2) > 1.8 * n(0) && n(2) < 2.2 * n(0), "▒: two in four"); assert.ok(n(3) > 2.7 * n(0) && n(3) < 3.3 * n(0), "▓: three in four");
+  assert.equal(n(4), W * H, "█ fills its cell edge to edge");
+  assert.equal(n(5), Math.round(W / 2) * H, "▌: the left half"); assert.ok(all(5, (x, y, dx) => dx < Math.round(W / 2)));
+  assert.equal(n(6), W * (H - Math.round(H / 2)), "▄: the lower half"); assert.ok(all(6, (x, y) => y >= Math.round(H / 2)));
+  assert.ok(n(7) > 0 && n(7) < W * H / 2, "other text is still the font's");
+});
+
 test("links: hovering one offers Open / Copy through the app; a click or ⌘-click opens it", async page => {
   const id = (await posts(page, "open"))[0].id, url = "https://gitlab.com/acme/widgets/-/merge_requests/5131";
   await page.evaluate(([id, s]) => term.feed(id, btoa(s)), [id, `see ${url} now\r\n`]);
