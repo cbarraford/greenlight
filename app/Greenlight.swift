@@ -28,6 +28,9 @@ let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? Strin
 /// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
 /// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
 let devDir = Bundle.main.object(forInfoDictionaryKey: "GreenlightDev") as? String
+/// A dev copy's workspace ("faster-qa"): on its menubar item and in its window bar, so you can tell the copies and Greenlight apart.
+let devName = devDir.map { URL(fileURLWithPath: $0).lastPathComponent }
+let devTagWidth: CGFloat = devName.map { min(190, ceil(($0 as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .bold)]).width) + 44) } ?? 0  // the window bar's tag: 0 in Greenlight
 /// A dev copy's extra ssh options to a host dev.py has a tunnel to: the tunnel's socket, so nothing connects in the copy's
 /// name and a firewall (Little Snitch) has no new app to ask about, however many copies there are. Empty otherwise.
 func devSsh(_ h: String) -> [String] {
@@ -2845,6 +2848,13 @@ struct Floors: View {
                          ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
     var body: some View {
         HStack(spacing: 10) {
+        if let devName {  // a dev copy: whose it is, dashed so it doesn't read as a floor
+            HStack(spacing: 4) { Image(systemName: "hammer.fill").font(.system(size: 8, weight: .bold)); Text(devName).lineLimit(1).truncationMode(.middle) }
+                .font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
+                .padding(.horizontal, 8).frame(height: 20)
+                .background(RoundedRectangle(cornerRadius: 7).strokeBorder(hexColor(light ? "#5F5F64" : "#9A9AA0"), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                .help("Dev copy of the \(devName) workspace").accessibilityLabel("Dev copy: \(devName)")
+        }
         HStack(spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
                 let l = Self.levels[i], on = l.0 == s.at
@@ -2874,7 +2884,7 @@ struct Floors: View {
         }.padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 300, height: 28, alignment: .trailing).padding(.trailing, 10)
+        }.frame(width: 300 + devTagWidth, height: 28, alignment: .trailing).padding(.trailing, 10)
     }
 }
 /// The project chip: the window's projects, centered in the title bar like a title; a click opens the picker.
@@ -2903,7 +2913,7 @@ struct ProjectChip: View {
 /// Floors in a window's title bar, top right; the project chip in its middle.
 func floorBar(_ w: NSWindow, _ f: Floors) {
     let a = NSTitlebarAccessoryViewController(), h = NSHostingView(rootView: f)
-    h.frame = NSRect(x: 0, y: 0, width: 310, height: 28)
+    h.frame = NSRect(x: 0, y: 0, width: 310 + devTagWidth, height: 28)
     a.view = h; a.layoutAttribute = .trailing
     w.addTitlebarAccessoryViewController(a)
     guard let tb = w.standardWindowButton(.closeButton)?.superview else { return }  // the title bar itself: no accessory slot is centered
@@ -3062,6 +3072,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         item.button?.target = self
         item.button?.action = #selector(click)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        if let devName { item.button?.toolTip = "Dev copy of the \(devName) workspace" }
         greenlight.popoverShown = { [weak self] in NSApp.isActive && self?.chatShown == true }
         greenlight.popChat = { [weak self] in self?.popChat(out: true) }
         greenlight.openPage = { [weak self] name in  // as the page's own openPage message
@@ -3110,7 +3121,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
-        if ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden
+        if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
         if let devDir { watchPages(devDir + "/web") }
 
         let un = UNUserNotificationCenter.current()
@@ -3775,7 +3786,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
+        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "dev", value: devName ?? ""), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
@@ -4204,14 +4215,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let b = item.button else { return }
         // Touch the status item only on change: any menubar update keeps a full-screen window's title bar pinned down.
         let working = greenlight.run != nil
-        let title = greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : "")
+        let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the stars are all alike
+            + (greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : ""))
         let key = "\(working) \(accent)"
         if key != starKey {
             starKey = key
             let img = NSImage(systemSymbolName: working ? "star.fill" : "star", accessibilityDescription: "Greenlight")
             img?.isTemplate = !working
             b.image = working ? img?.withSymbolConfiguration(.init(paletteColors: [NSColor(accent)])) : img
-            item.length = working ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second
+            item.length = working && devName == nil ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second (a copy's name doesn't fit 64)
         }
         if b.title != title { b.title = title }
     }

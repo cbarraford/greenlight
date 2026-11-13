@@ -739,6 +739,14 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   assert.deepEqual((await lastSave(page)).autoDone, ["/w/ar|ci|s1", "/w/ar|merge|s2"]);
 }, "?main=1");
 
+test("auto-run: never in a dev copy, its main window included", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "ar", path: "/w/ar", branch: "ar", main: false, agent: "none",
+    mr: {ref: "!7", state: "opened", sha: "s1"}, moves: [{kind: "ci", prompt: "fix", auto: "x", sha: "s1"}, {kind: "merge", auto: true, sha: "s1"}]}]}));
+  assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 0, "no tab of its own");
+  assert.equal((await posts(page, "tree")).filter(m => m.op === "merge").length, 0, "no merge");
+  assert.deepEqual((await lastSave(page))?.autoDone || [], [], "nothing marked tried");
+}, "?main=1&dev=faster-qa");
+
 test("auto-run: only the main window runs it", async page => {
   await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "ar", path: "/w/ar", branch: "ar", main: false, agent: "none",
     mr: {ref: "!7", state: "opened"}, moves: [{kind: "ci", prompt: "fix", auto: "x", sha: "s1"}]}]}));

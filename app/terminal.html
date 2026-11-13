@@ -1965,12 +1965,13 @@ window.term = {
 // Auto-run (Settings › Repositories › Auto-run): dash.py marks a move `auto` (its prompt plus what the run may do; merge: true).
 // The main window runs it once per workspace, job and head commit, in a tab of its own that doesn't take focus; one job per workspace,
 // none beside a tab already on that job. The tab closes once its job is gone from the moves and Claude is idle; idle with nothing pushed: it needs you.
-const MAIN = q.get("main") === "1", autoMerge = new Set();
+// Never in a dev copy (?dev=<workspace>): it's a branch's page and Python under test, and Greenlight is already running these.
+const MAIN = q.get("main") === "1", DEV = q.get("dev") || "", autoMerge = new Set();
 let autoDone = [];  // "path|kind|sha" tried; saved with the layout
 const AUTO_NAME = {ci: () => "Fix CI", conflicts: () => "Fix conflicts", review: () => "Review", threads: x => `Resolve ${x.n} thread${x.n > 1 ? "s" : ""}`};
 const tabBusy = t => paneOf(t).some(p => Date.now() - (p.out || 0) < 5000);  // output in the last 5s: Claude Code's TUI animates its spinner while it works, tool calls included, and goes quiet when idle (its title doesn't change). ponytail: a pane tailing a log reads busy
 function autoRun(){
-  if (!MAIN || !restored) return;
+  if (!MAIN || DEV || !restored) return;
   for (const w of trees) {
     const mv = w.moves || [], here = wsTabs(w.path);
     for (const t of here.filter(t => t.auto)) {
