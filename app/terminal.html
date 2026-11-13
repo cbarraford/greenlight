@@ -1029,7 +1029,7 @@ $("shead").append(iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "Ne
   iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
   t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
-  // the window bar names it too, left of the floors, with each project's square (none: All projects)
+  // the window bar names it too, centered like a title, with each project's square (none: All projects)
   const hex = i => i < 0 ? "#8E8E93" : getComputedStyle(document.documentElement).getPropertyValue("--" + "obgptyr"[i % 7]).trim();
   t.title = t.textContent + " · Show projects…"; post({cmd: "title", text: ONLY ? t.textContent : "All projects", colors: ONLY ? ONLY.map(id => hex(allP.findIndex(p => p.id === id))) : [],
     list: [...allP, null].map((p, i) => { const rs = reposOf(allP, p ?? undefined); return {id: p ? p.id : "", name: p ? p.name : NML, color: hex(p ? i : -1), repos: rs, paths: trees.filter(w => rs.includes(w.project)).map(w => w.path),
