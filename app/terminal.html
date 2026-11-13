@@ -284,10 +284,11 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
 const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, ...colors} = look, root = document.documentElement.style;
-let mode = mode0;  // "light" | "dark": the window bar's switch; term.look() changes it in place
+const mode = mode0;  // "light" | "dark": the window bar's switch; a change reloads the page (ghostty-web fixes a terminal's colors at open)
 const own = !colors.background, sys = matchMedia("(prefers-color-scheme: light)"), base = {...colors};  // own: no app/Ghostty background, so the page follows macOS live
-const LIGHT = {black: "#24292F", red: "#CF222E", green: "#116329", yellow: "#7D4E00", blue: "#0550AE", magenta: "#8250DF", cyan: "#1B7C83", white: "#6E7781",
-  brightBlack: "#57606A", brightRed: "#A40E26", brightGreen: "#1A7F37", brightYellow: "#633C01", brightBlue: "#0969DA", brightMagenta: "#A475F9", brightCyan: "#3192AA", brightWhite: "#8C959F"};
+// Ghostty's "Apple System Colors Light": mid-tones that read as text on white and as a prompt segment's background
+const LIGHT = {black: "#1A1A1A", red: "#CC372E", green: "#26A439", yellow: "#CDAC08", blue: "#0869CB", magenta: "#9647BF", cyan: "#479EC2", white: "#98989D",
+  brightBlack: "#464646", brightRed: "#FF453A", brightGreen: "#32D74B", brightYellow: "#E5BC00", brightBlue: "#0A84FF", brightMagenta: "#BF5AF2", brightCyan: "#69C9F2", brightWhite: "#FFFFFF"};
 let light, bg, fg;
 function paint(){
   light = mode ? mode === "light" : own && sys.matches;
@@ -323,8 +324,7 @@ const localLights = () => skinOk(half(acctCfg.look, "dark"));
 const worn = () => lights === "own" ? (light ? skinLight : skin) : lights === "local" ? (light ? skinOk(half(acctCfg.look, "light")) : localLights()) : {};
 paint();
 // ponytail: the app always passes its theme's background, so in Greenlight this only fires for a page opened without one; the app re-themes on the next window
-const repaint = () => { paint(); panes.forEach(p => { try { p.t.renderer.setTheme({cursor: fg, ...colors, background: bg, foreground: fg}); p.t.refresh?.(0, p.t.rows - 1) } catch { } }) };
-if (own) sys.addEventListener("change", repaint);
+if (own) sys.addEventListener("change", () => { paint(); panes.forEach(p => { try { p.t.renderer.setTheme({cursor: fg, ...colors, background: bg, foreground: fg}); p.t.refresh?.(0, p.t.rows - 1) } catch { } }) });
 window.onerror = (msg, src, line) => post({cmd: "error", text: `${msg} @${line}`});
 const $ = id => document.getElementById(id), el = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || "", innerHTML: html || ""});
 const svg = (d, w = 14, cls = "") => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -1484,7 +1484,7 @@ function looked(out){  // claude -p's answer to a restyle: a JSON object of colo
 }
 let picked;  // Choose folder…'s answer, from the app
 window.term = {
-  look(l){ const {font, size, mode: m, ...c} = l; mode = m; for (const k in base) delete base[k]; Object.assign(base, c); repaint() },  // the app's Auto/Light/Dark switch
+  flush(){ if (!restored) return; clearTimeout(saveT); const st = snap(); lastSaved = st; post({cmd: "save", state: JSON.parse(st)}) },  // save now: the app reloads the page next
   only(o){ ONLY = o; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
   picked: d => picked?.(d),
   slide: v => { slide = +v || 0 },

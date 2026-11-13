@@ -4051,9 +4051,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
         for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
-        if pushedTerm != theme.name { pushedTerm = theme.name  // the terminals re-theme in place; the page posts band for the title strip
-            let js = String(data: (try? JSONSerialization.data(withJSONObject: termLook())) ?? Data(), encoding: .utf8) ?? "{}"
-            termWebs.forEach { $0.evaluateJavaScript("window.term && term.look(\(js))") } }
+        if pushedTerm != theme.name { let first = pushedTerm.isEmpty; pushedTerm = theme.name  // ghostty-web fixes a terminal's colors at open: save, reload, tmux reattaches
+            if !first { for (wid, w) in termWins { guard let web = w.contentView as? WKWebView else { continue }
+                web.evaluateJavaScript("window.term && term.flush()") { [weak self] _, _ in guard let self else { return }
+                    if wid == 0 { wantFloor = floors[0]?.at }  // ponytail: other windows come back on the Pipe, as New windows do
+                    loadTerm(web, only: sharedOnly) } } } }
         if fluid.appearance?.name != look?.name { fluid.appearance = look }
         if window.appearance?.name != look?.name { window.appearance = look }  // else the full-screen title bar drops in white
         if chatWindow.appearance?.name != look?.name { chatWindow.appearance = look }
