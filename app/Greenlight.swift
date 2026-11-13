@@ -2817,7 +2817,7 @@ struct LevelFace: View {
 }
 
 /// The window bar's floor indicator: L1 B1 B2, the level you're on lit and named; click another to go there.
-final class FloorState: ObservableObject { @Published var at = "pipe"; @Published var project = ""; @Published var colors = [String]() }  // project: the window's, left of the floors; colors: its squares (none: All projects)
+final class FloorState: ObservableObject { @Published var at = "pipe"; @Published var project = ""; @Published var colors = [String]() }  // project: the window's, centered in the title bar; colors: its squares (none: All projects)
 struct Floors: View {
     @ObservedObject var s: FloorState
     @ObservedObject var c: Core  // its look bumps when the mode or theme changes
@@ -2828,20 +2828,6 @@ struct Floors: View {
                          ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
     var body: some View {
         HStack(spacing: 10) {
-        if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
-            Button(action: pick) {  // the chip (design A): its squares, the name, a chevron, in the floors' own track
-                HStack(spacing: 6) {
-                    if s.colors.isEmpty { Image(systemName: "square.grid.2x2.fill").font(.system(size: 9)).opacity(0.55) }
-                    ForEach(Array(s.colors.prefix(4).enumerated()), id: \.offset) { RoundedRectangle(cornerRadius: 2.5).fill(hexColor($0.element)).frame(width: 9, height: 9) }
-                    Text(s.project).lineLimit(1).truncationMode(.tail)
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
-                }.font(.system(size: 11.5, weight: .semibold)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
-                    .padding(.horizontal, 7).frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).frame(maxWidth: 220, alignment: .trailing).help("\(s.project) · Show projects…").accessibilityLabel("Projects: \(s.project)")
-        }
         HStack(spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
                 let l = Self.levels[i], on = l.0 == s.at
@@ -2871,15 +2857,44 @@ struct Floors: View {
         }.padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 480, height: 28, alignment: .trailing).padding(.trailing, 10)
+        }.frame(width: 300, height: 28, alignment: .trailing).padding(.trailing, 10)
     }
 }
-/// Floors in a window's title bar, top right.
+/// The project chip: the window's projects, centered in the title bar like a title; a click opens the picker.
+struct ProjectChip: View {
+    @ObservedObject var s: FloorState
+    @ObservedObject var c: Core
+    var light: Bool { _ = c.look; return !theme.dark }
+    let pick: () -> Void
+    var body: some View {
+        if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
+            Button(action: pick) {  // the chip (design A): its squares, the name, a chevron
+                HStack(spacing: 6) {
+                    if s.colors.isEmpty { Image(systemName: "square.grid.2x2.fill").font(.system(size: 9)).opacity(0.55) }
+                    ForEach(Array(s.colors.prefix(4).enumerated()), id: \.offset) { RoundedRectangle(cornerRadius: 2.5).fill(hexColor($0.element)).frame(width: 9, height: 9) }
+                    Text(s.project).lineLimit(1).truncationMode(.tail)
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
+                }.font(.system(size: 11.5, weight: .semibold)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
+                    .padding(.horizontal, 7).frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).frame(maxWidth: 260).help("\(s.project) · Show projects…").accessibilityLabel("Projects: \(s.project)")
+        }
+    }
+}
+/// Floors in a window's title bar, top right; the project chip in its middle.
 func floorBar(_ w: NSWindow, _ f: Floors) {
     let a = NSTitlebarAccessoryViewController(), h = NSHostingView(rootView: f)
-    h.frame = NSRect(x: 0, y: 0, width: 490, height: 28)
+    h.frame = NSRect(x: 0, y: 0, width: 310, height: 28)
     a.view = h; a.layoutAttribute = .trailing
     w.addTitlebarAccessoryViewController(a)
+    guard let tb = w.standardWindowButton(.closeButton)?.superview else { return }  // the title bar itself: no accessory slot is centered
+    let p = NSHostingView(rootView: ProjectChip(s: f.s, c: f.c, pick: f.pick)); p.translatesAutoresizingMaskIntoConstraints = false
+    tb.addSubview(p)
+    let mid = p.centerXAnchor.constraint(equalTo: tb.centerXAnchor); mid.priority = .defaultHigh  // centered, unless the floors are in the way
+    NSLayoutConstraint.activate([mid, p.centerYAnchor.constraint(equalTo: tb.centerYAnchor),
+                                 p.trailingAnchor.constraint(lessThanOrEqualTo: tb.trailingAnchor, constant: -(h.frame.width + 8))])  // clear of the floors (same superview: safe at creation)
 }
 
 /// The orb: in the Basement it goes up to Greenlight Center, there it comes back down; drag puts it anywhere.
