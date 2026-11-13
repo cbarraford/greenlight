@@ -114,8 +114,10 @@ let ud = UserDefaults.standard
 func named(_ key: String, _ fallback: String) -> Theme { themes.first { $0.name == (ud.string(forKey: key) ?? fallback) } ?? themes[0] }
 var darkTheme = named("darkTheme", "Greenlight")
 var lightTheme = named("lightTheme", "GitHub Light")
-/// Greenlight Center (the dashboard, the chat) is always light; the Basement (the terminal) is always dark and draws from darkTheme.
-var theme: Theme { lightTheme }
+/// The window bar's Auto/Light/Dark switch: every floor wears lightTheme or darkTheme; Auto follows macOS (the app's own appearance, which no window overrides).
+var appearanceMode: String { ud.string(forKey: "appearance") ?? "auto" }
+var isDark: Bool { appearanceMode == "auto" ? NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua : appearanceMode == "dark" }
+var theme: Theme { isDark ? darkTheme : lightTheme }
 var accentHex = ud.string(forKey: "accent")  // nil = the theme's own
 var chatFont = ud.string(forKey: "chatFont") ?? "System"
 var codeFont = ud.string(forKey: "codeFont") ?? "SF Mono"
@@ -1755,7 +1757,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder var appearance: some View {
-        heading("Appearance", "Each floor keeps its own theme: Greenlight Center (the dashboard and chat) is light, the Basement (the terminals) is dark.")
+        heading("Appearance", "The switch in the window bar picks Auto (match macOS), Light or Dark for every floor; each mode wears the theme you pick here.")
         box("Floors") { HStack(spacing: Theme.sp3) { floorTheme(dark: false); floorTheme(dark: true) }.padding(Theme.sp3) }
         box("Color & text") {
             row("Accent", "Buttons, selection and focus. State colors (orange, red) never change.") { accentPicker }
@@ -2818,7 +2820,8 @@ struct LevelFace: View {
 final class FloorState: ObservableObject { @Published var at = "pipe"; @Published var project = ""; @Published var colors = [String]() }  // project: the window's, left of the floors; colors: its squares (none: All projects)
 struct Floors: View {
     @ObservedObject var s: FloorState
-    let light: Bool
+    @ObservedObject var c: Core  // its look bumps when the mode or theme changes
+    var light: Bool { _ = c.look; return !theme.dark }
     var pick: () -> Void = {}  // the project chip: a terminal window's Open projects, L1's menu
     let go: (String) -> Void
     static let levels = [("greenlight", "L1", "GREENLIGHT", "#2E6F43", "#FFFFFF", "#56E08B"), ("basement", "B1", "BASEMENT", "#FFB340", "#1C1C1F", "#FFB340"),
@@ -2854,13 +2857,27 @@ struct Floors: View {
         }.padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 400, height: 28, alignment: .trailing).padding(.trailing, 10)
+        HStack(spacing: 2) {  // Auto / Light / Dark, in the same track
+            ForEach([("auto", "circle.lefthalf.filled", "Auto (match macOS)"), ("light", "sun.max", "Light"), ("dark", "moon", "Dark")], id: \.0) { m in
+                let on = appearanceMode == m.0
+                Button { c.restyle { ud.set(m.0, forKey: "appearance") }; (NSApp.delegate as? App)?.tick() } label: {
+                    Image(systemName: m.1).font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(hexColor(on ? (light ? "#1D1D1F" : "#F5F5F7") : (light ? "#5F5F64" : "#9A9AA0")))
+                        .frame(width: 22, height: 16)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(on ? Color(white: light ? 0 : 1, opacity: light ? 0.1 : 0.14) : .clear))
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).help(m.2).accessibilityLabel("Appearance: \(m.2)").accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }.padding(2)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
+        }.frame(width: 480, height: 28, alignment: .trailing).padding(.trailing, 10)
     }
 }
 /// Floors in a window's title bar, top right.
 func floorBar(_ w: NSWindow, _ f: Floors) {
     let a = NSTitlebarAccessoryViewController(), h = NSHostingView(rootView: f)
-    h.frame = NSRect(x: 0, y: 0, width: 410, height: 28)
+    h.frame = NSRect(x: 0, y: 0, width: 490, height: 28)
     a.view = h; a.layoutAttribute = .trailing
     w.addTitlebarAccessoryViewController(a)
 }
@@ -3164,7 +3181,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
             wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) }
         floorGo[ObjectIdentifier(w)] = (l1Floor, go)
-        floorBar(w, Floors(s: l1Floor, light: true, pick: { [unowned self] in l1Pick() }, go: go))
+        floorBar(w, Floors(s: l1Floor, c: greenlight, pick: { [unowned self] in l1Pick() }, go: go))
         let root = NSView()  // the dashboard and its overlays, left of the chat
         for v in [fluid, inboxHost] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -3286,6 +3303,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
 
+    var pushedDark = false, pushedTerm = ""  // the first tick pushes both
     var pushedRepos = "", pushedMono = "", pushedBell = "", pushedChat = "", pushedOrb = "", pushedMotion = 0.6, pushedSlide = 0.25, pushedLocal = localDefault
     func pushBuilds() {
         let names = (try? JSONSerialization.data(withJSONObject: building.sorted())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
@@ -3599,8 +3617,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.title = "Terminal"
         w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
-        w.backgroundColor = darkTheme.bg
-        w.appearance = NSAppearance(named: .darkAqua)  // the Basement is always dark
+        w.backgroundColor = theme.bg
+        w.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)  // tick keeps it in step with the switch
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 300, height: 160)
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
@@ -3619,7 +3637,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if f != "greenlight" { web?.evaluateJavaScript("term.opens('\(f)')") } else if id == 0 { appGoUp() } else { show() }
         }
         floorGo[ObjectIdentifier(w)] = (fs, go)
-        floorBar(w, Floors(s: fs, light: false, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }, go: go))
+        floorBar(w, Floors(s: fs, c: greenlight, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }, go: go))
         loadTerm(web, only: only)
         return w
     }
@@ -3690,13 +3708,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         return out
     }
-    func loadTerm(_ web: WKWebView, only: [String]?) {
-        guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
-        func rgb(_ c: NSColor) -> String { let c = c.usingColorSpace(.sRGB) ?? c; return String(format: "%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255)) }
-        var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
+    func rgb(_ c: NSColor) -> String { let c = c.usingColorSpace(.sRGB) ?? c; return String(format: "%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255)) }
+    /// The terminal page's look: the screen always wears darkTheme with your Ghostty colors and font over it; the chrome follows the mode.
+    func termLook() -> [String: String] {
         var look = ["background": "#" + rgb(darkTheme.bg), "foreground": "#" + rgb(darkTheme.fg), "font": codeFont, "size": "\(Int(fontSize))"]
         look.merge(ghosttyLook()) { _, g in g }  // Ghostty's colors and font win over the app's theme
-        if let b = look["background"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: 0.22, of: .black) }  // the tab strip's color, so the title band is part of it
+        return look.merging(termMode) { _, m in m }
+    }
+    var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
+    func loadTerm(_ web: WKWebView, only: [String]?) {
+        guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
+        var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
+        let look = termLook()
+        if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
         q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
@@ -4024,7 +4048,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func tick() {
         if !window.isVisible, tab.isVisible { greenlight.hint = "" }  // window hidden mid-hover: drop the tab
         if window.title != greenlight.name { window.title = greenlight.name }
-        let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the dashboard follows the app's theme, not macOS
+        if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
+        let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
+        for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
+        if pushedTerm != theme.name { pushedTerm = theme.name  // the terminals' chrome follows the mode; their screens stay as they are
+            let m = termMode; termWebs.forEach { $0.evaluateJavaScript("window.term && term.mode('\(m["mode"]!)', '\(m["lightBg"]!)', '\(m["lightFg"]!)')") } }
         if fluid.appearance?.name != look?.name { fluid.appearance = look }
         if window.appearance?.name != look?.name { window.appearance = look }  // else the full-screen title bar drops in white
         if chatWindow.appearance?.name != look?.name { chatWindow.appearance = look }
