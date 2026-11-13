@@ -3811,7 +3811,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
         return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
-    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    var termLoaded = false, treesProc: Process?, treesAgain = false, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
     func editorApp() -> (bid: String, url: URL, name: String)? {
         [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
@@ -3827,13 +3827,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
     func pushTrees() {
-        guard termLoaded, treesProc == nil else { return }
+        guard termLoaded else { return }
+        if treesProc != nil { treesAgain = true; return }  // one is running: it may have listed before this change, so go again after it
         treesAt = Date()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
+            if self.treesAgain { self.treesAgain = false; self.pushTrees() }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
