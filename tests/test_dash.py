@@ -321,3 +321,19 @@ assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")
+
+# Basement: ports, diff, new-workspace input checks
+assert dash.listeners("p10\nf3\nn*:5173\nf4\nn127.0.0.1:8080\np11\nn[::1]:3000\n") == {10: {5173, 8080}, 11: {3000}}
+assert dash.under([(2, 1), (3, 2), (9, 8)], [1]) == {1, 2, 3}
+assert dash.BRANCH_RE.fullmatch("feat/ports-1") and not dash.BRANCH_RE.fullmatch("-rf") and not dash.BRANCH_RE.fullmatch("a b")
+assert dash.tree_new("/nowhere", {"name": "../x"})["error"] and dash.tree_new("/nowhere", {"name": "ok", "base": "--x"})["error"]
+import subprocess as _sp
+with tempfile.TemporaryDirectory() as _d:
+    _g = lambda *a: _sp.run(["git", "-C", _d, *a], capture_output=True, check=True)
+    _g("init", "-q"); _g("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x")
+    open(os.path.join(_d, "f.txt"), "w").write("hi\n"); _g("add", "f.txt")
+    _df = dash.tree_diff(_d, "head")
+    assert _df["files"] == [["f.txt", "1", "0"]] and "+hi" in _df["patch"] and not _df["cut"], _df
+    assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
+    assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
+print("basement ok")

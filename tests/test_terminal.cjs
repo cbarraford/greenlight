@@ -541,6 +541,21 @@ test("workspace card: a long name, branch and next step stay inside the card", a
   assert.ok(await page.$("#card .nx:not([hidden])"), "the next step shows");
   assert.deepEqual(over, []);
 });
+test("diff: files and the patch as text; a note on a line goes to the workspace's Claude, pasted not sent", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "basement", project: "octo/g", name: "df", path: "/w/df", branch: "df", main: false, agent: "none"}]}));
+  await page.locator(".ws", {hasText: "df"}).first().click({button: "right"});
+  await page.waitForSelector("#card:not([hidden])"); await page.click("#card button:has-text('Diff')");
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "diff", path: "/w/df", text: "branch"});
+  await page.evaluate(() => term.tree({op: "diff", path: "/w/df", mode: "branch", base: "origin/main", cut: false, files: [["a.js", "1", "1"]],
+    patch: "diff --git a/a.js b/a.js\nindex 1..2 100644\n--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n keep\n-old <b>\n+new <img src=x onerror=alert(1)>\n"}));
+  await page.waitForSelector("#dlg:not([hidden]) .dfb");
+  assert.equal(await page.$eval("#dlg .dsum", d => d.textContent), "1 file · +1 −1");
+  assert.equal(await page.$("#dlg .dfv img"), null, "patch text is text");
+  await page.click("#dlg .dl.ad"); await page.fill("#dlg .dn textarea", "why?");
+  assert.equal(await page.$eval("#dlg button.pri", b => b.textContent), "Send 1 note to Claude");
+  await page.click("#dlg button.pri");
+  assert.match((await posts(page, "copy")).pop().text, /^Notes on the diff \(this branch vs origin\/main\):\n- a\.js:2: why\?$/, "no Claude open: copied");
+});
 test("workspace card: Review runs Claude with the repo's prompt, in place of the next step", async page => {
   const prompt = "Review !58 at abc123.\nIt's\tyours: don't post.";
   await page.evaluate(prompt => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "rv", path: "/w/rv", branch: "rv", main: false, agent: "done", state: "needs", puck: "rv",

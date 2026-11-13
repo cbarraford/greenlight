@@ -224,6 +224,20 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg .nwb{display:grid;align-content:start;gap:12px;padding:0 20px 16px;overflow-y:auto}
 #dlg label.find{gap:10px;height:36px;padding:0 12px;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:var(--dim)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1.5px var(--amb)}
 #dlg .big .find input[type=text]{flex:1;height:30px;padding:0;background:none;box-shadow:none;font-size:13px}
+#dlg .nws .fld{display:grid;gap:6px} #dlg .nws .fld>span{color:var(--dim);font-size:11.5px} #dlg .nws .chk{display:flex;align-items:center;gap:8px} #dlg .nws code{font:11.5px ui-monospace,"SF Mono",Menlo,monospace;color:var(--mid)}
+#dlg .nws textarea,#dlg .dn textarea{padding:8px 10px;border:0;border-radius:8px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:inherit;font:inherit;resize:vertical}
+/* Diff: files on the left, the patch on the right; a click on a line opens a note to Claude under it */
+#dlg .dfb{display:flex;min-height:0} #dlg .dfb nav{flex:0 0 240px;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;box-shadow:inset -1px 0 0 var(--ln)}
+#dlg .big .dfb nav button{height:auto;display:flex;gap:6px;padding:6px 8px;border-radius:6px;background:none;font:11px ui-monospace,"SF Mono",Menlo,monospace;text-align:left} #dlg .big .dfb nav button:hover{background:var(--ln)}
+#dlg .dfb nav button span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .dsum{padding:4px 8px;color:var(--dim);font-size:10.5px;font-weight:600}
+#dlg .dfb .pl{color:var(--g)} #dlg .dfb .mi{color:var(--r)}
+#dlg .dfv{flex:1;min-width:0;overflow:auto;font:12px/1.6 ui-monospace,"SF Mono",Menlo,monospace} #dlg .dfh{position:sticky;top:0;padding:6px 14px;background:var(--d1);color:var(--dim);box-shadow:inset 0 -1px 0 var(--ln)}
+#dlg .dl{white-space:pre;padding-right:14px} #dlg .dl i{display:inline-block;width:44px;padding-right:10px;text-align:right;color:var(--dim);font-style:normal}
+#dlg .dl[title]{cursor:pointer} #dlg .dl[title]:hover{box-shadow:inset 3px 0 0 var(--amb)} #dlg .dl.ad{background:color-mix(in srgb,var(--g) 12%,transparent)} #dlg .dl.rm{background:color-mix(in srgb,var(--r) 12%,transparent)}
+#dlg .dl.hk{color:var(--dim);background:color-mix(in srgb,var(--b) 6%,transparent)} #dlg .dcut{padding:10px 14px;color:var(--dim)}
+#dlg .dn{display:flex;gap:8px;align-items:flex-start;margin:6px 14px 6px 54px;padding:8px;border-radius:8px;background:var(--d1);box-shadow:inset 0 0 0 1px var(--amb);font:13px -apple-system,system-ui,sans-serif} #dlg .dn textarea{flex:1}
+#card .ports{display:flex;flex-wrap:wrap;gap:4px} #card .ports[hidden]{display:none} #card .ports button{height:22px;padding:0 9px;border:0;border-radius:11px;background:color-mix(in srgb,var(--g) 16%,transparent);color:var(--fg);font:11px ui-monospace,"SF Mono",Menlo,monospace}
+#stage.drop{outline:2px dashed var(--accent);outline-offset:-6px}
 #dlg .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .tiles label:first-child{grid-column:1/-1}
 #dlg label.tile{gap:11px;padding:11px 12px;border-radius:10px;background:color-mix(in srgb,var(--fg) 5%,var(--bg));box-shadow:inset 0 0 0 1px var(--ln);color:var(--fg);cursor:pointer}
 #dlg label.tile:has(input:checked){background:color-mix(in srgb,var(--amb) 8%,var(--d0));box-shadow:inset 0 0 0 1.5px var(--amb)}
@@ -452,10 +466,10 @@ function lnkHide(){ clearTimeout(lnkT); lnkT = setTimeout(() => $("lnk").hidden 
 $("lnk").onmouseenter = () => clearTimeout(lnkT); $("lnk").onmouseleave = lnkHide;
 $("lnkOpen").onclick = () => { post({cmd: "url", url: $("lnk")._url}); $("lnk").hidden = true; cur?.focus.t.focus() };
 $("lnkCopy").onclick = () => { post({cmd: "copy", text: $("lnk")._url}); $("lnkCopy").textContent = "Copied"; cur?.focus.t.focus() };
-function newTab(ws = curWs || acct()?.dir || "", cmd, fresh){  // a project window's home tab: its default folder. fresh: its own set of tabs (the sidebar's +)
+function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // session: attach to one already running (a Basement-made agent)  // a project window's home tab: its default folder. fresh: its own set of tabs (the sidebar's +)
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
-  const {p, mount} = newPane(tab, cmd);
+  const {p, mount} = newPane(tab, cmd, session);
   tab.r.append(p.box); tab.focus = p; mount(); show(tab);
 }
 function mkTab(ws, o = {}){
@@ -529,7 +543,11 @@ function sniff(p, s){
   let changed = false;
   for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
   for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { const d = decodeURIComponent(v); if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
-  if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true }
+  if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true; if (isClaude(p)) ping(p, "needs you", paneTitle(p)) }
+  const was = p.st; p.st = /^[\u2800-\u28ff]/.test(p.title || "") ? "work" : isClaude(p) ? "idle" : "";  // Claude's title: braille spinner while it works, ✳ idle
+  if (was === "work" && p.st === "idle") ping(p, "Claude finished", paneTitle(p));
+  // ponytail: OSC 9/777 only arrive when tmux passes them through (allow-passthrough); the bell and the title always do
+  for (const [, v] of s.matchAll(/\x1b\](?:9;(?!4;)|777;notify;)([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) ping(p, "says", v.replace(/;/, ": "));
   if (changed && !editing) render();
 }
 function rename(tab, side = false){
@@ -583,7 +601,7 @@ function render(){
     p.head.append(iconBtn("ib", I.splitR(16), "Split right  ⌘D", () => split(p, false), "Split right"), iconBtn("ib", I.splitD(16), "Split down  ⌘⇧D", () => split(p, true), "Split down"), iconBtn("ib", I.x(16), "Close pane", () => closePane(p)));
   });
   tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
-  renderSide(); save();
+  renderSide(); save(); badgeSync();
   $("tabs").replaceChildren(...setTabs(cur).map((x, i) => {
     const b = el("div", "tab" + (x === cur ? " on" : "")), name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell);
     b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x === cur); b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
@@ -687,8 +705,10 @@ function wsMenu(e, ws, w){
   if (tags.length) c.append(el("div", "tags", tags.join("")));
   const st = el("div", "st", stats(facts.get(ws))), mt = el("div", "meta", meta(w, facts.get(ws)));
   c.append(st); if (mt.innerHTML) c.append(mt);
+  const pr = el("div", "ports"); portsFill(pr, ws, facts.get(ws)); c.append(pr);
   const acts = el("div", "acts");
-  acts.append(btn("", I.shell(18) + "Terminal", act(() => newTab(ws))), btn("pri", I.claude(18) + "Claude", act(() => newTab(ws, "claude")), busy));
+  acts.append(btn("", I.shell(18) + "Terminal", act(() => newTab(ws))), btn("pri", I.claude(18) + "Claude", act(() => newTab(ws, "claude")), busy),
+    btn("", svg16("M5 2v12M11 2v12M2 5h6M8 11h6", 18) + "Diff", act(() => diffOpen(ws))), btn("", I.edit(18) + "Editor", act(() => post({cmd: "edit", ws}))));
   const ft = el("div", "ft");
   if (m.web_url) ft.append(btn("", `Open ${esc(m.ref || "MR")} ` + IC.ext, act(() => post({cmd: "url", url: m.web_url}))));
   const cp = btn("", IC.copy + "Copy " + I.chev(10), () => { const r = cp.getBoundingClientRect(); showMenu({clientX: r.left, clientY: r.bottom + 4}, [
@@ -798,10 +818,16 @@ async function delWs(ws, w){
     if (!r) return;
     if (r.checked) { noAskDel = true; save() }
   }
-  post({cmd: "tree", op: "rm", path: ws});
+  post({cmd: "tree", op: "rm", path: ws, ...teardown(ws) && {text: teardown(ws)}});
 }
 async function treeDone(o){
   if (o.op === "merge") return mergeDone(o);
+  if (o.op === "diff") return diffShow(o);
+  if (o.op === "new") {
+    if (o.error) return ask({icon: "warn", title: "Couldn't make the workspace", text: esc(o.error), cancel: false});
+    if (o.warn) toast(o.warn);
+    return newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
+  }
   if (o.op === "cfg") {  // Save to repo: the file is the look now, so yours goes (Undo brings it back)
     if (o.error) return ask({icon: "warn", title: "Couldn't save to the repo", text: esc(o.error), cancel: false});
     const w = wsInfo(o.path); if (w) w.cfg = o.cfg; merge(); setLook("local", {}); toast(`Saved to ${o.path.split("/").pop()}/.greenlight.json: commit it to share`, true);
@@ -812,11 +838,12 @@ async function treeDone(o){
       c.querySelector(".st").innerHTML = stats(o);
       const mt = c.querySelector(".meta") || c.querySelector(".st").insertAdjacentElement("afterend", el("div", "meta"));
       mt.innerHTML = meta(w || {}, o); mt.hidden = !mt.innerHTML;
+      const pr = c.querySelector(".ports"); if (pr) portsFill(pr, o.path, o);
     }
   } else if (o.risks) {
     const rows = o.risks.map(s => /uncommitted/.test(s) ? ["r", s, "lost"] : /commit/.test(s) ? ["o", s.replace(/ \(.*\)/, ""), /keeps/.test(s) && "branch keeps it"] : ["dim", s[0].toUpperCase() + s.slice(1)]);
     const r = await ask({icon: "warn", title: `${wsName(o.path)} has unsaved work`, text: "Deleting the worktree loses what's not committed.", rows, cancel: "Keep it", safe: true, ok: "Delete anyway", danger: true});
-    if (r) post({cmd: "tree", op: "rm", path: o.path, force: true});
+    if (r) post({cmd: "tree", op: "rm", path: o.path, force: true, ...teardown(o.path) && {text: teardown(o.path)}});
   } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
   else if (o.op === "rm") { facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
 }
@@ -965,7 +992,7 @@ function renderSide(){
     const n = el("span", "wn"); n.textContent = wsName(ws); l1.append(n);
     if (!bd && w?.state === "quiet" && w.why) { const y = el("span", "wy"); y.textContent = w.why.replace(/^waiting on /, ""); l1.append(y) }
     if (bd) { l1.insertAdjacentHTML("beforeend", `<span class="badge k-${bd[1]}" title="${esc(w.why || bd[0])}">${bd[1] === "b" ? g16(G.run, "spin") : ""}${bd[0]}</span>`) }
-    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3"}[w.ade] || w.ade; l1.append(g) }
+    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3", basement: "Basement"}[w.ade] || w.ade; l1.append(g) }
     if (wsTabs(ws).some(x => x !== cur && paneOf(x).some(p => p.bell))) l1.insertAdjacentHTML("beforeend", I.bell(12));
     l1.append(iconBtn("ib", I.plus(13), "New set of tabs here", () => newTab(ws, undefined, true)));
     r.append(l1);
@@ -1025,7 +1052,7 @@ function toggleSide(){
   sliding.onfinish = end;
 }
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
-$("shead").append(iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
+$("shead").append(iconBtn("ib", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
   iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
   t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
@@ -1373,6 +1400,11 @@ function palActs(){
     cur && paneOf(cur).length > 1 && ["This tab", "Zoom pane", svg16("M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"), "⌘⇧↵", "The focused pane fills the tab; again to put the others back.", () => zoomPane(cur)],
     cur && ["This tab", "Find…", svg16("M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5"), "⌘F", "Searches the focused pane's screen and scrollback.", () => find(true)],
     cur && ["This tab", "Clear", svg16("M3 4h10M3 8h10M3 12h5"), "⌘K", "Clears the screen and scrollback; the shell draws its prompt again.", () => clearPane(cur.focus)],
+    ...cmdsOf(curWs).map(c => ["Commands", c.name, c.agent ? I.claude(16) : I.shell(16), "", c.agent ? `Pastes into ${wsName(curWs)}'s Claude for you to send: ${c.run}` : `Runs in a new tab: ${c.run}`,
+      () => c.agent ? toAgent(curWs, c.run) : newTab(curWs, c.run)]),  // .greenlight.json "commands": [{name, run, agent?}]
+    wsInfo(curWs)?.ade && ["This tab", "Diff…", svg16("M5 2v12M11 2v12M2 5h6M8 11h6"), "", `What ${wsName(curWs)} changes; click a line to leave Claude a note.`, () => diffOpen(curWs)],
+    wsInfo(curWs)?.ade && ["This tab", "Open in editor", I.edit(16), "", "Zed, Cursor or VS Code, whichever you have; over ssh for a remote host.", () => post({cmd: "edit", ws: curWs})],
+    ["Basement", "New workspace…", I.plus(16), "", "A git worktree on a new branch: its repo's setup runs, then Claude starts on the goal.", newWsDialog],
     ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
     ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],
     ["Basement", side ? "Show the sidebar (the Basement)" : "Hide the sidebar (the Pipe)", I.sidebar(16), "⌘B", "Slides the sidebar in or out.", toggleSide],
@@ -1396,7 +1428,7 @@ function palRender(){
     const [label, text] = h[i];
     return {...it, score: hs, hit: [], via: `${label}: ${near(text, text.toLowerCase().indexOf(words[0]), words[0].length)}`};  // the field it matched, shown in place of the sub
   }).filter(Boolean);
-  if (qs) { items.sort((a, b) => b.score - a.score); const top = items.shift(); const by = pal.act ? "where" : "group"; items = top ? [{...top, top: true}, ...(pal.act ? ["This tab", "Basement", "Go to"] : Object.keys(GROUPS)).flatMap(g => items.filter(x => x[by] === g))] : [] }
+  if (qs) { items.sort((a, b) => b.score - a.score); const top = items.shift(); const by = pal.act ? "where" : "group"; items = top ? [{...top, top: true}, ...(pal.act ? ["This tab", "Commands", "Basement", "Go to"] : Object.keys(GROUPS)).flatMap(g => items.filter(x => x[by] === g))] : [] }
   else if (!pal.act && pal.scope === "all") { let n = 0; items = items.filter(x => x.kind !== "tab" || n++ < 5) }  // ponytail: the 5 latest terminals until you type
   pal.items = items.slice(0, 60); pal.sel = 0; palDraw();
 }
@@ -1524,7 +1556,8 @@ addEventListener("keydown", e => {
 }, true);
 // ⌘V: ghostty-web's container pastes raw, its textarea bracketed; one bracketed paste, so a shell or Claude Code takes it as one block
 addEventListener("paste", e => {
-  const s = e.clipboardData?.getData("text/plain");
+  const s = e.clipboardData?.getData("text/plain"), img = [...e.clipboardData?.files || []].filter(f => f.type.startsWith("image/"));
+  if (cur && !s && img.length && e.target.closest?.(".t")) { e.preventDefault(); e.stopImmediatePropagation(); return img.slice(0, 5).forEach(f => sendFile(cur.focus, f)) }  // a screenshot: saved where the shell runs, its path pasted
   if (!cur || !s || !e.target.closest?.(".t")) return;
   e.preventDefault(); e.stopImmediatePropagation(); cur.focus.t.scrollToBottom(); cur.focus.t.paste(s.replace(/\r?\n/g, "\r"));  // newlines as ↵, like xterm.js and Ghostty
 }, true);
@@ -1599,6 +1632,114 @@ function looked(out){  // claude -p's answer to a restyle: a JSON object of colo
   if (!Object.keys(v).length) return toast("Couldn't restyle: Claude didn't answer with colors. Try saying it another way.");
   setLook("own", {...worn(), ...v}, {...skinLight, ...skinOk(half(o, "light"))}); toast("Restyled this window", true);
 }
+// —— the Basement's own workspace tools: New workspace, Diff, ports, alerts, file drop, saved commands ——
+const mainOf = ws => { const p = wsInfo(ws)?.project; return p ? trees.find(w => w.main && w.project === p) : null };
+const cfgOf = ws => mainOf(ws)?.cfg || {};
+const teardown = ws => typeof cfgOf(ws).teardown === "string" ? cfgOf(ws).teardown : "";  // dash.py runs it only if the repo's file still says the same
+const cmdsOf = ws => { const c = cfgOf(ws).commands;  // the repo's file: names and commands are its words, shown as text and run only when you pick one
+  return Array.isArray(c) ? c.filter(x => x && typeof x.name === "string" && typeof x.run === "string" && x.name && x.run).slice(0, 40)
+    .map(x => ({name: x.name.slice(0, 80), run: x.run.slice(0, 2000), agent: x.agent === true})) : [] };
+// a prompt for the workspace's Claude: pasted (bracketed) into its pane, not sent, so you read it and press ↩; no Claude open: the clipboard
+function toAgent(ws, text){
+  const p = wsTabs(ws).flatMap(paneOf).find(isClaude);
+  if (!p) { post({cmd: "copy", text}); return toast(`No Claude open in ${wsName(ws)}: copied it instead`) }
+  show(p.tab); focusPane(p); p.t.scrollToBottom(); p.t.paste(text.replace(/\r?\n/g, "\r"));
+}
+function newWsDialog(){
+  const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs);
+  if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
+  const body = el("div", "nwb nws"), fld = (label, inp) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); body.append(l); return inp };
+  const sel = fld("Repo", el("select"));
+  repos.forEach(w => sel.append(Object.assign(el("option"), {value: w.path, textContent: `${w.project} · ${tilde(w.path)}`, selected: w === here})));
+  const name = fld("Branch", Object.assign(el("input"), {type: "text", placeholder: "feat/short-name", maxLength: 100}));
+  const base = fld("From", Object.assign(el("input"), {type: "text", placeholder: "the repo's default branch", maxLength: 100}));
+  const goal = fld("Goal", Object.assign(el("textarea"), {rows: 3, maxLength: 500, placeholder: "What does done look like?"}));
+  const chk = (text, on = true) => { const b = Object.assign(el("input"), {type: "checkbox", checked: on}), l = el("label", "chk"); l.append(b, text); body.append(l); return [b, l] };
+  const [ag] = chk("Start Claude on the goal"), [su, sl] = chk("Run the repo's setup: "), sc = el("code"), err = el("p", "err");
+  sl.append(sc); body.append(err);
+  const syncSetup = () => { const c = trees.find(w => w.path === sel.value)?.cfg?.setup; sl.hidden = typeof c !== "string" || !c; sc.textContent = c || "" };
+  sel.onchange = syncSetup; syncSetup();
+  dlgForm("New workspace", body, "Create", () => {
+    const n = name.value.trim(), b = base.value.trim(), ok = v => /^\w[\w./-]{0,99}$/.test(v) && !v.includes("..");
+    if (!ok(n)) { err.textContent = "Branch: letters, digits, and . _ - /"; name.focus(); return false }
+    if (b && !ok(b)) { err.textContent = "From: a branch name, or empty for the default branch"; base.focus(); return false }
+    post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify({name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""})});
+    toast(`Making ${n}…`); return true;
+  }, null, {cls: "big nw", sub: "A git worktree on a new branch"});
+  name.focus();
+}
+const diffs = new Map();  // worktree → the mode its open Diff dialog asked for
+function diffOpen(ws, mode = "branch"){ diffs.set(ws, mode); post({cmd: "tree", op: "diff", path: ws, text: mode}) }
+function diffShow(o){
+  const ws = o.path; if (!diffs.has(ws)) return;  // closed before the answer came
+  if (o.error) { diffs.delete(ws); return ask({icon: "warn", title: `No diff for ${wsName(ws)}`, text: esc(o.error), cancel: false}) }
+  const notes = [], body = el("div", "dfb"), nav = el("nav"), view = el("section", "dfv");
+  nav.setAttribute("aria-label", "Changed files"); body.append(nav, view);
+  const num = v => +v || 0, add = o.files.reduce((n, f) => n + num(f[1]), 0), del = o.files.reduce((n, f) => n + num(f[2]), 0);
+  nav.append(el("div", "dsum", `${o.files.length} file${o.files.length === 1 ? "" : "s"} · <span class="pl">+${add}</span> <span class="mi">−${del}</span>`));
+  const count = () => { const k = notes.filter(n => n.ta.value.trim()).length, b = $("dlg").querySelector("button.pri"); if (b) { b.textContent = k ? `Send ${k} note${k > 1 ? "s" : ""} to Claude` : "Send notes to Claude"; b.disabled = !k } };
+  const note = (r, f, at) => {
+    if (r.nextSibling?.classList?.contains("dn")) return r.nextSibling.querySelector("textarea").focus();
+    const box = el("div", "dn"), ta = Object.assign(el("textarea"), {rows: 2, maxLength: 2000, placeholder: `A note to Claude on ${f}:${at}`}), n = {f, at, ta};
+    ta.setAttribute("aria-label", `Note on ${f} line ${at}`); ta.oninput = count; notes.push(n);
+    const x = Object.assign(el("button", "lite"), {type: "button", textContent: "Remove"}); x.onclick = () => { notes.splice(notes.indexOf(n), 1); box.remove(); count() };
+    box.append(ta, x); r.after(box); ta.focus(); count();
+  };
+  let file = "", at = 0;  // the patch, a row per line; a line in the new file takes a note
+  for (const l of o.patch.split("\n")) {
+    if (l.startsWith("diff --git ")) {
+      const f = file = l.replace(/^diff --git a\/.* b\//, ""), h = el("div", "dfh"), [, a, d] = o.files.find(x => x[0] === f) || [], b = Object.assign(el("button"), {type: "button"});
+      h.textContent = f; view.append(h);
+      b.innerHTML = `<span></span><span class="pl">${num(a) ? "+" + a : ""}</span><span class="mi">${num(d) ? "−" + d : ""}</span>`; b.firstChild.textContent = f; b.onclick = () => h.scrollIntoView({block: "start"}); nav.append(b);
+      continue;
+    }
+    if (!l || l[0] === "\\" || /^(index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode|Binary files)/.test(l)) continue;
+    const m = l.match(/^@@ -\d+(?:,\d+)? \+(\d+)/), r = el("div", "dl" + (m ? " hk" : l[0] === "+" ? " ad" : l[0] === "-" ? " rm" : ""));
+    if (m) { at = +m[1]; r.textContent = l; view.append(r); continue }
+    const n = l[0] === "-" ? null : at++, f = file;
+    r.append(Object.assign(el("i"), {textContent: n ?? ""}), l);
+    if (n != null) { r.title = "Leave Claude a note on this line"; r.onclick = () => note(r, f, n) }
+    view.append(r);
+  }
+  if (o.cut) view.append(el("div", "dcut", "The rest is cut (over 300 KB): open it in your editor."));
+  if (!o.files.length) view.append(el("div", "dcut", o.mode === "head" ? "Nothing uncommitted." : `No changes from ${esc(o.base)}.`));
+  const seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Compare");
+  [["Uncommitted", "head"], ["Branch", "branch"]].forEach(([t, m]) => { const b = Object.assign(el("button"), {type: "button", textContent: t}); b.setAttribute("aria-pressed", o.mode === m); b.onclick = () => diffOpen(ws, m); seg.append(b) });
+  const ed = Object.assign(el("button", "lite"), {type: "button", textContent: "Open in editor"}); ed.onclick = () => post({cmd: "edit", ws});
+  dlgForm(o.mode === "head" ? `${wsName(ws)}: uncommitted` : `${wsName(ws)} vs ${o.base}`, body, "Send notes to Claude", () => {
+    const k = notes.filter(n => n.ta.value.trim()); if (!k.length) return false;
+    toAgent(ws, `Notes on the diff (${o.mode === "head" ? "uncommitted changes" : "this branch vs " + o.base}):\n` + k.map(n => `- ${n.f}:${n.at}: ${n.ta.value.trim()}`).join("\n"));
+    return true;
+  }, () => diffs.delete(ws), {cls: "big cc", head: [seg], left: [ed]});
+  count();
+}
+// a dev server's port, from processes started in this worktree's terminals: a click opens it (through an ssh tunnel when the host is remote)
+function portsFill(box, ws, o){
+  box.replaceChildren(...(o?.ports || []).filter(Number.isInteger).slice(0, 8).map(n => {
+    const b = Object.assign(el("button"), {type: "button", textContent: `localhost:${n}`}); b.onclick = () => post({cmd: "port", port: n, ws});
+    b.title = hostOf(ws) === "local" ? "Open in your browser" : `Open in your browser, through an ssh tunnel to ${hostOf(ws)}`; return b }));
+  box.hidden = !box.children.length;
+}
+// an agent that finished, wants you, or says so (OSC 9/777): one notification per change, none for the pane you're looking at or auto-run's tabs
+var pinged = new Map();
+function ping(p, what, text){
+  if (p.tab.auto || (p === cur?.focus && document.hasFocus()) || Date.now() - (pinged.get(p.id) || 0) < 10e3) return;
+  pinged.set(p.id, Date.now()); p.bell = true;
+  post({cmd: "notify", title: `${wsName(p.tab.ws)}: ${what}`, body: String(text).slice(0, 300)});
+}
+function badgeSync(){ const n = [...panes.values()].filter(p => p.bell && isClaude(p)).length; if (n !== badgeSync.n) post({cmd: "badge", n: badgeSync.n = n}) }  // the Dock: agents waiting on you (hoisted: render runs during load)
+// a file dropped on a pane (or a pasted screenshot): the app writes it where that pane's shell runs and its path is pasted in
+function sendFile(p, f){
+  if (f.size > 10e6) return toast(`${f.name || "That file"} is over 10 MB`);
+  const r = new FileReader();
+  r.onload = () => post({cmd: "file", id: p.id, ws: p.tab.ws, name: f.name || "pasted.png", data: String(r.result).split(",")[1] || ""});
+  r.readAsDataURL(f);
+}
+let dropT;
+$("stage").addEventListener("dragover", e => { if (!e.dataTransfer?.types.includes("Files")) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+  $("stage").classList.add("drop"); clearTimeout(dropT); dropT = setTimeout(() => $("stage").classList.remove("drop"), 200) });
+$("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files || []]; if (!fs.length) return; e.preventDefault(); $("stage").classList.remove("drop");
+  const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
 let picked;  // Choose folder…'s answer, from the app
 window.term = {
   mode(m, b, f){ mode = m; chrome = {bg: b, fg: f}; paint() },  // the app's Auto/Light/Dark: chrome only, CSS
@@ -1627,7 +1768,9 @@ window.term = {
   },
   focus: () => { if (!ready || !restored) return; if (!tabs.length) newTab(acctHome()); else cur.focus.t.focus() },
   restore,
-  tree: o => { treeDone(o) },  // not the promise: a dialog it opens waits on you, not on the caller
+  tree: o => { treeDone(o) },
+  filed: (id, path) => { const p = panes.get(id); if (!p) return; if (!path) return toast("Couldn't copy the file over"); p.t.paste(shq(path) + " ") },
+  toast: t => toast(String(t)),  // not the promise: a dialog it opens waits on you, not on the caller
   looked: out => { looked(out); const a = !$("dlg").hidden && $("dlg").querySelector("#look-ask"); if (a) lookDialog(a.value) },  // the Colors dialog, if open, shows it
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
