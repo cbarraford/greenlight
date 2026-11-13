@@ -17,7 +17,7 @@
   --fill:rgba(120,120,135,.22); --track:#3A3A3E;
   --glass:rgba(255,255,255,.055); --glass-hi:rgba(255,255,255,.12);
   --shadow:rgba(0,0,0,.5); --elev:0 12px 32px var(--shadow); --elev-up:0 -12px 32px var(--shadow); --shadow-sm:0 2px 8px rgba(0,0,0,.35);
-  --tint-a:.14; --canvas:var(--mc-bg,#111113); --strip:var(--mc-surface,#19191C); --hexbody:var(--mc-surface,#1C1C1F); --hexline:rgba(255,255,255,.14); --nuc:rgba(28,28,30,.94);
+  --gl-a1:.5; --gl-a2:.12; --gl-hi:.22; --gl-edge:.55; --gl-sh:32%; --canvas:var(--mc-bg,#111113); --strip:var(--mc-surface,#19191C); --hexbody:var(--mc-surface,#1C1C1F); --hexline:rgba(255,255,255,.14);
   /* state fills (hexes, bars, dots) */
   --orange:#FF9F0A; --yellow:#FFD60A; --blue:#0A84FF; --red:#FF453A; --green:#30D158; --gray:#8E8E93; --purple:#BF5AF2; --teal:#64D2FF;
   /* state inks (text on --card, all >= 4.5:1) */
@@ -52,7 +52,7 @@
     --fill:rgba(46,111,67,.10); --track:#E2EAE1;
     --glass:rgba(255,255,255,.9); --glass-hi:#FFFFFF;
     --shadow:rgba(25,50,30,.12); --shadow-sm:0 2px 8px rgba(25,50,30,.07);
-    --tint-a:.22; --canvas:var(--mc-surface,#FFFFFF); --strip:var(--mc-bg,#F5F8F4); --hexbody:var(--mc-surface,#FFFFFF); --hexline:#B9CBB6; --nuc:rgba(255,255,255,.94); --track-a:.16;
+    --gl-a1:.26; --gl-a2:.07; --gl-hi:.9; --gl-edge:1; --gl-sh:24%; --canvas:var(--mc-surface,#FFFFFF); --strip:var(--mc-bg,#F5F8F4); --hexbody:var(--mc-surface,#FFFFFF); --hexline:#B9CBB6; --track-a:.16;
     --orange:#F08A00; --yellow:#E6B800; --blue:#0A7AFF; --red:#E5392F; --green:#2BA84A; --gray:#8E8E93; --purple:#AF52DE; --teal:#16A3CC;
     --orange-ink:#A85A00; --yellow-ink:#8A6D00; --blue-ink:#0062CC; --red-ink:#C62828; --green-ink:#1E7A36; --gray-ink:#5E5E66; --purple-ink:#7E2FBF; --teal-ink:#0A6F94;
     --orange-tint:rgba(240,138,0,.16); --yellow-tint:rgba(230,184,0,.18); --blue-tint:rgba(10,122,255,.14); --red-tint:rgba(229,57,47,.14);
@@ -179,10 +179,11 @@ main.ov{background:var(--canvas)}
 .hx{position:relative}
 .hx svg{position:absolute;inset:0;overflow:visible}
 .hx .body{fill:var(--hexbody);stroke:none}  /* one contour: the track and its progress edge */
-.hx .tint{fill-opacity:var(--tint-a)}
+/* glass: a frosted tint of the state color (#glass gradients), a lit top edge, a shadow in the same hue */
+.hx>svg{filter:drop-shadow(0 8px 16px color-mix(in srgb,var(--hc) var(--gl-sh),transparent))}
+.hx .lit{fill:url(#gl-hi);stroke-width:1.5;stroke-linejoin:round}
 .hx .back{fill:var(--hexbody);stroke:var(--hexline);stroke-width:1}
-.hx .track{fill:none;stroke:var(--hexline);opacity:var(--track-a,.3)}
-.hx .nuc{fill:var(--nuc)} .hx.sm .nuc{opacity:.55}
+.hx .track{fill:none;opacity:var(--track-a,.2)}
 .hx .halo{fill:none;stroke:var(--blue);stroke-width:3;stroke-linejoin:round;opacity:0;transition:opacity .15s}
 .cell:focus-visible{box-shadow:none}  /* the hex's halo is its focus ring */
 .cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fp:hover .halo{opacity:1}
@@ -594,6 +595,7 @@ body:has(>main.ov){background:var(--canvas)}  /* the toast's row reads as part o
 </head>
 <body>
 <div class="bar" id="bar"></div>
+<svg id="glass" width="0" height="0" style="position:absolute" aria-hidden="true"><defs><linearGradient id="gl-needs" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--orange);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--orange);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-needs" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--orange);stop-opacity:.45"/></linearGradient><linearGradient id="gl-crashed" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--red);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--red);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-crashed" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--red);stop-opacity:.45"/></linearGradient><linearGradient id="gl-raised" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--yellow);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--yellow);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-raised" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--yellow);stop-opacity:.45"/></linearGradient><linearGradient id="gl-working" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--blue);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--blue);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-working" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--blue);stop-opacity:.45"/></linearGradient><linearGradient id="gl-queued" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--gray);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--gray);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-queued" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--gray);stop-opacity:.45"/></linearGradient><linearGradient id="gl-quiet" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--purple);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--purple);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-quiet" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--purple);stop-opacity:.45"/></linearGradient><linearGradient id="gl-done" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--green);stop-opacity:var(--gl-a1)"/><stop offset="1" style="stop-color:var(--green);stop-opacity:var(--gl-a2)"/></linearGradient><linearGradient id="ge-done" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-edge)"/><stop offset="1" style="stop-color:var(--green);stop-opacity:.45"/></linearGradient><radialGradient id="gl-hi" cx=".32" cy=".1" r=".8"><stop offset="0" style="stop-color:#fff;stop-opacity:var(--gl-hi)"/><stop offset="1" style="stop-color:#fff;stop-opacity:0"/></radialGradient></defs></svg>
 <main id="main" class="ov"><div class="empty" role="status"><span class="ehex wait" aria-hidden="true"><i class="spin"></i></span><h2 class="eh sm">Connecting</h2><p class="ep">Loading your workspaces and agent activity.</p><small class="etry"></small></div></main>
 <div class="foot" id="foot"></div>
 <script>
@@ -829,14 +831,14 @@ function hexEl(p, R, opts = {}){
     s("polygon", {class:"halo", points: hpoly(R * 1.05)}),
     p.state === "needs" || p.state === "crashed" ? s("polygon", {class:"pulse", points: hpoly(R * .97), stroke: col}) : null,
     s("polygon", {class:"body", points: hpoly(R * .97)}),
-    s("polygon", {class:"tint", points: hpoly(R * .89), fill: col}),
-    s("polygon", {class:"track", points: hpoly(R * .9), "stroke-width": Math.max(2, R * .06)}),
-    s("polygon", {points: hpoly(R * .9), fill:"none", stroke: col, "stroke-width": Math.max(2, R * .06), pathLength: n,
-      "stroke-dasharray": "0.82 0.18 ".repeat(i) + `0 ${n}`}),
-    s("polygon", {class:"nuc", points: hpoly(nuc)}));
+    s("polygon", {points: hpoly(R * .97), fill: `url(#gl-${p.state})`}),
+    s("polygon", {class:"lit", points: hpoly(R * .97), stroke: `url(#ge-${p.state})`}),
+    s("polygon", {class:"track", points: hpoly(R * .84), stroke: col, "stroke-width": Math.max(2, R * .05)}),
+    s("polygon", {points: hpoly(R * .84), fill:"none", stroke: col, "stroke-width": Math.max(2, R * .05), "stroke-linejoin": "round", pathLength: n,
+      "stroke-dasharray": "0.82 0.18 ".repeat(i) + `0 ${n}`}));
   const lbl = ink(STATE[p.state].color), b = Math.max(6, Math.round(R * .15)), named = !compact && R >= 50 && lb.num !== "No MR" && !opts.num;  // named: task, MR, step
   const ly = named ? R * 1.02 : R * 1.04;  // under the bell and agent dot's band
-  return h("div", {class:"hx" + (lb.num === "No MR" ? " nomr" : "") + (R < 40 ? " sm" : ""), style:`width:${2 * R}px;height:${2 * R}px`}, svg,
+  return h("div", {class:"hx" + (lb.num === "No MR" ? " nomr" : "") + (R < 40 ? " sm" : ""), style:`width:${2 * R}px;height:${2 * R}px;--hc:${col}`}, svg,
     h("div", {class:"hin", style:`width:${Math.max(nuc * 1.9, R * 1.5)}px;top:${ly}px`},
       named ? h("b", {class:"hname"}, p.name.split("/").pop().replace(/-/g, " ")) : null,  // big enough: which task, then its MR
       lb.num === "No MR" && !opts.num ? h("b", {class:"hname", style: compact || R < 40 ? `font-size:11px;-webkit-line-clamp:1;width:${Math.round(R * 1.75)}px;margin:0 auto;text-align:center` : null}, compact || R < 40 ? p.name.split("/").pop().split("-")[0] : p.name.split("/").pop().replace(/-/g, " ")) :  // no MR yet: its name says which one
