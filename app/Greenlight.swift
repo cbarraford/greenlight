@@ -3698,10 +3698,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         let ansi = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
         let keys = ["background": "background", "foreground": "foreground", "cursor-color": "cursor", "cursor-text": "cursorAccent",
-                    "selection-background": "selectionBackground", "selection-foreground": "selectionForeground", "font-family": "font", "font-size": "size"]
+                    "selection-background": "selectionBackground", "selection-foreground": "selectionForeground", "font-family": "font", "font-size": "size", "macos-option-as-alt": "optAlt"]
         var out = [String: String]()
         for (k, v) in all {
-            if let key = keys[k] { out[key] = key == "font" || key == "size" ? v : (v.hasPrefix("#") ? v : "#" + v) }
+            if let key = keys[k] { out[key] = ["font", "size", "optAlt"].contains(key) ? v : (v.hasPrefix("#") ? v : "#" + v) }
             else if k == "palette", let eq = v.firstIndex(of: "="), let n = Int(v[..<eq]), n < 16 {
                 let c = String(v[v.index(after: eq)...]); out[n < 8 ? ansi[n] : "bright" + ansi[n - 8].capitalized] = c.hasPrefix("#") ? c : "#" + c
             }
