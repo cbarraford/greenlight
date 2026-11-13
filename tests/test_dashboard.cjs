@@ -443,6 +443,51 @@ test("terminal: a tab whose title is just ~ is named by the folder its shell is 
   await tp.close();
 });
 
+test("terminal: keys send what Ghostty sends, and ⌘K / ⌘A / ⌘F / ⌘V / panes act like Ghostty's", async page => {
+  const tp = await page.context().browser().newPage({viewport: {width: 1000, height: 600}});
+  await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
+  await tp.route("**/ghostty-web.js", r => r.fulfill({path: path.join(__dirname, "../app/", "vendor", "ghostty-web.js")}));
+  await tp.goto("file://" + path.join(__dirname, "../app/", "terminal.html"));
+  await tp.waitForFunction(() => (window.__term || []).some(m => m.cmd === "ready"), null, {timeout: 8000});
+  await tp.evaluate(() => term.restore(null));
+  await tp.click(".pane canvas");
+  const sent = async (keys, fn) => { await tp.evaluate(() => window.__term.length = 0); for (const k of keys) await (fn ? tp.evaluate(fn, k) : tp.keyboard.press(k));
+    return tp.evaluate(() => window.__term.filter(m => m.cmd === "in").map(m => m.d).join("")) };
+  const want = {"Shift+Tab": "\x1b[Z", "Shift+Enter": "\n", "Alt+ArrowLeft": "\x1bb", "Alt+ArrowRight": "\x1bf", "Alt+Backspace": "\x1b\x7f",
+    "Meta+ArrowLeft": "\x01", "Meta+ArrowRight": "\x05", "Meta+Backspace": "\x15", "Meta+Home": "", "Meta+q": "", "Control+c": "\x03", "Control+v": "\x16", "Control+i": "\t", "Control+m": "\r", "Control+BracketLeft": "\x1b", "Enter": "\r", "Tab": "\t"};
+  for (const [k, d] of Object.entries(want)) assert.equal(await sent([k]), d, k);
+  // ⌥ without macos-option-as-alt types the character macOS makes (CDP can't produce ∫ from ⌥B, so this one is synthetic)
+  assert.equal(await sent([0], () => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {key: "∫", code: "KeyB", altKey: true, bubbles: true, cancelable: true}))), "∫");
+  await tp.evaluate(() => { let s = ""; for (let i = 0; i < 60; i++) s += `line${i} Needle needle\r\n`; cur.focus.t.write(s) });
+  await tp.waitForTimeout(100);
+  assert.ok(await tp.evaluate(() => cur.focus.t.getScrollbackLength() > 0));
+  assert.equal(await sent(["Meta+k"]), "\x0c", "⌘K has the shell redraw");
+  assert.equal(await tp.evaluate(() => cur.focus.t.getScrollbackLength()), 0, "⌘K clears the scrollback");
+  await tp.evaluate(() => { let s = ""; for (let i = 0; i < 60; i++) s += `line${i} Needle needle\r\n`; cur.focus.t.write(s) });
+  await tp.waitForTimeout(100);
+  await tp.keyboard.press("Meta+a");
+  assert.ok(await tp.evaluate(() => { const s = cur.focus.t.getSelection(); return s.startsWith("line0 ") && s.includes("line59") }), "⌘A takes the whole history");
+  await tp.keyboard.press("Meta+f"); await tp.keyboard.type("Needle");
+  assert.equal(await tp.textContent("#fn"), "1 of 60", "a capital matches case");
+  await tp.keyboard.press("Enter");
+  assert.equal(await tp.evaluate(() => cur.focus.t.getSelection()), "Needle");
+  assert.equal(await tp.evaluate(() => cur.focus.t.buffer.active.getLine(fnd.hits[fnd.i].y).translateToString(true)), "line58 Needle needle", "↵ goes older");
+  await tp.keyboard.press("Escape");
+  assert.equal(await tp.evaluate(() => $("find").hidden), true);
+  await tp.evaluate(() => window.__term.length = 0);
+  await tp.evaluate(() => { const dt = new DataTransfer(); dt.setData("text/plain", "a\nb"); cur.focus.t.write("\x1b[?2004h");
+    setTimeout(() => cur.focus.box.querySelector("textarea").dispatchEvent(new ClipboardEvent("paste", {clipboardData: dt, bubbles: true, cancelable: true})), 50) });
+  await tp.waitForTimeout(150);
+  assert.equal(await tp.evaluate(() => window.__term.filter(m => m.cmd === "in").map(m => m.d).join("")), "\x1b[200~a\rb\x1b[201~", "⌘V pastes once, bracketed");
+  await tp.keyboard.press("Meta+d"); await tp.waitForTimeout(150);
+  const [a, b] = await tp.evaluate(() => paneOf(cur).map(p => p.id));
+  await tp.keyboard.press("Meta+Alt+ArrowLeft");
+  assert.equal(await tp.evaluate(() => cur.focus.id), a, "⌘⌥← focuses the pane on the left");
+  await tp.keyboard.press("Meta+Shift+Enter");
+  assert.equal(await tp.evaluate(id => panes.get(id).box.getBoundingClientRect().width, b), 0, "⌘⇧↵ zooms the focused pane");
+  await tp.close();
+});
+
 (async () => {
   const browser = await chromium.launch({executablePath: browserPath()});
   let failed = 0;

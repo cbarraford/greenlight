@@ -114,6 +114,11 @@ svg{display:block;flex-shrink:0}
 /* panes: each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal. Split: every pane gets a header; the focused one carries the blue line, the rest dim */
 #stage{position:relative;flex:1;min-height:0;background:var(--term-bg);--bg:var(--term-bg);--fg:var(--term-fg);--dim:color-mix(in srgb,var(--term-fg) 62%,var(--term-bg));--hair:color-mix(in srgb,var(--term-fg) 13%,var(--term-bg))}  /* the screen keeps the terminal's colors in Light */
 .root{position:absolute;inset:0;display:flex} .root[hidden]{display:none}
+.root.zoom .pane:not(.on),.root.zoom .dv,.root.zoom .split:not(:has(.pane.on)){display:none}  /* ⌘⇧↵: the focused pane fills the tab */
+#find{position:absolute;top:8px;right:18px;z-index:6;display:flex;align-items:center;gap:2px;padding:3px;border-radius:8px;background:var(--strip);color:var(--fg);box-shadow:0 0 0 1px var(--hair),0 4px 14px rgba(0,0,0,.28);font-size:12px}
+#find[hidden]{display:none} #fq{width:190px;height:22px;padding:0 8px;border:0;border-radius:5px;background:var(--hair);color:var(--fg);font:inherit;outline:none}
+#fn{min-width:64px;padding:0 6px;color:var(--dim);text-align:center;font-variant-numeric:tabular-nums} #find button{width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--fg);font:inherit}
+#find button:hover{background:var(--hair)}
 .split{display:flex;flex:1 1 0;min-width:0;min-height:0} .split.col{flex-direction:column}
 .pane{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;overflow:hidden}
 .ph{display:none;align-items:center;gap:8px;height:28px;flex-shrink:0;padding:0 8px 0 14px;box-shadow:inset 0 -1px 0 var(--hair);color:var(--dim);font-size:11.5px;-webkit-user-select:none;user-select:none;-webkit-user-select:none}
@@ -271,7 +276,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 <button id="jump" type="button"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/></svg><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
 <div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
-<div id="stage"></div></div>
+<div id="stage"><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
 <div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
 <div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><svg id="pico" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
 <script>
@@ -283,7 +288,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 // page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
-const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, lightBg, lightFg, ...colors} = look, root = document.documentElement.style;
+const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, lightBg, lightFg, optAlt, ...colors} = look, root = document.documentElement.style;
 // the window bar's Auto/Light/Dark (term.mode): the chrome follows it; the terminal screen keeps its own colors, always
 let mode = mode0, chrome = {bg: lightBg, fg: lightFg};
 const own = !colors.background, sys = matchMedia("(prefers-color-scheme: light)"), base = {...colors};  // own: no app/Ghostty background, so the page follows macOS live
@@ -380,6 +385,7 @@ function newPane(tab, cmd, session = sid()){
   box.addEventListener("mousedown", () => { if (p.tab.focus !== p) focusPane(p) });
   return {p, mount(){
     t.loadAddon(fit); t.open(host); fit.fit(); fit.observeResize();
+    t.attachCustomKeyEventHandler(e => { const s = e.metaKey || e.isComposing ? null : ghostKey(t, e); if (s) t.input(s, true); return typeof s === "string" });
     host.addEventListener("mousemove", e => setTimeout(() => linkHover(p, e), 40));  // after ghostty-web's own 16ms-throttled hover
     host.addEventListener("mouseleave", lnkHide);
     host.addEventListener("click", e => { const l = t.currentHoveredLink;  // a plain click opens it too; ⌘-click is ghostty-web's own
@@ -389,6 +395,26 @@ function newPane(tab, cmd, session = sid()){
     post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
     if (cmd) post({cmd: "in", id, d: cmd + "\r"});
   }};
+}
+// Keys ghostty-web gets wrong next to Ghostty's defaults (ghostty +list-keybinds --default): the bytes to send, "" when
+// handled here with nothing to send, null to leave it to ghostty-web. ⌘ keys are in the window listener below.
+const US = {Backquote: "`~", Minus: "-_", Equal: "=+", BracketLeft: "[{", BracketRight: "]}", Backslash: "\\|", Semicolon: ";:", Quote: "'\"", Comma: ",<", Period: ".>", Slash: "/?", Space: "  "};
+function ghostKey(t, e){
+  const k = e.key, sh = e.shiftKey, only = m => e.altKey === m.includes("a") && e.ctrlKey === m.includes("c");
+  if (k === "Tab" && only("")) return sh ? "\x1b[Z" : null;
+  if (k === "Enter" && sh && only("")) return "\n";
+  // ghostty-web sends CSI u for ⌃I ⌃M ⌃[ (with no app asking for it) and nothing for ⌃V (it takes it for paste)
+  if (only("c") && !sh && k.length === 1 && "im[v".includes(k)) return {i: "\t", m: "\r", "[": "\x1b", v: "\x16"}[k];
+  if ((k === "PageUp" || k === "PageDown") && sh && only("")) { t.scrollPages(k === "PageUp" ? -1 : 1); return "" }
+  if (!only("a") || sh && k.startsWith("Arrow")) return null;
+  if (k === "ArrowLeft" || k === "ArrowRight") return k === "ArrowLeft" ? "\x1bb" : "\x1bf";
+  if (k === "Backspace") return "\x1b\x7f";
+  if (k.length !== 1) return null;  // Dead (⌥E, ⌥U…) composes through the textarea; ↵, arrows… stay ghostty-web's
+  if (!optAlt || optAlt === "false") return k;  // macOS-style ⌥: the character it makes (⌥B → ∫)
+  // ponytail: ⌥ as Meta reads a US layout off the physical key; "left"/"right" act like true
+  const c = e.code, base = /^Key[A-Z]$/.test(c) ? c[3].toLowerCase() : /^Digit\d$/.test(c) ? c[5] : US[c]?.[0];
+  if (!base) return k;
+  return "\x1b" + (!sh ? base : /[a-z]/.test(base) ? base.toUpperCase() : /\d/.test(base) ? ")!@#$%^&*("[+base] : US[c][1]);
 }
 // links: ghostty-web finds URLs (its OSC 8 lookup is a stub that returns null) and ⌘-click calls window.open, which a WKWebView ignores, so the app opens it.
 // Hovering one offers Open / Copy.
@@ -439,7 +465,7 @@ function mkTab(ws, o = {}){
 const divider = down => { const dv = el("div", "dv"); dv.setAttribute("role", "separator"); dv.setAttribute("aria-orientation", down ? "horizontal" : "vertical"); dv.onmousedown = e => drag(e, dv, down); return dv };
 // a split is always two children with a divider between; dragging the divider trades size between them
 function split(p, down){
-  const wrap = el("div", "split" + (down ? " col" : ""));
+  const wrap = el("div", "split" + (down ? " col" : "")); p.tab.r.classList.remove("zoom");
   wrap.style.flex = p.box.style.flex; p.box.style.flex = "";
   p.box.replaceWith(wrap);
   const {p: n, mount} = newPane(p.tab), dv = divider(down);
@@ -482,6 +508,7 @@ function focusPane(p){
   render(); p.t.focus();
 }
 function show(tab){
+  if (tab !== cur) $("find").hidden = true;
   cur = tab; curWs = tab.ws; tab.used = Date.now();
   tabs.forEach(x => x.r.hidden = x !== tab);
   paneOf(tab).forEach(p => { p.bell = false; p.fit.fit() });
@@ -587,7 +614,7 @@ function menu(e, tab, side = false){
   const m = $("menu"), items = [["Rename…", "", () => rename(tab, side)], ["Name with AI", "", () => aiName(tab)]];
   if (tab.name) items.push(["Use the terminal's title", "", () => { tab.name = ""; tab.manual = true; render() }]);
   if (tab.manual) items.push(["Name automatically", "", () => { tab.manual = false; tab.sig = ""; aiName(tab) }]);
-  items.push(null, ["Split right", "⌘D", () => { show(tab); split(tab.focus, false) }], ["Split down", "⌘⇧D", () => { show(tab); split(tab.focus, true) }], null, ["Close tab", "⌘W", () => closeTab(tab)]);
+  items.push(null, ["Split right", "⌘D", () => { show(tab); split(tab.focus, false) }], ["Split down", "⌘⇧D", () => { show(tab); split(tab.focus, true) }], null, ["Close tab", "⌥⌘W", () => closeTab(tab)]);
   showMenu(e, items);
 }
 // items: [label, kbd, fn, {danger, off: "why it's disabled"}] or null (a rule); head: a header above them
@@ -1341,7 +1368,11 @@ function palActs(){
     cur && ["This tab", "Split right", I.splitR(16), "⌘D", `Opens a shell beside the pane you're in, in ${wsName(curWs)}. From a result, ⌥↵ jumps there and splits right.`, () => split(cur.focus)],
     cur && ["This tab", "Split down", I.splitD(16), "⌘⇧D", "Opens a shell under the pane you're in.", () => split(cur.focus, true)],
     cur && ["This tab", "Rename tab…", I.edit(16), "", "A name you type sticks: nothing auto-names over it again.", () => rename(cur)],
-    cur && ["This tab", "Close tab", I.x(16), "⌘W", "Closes its panes and ends their sessions.", () => closeTab(cur)],
+    cur && paneOf(cur).length > 1 && ["This tab", "Close pane", I.x(16), "⌘W", "Ends the focused pane's session; the others fill its space.", () => closePane(cur.focus)],
+    cur && ["This tab", "Close tab", I.x(16), "⌥⌘W", "Closes its panes and ends their sessions.", () => closeTab(cur)],
+    cur && paneOf(cur).length > 1 && ["This tab", "Zoom pane", svg16("M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"), "⌘⇧↵", "The focused pane fills the tab; again to put the others back.", () => zoomPane(cur)],
+    cur && ["This tab", "Find…", svg16("M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5"), "⌘F", "Searches the focused pane's screen and scrollback.", () => find(true)],
+    cur && ["This tab", "Clear", svg16("M3 4h10M3 8h10M3 12h5"), "⌘K", "Clears the screen and scrollback; the shell draws its prompt again.", () => clearPane(cur.focus)],
     ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
     ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],
     ["Basement", side ? "Show the sidebar (the Basement)" : "Hide the sidebar (the Pipe)", I.sidebar(16), "⌘B", "Slides the sidebar in or out.", toggleSide],
@@ -1448,30 +1479,113 @@ $("pq").onkeydown = e => {
 };
 $("pal").onmousedown = e => { if (e.target === $("pal")) { e.preventDefault(); palette(false) } };
 
-// ⌘T new tab, ⌘D / ⌘⇧D split, ⌘= / ⌘- / ⌘0 size, ⌘1–9 jump, ⌘⇧[ / ⌘⇧] tab, ⌘[ / ⌘] pane, ⌘⌥↑/↓ workspace, ⌘B sidebar, ⌘J jump
-// (⌘W comes from the app's Close menu item as term.closeTab); tabs and ⌘1–9 count within the workspace
+// Ghostty's keys (ghostty +list-keybinds --default), less the ones the app owns: ⌘↑/↓ ride the floors, ⌘⌥↑/↓ switch workspaces, ⌘⇧C/G/T, ⌘J jump, ⌘R, ⌘N.
+// ⌘T tab, ⌘D / ⌘⇧D split, ⌘W pane then tab (the app's Close menu item, as term.closeTab), ⌥⌘W tab, ⌘1–8 / ⌘9 last, ⌘⇧[ / ⌘⇧] or ⌃⇥ / ⌃⇧⇥ tab,
+// ⌘[ / ⌘] or ⌘⌥← / → pane, ⌘⇧↵ zoom a pane, ⌘⌃arrows resize, ⌘⌃= equalize, ⌘= / ⌘- / ⌘0 size, ⌘K clear, ⌘A select all, ⌘C copy,
+// ⌘F / ⌘E find (⌘G / ⌘⇧G next / previous while it's open), ⌘Home / End / PgUp / PgDn scroll, ⌘← / → / ⌫ line start / end / kill,
+// ⌘⇧P actions, ⌘B sidebar; tabs and ⌘1–9 count within the workspace
 addEventListener("keydown", e => {
   if (e.target.closest?.("#card textarea")) return;  // the goal box keeps its own keys (this listener captures)
   if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
-  if (!e.metaKey || !cur || editing || !$("pal").hidden || !$("dlg").hidden) return;
+  const free = cur && !editing && $("pal").hidden && $("dlg").hidden;
+  if (free && e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) { const ws = setTabs(cur); show(ws[(ws.indexOf(cur) + (e.shiftKey ? -1 : 1) + ws.length) % ws.length]); e.preventDefault(); e.stopPropagation(); return }
+  if (!e.metaKey || !free) return;
   const k = e.key.toLowerCase(), ws = setTabs(cur), i = ws.indexOf(cur), mine = paneOf(cur), j = mine.indexOf(cur.focus);
-  const wss = [...(isShut("§host") ? [] : homes()), ...sideOrder()];
+  const wss = [...(isShut("§host") ? [] : homes()), ...sideOrder()], t = cur.focus.t, inT = e.target.closest?.(".t"), only = !e.shiftKey && !e.altKey && !e.ctrlKey;
   if (k === "j" && !e.shiftKey) palette(true);
   else if (k === "b" && !e.shiftKey) toggleSide();
   else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) openWs(wss[(wss.indexOf(curWs) + (e.key === "ArrowDown" ? 1 : -1) + wss.length) % wss.length]);
+  else if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) paneToward(e.key === "ArrowLeft" ? -1 : 1);
+  else if (e.ctrlKey && e.key.startsWith("Arrow")) nudge(cur.focus, e.key);
+  else if (e.ctrlKey && (k === "=" || k === "+")) equalize(cur);
+  else if (inT && only && ["arrowleft", "arrowright", "backspace"].includes(k)) t.input({arrowleft: "\x01", arrowright: "\x05", backspace: "\x15"}[k], true);
+  else if (inT && !e.altKey && !e.ctrlKey && ["home", "end", "pageup", "pagedown"].includes(k)) k === "home" ? t.scrollToTop() : k === "end" ? t.scrollToBottom() : t.scrollPages(k === "pageup" ? -1 : 1);
+  else if (inT && only && k === "k") clearPane(cur.focus);
+  else if (inT && only && k === "a") selectAll(t);
+  else if (inT && only && k === "c" && t.hasSelection()) post({cmd: "copy", text: t.getSelection()});
+  else if (e.code === "KeyW" && e.altKey && !e.shiftKey) closeTab(cur);
+  else if (e.key === "Enter" && e.shiftKey) zoomPane(cur);
+  else if (k === "p" && e.shiftKey) { palette(true); $("pq").value = ">"; palRender() }
+  else if (k === "f" && !e.shiftKey && !e.ctrlKey) find(true);
+  else if (k === "e" && !e.shiftKey) find(true, t.getSelection());
+  else if (k === "g" && !$("find").hidden) findGo(e.shiftKey ? -1 : 1);  // ⌘⇧G is the app's Up while find is shut
   else if (k === "t" && !e.shiftKey) newTab();
   else if (k === "n" && e.shiftKey) newWindow();
   else if (k === "d") split(cur.focus, e.shiftKey);
   else if (k === "=" || k === "+") zoom(px + 1);
   else if (k === "-") zoom(px - 1);
   else if (k === "0") zoom(+(size || 15));
-  else if (/^[1-9]$/.test(k)) show(ws[Math.min(+k, ws.length) - 1]);
+  else if (/^[1-9]$/.test(k)) show(ws[k === "9" ? ws.length - 1 : Math.min(+k, ws.length) - 1]);
   else if (e.shiftKey && "[{]}".includes(k)) show(ws[(i + ("]}".includes(k) ? 1 : -1) + ws.length) % ws.length]);
   else if (!e.shiftKey && "[]".includes(k)) focusPane(mine[(j + (k === "]" ? 1 : -1) + mine.length) % mine.length]);
-  // ghostty-web preventDefaults ⌘W, ⌘Q, ⌘M, ⌘H, ⌘, …, so the app's menu never got them: it sees only copy, paste, select all, clear
-  else { if (k.length === 1 && !"cvak".includes(k)) e.stopImmediatePropagation(); return }
+  // the rest go to the app's menus: ghostty-web would preventDefault them (⌘W, ⌘Q, ⌘M, ⌘H, ⌘,) or type junk for them (⌘Home → ESC[1;9H)
+  else { if (k !== "v") e.stopImmediatePropagation(); return }
   e.preventDefault(); e.stopPropagation();
 }, true);
+// ⌘V: ghostty-web's container pastes raw, its textarea bracketed; one bracketed paste, so a shell or Claude Code takes it as one block
+addEventListener("paste", e => {
+  const s = e.clipboardData?.getData("text/plain");
+  if (!cur || !s || !e.target.closest?.(".t")) return;
+  e.preventDefault(); e.stopImmediatePropagation(); cur.focus.t.scrollToBottom(); cur.focus.t.paste(s.replace(/\r?\n/g, "\r"));  // newlines as ↵, like xterm.js and Ghostty
+}, true);
+function paneToward(d){  // ⌘⌥← / →: the nearest pane that side
+  const a = cur.focus.box.getBoundingClientRect(), mid = r => (r.top + r.bottom) / 2;
+  const n = paneOf(cur).map(p => [p, p.box.getBoundingClientRect()]).filter(([, r]) => d < 0 ? r.right <= a.left + 1 : r.left >= a.right - 1)
+    .sort(([, x], [, y]) => Math.abs(d < 0 ? a.left - x.right : x.left - a.right) + Math.abs(mid(x) - mid(a)) - Math.abs(d < 0 ? a.left - y.right : y.left - a.right) - Math.abs(mid(y) - mid(a)))[0];
+  if (n) focusPane(n[0]);
+}
+function nudge(p, key){  // ⌘⌃arrows: the nearest divider that way moves 40px
+  const down = key === "ArrowUp" || key === "ArrowDown", d = key === "ArrowLeft" || key === "ArrowUp" ? -40 : 40, dim = down ? "height" : "width";
+  let s = p.box.parentElement;
+  while (s?.classList.contains("split") && s.classList.contains("col") !== down) s = s.parentElement;
+  if (!s?.classList.contains("split") || p.tab.r.classList.contains("zoom")) return;  // zoomed, the others measure 0
+  const [a, , b] = s.children, ra = a.getBoundingClientRect()[dim], rb = b.getBoundingClientRect()[dim], na = Math.max(60, Math.min(ra + rb - 60, ra + d));
+  a.style.flex = `${na} 1 0`; b.style.flex = `${ra + rb - na} 1 0`; refit(p.tab); save();
+}
+// ponytail: halves every split, so three panes in a row come out 50/25/25; weigh splits by their pane count if that matters
+function equalize(tab){ tab.r.querySelectorAll(".pane,.split").forEach(x => x.style.flex = ""); refit(tab); save() }
+function zoomPane(tab){ tab.r.classList.toggle("zoom", !tab.r.classList.contains("zoom") && paneOf(tab).length > 1); refit(tab) }
+// ⌘K: the screen and scrollback go, and ^L has the shell (or the app in it) draw itself again; tmux's own history stays
+function clearPane(p){ p.t.scrollToBottom(); p.t.write("\x1b[H\x1b[2J\x1b[3J"); p.t.input("\x0c", true) }
+// ghostty-web's own selectAll takes just a screenful from the top of the history; Ghostty's takes it all
+function selectAll(t){ const sm = t.selectionManager; sm.selectionStart = {col: 0, absoluteRow: 0}; sm.selectionEnd = {col: t.cols - 1, absoluteRow: t.buffer.active.length - 1}; sm.requestRender() }
+
+// ⌘F: finds in the focused pane's screen and scrollback, newest first; ↵ / ⌘G older, ⇧↵ / ⌘⇧G newer, esc closes. Lowercase matches any case.
+// ponytail: one row at a time (a match that wraps is missed), and a column per character (a wide character before a match shifts its highlight)
+const fnd = {hits: []};
+function find(open, pre){
+  $("find").hidden = !open;
+  if (!open) { cur?.focus.t.clearSelection(); return cur?.focus.t.focus() }
+  if (pre) $("fq").value = pre;
+  $("fq").focus(); $("fq").select(); findScan();
+}
+function findScan(){
+  const t = cur.focus.t, b = t.buffer.active, q = $("fq").value, lc = q === q.toLowerCase();
+  fnd.hits = []; fnd.i = -1; fnd.t = t; fnd.n = q.length;
+  for (let y = b.length - 1; q && y >= 0; y--) {
+    const row = b.getLine(y)?.translateToString(false) || "", h = lc ? row.toLowerCase() : row, xs = [];
+    for (let x = h.indexOf(q); x >= 0; x = h.indexOf(q, x + 1)) xs.push(x);
+    xs.reverse().forEach(x => fnd.hits.push({y, x}));
+  }
+  findGo(1);
+}
+function findGo(d){
+  if (fnd.t !== cur.focus.t) return findScan();  // another pane since: find there
+  const n = fnd.hits.length, t = fnd.t;
+  $("fn").textContent = !$("fq").value ? "" : n ? `${(fnd.i = (fnd.i + d + n) % n) + 1} of ${n}` : "No matches";
+  if (!n) return t.clearSelection();
+  const {y, x} = fnd.hits[fnd.i], sb = t.getScrollbackLength(), sm = t.selectionManager;
+  t.scrollToLine(Math.max(0, Math.min(sb, sb - y + (t.rows >> 1))));  // scrollToLine takes lines up from the bottom
+  sm.selectionStart = {col: x, absoluteRow: y}; sm.selectionEnd = {col: x + fnd.n - 1, absoluteRow: y}; sm.requestRender();
+}
+$("fq").oninput = findScan;
+$("fq").onkeydown = e => {
+  if (e.key === "Enter") findGo(e.shiftKey ? -1 : 1);
+  else if (e.key === "Escape") find(false);
+  else return;
+  e.preventDefault(); e.stopPropagation();
+};
+$("fprev").onclick = () => findGo(-1); $("fnext").onclick = () => findGo(1); $("fx").onclick = () => find(false);
 
 function looked(out){  // claude -p's answer to a restyle: a JSON object of colors, maybe wrapped in prose or a fence
   restyling = false; let o = null; const s = String(out), a = s.indexOf("["), b = s.indexOf("{");
