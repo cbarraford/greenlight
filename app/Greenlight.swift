@@ -3676,7 +3676,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
     /// Your Ghostty look: its config's theme file, then the config's own color/font lines over it (ghostty-web theme keys).
-    func ghosttyLook(dark: Bool) -> [String: String] {
+    func ghosttyLook() -> [String: String] {
         func lines(_ path: String) -> [(String, String)] {
             ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").compactMap { l in
                 let l = l.trimmingCharacters(in: .whitespaces)
@@ -3685,12 +3685,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
         }
         let home = NSHomeDirectory(), cfg = ["\(home)/.config/ghostty/config", "\(home)/Library/Application Support/com.mitchellh.ghostty/config"].flatMap(lines)
-        var all = cfg, split = false
+        var all = cfg
         if var name = cfg.last(where: { $0.0 == "theme" })?.1 {
             if name.contains(":") {  // light:A,dark:B
                 let parts = Dictionary(name.split(separator: ",").compactMap { p -> (String, String)? in
                     let kv = p.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }; return kv.count == 2 ? (kv[0], kv[1]) : nil }, uniquingKeysWith: { a, _ in a })
-                name = parts[dark ? "dark" : "light"] ?? parts.values.first ?? name; split = true
+                name = parts["dark"] ?? parts.values.first ?? name
             }
             let dirs = ["\(home)/.config/ghostty/themes", "/Applications/Ghostty.app/Contents/Resources/ghostty/themes"]
             let file = dirs.lazy.compactMap { d in (try? FileManager.default.contentsOfDirectory(atPath: d))?.first { $0.lowercased() == name.lowercased() }.map { "\(d)/\($0)" } }.first
@@ -3706,21 +3706,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let c = String(v[v.index(after: eq)...]); out[n < 8 ? ansi[n] : "bright" + ansi[n - 8].capitalized] = c.hasPrefix("#") ? c : "#" + c
             }
         }
-        // ponytail: one Ghostty theme is taken for a dark one, so Light keeps only its font; a light:A,dark:B theme gives each mode its half
-        return dark || split ? out : out.filter { $0.key == "font" || $0.key == "size" }
+        return out
     }
     func rgb(_ c: NSColor) -> String { let c = c.usingColorSpace(.sRGB) ?? c; return String(format: "%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255)) }
-    /// The terminal page's look: the mode's theme, your Ghostty colors and font over it, and the mode.
+    /// The terminal page's look: the screen always wears darkTheme with your Ghostty colors and font over it; the chrome follows the mode.
     func termLook() -> [String: String] {
-        var look = ["background": "#" + rgb(theme.bg), "foreground": "#" + rgb(theme.fg), "font": codeFont, "size": "\(Int(fontSize))", "mode": isDark ? "dark" : "light"]
-        look.merge(ghosttyLook(dark: isDark)) { _, g in g }  // Ghostty's colors and font win over the app's theme
-        return look
+        var look = ["background": "#" + rgb(darkTheme.bg), "foreground": "#" + rgb(darkTheme.fg), "font": codeFont, "size": "\(Int(fontSize))"]
+        look.merge(ghosttyLook()) { _, g in g }  // Ghostty's colors and font win over the app's theme
+        return look.merging(termMode) { _, m in m }
     }
+    var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
     func loadTerm(_ web: WKWebView, only: [String]?) {
         guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
         let look = termLook()
-        if let b = look["background"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the tab strip's color, so the title band is part of it
+        if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
         q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
@@ -4051,11 +4051,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
         for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
-        if pushedTerm != theme.name { let first = pushedTerm.isEmpty; pushedTerm = theme.name  // ghostty-web fixes a terminal's colors at open: save, reload, tmux reattaches
-            if !first { for (wid, w) in termWins { guard let web = w.contentView as? WKWebView else { continue }
-                web.evaluateJavaScript("window.term && term.flush()") { [weak self] _, _ in guard let self else { return }
-                    if wid == 0 { wantFloor = floors[0]?.at }  // ponytail: other windows come back on the Pipe, as New windows do
-                    loadTerm(web, only: sharedOnly) } } } }
+        if pushedTerm != theme.name { pushedTerm = theme.name  // the terminals' chrome follows the mode; their screens stay as they are
+            let m = termMode; termWebs.forEach { $0.evaluateJavaScript("window.term && term.mode('\(m["mode"]!)', '\(m["lightBg"]!)', '\(m["lightFg"]!)')") } }
         if fluid.appearance?.name != look?.name { fluid.appearance = look }
         if window.appearance?.name != look?.name { window.appearance = look }  // else the full-screen title bar drops in white
         if chatWindow.appearance?.name != look?.name { chatWindow.appearance = look }
