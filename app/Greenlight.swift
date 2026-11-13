@@ -2828,7 +2828,7 @@ struct Floors: View {
                          ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
     var body: some View {
         HStack(spacing: 10) {
-        if !s.project.isEmpty {
+        if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
             Button(action: pick) {  // the chip (design A): its squares, the name, a chevron, in the floors' own track
                 HStack(spacing: 6) {
                     if s.colors.isEmpty { Image(systemName: "square.grid.2x2.fill").font(.system(size: 9)).opacity(0.55) }
