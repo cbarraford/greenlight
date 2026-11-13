@@ -198,7 +198,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg button.lite{flex:0 0 auto;height:26px;padding:0 9px;background:none;color:var(--dim)} #dlg button.lite:hover{background:var(--hair);color:var(--fg)}
 #dlg input[type=color]{width:100%;height:24px;padding:0;border:0;background:none;cursor:pointer}
 #dlg .err{color:var(--r)} #dlg .err:empty{display:none} #dlg label.sub{padding-left:22px} #dlg .grid{display:grid;gap:8px}
-#dlg button.pri{background:var(--accent);color:#fff;font-weight:600} #dlg button.danger{background:var(--r);color:#fff;font-weight:600} #dlg button.pri~button.danger{background:var(--hair);color:var(--r)}
+#dlg button.pri{background:var(--accent);color:#fff;font-weight:600} #dlg button:disabled{opacity:.45;cursor:default}  /* the .pri colors outrank button:disabled: a disabled Send looked live */ #dlg button.danger{background:var(--r);color:#fff;font-weight:600} #dlg button.pri~button.danger{background:var(--hair);color:var(--r)}
 /* the roomy dialogs (projects, colors, open projects): a title bar, a body, a footer bar */
 /* the roomy dialogs (projects, colors, open projects): greys mixed from this window's own colors, amber for the thing to press */
 #dlg form.big{--d0:color-mix(in srgb,var(--fg) 6%,var(--bg));--d1:color-mix(in srgb,var(--fg) 4%,var(--bg));--d2:color-mix(in srgb,var(--fg) 1.5%,var(--bg));--ln:color-mix(in srgb,var(--fg) 12%,var(--bg));--rg:color-mix(in srgb,var(--fg) 17%,var(--bg));--mid:color-mix(in srgb,var(--fg) 80%,var(--bg));--amb:#FFB340;--ink:#1C1C1F;
@@ -1410,10 +1410,10 @@ function palActs(){
     cur && paneOf(cur).length > 1 && ["This tab", "Zoom pane", svg16("M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"), "⌘⇧↵", "The focused pane fills the tab; again to put the others back.", () => zoomPane(cur)],
     cur && ["This tab", "Find…", svg16("M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5"), "⌘F", "Searches the focused pane's screen and scrollback.", () => find(true)],
     cur && ["This tab", "Clear", svg16("M3 4h10M3 8h10M3 12h5"), "⌘K", "Clears the screen and scrollback; the shell draws its prompt again.", () => clearPane(cur.focus)],
-    ...cmdsOf(curWs).map(c => ["Commands", c.name, c.agent ? I.claude(16) : I.shell(16), "", c.agent ? `Pastes into ${wsName(curWs)}'s Claude for you to send: ${c.run}` : `Runs in a new tab: ${c.run}`,
-      () => c.agent ? toAgent(curWs, c.run) : newTab(curWs, c.run)]),  // .greenlight.json "commands": [{name, run, agent?}]
     wsInfo(curWs)?.ade && ["This tab", "Diff…", svg16("M5 2v12M11 2v12M2 5h6M8 11h6"), "", `What ${wsName(curWs)} changes; click a line to leave Claude a note.`, () => diffOpen(curWs)],
     wsInfo(curWs)?.ade && ["This tab", "Open in editor", I.edit(16), "", "Zed, Cursor or VS Code, whichever you have; over ssh for a remote host.", () => post({cmd: "edit", ws: curWs})],
+    ...cmdsOf(curWs).map(c => ["Commands", c.name, c.agent ? I.claude(16) : I.shell(16), "", c.agent ? `Pastes into ${wsName(curWs)}'s Claude for you to send: ${c.run}` : `Runs in a new tab: ${c.run}`,
+      () => c.agent ? toAgent(curWs, c.run) : newTab(curWs, c.run)]),  // .greenlight.json "commands": [{name, run, agent?}]
     ["Basement", "New workspace…", I.plus(16), "", "A git worktree on a new branch: its repo's setup runs, then Claude starts on the goal.", newWsDialog],
     ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
     ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],

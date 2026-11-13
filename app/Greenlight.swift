@@ -3938,8 +3938,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if at.host.isEmpty || at.host == "local" { NSWorkspace.shared.open(u); return }
             if tunnels["\(at.host):\(port)"]?.isRunning != true {  // ponytail: a local port already in use makes ssh exit; the browser then shows whatever holds it
                 let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
+                p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
                 p.standardError = FileHandle.nullDevice
+                // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
                 try? p.run(); tunnels["\(at.host):\(port)"] = p
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSWorkspace.shared.open(u) }
             } else { NSWorkspace.shared.open(u) }
@@ -3952,6 +3953,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             } else if bid == "dev.zed.Zed" {  // zed's cli opens ssh://host/path as a remote project
                 let p = Process(); p.executableURL = app.appendingPathComponent("Contents/MacOS/cli"); p.arguments = ["ssh://\(at.host)\(at.cwd)"]; try? p.run()
+            } else if bid == "com.microsoft.VSCode", !((try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/.vscode/extensions")) ?? []).contains(where: { $0.hasPrefix("ms-vscode-remote.remote-ssh-") }) {
+                toastTerm(web, "VS Code needs its Remote - SSH extension to open \(at.host)")  // without it the link opens VS Code and fails there, unexplained
             } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
                 NSWorkspace.shared.open(u)
             }
