@@ -2,7 +2,7 @@
 
 Copy to `~/.greenlight/lifecycles/<repo>.md` for a GitLab repo with a review bot and release milestones.
 
-The first failing step is the next step. Each step names the check `greenlight.py` runs, who owns
+The first failing step is the next step. Each step names the check `greenlight` runs, who owns
 fixing it, and how. Steps 1–2 (branch, code change) are done once an MR exists. Before that,
 the workspace goal tells the agent what to build; the agent opens a draft MR when it's ready.
 

@@ -17,6 +17,12 @@ pub static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     let exe = std::env::current_exe().unwrap_or_default();
     exe.ancestors().find(|d| d.join("lifecycles").is_dir()).map(PathBuf::from).unwrap_or_else(|| exe.parent().unwrap_or(&exe).into())
 });
+/// What persisted commands (timers, next.cmd) should run: the bin/greenlight shim, which rebuilds after a
+/// pull, else this binary.
+pub fn exe() -> String {
+    let shim = ROOT.join("bin/greenlight");
+    if shim.is_file() { shim } else { std::env::current_exe().unwrap_or_default() }.display().to_string()
+}
 /// $GREENLIGHT_HOME, else ~/.greenlight (empty env counts as unset).
 pub static STATE: LazyLock<PathBuf> = LazyLock::new(|| match std::env::var("GREENLIGHT_HOME") {
     Ok(h) if !h.is_empty() => PathBuf::from(h),

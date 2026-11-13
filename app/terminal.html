@@ -279,7 +279,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 // The T orb's terminal: Ghostty's VT core (ghostty-web, wasm) drawing login shells the app runs on ptys, one per pane; tabs hold split panes.
 // The sidebar groups tabs by workspace (a worktree path; "" is Local, your home): the strip shows the current workspace's tabs.
 // Each pane is a tmux session the app keeps alive across restarts; the layout is saved through the app (terminals.json).
-// app → page: term.restore(state), term.workspaces({trees}), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
+// app → page: term.restore(state), term.workspaces({trees}), term.tree(greenlight dash tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
 // page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
@@ -348,7 +348,7 @@ const I = {
 const iconBtn = (cls, icon, label, fn, aria = label) => { const b = el("button", cls, icon); b.type = "button"; b.title = label; b.setAttribute("aria-label", aria); b.onclick = e => { e.stopPropagation(); fn() }; return b };
 const tabs = [], panes = new Map(), paneOf = tab => [...panes.values()].filter(p => p.tab === tab);
 let cur = null, seq = 0, tabSeq = 0, ready = false, editing = null, editSide = false, restored = false;  // editSide: renaming in the sidebar row, not the tab
-let trees = [], curWs = "", shut = new Set(), sideW = 280;  // trees: every ADE's worktrees (dash.py trees); shut: collapsed sections and projects ("§done" means opened)
+let trees = [], curWs = "", shut = new Set(), sideW = 280;  // trees: every ADE's worktrees (greenlight dash trees); shut: collapsed sections and projects ("§done" means opened)
 const wsTabs = ws => tabs.filter(t => t.ws === ws);
 const setTabs = t => tabs.filter(x => x.set === t?.set);  // the tab strip: a set of tabs; a workspace can have several (the sidebar's + starts one)
 let setSeq = Date.now();  // ponytail: ms-seeded counter, unique enough across restarts
@@ -598,7 +598,7 @@ function showMenu(e, items, head){
   m.style.left = Math.max(6, Math.min(e.clientX, innerWidth - m.offsetWidth - 6)) + "px"; m.style.top = Math.max(6, Math.min(e.clientY, innerHeight - m.offsetHeight - 6)) + "px";
   m.querySelector("button:not(:disabled)")?.focus();
 }
-// a workspace's card: what it is and how it's doing (git facts arrive from dash.py tree info), then what you can do with it
+// a workspace's card: what it is and how it's doing (git facts arrive from greenlight dash tree info), then what you can do with it
 let cardWs = null, cardHover = false, noAskDel = false;
 const dur = ms => { const s = (Date.now() - ms) / 1000; return s < 60 ? "now" : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d` };
 const ago = ms => dur(ms) === "now" ? "just now" : dur(ms) + " ago";
@@ -662,7 +662,7 @@ function wsMenu(e, ws, w){
     w.branch && ["Branch name", "", () => post({cmd: "copy", text: w.branch})], ["Worktree path", "", () => post({cmd: "copy", text: ws})], m.web_url && ["MR link", "", () => post({cmd: "copy", text: m.web_url})]].filter(Boolean)) });
   ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
   if (!w.main) { const d = btn("del", IC.trash(14), act(() => delWs(ws, w))); d.title = "Delete workspace"; d.setAttribute("aria-label", d.title); ft.append(d) }
-  // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
+  // the smart button: this MR's most urgent move (greenlight dash moves, in order); the others it also needs sit under it as "Also"
   const mv = open ? (w.moves || []) : [], top = [];
   const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
   if (mv[0]?.kind === "merge") top.push(mergeBtn(ws, m, mv[0]));
@@ -681,7 +681,7 @@ function wsMenu(e, ws, w){
   const also = mv.slice(1);
   if (also.length) { const a = el("div", "also", "<span>Also</span>"); also.forEach(x => a.append(btn("", `<i style="background:${DOT[x.kind]}"></i>` + esc(MOVE[x.kind](m, x)[2]), run(x), busy))); top.push(a) }
   const pk = !mv.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
-  if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (dash.py suggest: the Next model, Haiku by default)
+  if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (greenlight dash suggest: the Next model, Haiku by default)
     const nx = btn("nx", "", act(() => newTab(ws, "claude " + shq(sugg.get(pk).prompt))));
     nx.dataset.pk = pk; if (busy) nx.dataset.busy = busy;
     top.push(nx);
@@ -695,7 +695,7 @@ function wsMenu(e, ws, w){
   c.tabIndex = -1; if (!e.hover) c.focus();  // Tab reaches the buttons; a hover leaves your typing in the terminal
   if (!e.hover || !(Date.now() - (facts.get(ws)?.at || 0) < 30e3)) post({cmd: "tree", op: "info", path: ws});  // hovering along the list doesn't ssh for every row
 }
-const sugg = new Map();  // greenlight's name → dash.py suggest's {label, prompt} (or {error}), stamped when it came
+const sugg = new Map();  // greenlight's name → greenlight dash suggest's {label, prompt} (or {error}), stamped when it came
 // a move's [button, its subline, its "Also" label]
 const MOVE = {
   review: m => [`Review ${m.ref || ""}`, "Claude drafts it; nothing posts until you pick", "Review"],
@@ -737,7 +737,7 @@ function drawNext(){
   nx.disabled = !s || !!busy; nx.title = busy || s?.prompt || "";
   nx.innerHTML = I.spark(16) + `<span><b>${esc(s?.label || (s ? "Next step" : "Suggesting a next step…"))}</b><small>${esc(s?.prompt || "Reading the workspace")}</small></span>`;
 }
-const facts = new Map();  // path → dash.py tree info, so the next open (and Delete) starts from the last answer
+const facts = new Map();  // path → greenlight dash tree info, so the next open (and Delete) starts from the last answer
 // a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
 function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, cancel = "Cancel", safe}){
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
@@ -756,7 +756,7 @@ function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, canc
     f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end(null) };
   });
 }
-// Delete: the worktree only (the branch stays). Asks first unless you said not to; dash.py refuses a pinned, dirty or unpushed tree, and that always asks.
+// Delete: the worktree only (the branch stays). Asks first unless you said not to; greenlight dash refuses a pinned, dirty or unpushed tree, and that always asks.
 async function delWs(ws, w){
   if (!noAskDel) {
     const o = facts.get(ws), clean = o && !o.error && !o.dirty && !o.unpushed;
@@ -832,7 +832,7 @@ const hostKey = h => h === HOST ? "" : "@" + h;  // a host's name → its Hosts 
 // where a project window's first shell opens: its .greenlight.json "host" (when it's one of yours), else GREENLIGHT_HOST
 const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES.includes(hostKey(acctCfg.host)) ? hostKey(acctCfg.host) : "");
 // projects: named groups of repos (an ADE's w.project) and folders. Yours are projects.json (through the app); a repo's own .greenlight.json
-// (its main checkout, read by dash.py trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
+// (its main checkout, read by greenlight dash trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
 // or ONLY these ids ("" is No Man's Land: in no project). A window of one project is that project's account: its file's look, host and hosts.
 const NML = "No Man's Land";
 let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
@@ -1518,7 +1518,7 @@ window.term = {
     setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
   palette: open => restored && palette(open),
 };
-// Auto-run (Settings › Repositories › Auto-run): dash.py marks a move `auto` (its prompt plus what the run may do; merge: true).
+// Auto-run (Settings › Repositories › Auto-run): greenlight dash marks a move `auto` (its prompt plus what the run may do; merge: true).
 // The main window runs it once per workspace, job and head commit, in a tab of its own that doesn't take focus; one job per workspace,
 // none beside a tab already on that job. The tab closes once its job is gone from the moves and Claude is idle; idle with nothing pushed: it needs you.
 const MAIN = q.get("main") === "1", autoMerge = new Set();

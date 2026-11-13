@@ -1,0 +1,7 @@
+#!/bin/sh
+# Entry point for everything (app, launchd/systemd, SKILL.md): rebuilds after a `git pull`, then runs.
+# ponytail: cargo's own no-op check is the freshness test (~0.1s); a failed build runs the last good one.
+PATH="$HOME/.cargo/bin:$PATH"
+d=$(cd "$(dirname "$0")/.." && pwd)
+cargo build --release -q --manifest-path "$d/Cargo.toml" || echo "greenlight: build failed, running the last build" >&2
+exec "$d/target/release/greenlight" "$@"

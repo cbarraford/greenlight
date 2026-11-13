@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-greenlight.py ping: end the text with a line `Options: first | second`; nothing sent
+greenlight ping: end the text with a line `Options: first | second`; nothing sent
 --- calls
 --- files
 == home/last.json

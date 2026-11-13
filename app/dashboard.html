@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agents</title>
-<!-- Greenlight's left pane. Data arrives from the app: mc.update(snapshot) every ~10s from `dash.py stream`,
-     mc.page(response) after we post {cmd:"page"} (dash.py page). Widgets are data → DOM only; nothing from
+<!-- Greenlight's left pane. Data arrives from the app: mc.update(snapshot) every ~10s from `greenlight dash stream`,
+     mc.page(response) after we post {cmd:"page"} (greenlight dash page). Widgets are data → DOM only; nothing from
      the model is ever evaluated. -->
 <style>
 :root{
@@ -776,7 +776,7 @@ function ringSvg(size, st, prog, width){
     prog != null && st !== "queued" ? s("circle", {cx:size / 2, cy:size / 2, r, fill:"none", stroke:col, "stroke-width":width, "stroke-linecap":"round",
       pathLength:100, "stroke-dasharray":`${Math.max(prog * 100, 2)} 100`}) : null);
 }
-/* greenlight asked about these workspaces (mc.bell's asked, from `greenlight.py ping --ws`): they read "Needs you", never shelved or stacked,
+/* greenlight asked about these workspaces (mc.bell's asked, from `greenlight ping --ws`): they read "Needs you", never shelved or stacked,
    until the question is answered, superseded or resolved. Applied to the whole snapshot so every view, count and page agrees. */
 function lift(p){
   const q = (ui.bell.asked || []).find(q => arr(q.ws).includes(p.name));
@@ -1498,7 +1498,7 @@ function hoverCard(p){
       tile("CI", [icon(cic, 14), ct], null, ci),
       tile(mr.mergeable && !mr.conflicts ? "Merge" : "Conflicts", [icon("conflict", 14), mr.conflicts ? "Has conflicts" : mr.mergeable ? "Mergeable" : "None"], null, mr.conflicts ? "--orange" : mr.mergeable ? "--green" : null))];
   }
-  const mv = mr && mr.state === "opened" ? arr(p.moves) : [];  // dash.py moves: the smart button replaces the next step
+  const mv = mr && mr.state === "opened" ? arr(p.moves) : [];  // greenlight dash moves: the smart button replaces the next step
   const open = h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, "Open workspace");
   const acts = a.state === "waiting" ? h("div", {class: "hacts"}, h("button", {class: "btn sm ans", onclick: () => { hideCard(); openAnswer(p.name) }}, "Answer"), open)  // its question, answered from here
       : a.state === "working" ? null
@@ -1544,7 +1544,7 @@ function movesEl(p, mv){
   return h("div", {class: "mvs"}, top, rest.length ? h("div", {class: "also"}, h("span", {}, "Also"),
     rest.map(y => h("button", {class: "btn sm", disabled: !!busy, title: busy || y.prompt, onclick: run(y)}, h("i", {style: "background:" + DOT[y.kind]}), MOVE[y.kind](p.mr, y)[2]))) : null);
 }
-// Merge: the first click arms it for 5s, the second merges (dash.py tree merge, pinned to the head greenlight saw)
+// Merge: the first click arms it for 5s, the second merges (greenlight dash tree merge, pinned to the head greenlight saw)
 function mergeEl(p, x){
   const box = h("div", {class: "mg"}), ref = mrRef(p.mr);
   let t = 0;
@@ -1561,7 +1561,7 @@ function merged(o){
   box.className = "mg " + (o.error ? "no" : "ok");
   box.replaceChildren(...(o.error ? [h("b", {}, "Didn't merge"), h("code", {}, o.error)] : [h("b", {}, `Merged ${o.ref} into ${o.target}`), h("small", {}, o.how)]));
 }
-// the button names the step in 1-4 words (dash.py suggest's label; the full prompt on hover). The app writes it ahead,
+// the button names the step in 1-4 words (greenlight dash suggest's label; the full prompt on hover). The app writes it ahead,
 // whenever the puck's state moves, and the snapshot carries it; until it's there the button is greyed out and waits
 function nextBtn(p){
   suggestCon(p.name);  // normally already written or on its way; the app never asks twice at once
@@ -1764,9 +1764,9 @@ document.addEventListener("click", e => { const n = e.metaKey && conTarget(e); i
 
 /* ---------- New task: describe it, attach files, pick the project; a fresh workspace and its agent start on it at once ---------- */
 ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0};
-const TASK_CAP = 15 << 20;  // all files together; dash.py task new refuses more
+const TASK_CAP = 15 << 20;  // all files together; greenlight dash task new refuses more
 const PLUS = s("svg", {width:13, height:13, viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", "stroke-width":"2.4", "stroke-linecap":"round", "aria-hidden":"true"}, s("path", {d:"M12 5v14M5 12h14"}));
-function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // dash.py _slug
+function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // greenlight dash _slug
 function taskSheet(){
   const repo = localGet("taskRepo") || "";
   ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: []}; ui.task.err = "";
@@ -1946,7 +1946,7 @@ window.mc = {
     if (snap.error) { console.log("dash:", snap.error); return }
     clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.failed = CONN.refocus = false;
     ui.raw = snap; relift();
-    for (const p of snap.pucks) {  // next steps written ahead (dash.py suggest's cache) for the puck's current state
+    for (const p of snap.pucks) {  // next steps written ahead (greenlight dash suggest's cache) for the puck's current state
       const sg = ui.sug[p.name];
       if (p.suggestion && (!sg || sg.sig !== p.sig || !sg.prompt)) { ui.sug[p.name] = {name: p.name, sig: p.sig, ...p.suggestion}; relabelCard(p.name) }
     }

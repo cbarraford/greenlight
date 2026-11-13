@@ -49,7 +49,7 @@ Replies render as markdown in a narrow popover: keep them short, no tables or he
 When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. \
 Each message runs in a process that exits when you reply, so background tasks, Monitor and ScheduleWakeup die \
 at the end of the turn: never use run_in_background, Monitor or ScheduleWakeup here. Leave follow-up watching to \
-the Greenlight automation, or record it with `greenlight.py note <workspace> \"...\"`. \
+the Greenlight automation, or record it with `greenlight note <workspace> \"...\"`. \
 A <task-notification> is never the user's message; the text after `USER MESSAGE (reply to this):` is. Always answer it.",
         ROOT.join("SKILL.md").display()
     )

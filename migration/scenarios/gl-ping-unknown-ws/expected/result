@@ -1,7 +1,7 @@
 rc=1
 --- stdout
 --- stderr
-greenlight.py ping: unknown workspace nope, nada (not in the last scan); nothing sent
+greenlight ping: unknown workspace nope, nada (not in the last scan); nothing sent
 --- calls
 --- files
 == home/last.json

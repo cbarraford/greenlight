@@ -3,22 +3,22 @@ rc=1
 --- stderr
 Greenlight's own automations: Orca-style scheduled agent runs, no Orca needed.
 
-  auto.py list
-  auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
+  greenlight auto list
+  greenlight auto add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
               [--provider claude|codex|opencode|pi] [--model M] [--effort E] [--timeout MIN]
-  auto.py edit <name> [any add option] [--enabled | --disabled]
-  auto.py rm <name>
-  auto.py show <name>       # its JSON
-  auto.py run <name>        # now, in the background, skipping the schedule (not the precheck)
-  auto.py runs [name]       # last 20 runs
-  auto.py tick              # the timer calls this every minute
-  auto.py install           # writes and starts the timer: a systemd user timer, or a launchd agent on macOS
+  greenlight auto edit <name> [any add option] [--enabled | --disabled]
+  greenlight auto rm <name>
+  greenlight auto show <name>       # its JSON
+  greenlight auto run <name>        # now, in the background, skipping the schedule (not the precheck)
+  greenlight auto runs [name]       # last 20 runs
+  greenlight auto tick              # the timer calls this every minute
+  greenlight auto install           # writes and starts the timer: a systemd user timer, or a launchd agent on macOS
 
 Automations live in ~/.greenlight/automations.json, runs in ~/.greenlight/auto/.
 Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday=0).
 A precheck that exits non-zero means "nothing to do": the run is skipped.
 The provider (default: config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
-Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
+Model and effort apply to the provider only. Permissions follow the harness rules (config `harnesses`): safe unless that harness has bypass set.
 
 --- calls
 --- files

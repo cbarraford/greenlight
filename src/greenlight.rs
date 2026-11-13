@@ -647,7 +647,7 @@ fn check(step: &str, mr: &Value, ws: &Value, milestone: &Value) -> Res<Hit> {
     if it(&gd(&so, &format!("{proj}#{iid}"), json!([])))?.contains(&json!(step)) {
         return Ok(None);
     }
-    let exe = std::env::current_exe()?.display().to_string();
+    let exe = base::exe();
     hit("me", format!("{name}: {req} Sign it off?"), Some(vec![exe, "signoff".into(), proj, iid, step.into()]))
 }
 
@@ -679,7 +679,7 @@ fn evaluate(ws: &Value, mr: &Value, milestone: &Value) -> Res<Value> {
         return Ok(json!({"step": "freeform", "owner": "agent", "action": format!("work toward goal: {goal}")}));
     }
     if finished()? {
-        return Ok(json!({"step": "done", "owner": "done", "action": format!("MR {}: cleanup.py removes it", py::str_(&mr["state"]))}));
+        return Ok(json!({"step": "done", "owner": "done", "action": format!("MR {}: greenlight cleanup removes it", py::str_(&mr["state"]))}));
     }
     let me_ = json!(me());
     if *ix(ix(mr, "author")?, "username")? != me_ {
@@ -1255,12 +1255,12 @@ fn ping_cli(mut args: &[String]) -> Res<()> {
     let text = args.join(" ");
     if !regex::Regex::new(r"\nOptions: *\S.*\|").unwrap().is_match(&text) {
         // no buttons, only "Reply", in the app
-        py::sys_exit("greenlight.py ping: end the text with a line `Options: first | second`; nothing sent");
+        py::sys_exit("greenlight ping: end the text with a line `Options: first | second`; nothing sent");
     }
     let names = scanned_names()?;
     let unknown: Vec<&str> = ws.iter().copied().filter(|w| !names.contains_key(*w)).collect();
     if !unknown.is_empty() {
-        py::sys_exit(&format!("greenlight.py ping: unknown workspace {} (not in the last scan); nothing sent", unknown.join(", ")));
+        py::sys_exit(&format!("greenlight ping: unknown workspace {} (not in the last scan); nothing sent", unknown.join(", ")));
     }
     ping(&text, key, ws.iter().map(|w| names[*w].clone()).collect())
 }
@@ -1278,7 +1278,7 @@ pub fn close_stale(rows: &[Value]) -> Res<()> {
     by_key.extend(rows.iter().map(|r| (py::str_(&r["id"]), r.clone())));
     for key in pinged()?.keys() {
         if key.starts_with('@') {
-            continue; // not a workspace: closed by hand with `greenlight.py resolve`
+            continue; // not a workspace: closed by hand with `greenlight resolve`
         }
         match by_key.get(key) {
             None => resolve(key, "workspace removed")?,

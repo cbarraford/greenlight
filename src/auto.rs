@@ -1,5 +1,5 @@
 //! Port of scripts/auto.py: greenlight's own automations, Orca-style scheduled agent runs, no Orca needed.
-use crate::base::{cfg, LIMIT_RE, ROOT, STATE};
+use crate::base::{cfg, LIMIT_RE, STATE};
 use crate::py::{self, kill, setsid, Res};
 use crate::{greenlight, harness};
 use serde_json::{json, Map, Value};
@@ -11,22 +11,22 @@ use std::time::{Duration, Instant};
 
 const DOC: &str = r#"Greenlight's own automations: Orca-style scheduled agent runs, no Orca needed.
 
-  auto.py list
-  auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
+  greenlight auto list
+  greenlight auto add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
               [--provider claude|codex|opencode|pi] [--model M] [--effort E] [--timeout MIN]
-  auto.py edit <name> [any add option] [--enabled | --disabled]
-  auto.py rm <name>
-  auto.py show <name>       # its JSON
-  auto.py run <name>        # now, in the background, skipping the schedule (not the precheck)
-  auto.py runs [name]       # last 20 runs
-  auto.py tick              # the timer calls this every minute
-  auto.py install           # writes and starts the timer: a systemd user timer, or a launchd agent on macOS
+  greenlight auto edit <name> [any add option] [--enabled | --disabled]
+  greenlight auto rm <name>
+  greenlight auto show <name>       # its JSON
+  greenlight auto run <name>        # now, in the background, skipping the schedule (not the precheck)
+  greenlight auto runs [name]       # last 20 runs
+  greenlight auto tick              # the timer calls this every minute
+  greenlight auto install           # writes and starts the timer: a systemd user timer, or a launchd agent on macOS
 
 Automations live in ~/.greenlight/automations.json, runs in ~/.greenlight/auto/.
 Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday=0).
 A precheck that exits non-zero means "nothing to do": the run is skipped.
 The provider (default: config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
-Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
+Model and effort apply to the provider only. Permissions follow the harness rules (config `harnesses`): safe unless that harness has bypass set.
 "#;
 
 const OPTS: [&str; 8] = ["schedule", "prompt", "cwd", "precheck", "provider", "model", "effort", "timeout"];
@@ -255,6 +255,20 @@ fn agent(a: &Value, engine: &str, log: &mut std::fs::File) -> Res<(String, i32)>
     Ok((out, code))
 }
 
+/// Prechecks saved by the Python install (`/usr/bin/python3 …/scripts/greenlight.py precheck`) run
+/// the binary instead: `<exe> greenlight precheck`, since the binary takes the old script name first.
+fn migrate(pre: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\S*python3 +\S*scripts/(\w+)\.py\b").unwrap());
+    RE.replace_all(pre, format!("{} $1", crate::base::exe()).as_str()).into_owned()
+}
+
+#[test]
+fn migrate_precheck() {
+    let e = crate::base::exe();
+    let got = migrate("/usr/bin/python3 /h/.claude/skills/greenlight/scripts/greenlight.py precheck || python3 ~/x/scripts/cleanup.py precheck");
+    assert_eq!(got, format!("{e} greenlight precheck || {e} cleanup precheck"));
+}
+
 /// One run, start to finish: precheck, agent (the next of config agents on a limit), log, record.
 fn execute(name: Option<&str>) -> Res<()> {
     let autos = load()?;
@@ -279,7 +293,7 @@ fn execute(name: Option<&str>) -> Res<()> {
     {
         let mut log = std::fs::File::create(&logf).map_err(|e| io_err(e, &logf))?;
         if let Some(pre) = py::get_or(a, "precheck") {
-            let pre = py::str_(pre);
+            let pre = migrate(&py::str_(pre));
             // shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
             let cwd = py::expanduser(py::get_or(a, "cwd").map_or("~".into(), py::str_).as_str());
             // ponytail: a timeout or a missing cwd crashes the run (errors.log, pid file left), as in Python
@@ -357,13 +371,14 @@ fn tick() -> Res<()> {
     Ok(())
 }
 
-const UNIT: &str = "[Unit]
+const UNIT: &str = r#"[Unit]
 Description=Greenlight automations tick
 [Service]
 Type=oneshot
 KillMode=process
-ExecStart={exe} {path} tick
-";
+Environment="PATH={env_path}"
+ExecStart="{exe}" auto tick
+"#;
 const TIMER: &str = "[Unit]
 Description=Run greenlight automations every minute
 [Timer]
@@ -376,19 +391,12 @@ const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>greenlight-auto</string>
-  <key>ProgramArguments</key><array><string>{exe}</string><string>{path}</string><string>tick</string></array>
+  <key>ProgramArguments</key><array><string>{exe}</string><string>auto</string><string>tick</string></array>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>{env_path}</string></dict>
   <key>StartInterval</key><integer>60</integer>
 </dict></plist>
 "#;
 
-/// (sys.executable, Path(__file__).resolve()): what the Python install wrote into the timer.
-/// cutover: switch both to `current_exe()` + `auto` in one go (the plist's ProgramArguments, the unit's ExecStart).
-fn exe_and_path() -> (String, String) {
-    let exe = py::which("python3").map_or("python3".into(), |p| p.display().to_string());
-    let p = ROOT.join("scripts/auto.py");
-    (exe, std::fs::canonicalize(&p).unwrap_or(p).display().to_string())
-}
 
 /// subprocess.run(cmd, check=check) with inherited stdio; `quiet` is capture_output=True.
 fn sh(cmd: &[&str], check: bool, quiet: bool) -> Res<()> {
@@ -406,21 +414,23 @@ fn sh(cmd: &[&str], check: bool, quiet: bool) -> Res<()> {
 }
 
 fn install() -> Res<()> {
-    let (exe, path) = exe_and_path();
+    let exe = crate::base::exe();
+    // launchd/systemd start with a bare PATH: keep this shell's, so glab/gh/orca and the agents are found
+    let env_path = std::env::var("PATH").unwrap_or_default();
     if cfg!(target_os = "macos") {
         let f = py::home().join("Library/LaunchAgents/greenlight-auto.plist");
         std::fs::create_dir_all(f.parent().unwrap())?;
-        // launchd starts with a bare PATH: keep this shell's, so glab/gh/orca and the agents are found
-        let env_path = std::env::var("PATH").unwrap_or_default();
-        std::fs::write(&f, PLIST.replace("{exe}", &exe).replace("{path}", &path).replace("{env_path}", &env_path))?;
+        let x = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        std::fs::write(&f, PLIST.replace("{exe}", &x(&exe)).replace("{env_path}", &x(&env_path)))?;
         let fs = f.display().to_string();
         sh(&["launchctl", "unload", &fs], false, true)?;
         sh(&["launchctl", "load", "-w", &fs], true, false)?;
         println!("greenlight-auto launch agent loaded ({fs})");
     } else {
+        let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%");
         let d = py::home().join(".config/systemd/user");
         std::fs::create_dir_all(&d)?;
-        std::fs::write(d.join("greenlight-auto.service"), UNIT.replace("{exe}", &exe).replace("{path}", &path))?;
+        std::fs::write(d.join("greenlight-auto.service"), UNIT.replace("{exe}", &q(&exe)).replace("{env_path}", &q(&env_path)))?;
         std::fs::write(d.join("greenlight-auto.timer"), TIMER)?;
         sh(&["systemctl", "--user", "daemon-reload"], true, false)?;
         sh(&["systemctl", "--user", "enable", "--now", "greenlight-auto.timer"], true, false)?;

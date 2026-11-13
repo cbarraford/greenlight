@@ -1,10 +1,10 @@
 // Greenlight: menubar chat with greenlight (on this Mac or an ssh host), live activity while it works, replyable notifications.
-// Chat: `chat.py send|compact|new|stop` streams JSON events (see chat.py's Norm).
-// Pings: greenlight appends JSON lines to <greenlightHome>/outbox.jsonl (`greenlight.py ping`); we tail it.
+// Chat: `greenlight chat send|compact|new|stop` streams JSON events (see greenlight chat's Norm).
+// Pings: greenlight appends JSON lines to <greenlightHome>/outbox.jsonl (`greenlight ping`); we tail it.
 // Where greenlight runs: Settings › Hosts (or `defaults write <bundle id> <key> <value>`), read at launch:
-//   host       "local" (default) runs greenlight's Python here; anything else is an ssh host (GREENLIGHT_HOST overrides)
+//   host       "local" (default) runs greenlight here; anything else is an ssh host (GREENLIGHT_HOST overrides)
 //   greenlightHome  greenlight's state dir on that host (default ~/.greenlight)
-//   greenlightCode  where greenlight's *.py live there (default ~/.claude/skills/greenlight)
+//   greenlightCode  where greenlight's checkout lives there (default ~/.claude/skills/greenlight)
 // No @State/@Observable: those are macros, and the Command Line Tools swiftc has no SwiftUI macro plugin.
 import AppKit
 import Combine
@@ -20,9 +20,9 @@ let localDefault: String = { var b = [CChar](repeating: 0, count: 256); gethostn
 let host = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"] ?? UserDefaults.standard.string(forKey: "host") ?? "local"
 let greenlightHome = UserDefaults.standard.string(forKey: "greenlightHome") ?? "~/.greenlight"
 let greenlightCode = UserDefaults.standard.string(forKey: "greenlightCode") ?? "~/.claude/skills/greenlight"
-let py = "GREENLIGHT_HOME=\(greenlightHome) python3 \(greenlightCode)/scripts"  // + "/greenlight.py ..."
+let gl = "GREENLIGHT_HOME=\(greenlightHome) \(greenlightCode)/bin/greenlight"  // + " dash ...": bin/greenlight rebuilds the Rust binary after a pull
 let selftest = CommandLine.arguments.contains("--selftest")  // scratch chat session + transcript, see selfTest()
-let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(py)/chat.py"
+let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(gl) chat"
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
@@ -150,10 +150,10 @@ func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capital
 
 // MARK: Settings: repo lifecycles, instructions, memory
 
-/// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
+/// One lifecycle stage as greenlight dash's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
 struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String }
 
-/// Settings → Repositories / Memory and the chat's instructions: each read and saved with `dash.py task <op> <arg>` where greenlight runs.
+/// Settings → Repositories / Memory and the chat's instructions: each read and saved with `greenlight dash task <op> <arg>` where greenlight runs.
 final class RulesStore: ObservableObject {
     @Published var repos = [String]()
     @Published var repo = ""
@@ -175,7 +175,7 @@ final class RulesStore: ObservableObject {
     @Published var reviewVars = [String]()
     @Published var kind = "review"
     static let kinds = [("review", "Review"), ("threads", "Resolve threads"), ("ci", "Fix CI"), ("conflicts", "Fix conflicts")]
-    @Published var autoKinds = [(kind: String, when: String, gates: [String])]()  // Auto-run: dash.py's AUTO, and this repo's {kind: gate}
+    @Published var autoKinds = [(kind: String, when: String, gates: [String])]()  // Auto-run: greenlight dash's AUTO, and this repo's {kind: gate}
     @Published var autoOn = [String: Int]()
     @Published var status = ""
     @Published var busy = false
@@ -184,7 +184,7 @@ final class RulesStore: ObservableObject {
     func call(_ op: String, _ arg: String, _ stdin: String = "", _ done: @escaping ([String: Any]) -> Void) {
         busy = true
         var out = ""
-        ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
+        ssh("\(gl) dash task \(op) '\(arg)'", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
             self?.busy = false
             let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["error": "\(host) didn't answer (exit \(code))"]
             if let e = j["error"] as? String { self?.status = e } else { done(j) }
@@ -221,7 +221,7 @@ final class RulesStore: ObservableObject {
         review = j["text"] as? String ?? ""; reviewDefault = j["default"] as? String ?? ""; reviewOwn = j["own"] as? Bool ?? false
         reviewVars = (j["vars"] as? [String] ?? []).map { "{\($0)}" } + ["{default}"]
     }
-    func saveReview() {  // empty or Default: back to the default (dash.py deletes yours)
+    func saveReview() {  // empty or Default: back to the default (greenlight dash deletes yours)
         let own = reviewOwn && !review.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         call("prompt-set", "\(repo)/\(kind)", own ? review : "") { self.gotReview($0); self.status = own ? "Saved the prompt." : "Using the default prompt." }
     }
@@ -496,10 +496,10 @@ struct Question: Codable, Identifiable {
     var ts = Date()
     var answer: String? = nil
     var key: String? = nil  // the workspace a ping is about; greenlight sends {"resolve": key} when it goes stale
-    var ws: [String]? = nil  // workspaces it names (`greenlight.py ping --ws`): the dashboard lifts their hexes while it waits. Optional so old questions.json decodes
+    var ws: [String]? = nil  // workspaces it names (`greenlight ping --ws`): the dashboard lifts their hexes while it waits. Optional so old questions.json decodes
 }
 
-/// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
+/// The transcript survives restarts; the conversation itself lives in greenlight chat's session file on greenlight's host.
 let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Greenlight")
 let transcript = support.appendingPathComponent(selftest ? "transcript-test.json" : "transcript.json")
 let questionsFile = support.appendingPathComponent(selftest ? "questions-test.json" : "questions.json")
@@ -707,7 +707,7 @@ final class Core: ObservableObject {
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
     @Published var termNameModel = UserDefaults.standard.string(forKey: "termNameModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(termNameModel, forKey: "termNameModel") } }
     @Published var termAutoName = UserDefaults.standard.object(forKey: "termAutoName") as? Bool ?? true { didSet { UserDefaults.standard.set(termAutoName, forKey: "termAutoName") } }
-    // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
+    // The agent that writes the hover card's next step (greenlight dash suggest), ahead of time for every puck whose state moved.
     @Published var nextModel = UserDefaults.standard.string(forKey: "nextModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(nextModel, forKey: "nextModel") } }
     @Published var nextEffort = UserDefaults.standard.string(forKey: "nextEffort") ?? "low" { didSet { UserDefaults.standard.set(nextEffort, forKey: "nextEffort") } }
     @Published var designParallel = UserDefaults.standard.object(forKey: "designParallel") as? Int ?? 3 { didSet { UserDefaults.standard.set(designParallel, forKey: "designParallel") } }
@@ -754,14 +754,14 @@ final class Core: ObservableObject {
     @Published var hostCheck = ""
     var hostPending: Bool { ProcessInfo.processInfo.environment["GREENLIGHT_HOST"] == nil && runHost != host
         || (runHome.isEmpty ? "~/.greenlight" : runHome) != greenlightHome || (runCode.isEmpty ? "~/.claude/skills/greenlight" : runCode) != greenlightCode }
-    /// Test: ssh in (or a shell here) and look for greenlight.py and python3 at the settings' paths.
+    /// Test: ssh in (or a shell here) and look for bin/greenlight and cargo at the settings' paths.
     func testHost() {
         let h = runHost, code = runCode.isEmpty ? "~/.claude/skills/greenlight" : runCode
         var out = ""
         hostCheck = "Checking \(h)…"
-        ssh("command -v python3 >/dev/null || { echo nopy; exit 3; }; test -f \(code)/scripts/greenlight.py && echo ok", on: h, onLine: { out = $0 }) { [weak self] rc in
-            self?.hostCheck = out == "ok" ? "✓ \(h) is ready: greenlight is at \(code)." : out == "nopy" ? "✗ \(h) has no python3."
-                : rc == 255 || rc == -1 ? "✗ Can't reach \(h) over ssh (BatchMode: it needs key auth)." : "✗ \(h) has no \(code)/scripts/greenlight.py. Clone the repo there."
+        ssh("command -v cargo >/dev/null || test -x ~/.cargo/bin/cargo || { echo nocargo; exit 3; }; test -x \(code)/bin/greenlight && echo ok", on: h, onLine: { out = $0 }) { [weak self] rc in
+            self?.hostCheck = out == "ok" ? "✓ \(h) is ready: greenlight is at \(code)." : out == "nocargo" ? "✗ \(h) has no cargo (install Rust: rustup.rs)."
+                : rc == 255 || rc == -1 ? "✗ Can't reach \(h) over ssh (BatchMode: it needs key auth)." : "✗ \(h) has no \(code)/bin/greenlight. Clone the repo there."
         }
     }
     func relaunch() {
@@ -813,7 +813,7 @@ final class Core: ObservableObject {
     func loadGreenlightEvery() {
         var line = ""
         greenlightEveryLoading = true
-        ssh("\(py)/auto.py show greenlight", onLine: { line += $0 }, onExit: { [weak self] code in
+        ssh("\(gl) auto show greenlight", onLine: { line += $0 }, onExit: { [weak self] code in
             let a = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
             let m = (a?["schedule"] as? String).flatMap { $0.hasPrefix("*/") ? Int($0.dropFirst(2).prefix { $0.isNumber }) : nil }
             DispatchQueue.main.async {
@@ -830,7 +830,7 @@ final class Core: ObservableObject {
     func setGreenlightEvery(_ m: Int) {
         greenlightEvery = m
         ud.set(m, forKey: "greenlightEvery")
-        ssh("\(py)/auto.py edit greenlight " + (m == 0 ? "--disabled" : "--enabled --schedule '*/\(m) * * * *'"),
+        ssh("\(gl) auto edit greenlight " + (m == 0 ? "--disabled" : "--enabled --schedule '*/\(m) * * * *'"),
             onExit: { [weak self] code in DispatchQueue.main.async { self?.greenlightEveryNote = code == 0 ? "" : "Couldn't save the schedule on \(host)." } })
     }
 
@@ -2921,7 +2921,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
 
-    // MARK: dashboard data (dash.py where greenlight runs)
+    // MARK: dashboard data (greenlight dash where greenlight runs)
 
     var rescanning = false
     var dashSnap = ""  // newest snapshot line, replayed when the page (re)loads
@@ -2930,13 +2930,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func rescan() {
         guard !rescanning else { return }
         rescanning = true
-        ssh("\(py)/greenlight.py scan >/dev/null", onExit: { [weak self] code in
+        ssh("\(gl) scan >/dev/null", onExit: { [weak self] code in
             DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
         })
     }
 
     func streamDash() {
-        ssh("\(py)/dash.py stream 5", onLine: { [weak self] l in
+        ssh("\(gl) dash stream 5", onLine: { [weak self] l in
             guard let self, l.hasPrefix("{") else { return }
             self.dashSnap = l
             self.broadcast("window.mc && mc.update(\(l))")
@@ -2956,7 +2956,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
                   name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil else { continue }
             building.insert(name); tried[name] = sig
-            ssh("\(py)/dash.py page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort)) >/dev/null", onExit: { [weak self] _ in
+            ssh("\(gl) dash page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort)) >/dev/null", onExit: { [weak self] _ in
                 self?.building.remove(name); self?.pushBuilds()
             })
         }
@@ -2981,12 +2981,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
 
-    /// dash.py suggest for one workspace; every page gets the answer (mc.suggest), so an open hover card relabels at once.
+    /// greenlight dash suggest for one workspace; every page gets the answer (mc.suggest), so an open hover card relabels at once.
     func suggest(_ name: String) {
         guard !suggesting.contains(name) else { return }
         suggesting.insert(name)
         var out = ""
-        ssh("\(py)/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", onLine: { out += $0 }, onExit: { [weak self] code in
+        ssh("\(gl) dash suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", onLine: { out += $0 }, onExit: { [weak self] code in
             self?.suggesting.remove(name)
             let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
             self?.broadcast("window.mc && mc.suggest(\(js))")
@@ -3051,11 +3051,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
         }
         if cmd == "rescan" { rescan() }
-        // Names go into a shell command: allow only what workspace names use (dash.py checks again).
+        // Names go into a shell command: allow only what workspace names use (greenlight dash checks again).
         if cmd == "page", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
-            ssh("\(py)/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
+            ssh("\(gl) dash page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"couldn't load this page from \#(host) (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.page(\(js))")
             })
@@ -3064,8 +3064,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "ask" || cmd == "answer", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             let text = b["text"] as? String ?? ""
             if cmd == "answer" && text.isEmpty { return }
-            let remote = cmd == "answer" ? "\(py)/dash.py answer '\(name)'"
-                : "\(py)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
+            let remote = cmd == "answer" ? "\(gl) dash answer '\(name)'"
+                : "\(gl) dash ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
             ssh(remote, stdin: text, onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
@@ -3075,16 +3075,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // The hover card's Next step: greenlight's next-step prompt for a workspace, and running a prompt there as a new agent.
         if cmd == "park", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil, let on = b["on"] as? Bool {
             var out = ""
-            ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
+            ssh("\(gl) dash park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
         }
-        // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
+        // New task: greenlight dash task repos | new <repo>; the request and its files go on stdin as JSON.
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
            let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             var out = ""
-            ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
+            ssh("\(gl) dash task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","arg":"\#(arg)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
@@ -3092,10 +3092,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "suggest", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
-        // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
+        // The hex card's Merge (second click): greenlight dash tree merge, answered with mc.merged
         if cmd == "merge", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            ssh("\(py)/dash.py tree merge '\(path)'", onLine: { out += $0 }, onExit: { code in
+            ssh("\(gl) dash tree merge '\(path)'", onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
@@ -3108,7 +3108,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let prompt = b["prompt"] as? String ?? ""
             if prompt.isEmpty { return }
             var out = ""
-            ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
+            ssh("\(gl) dash run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
@@ -3482,12 +3482,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
     var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast
-    /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
+    /// The sidebar: every installed ADE's worktrees (greenlight dash trees), where greenlight lives.
     func pushTrees() {
         guard termLoaded, treesProc == nil else { return }
         treesAt = Date()
         var out = ""
-        treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
+        treesProc = ssh("\(gl) dash trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
@@ -3550,13 +3550,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let n = c.split(whereSeparator: { !"0123456789.".contains($0) }).compactMap { Double($0) }
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
-        case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
+        case "suggest":  // the sidebar card's next-step button: greenlight dash suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
-        case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg <path>, answered with term.tree(json)
+        case "tree":  // the sidebar's workspace menu: greenlight dash tree info|rm|goal|cfg <path>, answered with term.tree(json)
             guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
-            ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
+            ssh("\(gl) dash tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
                 onLine: { out += $0 }, onExit: { [weak self, weak web] code in
                 let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 web?.evaluateJavaScript("term.tree(\(js))")
@@ -3995,7 +3995,7 @@ func selfTest() {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
         Thread.sleep(forTimeInterval: 3)
 
-        onMain { c.send("Run this exact bash command: python3 -c \"import time; time.sleep(60)\" then say finished.") }
+        onMain { c.send("Run this exact bash command: sleep 60 then say finished.") }
         wait("a live step", 90) { !(c.run?.steps.isEmpty ?? true) }
         check("live step while working: \(onMain { c.run?.steps.first?.title ?? "-" })", onMain { c.run != nil })
         onMain { c.stop() }
@@ -4034,7 +4034,7 @@ func selfTest() {
             c.answer(c.waiting[0], "(dismissed)", send: false)
             check("questions persist", ((try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsFile))) ?? []).count == c.questions.count)
 
-            // pings that name workspaces (`greenlight.py ping --ws`): the dashboard lifts their hexes until answered, superseded or resolved
+            // pings that name workspaces (`greenlight ping --ws`): the dashboard lifts their hexes until answered, superseded or resolved
             c.ping(#"{"text": "3.22 ship?\nOptions: ship | hold", "key": "@lift", "ws": ["feat-3", "fix-1", "fix-2"]}"#)
             c.ping(#"{"text": "no workspaces here", "key": "@plain"}"#)
             check("a ping keeps the workspaces it names: \(c.waiting.map { $0.ws ?? [] })",

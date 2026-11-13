@@ -2,11 +2,11 @@
 
 An agent manager for coding-agent workspaces. Every workspace gets a **goal** ("Merge !42", "Review #17", or free-form). Greenlight walks each one through its repo's MR/PR lifecycle, works out the next step and who owns it, does the mechanical steps itself (mark ready, set a milestone, assign a review bot, merge), dispatches an agent to anything idle, cleans up finished workspaces, and only asks you what only you can answer.
 
-It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**, a macOS menubar app with a dashboard, a chat with Greenlight, and replyable notifications. Greenlight opens in **the Pipe**: the terminal alone, dark. Its level pill, which names where it goes (the Pipe in dark copper, the Basement in amber), or ⌘B switches to **the Basement**, the same window with its sidebar, where the green light at the bottom right rides up to **Greenlight Center** (the dashboard and chat, light), whose terminal button rides back down. ⌘⇧G goes up, ⌘⇧T down.
+It ships as a Claude Code skill (`SKILL.md` + one Rust binary, `bin/greenlight`), and **Greenlight**, a macOS menubar app with a dashboard, a chat with Greenlight, and replyable notifications. Greenlight opens in **the Pipe**: the terminal alone, dark. Its level pill, which names where it goes (the Pipe in dark copper, the Basement in amber), or ⌘B switches to **the Basement**, the same window with its sidebar, where the green light at the bottom right rides up to **Greenlight Center** (the dashboard and chat, light), whose terminal button rides back down. ⌘⇧G goes up, ⌘⇧T down.
 
 ## Requirements
 
-- Python 3.10+ (stdlib only).
+- Rust (`cargo`, via [rustup](https://rustup.rs)): `bin/greenlight` builds the binary on first run and after every `git pull`.
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
 - At least one coding agent CLI: `claude`, `codex`, `opencode` or `pi`.
 - One workspace manager (ADE): Orca (default), cmux, herdr, or T3 Code. Pick it with `GREENLIGHT_ADE=orca|cmux|herdr|t3`.
@@ -17,12 +17,12 @@ It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**
 ```bash
 git clone https://github.com/cbarraford/greenlight ~/.claude/skills/greenlight   # Claude Code's personal-skill path
 cd ~/.claude/skills/greenlight
-python3 scripts/greenlight.py report   # first scan: writes ~/.greenlight/report.html
-python3 scripts/auto.py install        # the scheduler (systemd user timer, or launchd on macOS)
+bin/greenlight report                  # first run builds the binary, then scans: writes ~/.greenlight/report.html
+bin/greenlight auto install            # the scheduler (systemd user timer, or launchd on macOS)
 app/build.sh                           # optional: ~/Applications/Greenlight.app
 ```
 
-Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add` (see `SKILL.md`).
+Then run `/greenlight` in Claude Code, or add a scheduled run with `greenlight auto add` (see `SKILL.md`).
 
 Greenlight can run on another machine (a dev box that's always on): put the checkout there, and pick it in the app's **Settings › Hosts** (any `Host` in `~/.ssh/config`; **Test** checks it, then relaunch), or set `GREENLIGHT_HOST`. `scripts/sync.sh` copies a local checkout to that host.
 
@@ -39,8 +39,8 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 | `llm_harness` | `"claude"` | runs the dashboard's own LLM calls (page design, suggestions) |
 | `merge_method` | `"merge"` | `merge`, `squash` or `rebase` |
 | `require_human_approval` | `true` | `false`: a mergeable MR with no other human's approval merges anyway |
-| `adopt` | `{"cap": 10, "roles": ["author", "reviewer"]}` | workspaces `adopt.py` creates per run, and for which of your MRs |
-| `blocking` | `null` | GitLab only: a team roster for `blocking.py` (see its docstring); `null` turns it off |
+| `adopt` | `{"cap": 10, "roles": ["author", "reviewer"]}` | workspaces `greenlight adopt` creates per run, and for which of your MRs |
+| `blocking` | `null` | GitLab only: a team roster for `greenlight blocking` (see `src/blocking.rs`); `null` turns it off |
 | `suggest_rules` | `[]` | extra rules for the dashboard's suggested prompts |
 | `name` | `"greenlight"` | what the dashboard's LLM prompts call it |
 
@@ -60,7 +60,7 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 
 ## Agent harnesses
 
-`harness.py` builds every headless agent command. Each harness runs with safe permissions unless you opt into bypass:
+`src/harness.rs` builds every headless agent command. Each harness runs with safe permissions unless you opt into bypass:
 
 | harness | default | `harnesses.<name>.bypass: true` |
 |---|---|---|
@@ -74,31 +74,34 @@ Unattended work (automations, the menubar chat) runs shell commands, so in safe 
 Support differs by harness:
 - All four: dispatch, automations, the menubar chat, limit fallback, cmux launch.
 - Claude and codex only: the dashboard's transcript mirror and question picker, herdr's `--kind`, T3 providers.
-- Claude only: Greenlight tells an idle agent from one with an unsent draft by reading Claude Code's TUI (`ade_common.py`), and only Claude conversations can be compacted from the chat.
+- Claude only: Greenlight tells an idle agent from one with an unsent draft by reading Claude Code's TUI (`src/ade_common.rs`), and only Claude conversations can be compacted from the chat.
 
 ## Layout
 
 | path | what |
 |---|---|
 | `SKILL.md` | the skill: how Claude Code runs Greenlight |
-| `scripts/greenlight.py` | scan, next step per workspace, report, pings |
-| `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
-| `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |
-| `scripts/auto.py` | Greenlight's own cron-style automations |
-| `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
-| `scripts/harness.py` | the agent CLIs |
-| `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
-| `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |
+| `bin/greenlight` | the entry point: rebuilds the binary when the source changed, then runs `greenlight <command>` |
+| `src/greenlight.rs` | scan, next step per workspace, report, pings (`greenlight scan`, `report`, `ping`, …) |
+| `src/adopt.rs` | `greenlight adopt`: a workspace for each open MR/PR of yours or awaiting your review |
+| `src/cleanup.rs` | `greenlight cleanup`: deletes finished workspaces when nothing can be lost |
+| `src/auto.rs` | `greenlight auto`: Greenlight's own cron-style automations |
+| `src/blocking.rs` | `greenlight blocking`, opt-in: what you're blocking under a team's GitLab review rules |
+| `src/harness.rs` | the agent CLIs |
+| `src/ade_*.rs` | the cmux, herdr and T3 adapters (Orca is native) |
+| `src/dash.rs`, `src/chat.rs` | `greenlight dash` / `chat`: the menubar app's backends |
+| `src/py.rs`, `src/base.rs` | shared helpers (Python-compatible JSON/text formatting, config, CLI wrappers) |
 | `scripts/sync.sh` | copies the checkout to a remote host |
 | `app/` | the macOS menubar app (Swift + `dashboard.html`, `terminal.html`) |
 | `lifecycles/`, `prompts/` | bundled defaults; yours in `~/.greenlight/` override them |
 | `examples/` | a sample lifecycle |
 | `brand/` | names, colors, icons |
-| `tests/` | Python and Playwright tests |
+| `tests/` | Playwright tests for the app's pages |
+| `migration/` | the black-box harness: goldens recorded from the old Python, fake CLIs, `BUGS.md` (deliberate fixes) |
 
 ## Tests
 
 ```bash
-for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done   # test_chat.py needs pytest: uv run --with pytest python -m pytest tests/test_chat.py
+cargo test && cargo build && GREENLIGHT_BIN=target/debug/greenlight migration/harness.sh check   # unit tests, then every golden
 node tests/test_dashboard.cjs; node tests/test_terminal.cjs          # need playwright-core and Chrome
 ```

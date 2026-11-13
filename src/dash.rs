@@ -15,24 +15,24 @@ use std::sync::LazyLock;
 
 const DOC: &str = r#"dash: live data for the Greenlight left pane (app/dashboard.html).
 
-    dash.py snapshot          one JSON line: every workspace as a puck
-    dash.py stream [secs]     a snapshot every `secs` (default 10); records state changes as history
-    dash.py page <ws> [--fresh] [--model M] [--effort E]  one JSON line: facts + an AI-designed layout for that workspace's page
-    dash.py suggest <ws> [--model M] [--effort E]  one JSON line: the next prompt to give an agent there (the console drawer, the
-                                                    hover card's button); cached per state, and snapshots carry it as `suggestion`
-    dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
-    dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the console)
-    dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
-    dash.py tree info|rm|goal|cfg <path> [--force]  the sidebar's workspace menu: git facts; remove the worktree (refuses a dirty,
-                                                    unpushed or pinned one without --force); set the goal (stdin); write the main
-                                                    checkout's .greenlight.json (stdin)
-    dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
-    dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
-    dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
-    dash.py task repos -                            one JSON line: the repos a task can go to (New task)
-    dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs
+    greenlight dash snapshot          one JSON line: every workspace as a puck
+    greenlight dash stream [secs]     a snapshot every `secs` (default 10); records state changes as history
+    greenlight dash page <ws> [--fresh] [--model M] [--effort E]  one JSON line: facts + an AI-designed layout for that workspace's page
+    greenlight dash suggest <ws> [--model M] [--effort E]  one JSON line: the next prompt to give an agent there (the console drawer, the
+                                                            hover card's button); cached per state, and snapshots carry it as `suggestion`
+    greenlight dash run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
+    greenlight dash transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the console)
+    greenlight dash trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+    greenlight dash tree info|rm|goal|cfg <path> [--force]  the sidebar's workspace menu: git facts; remove the worktree (refuses a dirty,
+                                                            unpushed or pinned one without --force); set the goal (stdin); write the main
+                                                            checkout's .greenlight.json (stdin)
+    greenlight dash ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
+    greenlight dash answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
+    greenlight dash park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
+    greenlight dash task repos -                            one JSON line: the repos a task can go to (New task)
+    greenlight dash task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs
 
-Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
+Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
 with a live `orca worktree ps` (agent state, seconds old). Never calls GitLab for the overview.
 Page layouts come from Claude Haiku picking widgets out of CATALOG; the page renders only known
 widgets, so a bad layout degrades to fewer cards, never to executed output.
