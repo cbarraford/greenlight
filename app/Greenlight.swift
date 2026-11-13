@@ -2867,7 +2867,7 @@ struct ProjectChip: View {
     var light: Bool { _ = c.look; return !theme.dark }
     let pick: () -> Void
     var body: some View {
-        if !s.project.isEmpty {
+        if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
             Button(action: pick) {  // the chip (design A): its squares, the name, a chevron
                 HStack(spacing: 6) {
                     if s.colors.isEmpty { Image(systemName: "square.grid.2x2.fill").font(.system(size: 9)).opacity(0.55) }
