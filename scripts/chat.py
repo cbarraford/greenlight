@@ -13,6 +13,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
 import json, os, re, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import decisions  # noqa: E402
 import harness  # noqa: E402
 
 DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "chat"))  # CHAT_DIR: tests use a scratch session
@@ -77,6 +78,7 @@ class Norm:
         self.context = 0
         self.window = None
         self.text = ""  # last text block, the fallback reply
+        self.reply = None  # what the turn ended on, when it ended well: a question if it closes with an Options line
         self.cmds = {}  # Bash tool_use id → command, so a background shell can be found and stopped
         self.shells = {}  # task_id → {id, title, cmd, started}
 
@@ -254,12 +256,13 @@ def run(cmd, engine, text, norm, check=False):
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice
                 continue
-            done |= e["e"] == "done"
+            if e["e"] == "done":
+                done, norm.reply = True, e["text"] if e["ok"] else None
             emit(**e)
     p.wait()
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
         emit(e="done", ok=True, text=norm.text, context=norm.context, window=norm.window, ms=None)
-        done = True
+        done, norm.reply = True, norm.text
     for f in (PIDFILE, BGFILE):  # the process is gone, and its shells with it
         if os.path.exists(f):
             os.remove(f)
@@ -326,6 +329,7 @@ def turn(text, model, effort, compact=False, name=None):
         prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
     sid = session(engine)
     if not compact:
+        decisions.quiet("heard", text)  # an answer to a ping or to the chat's open question goes into that question's record
         text = WRAP + text
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
@@ -348,6 +352,8 @@ def turn(text, model, effort, compact=False, name=None):
         new_sid, err = run(cmd, engine, t, norm)
     if new_sid:
         session(engine, new_sid)
+    if not compact and not err:
+        decisions.quiet("said", norm.reply)  # a reply ending in an Options line is a question: record it
     if err:
         emit(e="done", ok=False, text=short(err, 500), context=norm.context, window=norm.window, ms=None)
 
@@ -361,6 +367,7 @@ def main():
         for f in ["session"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
+        decisions.quiet("forget_chat")
     elif cmd == "stop":
         if os.path.exists(PIDFILE):
             try:

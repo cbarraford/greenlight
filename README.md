@@ -84,6 +84,7 @@ Support differs by harness:
 | `scripts/greenlight.py` | scan, next step per workspace, report, pings |
 | `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
 | `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |
+| `scripts/decisions.py` | the decision record: every question Greenlight asked you, the situation, and your answer (`~/.greenlight/decisions.jsonl`) |
 | `scripts/auto.py` | Greenlight's own cron-style automations |
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
