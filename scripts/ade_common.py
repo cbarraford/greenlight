@@ -51,9 +51,9 @@ def worktree_add(repo, name, base=None):
     return path
 
 
-def worktree_remove(ws):
-    if not ws["isMainWorktree"]:  # git refuses a dirty tree without --force, which we never pass
-        p = subprocess.run(["git", "-C", ws["repoId"], "worktree", "remove", ws["path"]], capture_output=True, text=True)
+def worktree_remove(ws, force=False):
+    if not ws["isMainWorktree"]:  # git refuses a dirty tree without --force: only the Basement passes it, after the page showed the risks
+        p = subprocess.run(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), ws["path"]], capture_output=True, text=True)
         if p.returncode:
             raise RuntimeError(f"git worktree remove {ws['path']}: {p.stderr.strip()[:300]}")
 

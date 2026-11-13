@@ -3683,7 +3683,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop() }
-            self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil
+            self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
             web.configuration.userContentController.removeScriptMessageHandler(forName: "term")  // it holds the app, not the page, but the page would linger
@@ -3737,7 +3737,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown),
+        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
@@ -3811,7 +3811,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
         return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
-    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast
+    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
+    func editorApp() -> (bid: String, url: URL, name: String)? {
+        [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
+            .compactMap { i, n in NSWorkspace.shared.urlForApplication(withBundleIdentifier: i).map { (i, $0, n) } }.first
+    }
+    func tunnelState(_ key: String, _ st: String) {  // a port row's tunnel: opening, open, failed, closed
+        let a = String(data: (try? JSONSerialization.data(withJSONObject: [key, st])) ?? Data(), encoding: .utf8) ?? "[]"
+        termWebs.forEach { $0.evaluateJavaScript("window.term && term.tunnel(...\(a))") }
+    }
+    func toastTerm(_ web: WKWebView?, _ text: String) {
+        let d = (try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        web?.evaluateJavaScript("term.toast(\(d))")
+    }
     /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
     func pushTrees() {
         guard termLoaded, treesProc == nil else { return }
@@ -3882,15 +3895,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "trees": pushTrees()
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
-        case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+        case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
+            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
                 onLine: { out += $0 }, onExit: { [weak self, weak web] code in
                 let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 web?.evaluateJavaScript("term.tree(\(js))")
-                if op != "info" { self?.pushTrees() }
+                if op != "info" && op != "diff" { self?.pushTrees() }
             })
         case "url":  // a link in a terminal: web links only, the output isn't ours to trust
             if let u = URL(string: b["url"] as? String ?? ""), ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
@@ -3902,8 +3915,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "up": appGoUp()  // Jump › Greenlight Center
         case "localName":  // the sidebar's Rename on this Mac
             let n = String((b["name"] as? String ?? "").trimmingCharacters(in: .whitespaces).prefix(60)); greenlight.localName = n == localDefault ? "" : n
-        case "notify":  // auto-run: a job done, or waiting on you
-            if wid == 0, let t = b["title"] as? String, let body = b["body"] as? String { greenlight.notify(title: String(t.prefix(200)), body: String(body.prefix(500)), subtitle: nil, reply: false) }
+        case "notify":  // auto-run's jobs, and an agent that finished or wants you (the page sends one per change, any window)
+            if let t = b["title"] as? String, let body = b["body"] as? String { greenlight.notify(title: String(t.prefix(200)), body: String(body.prefix(500)), subtitle: nil, reply: false) }
         case "copy":
             if let s = b["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
         case "save":
@@ -3916,6 +3929,51 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let reply: (String) -> Void = { [weak web] n in web?.evaluateJavaScript("term.named(\(tab), \(js(n)))") }
             if auto && !greenlight.termAutoName { return reply("") }  // still answer: the page counts auto runs in flight
             aiTabName(b["text"] as? String ?? "", model: greenlight.termNameModel, done: reply)
+        case "badge":  // agents waiting on you, per window: the Dock icon shows the sum
+            termBadges[wid] = max(0, b["n"] as? Int ?? 0)
+            let n = termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
+        case "file":  // a dropped or pasted file: written where the pane's shell runs, its path goes back to be pasted
+            guard let at = paneWhere(b["ws"] as? String ?? ""), let data = b["data"] as? String, data.count <= 14_000_000,
+                  data.range(of: #"^[A-Za-z0-9+/=]*$"#, options: .regularExpression) != nil else { return }
+            let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
+            let path = "/tmp/greenlight/\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
+            // ponytail: stdin is written on the main thread, so a 10 MB drop over a slow ssh stalls the UI for its upload
+            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data) { [weak web] code in
+                web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 ? path : "")))")
+            }
+        case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
+            guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
+                  let u = URL(string: "http://localhost:\(port)") else { return }
+            if at.host.isEmpty || at.host == "local" { NSWorkspace.shared.open(u); return }
+            let key = "\(at.host):\(port)"
+            if tunnels[key]?.isRunning == true { NSWorkspace.shared.open(u); return tunnelState(key, "open") }
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
+            p.standardError = FileHandle.nullDevice
+            // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
+            p.terminationHandler = { [weak self] q in DispatchQueue.main.async { if self?.tunnels[key] === q { self?.tunnels[key] = nil; self?.tunnelState(key, q.terminationStatus == 0 ? "closed" : "failed") } } }  // ssh exiting on its own (port taken, host down, dropped): failed; Cancel removes it first
+            guard (try? p.run()) != nil else { return tunnelState(key, "failed") }
+            tunnels[key] = p; tunnelState(key, "opening")
+            // ponytail: 1.5s for ssh to bind; a local port already in use makes ssh exit (ExitOnForwardFailure), which reads as failed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard self?.tunnels[key] === p else { return }
+                if p.isRunning { NSWorkspace.shared.open(u); self?.tunnelState(key, "open") } else { self?.tunnelState(key, "failed") }
+            }
+        case "untunnel":  // Cancel / Close on a port row: ends that tunnel
+            guard let port = b["port"] as? Int, let at = paneWhere(b["ws"] as? String ?? "") else { return }
+            let key = "\(at.host):\(port)"
+            if let p = tunnels.removeValue(forKey: key) { p.terminate() }
+            tunnelState(key, "closed")
+        case "edit":  // Open in editor: Zed, Cursor or VS Code, whichever is installed first; over ssh for a remote host
+            guard let at = paneWhere(b["ws"] as? String ?? ""), !at.cwd.isEmpty else { return }
+            guard let (bid, app, _) = editorApp() else { return toastTerm(web, "No Zed, Cursor or VS Code installed") }
+            if at.host.isEmpty || at.host == "local" {
+                NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+            } else if bid == "dev.zed.Zed" {  // zed's cli opens ssh://host/path as a remote project
+                let p = Process(); p.executableURL = app.appendingPathComponent("Contents/MacOS/cli"); p.arguments = ["ssh://\(at.host)\(at.cwd)"]; try? p.run()
+            } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
+                NSWorkspace.shared.open(u)
+            }
         case "error": NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
         default: break
         }
@@ -4244,6 +4302,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
+    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() } }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
