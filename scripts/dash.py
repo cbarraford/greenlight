@@ -353,8 +353,18 @@ def tree_info(path):
         lp = ports(path)
     except (OSError, subprocess.SubprocessError, ValueError):  # no tmux server or no lsof: no ports, not an error
         lp = []
-    return {"dirty": len(st.stdout.splitlines()), "unpushed": len(git("rev-list", "HEAD", "--not", "--remotes").stdout.split()),
-            "commit": int(last) * 1000 if last.isdigit() else None, "ports": lp}
+    lines = st.stdout.splitlines()
+    ahead = git("log", "--format=%h %s", "HEAD", "--not", "--remotes").stdout.splitlines()
+    cmd = (repo_cfg(main_of(path)) or {}).get("teardown")
+    base = git("merge-base", "HEAD", "origin/HEAD").stdout.strip() or "HEAD"
+    # the card's Diff counts, branch plus uncommitted; ponytail: untracked files aren't counted (the Diff dialog has them)
+    sh = git("diff", "--shortstat", base).stdout
+    n = lambda w: int(m[1]) if (m := re.search(rf"(\d+) {w}", sh)) else 0
+    # ports/dirty/unpushed as before; the rest is what Delete lists (first 20 files, 10 commits) and the port rows' process names
+    return {"dirty": len(lines), "unpushed": len(ahead), "commit": int(last) * 1000 if last.isdigit() else None, "ports": [p for p, _ in lp],
+            "procs": {str(p): c for p, c in lp}, "untracked": sum(l[:2] == "??" for l in lines), "files": [[l[:2].strip(), l[3:]] for l in lines[:20]],
+            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "",
+            "added": n("insertion"), "removed": n("deletion")}
 
 
 def tree_rm(path, force=False, teardown=""):
@@ -369,11 +379,15 @@ def tree_rm(path, force=False, teardown=""):
              *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else [])]
     if risks and not force:
         return {"risks": risks}
-    if teardown and teardown == (repo_cfg(main_of(path)) or {}).get("teardown"):
-        hook(teardown, path)  # ponytail: a failed teardown doesn't stop the delete; surface its error if that bites
+    warn = None
+    if teardown:  # a failed teardown doesn't stop the delete; the page toasts why
+        if teardown != (repo_cfg(main_of(path)) or {}).get("teardown"):
+            warn = "Teardown skipped: the repo's .greenlight.json changed"
+        elif err := hook(teardown, path):
+            warn = f"Teardown failed ({err}); deleted anyway"
     # ponytail: only Orca and the Basement honour --force; the other git-backed ADEs still refuse a dirty tree, and that error reaches the page
     call("worktree", "rm", "--worktree", f"id:{w.get('worktreeId') or w['id']}", *(["--force"] if force else []))
-    return {"ok": True}
+    return {"ok": True, **({"warn": warn} if warn else {})}
 
 
 def tree_goal(path, goal):
@@ -467,7 +481,7 @@ def tree_diff(path, mode):
     if mode == "branch":  # ponytail: origin's default branch, else the usual names; a stacked branch diffs against the trunk
         for r in ("origin/HEAD", "origin/main", "origin/master", "origin/develop"):
             if b := git("merge-base", "HEAD", r).stdout.strip():
-                base, label = b, r.removeprefix("origin/")
+                base, label = b, git("rev-parse", "--abbrev-ref", r).stdout.strip().removeprefix("origin/") or r  # origin/HEAD names main
                 break
         else:
             return {"error": "no origin/HEAD, main, master or develop to compare with"}
@@ -476,23 +490,26 @@ def tree_diff(path, mode):
         return {"error": (num.stderr.strip() or "not a git checkout")[:200]}
     patch = git("diff", "--no-color", "--no-ext-diff", base).stdout
     files = [[f, a, d] for a, d, f in (l.split("\t", 2) for l in num.stdout.splitlines())]  # path, +, − ("-" = binary)
+    kind = {x[-1]: x[0][0] for x in (l.split("\t") for l in git("diff", "--name-status", base).stdout.splitlines()) if len(x) > 1}  # M A D R…
     # an agent's new files are untracked, which `git diff` never shows; ponytail: first 100, one git call each
     for f in [x for x in git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0") if x][:100]:
         a, d = (git("diff", "--no-index", "--numstat", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
-        files.append([f, a, d])
+        files.append([f, a, d]); kind[f] = "U"
         if len(patch) <= DIFF_CAP:  # past the cap only the counts: a big un-ignored file isn't read whole
             patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
-    return {"mode": mode, "base": label, "files": files, "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
+    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f, "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
 def listeners(lsof):
-    """`lsof -Fpn` output → {pid: {port}}."""
-    out, pid = {}, None
+    """`lsof -Fpcn` output → {pid: (command, {port})}."""
+    out, pid, cmd = {}, None, ""
     for l in lsof.splitlines():
         if l[:1] == "p":
-            pid = int(l[1:])
+            pid, cmd = int(l[1:]), ""
+        elif l[:1] == "c":
+            cmd = l[1:]
         elif l[:1] == "n" and pid and (port := l.rpartition(":")[2]).isdigit():
-            out.setdefault(pid, set()).add(int(port))
+            out.setdefault(pid, (cmd, set()))[1].add(int(port))
     return out
 
 
@@ -510,7 +527,7 @@ def under(pairs, roots):
 
 
 def ports(path):
-    """TCP ports listening from processes started in this worktree's Basement terminals (tmux panes whose folder is in it)."""
+    """[(port, command)] listening from processes started in this worktree's Basement terminals (tmux panes whose folder is in it)."""
     run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=10).stdout
     roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run("tmux", "-L", "greenlight", "list-panes", "-a", "-F",
              "#{pane_pid} #{pane_current_path}").splitlines()) if pid.isdigit() and (cwd == path or cwd.startswith(path + "/"))]
@@ -518,7 +535,7 @@ def ports(path):
         return []
     pids = under([tuple(map(int, l.split())) for l in run("ps", "-A", "-o", "pid=,ppid=").splitlines() if len(l.split()) == 2], roots)
     # ponytail: lsof on both (Linux shows your own processes without root); `ss -ltnp` if a host lacks lsof
-    return sorted({p for pid, ps in listeners(run("lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn")).items() if pid in pids for p in ps})
+    return sorted({(p, c[:40]) for pid, (c, ps) in listeners(run("lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn")).items() if pid in pids for p in ps})
 
 
 def safe(name):

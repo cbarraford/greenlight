@@ -208,7 +208,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg .big>.dh{display:flex;align-items:center;gap:12px;min-width:0;padding:16px 20px;box-shadow:inset 0 -1px 0 var(--ln)} #dlg .nw>.dh{padding:18px 20px 12px;box-shadow:none}
 #dlg .dh h3{margin:0;font-size:15px;font-weight:650;white-space:nowrap} #dlg .dh .sub{min-width:0;overflow:hidden;color:var(--dim);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 #dlg .big>.btns{align-items:center;gap:10px;padding:12px 20px;background:var(--d1);box-shadow:inset 0 1px 0 var(--ln)}
-#dlg .big>.btns .err,#dlg .big>.btns .note2{display:flex;align-items:center;gap:8px;margin:0;font-size:11.5px} #dlg .note2,#dlg .tot{color:var(--dim);font-size:11.5px} #dlg .big>.btns .err:empty{display:none}
+#dlg .big>.btns .err,#dlg .big>.btns .note2{display:flex;align-items:center;gap:8px;margin:0;font-size:11.5px} #dlg .note2,#dlg .tot{color:var(--dim);font-size:11.5px} #dlg .big>.btns .err:empty{display:none} #dlg .nws details input{font:12.5px ui-monospace,'SF Mono',Menlo,monospace} #dlg .nw>.btns .note2{display:block;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #dlg .big button{flex:0 0 auto;height:32px;padding:0 16px;border-radius:8px;background:var(--ln);color:var(--fg);font-size:13px;font-weight:500;cursor:pointer}
 #dlg .big button.pri,#dlg .big button.go{display:flex;align-items:center;gap:8px;padding:0 18px;background:var(--amb);color:var(--ink);font-weight:650} #dlg .big button.pri kbd{font:11px ui-monospace,Menlo,monospace;opacity:.7}
 #dlg .big button.lite{display:flex;align-items:center;gap:6px;padding:0 10px;background:none;color:var(--mid);font-size:12.5px} #dlg .big button.lite:hover{background:var(--ln);color:var(--fg)} #dlg .big button.lite:disabled{opacity:.45;background:none}
@@ -229,7 +229,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 /* Diff: files on the left, the patch on the right; a click on a line opens a note to Claude under it */
 #dlg .dfb{display:flex;min-height:0} #dlg .dfb nav{flex:0 0 240px;display:flex;flex-direction:column;gap:2px;padding:8px;overflow-y:auto;box-shadow:inset -1px 0 0 var(--ln)}
 #dlg .big .dfb nav button{height:auto;display:flex;gap:6px;padding:6px 8px;border-radius:6px;background:none;font:11px ui-monospace,"SF Mono",Menlo,monospace;text-align:left} #dlg .big .dfb nav button:hover{background:var(--ln)}
-#dlg .dfb nav button span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .dsum{padding:4px 8px;color:var(--dim);font-size:10.5px;font-weight:600}
+#dlg .dfb nav button span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .dsum{padding:4px 8px;color:var(--dim);font-size:10.5px;font-weight:600}
 #dlg .dfb .pl{color:var(--g)} #dlg .dfb .mi{color:var(--r)}
 #dlg .dfv{flex:1;min-width:0;overflow:auto;font:12px/1.6 ui-monospace,"SF Mono",Menlo,monospace} #dlg .dfh{position:sticky;top:0;padding:6px 14px;background:var(--d1);color:var(--dim);box-shadow:inset 0 -1px 0 var(--ln)}
 #dlg .dl{white-space:pre;padding-right:14px} #dlg .dl i{display:inline-block;width:44px;padding-right:10px;text-align:right;color:var(--dim);font-style:normal}
@@ -237,7 +237,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg .dl.hk{color:var(--dim);background:color-mix(in srgb,var(--b) 6%,transparent)} #dlg .dcut{padding:10px 14px;color:var(--dim)}
 #dlg .dn{display:flex;gap:8px;align-items:flex-start;margin:6px 14px 6px 54px;padding:8px;border-radius:8px;background:var(--d1);box-shadow:inset 0 0 0 1px var(--amb);font:13px -apple-system,system-ui,sans-serif} #dlg .dn textarea{flex:1}
 #card .ports{display:flex;flex-wrap:wrap;gap:4px} #card .ports[hidden]{display:none} #card .ports button{height:22px;padding:0 9px;border:0;border-radius:11px;background:color-mix(in srgb,var(--g) 16%,transparent);color:var(--fg);font:11px ui-monospace,"SF Mono",Menlo,monospace}
-#stage.drop{outline:2px dashed var(--accent);outline-offset:-6px}
+
 #dlg .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .tiles label:first-child{grid-column:1/-1}
 #dlg label.tile{gap:11px;padding:11px 12px;border-radius:10px;background:color-mix(in srgb,var(--fg) 5%,var(--bg));box-shadow:inset 0 0 0 1px var(--ln);color:var(--fg);cursor:pointer}
 #dlg label.tile:has(input:checked){background:color-mix(in srgb,var(--amb) 8%,var(--d0));box-shadow:inset 0 0 0 1.5px var(--amb)}
@@ -283,6 +283,41 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #dlg details{flex-shrink:0;border-radius:9px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln)} #dlg summary{padding:10px 12px;color:var(--fg);font-size:12.5px;font-weight:650;cursor:pointer}
 #dlg .ev{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;padding:0 12px 10px} #dlg .ev label{gap:10px;padding:5px 0;color:var(--mid);font-size:12px} #dlg .ev input[type=color]{flex:0 0 auto;width:26px;height:20px;padding:0;border:0;border-radius:5px;background:none;cursor:pointer}
 #dlg .ev span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .ev code{color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace}
+/* the redesign: Needs you / Working on top of the sidebar, a waiting pill, tab dots, toasts with a second line */
+.s-need{--c:var(--o)} .s-work{--c:var(--b)} .ws .why{flex-shrink:0;color:var(--c);font-size:10.5px;font-weight:600} .ws .pt{flex-shrink:0;color:var(--dim);font:10.5px ui-monospace,"SF Mono",Menlo,monospace}
+#shead .wait{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;height:20px;padding:0 7px;border:0;border-radius:10px;background:color-mix(in srgb,var(--o) 16%,transparent);color:var(--o);font:600 10.5px -apple-system,sans-serif;cursor:pointer} #shead .wait[hidden]{display:none}
+#shead .acc{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.tab .dot{width:7px;height:7px}
+#toast .tx{display:flex;flex-direction:column;min-width:0} #toast .tx b{font-weight:600} #toast small{color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace} #toast small:empty{display:none}
+/* card: a row per port (address, process, tunnel state, its button) */
+#card .ports{display:grid;gap:2px;flex-wrap:nowrap} #card .ports .pth{color:var(--dim);font-size:10.5px;font-weight:600;padding:0 2px 2px}
+#card .ports .pr{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 4px 0 9px;border-radius:7px;background:var(--bg);font-size:11px}
+#card .ports .pr i{width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--dim)} #card .ports .pr i.open{background:var(--g)} #card .ports .pr i.opening{background:var(--o)} #card .ports .pr i.failed{background:var(--r)}
+#card .ports code{font:11px ui-monospace,"SF Mono",Menlo,monospace} #card .ports .pr span{flex:1;min-width:0;overflow:hidden;color:var(--dim);text-overflow:ellipsis;white-space:nowrap}
+#card .ports .pr button{height:22px;padding:0 9px;border-radius:6px;background:var(--hair);font:500 11px -apple-system,sans-serif}
+#card .acts small{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums} #card .ft .del{font-weight:500}
+/* New workspace: an icon by the title, two fields a row, the setup as a tile, the branch under Advanced */
+#dlg .dh .hic{flex:0 0 auto;width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:color-mix(in srgb,var(--amb) 18%,transparent);color:var(--amb)} #dlg .dh .stk{display:grid;gap:2px;min-width:0}
+#dlg .nws .two{display:grid;grid-template-columns:1fr 1fr;gap:12px} #dlg .nws .tiles label:first-child{grid-column:auto} #dlg .nws .tile small{white-space:normal}
+#dlg .nws .tile code{display:block;margin:4px 0;padding:3px 6px;border-radius:5px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dlg .tile.none{display:flex;gap:11px;padding:11px 12px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--ln);color:var(--dim);cursor:default} #dlg .tile.none[hidden],#dlg .nws [hidden]{display:none} #dlg .dh .stk .sub{white-space:normal} #dlg .big button.danger{background:var(--r);color:#fff;font-weight:650} #dlg .tile.none b{color:var(--mid)}
+#dlg .nws summary{display:flex;align-items:center;gap:8px;color:var(--mid);font-size:12px;font-weight:600} #dlg .nws summary code{font-weight:400;color:var(--dim)} #dlg .nws details .fld{padding:0 12px 12px}
+#dlg .nws .where{padding:0 12px 12px;color:var(--dim);font:11.5px ui-monospace,"SF Mono",Menlo,monospace}
+/* Diff: a status letter and a note count per file; the note says where it goes */
+#dlg .dfb nav .st{flex:0 0 auto;width:14px;font-weight:700} #dlg .st.M{color:var(--o)} #dlg .st.A,#dlg .st.U{color:var(--g)} #dlg .st.D{color:var(--r)} #dlg .st.R{color:var(--b)}
+#dlg .dfb nav .nn{flex:0 0 auto;padding:0 5px;border-radius:8px;background:var(--amb);color:var(--ink);font-weight:700}
+#dlg .dn>div{flex:1;display:grid;gap:6px} #dlg .dn .lb{color:var(--dim);font-size:11.5px;font-weight:600} #dlg .big .dn button.lite{color:var(--r)}
+#dlg .big .seg [aria-checked=true]{background:var(--ln);color:var(--fg);font-weight:600}
+/* Delete: what goes with it */
+#dlg .lost li{align-items:flex-start} #dlg .lost li>span{display:grid;gap:2px} #dlg .lost small{color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-line}
+#dlg .warn{display:flex;gap:10px;padding:10px 12px;border-radius:9px;background:color-mix(in srgb,var(--o) 10%,transparent);color:var(--fg);font-size:12px;line-height:1.4} #dlg .warn svg{flex:0 0 auto;color:var(--o)}
+/* a file dragged over the terminals: where it goes */
+#drop{position:absolute;inset:10px;z-index:5;display:none;place-items:center;border-radius:12px;background:color-mix(in srgb,var(--accent) 7%,rgba(0,0,0,.45));box-shadow:inset 0 0 0 2px var(--accent);pointer-events:none;color:var(--fg);font:13px -apple-system,system-ui,sans-serif}
+#stage.drop #drop{display:grid} #drop>div{width:420px;max-width:80%;display:flex;flex-direction:column;align-items:center;gap:10px;padding:24px;border-radius:14px;background:var(--strip);box-shadow:0 0 0 1px var(--hair),0 24px 70px rgba(0,0,0,.5);text-align:center}
+#drop .hic{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)} #drop b{font-size:15px;font-weight:650} #drop p{margin:0;color:var(--dim);line-height:1.45} #drop code{font:12px ui-monospace,"SF Mono",Menlo,monospace}
+#drop .n{width:100%;box-sizing:border-box;padding:8px 10px;border-radius:9px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--hair)} #drop kbd{padding:1px 5px;border-radius:4px;background:var(--hair);font:11px -apple-system,sans-serif}
+/* palette: a saved command says where it goes */
+#pres .sd{flex-shrink:0;color:var(--dim);font-size:11px}
 </style>
 <script src="ghostty-web.js"></script>
 </head><body class="noside">
@@ -290,8 +325,8 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 <button id="jump" type="button"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/></svg><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
 <div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
-<div id="stage"><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
-<div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
+<div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
+<div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span class="tx"><b></b><small></small></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
 <div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><svg id="pico" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
 <script>
 "use strict";
@@ -557,6 +592,7 @@ function working(p){
   for (let y = b.length - 1, n = 0; y >= Math.max(0, b.length - 80) && n < 15 && !spin; y--) {  // the last 15 lines with text
     const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = BUSY.test(l) } }
   p.st = spin ? "work" : "idle";
+  if (was !== "work" && p.st === "work") p.workAt = Date.now();  // the Working section counts from here
   if (was === "work" && p.st === "idle") ping(p, "Claude finished", paneTitle(p));
   if (was !== p.st && !editing) render();
 }
@@ -629,6 +665,8 @@ function render(){
     const multi = paneOf(x).length > 1;
     b.insertAdjacentHTML("beforeend", x.auto ? I.bolt(13) : multi ? I.splitR(14) : paneIcon(x.focus, 14));
     if (editing === x && !editSide) { nameField(x, b); return b }
+    const st = paneOf(x).some(p => p.bell && isClaude(p)) ? "needs" : paneOf(x).some(p => p.st === "work") ? "working" : "";
+    if (st) b.append(el("i", "dot " + st));  // the tab's Claude: waiting on you, or working
     const nm = el("span", "nm" + (x.naming ? " busy" : "")); nm.textContent = x.naming ? "Naming…" : (multi && !x.name ? `${name} · ${paneOf(x).length} panes` : name);
     b.append(nm);
     if (bell && x !== cur) b.insertAdjacentHTML("beforeend", I.bell(13));
@@ -718,13 +756,13 @@ function wsMenu(e, ws, w){
   const pr = el("div", "ports"); portsFill(pr, ws, facts.get(ws)); c.append(pr);
   const acts = el("div", "acts");
   acts.append(btn("", I.shell(18) + "Terminal", act(() => newTab(ws))), btn("pri", I.claude(18) + "Claude", act(() => newTab(ws, "claude")), busy),
-    btn("", svg16("M5 2v12M11 2v12M2 5h6M8 11h6", 18) + "Diff", act(() => diffOpen(ws))), btn("", I.edit(18) + "Editor", act(() => post({cmd: "edit", ws}))));
+    btn("df", svg16("M5 2v12M11 2v12M2 5h6M8 11h6", 18) + `Diff<small>${dfn(facts.get(ws))}</small>`, act(() => diffOpen(ws))), btn("", I.edit(18) + esc(EDITOR), act(() => post({cmd: "edit", ws}))));
   const ft = el("div", "ft");
   if (m.web_url) ft.append(btn("", `Open ${esc(m.ref || "MR")} ` + IC.ext, act(() => post({cmd: "url", url: m.web_url}))));
   const cp = btn("", IC.copy + "Copy " + I.chev(10), () => { const r = cp.getBoundingClientRect(); showMenu({clientX: r.left, clientY: r.bottom + 4}, [
     w.branch && ["Branch name", "", () => post({cmd: "copy", text: w.branch})], ["Worktree path", "", () => post({cmd: "copy", text: ws})], m.web_url && ["MR link", "", () => post({cmd: "copy", text: m.web_url})]].filter(Boolean)) });
   ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
-  if (!w.main) { const d = btn("del", IC.trash(14), act(() => delWs(ws, w))); d.title = "Delete workspace"; d.setAttribute("aria-label", d.title); ft.append(d) }
+  if (!w.main) ft.append(btn("del", "Delete…", act(() => delWs(ws))));
   // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
   const mv = open ? (w.moves || []) : [], top = [];
   const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
@@ -800,7 +838,9 @@ function drawNext(){
   nx.disabled = !s || !!busy; nx.title = busy || s?.prompt || "";
   nx.innerHTML = I.spark(16) + `<span><b>${esc(s?.label || (s ? "Next step" : "Suggesting a next step…"))}</b><small>${esc(s?.prompt || "Reading the workspace")}</small></span>`;
 }
-const facts = new Map();  // path → dash.py tree info, so the next open (and Delete) starts from the last answer
+const facts = new Map();  // path → dash.py tree info, so the next open starts from the last answer
+const dfn = o => o && (o.added || o.removed) ? `+${o.added | 0} −${o.removed | 0}` : "";  // the card's Diff button: branch plus uncommitted, in lines
+const EDITOR = q.get("editor") || "Editor";  // the app's pick: Zed, Cursor or VS Code
 // a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
 function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, cancel = "Cancel", safe}){
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
@@ -819,16 +859,30 @@ function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, canc
     f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end(null) };
   });
 }
-// Delete: the worktree only (the branch stays). Asks first unless you said not to; dash.py refuses a pinned, dirty or unpushed tree, and that always asks.
-async function delWs(ws, w){
-  if (!noAskDel) {
-    const o = facts.get(ws), clean = o && !o.error && !o.dirty && !o.unpushed;
-    const r = await ask({icon: "trash", title: `Delete ${w.name}?`, text: `The worktree folder goes and its terminals close.${w.branch ? ` The branch <code>${esc(w.branch)}</code> stays.` : ""}`,
-      note: clean && "Clean and pushed", check: "Don't ask again when it's clean", ok: "Delete", danger: true});
-    if (!r) return;
-    if (r.checked) { noAskDel = true; save() }
-  }
-  post({cmd: "tree", op: "rm", path: ws, ...teardown(ws) && {text: teardown(ws)}});
+// Delete: the worktree only (the branch stays). A fresh info first, then a dialog listing what goes with it; clean and "don't ask" deletes at once.
+// dash.py refuses a pinned, dirty or unpushed tree without force, and that (a race) still asks.
+let delAsk = null;  // the workspace whose Delete waits on that info
+function delWs(ws){ delAsk = ws; post({cmd: "tree", op: "info", path: ws}) }
+function delDialog(o){
+  delAsk = null; const ws = o.path, w = wsInfo(ws) || {}, m = w.mr || {}, td = o.teardown && o.teardown === teardown(ws) ? o.teardown : "";
+  const clean = !o.error && !o.dirty && !o.unpushed, rm = force => post({cmd: "tree", op: "rm", path: ws, ...force && {force: true}, ...td && {text: td}});
+  if (clean && noAskDel) return rm(false);
+  const pl = (n, s) => `${n} ${s}${n === 1 ? "" : "s"}`, fs = o.files || [], tracked = (o.dirty | 0) - (o.untracked | 0);
+  const lost = [o.error && ["r", "Couldn't read its git state", o.error],
+    tracked > 0 && ["r", pl(tracked, "uncommitted change"), fs.filter(f => f[0] !== "??").map(f => f[1]).join("\n")],
+    o.untracked && ["r", pl(o.untracked, "untracked file"), fs.filter(f => f[0] === "??").map(f => f[1]).join("\n")],
+    o.unpushed && ["o", pl(o.unpushed, "unpushed commit") + ": the branch keeps them", (o.commits || []).join("\n")]].filter(Boolean);
+  const body = el("div", "nwb");
+  if (lost.length) { const ul = el("ul", "lost"); lost.forEach(([k, t, x]) => { const li = el("li", "", `<i class="k-${k}"></i><span><b></b><small></small></span>`); li.querySelector("b").textContent = t; li.querySelector("small").textContent = x; ul.append(li) });
+    body.append(el("h4", "", "Lost when it's deleted"), ul) }
+  else body.append(el("div", "note k-g", g16(G.ok) + "Clean and pushed: nothing is lost"));
+  if (o.teardown && td) { const t = el("label", "tile"); t.innerHTML = `<span><b>Runs the repo's teardown first</b><code></code><small>Matches .greenlight.json</small></span>`; t.querySelector("code").textContent = td; body.append(t) }
+  else if (o.teardown) body.append(el("div", "warn", IC.warn + "<span>Teardown skipped: the repo's .greenlight.json changed since this was read, so nothing runs first.</span>"));
+  const cb = Object.assign(el("input"), {type: "checkbox"}), lb = el("label"); lb.append(cb, "Don't ask again when it's clean");
+  const host = hostOf(ws) === "local" ? "this Mac" : hostOf(ws);
+  dlgForm(`Delete ${w.name || wsName(ws)}?`, body, clean ? "Delete" : "Delete anyway", () => { if (cb.checked) { noAskDel = true; save() } rm(!clean); return true }, null,
+    {cls: "big nw dlx", icon: IC.trash(16), sub: `Removes the worktree on ${host}.${w.branch ? ` The branch ${w.branch}${m.ref ? ` and ${m.ref} stay` : " stays"}.` : ""}`, left: clean ? [lb] : [el("span", "note2", "Commits stay on the branch")]});
+  const y = $("dlg").querySelector("button.pri"); y.className = "danger"; $("dlg").querySelector(".btns button:not(.danger)")?.focus();
 }
 async function treeDone(o){
   if (o.op === "merge") return mergeDone(o);
@@ -843,19 +897,21 @@ async function treeDone(o){
     const w = wsInfo(o.path); if (w) w.cfg = o.cfg; merge(); setLook("local", {}); toast(`Saved to ${o.path.split("/").pop()}/.greenlight.json: commit it to share`, true);
   } else if (o.op === "info") {
     facts.set(o.path, {...o, at: Date.now()});
+    if (delAsk === o.path) return delDialog(o);
     const c = $("card"), w = wsInfo(o.path);
     if (cardWs === o.path && !c.hidden) {
       c.querySelector(".st").innerHTML = stats(o);
       const mt = c.querySelector(".meta") || c.querySelector(".st").insertAdjacentElement("afterend", el("div", "meta"));
       mt.innerHTML = meta(w || {}, o); mt.hidden = !mt.innerHTML;
       const pr = c.querySelector(".ports"); if (pr) portsFill(pr, o.path, o);
+      const ds = c.querySelector(".df small"); if (ds) ds.textContent = dfn(o);
     }
   } else if (o.risks) {
     const rows = o.risks.map(s => /uncommitted/.test(s) ? ["r", s, "lost"] : /commit/.test(s) ? ["o", s.replace(/ \(.*\)/, ""), /keeps/.test(s) && "branch keeps it"] : ["dim", s[0].toUpperCase() + s.slice(1)]);
     const r = await ask({icon: "warn", title: `${wsName(o.path)} has unsaved work`, text: "Deleting the worktree loses what's not committed.", rows, cancel: "Keep it", safe: true, ok: "Delete anyway", danger: true});
     if (r) post({cmd: "tree", op: "rm", path: o.path, force: true, ...teardown(o.path) && {text: teardown(o.path)}});
   } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
-  else if (o.op === "rm") { facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
+  else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
 }
 addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) $("card").hidden = true; else cardHover = false }, true);
 // hover: resting on a workspace row opens its card (sooner when one is already up); leaving both row and card closes a card that hover opened.
@@ -1019,7 +1075,25 @@ function renderSide(){
     g.onclick = () => { shut.has(k) ? shut.delete(k) : shut.add(k); render() };
     into.push(g);
   };
-  const out = [];  // a box per section holding its rows: Hosts, then the workspaces by status
+  const out = [];  // a box per section holding its rows: Needs you, Working, Hosts, then the workspaces by status
+  // on top: Claude panes waiting on you (a bell), then the ones working; a row per workspace, a click goes to that pane
+  const alerts = (k, label, ps, tail) => {
+    const by = new Map(); ps.forEach(p => by.has(p.tab.ws) || by.set(p.tab.ws, p));
+    if (!by.size) return;
+    rows.length = 0; grp("§" + k, label, by.size, "sec");
+    if (!isShut("§" + k)) by.forEach((p, ws) => {
+      const w = wsInfo(ws), r = el("div", "ws"), l1 = el("span", "l1"), n = el("span", "wn"), pt = facts.get(ws)?.ports?.[0];
+      r.setAttribute("role", "treeitem"); n.textContent = wsName(ws);
+      l1.append(el("span", "dot " + (k === "need" ? "needs" : "working")), n, tail(p)); r.append(l1);
+      if (w?.branch || pt) r.append(el("span", "l2", `<span class="br">${w?.branch ? g16(G.branch) + `<span>${esc(w.branch)}</span>` : ""}</span>${Number.isInteger(pt) ? `<span class="pt">:${pt}</span>` : ""}`));
+      if (w?.ade) r._ws = ws;
+      r.onclick = () => focusPane(p); rows.push(r);
+    });
+    const b = el("div", `box s-${k}` + (isShut("§" + k) ? " shut" : "")); b.setAttribute("role", "group"); b.append(...rows); out.push(b);
+  };
+  const cl = [...panes.values()].filter(isClaude);
+  alerts("need", "Needs you", cl.filter(p => p.bell), p => el("span", "badge k-o", esc(p.why || "Asking")));
+  alerts("work", "Working", cl.filter(p => p.st === "work" && !p.bell), p => el("span", "why", p.workAt ? dur(p.workAt) : ""));
   rows.length = 0; grp("§host", "Hosts", homes().length, "sec");
   if (!isShut("§host")) {
     const idle = el("div", "hchips");
@@ -1062,7 +1136,9 @@ function toggleSide(){
   sliding.onfinish = end;
 }
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
-$("shead").append(iconBtn("ib", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
+const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});
+waitB.onclick = () => { const p = [...panes.values()].find(p => p.bell && isClaude(p)); if (p) focusPane(p) };
+$("shead").append(waitB, iconBtn("ib acc", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
   iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
   t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
@@ -1075,9 +1151,10 @@ $("shead").querySelector(".ttl").onclick = () => pickProjects(true);  // the tit
 setTitle();
 // a form in the modal: onOk() true closes it, false keeps it (a field said why). opt: cls "big" for the roomy layout (a title bar, a footer bar),
 // sub (a line by the title), head (nodes at the title bar's end), left/right (footer nodes either side of the gap), done (one Done button; the body has its own submit)
-function dlgForm(title, body, ok, onOk, onEnd, {cls = "wide", sub = "", head = [], left = [], right = [], done} = {}){
+function dlgForm(title, body, ok, onOk, onEnd, {cls = "wide", sub = "", head = [], left = [], right = [], done, icon} = {}){
   const d = $("dlg"), f = el("form", cls); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
-  const h = el("div", "dh", `<h3>${esc(title)}</h3>` + (sub ? `<span class="sub">${esc(sub)}</span>` : "")); h.append(el("span", "gap"), ...head); f.append(h, body);
+  const tt = `<h3>${esc(title)}</h3>` + (sub ? `<span class="sub">${esc(sub)}</span>` : "");
+  const h = el("div", "dh", icon ? `<span class="hic">${icon}</span><div class="stk">${tt}</div>` : tt); h.append(el("span", "gap"), ...head); f.append(h, body);
   const no = Object.assign(el("button", done ? "go" : ""), {type: "button", textContent: done ? "Done" : "Cancel"}), yes = Object.assign(el("button", "pri"), {type: "submit", textContent: ok});
   const btns = el("div", "btns"); btns.append(...left, ...left.length || right.length ? [el("span", "gap")] : [], ...right, no, ...done ? [] : [yes]); f.append(btns);
   const end = () => { d.hidden = true; d.replaceChildren(); onEnd?.(); cur?.focus.t.focus() };
@@ -1125,9 +1202,12 @@ function pickProjects(here){
 function newWindow(){ pickProjects(false) }
 // Customize look: your words → Claude (the app runs claude -p) → CSS colors over this window's chrome; Undo walks back, one restyle at a time
 let restyling = false, toastT;
-function toast(text, undo){
-  const t = $("toast"); clearTimeout(toastT); t.querySelector("span").textContent = text; t.hidden = false;
-  const b = t.querySelector("button"); b.hidden = !undo; b.onclick = () => { undoLook(); t.hidden = true; cur?.focus.t.focus() };
+// opt: true (an Undo for the look), or {sub: a second line, act: [button label, its fn]}
+function toast(text, opt){
+  if (opt === true) opt = {act: ["Undo", () => { undoLook(); cur?.focus.t.focus() }]};
+  const t = $("toast"), [label, fn] = opt?.act || []; clearTimeout(toastT);
+  t.querySelector("b").textContent = text; t.querySelector("small").textContent = opt?.sub || ""; t.hidden = false;
+  const b = t.querySelector("button"); b.hidden = !fn; b.textContent = label || ""; b.onclick = () => { t.hidden = true; fn() };
   if (!restyling) toastT = setTimeout(() => t.hidden = true, 10e3);
 }
 // ponytail: asked per window; a new window of the same repo asks again, and a look the repo changes later doesn't re-ask
@@ -1411,9 +1491,9 @@ function palActs(){
     cur && ["This tab", "Find…", svg16("M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5"), "⌘F", "Searches the focused pane's screen and scrollback.", () => find(true)],
     cur && ["This tab", "Clear", svg16("M3 4h10M3 8h10M3 12h5"), "⌘K", "Clears the screen and scrollback; the shell draws its prompt again.", () => clearPane(cur.focus)],
     wsInfo(curWs)?.ade && ["This tab", "Diff…", svg16("M5 2v12M11 2v12M2 5h6M8 11h6"), "", `What ${wsName(curWs)} changes; click a line to leave Claude a note.`, () => diffOpen(curWs)],
-    wsInfo(curWs)?.ade && ["This tab", "Open in editor", I.edit(16), "", "Zed, Cursor or VS Code, whichever you have; over ssh for a remote host.", () => post({cmd: "edit", ws: curWs})],
-    ...cmdsOf(curWs).map(c => ["Commands", c.name, c.agent ? I.claude(16) : I.shell(16), "", c.agent ? `Pastes into ${wsName(curWs)}'s Claude for you to send: ${c.run}` : `Runs in a new tab: ${c.run}`,
-      () => c.agent ? toAgent(curWs, c.run) : newTab(curWs, c.run)]),  // .greenlight.json "commands": [{name, run, agent?}]
+    wsInfo(curWs)?.ade && ["This tab", `Open in ${EDITOR}`, I.edit(16), "", "Zed, Cursor or VS Code, whichever you have; over ssh for a remote host.", () => post({cmd: "edit", ws: curWs})],
+    ...cmdsOf(curWs).map(c => ["Commands", c.name, c.agent ? I.claude(16) : I.shell(16), "", c.agent ? `Pastes into ${wsName(curWs)}'s Claude for you to send.` : "Runs in a new tab.",
+      () => c.agent ? toAgent(curWs, c.run) : newTab(curWs, c.run), {sub: c.run, side: c.agent ? "Paste into Claude" : "Run in new tab", cmd: c}]),  // .greenlight.json "commands": [{name, run, agent?}]
     ["Basement", "New workspace…", I.plus(16), "", "A git worktree on a new branch: its repo's setup runs, then Claude starts on the goal.", newWsDialog],
     ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
     ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],
@@ -1421,7 +1501,7 @@ function palActs(){
     ["Basement", "Rename this Mac…", I.edit(16), "", `How ${LOCALNAME} shows in Hosts. Empty: its hostname.`, renameLocal],
     ["Go to", "Greenlight Center", up, "", "Rides up to the dashboard and the chat.", () => post({cmd: "up"})],
     ["Go to", "Settings", gear, "⌘,", "Opens Settings over the floor you're on.", () => post({cmd: "settings"})],
-  ].filter(Boolean).map(([where, main, icon, key, desc, go]) => ({kind: "act", group: "act", where, main, sub: "", icon, key, desc, go}));
+  ].filter(Boolean).map(([where, main, icon, key, desc, go, more]) => ({kind: "act", group: "act", where, main, sub: "", icon, key, desc, go, ...more}));
 }
 function palRender(){
   const raw = $("pq").value;
@@ -1453,11 +1533,11 @@ function palDraw(){
   pal.items.forEach((it, i) => {
     const on = i === pal.sel, g = pal.act ? it.where : it.group, name = `<span class="m">${mark(it.main, it.hit || [])}</span>`;
     if (it.top) out.push(el("div", "gh g-top", "Top hit"));
-    else if (g !== last) out.push(el("div", "gh g-" + it.group, esc(pal.act ? g : GROUPS[g]) + (pal.act ? (g === "This tab" && cur ? `<span>${esc(shown(tabName(cur)))} · ${esc(wsName(curWs))}</span>` : "") : `<span>${cnt[g]}</span>`)));
+    else if (g !== last) out.push(el("div", "gh g-" + it.group, esc(pal.act ? g : GROUPS[g]) + (pal.act ? (g === "This tab" && cur ? `<span>${esc(shown(tabName(cur)))} · ${esc(wsName(curWs))}</span>` : g === "Commands" ? `<span>from ${esc(cfgFile())}</span>` : "") : `<span>${cnt[g]}</span>`)));
     last = it.top ? null : g;
     const sub = `<span class="sub">${esc(it.via || (it.top ? [{tab: "terminal", ws: "workspace", host: "host", act: "action"}[it.kind], it.sub].filter(Boolean).join(" · ") : it.sub))}</span>`;
     const r = it.top ? el("div", "hit" + (on ? " sel" : ""), `<div class="l"><span class="ic">${it.icon}</span>${name}${sub}${pill(it)}</div><div class="bt"></div>`)
-      : el("div", `r r-${it.kind}${on ? " sel" : ""}`, `<span class="ic">${it.icon}</span>${name}${sub}${pill(it)}${on ? kbd("↵", "amb") : kbd(it.key)}`);  // r-/g- prefixes: bare .ws/.tab/.box are the sidebar's and tab strip's classes
+      : el("div", `r r-${it.kind}${on ? " sel" : ""}`, `<span class="ic">${it.icon}</span>${name}${sub}${pill(it)}${it.side ? `<span class="sd">${esc(it.side)}</span>` : ""}${on ? kbd("↵", "amb") : kbd(it.key)}`);  // r-/g- prefixes: bare .ws/.tab/.box are the sidebar's and tab strip's classes
     if (it.top) r.querySelector(".bt").append(...palMoves(it).map(([label, key, fn, pri]) => {
       const b = el("button", pri ? "pri" : "", `${esc(label)} <span>${key}</span>`); b.type = "button"; b.tabIndex = -1;
       b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.stopPropagation(); palRun(fn) }; return b }));
@@ -1474,7 +1554,7 @@ function palDraw(){
   $("pq").placeholder = pal.act ? "Do something in the Basement" : "Jump to a terminal, workspace or host";
   $("pscope").replaceChildren(...SCOPES.map(([k, label]) => { const b = el("button", "", label); b.type = "button"; b.tabIndex = -1; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", pal.scope === k);
     b.onmousedown = e => e.preventDefault(); b.onclick = () => { pal.scope = k; palRender() }; return b }));
-  $("pft").innerHTML = pal.act ? `<span>${kbd("↵", "amb")}Run</span><span>Every action lists its shortcut</span>`
+  $("pft").innerHTML = pal.act ? `<span>${kbd("↵", "amb")}${esc(pal.items[pal.sel]?.side || "Run")}</span><span>Every action lists its shortcut</span>`
     : qs ? `<span>${kbd("↵", "amb")}Jump</span><span>${kbd("⌥↵")}Split right</span><span>Matches the name, then MR, title, branch, people…</span><span class="end">Esc clears · Esc again closes</span>`
     : `<span>${kbd("↵", "amb")}Jump</span><span>${kbd("⌘↵")}New set of tabs</span><span>${kbd("⌥↵")}Split right</span><span>${kbd("⇥")}Scope</span><span class="end">Type ${kbd(">")} for actions</span>`;
   palPv(pal.items[pal.sel]);
@@ -1483,7 +1563,8 @@ function palPv(it){
   const pv = $("pv"); if (!it) return pv.replaceChildren();
   const w = it.w, m = w?.mr, rows = [], f = (k, v, c = "") => v && rows.push(`<dt>${k}</dt><dd class="${c}" title="${esc(v)}">${esc(v)}</dd>`);
   let text = "", tt = "Last lines", body = "", prose = "";
-  if (it.kind === "act") body = `<p>${esc(it.desc)}</p>${it.key ? `<div class="sc">Shortcut ${kbd(it.key)}</div>` : ""}`;
+  if (it.cmd) { body = `<p>${esc(it.desc)}</p>`; f("Goes to", it.side); f("From", cfgFile()); tt = "Command"; text = it.cmd.run }  // a saved command: what runs, and where
+  else if (it.kind === "act") body = `<p>${esc(it.desc)}</p>${it.key ? `<div class="sc">Shortcut ${kbd(it.key)}</div>` : ""}`;
   else {
     const ts = wsTabs(it.ws).sort((a, b) => b.used - a.used), sets = [...new Set(ts.map(x => x.set))], jobs = (w?.moves || []).flatMap(x => x.jobs || []);
     const home = it.kind === "host", hh = hostOf(it.ws);
@@ -1646,6 +1727,7 @@ function looked(out){  // claude -p's answer to a restyle: a JSON object of colo
 const mainOf = ws => { const p = wsInfo(ws)?.project; return p ? trees.find(w => w.main && w.project === p) : null };
 const cfgOf = ws => mainOf(ws)?.cfg || {};
 const teardown = ws => typeof cfgOf(ws).teardown === "string" ? cfgOf(ws).teardown : "";  // dash.py runs it only if the repo's file still says the same
+const cfgFile = () => (mainOf(curWs)?.path.split("/").pop() || "the repo") + "/.greenlight.json";
 const cmdsOf = ws => { const c = cfgOf(ws).commands;  // the repo's file: names and commands are its words, shown as text and run only when you pick one
   return Array.isArray(c) ? c.filter(x => x && typeof x.name === "string" && typeof x.run === "string" && x.name && x.run).slice(0, 40)
     .map(x => ({name: x.name.slice(0, 80), run: x.run.slice(0, 2000), agent: x.agent === true})) : [] };
@@ -1655,52 +1737,83 @@ function toAgent(ws, text){
   if (!p) { post({cmd: "copy", text}); return toast(`No Claude open in ${wsName(ws)}: copied it instead`) }
   show(p.tab); focusPane(p); p.t.scrollToBottom(); p.t.paste(text.replace(/\r?\n/g, "\r"));
 }
+// a branch name from the goal: its first five words, lowercase, dashed
+const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 5).join("-").slice(0, 40).replace(/-+$/, "");
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs);
   if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
-  const body = el("div", "nwb nws"), fld = (label, inp) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); body.append(l); return inp };
-  const sel = fld("Repo", el("select"));
+  const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
+  body.append(two);
+  const sel = fld("Repo", el("select"), two);
   repos.forEach(w => sel.append(Object.assign(el("option"), {value: w.path, textContent: `${w.project} · ${tilde(w.path)}`, selected: w === here})));
-  const name = fld("Branch", Object.assign(el("input"), {type: "text", placeholder: "feat/short-name", maxLength: 100}));
-  const base = fld("From", Object.assign(el("input"), {type: "text", placeholder: "the repo's default branch", maxLength: 100}));
+  const base = fld("From", Object.assign(el("input"), {type: "text", placeholder: "the default branch", maxLength: 100}), two);
   const goal = fld("Goal", Object.assign(el("textarea"), {rows: 3, maxLength: 500, placeholder: "What does done look like?"}));
-  const chk = (text, on = true) => { const b = Object.assign(el("input"), {type: "checkbox", checked: on}), l = el("label", "chk"); l.append(b, text); body.append(l); return [b, l] };
-  const [ag] = chk("Start Claude on the goal"), [su, sl] = chk("Run the repo's setup: "), sc = el("code"), err = el("p", "err");
-  sl.append(sc); body.append(err);
-  const syncSetup = () => { const c = trees.find(w => w.path === sel.value)?.cfg?.setup; sl.hidden = typeof c !== "string" || !c; sc.textContent = c || "" };
-  sel.onchange = syncSetup; syncSetup();
-  dlgForm("New workspace", body, "Create", () => {
-    const n = name.value.trim(), b = base.value.trim(), ok = v => /^\w[\w./-]{0,99}$/.test(v) && !v.includes("..");
-    if (!ok(n)) { err.textContent = "Branch: letters, digits, and . _ - /"; name.focus(); return false }
+  const tiles = el("div", "tiles"); body.append(tiles);
+  const tile = (title, ...more) => { const l = el("label", "tile"), cb = Object.assign(el("input"), {type: "checkbox", checked: true}), sp = el("span");
+    sp.append(Object.assign(el("b"), {textContent: title}), ...more); l.append(cb, sp); tiles.append(l); return [cb, l] };
+  const [ag] = tile("Start Claude on the goal", el("small", "", "In a tmux session; a tab attaches to it"));
+  const sc = el("code"), [su, sl] = tile("Run the repo's setup", sc, el("small", "k-g", "From .greenlight.json; rechecked before it runs"));
+  const none = el("div", "tile none", g16('<circle cx="8" cy="8" r="6"/><path d="M8 5v3.5M8 11h.01"/>', "", "", 16) + `<span><b>No setup step</b><small>Add <code>"setup"</code> to the repo's .greenlight.json to run one here</small></span>`);
+  tiles.append(none);
+  // the branch is the goal's slug unless you name one, under Advanced (with where a Basement worktree goes)
+  const adv = el("details"), sum = el("summary", "", `Advanced<span style="flex:1"></span>`), sb = el("code"); sum.append(sb); adv.append(sum);
+  const name = fld("Branch", Object.assign(el("input"), {type: "text", maxLength: 100}), adv), where = el("div", "where"); adv.append(where);
+  const err = el("p", "err"), foot = el("span", "note2"); body.append(adv, err);
+  const repo = () => trees.find(w => w.path === sel.value), br = () => name.value.trim() || slug(goal.value);
+  const sync = () => {
+    const w = repo(), c = w?.cfg?.setup, b = br();
+    sl.hidden = typeof c !== "string" || !c; none.hidden = !sl.hidden; sc.textContent = c || "";
+    name.placeholder = slug(goal.value) || "feat/short-name"; sb.textContent = b;
+    where.hidden = w?.ade !== "basement" || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
+    foot.innerHTML = b ? `Creates <code>${esc(b)}</code> from ${esc(base.value.trim() || "the default branch")}` : "Write a goal, or name the branch";
+  };
+  sel.onchange = goal.oninput = name.oninput = base.oninput = sync; sync();
+  const host = HOST === "local" ? "this Mac" : HOST;
+  dlgForm("New workspace", body, "Create workspace", () => {
+    const n = br(), b = base.value.trim(), ok = v => /^\w[\w./-]{0,99}$/.test(v) && !v.includes("..");
+    const bad = m => { err.textContent = m; adv.open = true; name.focus(); return false };
+    if (!n) return bad("Name the branch, or write a goal");
+    if (!ok(n)) return bad("Branch: letters, digits, and . _ - /");
+    if (trees.some(w => w.project === repo()?.project && w.branch === n)) return bad(`${repo().project} already has a workspace on ${n}`);
     if (b && !ok(b)) { err.textContent = "From: a branch name, or empty for the default branch"; base.focus(); return false }
     post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify({name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""})});
     toast(`Making ${n}…`); return true;
-  }, null, {cls: "big nw", sub: "A git worktree on a new branch"});
-  name.focus();
+  }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `A worktree on a new branch, on ${host}`, left: [foot]});
+  $("dlg").querySelector("button.pri").innerHTML = "Create workspace<kbd>↩</kbd>";
+  goal.focus();
 }
-const diffs = new Map();  // worktree → the mode its open Diff dialog asked for
-function diffOpen(ws, mode = "branch"){ diffs.set(ws, mode); post({cmd: "tree", op: "diff", path: ws, text: mode}) }
+const diffs = new Set(), dmode = new Map(), dnotes = new Map();  // worktrees with a Diff open; each one's last mode; its notes ({f, at, text}), kept until sent
+function diffOpen(ws, mode = dmode.get(ws) || "branch"){ diffs.add(ws); dmode.set(ws, mode); post({cmd: "tree", op: "diff", path: ws, text: mode}) }
 function diffShow(o){
   const ws = o.path; if (!diffs.has(ws)) return;  // closed before the answer came
   if (o.error) { diffs.delete(ws); return ask({icon: "warn", title: `No diff for ${wsName(ws)}`, text: esc(o.error), cancel: false}) }
-  const notes = [], body = el("div", "dfb"), nav = el("nav"), view = el("section", "dfv");
-  nav.setAttribute("aria-label", "Changed files"); body.append(nav, view);
+  const notes = dnotes.get(ws) || [], body = el("div", "dfb"), nav = el("nav"), view = el("section", "dfv"), nn = new Map();
+  dnotes.set(ws, notes); nav.setAttribute("aria-label", "Changed files"); body.append(nav, view);
+  const claude = () => wsTabs(ws).flatMap(paneOf).some(isClaude), dest = el("span", "note2");
   const num = v => +v || 0, add = o.files.reduce((n, f) => n + num(f[1]), 0), del = o.files.reduce((n, f) => n + num(f[2]), 0);
   nav.append(el("div", "dsum", `${o.files.length} file${o.files.length === 1 ? "" : "s"} · <span class="pl">+${add}</span> <span class="mi">−${del}</span>`));
-  const count = () => { const k = notes.filter(n => n.ta.value.trim()).length, b = $("dlg").querySelector("button.pri"); if (b) { b.textContent = k ? `Send ${k} note${k > 1 ? "s" : ""} to Claude` : "Send notes to Claude"; b.disabled = !k } };
-  const note = (r, f, at) => {
-    if (r.nextSibling?.classList?.contains("dn")) return r.nextSibling.querySelector("textarea").focus();
-    const box = el("div", "dn"), ta = Object.assign(el("textarea"), {rows: 2, maxLength: 2000, placeholder: `A note to Claude on ${f}:${at}`}), n = {f, at, ta};
-    ta.setAttribute("aria-label", `Note on ${f} line ${at}`); ta.oninput = count; notes.push(n);
+  // the footer says where notes go: pasted into this workspace's Claude (you press ↩), or the clipboard when none is open
+  const count = () => {
+    const k = notes.filter(n => n.text.trim()).length, c = claude(), b = $("dlg").querySelector("button.pri"), s = k > 1 ? "s" : "";
+    nn.forEach((x, f) => { const m = notes.filter(n => n.f === f).length; x.textContent = m || ""; x.hidden = !m });
+    dest.textContent = !k ? "Click a line to start a note" : c ? "Pasted into Claude, not sent: you press Enter" : "No Claude pane open: notes go to the clipboard";
+    if (b) { b.textContent = c ? (k ? `Paste ${k} note${s} into Claude` : "Paste notes into Claude") : k ? `Copy ${k} note${s}` : "Copy notes"; b.disabled = !k }
+  };
+  const note = (r, f, at, n) => {
+    if (!n && r.nextSibling?.classList?.contains("dn")) return r.nextSibling.querySelector("textarea").focus();
+    if (!n) notes.push(n = {f, at, text: ""});
+    const box = el("div", "dn"), col = el("div"), lb = el("span", "lb"), ta = Object.assign(el("textarea"), {rows: 2, maxLength: 2000, value: n.text});
+    lb.textContent = `Note to Claude on ${f}:${at}`; ta.setAttribute("aria-label", `Note on ${f} line ${at}`); ta.oninput = () => { n.text = ta.value; count() };
     const x = Object.assign(el("button", "lite"), {type: "button", textContent: "Remove"}); x.onclick = () => { notes.splice(notes.indexOf(n), 1); box.remove(); count() };
-    box.append(ta, x); r.after(box); ta.focus(); count();
+    col.append(lb, ta); box.append(col, x); r.after(box); if (!n.text) ta.focus(); count();
   };
   let file = "", at = 0;  // the patch, a row per line; a line in the new file takes a note
   for (const l of o.patch.split("\n")) {
     if (l.startsWith("diff --git ")) {
-      const f = file = l.replace(/^diff --git a\/.* b\//, ""), h = el("div", "dfh"), [, a, d] = o.files.find(x => x[0] === f) || [], b = Object.assign(el("button"), {type: "button"});
+      const f = file = l.replace(/^diff --git a\/.* b\//, ""), h = el("div", "dfh"), i = o.files.findIndex(x => x[0] === f), [, a, d] = o.files[i] || [], k = o.status?.[i] || "M", b = Object.assign(el("button"), {type: "button"});
       h.textContent = f; view.append(h);
-      b.innerHTML = `<span></span><span class="pl">${num(a) ? "+" + a : ""}</span><span class="mi">${num(d) ? "−" + d : ""}</span>`; b.firstChild.textContent = f; b.onclick = () => h.scrollIntoView({block: "start"}); nav.append(b);
+      b.innerHTML = `<span class="st ${esc(k)}" title="${esc({M: "Modified", A: "Added", D: "Deleted", R: "Renamed", U: "Untracked"}[k] || k)}">${esc(k)}</span><span></span><span class="pl">${num(a) ? "+" + a : ""}</span><span class="mi">${num(d) ? "−" + d : ""}</span><span class="nn" hidden></span>`;
+      b.children[1].textContent = f; nn.set(f, b.lastChild); b.onclick = () => h.scrollIntoView({block: "start"}); nav.append(b);
       continue;
     }
     if (!l || l[0] === "\\" || /^(index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode|Binary files)/.test(l)) continue;
@@ -1710,34 +1823,48 @@ function diffShow(o){
     r.append(Object.assign(el("i"), {textContent: n ?? ""}), l);
     if (n != null) { r.title = "Leave Claude a note on this line"; r.onclick = () => note(r, f, n) }
     view.append(r);
+    if (n != null) notes.filter(x => x.f === f && x.at === n).forEach(x => note(r, f, n, x));  // notes written before a switch or a reopen
   }
   if (o.cut) view.append(el("div", "dcut", "The rest is cut (over 300 KB): open it in your editor."));
   if (!o.files.length) view.append(el("div", "dcut", o.mode === "head" ? "Nothing uncommitted." : `No changes from ${esc(o.base)}.`));
-  const seg = el("div", "seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Compare");
-  [["Uncommitted", "head"], ["Branch", "branch"]].forEach(([t, m]) => { const b = Object.assign(el("button"), {type: "button", textContent: t}); b.setAttribute("aria-pressed", o.mode === m); b.onclick = () => diffOpen(ws, m); seg.append(b) });
-  const ed = Object.assign(el("button", "lite"), {type: "button", textContent: "Open in editor"}); ed.onclick = () => post({cmd: "edit", ws});
-  dlgForm(o.mode === "head" ? `${wsName(ws)}: uncommitted` : `${wsName(ws)} vs ${o.base}`, body, "Send notes to Claude", () => {
-    const k = notes.filter(n => n.ta.value.trim()); if (!k.length) return false;
-    toAgent(ws, `Notes on the diff (${o.mode === "head" ? "uncommitted changes" : "this branch vs " + o.base}):\n` + k.map(n => `- ${n.f}:${n.at}: ${n.ta.value.trim()}`).join("\n"));
-    return true;
-  }, () => diffs.delete(ws), {cls: "big cc", head: [seg], left: [ed]});
+  const seg = el("div", "seg"); seg.setAttribute("role", "radiogroup"); seg.setAttribute("aria-label", "Compare");
+  [["Uncommitted", "head"], [`Branch vs ${o.base || "its base"}`, "branch"]].forEach(([t, m]) => { const b = Object.assign(el("button"), {type: "button", textContent: t}); b.setAttribute("role", "radio"); b.setAttribute("aria-checked", o.mode === m); b.onclick = () => diffOpen(ws, m); seg.append(b) });
+  const ed = Object.assign(el("button", "lite"), {type: "button", textContent: `Open in ${EDITOR}`}); ed.onclick = () => post({cmd: "edit", ws});
+  dlgForm(`Diff · ${wsName(ws)}`, body, "Paste notes into Claude", () => {
+    const k = notes.filter(n => n.text.trim()); if (!k.length) return false;
+    toAgent(ws, `Notes on the diff (${o.mode === "head" ? "uncommitted changes" : "this branch vs " + o.base}):\n` + k.map(n => `- ${n.f}:${n.at}: ${n.text.trim()}`).join("\n"));
+    notes.length = 0; return true;
+  }, () => diffs.delete(ws), {cls: "big cc", sub: "Click a line to leave Claude a note on it", head: [seg], left: [ed, dest]});
   count();
 }
 // a dev server's port, from processes started in this worktree's terminals: a click opens it (through an ssh tunnel when the host is remote)
+const tun = new Map();  // "host:port" → its ssh tunnel's state, from the app (term.tunnel): opening, open, failed, closed
 function portsFill(box, ws, o){
-  box.replaceChildren(...(o?.ports || []).filter(Number.isInteger).slice(0, 8).map(n => {
-    const b = Object.assign(el("button"), {type: "button", textContent: `localhost:${n}`}); b.onclick = () => post({cmd: "port", port: n, ws});
-    b.title = hostOf(ws) === "local" ? "Open in your browser" : `Open in your browser, through an ssh tunnel to ${hostOf(ws)}`; return b }));
-  box.hidden = !box.children.length;
+  const h = hostOf(ws), local = h === "local", ns = (o?.ports || []).filter(Number.isInteger).slice(0, 8);
+  box.replaceChildren(); box.hidden = !ns.length; if (!ns.length) return;
+  box.append(el("div", "pth", `Ports · on ${local ? "this Mac" : esc(h)}${local ? "" : " · tunnels on click"}`));
+  for (const n of ns) {
+    const st = local ? "open" : tun.get(`${h}:${n}`) || "", r = el("div", "pr"), c = el("code"), sp = el("span");
+    const [lb, cmd] = local ? ["Open", "port"] : {opening: ["Cancel", "untunnel"], open: ["Open", "port"], failed: ["Retry", "port"]}[st] || ["Tunnel & open", "port"];
+    const b = Object.assign(el("button"), {type: "button", textContent: lb}); b.onclick = () => post({cmd, port: n, ws});
+    c.textContent = `localhost:${n}`; sp.textContent = [o.procs?.[n], !local && {opening: "tunnel opening…", open: "tunnel open", failed: "tunnel failed"}[st]].filter(Boolean).join(" · ");
+    r.append(el("i", st), c, sp, b); box.append(r);
+  }
 }
 // an agent that finished, wants you, or says so (OSC 9/777): one notification per change, none for the pane you're looking at or auto-run's tabs
 var pinged = new Map();
 function ping(p, what, text){
-  if (p.tab.auto || (p === cur?.focus && document.hasFocus()) || Date.now() - (pinged.get(p.id) || 0) < 10e3) return;
-  pinged.set(p.id, Date.now()); p.bell = true;
-  post({cmd: "notify", title: `${wsName(p.tab.ws)}: ${what}`, body: String(text).slice(0, 300)});
+  if (p.tab.auto || (p === cur?.focus && document.hasFocus())) return;
+  p.bell = true; p.why = what === "Claude finished" ? "Finished" : "Asking";
+  if (Date.now() - (pinged.get(p.id) || 0) < 10e3) return;
+  pinged.set(p.id, Date.now());
+  const ws = wsName(p.tab.ws);
+  if (document.hasFocus()) return toast(what === "Claude finished" ? `${ws} finished` : what === "says" ? `${ws} says` : `${ws} is asking a question`, {sub: String(text).slice(0, 120), act: ["Show", () => focusPane(p)]});
+  post({cmd: "notify", title: `${ws}: ${what}`, body: String(text).slice(0, 300)});
 }
-function badgeSync(){ const n = [...panes.values()].filter(p => p.bell && isClaude(p)).length; if (n !== badgeSync.n) post({cmd: "badge", n: badgeSync.n = n}) }  // the Dock: agents waiting on you (hoisted: render runs during load)
+function badgeSync(){ const n = [...panes.values()].filter(p => p.bell && isClaude(p)).length, w = $("shead")?.querySelector(".wait");
+  if (w) { w.hidden = !n; w.innerHTML = g16('<path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3z"/><path d="M6.5 14h3"/>') + n; w.title = `${n} waiting on you: go to the first`; w.ariaLabel = w.title }  // ponytail: bell + count; the header has no room for "N waiting" beside the title
+  if (n !== badgeSync.n) post({cmd: "badge", n: badgeSync.n = n}) }  // the Dock: agents waiting on you (hoisted: render runs during load)
 // a file dropped on a pane (or a pasted screenshot): the app writes it where that pane's shell runs and its path is pasted in
 function sendFile(p, f){
   if (f.size > 10e6) return toast(`${f.name || "That file"} is over 10 MB`);
@@ -1747,6 +1874,9 @@ function sendFile(p, f){
 }
 let dropT;
 $("stage").addEventListener("dragover", e => { if (!e.dataTransfer?.types.includes("Files")) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+  if (!$("stage").classList.contains("drop")) { const p = e.target.closest?.(".pane")?._p || cur?.focus, h = p ? hostOf(p.tab.ws) : HOST, at = h === "local" ? "this Mac" : esc(h), n = e.dataTransfer.items?.length || 0;
+    $("drop").innerHTML = `<div><span class="hic">${svg('<path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/>', 22)}</span><b>Drop to send to ${at}</b><p>Saved in <code>/tmp/greenlight/</code> on ${at}. Its path is typed at the prompt; nothing is sent.</p>`
+      + (n ? `<div class="n">${n} file${n === 1 ? "" : "s"}</div>` : "") + `<p>Screenshots work too: <kbd>⌘V</kbd> in any pane</p></div>` }
   $("stage").classList.add("drop"); clearTimeout(dropT); dropT = setTimeout(() => $("stage").classList.remove("drop"), 200) });
 $("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files || []]; if (!fs.length) return; e.preventDefault(); $("stage").classList.remove("drop");
   const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
@@ -1779,7 +1909,9 @@ window.term = {
   focus: () => { if (!ready || !restored) return; if (!tabs.length) newTab(acctHome()); else cur.focus.t.focus() },
   restore,
   tree: o => { treeDone(o) },
-  filed: (id, path) => { const p = panes.get(id); if (!p) return; if (!path) return toast("Couldn't copy the file over"); p.t.paste(shq(path) + " ") },
+  filed: (id, path) => { const p = panes.get(id); if (!p) return; if (!path) return toast("Couldn't copy the file over"); p.t.paste(shq(path) + " ");
+    toast(`${/-pasted\.png$/.test(path) ? "Screenshot" : "File"} sent to ${hostOf(p.tab.ws) === "local" ? "this Mac" : hostOf(p.tab.ws)}`, {sub: path, act: ["Copy path", () => post({cmd: "copy", text: path})]}) },
+  tunnel: (key, st) => { tun.set(key, st); const c = $("card"), pr = !c.hidden && c.querySelector(".ports"); if (pr && facts.get(cardWs)) portsFill(pr, cardWs, facts.get(cardWs)) },
   toast: t => toast(String(t)),  // not the promise: a dialog it opens waits on you, not on the caller
   looked: out => { looked(out); const a = !$("dlg").hidden && $("dlg").querySelector("#look-ask"); if (a) lookDialog(a.value) },  // the Colors dialog, if open, shows it
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];

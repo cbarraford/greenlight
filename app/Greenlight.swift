@@ -3737,7 +3737,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown),
+        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
@@ -3812,6 +3812,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
     var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
+    func editorApp() -> (bid: String, url: URL, name: String)? {
+        [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
+            .compactMap { i, n in NSWorkspace.shared.urlForApplication(withBundleIdentifier: i).map { (i, $0, n) } }.first
+    }
+    func tunnelState(_ key: String, _ st: String) {  // a port row's tunnel: opening, open, failed, closed
+        let a = String(data: (try? JSONSerialization.data(withJSONObject: [key, st])) ?? Data(), encoding: .utf8) ?? "[]"
+        termWebs.forEach { $0.evaluateJavaScript("window.term && term.tunnel(...\(a))") }
+    }
     func toastTerm(_ web: WKWebView?, _ text: String) {
         let d = (try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         web?.evaluateJavaScript("term.toast(\(d))")
@@ -3932,23 +3941,32 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data) { [weak web] code in
                 web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 ? path : "")))")
             }
-        case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first
+        case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
             guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
                   let u = URL(string: "http://localhost:\(port)") else { return }
             if at.host.isEmpty || at.host == "local" { NSWorkspace.shared.open(u); return }
-            if tunnels["\(at.host):\(port)"]?.isRunning != true {  // ponytail: a local port already in use makes ssh exit; the browser then shows whatever holds it
-                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
-                p.standardError = FileHandle.nullDevice
-                // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
-                try? p.run(); tunnels["\(at.host):\(port)"] = p
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSWorkspace.shared.open(u) }
-            } else { NSWorkspace.shared.open(u) }
+            let key = "\(at.host):\(port)"
+            if tunnels[key]?.isRunning == true { NSWorkspace.shared.open(u); return tunnelState(key, "open") }
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
+            p.standardError = FileHandle.nullDevice
+            // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
+            p.terminationHandler = { [weak self] q in DispatchQueue.main.async { if self?.tunnels[key] === q { self?.tunnels[key] = nil; self?.tunnelState(key, q.terminationStatus == 0 ? "closed" : "failed") } } }  // ssh exiting on its own (port taken, host down, dropped): failed; Cancel removes it first
+            guard (try? p.run()) != nil else { return tunnelState(key, "failed") }
+            tunnels[key] = p; tunnelState(key, "opening")
+            // ponytail: 1.5s for ssh to bind; a local port already in use makes ssh exit (ExitOnForwardFailure), which reads as failed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard self?.tunnels[key] === p else { return }
+                if p.isRunning { NSWorkspace.shared.open(u); self?.tunnelState(key, "open") } else { self?.tunnelState(key, "failed") }
+            }
+        case "untunnel":  // Cancel / Close on a port row: ends that tunnel
+            guard let port = b["port"] as? Int, let at = paneWhere(b["ws"] as? String ?? "") else { return }
+            let key = "\(at.host):\(port)"
+            if let p = tunnels.removeValue(forKey: key) { p.terminate() }
+            tunnelState(key, "closed")
         case "edit":  // Open in editor: Zed, Cursor or VS Code, whichever is installed first; over ssh for a remote host
             guard let at = paneWhere(b["ws"] as? String ?? ""), !at.cwd.isEmpty else { return }
-            let ids = ["dev.zed.Zed", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"]
-            guard let (bid, app) = ids.lazy.compactMap({ i in NSWorkspace.shared.urlForApplication(withBundleIdentifier: i).map { (i, $0) } }).first else {
-                return toastTerm(web, "No Zed, Cursor or VS Code installed") }
+            guard let (bid, app, _) = editorApp() else { return toastTerm(web, "No Zed, Cursor or VS Code installed") }
             if at.host.isEmpty || at.host == "local" {
                 NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             } else if bid == "dev.zed.Zed" {  // zed's cli opens ssh://host/path as a remote project

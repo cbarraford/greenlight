@@ -451,7 +451,8 @@ test("alerts: Claude's spinner line going away in a tab you're not on pings once
   await feed("✶\x1b[CSkedaddling…\r\n"); await page.waitForTimeout(700);  // as tmux draws it: the space skipped, no timer in its first second
   assert.equal((await posts(page, "notify")).length, 0, "the prompt you typed isn't the spinner; working isn't done");
   await feed("\x1b[1A\x1b[2K✻ Churned for 3s · done\r\n"); await page.waitForTimeout(700);
-  assert.deepEqual((await posts(page, "notify")).map(m => m.title), ["Local: Claude finished"]);
+  assert.equal((await posts(page, "notify")).length, 0, "the window has focus: a toast, not a notification");
+  assert.equal(await page.$eval("#toast", t => t.hidden ? "" : t.querySelector("b").textContent + "|" + t.querySelector("button").textContent), "Local finished|Show");
   assert.equal((await posts(page, "badge")).pop().n, 1);
 });
 
@@ -522,9 +523,19 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   // Copy opens a small menu
   await row("sidebar").click({button: "right"}); await page.click("#card button:has-text('Copy')"); await page.click("#menu button:text-is('Branch name')");
   assert.equal((await posts(page, "copy")).pop().text, "term-sidebar");
-  // delete: confirm with "Don't ask again", then the server refuses (dirty), and that asks to force
-  await page.click("#card button[aria-label='Delete workspace']");
-  await page.waitForSelector("#dlg:not([hidden])"); await page.check("#dlg input[type=checkbox]"); await page.click("#dlg button.danger");
+  // delete: reads the worktree first; dirty lists what's lost and forces
+  const del = async info => { await row("sidebar").click({button: "right"}); await page.click("#card button.del");
+    assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "info", path: "/w/sidebar"});
+    await page.evaluate(info => term.tree({op: "info", path: "/w/sidebar", ...info}), info) };
+  await del({dirty: 3, untracked: 1, unpushed: 0, files: [["M", "a.js"], ["M", "b.js"], ["??", "new.txt"]]});
+  await page.waitForSelector("#dlg:not([hidden]) .lost");
+  assert.match(await page.$eval("#dlg .lost", d => d.textContent), /2 uncommitted changesa\.js\nb\.js1 untracked filenew\.txt/);
+  assert.equal(await page.$("#dlg input[type=checkbox]"), null, "dirty: no Don't ask again");
+  assert.equal(await page.$eval("#dlg button.danger", b => b.textContent), "Delete anyway");
+  await page.keyboard.press("Escape"); assert.equal((await posts(page, "tree")).pop().op, "info", "Escape deletes nothing");
+  // clean: confirm with "Don't ask again", then the server refuses (dirty since), and that asks to force
+  await del({dirty: 0, unpushed: 0});
+  await page.waitForSelector("#dlg:not([hidden]) .note"); await page.check("#dlg input[type=checkbox]"); await page.click("#dlg button.danger");
   assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "rm", path: "/w/sidebar"});
   assert.equal((await lastSave(page)).noAskDel, true);
   await page.evaluate(() => term.tree({op: "rm", path: "/w/sidebar", risks: ["3 uncommitted files", "1 commit no remote has (the local branch keeps them)"]}));
@@ -536,8 +547,9 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   // next time: no confirm; a success closes its terminals
   await row("sidebar").click({button: "right"}); await page.click("#card button:text-is('Terminal')");
   const opened = (await posts(page, "open")).pop(); assert.equal(opened.ws, "/w/sidebar");
-  await row("sidebar").click({button: "right"}); await page.click("#card button[aria-label='Delete workspace']");
+  await del({dirty: 0, unpushed: 0});
   assert.equal(await page.$eval("#dlg", d => d.hidden), true);
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "rm", path: "/w/sidebar"});
   await page.evaluate(() => term.tree({op: "rm", path: "/w/sidebar", ok: true}));
   assert.deepEqual((await posts(page, "close")).map(m => m.session).sort(), (await posts(page, "open")).filter(m => m.ws === "/w/sidebar").map(m => m.session).sort());
 });
@@ -563,10 +575,35 @@ test("diff: files and the patch as text; a note on a line goes to the workspace'
   assert.equal(await page.$eval("#dlg .dsum", d => d.textContent), "1 file · +1 −1");
   assert.equal(await page.$("#dlg .dfv img"), null, "patch text is text");
   await page.click("#dlg .dl.ad"); await page.fill("#dlg .dn textarea", "why?");
-  assert.equal(await page.$eval("#dlg button.pri", b => b.textContent), "Send 1 note to Claude");
+  assert.equal(await page.$eval("#dlg button.pri", b => b.textContent), "Copy 1 note");
   await page.click("#dlg button.pri");
   assert.match((await posts(page, "copy")).pop().text, /^Notes on the diff \(this branch vs origin\/main\):\n- a\.js:2: why\?$/, "no Claude open: copied");
 });
+test("new workspace: the branch is the goal's slug; a taken branch opens Advanced and says so", async page => {
+  await page.click("#shead button[aria-label='New workspace']"); await page.waitForSelector("#dlg:not([hidden]) textarea:focus");
+  await page.selectOption("#dlg select", "/w/widgets");
+  await page.keyboard.type("Fix login");
+  assert.match(await page.$eval("#dlg .note2", d => d.textContent), /^Creates fix-login from the default branch$/);
+  await page.click("#dlg button.pri");
+  assert.equal(await page.$eval("#dlg .err", d => d.textContent), "acme/widgets already has a workspace on fix-login");
+  assert.equal(await page.$eval("#dlg details", d => d.open), true);
+  await page.fill("#dlg textarea", "Login keeps the page you were on!"); await page.click("#dlg button.pri");
+  const p = (await posts(page, "tree")).pop(); assert.equal(p.op, "new"); assert.equal(p.path, "/w/widgets");
+  assert.deepEqual(JSON.parse(p.text), {name: "login-keeps-the-page-you", base: "", goal: "Login keeps the page you were on!", agent: true, setup: ""});
+});
+test("ports: a remote port tunnels on click; the app's opening / open / failed relabel the row", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "basement", project: "octo/g", name: "pt", path: "/w/pt", branch: "pt", main: false, agent: "none"}]}));
+  await page.locator(".ws", {hasText: "pt"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  await page.evaluate(() => term.tree({op: "info", path: "/w/pt", dirty: 0, unpushed: 0, ports: [5173], procs: {5173: "vite"}}));
+  const row = () => page.$eval("#card .pr", r => r.querySelector("i").className + "|" + r.querySelector("span").textContent + "|" + r.querySelector("button").textContent);
+  assert.match(await page.$eval("#card .pth", d => d.textContent), /on devbox · tunnels on click/);
+  assert.equal(await row(), "|vite|Tunnel & open");
+  await page.click("#card .pr button"); assert.deepEqual((await posts(page, "port")).pop(), {cmd: "port", port: 5173, ws: "/w/pt"});
+  await page.evaluate(() => term.tunnel("devbox:5173", "opening")); assert.equal(await row(), "opening|vite · tunnel opening…|Cancel");
+  await page.click("#card .pr button"); assert.deepEqual((await posts(page, "untunnel")).pop(), {cmd: "untunnel", port: 5173, ws: "/w/pt"});
+  await page.evaluate(() => term.tunnel("devbox:5173", "failed")); assert.equal(await row(), "failed|vite · tunnel failed|Retry");
+  await page.evaluate(() => term.tunnel("devbox:5173", "open")); assert.equal(await row(), "open|vite · tunnel open|Open");
+}, "?host=devbox");
 test("workspace card: Review runs Claude with the repo's prompt, in place of the next step", async page => {
   const prompt = "Review !58 at abc123.\nIt's\tyours: don't post.";
   await page.evaluate(prompt => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "rv", path: "/w/rv", branch: "rv", main: false, agent: "done", state: "needs", puck: "rv",
@@ -627,7 +664,7 @@ test("workspace card: the main checkout can't be deleted; a busy agent disables 
   assert.equal((await posts(page, "suggest")).length, 0);
   await page.keyboard.press("Escape");
   await page.locator(".ws", {hasText: "widgets"}).first().click({button: "right"});
-  assert.equal(await page.$("#card button[aria-label='Delete workspace']"), null);
+  assert.equal(await page.$("#card button.del"), null);
   await page.keyboard.press("Escape"); assert.equal(await page.$eval("#card", d => d.hidden), true);
   await page.locator(".ws", {hasText: "fix-login"}).first().click({button: "right"});
   assert.equal(await page.$eval("#card button:text-is('Claude')", b => b.disabled), true);

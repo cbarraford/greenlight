@@ -235,7 +235,8 @@ def _ade(*a):
     return {"worktrees": [{"path": str(_repo), "worktreeId": "m", "isMainWorktree": True}, {"path": str(_wt_path), "worktreeId": "w1", "isPinned": _pin[0]}]}
 _pin = [False]
 _sys.modules["ade_cmux"] = types.SimpleNamespace(call=_ade)
-assert dash.tree_info(str(_wt_path))["dirty"] == 1 and dash.tree_info(str(_wt_path))["unpushed"] == 1  # the init commit: no remote
+_i = dash.tree_info(str(_wt_path))
+assert _i["dirty"] == 1 and _i["unpushed"] == 1 and _i["untracked"] == 1 and _i["files"] == [["??", "new.txt"]] and _i["commits"][0].endswith(" init"), _i  # the init commit: no remote
 assert isinstance(dash.created(str(_wt_path)), int) and dash.created("/nope") is None
 _r = dash.tree_rm(str(_wt_path))
 assert _r["risks"] == ["1 uncommitted file", "1 commit no remote has (the local branch keeps them)"], _r
@@ -250,6 +251,12 @@ assert dash.tree_goal(str(_wt_path), "  ship   it \n") == {"ok": True} and _call
 assert dash.tree_cfg(str(_repo), '{"name": "Greenlight", "look": {"strip": "#222"}}') == {"ok": True, "cfg": {"name": "Greenlight", "look": {"strip": "#222"}}}
 assert dash.repo_cfg(str(_repo)) == {"name": "Greenlight", "look": {"strip": "#222"}} and dash.repo_cfg(str(_wt_path)) is None
 assert "error" in dash.tree_cfg(str(_wt_path), "{}") and "error" in dash.tree_cfg(str(_repo), "[1]")
+# the card's Diff counts (staged and unstaged, no origin/HEAD here: against HEAD), and Delete's teardown: a failure or a changed file warns
+(_wt_path / "a.txt").write_text("1\n2\n"); _g("add", "a.txt", cwd=_wt_path)
+assert (lambda i: (i["added"], i["removed"]))(dash.tree_info(str(_wt_path))) == (2, 0)
+dash.tree_cfg(str(_repo), '{"teardown": "exit 3"}')
+assert dash.tree_rm(str(_wt_path), True, "exit 3")["warn"].startswith("Teardown failed (exit 3")
+assert dash.tree_rm(str(_wt_path), True, "true")["warn"] == "Teardown skipped: the repo's .greenlight.json changed"
 print("ok")
 
 # --- Settings: a repo's lifecycle (bundled → yours → reset), instructions, memory notes kept in the MEMORY.md index
@@ -323,7 +330,7 @@ _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")
 
 # Basement: ports, diff, new-workspace input checks
-assert dash.listeners("p10\nf3\nn*:5173\nf4\nn127.0.0.1:8080\np11\nn[::1]:3000\n") == {10: {5173, 8080}, 11: {3000}}
+assert dash.listeners("p10\ncnode\nf3\nn*:5173\nf4\nn127.0.0.1:8080\np11\nn[::1]:3000\n") == {10: ("node", {5173, 8080}), 11: ("", {3000})}
 assert dash.under([(2, 1), (3, 2), (9, 8)], [1]) == {1, 2, 3}
 assert dash.BRANCH_RE.fullmatch("feat/ports-1") and not dash.BRANCH_RE.fullmatch("-rf") and not dash.BRANCH_RE.fullmatch("a b")
 assert dash.tree_new("/nowhere", {"name": "../x"})["error"] and dash.tree_new("/nowhere", {"name": "ok", "base": "--x"})["error"]
@@ -336,6 +343,7 @@ with tempfile.TemporaryDirectory() as _d:
     assert _df["files"] == [["f.txt", "1", "0"]] and "+hi" in _df["patch"] and not _df["cut"], _df
     open(os.path.join(_d, "new.py"), "w").write("a\nb\n"); open(os.path.join(_d, "empty"), "w").close()  # untracked: an agent's new files
     assert dash.tree_diff(_d, "head")["files"] == [["f.txt", "1", "0"], ["empty", "0", "0"], ["new.py", "2", "0"]], dash.tree_diff(_d, "head")
+    assert dash.tree_diff(_d, "head")["status"] == ["A", "U", "U"]  # staged new file, then the untracked ones
     assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
     assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
 print("basement ok")
