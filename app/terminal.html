@@ -403,6 +403,8 @@ function ghostKey(t, e){
   const k = e.key, sh = e.shiftKey, only = m => e.altKey === m.includes("a") && e.ctrlKey === m.includes("c");
   if (k === "Tab" && only("")) return sh ? "\x1b[Z" : null;
   if (k === "Enter" && sh && only("")) return "\n";
+  // ghostty-web sends CSI u for ⌃I ⌃M ⌃[ (with no app asking for it) and nothing for ⌃V (it takes it for paste)
+  if (only("c") && !sh && k.length === 1 && "im[v".includes(k)) return {i: "\t", m: "\r", "[": "\x1b", v: "\x16"}[k];
   if ((k === "PageUp" || k === "PageDown") && sh && only("")) { t.scrollPages(k === "PageUp" ? -1 : 1); return "" }
   if (!only("a") || sh && k.startsWith("Arrow")) return null;
   if (k === "ArrowLeft" || k === "ArrowRight") return k === "ArrowLeft" ? "\x1bb" : "\x1bf";
@@ -1513,7 +1515,7 @@ addEventListener("keydown", e => {
   else if (k === "=" || k === "+") zoom(px + 1);
   else if (k === "-") zoom(px - 1);
   else if (k === "0") zoom(+(size || 15));
-  else if (/^[1-9]$/.test(k)) show(ws[Math.min(+k, ws.length) - 1]);
+  else if (/^[1-9]$/.test(k)) show(ws[k === "9" ? ws.length - 1 : Math.min(+k, ws.length) - 1]);
   else if (e.shiftKey && "[{]}".includes(k)) show(ws[(i + ("]}".includes(k) ? 1 : -1) + ws.length) % ws.length]);
   else if (!e.shiftKey && "[]".includes(k)) focusPane(mine[(j + (k === "]" ? 1 : -1) + mine.length) % mine.length]);
   // the rest go to the app's menus: ghostty-web would preventDefault them (⌘W, ⌘Q, ⌘M, ⌘H, ⌘,) or type junk for them (⌘Home → ESC[1;9H)
@@ -1536,7 +1538,7 @@ function nudge(p, key){  // ⌘⌃arrows: the nearest divider that way moves 40p
   const down = key === "ArrowUp" || key === "ArrowDown", d = key === "ArrowLeft" || key === "ArrowUp" ? -40 : 40, dim = down ? "height" : "width";
   let s = p.box.parentElement;
   while (s?.classList.contains("split") && s.classList.contains("col") !== down) s = s.parentElement;
-  if (!s?.classList.contains("split")) return;
+  if (!s?.classList.contains("split") || p.tab.r.classList.contains("zoom")) return;  // zoomed, the others measure 0
   const [a, , b] = s.children, ra = a.getBoundingClientRect()[dim], rb = b.getBoundingClientRect()[dim], na = Math.max(60, Math.min(ra + rb - 60, ra + d));
   a.style.flex = `${na} 1 0`; b.style.flex = `${ra + rb - na} 1 0`; refit(p.tab); save();
 }
