@@ -3988,18 +3988,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let s = RideState(); s.toShot = shot(to, nil)  // the floor below: its color until its picture is taken
                 let p = NSPanel(contentRect: S, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                 p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true; p.level = .floating
-                p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, matte: false, face: false, s: s, shaft: ("\(lvl.1) · \(lvl.2)", lvl.5)))
+                p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, matte: false, face: false, s: s, shaft: ("\(lvl.1) · \(lvl.2)", String(lvl.5.dropFirst()))))
                 p.setFrame(S, display: true); p.orderFrontRegardless(); rideWin = p
+                p.contentView?.layoutSubtreeIfNeeded(); p.displayIfNeeded(); CATransaction.flush()  // on screen before the window under it goes
                 hideFloaters()
                 termWindow.parent?.removeChildWindow(termWindow)
                 to.alphaValue = 0.01
-                DispatchQueue.main.async { [self] in from.orderOut(nil); if up { show() } else { basement() } }
-                at(0, 0.6, { Animation.timingCurve(0.65, 0, 0.35, 1, duration: $0) }) { s.p = 1 }  // one stroke: slow off, the slab passes, slow in
-                // ponytail: the next floor enters ~25% in (the curve's slow start), so its picture is taken at 20%; slower snapshots show its color a beat
-                DispatchQueue.main.asyncAfter(deadline: .now() + max(0.12 * k, 0.1)) { [self] in snap(to) { s.toShot = shot(to, $0) } }
-                later(0.6) { [self] in
-                    to.alphaValue = 1
-                    DispatchQueue.main.async { [self] in rideWin?.orderOut(nil); rideWin = nil; riding = false; keepAt = c; syncOrbs() }
+                DispatchQueue.main.async { [self] in
+                    from.orderOut(nil); if up { show() } else { basement() }  // the main thread's busy here: the ride starts after, or that's half of it gone
+                    snap(to) { [self] img in  // the next floor's picture before it moves: a snapshot mid-ride stalls it
+                        s.toShot = shot(to, img)
+                        at(0, 0.6, { Animation.timingCurve(0.65, 0, 0.35, 1, duration: $0) }) { s.p = 1 }  // one stroke: slow off, the slab passes, slow in
+                        later(0.6) { [self] in
+                            to.alphaValue = 1
+                            DispatchQueue.main.async { [self] in rideWin?.orderOut(nil); rideWin = nil; riding = false; keepAt = c; syncOrbs() }
+                        }
+                    }
                 }
             }
             return
@@ -4010,6 +4014,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true; p.level = .floating
             p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, matte: greenlight.orbStyle == "matte", face: !greenlight.orbsHidden, s: s))
             p.setFrame(S, display: true); p.orderFrontRegardless(); rideWin = p
+            p.contentView?.layoutSubtreeIfNeeded(); p.displayIfNeeded(); CATransaction.flush()  // on screen before the window under it goes
             hideFloaters()
             termWindow.parent?.removeChildWindow(termWindow)
             // the other level comes up behind the overlay, all but invisible, so it's drawn by the time it grows
