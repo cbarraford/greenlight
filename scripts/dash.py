@@ -480,7 +480,8 @@ def tree_diff(path, mode):
     for f in [x for x in git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0") if x][:100]:
         a, d = (git("diff", "--no-index", "--numstat", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
         files.append([f, a, d])
-        patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
+        if len(patch) <= DIFF_CAP:  # past the cap only the counts: a big un-ignored file isn't read whole
+            patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
     return {"mode": mode, "base": label, "files": files, "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
