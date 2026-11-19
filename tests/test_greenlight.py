@@ -236,7 +236,8 @@ with mock.patch.object(greenlight, "lifecycle_opts", return_value={"merge_any_ba
 assert (ev(gh_pr(commits=roll("FAILURE")))["step"], ev(gh_pr(commits=roll("FAILURE")))["owner"]) == ("ci_green", "agent")
 assert ev(gh_pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY"))["step"] == "no_conflicts"
 assert ev(gh_pr(reviewThreads={"nodes": [th("alice", "alice")]}))["step"] == "threads"
-assert ev(gh_pr(state="MERGED"))["owner"] == "done"
+assert (ev(gh_pr(state="MERGED"))["step"], ev(gh_pr(state="MERGED"))["owner"]) == ("deploy", "me")  # greenlight.md: deploy after merge
+assert ev(gh_pr(state="CLOSED"))["owner"] == "done"
 assert ev(gh_pr(author={"login": "alice"}))["action"] == "review it"  # someone else's PR is a review
 assert ev(gh_pr(mergeable="UNKNOWN", mergeStateStatus="UNKNOWN"))["owner"] == "ci"
 assert ev(gh_pr(mergeStateStatus="BLOCKED"))["owner"] == "me"
@@ -279,7 +280,7 @@ assert res["skipped"] == 1 and set(by) == {"ws-linked", "ws-linked-obj", "ws-bra
 assert {n: r["mr"] and r["mr"]["ref"] for n, r in by.items()} == {"ws-linked": "#17", "ws-linked-obj": "#39", "ws-branch": "#22", "ws-issue": "#23",
                                                                    "ws-old": "#9", "ws-none": None}
 assert by["ws-branch"]["next"]["owner"] == "dependency" and "#13" in by["ws-branch"]["next"]["action"]  # stacked on plan-view
-assert by["ws-old"]["next"]["owner"] == "done" and by["ws-none"]["next"]["step"] == "freeform"
+assert by["ws-old"]["next"]["step"] == "deploy" and by["ws-none"]["next"]["step"] == "freeform"
 assert by["ws-issue"]["mr"]["forge"] == "github" and by["ws-issue"]["mr"]["author"] == "octo"
 assert by["ws-issue"]["project"] == "octo/greenlight" and by["ws-issue"]["forge"] == "github"
 page = greenlight.report(res)
@@ -301,9 +302,10 @@ def gh_cleanup(state, linked=None):
         return subprocess.CompletedProcess(cmd, 0, out, "")
     with mock.patch.object(cleanup, "run", side_effect=fake_run), mock.patch.object(cleanup.os.path, "isdir", return_value=True):
         return cleanup.evaluate({"id": "w", "path": "/w", "branch": "refs/heads/b", "linkedPR": linked}, repo, set())
-assert gh_cleanup("MERGED") == ("candidate", "MR #23 merged")
+with mock.patch.object(greenlight, "post_merge", return_value=[]):  # a lifecycle with nothing after merge
+    assert gh_cleanup("MERGED") == ("candidate", "MR #23 merged")
+    assert gh_cleanup("MERGED", linked=23) == ("candidate", "MR #23 merged")
 assert gh_cleanup("CLOSED") == ("candidate", "MR #23 closed")
-assert gh_cleanup("MERGED", linked=23) == ("candidate", "MR #23 merged")
 assert cleanup.mr_numbers({"linkedPR": {"number": 39}}, "b", repo) == [39]  # newer Orca links a PR as an object
 assert gh_cleanup("OPEN")[0] == "keep"
 # a merged PR whose lifecycle has steps after merge stays until greenlight's scan says they're done
