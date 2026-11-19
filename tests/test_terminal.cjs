@@ -169,9 +169,10 @@ test("a window of some projects shows only theirs (Hosts stay); No Man's Land is
 
 test("new window: the picker posts All, or the projects you tick", async page => {
   await page.evaluate(p => term.projects(p), PROJ);
-  await page.click("#shead [aria-label='New window']"); await page.click("#dlg button.pri");
+  assert.equal(await page.$("#shead [aria-label='New window']"), null, "the sidebar head has no New window button: ⌘⇧N, or the picker");
+  await page.keyboard.press("Meta+Shift+N"); await page.click("#dlg button.pri");
   assert.deepEqual((await posts(page, "window")).pop(), {cmd: "window", only: null});
-  await page.click("#shead [aria-label='New window']"); await page.click("#dlg label:has-text('Greenlight') input"); await page.click("#dlg label:has-text(\"No Man's Land\") input");
+  await page.click("#shead .ttl"); await page.click("#dlg .seg button:has-text('New window')"); await page.click("#dlg label:has-text('Greenlight') input"); await page.click("#dlg label:has-text(\"No Man's Land\") input");
   await page.click("#dlg button.pri");
   assert.deepEqual((await posts(page, "window")).pop().only, ["p2", ""]);
 });
