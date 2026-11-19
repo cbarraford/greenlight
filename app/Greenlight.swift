@@ -357,6 +357,14 @@ func splitOptions(_ text: String) -> (String, [String]) {
             last.dropFirst(8).split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
 }
 
+/// The watch's diff: workspaces (name -> why) needing the user in this snapshot, and those that weren't in the last one.
+/// No last snapshot (launch) = nothing new: what already needed you isn't news.
+func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [String: String], new: [String: String]) {
+    var now = [String: String]()
+    for p in pucks where p["state"] as? String == "needs" { if let n = p["name"] as? String { now[n] = p["why"] as? String ?? "" } }
+    return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
+}
+
 func ago(_ d: Date) -> String {
     let s = Int(Date().timeIntervalSince(d))
     return s < 60 ? "now" : s < 3600 ? "\(s / 60)m ago" : s < 86400 ? "\(s / 3600)h ago" : "\(s / 86400)d ago"
@@ -398,7 +406,7 @@ final class Run: ObservableObject {
     @Published var steps: [Step] = []
     @Published var live = ""
     @Published var stopping = false
-    var gotDone = false, checkIn = false
+    var gotDone = false, checkIn = false, watch = false
     init(_ q: String) { question = q }
 }
 
@@ -864,6 +872,27 @@ final class Core: ObservableObject {
             + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
     }
 
+    // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
+    @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
+    var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
+    func watched(_ pucks: [[String: Any]]) {
+        let (now, new) = newNeeds(needs, pucks)
+        needs = now
+        fresh = fresh.merging(new) { $1 }.filter { now[$0.key] != nil }  // one that stopped needing you before the turn is dropped
+        watchTurn()
+    }
+    func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
+        guard watch, !fresh.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        watchedAt = Date()
+        let list = fresh.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
+        fresh = [:]
+        let r = Run("Watching the workspaces"); r.watch = true
+        start(r, "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin:
+            "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
+            + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
+            + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
+    }
+
     func compact() {
         guard run == nil, isClaude else { return }
         start(Run("Compact context"), "\(chatCmd) compact --model \(model)", stdin: "")
@@ -929,6 +958,11 @@ final class Core: ObservableObject {
     }
 
     private func finish(_ r: Run, ok: Bool, text: String) {
+        if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace
+            run = nil; tps = 0
+            if !queue.isEmpty { send(queue.removeFirst()) }
+            return
+        }
         let (body, options) = splitOptions(text.isEmpty ? "(no reply)" : text)
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
@@ -941,7 +975,7 @@ final class Core: ObservableObject {
         tps = 0
         if !popoverShown() && !r.stopping {
             missed += 1
-            notify(title: r.checkIn ? "\(name): what to work on next" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn ? nil : fmt(m.duration))
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
         }
         if !queue.isEmpty { send(queue.removeFirst()) }
     }
@@ -2054,6 +2088,9 @@ struct SettingsView: View {
             row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { claudeModelPicker("Suggestions model", $c.nextModel) }
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
+            }
+            row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
+                Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
             dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
         }
@@ -3296,6 +3333,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func queueBuilds(_ l: String) {
         guard let d = l.data(using: .utf8), let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let pucks = snap["pucks"] as? [[String: Any]] else { return }
+        greenlight.watched(pucks)
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
@@ -4157,6 +4195,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
+        greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
         let bell = "\(greenlight.waiting.count), \(greenlight.inboxOpen), \(greenlight.askedJSON)"  // re-pushed whenever a question changes, not only the count
@@ -4410,6 +4449,8 @@ func selfTest() {
     let fz = fuzzy("evm test", "run the evm unit tests")
     check("!! and !$ expand as whole words only", expandBang("cat !$ again: !!", "open x/y.go") == "cat x/y.go again: open x/y.go" && expandBang("now!! !4521", "z") == "now!! !4521")
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
+    let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
+    check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
     let c = Core()
     Thread.detachNewThread {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
