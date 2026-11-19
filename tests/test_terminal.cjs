@@ -703,6 +703,17 @@ test("workspace card: Merge asks once more, then merges; the forge's refusal sho
   await page.evaluate(() => term.tree({op: "merge", path: "/w/mg", ok: true, ref: "!61", target: "main", how: "Squash"}));
   assert.match(await page.$eval("#card .mg.ok", b => b.textContent), /Merged !61 into main/);
 });
+test("workspace card: Mark ready takes a kept draft out of draft in one click", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "dr", path: "/w/dr", branch: "dr", main: false, agent: "done", state: "raised", puck: "dr",
+    mr: {ref: "!62", state: "opened"}, moves: [{kind: "ready"}]}]}));
+  await page.locator(".ws", {hasText: "dr"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.match(await page.$eval("#card .mg .go", b => b.textContent), /Mark !62 ready for review/);
+  assert.equal(await page.$("#card .nx"), null, "the button replaces the next step");
+  await page.click("#card .mg .go");
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "ready", path: "/w/dr"});
+  await page.evaluate(() => term.tree({op: "ready", path: "/w/dr", ok: true, ref: "!62"}));
+  assert.match(await page.$eval("#card .mg.ok", b => b.textContent), /!62 is ready for review/);
+});
 test("workspace card: the main checkout can't be deleted; a busy agent disables the agent actions", async page => {
   await page.locator(".ws", {hasText: "widgets"}).first().click({button: "right"});
   assert.equal(await page.$("#card .nx"), null, "not waiting on you: no next-step button");

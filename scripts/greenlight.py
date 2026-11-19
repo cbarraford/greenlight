@@ -466,9 +466,10 @@ def check(step, mr, ws, milestone):
     if step == "ready":
         if not mr["draft"]:
             return None
+        ready = ["gh", "pr", "ready", str(iid), "-R", proj] if github else upd + ["--ready"]
         if KEEP_DRAFT_RE.search(said(ws, mr)):
-            return "me", "goal says keep draft but everything else is green: take it out of draft?", None
-        return "greenlight", "mark ready for review", (["gh", "pr", "ready", str(iid), "-R", proj] if github else upd + ["--ready"])
+            return "me", "goal says keep draft but everything else is green: take it out of draft?", ready  # the card's Mark ready runs it
+        return "greenlight", "mark ready for review", ready
     if step == "threads":
         ds = unresolved(mr)
         todo = [d for d in ds if d["notes"][-1]["author"]["username"] not in (ME, BOT)]
