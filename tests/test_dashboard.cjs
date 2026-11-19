@@ -235,6 +235,16 @@ test("hover card: the recommendation shows when it's on you; the steps bar opens
   assert.deepEqual(await page.$$eval("#hcard .chk li", l => l.map(e => e.className + ":" + e.textContent)),
     ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
   assert.equal(await page.evaluate(() => localStorage.getItem("stepsOpen")), "1");
+  await page.focus("#hcard .sbar"); await page.keyboard.press("Enter"); await page.waitForTimeout(300);
+  assert.ok(await page.$("#hcard") && !(await page.$("#hcard .chk")), "Enter closes the checklist and the card stays");
+  await page.keyboard.press("Enter");
+  // a step with no rule (advice null): the model's line, from the snapshot's suggestion or when it lands; none from an older step
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.advice = null; ui.sug["plan-a"] = {sig: "old", prompt: "x", advice: "Stale."}; hideCard(); document.body.append(hoverCard(p)) });
+  assert.equal(await page.textContent("#hcard .rec"), "RecommendedWorking one out…");
+  await page.evaluate(() => window.mc.suggest({name: "plan-a", sig: puckOf("plan-a").sig, prompt: "Deploy it.", label: "Deploy", advice: "Run the deploy job, then sign off."}));
+  assert.equal(await page.textContent("#hcard .rec"), "RecommendedRun the deploy job, then sign off.");
+  await page.evaluate(() => { window.mc.suggest({name: "plan-a", sig: puckOf("plan-a").sig, prompt: "Deploy it.", label: "Deploy", advice: ""}); hideCard(); document.body.append(hoverCard(puckOf("plan-a"))) });
+  assert.equal(await page.$("#hcard .rec"), null, "the model had nothing to add: no block");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.advice = ""; p.steps = []; hideCard(); document.body.append(hoverCard(p)) });
   assert.equal(await page.$("#hcard .rec"), null, "a recommendation when it isn't on you");
   assert.equal(await page.$("#hcard .sbar"), null, "a lifecycle bar for a tree with no lifecycle");
