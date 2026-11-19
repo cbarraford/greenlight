@@ -812,10 +812,9 @@ function wsMenu(e, ws, w){
   ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
   if (!w.main) ft.append(btn("del", "Delete…", act(() => delWs(ws))));
   // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
-  const mv = open ? (w.moves || []) : [], top = [];
+  const all = open ? (w.moves || []) : [], land = all.filter(x => x.kind === "merge" || x.kind === "ready"), mv = all.filter(x => !land.includes(x)), top = [];
   const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
-  if (mv[0]?.kind === "merge") top.push(mergeBtn(ws, m, mv[0]));
-  else if (mv[0]) {
+  if (mv[0]) {
     const x = mv[0], [label, sub] = MOVE[x.kind](m, x), pv = el("pre", "rvp");
     const go = btn("go", svg(`<path d="${MI[x.kind]}"/>`, 20) + `<span><b>${esc(label)}</b><small>${esc(sub)}</small></span>`, run(x), busy);
     go.title = label;
@@ -829,7 +828,8 @@ function wsMenu(e, ws, w){
   }
   const also = mv.slice(1);
   if (also.length) { const a = el("div", "also", "<span>Also</span>"); also.forEach(x => a.append(btn("", `<i style="background:${DOT[x.kind]}"></i>` + esc(MOVE[x.kind](m, x)[2]), run(x), busy))); top.push(a) }
-  const pk = !mv.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
+  land.forEach(x => top.push(x.kind === "merge" ? mergeBtn(ws, m, x) : readyBtn(ws, m)));  // under a review it still waits on: merge when you're happy
+  const pk = !all.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
   if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (dash.py suggest: the Next model, Haiku by default)
     const nx = btn("nx", "", act(() => newTab(ws, "claude " + shq(sugg.get(pk).prompt))));
     nx.dataset.pk = pk; if (busy) nx.dataset.busy = busy;
@@ -907,6 +907,19 @@ function mergeBtn(ws, m, x){
   cancel.onclick = idle; idle(); box.append(b); box.dataset.ws = ws;
   return box;
 }
+// Mark ready: takes the draft out of draft (greenlight's own ready cmd). One click: it's undone by marking it draft again.
+function readyBtn(ws, m){
+  const box = el("div", "mg"), b = el("button", "go"); b.type = "button";
+  b.innerHTML = I.check + `<span><b>Mark ${esc(m.ref || "MR")} ready for review</b><small>Takes it out of draft</small></span>`;
+  b.onclick = () => { box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>Marking ${esc(m.ref || "MR")} ready…</b></span>`; post({cmd: "tree", op: "ready", path: ws}) };
+  box.append(b); box.dataset.ws = ws; return box;
+}
+function readyDone(o){
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st");
+  if (!box) return o.error ? ask({icon: "warn", title: `Didn't mark ${wsName(o.path)} ready`, text: esc(o.error), cancel: false}) : toast(`${o.ref} is ready for review`);
+  box.className = "mg " + (o.error ? "no" : "ok");
+  box.innerHTML = o.error ? `<b>Didn't mark it ready</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(o.ref)} is ready for review</b><small>Out of draft</small></span>`;
+}
 function mergeDone(o){
   if (autoMerge.delete(o.path)) return post({cmd: "notify", title: o.error ? `Didn't merge ${wsName(o.path)}` : `Merged ${o.ref} into ${o.target}`, body: o.error || "Auto-run: greenlight merged it"});
   const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg");
@@ -969,6 +982,7 @@ function delDialog(o){
 }
 async function treeDone(o){
   if (o.op === "merge") return mergeDone(o);
+  if (o.op === "ready") return readyDone(o);
   if (o.op === "diff") return diffShow(o);
   if (o.op === "new") {
     if (o.error) return ask({icon: "warn", title: "Couldn't make the workspace", text: esc(o.error), cancel: false});

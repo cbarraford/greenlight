@@ -129,7 +129,8 @@ def merge_how(cmd):
 
 def moves(r, blk=None):
     """Both hover cards' buttons for this row's open MR, most urgent first: conflicts › ci › threads (your MR's fixes) ›
-    review (your review is the next move) › merge (greenlight can merge now; only when nothing else applies). None → the card
+    review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
+    draft, when that waits on you). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
     if mr.get("state") != "opened":
@@ -152,10 +153,13 @@ def moves(r, blk=None):
             ok = set(COMMON + KINDS[kind])
             text = re.sub(r"\{(\w+)\}", lambda m: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
-    if not out and nxt.get("step") == "merge" and cmd[:1] in (["gh"], ["glab"]):
+    fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
+    if not fix and nxt.get("step") == "merge" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
-    for m in out:  # auto: what the terminal runs unattended (merge: True), once per head commit
-        g = on_auto.get(m["kind"])
+    if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
+        out.append({"kind": "ready"})
+    for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
+        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) else None
         if isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1])):
             m["sha"], m["auto"] = mr.get("sha"), True if m["kind"] == "merge" else f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]}\n\n{m['prompt']}"
     return out
@@ -179,6 +183,15 @@ def tree_merge(path):
     snap["rows"] = [r if x["path"] == path else x for x in snap["rows"]]
     (greenlight.STATE / "last.json").write_text(json.dumps(snap))
     return {"ok": True, "ref": r["mr"].get("ref"), "target": r["mr"].get("target_branch"), "how": m["how"]}
+
+
+def tree_ready(path):
+    """The card's Mark ready: greenlight's own ready cmd (gh pr ready / glab mr update --ready) for this workspace's draft."""
+    r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
+    if not r or not any(x["kind"] == "ready" for x in moves(r)):
+        return {"op": "ready", "path": path, "error": "greenlight doesn't say this is waiting to come out of draft"}
+    greenlight.run(r["next"]["cmd"], timeout=90)
+    return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref")}  # ponytail: the next scan shows it out of draft
 
 
 def state_of(r, blk=None):
@@ -1306,10 +1319,10 @@ def main():
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]
-            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
+            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_ready(arg) if op == "ready" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
                 else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:

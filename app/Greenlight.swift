@@ -3417,10 +3417,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
-        if cmd == "merge", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
+        if cmd == "merge" || cmd == "ready", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            ssh("\(py)/dash.py tree merge '\(path)'", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
+            ssh("\(py)/dash.py tree \(cmd) '\(path)'", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"op":"\#(cmd)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
         }
@@ -3896,7 +3896,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",

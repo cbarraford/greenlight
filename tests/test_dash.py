@@ -334,6 +334,11 @@ assert "- unit (test): https://ci/1/j" in mv[1]["prompt"] and "https://ci/1" in 
 mv = dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})
 assert [m["kind"] for m in mv] == ["merge"] and mv[0]["how"] == "Squash", mv
 assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}, "next": {**mine["next"], "cmd": None}}) == []  # no cmd: greenlight won't merge it now
+_rv = {**mine, "next": {**mine["next"], "owner": "me", "action": "mergeable, and nobody else reviews this repo: review it, then merge?"},
+       "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}
+assert [m["kind"] for m in dash.moves(_rv)] == ["review", "merge"]  # a review doesn't hide Merge (a fix does)
+_dr = {**_rv, "next": {"owner": "me", "step": "ready", "action": "goal says keep draft…", "cmd": ["gh", "pr", "ready", "58", "-R", "o/g"]}}
+assert [m["kind"] for m in dash.moves(_dr)] == ["ready"] and dash.moves({**_dr, "next": {**_dr["next"], "owner": "greenlight"}}) == []  # greenlight undrafts it itself
 # auto-run: per repo, per kind, with a gate; never on a held/parked goal; merge gets True
 assert dash.settings("autorun-set", "../x", "{}")["error"]
 a = dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "threads": 9, "nope": 0, "merge": 0}))
@@ -343,6 +348,7 @@ assert mv["ci"]["auto"].startswith(dash.AUTO_HEAD + "You have my OK to push") an
 assert "auto" not in mv["conflicts"] and "auto" not in mv["threads"]
 assert not any("auto" in m for m in dash.moves({**mine, "goal": "fix it (hold)"}))
 assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})[0]["auto"] is True
+assert not any("auto" in m for m in dash.moves(_rv))  # auto-merge never jumps a pending review
 dash.settings("autorun-set", "greenlight", "{}")
 assert not any("auto" in m for m in dash.moves(mine))
 # Merge: greenlight's own cmd, pinned to the head it saw; then the snapshot says merged so the card stops offering it
@@ -355,6 +361,8 @@ _lj.write_text(json.dumps({"ts": 1, "rows": [{**mine, "mr": {**mine["mr"], "conf
 assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "target": "main", "how": "Squash"}
 assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
+_lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
+assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 2
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")

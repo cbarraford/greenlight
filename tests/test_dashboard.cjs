@@ -204,6 +204,13 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.deepEqual((await posts(page, "merge")).pop(), {cmd: "merge", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({path: "/w/plan-a", error: "405: Branch cannot be merged"}));
   assert.equal(await page.textContent("#hcard .mg code"), "405: Branch cannot be merged");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "review", prompt: "rv", own: true, repo: "widgets"}, {kind: "merge", how: "Squash", target: "main"}]; hideCard(); document.body.append(hoverCard(p)) });
+  assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "ready"}]; hideCard(); document.body.append(hoverCard(p)) });
+  await page.click("#hcard .mg .go");  // one click: undrafting is undone by drafting again
+  assert.deepEqual((await posts(page, "ready")).pop(), {cmd: "ready", path: "/w/plan-a"});
+  await page.evaluate(() => window.mc.merged({op: "ready", path: "/w/plan-a", ok: true, ref: "!12"}));
+  assert.equal(await page.textContent("#hcard .mg.ok b"), "!12 is ready for review");
 });
 
 test("hover card button: a step written ahead (the snapshot's suggestion) is ready the moment the card opens", async page => {
