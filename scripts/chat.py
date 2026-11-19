@@ -19,6 +19,7 @@ DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.g
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_WINDOW = 272000  # ponytail: codex doesn't report its window; fixed guess for the meter
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
@@ -34,7 +35,10 @@ PROMPT = (
     "Messages may start with a BOARD: every unfinished workspace with its lifecycle step (step i/n), who it waits on, and when "
     "it's on the user what to do. It's greenlight's latest scan; trust it over memory and say where a workspace is in its lifecycle "
     "when it matters. Asked what to work on (or checked in on), pick 1–3 from it: blocks on the user first (others wait on them), "
-    "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each."
+    "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
+    "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
+    "`python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS + "/dash.py board` rescans every workspace, "
+    "updates the user's dashboard and prints the fresh board."
 )
 
 
