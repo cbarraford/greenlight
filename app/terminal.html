@@ -812,7 +812,7 @@ function wsMenu(e, ws, w){
   ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
   if (!w.main) ft.append(btn("del", "Delete…", act(() => delWs(ws))));
   // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
-  const all = open ? (w.moves || []) : [], land = all.filter(x => x.kind === "merge" || x.kind === "ready"), mv = all.filter(x => !land.includes(x)), top = [];
+  const all = w.moves || [], land = all.filter(x => ["merge", "ready", "signoff"].includes(x.kind)), mv = all.filter(x => !land.includes(x)), top = [];
   const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
   if (mv[0]) {
     const x = mv[0], [label, sub] = MOVE[x.kind](m, x), pv = el("pre", "rvp");
@@ -828,7 +828,7 @@ function wsMenu(e, ws, w){
   }
   const also = mv.slice(1);
   if (also.length) { const a = el("div", "also", "<span>Also</span>"); also.forEach(x => a.append(btn("", `<i style="background:${DOT[x.kind]}"></i>` + esc(MOVE[x.kind](m, x)[2]), run(x), busy))); top.push(a) }
-  land.forEach(x => top.push(x.kind === "merge" ? mergeBtn(ws, m, x) : readyBtn(ws, m)));  // under a review it still waits on: merge when you're happy
+  land.forEach(x => top.push(x.kind === "merge" ? mergeBtn(ws, m, x) : x.kind === "signoff" ? signoffBtn(ws, m, x) : readyBtn(ws, m)));  // under a review it still waits on: merge when you're happy
   const pk = !all.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
   if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (dash.py suggest: the Next model, Haiku by default)
     const nx = btn("nx", "", act(() => newTab(ws, "claude " + shq(sugg.get(pk).prompt))));
@@ -914,6 +914,21 @@ function readyBtn(ws, m){
   b.onclick = () => { box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>Marking ${esc(m.ref || "MR")} ready…</b></span>`; post({cmd: "tree", op: "ready", path: ws}) };
   box.append(b); box.dataset.ws = ws; return box;
 }
+// Deploy (any step after the merge): runs the step's Run command from the lifecycle on the host, then signs it off. One click.
+const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+function signoffBtn(ws, m, x){
+  const box = el("div", "mg"), b = el("button", "go"), t = stepTitle(x.step); b.type = "button";
+  b.innerHTML = I.check + `<span><b>${x.run ? esc(t) + " " + esc(m.ref || "") : "Sign off " + esc(x.step.replace(/_/g, " "))}</b><small>${x.run ? "Runs " + esc(x.run.length > 60 ? x.run.slice(0, 59) + "…" : x.run) + ", then signs it off" : "Done: marks the step finished"}</small></span>`;
+  b.title = x.run || "";
+  b.onclick = () => { box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>${x.run ? esc(t) + "ing" : "Signing off"}…</b></span>`; post({cmd: "tree", op: "signoff", path: ws}) };
+  box.append(b); box.dataset.ws = ws; return box;
+}
+function signoffDone(o){
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st"), t = stepTitle(o.step || "step");
+  if (!box) return o.error ? ask({icon: "warn", title: `${t} didn't finish for ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`${t}: signed off ${o.ref}`);
+  box.className = "mg " + (o.error ? "no" : "ok");
+  box.innerHTML = o.error ? `<b>${esc(t)} didn't finish</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(t)} signed off</b><small>${o.ran ? "Ran " + esc(o.ran) : esc(o.ref || "")}</small></span>`;
+}
 function readyDone(o){
   const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st");
   if (!box) return o.error ? ask({icon: "warn", title: `Didn't mark ${wsName(o.path)} ready`, text: esc(o.error), cancel: false}) : toast(`${o.ref} is ready for review`);
@@ -983,6 +998,7 @@ function delDialog(o){
 async function treeDone(o){
   if (o.op === "merge") return mergeDone(o);
   if (o.op === "ready") return readyDone(o);
+  if (o.op === "signoff") return signoffDone(o);
   if (o.op === "diff") return diffShow(o);
   if (o.op === "new") {
     if (o.error) return ask({icon: "warn", title: "Couldn't make the workspace", text: esc(o.error), cancel: false});

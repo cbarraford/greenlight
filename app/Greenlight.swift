@@ -153,7 +153,7 @@ func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capital
 // MARK: Settings: repo lifecycles, instructions, memory
 
 /// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
-struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String }
+struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "" }  // ponytail: run (a sign-off step's Run: command) is kept, not editable here: edit the .md
 
 /// Settings → Repositories / Memory and the chat's instructions: each read and saved with `dash.py task <op> <arg>` where greenlight runs.
 final class RulesStore: ObservableObject {
@@ -239,13 +239,13 @@ final class RulesStore: ObservableObject {
         call("prompt-set", "\(repo)/\(kind)", own ? review : "") { self.gotReview($0); self.status = own ? "Saved the prompt." : "Using the default prompt." }
     }
     func got(_ j: [String: Any]) {
-        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "") }
+        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "") }
         options = j["options"] as? [String: String] ?? [:]
         rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
         builtins = j["builtins"] as? [String: String] ?? [:]
     }
     func save() {
-        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done] }, "options": options, "rules": rules, "intro": intro]
+        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run] }, "options": options, "rules": rules, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
         call("lifecycle-set", repo, s) { self.got($0); self.status = "Saved." }
     }
@@ -3358,7 +3358,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
-        if ["run", "merge", "undraft", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
+        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
@@ -3440,7 +3440,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
-        if cmd == "merge" || cmd == "undraft", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
+        if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
             let op = cmd == "undraft" ? "ready" : cmd
             ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
@@ -3920,7 +3920,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",

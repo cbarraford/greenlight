@@ -133,6 +133,9 @@ def moves(r, blk=None):
     draft, when that waits on you). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
+    if mr.get("state") == "merged" and nxt.get("owner") == "me" and "signoff" in (nxt.get("cmd") or []):  # your step after the merge: deploy, verify
+        st = next((s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == nxt["step"]), {})
+        return [{"kind": "signoff", "step": nxt["step"], "run": st.get("run", "")}]
     if mr.get("state") != "opened":
         return []
     mine = mr.get("role") == "author"
@@ -192,6 +195,25 @@ def tree_ready(path):
         return {"op": "ready", "path": path, "error": "greenlight doesn't say this is waiting to come out of draft"}
     greenlight.run(r["next"]["cmd"], timeout=90)
     return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref")}  # ponytail: the next scan shows it out of draft
+
+
+def tree_signoff(path):
+    """The card's Deploy (any step after merge): runs the step's `Run:` command from your lifecycle on this host, in the
+    worktree, then signs the step off. No Run: just signs it off. A failed command signs nothing off; its output comes back."""
+    r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
+    m = next((x for x in moves(r) if x["kind"] == "signoff"), None) if r else None
+    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref"), "step": m and m["step"]}
+    if not m:
+        return {**base, "error": "greenlight doesn't say a step after the merge waits on you"}
+    if m["run"]:
+        try:
+            p = subprocess.run(["bash", "-lc", m["run"]], cwd=path if os.path.isdir(path) else None, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return {**base, "error": f"`{m['run']}` ran past 10 minutes"}
+        if p.returncode:
+            return {**base, "error": f"`{m['run']}` exited {p.returncode}: " + (p.stderr or p.stdout).strip()[-600:]}
+    greenlight.run(r["next"]["cmd"], timeout=30)
+    return {**base, "ok": True, "ran": m["run"]}
 
 
 def board():
@@ -1341,10 +1363,10 @@ def main():
         print(board())
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]
-            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_ready(arg) if op == "ready" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
+            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_ready(arg) if op == "ready" else tree_signoff(arg) if op == "signoff" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
                 else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:
