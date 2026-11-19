@@ -249,7 +249,8 @@ assert _mr["ref"] == "!7" and _mr["threads"] == 2 and _mr["rebase"] and "author"
 # the live agent (working) wins over the scan's (waiting): not "needs you"
 assert _t[-1] == {"ade": "cmux", "project": "r", "name": "a", "path": "/r/a", "branch": "x", "main": False, "agent": "working",
                   "goal": "", "pinned": False, "active": None, "since": None, "created": None,
-                  "puck": "r-a", "state": "working", "why": "agent working"}, _t[-1]
+                  "puck": "r-a", "state": "working", "why": "agent working",
+                  "steps": [], "step_index": None, "step": "ci_green", "owner": "agent", "advice": ""}, _t[-1]
 
 # the workspace menu's Delete: by path, the worktree only; a dirty or unpushed tree (or a pinned one) needs --force, main never goes
 import subprocess as _sp

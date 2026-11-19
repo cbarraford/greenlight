@@ -156,6 +156,15 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #card .st{display:grid;grid-template-columns:repeat(3,1fr);border-radius:8px;background:var(--bg)} #card .st div{display:grid;gap:1px;padding:8px 10px} #card .st div+div{box-shadow:inset 1px 0 0 var(--hair)}
 #card .st b{font-size:15px;font-weight:650;font-variant-numeric:tabular-nums} #card .st span{color:var(--dim);font-size:10.5px}
 #card .meta{margin-top:-4px;color:var(--dim);font-size:11px}
+#card .rec{display:grid;gap:2px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:12px;line-height:1.4} #card .rec[hidden]{display:none}
+#card .rec .lb{color:var(--dim);font:600 9.5px/1.3 inherit;letter-spacing:.06em;text-transform:uppercase} #card .rec.wait{color:var(--dim)}
+#card .sbar{display:grid;gap:5px;width:100%;padding:0;border:0;background:none;color:var(--dim);font:inherit;font-size:11px;text-align:left;cursor:pointer} #card .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+#card .sbar .trk{display:flex;gap:3px} #card .sbar .trk i{flex:1;height:4px;border-radius:2px;background:var(--hair)} #card .sbar b{color:var(--fg);font-weight:600}
+#card .sbar .sl::after{content:" ▸"} #card .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
+#card .chk{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;color:var(--dim);font-size:11.5px} #card .chk[hidden]{display:none}
+#card .chk li{display:grid;grid-template-columns:14px minmax(0,1fr);gap:7px} #card .chk li.ok{color:var(--fg);opacity:.75} #card .chk li.cur{color:var(--fg);font-weight:600} #card .chk .ow{font-weight:400;color:var(--dim)}
+#card .chk li.sep{display:block;margin-top:2px;padding-top:5px;border-top:1px dashed var(--hair);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}
+#card .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 #card .acts{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px} #card .acts button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;height:58px;border:0;border-radius:8px;background:var(--hair);color:var(--fg);font:inherit;font-size:11.5px;font-weight:500}
 #card .acts button.pri{background:var(--accent);color:#fff} #card .acts button:hover:not(:disabled){filter:brightness(1.15)} #card button:disabled{opacity:.45}
 #card .nx{display:flex;align-items:flex-start;gap:10px;width:100%;padding:9px 11px;border:0;border-radius:8px;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--fg);font:inherit;text-align:left} #card .nx[hidden]{display:none}
@@ -791,6 +800,7 @@ function wsMenu(e, ws, w){
   if (tags.length) c.append(el("div", "tags", tags.join("")));
   const st = el("div", "st", stats(facts.get(ws))), mt = el("div", "meta", meta(w, facts.get(ws)));
   c.append(st); if (mt.innerHTML) c.append(mt);
+  c.append(...lifeEls(w));
   const pr = el("div", "ports"); portsFill(pr, ws, facts.get(ws)); c.append(pr);
   const acts = el("div", "acts");
   acts.append(btn("", I.shell(18) + "Terminal", act(() => newTab(ws))), btn("pri", I.claude(18) + "Claude", act(() => newTab(ws, "claude")), busy),
@@ -826,13 +836,48 @@ function wsMenu(e, ws, w){
     top.push(nx);
     if (!(Date.now() - (sugg.get(pk)?.at || 0) < 60e3)) post({cmd: "suggest", name: pk});
   }
-  c.append(...top, acts, ft); drawNext();
+  c.append(...top, acts, ft); drawNext(); drawRec();
   c.setAttribute("aria-label", w.name); c.hidden = false; cardWs = ws; cardHover = !!e.hover;
   const r = e.currentTarget?.getBoundingClientRect?.() || {right: e.clientX, top: e.clientY};
   c.style.left = (r.right + 8 + c.offsetWidth > innerWidth - 6 ? Math.max(6, innerWidth - c.offsetWidth - 6) : r.right + 8) + "px";
   c.style.top = Math.max(6, Math.min(r.top - 4, innerHeight - c.offsetHeight - 6)) + "px";
   c.tabIndex = -1; if (!e.hover) c.focus();  // Tab reaches the buttons; a hover leaves your typing in the terminal
   if (!e.hover || !(Date.now() - (facts.get(ws)?.at || 0) < 30e3)) post({cmd: "tree", op: "info", path: ws});  // hovering along the list doesn't ssh for every row
+}
+// the lifecycle (dash.py progress) as a bar that opens into a checklist, and when it's on you what to do (dash.py advice; null: the suggestion's advice line)
+// ponytail: the step names and owner words are dashboard.html's too (STEP_DONE, OWNER_SAY); keep them in step
+const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", review_bot: "Review bot assigned", milestone: "Milestone set",
+  ready: "Ready for review", threads: "Threads resolved", approved: "Approved", merge: "Merged", review: "Your review"};
+const OWNER_SAY = {me: "you", greenlight: "greenlight", agent: "an agent", working: "an agent, working", ci: "CI", reviewers: "reviewers", author: "the author", dependency: "another MR"};
+let stepsOpen = store("stepsOpen") === "1";
+const stepName = k => STEP_DONE[k] || k.replace(/_/g, " ").replace(/^./, m => m.toUpperCase());
+function lifeEls(w){
+  const out = [];
+  if (w.advice === null || w.advice) {  // "" or absent: not on you; null: no rule, the model writes it
+    const r = el("div", "rec"); r.dataset.pk = w.puck || w.name; r.dataset.say = w.advice || ""; r.setAttribute("role", "note"); out.push(r);
+    if (w.advice === null && !sugg.has(r.dataset.pk) && /^[\w.@+/-]{1,200}$/.test(r.dataset.pk)) post({cmd: "suggest", name: r.dataset.pk});
+  }
+  const st = w.steps || [], n = st.length; if (!n) return out;  // a goal-only tree has no lifecycle
+  const i = w.state === "done" ? n : w.step_index ?? 0, after = st.indexOf("merge"), here = w.state === "done" ? "Done" : stepName(w.step || "");
+  const bar = el("button", "sbar", `<span class="trk">${st.map((_, k) => `<i style="${k < i ? "background:var(--g)" : k === i ? "background:var(--accent)" : ""}"></i>`).join("")}</span>`
+    + `<span class="sl">Step ${Math.min(i + 1, n)} of ${n} · <b>${esc(here)}</b></span>`);
+  bar.type = "button"; bar.onclick = () => {
+    stepsOpen = !stepsOpen; store("stepsOpen", stepsOpen ? "1" : ""); bar.setAttribute("aria-expanded", stepsOpen); list.hidden = !stepsOpen;
+    const c = $("card"), r = c.getBoundingClientRect(); c.style.top = Math.max(6, Math.min(r.top, innerHeight - c.offsetHeight - 6)) + "px" };  // taller: keep it on screen
+  bar.setAttribute("aria-expanded", stepsOpen); bar.setAttribute("aria-label", `Lifecycle, step ${Math.min(i + 1, n)} of ${n}: show every step`);
+  const list = el("ol", "chk", st.map((k, j) => (j === after + 1 && after >= 0 ? `<li class="sep" aria-hidden="true">After merge</li>` : "")
+    + `<li class="${j < i ? "ok" : j === i ? "cur" : ""}"><span aria-hidden="true" style="color:${j < i ? "var(--g)" : j === i ? "var(--accent)" : "inherit"}">${j < i ? "✓" : j === i ? "●" : "○"}</span>`
+    + `<span><span class="vh">${j < i ? "done: " : j === i ? "now: " : "ahead: "}</span>${esc(stepName(k))}`
+    + `${j === i && OWNER_SAY[w.owner] ? `<span class="ow"> · on ${OWNER_SAY[w.owner]}</span>` : ""}</span></li>`).join(""));
+  list.hidden = !stepsOpen;
+  const box = el("div", "life"); box.append(bar, list); out.push(box);
+  return out;
+}
+function drawRec(){  // the advice, or the suggestion's line once it lands; nothing if the model had none
+  const r = $("card").querySelector(".rec"); if (!r) return;
+  const s = sugg.get(r.dataset.pk), say = r.dataset.say || s?.advice;
+  r.hidden = !say && !!s; r.classList.toggle("wait", !say);
+  r.innerHTML = `<span class="lb">Recommended</span>${esc(say || "Working one out…")}`;
 }
 const sugg = new Map();  // greenlight's name → dash.py suggest's {label, prompt} (or {error}), stamped when it came
 // a move's [button, its subline, its "Also" label]
@@ -1927,7 +1972,7 @@ window.term = {
   localName: v => { LOCALNAME = v || "Local"; render() },
   opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide() },  // Settings → Terminal → App opens to
   ws: path => { if (restored && typeof path === "string") openWs(path) },  // Greenlight's Basement button: that worktree's latest tab, or a new shell in it
-  suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext() },
+  suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
   exited: (id, code) => {
     const p = panes.get(id); if (!p) return;
