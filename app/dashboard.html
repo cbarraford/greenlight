@@ -1507,7 +1507,7 @@ function hoverCard(p){
       tile("CI", [icon(cic, 14), ct], null, ci),
       tile(mr.mergeable && !mr.conflicts ? "Merge" : "Conflicts", [icon("conflict", 14), mr.conflicts ? "Has conflicts" : mr.mergeable ? "Mergeable" : "None"], null, mr.conflicts ? "--orange" : mr.mergeable ? "--green" : null))];
   }
-  const mv = mr && mr.state === "opened" ? arr(p.moves) : [];  // dash.py moves: the smart button replaces the next step
+  const mv = mr ? arr(p.moves) : [];  // open MRs' moves, and a merged one's step after the merge (dash.py moves)  // dash.py moves: the smart button replaces the next step
   const open = h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, "Open workspace");
   const acts = a.state === "waiting" ? h("div", {class: "hacts"}, h("button", {class: "btn sm ans", onclick: () => { hideCard(); openAnswer(p.name) }}, "Answer"), open)  // its question, answered from here
       : a.state === "working" ? null
@@ -1571,7 +1571,7 @@ const MI = {review: "M15.5 15.5L20 20M11 17.5a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0
 const MTONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {review: "#FF9F0A", threads: "#BF5AF2", ci: "#FF453A", conflicts: "#FF453A"};
 // the most urgent move as one big solid button (its own color; blue when several fixes apply; green: merge); the rest as "Also"
 function movesEl(p, mv){
-  const land = mv.filter(y => y.kind === "merge" || y.kind === "ready"), fix = mv.filter(y => !land.includes(y));
+  const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
   const run = y => () => { hideCard(); runFor(p.name, y.prompt) };  // as a new agent in that workspace, like the Next step
   let top = null;
@@ -1583,13 +1583,21 @@ function movesEl(p, mv){
       h("button", {class: "ed", title: `Edit ${x.repo}'s ${l.split(" ")[0]} prompt`, "aria-label": `Edit ${x.repo}'s prompt`, onclick: () => { hideCard(); post({cmd: "editPrompt", repo: x.repo, kind: x.kind}) }}, icon("edit", 13))) }
   return h("div", {class: "mvs"}, top, rest.length ? h("div", {class: "also"}, h("span", {}, "Also"),
     rest.map(y => h("button", {class: "btn sm", disabled: !!busy, title: busy || y.prompt, onclick: run(y)}, h("i", {style: "background:" + DOT[y.kind]}), MOVE[y.kind](p.mr, y)[2]))) : null,
-    land.map(y => y.kind === "merge" ? mergeEl(p, y) : readyEl(p)));  // under a review it still waits on: merge when you're happy
+    land.map(y => y.kind === "merge" ? mergeEl(p, y) : y.kind === "signoff" ? signoffEl(p, y) : readyEl(p)));  // under a review it still waits on: merge when you're happy
 }
 // Mark ready: out of draft with greenlight's own ready cmd; one click (marking it draft again undoes it). Answered with mc.merged too.
 function readyEl(p){
   const box = h("div", {class: "mg"}), ref = mrRef(p.mr);
   box.append(h("button", {class: "go", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, `Marking ${ref} ready…`)); post({cmd: "undraft", path: p.path})  /* "ready" is the page loading */ }},
     h("b", {}, `Mark ${ref} ready for review`), h("small", {}, "Takes it out of draft")));
+  box.dataset.path = p.path; return box;
+}
+// Deploy (any step after the merge): the step's Run command from the lifecycle, then its sign-off; no Run: just the sign-off
+const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+function signoffEl(p, x){
+  const box = h("div", {class: "mg"}), ref = mrRef(p.mr), t = stepTitle(x.step);
+  box.append(h("button", {class: "go", title: x.run || "", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, x.run ? `${t}ing ${ref}…` : "Signing off…")); post({cmd: "signoff", path: p.path}) }},
+    h("b", {}, x.run ? `${t} ${ref}` : `Sign off ${x.step.replace(/_/g, " ")}`), h("small", {}, x.run ? `Runs ${short(x.run, 60)}, then signs it off` : "Done: marks the step finished")));
   box.dataset.path = p.path; return box;
 }
 // Merge: the first click arms it for 5s, the second merges (dash.py tree merge, pinned to the head greenlight saw)
@@ -1607,7 +1615,8 @@ function merged(o){
   const box = document.querySelector(`#hcard .mg[data-path="${CSS.escape(o.path || "")}"]`);
   if (!box) return console.log("dash: merge", o.path, o.error || "ok");  // ponytail: the card closed; the next snapshot shows it merged (or not)
   box.className = "mg " + (o.error ? "no" : "ok");
-  const rd = o.op === "ready";
+  const rd = o.op === "ready", so = o.op === "signoff", t = stepTitle(o.step || "step");
+  if (so) return box.replaceChildren(...(o.error ? [h("b", {}, `${t} didn't finish`), h("code", {}, o.error)] : [h("b", {}, `${t} signed off`), h("small", {}, o.ran ? `Ran ${o.ran}` : o.ref || "")]));
   box.replaceChildren(...(o.error ? [h("b", {}, rd ? "Didn't mark it ready" : "Didn't merge"), h("code", {}, o.error)]
     : rd ? [h("b", {}, `${o.ref} is ready for review`), h("small", {}, "Out of draft")] : [h("b", {}, `Merged ${o.ref} into ${o.target}`), h("small", {}, o.how)]));
 }

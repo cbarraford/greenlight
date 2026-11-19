@@ -188,6 +188,7 @@ BUILTIN = {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipe
            "approved": "The required approvals are in.", "merge": "The forge reports it mergeable."}
 STAGE_RE = re.compile(r"^\s*\d+\.\s+`(\w+)`[ \t]*(?:—|-)?[ \t]*(.*)$", re.M)
 DONE_RE = re.compile(r"\s*Done:\s*`(signoff|label=[^`]+)`")
+RUN_RE = re.compile(r"\s*Run:\s*`([^`]+)`")  # a signoff step's command: the card's button runs it on the host, then signs it off
 
 
 def lifecycle_doc(project):
@@ -197,9 +198,9 @@ def lifecycle_doc(project):
     head, _, rules = f.read_text().partition("\n## Rules")
     stages = []
     for key, rest in STAGE_RE.findall(head):
-        m = DONE_RE.search(rest)
-        stages.append({"key": key, "req": DONE_RE.sub("", rest).strip(),
-                       "done": m[1] if m else ("" if key in BUILTIN else "signoff")})
+        m, run = DONE_RE.search(rest), RUN_RE.search(rest)
+        stages.append({"key": key, "req": RUN_RE.sub("", DONE_RE.sub("", rest)).strip(),
+                       "done": m[1] if m else ("" if key in BUILTIN else "signoff"), "run": run[1] if run else ""})
     m = re.search(r"^Options:(.*)$", head, re.M)
     first = STAGE_RE.search(head) or m
     intro = "" if f.name == "default.md" and f.parent == ROOT / "lifecycles" else \
@@ -225,7 +226,10 @@ def lifecycle_md(repo, doc):
         done = "" if s["key"] in BUILTIN else one(s.get("done")) or "signoff"
         if not re.fullmatch(r"|signoff|label=[^`]+", done):
             raise ValueError(f"bad Done for {s['key']}: {done}")
-        out.append(f"{i}. `{s['key']}` — {one(s.get('req'))}" + (f" Done: `{done}`" if done else ""))
+        run = one(s.get("run")) if done == "signoff" else ""
+        if "`" in run:
+            raise ValueError(f"a Run command can't hold a backtick: {s['key']}")
+        out.append(f"{i}. `{s['key']}` — {one(s.get('req'))}" + (f" Done: `{done}`" if done else "") + (f" Run: `{run}`" if run else ""))
     if doc.get("rules", "").strip():
         out += ["", "## Rules", "", doc["rules"].strip()]
     return "\n".join(out) + "\n"

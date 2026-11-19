@@ -364,7 +364,8 @@ for bad in [{"stages": [{"key": "a b"}]}, {"stages": [{"key": "x"}, {"key": "x"}
         pass
 # steps after `merge` run once the MR has merged (your own ones only); a built-in there is refused by the writer
 (greenlight.STATE / "lifecycles/post.md").write_text(greenlight.lifecycle_md("post", {**doc, "stages": doc["stages"] + [
-    {"key": "deploy", "req": "Deployed.", "done": "signoff"}]}))
+    {"key": "deploy", "req": "Deployed.", "done": "signoff", "run": "make  deploy"}]}))
+assert greenlight.lifecycle_doc("acme/post")["stages"][-1] == {"key": "deploy", "req": "Deployed.", "done": "signoff", "run": "make deploy"}
 pw = {"project": "acme/post", "goal": "", "branch": "b"}
 assert greenlight.split_merge(["a", "merge", "deploy"]) == (["a", "merge"], ["deploy"]) and greenlight.post_merge("acme/post") == ["deploy"]
 assert greenlight.evaluate(pw, mr(labels=["qa-ok"]), None)["step"] == "security"  # open: deploy isn't checked yet

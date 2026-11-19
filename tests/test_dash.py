@@ -363,6 +363,17 @@ assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
 assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 2
+# Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off
+import tempfile
+_wt = tempfile.mkdtemp()
+(dash.greenlight.STATE / "lifecycles").mkdir(exist_ok=True)
+(dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "req": "Out.", "done": "signoff", "run": "echo hi > ran.txt"}]}))
+_dep = {"path": _wt, "project": "acme/dep", "mr": {"state": "merged", "ref": "!9"}, "next": {"step": "deploy", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/dep", "9", "deploy"]}}
+assert dash.moves(_dep) == [{"kind": "signoff", "step": "deploy", "run": "echo hi > ran.txt"}]
+_lj.write_text(json.dumps({"ts": 1, "rows": [_dep]}))
+assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 3
+(dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
+assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3 and dash.tree_signoff("/w/x")["error"]
 # the chat's board: unfinished workspaces, yours first, finished ones counted
 _b = lambda n, o, st="freeform": {"name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
 _lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))

@@ -714,6 +714,16 @@ test("workspace card: Mark ready takes a kept draft out of draft in one click", 
   await page.evaluate(() => term.tree({op: "ready", path: "/w/dr", ok: true, ref: "!62"}));
   assert.match(await page.$eval("#card .mg.ok", b => b.textContent), /!62 is ready for review/);
 });
+test("workspace card: Deploy runs a merged MR's step after the merge, then signs it off", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "dp", path: "/w/dp", branch: "dp", main: false, agent: "done", state: "raised", puck: "dp",
+    mr: {ref: "#7", state: "merged"}, moves: [{kind: "signoff", step: "deploy", run: "git pull"}]}]}));
+  await page.locator(".ws", {hasText: "dp"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.match(await page.$eval("#card .mg .go", b => b.textContent), /Deploy #7.*Runs git pull, then signs it off/);
+  await page.click("#card .mg .go");
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "signoff", path: "/w/dp"});
+  await page.evaluate(() => term.tree({op: "signoff", path: "/w/dp", step: "deploy", error: "`git pull` exited 1: no"}));
+  assert.match(await page.$eval("#card .mg.no", b => b.textContent), /Deploy didn't finish.*exited 1: no/);
+});
 test("workspace card: the main checkout can't be deleted; a busy agent disables the agent actions", async page => {
   await page.locator(".ws", {hasText: "widgets"}).first().click({button: "right"});
   assert.equal(await page.$("#card .nx"), null, "not waiting on you: no next-step button");
