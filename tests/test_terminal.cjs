@@ -504,6 +504,32 @@ test("links: hovering one offers Open / Copy through the app; a click or ⌘-cli
   assert.equal((await posts(page, "copy")).pop().text, long);
 });
 
+test("workspace card: the recommendation when it's on you, and the lifecycle bar opens a checklist with what's after merge", async page => {
+  const row = n => page.locator(".ws", {hasText: n}).first();
+  const tree = (k) => page.evaluate(k => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "sidebar", path: "/w/sidebar", branch: "b", main: false,
+    agent: "done", goal: "x", puck: "sidebar", state: "raised", steps: ["mr_open", "merge", "deploy"], step_index: 2, step: "deploy", owner: "me", ...k}]}), k);
+  await tree({advice: "Once it's true, sign off deploy in the chat."});
+  await row("sidebar").click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.equal(await page.$eval("#card .rec", d => d.textContent), "RecommendedOnce it's true, sign off deploy in the chat.");
+  assert.match(await page.$eval("#card .sbar", d => d.textContent), /Step 3 of 3 · Deploy/);
+  assert.equal(await page.$eval("#card .chk", d => d.hidden), true);
+  await page.click("#card .sbar");
+  assert.equal(await page.getAttribute("#card .sbar", "aria-expanded"), "true");
+  assert.deepEqual(await page.$$eval("#card .chk li", l => l.map(e => e.className + ":" + e.textContent)),
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+  await page.keyboard.press("Escape");
+  // no rule for the step: the suggestion's advice line, asked for on open; none when it's not on you
+  await tree({advice: null, step: "qa", steps: ["mr_open", "qa", "merge"], step_index: 1});
+  await row("sidebar").click({button: "right"});
+  assert.match(await page.$eval("#card .rec", d => d.textContent), /Working one out/);
+  await page.evaluate(() => term.suggest({name: "sidebar", label: "QA", prompt: "Run QA.", advice: "Ask QA to test the build, then sign off."}));
+  assert.equal(await page.$eval("#card .rec", d => d.textContent), "RecommendedAsk QA to test the build, then sign off.");
+  await page.keyboard.press("Escape");
+  await tree({advice: "", steps: []});
+  await row("sidebar").click({button: "right"});
+  assert.equal(await page.$("#card .rec"), null); assert.equal(await page.$("#card .sbar"), null);
+});
+
 test("workspace card: facts, agent actions, inline goal, delete asks once (or never) and a refusal always asks", async page => {
   const row = n => page.locator(".ws", {hasText: n}).first();
   await page.evaluate(() => { const t = {trees: [{ade: "cmux", project: "octo/greenlight", name: "sidebar", path: "/w/sidebar", branch: "term-sidebar", main: false,
