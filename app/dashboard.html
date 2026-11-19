@@ -264,6 +264,13 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .steps{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:3px;margin-bottom:6px}
 #hcard .sl{font-size:var(--fs-2);color:var(--text2)}#hcard .sl b{font-weight:600}
 #hcard .steps{align-items:center} #hcard .steps i{height:4px;border-radius:2px;background:var(--track)} #hcard .steps i.cur{height:8px;border-radius:3px}  /* where it is, without color */
+#hcard .sbar{all:unset;display:block;cursor:pointer;border-radius:6px} #hcard .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#hcard .sbar .sl::after{content:" ▸";color:var(--text3)} #hcard .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
+#hcard .chk{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
+#hcard .chk li{display:grid;grid-template-columns:14px minmax(0,1fr);gap:8px;align-items:baseline} #hcard .chk li.ok{color:var(--text2)} #hcard .chk li.cur{color:var(--text);font-weight:600}
+#hcard .chk li .ow{font-weight:400;color:var(--text2)} #hcard .chk li.sep{display:block;margin-top:2px;padding-top:6px;border-top:1px dashed var(--hair);font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.06em}
+#hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:var(--fs-3);line-height:var(--lh-3)}
+#hcard .rec.wait{color:var(--text3)} #hcard .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 #hcard .hacts .btn{height:28px} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
 #hcard .hts{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;column-gap:10px;padding-top:10px;border-top:1px solid var(--hair)}
 #hcard .ht{display:contents}
@@ -1513,13 +1520,42 @@ function hoverCard(p){
       h("div", {class: "tt"}, mr ? mr.title : p.name),
       sayOf(p) ? h("div", {class: "say", style: `color:${ink(STATE[p.state].color)}`}, short(sayOf(p), 140)) : null,  // what it's waiting on, in a line
       branch ? h("div", {class: "br"}, branch, mr && mr.target_branch ? h("span", {class: "hm"}, ` → ${mr.target_branch}`) : null) : null),
+    recEl(p),  // what to do about it, when that's you (or an agent step nobody's on)
     mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
-    h("div", {}, h("div", {class: "steps", style: `--n:${n}`}, Array.from({length: n}, (_, k) => h("i", {class: k === i ? "cur" : null, style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))),  // done green, here in its state color, ahead on the track
-      h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || ""))),
+    arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
     ...body,
     h("div", {class: "hf"}, a.type ? h("span", {class: "av", "aria-hidden": "true", style: `background:${/codex/i.test(a.type) ? c("--codex") : c("--claude")}`}, /codex/i.test(a.type) ? icon("target", 10) : "C") : null,
       h("span", {class: "hfx"}, a.type ? `${/codex/i.test(a.type) ? "Codex" : "Claude"} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
         a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · idle ${ago(a.idle_h)}`) : null)));
+}
+// the recommendation: dash.py's rule (p.advice), or when no rule covers the step (null) the suggestion's advice line
+function recEl(p){
+  if (p.advice === "" || p.advice === undefined) return null;
+  const sg = ui.sug[p.name] || {}, say = p.advice || sg.advice;
+  if (!say && !sg.prompt && !sg.error) suggestCon(p.name);  // normally written ahead with the next step
+  if (!say && (sg.prompt || sg.error)) return null;  // the model had nothing to add: the next-step button stands
+  return h("div", {class: "rec" + (say ? "" : " wait"), role: "note"}, h("span", {class: "hk"}, "Recommended"), say || "Working one out…");
+}
+// the lifecycle: a bar that opens into a checklist (done, here and who it's on, ahead; steps after merge below a line)
+const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", review_bot: "Review bot assigned", milestone: "Milestone set",
+  ready: "Ready for review", threads: "Threads resolved", approved: "Approved", merge: "Merged", review: "Your review"};
+const OWNER_SAY = {me: "you", greenlight: "greenlight", agent: "an agent", working: "an agent, working", ci: "CI", reviewers: "reviewers", author: "the author", dependency: "another MR"};
+ui.stepsOpen = localGet("stepsOpen") === "1";
+function stepsEl(p){
+  const {n, i} = stepsOf(p), col = c(STATE[p.state].color), st = arr(p.steps), after = st.indexOf("merge");
+  const bar = h("button", {class: "sbar", "aria-expanded": String(ui.stepsOpen), "aria-label": `Lifecycle, step ${Math.min(i + 1, n)} of ${n}: show every step`,
+      onclick: () => { ui.stepsOpen = !ui.stepsOpen; localSet("stepsOpen", ui.stepsOpen ? "1" : ""); const card = document.getElementById("hcard"); box.replaceWith(stepsEl(p));
+        if (card) { const r = card.getBoundingClientRect(); card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - card.offsetHeight))}px` }  // taller: keep it on screen
+        document.querySelector("#hcard .sbar")?.focus() }},
+    h("div", {class: "steps", style: `--n:${n}`}, Array.from({length: n}, (_, k) => h("i", {class: k === i ? "cur" : null, style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))),  // done green, here in its state color, ahead on the track
+    h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || "")));
+  const box = h("div", {}, bar, ui.stepsOpen ? h("ol", {class: "chk"}, st.flatMap((k, j) => [
+    j === after + 1 && after >= 0 ? h("li", {class: "sep", "aria-hidden": "true"}, "After merge") : null,
+    h("li", {class: j < i ? "ok" : j === i ? "cur" : null},
+      h("span", {"aria-hidden": "true", style: j < i ? `color:${c("--green")}` : j === i ? `color:${col}` : null}, j < i ? "✓" : j === i ? "●" : "○"),
+      h("span", {}, h("span", {class: "vh"}, j < i ? "done: " : j === i ? "now: " : "ahead: "), STEP_DONE[k] || cap(k.replace(/_/g, " ")),
+        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, ` · on ${OWNER_SAY[p.owner]}`) : null))])) : null);
+  return box;
 }
 // a move's [button, its subline, its "Also" label]; the same moves as the Basement card's
 const MOVE = {
@@ -1575,6 +1611,8 @@ function nextBtn(p){
 function relabelCard(name){  // the open card's button now says what it will send
   const card = document.getElementById("hcard"), b = card && card.dataset.name === name && card.querySelector(".nx"), p = b && puckOf(name);
   if (p) b.replaceWith(nextBtn(p));
+  const rec = card && card.dataset.name === name && card.querySelector(".rec"), q = rec && puckOf(name);
+  if (q) rec.replaceWith(recEl(q) || "");
 }
 // the hover card's Next step: greenlight's suggested next step for this workspace, run in the background as soon as it's written 
 function nextStep(name){

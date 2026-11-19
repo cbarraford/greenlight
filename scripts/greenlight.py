@@ -215,6 +215,8 @@ def lifecycle_md(repo, doc):
     keys = [s["key"] for s in doc["stages"]]
     if not keys or len(set(keys)) != len(keys) or not all(re.fullmatch(r"\w+", k) for k in keys):
         raise ValueError(f"stage keys must be unique words: {keys}")
+    if late := [k for k in split_merge(keys)[1] if k in BUILTIN]:
+        raise ValueError(f"only your own steps can come after merge: {late}")
     out = [f"# {repo} lifecycle", ""] + ([doc["intro"].strip(), ""] if doc.get("intro", "").strip() else [])
     opts = doc.get("options") or {}
     if opts:
@@ -231,6 +233,16 @@ def lifecycle_md(repo, doc):
 
 def lifecycle(project):
     return Path(lifecycle_doc(project)["file"]).name, [s["key"] for s in lifecycle_doc(project)["stages"]]
+
+
+def split_merge(steps):
+    """(up to and including `merge`, after it). Steps after `merge` run once the MR has merged."""
+    i = steps.index("merge") + 1 if "merge" in steps else len(steps)
+    return steps[:i], steps[i:]
+
+
+def post_merge(project):
+    return split_merge(lifecycle(project)[1])[1]
 
 
 def lifecycle_opts(project):
@@ -527,6 +539,13 @@ def evaluate(ws, mr, milestone):
         if AUTOMATION_RE.search(ws["goal"]):
             return {"step": "freeform", "owner": "working", "action": "run by an Orca automation"}
         return {"step": "freeform", "owner": "agent", "action": f"work toward goal: {ws['goal']}"}
+    name, steps = lifecycle(ws["project"])
+    pre, post = split_merge(steps)
+    if mr["state"] == "merged" and mr["author"]["username"] == ME:
+        for step in post:  # your own steps after the merge (deploy, verify): signoff/label only, the MR is done
+            if step not in BUILTIN and (hit := check(step, mr, ws, milestone)):
+                owner, action, cmd = hit
+                return {"step": step, "owner": owner, "action": action, "cmd": cmd, "lifecycle": name}
     if mr["state"] in ("merged", "closed"):
         return {"step": "done", "owner": "done", "action": f"MR {mr['state']}: cleanup.py removes it"}
     if mr["author"]["username"] != ME:
@@ -540,8 +559,7 @@ def evaluate(ws, mr, milestone):
         if any(d["notes"][-1]["author"]["username"] != ME for d in mine):
             return {"step": "review", "owner": "me", "action": "author replied on your threads: re-review"}
         return {"step": "review", "owner": "author", "action": f"{len(mine)} of your threads open, waiting on author"}
-    name, steps = lifecycle(ws["project"])
-    for step in steps:
+    for step in pre:
         hit = check(step, mr, ws, milestone)
         if hit:
             owner, action, cmd = hit
