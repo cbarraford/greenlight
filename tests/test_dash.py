@@ -197,6 +197,7 @@ print("ok")
 _r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"step": step, "owner": owner, "action": action, "cmd": cmd},
                                                                  "agent": {"state": ag}, "mr": mr}
 assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "failed"})).startswith("CI failed, so read the diff")
+assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "success"})).startswith("Read the diff")
 assert "replies" in dash.advice(_r("review", "me", "author replied on your threads: re-review"))
 assert "sign off deploy" in dash.advice(_r("deploy", "me", "deploy: x Sign it off?", ["python3", "g.py", "signoff", "p", "1", "deploy"]))
 assert "rebase" in dash.advice(_r("merge", "me", "GitLab needs a rebase to merge (no conflict): rebase it?"))

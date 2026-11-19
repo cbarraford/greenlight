@@ -231,8 +231,8 @@ def _advice_me(r):
     if step == "review":
         if "re-review" in a:
             return "Read the author's replies, then resolve your threads or follow up."
-        return (f"CI {mr['pipeline']}, so " if mr.get("pipeline") not in (None, "success") else "") + \
-            "read the diff, then approve or leave threads for what has to change."
+        return f"CI {mr['pipeline']}, so read the diff, then approve or leave threads for what has to change." \
+            if mr.get("pipeline") not in (None, "success") else "Read the diff, then approve or leave threads for what has to change."
     if "signoff" in cmd:
         return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this MR."
     if step == "ready":
