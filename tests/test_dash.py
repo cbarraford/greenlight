@@ -186,13 +186,36 @@ def suggestion(cached):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps(cached))
     with mock.patch.object(dash, "live_agents", return_value=LIVE):
         return dash.snapshot()["pucks"][0]["suggestion"]
-assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready."}
+assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready.", "advice": ""}
 assert suggestion({"sig": "stale", "label": "Mark ready", "prompt": "Mark #23 ready."}) is None  # the state moved on since
 assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an old entry without a label gets rewritten
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
 print("ok")
+# advice: a rule when you're the blocker or an agent step has no agent; None -> suggest writes it; "" -> no advice at all
+_r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"step": step, "owner": owner, "action": action, "cmd": cmd},
+                                                                 "agent": {"state": ag}, "mr": mr}
+assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "failed"})).startswith("CI failed, so read the diff")
+assert "replies" in dash.advice(_r("review", "me", "author replied on your threads: re-review"))
+assert "sign off deploy" in dash.advice(_r("deploy", "me", "deploy: x Sign it off?", ["python3", "g.py", "signoff", "p", "1", "deploy"]))
+assert "rebase" in dash.advice(_r("merge", "me", "GitLab needs a rebase to merge (no conflict): rebase it?"))
+assert dash.advice(_r("ci_green", "agent")) == "No agent is on it: run Fix CI."
+assert dash.advice(_r("ci_green", "agent", ag="working")) == ""
+assert dash.advice(_r("qa", "agent", "qa: x (add the label `qa-ok` when it's met)")) is None  # your own step: the model writes it
+assert dash.advice(_r("approved", "reviewers")) == "" and dash.advice(_r("x", "greenlight", ag="waiting")).startswith("Answer")
+# a needed advice line makes an old cached suggestion stale; a rule-covered puck doesn't ask for one
+assert not dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": None})
+assert dash.fresh_suggest({"sig": "s", "label": "L", "advice": "Do x."}, {"sig": "s", "advice": None})
+assert dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": "rule"})
+assert dash.split_advice("Advice: Ask QA to sign it off.\nCheck the QA board for !5.") == ("Ask QA to sign it off.", "Check the QA board for !5.")
+assert dash.split_advice("**Advice:** Do x.\nPrompt.") == ("Do x.", "Prompt.") and dash.split_advice("Just a prompt.") == ("", "Just a prompt.")
+# progress: no MR is step 0 (mr_open is the implement step); a review checkout is one step; a goal-only tree has none
+_p = lambda **k: dash.progress({"project": "o/r", "forge": "gitlab", "mr": None, "next": {"step": "freeform", "owner": "agent"}, **k})
+assert _p()[2] == 0 and _p()[1][0] == "mr_open"
+assert _p(mr={"role": "review"}, next={"step": "review", "owner": "me"})[1:] == (["review"], 0)
+assert _p(forge=None)[1:] == ([], None)
+print("advice ok")
 # suggest: the button's short label, then the prompt
 assert dash.split_label("Fix failing lint job\nFix the gofmt error in x.go and push.") == ("Fix failing lint job", "Fix the gofmt error in x.go and push.")
 assert dash.split_label("Summarize the open review threads now please\nDo it.") == ("Summarize the open review", "Do it.")

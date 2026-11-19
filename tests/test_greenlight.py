@@ -306,6 +306,14 @@ assert gh_cleanup("CLOSED") == ("candidate", "MR #23 closed")
 assert gh_cleanup("MERGED", linked=23) == ("candidate", "MR #23 merged")
 assert cleanup.mr_numbers({"linkedPR": {"number": 39}}, "b", repo) == [39]  # newer Orca links a PR as an object
 assert gh_cleanup("OPEN")[0] == "keep"
+# a merged PR whose lifecycle has steps after merge stays until greenlight's scan says they're done
+with mock.patch.object(greenlight, "post_merge", return_value=["deploy"]):
+    (greenlight.STATE / "last.json").write_text(json.dumps({"rows": [{"path": "/w", "next": {"step": "deploy", "owner": "me"}}]}))
+    assert gh_cleanup("MERGED") == ("keep", "MR #23 merged, still to do: deploy")
+    (greenlight.STATE / "last.json").write_text(json.dumps({"rows": []}))  # not scanned since the merge: keep
+    assert gh_cleanup("MERGED") == ("keep", "MR #23 merged, still to do: deploy")
+    (greenlight.STATE / "last.json").write_text(json.dumps({"rows": [{"path": "/w", "next": {"step": "done", "owner": "done"}}]}))
+    assert gh_cleanup("MERGED") == ("candidate", "MR #23 merged")
 print("github ok")
 
 # --- config.json knobs
@@ -352,4 +360,20 @@ for bad in [{"stages": [{"key": "a b"}]}, {"stages": [{"key": "x"}, {"key": "x"}
         greenlight.lifecycle_md("r", bad); raise AssertionError(bad)
     except ValueError:
         pass
+# steps after `merge` run once the MR has merged (your own ones only); a built-in there is refused by the writer
+(greenlight.STATE / "lifecycles/post.md").write_text(greenlight.lifecycle_md("post", {**doc, "stages": doc["stages"] + [
+    {"key": "deploy", "req": "Deployed.", "done": "signoff"}]}))
+pw = {"project": "acme/post", "goal": "", "branch": "b"}
+assert greenlight.split_merge(["a", "merge", "deploy"]) == (["a", "merge"], ["deploy"]) and greenlight.post_merge("acme/post") == ["deploy"]
+assert greenlight.evaluate(pw, mr(labels=["qa-ok"]), None)["step"] == "security"  # open: deploy isn't checked yet
+e = greenlight.evaluate(pw, mr(state="merged"), None)
+assert (e["step"], e["owner"], e["cmd"][-1]) == ("deploy", "me", "deploy"), e
+with mock.patch.object(sys, "argv", ["greenlight.py"] + e["cmd"][2:]):
+    greenlight.main()
+assert greenlight.evaluate(pw, mr(state="merged"), None)["step"] == "done"
+assert greenlight.evaluate(pw, mr(state="closed"), None)["step"] == "done"  # closed unmerged: nothing to deploy
+try:
+    greenlight.lifecycle_md("r", {"stages": [{"key": "merge"}, {"key": "ci_green"}]}); raise AssertionError("built-in after merge")
+except ValueError:
+    pass
 print("custom stages ok")

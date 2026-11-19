@@ -225,6 +225,21 @@ test("hover card button: a step written ahead (the snapshot's suggestion) is rea
   assert.equal(await page.textContent("#hcard .btn.nx"), "Fix lint job");
 });
 
+test("hover card: the recommendation shows when it's on you; the steps bar opens a checklist with what's after merge", async page => {
+  await page.evaluate(() => { const p = puckOf("plan-a"); Object.assign(p, {agent: {...p.agent, state: "idle"}, owner: "me", step: "deploy", step_index: 2,
+    steps: ["mr_open", "merge", "deploy"], advice: "Once it's true, sign off deploy in the chat."}); hideCard(); document.body.append(hoverCard(p)) });
+  assert.match(await page.textContent("#hcard .rec"), /sign off deploy/);
+  assert.equal(await page.$("#hcard .chk"), null, "checklist open before asked");
+  await page.click("#hcard .sbar");
+  assert.equal(await page.getAttribute("#hcard .sbar", "aria-expanded"), "true");
+  assert.deepEqual(await page.$$eval("#hcard .chk li", l => l.map(e => e.className + ":" + e.textContent)),
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+  assert.equal(await page.evaluate(() => localStorage.getItem("stepsOpen")), "1");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.advice = ""; p.steps = []; hideCard(); document.body.append(hoverCard(p)) });
+  assert.equal(await page.$("#hcard .rec"), null, "a recommendation when it isn't on you");
+  assert.equal(await page.$("#hcard .sbar"), null, "a lifecycle bar for a tree with no lifecycle");
+});
+
 test("hover card button: a failed step leaves a button that asks again", async page => {
   await page.evaluate(() => { puckOf("plan-a").agent.state = "idle"; document.body.append(hoverCard(puckOf("plan-a"))) });
   await page.evaluate(() => window.mc.suggest({name: "plan-a", error: "claude timed out"}));

@@ -172,7 +172,9 @@ def tree_merge(path):
     gh = r["next"]["cmd"][0] == "gh"
     greenlight.run(r["next"]["cmd"] + ["--match-head-commit" if gh else "--sha", r["mr"]["sha"]], timeout=90)
     # ponytail: mark it merged in the snapshot so the card stops offering it; greenlight's next scan rewrites the row anyway
-    r["mr"]["state"], r["next"] = "merged", {"step": "done", "owner": "done", "action": "merged from Greenlight"}
+    post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
+    r["mr"]["state"], r["next"] = "merged", {"step": post[0], "owner": "me", "action": f"merged from Greenlight; next: {post[0].replace('_', ' ')}"} \
+        if post else {"step": "done", "owner": "done", "action": "merged from Greenlight"}
     snap = json.loads((greenlight.STATE / "last.json").read_text())
     snap["rows"] = [r if x["path"] == path else x for x in snap["rows"]]
     (greenlight.STATE / "last.json").write_text(json.dumps(snap))
@@ -200,13 +202,73 @@ def state_of(r, blk=None):
 
 
 def progress(r):
-    name, steps = greenlight.lifecycle(r["project"]) if r.get("project") else ("", [])
+    """(fraction, steps, index). No MR yet sits on step 0 (`mr_open` is implement, push, open the MR); someone else's MR
+    has one step, your review; steps after `merge` are the lifecycle's own post-merge ones."""
+    name, steps = greenlight.lifecycle(r["project"]) if r.get("forge") else ("", [])  # no forge: a goal-only tree
     step = r["next"]["step"]
+    if (r.get("mr") or {}).get("role") == "review" or step == "review":
+        steps = ["review"]
     if r["next"]["owner"] == "done" or step == "done":
         return 1.0, steps, len(steps)
     if step in steps:
         return steps.index(step) / len(steps), steps, steps.index(step)
+    if steps and not r.get("mr") and step in ("freeform", "goal", "automation"):
+        return 0.0, steps, 0
     return None, steps, None
+
+
+def _advice_me(r):
+    nxt, mr, a = r["next"], r.get("mr") or {}, r["next"].get("action", "")
+    step, cmd = nxt["step"], nxt.get("cmd") or []
+    if "logged out" in a:
+        return "Log the agent back in in its terminal; greenlight re-dispatches once it's back."
+    if step == "error":
+        return "Usually a forge auth or network blip; the next scan retries. Open the workspace if it sticks."
+    if step == "goal":
+        return "Give it a goal (the workspace comment), or delete the workspace if it's stale."
+    if step == "automation":
+        return "Look over what the run left behind, then delete the workspace."
+    if step == "review":
+        if "re-review" in a:
+            return "Read the author's replies, then resolve your threads or follow up."
+        return (f"CI {mr['pipeline']}, so " if mr.get("pipeline") not in (None, "success") else "") + \
+            "read the diff, then approve or leave threads for what has to change."
+    if "signoff" in cmd:
+        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this MR."
+    if step == "ready":
+        return "If the reason to keep it a draft is gone, take it out of draft; otherwise leave it."
+    if step == "milestone":
+        return "Pick the release milestone on the MR yourself: two share the latest due date."
+    if step == "merge":
+        if "goal says hold" in a:
+            return "Merge from here when the hold is over, or take the hold out of the goal."
+        if "nobody else reviews" in a:
+            return "Read the diff yourself, then merge from here."
+        if "rebase" in a:
+            return "There's no real conflict: say yes to a rebase in the chat and greenlight runs it."
+        if "branch protection" in a:
+            return "Open the PR and find which protection rule isn't met (a required check or review)."
+        if a.startswith("mergeable into"):
+            return f"Merge it into {mr.get('target_branch') or 'its base'} yourself, or retarget it at the default branch."
+        return "Open the MR to see why the forge won't merge it."
+    return None
+
+
+AGENT_ADVICE = {"ci_green": "No agent is on it: run Fix CI.", "no_conflicts": "No agent is on it: run Fix conflicts.",
+                "threads": "No agent is on it: run Resolve threads.", "freeform": "No agent is running: start one on the goal."}
+
+
+def advice(r):
+    """One sentence on what to do, when you're the blocker or the step is an agent's and none is on it. None: no rule
+    covers it (your own steps, mostly), so `suggest` writes one; "" for pucks that don't get advice at all."""
+    nxt, ag = r["next"], r.get("agent") or {}
+    if ag.get("state") == "waiting":
+        return "Answer it from here, or open the workspace if it needs more than a reply."
+    if nxt["owner"] == "me":
+        return _advice_me(r)
+    if nxt["owner"] == "agent" and ag.get("state") != "working":  # owner is the scan's; the agent state is live
+        return AGENT_ADVICE.get(nxt["step"])
+    return ""
 
 
 def live_agents():
@@ -263,9 +325,10 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         pucks[-1]["sig"] = sig(pucks[-1])
         pucks[-1]["built"] = page.get("sig") == pucks[-1]["sig"] and page.get("v") == PAGE_V  # its page layout is current; else the app queues a build
         # the hover card's button, written ahead (the app runs `suggest` for a puck whose state moved); None until then
+        pucks[-1]["advice"] = advice(r)  # None: the suggestion's advice line stands in
         sg = cached_suggest(r["name"])
-        pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"]} \
-            if sg.get("sig") == pucks[-1]["sig"] and "label" in sg and sg.get("prompt") else None
+        pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
+            if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -647,8 +710,9 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
         return {"name": name, "error": f"no workspace {name}"}
     cache, s = DASH / "suggest" / f"{safe(name)}.json", p["sig"]
     cached = cached_suggest(name)
-    if cached.get("sig") == s and "label" in cached:  # older cached suggestions have no button label
+    if fresh_suggest(cached, p):
         return cached
+    want = p.get("advice") is None  # no rule covers this step: the reply carries the advice line too
     prompt = (
         f"You are {greenlight.CONFIG['name']}, a developer's agent manager. Write the ONE prompt the developer should send to a fresh coding agent "
         "working in this workspace so it does the next thing toward the workspace goal. Ground it on greenlight's next step "
@@ -656,10 +720,13 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
         "If the next move is the developer's own (a review, an approval, an answer), the prompt prepares it for them "
         "(e.g. summarize the diff and open threads, draft a reply) and must not approve, comment or push. "
         "Rules: don't suggest merging (greenlight merges). " + "".join(f"{r.rstrip('.')}. " for r in greenlight.CONFIG["suggest_rules"]) +
-        "Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), "
+        "Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), " +
+        ("then a line starting `Advice:` with one sentence telling the developer what to do next themselves (don't restate "
+         "puck.action, they see it), " if want else "") +
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
-    out = {"name": name, "sig": s, "prompt": text[:1000], "label": label}
+    tip, text = split_advice(text)
+    out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     if text:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(out))
@@ -671,6 +738,19 @@ def cached_suggest(name):
         return json.loads((DASH / "suggest" / f"{safe(name)}.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def fresh_suggest(sg, p):
+    """The cached suggestion is for this state, and has an advice line if this puck needs one (older ones have neither)."""
+    return sg.get("sig") == p["sig"] and "label" in sg and (p.get("advice") is not None or bool(sg.get("advice")))
+
+
+def split_advice(text):
+    """An optional `Advice: ...` line ahead of the prompt -> (advice, prompt)."""
+    head, _, rest = text.strip().partition("\n")
+    if re.match(r"\W*advice:", head, re.I) and rest.strip():
+        return re.sub(r"^\W*advice:\W*", "", head, flags=re.I).strip().rstrip("*").strip(), rest.strip()
+    return "", text
 
 
 def split_label(text):
