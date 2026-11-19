@@ -1588,7 +1588,7 @@ function movesEl(p, mv){
 // Mark ready: out of draft with greenlight's own ready cmd; one click (marking it draft again undoes it). Answered with mc.merged too.
 function readyEl(p){
   const box = h("div", {class: "mg"}), ref = mrRef(p.mr);
-  box.append(h("button", {class: "go", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, `Marking ${ref} ready…`)); post({cmd: "ready", path: p.path}) }},
+  box.append(h("button", {class: "go", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, `Marking ${ref} ready…`)); post({cmd: "undraft", path: p.path})  /* "ready" is the page loading */ }},
     h("b", {}, `Mark ${ref} ready for review`), h("small", {}, "Takes it out of draft")));
   box.dataset.path = p.path; return box;
 }

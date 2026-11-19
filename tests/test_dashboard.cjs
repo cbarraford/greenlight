@@ -208,7 +208,7 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "ready"}]; hideCard(); document.body.append(hoverCard(p)) });
   await page.click("#hcard .mg .go");  // one click: undrafting is undone by drafting again
-  assert.deepEqual((await posts(page, "ready")).pop(), {cmd: "ready", path: "/w/plan-a"});
+  assert.deepEqual((await posts(page, "undraft")).pop(), {cmd: "undraft", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({op: "ready", path: "/w/plan-a", ok: true, ref: "!12"}));
   assert.equal(await page.textContent("#hcard .mg.ok b"), "!12 is ready for review");
 });

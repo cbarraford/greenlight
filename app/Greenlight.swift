@@ -398,7 +398,7 @@ final class Run: ObservableObject {
     @Published var steps: [Step] = []
     @Published var live = ""
     @Published var stopping = false
-    var gotDone = false
+    var gotDone = false, checkIn = false
     init(_ q: String) { question = q }
 }
 
@@ -833,6 +833,7 @@ final class Core: ObservableObject {
     }
 
     func send(_ text: String, shown: String? = nil) {
+        active()
         if run != nil { queue.append(text); return }
         msgs.append(Msg(.you, shown ?? text))
         var payload = text
@@ -843,6 +844,24 @@ final class Core: ObservableObject {
             for i in attached.indices { attached[i].sent = true }
         }
         start(Run(shown ?? text), "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin: payload)
+    }
+
+    // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
+    // checkInMins, greenlight asks the chat what to work on next, once per quiet stretch.
+    // ponytail: work outside Greenlight (an editor, a browser) doesn't count; count pushes from the scan if it nags then
+    @Published var checkInMins = UserDefaults.standard.object(forKey: "checkInMins") as? Int ?? 30 { didSet { UserDefaults.standard.set(checkInMins, forKey: "checkInMins") } }
+    var lastActive = Date(), checkedIn = false
+    func active() { lastActive = Date(); checkedIn = false }
+    func checkIn() {
+        let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
+        guard checkInMins > 0, !checkedIn, run == nil, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
+        checkedIn = true
+        msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
+        let r = Run("What to work on next"); r.checkIn = true
+        start(r, "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin:
+            "(Greenlight's idle check-in, not typed by the user: they're at their Mac but haven't done anything in Greenlight for \(checkInMins) minutes.) "
+            + "From the board, suggest which 1–3 workspaces they should work on next, most valuable first: for each, where it is in its lifecycle, "
+            + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
     }
 
     func compact() {
@@ -922,7 +941,7 @@ final class Core: ObservableObject {
         tps = 0
         if !popoverShown() && !r.stopping {
             missed += 1
-            notify(title: "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: fmt(m.duration))
+            notify(title: r.checkIn ? "\(name): what to work on next" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn ? nil : fmt(m.duration))
         }
         if !queue.isEmpty { send(queue.removeFirst()) }
     }
@@ -2033,6 +2052,9 @@ struct SettingsView: View {
                 }
             }
             row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { claudeModelPicker("Suggestions model", $c.nextModel) }
+            row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
+                Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
+            }
             dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
@@ -3336,6 +3358,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
+        if ["run", "merge", "undraft", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
@@ -3417,10 +3440,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
-        if cmd == "merge" || cmd == "ready", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
+        if cmd == "merge" || cmd == "undraft", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            ssh("\(py)/dash.py tree \(cmd) '\(path)'", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"op":"\#(cmd)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
+            let op = cmd == "undraft" ? "ready" : cmd
+            ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
         }
@@ -3862,7 +3886,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
             ptys[id] = p; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
         case "in":
-            ptys[id]?.write(b["d"] as? String ?? "")
+            ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
             ptys.removeValue(forKey: id)?.stop()
@@ -4132,6 +4156,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if chatEdge.fillColor != theme.blend(0.1) { chatEdge.fillColor = theme.blend(0.1) }
         for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
+        greenlight.checkIn()
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
         let bell = "\(greenlight.waiting.count), \(greenlight.inboxOpen), \(greenlight.askedJSON)"  // re-pushed whenever a question changes, not only the count

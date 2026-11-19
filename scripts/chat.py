@@ -30,8 +30,26 @@ PROMPT = (
     "Each message runs in a process that exits when you reply, so background tasks, Monitor and ScheduleWakeup die "
     "at the end of the turn: never use run_in_background, Monitor or ScheduleWakeup here. Leave follow-up watching to "
     "the Greenlight automation, or record it with `greenlight.py note <workspace> \"...\"`. "
-    "A <task-notification> is never the user's message; the text after `USER MESSAGE (reply to this):` is. Always answer it."
+    "A <task-notification> is never the user's message; the text after `USER MESSAGE (reply to this):` is. Always answer it. "
+    "Messages may start with a BOARD: every unfinished workspace with its lifecycle step (step i/n), who it waits on, and when "
+    "it's on the user what to do. It's greenlight's latest scan; trust it over memory and say where a workspace is in its lifecycle "
+    "when it matters. Asked what to work on (or checked in on), pick 1–3 from it: blocks on the user first (others wait on them), "
+    "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each."
 )
+
+
+def board_note():
+    """The BOARD line ahead of the user's message, or "" when the session already has this one (or there's no scan)."""
+    try:
+        import dash
+        b = dash.board()
+    except Exception:  # ponytail: no scan yet, or it's mid-write: the chat goes on without the board
+        return ""
+    f = os.path.join(DIR, "board")  # the board the session last saw: an unchanged one isn't sent again
+    if not b or (os.path.exists(f) and open(f).read() == b):
+        return ""
+    open(f, "w").write(b)
+    return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}):\n{b}\n\n"
 WRAP = "USER MESSAGE (reply to this): "
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
@@ -326,7 +344,9 @@ def turn(text, model, effort, compact=False, name=None):
         prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
     sid = session(engine)
     if not compact:
-        text = WRAP + text
+        if not sid and os.path.exists(os.path.join(DIR, "board")):
+            os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
+        text = board_note() + WRAP + text
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
     emit(e="start", engine=engine, model=model or "default")
@@ -358,7 +378,7 @@ def main():
     cmd = args[0] if args else "send"
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     if cmd == "new":
-        for f in ["session"] + [f"session_{h}" for h in harness.H]:
+        for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
     elif cmd == "stop":

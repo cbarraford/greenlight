@@ -363,6 +363,11 @@ assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
 assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 2
+# the chat's board: unfinished workspaces, yours first, finished ones counted
+_b = lambda n, o, st="freeform": {"name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
+_lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))
+assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
+                                     "(1 more finished)"], dash.board()
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")
