@@ -207,6 +207,7 @@ assert dash.advice(_r("approved", "reviewers")) == "" and dash.advice(_r("x", "g
 # a needed advice line makes an old cached suggestion stale; a rule-covered puck doesn't ask for one
 assert not dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": None})
 assert dash.fresh_suggest({"sig": "s", "label": "L", "advice": "Do x."}, {"sig": "s", "advice": None})
+assert dash.fresh_suggest({"sig": "s", "label": "L", "advice": ""}, {"sig": "s", "advice": None})  # the model had none: final for this sig
 assert dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": "rule"})
 assert dash.split_advice("Advice: Ask QA to sign it off.\nCheck the QA board for !5.") == ("Ask QA to sign it off.", "Check the QA board for !5.")
 assert dash.split_advice("**Advice:** Do x.\nPrompt.") == ("Do x.", "Prompt.") and dash.split_advice("Just a prompt.") == ("", "Just a prompt.")
@@ -215,6 +216,10 @@ _p = lambda **k: dash.progress({"project": "o/r", "forge": "gitlab", "mr": None,
 assert _p()[2] == 0 and _p()[1][0] == "mr_open"
 assert _p(mr={"role": "review"}, next={"step": "review", "owner": "me"})[1:] == (["review"], 0)
 assert _p(forge=None)[1:] == ([], None)
+# a merged MR with a step after merge: still your move, on that step, not done
+_m = {"project": "o/r", "forge": "gitlab", "mr": {"state": "merged"}, "agent": {"state": "none"}, "next": {"step": "deploy", "owner": "me", "action": "deploy: x Sign it off?"}}
+with mock.patch.object(dash.greenlight, "lifecycle", return_value=("o.md", ["mr_open", "merge", "deploy"])):
+    assert dash.state_of(_m)[0] == "raised" and dash.progress(_m)[1:] == (["mr_open", "merge", "deploy"], 2)
 print("advice ok")
 # suggest: the button's short label, then the prompt
 assert dash.split_label("Fix failing lint job\nFix the gofmt error in x.go and push.") == ("Fix failing lint job", "Fix the gofmt error in x.go and push.")

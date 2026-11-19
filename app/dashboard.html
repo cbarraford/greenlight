@@ -1531,7 +1531,7 @@ function hoverCard(p){
 // the recommendation: dash.py's rule (p.advice), or when no rule covers the step (null) the suggestion's advice line
 function recEl(p){
   if (p.advice === "" || p.advice === undefined) return null;
-  const sg = ui.sug[p.name] || {}, say = p.advice || sg.advice;
+  const sg = (ui.sug[p.name] || {}).sig === p.sig ? ui.sug[p.name] : {}, say = p.advice || sg.advice;  // an older step's advice is stale
   if (!say && !sg.prompt && !sg.error) suggestCon(p.name);  // normally written ahead with the next step
   if (!say && (sg.prompt || sg.error)) return null;  // the model had nothing to add: the next-step button stands
   return h("div", {class: "rec" + (say ? "" : " wait"), role: "note"}, h("span", {class: "hk"}, "Recommended"), say || "Working one out…");
@@ -1544,17 +1544,19 @@ ui.stepsOpen = localGet("stepsOpen") === "1";
 function stepsEl(p){
   const {n, i} = stepsOf(p), col = c(STATE[p.state].color), st = arr(p.steps), after = st.indexOf("merge");
   const bar = h("button", {class: "sbar", "aria-expanded": String(ui.stepsOpen), "aria-label": `Lifecycle, step ${Math.min(i + 1, n)} of ${n}: show every step`,
-      onclick: () => { ui.stepsOpen = !ui.stepsOpen; localSet("stepsOpen", ui.stepsOpen ? "1" : ""); const card = document.getElementById("hcard"); box.replaceWith(stepsEl(p));
-        if (card) { const r = card.getBoundingClientRect(); card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - card.offsetHeight))}px` }  // taller: keep it on screen
-        document.querySelector("#hcard .sbar")?.focus() }},
+      onclick: () => { ui.stepsOpen = !ui.stepsOpen; localSet("stepsOpen", ui.stepsOpen ? "1" : ""); bar.setAttribute("aria-expanded", String(ui.stepsOpen));
+        if (ui.stepsOpen) box.append(list()); else box.querySelector(".chk")?.remove();  // in place: the focused button stays, the card stays open
+        const card = document.getElementById("hcard");
+        if (card) { const r = card.getBoundingClientRect(); card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - card.offsetHeight))}px` } }},  // taller: keep it on screen
     h("div", {class: "steps", style: `--n:${n}`}, Array.from({length: n}, (_, k) => h("i", {class: k === i ? "cur" : null, style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))),  // done green, here in its state color, ahead on the track
     h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || "")));
-  const box = h("div", {}, bar, ui.stepsOpen ? h("ol", {class: "chk"}, st.flatMap((k, j) => [
+  const list = () => h("ol", {class: "chk"}, st.flatMap((k, j) => [
     j === after + 1 && after >= 0 ? h("li", {class: "sep", "aria-hidden": "true"}, "After merge") : null,
     h("li", {class: j < i ? "ok" : j === i ? "cur" : null},
       h("span", {"aria-hidden": "true", style: j < i ? `color:${c("--green")}` : j === i ? `color:${col}` : null}, j < i ? "✓" : j === i ? "●" : "○"),
       h("span", {}, h("span", {class: "vh"}, j < i ? "done: " : j === i ? "now: " : "ahead: "), STEP_DONE[k] || cap(k.replace(/_/g, " ")),
-        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, ` · on ${OWNER_SAY[p.owner]}`) : null))])) : null);
+        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, ` · on ${OWNER_SAY[p.owner]}`) : null))]));
+  const box = h("div", {}, bar, ui.stepsOpen ? list() : null);
   return box;
 }
 // a move's [button, its subline, its "Also" label]; the same moves as the Basement card's
