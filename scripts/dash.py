@@ -194,6 +194,26 @@ def tree_ready(path):
     return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref")}  # ponytail: the next scan shows it out of draft
 
 
+def board():
+    """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
+    what to do. Blocks on you first, then your moves, then the rest; finished ones only counted."""
+    rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
+    lines, done = [], 0
+    for r in rows:
+        st, why = state_of(r, blk)
+        if st == "done":
+            done += 1
+            continue
+        _, steps, i = progress(r)
+        mr, nxt, ad = r.get("mr") or {}, r["next"], advice(r)
+        ref = f"[{mr['ref']}]({mr['web_url']})" if mr.get("ref") and mr.get("web_url") else mr.get("ref") or "no MR"
+        where = f"step {i + 1}/{len(steps)} {nxt['step']}" if steps and i is not None else nxt["step"]
+        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}): {where} · on {nxt['owner']} · {(nxt.get('action') or why)[:110]}"
+                      + (f" · do: {ad}" if ad else "") + (" · agent working" if (r.get("agent") or {}).get("state") == "working" else "")))
+    lines.sort(key=lambda x: x[0])
+    return "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
+
+
 def state_of(r, blk=None):
     """(state, why) from greenlight's next step plus the live agent and what I'm blocking."""
     nxt, ag = r["next"], r["agent"]
@@ -1317,6 +1337,8 @@ def main():
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+    elif a[:1] == ["board"]:
+        print(board())
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
     elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:

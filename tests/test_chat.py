@@ -87,6 +87,15 @@ def test_normal_turn_no_retry(tmp_path, monkeypatch):
     assert [e["text"] for e in events if e["e"] == "done"] == ["Deleted it."]
 
 
+def test_board_goes_ahead_of_the_message_once(tmp_path, monkeypatch):
+    import dash
+    monkeypatch.setattr(dash, "board", lambda: "- faster-qa (#16): step 4/7 ready · on me")
+    _, prompts = turn(tmp_path, monkeypatch, "what next?")
+    assert prompts[0].startswith("BOARD (") and "faster-qa (#16): step 4/7 ready" in prompts[0] and prompts[0].endswith(chat.WRAP + "what next?"), prompts
+    _, prompts = turn(tmp_path, monkeypatch, "and then?")  # the session has it: not again until it changes
+    assert prompts[-1] == chat.WRAP + "and then?", prompts
+
+
 def test_ignored_pattern():
     for s in ("", "  ", "No response requested.", "no response requested"):
         assert chat.IGNORED.match(s), s
