@@ -30,7 +30,8 @@ PROMPT = (
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
     "A request that only asks (status, research, a billing or usage lookup, inspecting logs, code or an MR) you answer "
     "yourself, here, from the sources you can read (greenlight.py, the ADE, glab/gh, APIs and files on this host); "
-    "never create a workspace to answer one (`greenlight.py ade worktree create` refuses it). "
+    "never create a workspace to answer one (`greenlight.py ade worktree create` refuses it; `--change \"<what>\"` "
+    "only when the message does ask for a change). "
     "A request that changes something (code, docs, settings, an external system) goes to an agent in the appropriate "
     "Orca workspace, creating one with a goal if none fits; then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
@@ -694,7 +695,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     if not compact and not err:
         decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
         asked = os.path.join(DIR, "asked")
-        if re.search(r"\?|^Options:", norm.reply or "", re.M):
+        if re.search(r"(\?|^Options:.*)\Z", (norm.reply or "").rstrip(), re.M):  # it ended on a question
             open(asked, "w").close()
         elif os.path.exists(asked):
             os.remove(asked)
