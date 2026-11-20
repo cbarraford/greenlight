@@ -154,6 +154,26 @@ test("projects: repos and folders group under their project; a repo in none keep
   assert.deepEqual(page._errs, []);
 });
 
+test("a workspace is in its repo's project wherever its worktree sits, new ones at once", async page => {
+  // Platform names no repo: it holds acme/widgets by its main checkout's folder. Orca puts the worktrees somewhere else.
+  await page.evaluate(() => term.projects([{id: "p1", name: "Platform", repos: [], dirs: ["/w/widgets"]}, {id: "p2", name: "Elsewhere", repos: [], dirs: ["/orca"]}]));
+  const T = [...TREES.trees, {ade: "orca", project: "acme/widgets", name: "far", path: "/orca/acme/far", branch: "far", main: false, agent: "none"}];
+  await page.evaluate(t => term.workspaces({trees: t}), T);
+  const under = () => page.evaluate(() => Object.fromEntries(sideGroups().flatMap(([, , m]) => [...m].flatMap(([p, ws]) => ws.map(w => [w.name, p])))));
+  let u = await under();
+  assert.equal(u["fix-login"], "Platform", "a worktree outside the project's folder"); assert.equal(u.far, "Platform", "the repo's project, not the folder's");
+  await page.evaluate(() => term.tree({op: "new", path: "/orca/acme/brand-new", repo: "/w/widgets", ok: true}));
+  assert.equal((await under())["brand-new"], "Platform", "just made, not listed yet: already under its repo's project");
+  assert.deepEqual(page._errs, []);
+});
+test("new workspace in a project window: the repo offered first is one of the window's", async page => {
+  page = await boot(page.context().browser(), null, "?only=" + encodeURIComponent('["p2"]'));
+  await page.evaluate(() => { term.projects([{id: "p2", name: "Widgets", repos: ["acme/widgets"], dirs: []}]);
+    term.workspaces({trees: [{ade: "orca", project: "aaa/first", name: "first", path: "/w/first", branch: "main", main: true, agent: "none"}, ...trees]}) });
+  await page.click("#shead button[aria-label='New workspace']"); await page.waitForSelector("#dlg:not([hidden]) textarea:focus");
+  assert.equal(await page.$eval("#dlg select", s => s.value), "/w/widgets");
+  assert.deepEqual(page._errs, []); await page.close();
+});
 test("a window of some projects shows only theirs (Hosts stay); No Man's Land is the repos in none", async page => {
   const b = page.context().browser();
   page = await boot(b, null, "?only=" + encodeURIComponent('["p1"]')); await page.evaluate(p => term.projects(p), PROJ);
@@ -629,13 +649,28 @@ test("new workspace: the branch is the goal's slug; a taken branch opens Advance
   await page.click("#shead button[aria-label='New workspace']"); await page.waitForSelector("#dlg:not([hidden]) textarea:focus");
   await page.selectOption("#dlg select", "/w/widgets");
   await page.keyboard.type("Fix login");
-  assert.match(await page.$eval("#dlg .note2", d => d.textContent), /^Creates fix-login from the default branch$/);
+  assert.match(await page.$eval("#dlg .note2", d => d.textContent), /^Creates fix-login in acme\/widgets from the default branch$/);
   await page.click("#dlg button.pri");
   assert.equal(await page.$eval("#dlg .err", d => d.textContent), "acme/widgets already has a workspace on fix-login");
   assert.equal(await page.$eval("#dlg details", d => d.open), true);
   await page.fill("#dlg textarea", "Login keeps the page you were on!"); await page.click("#dlg button.pri");
   const p = (await posts(page, "tree")).pop(); assert.equal(p.op, "new"); assert.equal(p.path, "/w/widgets");
   assert.deepEqual(JSON.parse(p.text), {name: "login-keeps-the-page-you", base: "", goal: "Login keeps the page you were on!", agent: true, setup: ""});
+});
+test("new workspace: its row shows at once, and its section and project open if they were shut", async page => {
+  const row = () => page.$$eval("#tree .ws", r => r.filter(x => x.querySelector(".wn").textContent === "new-one").map(x => x.querySelector(".br")?.textContent || "bare"));
+  await page.click("#tree .grp.prj:has-text('acme/widgets')"); await page.click("#tree .grp.sec:has-text('Workspaces')");
+  await page.evaluate(() => term.tree({op: "new", path: "/w/new-one", ok: true}));
+  assert.deepEqual(await row(), ["bare"], "before the ADE lists it: a row by its tab, the section opened");
+  assert.equal(await page.evaluate(() => curWs), "/w/new-one");
+  await page.evaluate(t => term.workspaces({trees: [...t, {ade: "orca", project: "acme/widgets", name: "new-one", path: "/w/new-one", branch: "new-one", main: false, agent: "working"}]}), TREES.trees);
+  assert.deepEqual(await row(), ["new-one"], "listed: under its project, which was shut and is opened");
+  await page.click("#tree .grp.prj:has-text('acme/widgets')"); await page.evaluate(t => term.workspaces({trees: [...t, {ade: "orca", project: "acme/widgets", name: "new-one", path: "/w/new-one", branch: "new-one", main: false, agent: "working"}]}), TREES.trees);
+  assert.deepEqual(await row(), [], "shut it yourself afterwards: it stays shut");
+});
+test("Hosts is the first section, above Needs you and Working", async page => {
+  await page.evaluate(() => { newTab("/w/fix-login"); newTab("/w/sidebar"); const [a, b] = [...panes.values()]; a.title = "✳ asks"; a.bell = true; b.title = "⠋ busy"; b.st = "work"; render() });
+  assert.deepEqual(await page.$$eval("#tree .box", b => b.map(x => x.className).slice(0, 4)), ["box s-host", "box s-need", "box s-work", "box s-ws"]);
 });
 test("ports: a remote port tunnels on click; the app's opening / open / failed relabel the row", async page => {
   await page.evaluate(() => term.workspaces({trees: [{ade: "basement", project: "octo/g", name: "pt", path: "/w/pt", branch: "pt", main: false, agent: "none"}]}));
@@ -786,6 +821,14 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   assert.equal((await posts(page, "notify")).pop().title, "Merged !7 into main", "a notification, not a dialog");
   assert.deepEqual((await lastSave(page)).autoDone, ["/w/ar|ci|s1", "/w/ar|merge|s2"]);
 }, "?main=1");
+
+test("auto-run: never in a dev copy, its main window included", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "ar", path: "/w/ar", branch: "ar", main: false, agent: "none",
+    mr: {ref: "!7", state: "opened", sha: "s1"}, moves: [{kind: "ci", prompt: "fix", auto: "x", sha: "s1"}, {kind: "merge", auto: true, sha: "s1"}]}]}));
+  assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 0, "no tab of its own");
+  assert.equal((await posts(page, "tree")).filter(m => m.op === "merge").length, 0, "no merge");
+  assert.deepEqual((await lastSave(page))?.autoDone || [], [], "nothing marked tried");
+}, "?main=1&dev=faster-qa");
 
 test("auto-run: only the main window runs it", async page => {
   await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "ar", path: "/w/ar", branch: "ar", main: false, agent: "none",

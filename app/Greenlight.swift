@@ -5,6 +5,7 @@
 //   host       "local" (default) runs greenlight's Python here; anything else is an ssh host (GREENLIGHT_HOST overrides)
 //   greenlightHome  greenlight's state dir on that host (default ~/.greenlight)
 //   greenlightCode  where greenlight's *.py live there (default ~/.claude/skills/greenlight)
+// A dev copy (greenlight-<workspace>, scripts/dev.py) is this app under another name with settings of its own: see devDir.
 // No @State/@Observable: those are macros, and the Command Line Tools swiftc has no SwiftUI macro plugin.
 import AppKit
 import Combine
@@ -24,11 +25,30 @@ let greenlightCode = UserDefaults.standard.string(forKey: "greenlightCode") ?? "
 let py = "GREENLIGHT_HOME=\(greenlightHome) python3 \(greenlightCode)/scripts"  // + "/greenlight.py ..."
 let selftest = CommandLine.arguments.contains("--selftest")  // scratch chat session + transcript, see selfTest()
 let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(py)/chat.py"
+let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
+/// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
+/// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
+let devDir = Bundle.main.object(forInfoDictionaryKey: "GreenlightDev") as? String
+/// A dev copy's workspace ("faster-qa"): on its menubar item and in its window bar, so you can tell the copies and Greenlight apart.
+let devName = devDir.map { URL(fileURLWithPath: $0).lastPathComponent }
+let devTagWidth: CGFloat = devName.map { min(190, ceil(($0 as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .bold)]).width) + 44) } ?? 0  // the window bar's tag: 0 in Greenlight
+/// A dev copy's extra ssh options to a host dev.py has a tunnel to: the tunnel's socket, so nothing connects in the copy's
+/// name and a firewall (Little Snitch) has no new app to ask about, however many copies there are. Empty otherwise.
+func devSsh(_ h: String) -> [String] {
+    guard let devDir else { return [] }
+    let sock = URL(fileURLWithPath: devDir).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("ssh/\(h).sock").path
+    return FileManager.default.fileExists(atPath: sock) ? ["-o", "ProxyCommand=/usr/bin/nc -U '\(sock)'"] : []
+}
+/// A bundled page (dashboard, terminal): in a dev copy, the workspace's live one.
+func page(_ name: String) -> URL? {
+    if let devDir, FileManager.default.fileExists(atPath: "\(devDir)/web/\(name).html") { return URL(fileURLWithPath: "\(devDir)/web/\(name).html") }
+    return Bundle.main.url(forResource: name, withExtension: "html")
+}
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
     if host.isEmpty || host == "local" { return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote]) }
-    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", host, remote])
+    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + [host, remote])
 }
 
 /// The terminal sidebar's Hosts: ~/.ssh/config's Host names, minus wildcards, git hosts and the -ts (Tailscale) twin of a listed host.
@@ -344,7 +364,7 @@ struct Question: Codable, Identifiable {
 }
 
 /// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
-let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Greenlight")
+let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(appName)")  // a copy's own: its tabs' tmux sessions die with its tabs
 let transcript = support.appendingPathComponent(selftest ? "transcript-test.json" : "transcript.json")
 let questionsFile = support.appendingPathComponent(selftest ? "questions-test.json" : "questions.json")
 
@@ -435,7 +455,7 @@ let engines = [("apple", appleOnDevice ? "Apple (on-device)" : "Apple (Apple ser
 let voiceFile = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-voice.wav")
 var recognizer: SFSpeechRecognizer?  // must outlive its task
 func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin") ?? "/opt/homebrew/bin/whisper-cli" }
-func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
+func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.deletingLastPathComponent().appendingPathComponent("Greenlight/ggml-large-v3-turbo-q5_0.bin").path }  // one model, copies included
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
 @discardableResult
@@ -2239,7 +2259,7 @@ final class Core: ObservableObject {
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
     func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil) {
-        if selftest { return }  // fake pings shouldn't pop banners on the real Mac
+        if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
         let c = UNMutableNotificationContent()
         c.title = title
         if let subtitle { c.subtitle = subtitle }
@@ -4684,6 +4704,13 @@ struct Floors: View {
                          ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
     var body: some View {
         HStack(spacing: 10) {
+        if let devName {  // a dev copy: whose it is, dashed so it doesn't read as a floor
+            HStack(spacing: 4) { Image(systemName: "hammer.fill").font(.system(size: 8, weight: .bold)); Text(devName).lineLimit(1).truncationMode(.middle) }
+                .font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
+                .padding(.horizontal, 8).frame(height: 20)
+                .background(RoundedRectangle(cornerRadius: 7).strokeBorder(hexColor(light ? "#5F5F64" : "#9A9AA0"), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                .help("Dev copy of the \(devName) workspace").accessibilityLabel("Dev copy: \(devName)")
+        }
         HStack(spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
                 let l = Self.levels[i], on = l.0 == s.at
@@ -4713,7 +4740,7 @@ struct Floors: View {
         }.padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 300, height: 28, alignment: .trailing).padding(.trailing, 10)
+        }.frame(width: 300 + devTagWidth, height: 28, alignment: .trailing).padding(.trailing, 10)
     }
 }
 /// The project chip: the window's projects, centered in the title bar like a title; a click opens the picker.
@@ -4742,7 +4769,7 @@ struct ProjectChip: View {
 /// Floors in a window's title bar, top right; the project chip in its middle.
 func floorBar(_ w: NSWindow, _ f: Floors) {
     let a = NSTitlebarAccessoryViewController(), h = NSHostingView(rootView: f)
-    h.frame = NSRect(x: 0, y: 0, width: 310, height: 28)
+    h.frame = NSRect(x: 0, y: 0, width: 310 + devTagWidth, height: 28)
     a.view = h; a.layoutAttribute = .trailing
     w.addTitlebarAccessoryViewController(a)
     guard let tb = w.standardWindowButton(.closeButton)?.superview else { return }  // the title bar itself: no accessory slot is centered
@@ -4905,6 +4932,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         item.button?.target = self
         item.button?.action = #selector(click)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        if let devName { item.button?.toolTip = "Dev copy of the \(devName) workspace" }
         greenlight.popoverShown = { [weak self] in NSApp.isActive && self?.chatShown == true }
         greenlight.popChat = { [weak self] in self?.popChat(out: $0) }
         greenlight.openPage = { [weak self] name in  // as the page's own openPage message
@@ -4955,11 +4983,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
-        if ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden
+        if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
+        if let devDir { watchPages(devDir + "/web") }
 
         let un = UNUserNotificationCenter.current()
         un.delegate = self
-        un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        if devDir == nil { un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }  // a copy never posts (notify), so never asks
         let reply = UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Answer greenlight…")
         un.setNotificationCategories([UNNotificationCategory(identifier: "greenlight", actions: [reply], intentIdentifiers: [])])
         greenlight.tailOutbox()
@@ -5022,7 +5051,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.appearance = window.appearance
         let web = makeWeb()
         w.contentView = web
-        if let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
+        if let u = page("dashboard") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
         if !w.setFrameUsingName("view-" + v) { w.center() }
         w.setFrameAutosaveName("view-" + v)
         viewWindows[v] = w
@@ -5119,9 +5148,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return w
     }()
 
+    /// A dev copy: reload a page when dev.py lays down a new one (the Swift takes a rebuild, and dev.py relaunches us after it).
+    var pageTimes = [String: Date](), pageTimer: Timer?
+    func watchPages(_ dir: String) {
+        func times() -> [String: Date] {
+            var t = [String: Date]()
+            for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where !f.hasPrefix(".") {
+                t[f] = (try? FileManager.default.attributesOfItem(atPath: dir + "/" + f))?[.modificationDate] as? Date
+            }
+            return t
+        }
+        pageTimes = times()
+        pageTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = times(), moved = Set(now.filter { self.pageTimes[$0.key] != $0.value }.keys)
+            self.pageTimes = now
+            if moved.contains("dashboard.html") { self.webs.forEach { $0.reloadFromOrigin() } }
+            if !moved.subtracting(["dashboard.html"]).isEmpty { self.termWebs.forEach { $0.reloadFromOrigin() } }  // terminal.html, or a script of its
+        }
+    }
+
     func loadFluid() {
         let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
-        if s.isEmpty, let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") {
+        if s.isEmpty, let u = page("dashboard") {
             fluid.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent())
         } else if s.hasPrefix("http://") || s.hasPrefix("https://"), let u = URL(string: s) {
             fluid.load(URLRequest(url: u))
@@ -5640,12 +5689,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
     func loadTerm(_ web: WKWebView, only: [String]?) {
-        guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
+        guard let u = page("terminal") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
+        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "dev", value: devName ?? ""), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
@@ -5685,6 +5734,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// claude -p on this Mac at low effort: its stdout, "" when it fails.
     func claudeP(_ prompt: String, model: String, done: @escaping (String) -> Void) {
+        if !devSsh(host).isEmpty {  // a dev copy asks the host's claude: one here would connect in the copy's name
+            var out = ""
+            ssh("exec $SHELL -lc " + shellQuote("cd /tmp && exec claude -p --model \(shellQuote(model)) --effort low"), stdin: prompt,
+                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? out : "") })
+            return
+        }
         DispatchQueue.global().async {
             let p = Process(), inPipe = Pipe(), out = Pipe()
             p.executableURL = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
@@ -5720,9 +5775,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
-        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
+        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + [host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
-    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    var termLoaded = false, treesProc: Process?, treesAgain = false, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
     func editorApp() -> (bid: String, url: URL, name: String)? {
         [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
@@ -5738,13 +5793,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
     func pushTrees() {
-        guard termLoaded, treesProc == nil else { return }
+        guard termLoaded else { return }
+        if treesProc != nil { treesAgain = true; return }  // one is running: it may have listed before this change, so go again after it
         treesAt = Date()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
+            if self.treesAgain { self.treesAgain = false; self.pushTrees() }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
@@ -5859,7 +5916,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let key = "\(at.host):\(port)"
             if tunnels[key]?.isRunning == true { NSWorkspace.shared.open(u); return tunnelState(key, "open") }
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
+            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)"] + devSsh(at.host) + [at.host]
             p.standardError = FileHandle.nullDevice
             // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
             p.terminationHandler = { [weak self] q in DispatchQueue.main.async { if self?.tunnels[key] === q { self?.tunnels[key] = nil; self?.tunnelState(key, q.terminationStatus == 0 ? "closed" : "failed") } } }  // ssh exiting on its own (port taken, host down, dropped): failed; Cancel removes it first
@@ -6073,14 +6130,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let b = item.button else { return }
         // Touch the status item only on change: any menubar update keeps a full-screen window's title bar pinned down.
         let working = greenlight.run != nil
-        let title = greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : "")
+        let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the stars are all alike
+            + (greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : ""))
         let key = "\(working) \(accent)"
         if key != starKey {
             starKey = key
             let img = NSImage(systemSymbolName: working ? "star.fill" : "star", accessibilityDescription: "Greenlight")
             img?.isTemplate = !working
             b.image = working ? img?.withSymbolConfiguration(.init(paletteColors: [NSColor(accent)])) : img
-            item.length = working ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second
+            item.length = working && devName == nil ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second (a copy's name doesn't fit 64)
         }
         if b.title != title { b.title = title }
     }
