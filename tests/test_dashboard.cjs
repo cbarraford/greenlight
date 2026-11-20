@@ -269,7 +269,7 @@ test("a selected file counts as an edit before its reader finishes", async page 
   assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["before.txt", "later.txt"]);
 });
 
-test("a failed file read asks for a replacement without offering task Retry", async page => {
+test("a failed file read stays visible until removed and cannot trigger task Retry", async page => {
   await newTask(page);
   await page.selectOption("#ps-repo", "widgets");
   await page.fill("#ps-task", "Task A");
@@ -278,13 +278,39 @@ test("a failed file read asks for a replacement without offering task Retry", as
   } });
   await page.setInputFiles(".tdrop input[type=file]", {name: "broken.txt", mimeType: "text/plain", buffer: Buffer.from("bad")});
   await page.evaluate(() => window.__reads[0].onerror());
-  assert.match(await page.textContent(".perr"), /Couldn't read broken.txt.*Choose it again/);
+  assert.match(await page.textContent(".perr"), /Couldn't read broken.txt.*Remove it and choose it again/);
   assert.equal(await page.$("#ps-retry"), null);
   assert.equal(await page.isDisabled("#ps-go"), true);
   await page.setInputFiles(".tdrop input[type=file]", {name: "replacement.txt", mimeType: "text/plain", buffer: Buffer.from("ok")});
-  assert.equal(await page.$(".perr"), null);
+  assert.match(await page.textContent(".perr"), /broken.txt/);
   assert.equal(await page.isDisabled("#ps-go"), true);
   await page.evaluate(() => window.__reads[1].onload());
+  assert.equal(await page.isDisabled("#ps-go"), true, "one replacement silently cleared the failed entry");
+  await page.click("button[aria-label='Remove broken.txt']");
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["replacement.txt"]);
+});
+
+test("multiple failed reads remain visible, and a removed reader cannot revive an error", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,b2s="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", [
+    {name: "bad-a.txt", mimeType: "text/plain", buffer: Buffer.from("a")},
+    {name: "bad-b.txt", mimeType: "text/plain", buffer: Buffer.from("b")}]);
+  await page.evaluate(() => window.__reads[0].onerror());
+  await page.setInputFiles(".tdrop input[type=file]", {name: "replacement.txt", mimeType: "text/plain", buffer: Buffer.from("ok")});
+  await page.evaluate(() => window.__reads[2].onload());
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  assert.match(await page.textContent(".perr"), /bad-a.txt/);
+  await page.click("button[aria-label='Remove bad-a.txt']");
+  assert.equal(await page.isDisabled("#ps-go"), true, "the second unread file was omitted");
+  await page.click("button[aria-label='Remove bad-b.txt']");
+  await page.evaluate(() => window.__reads[1].onerror());
+  assert.equal(await page.$(".perr"), null);
   assert.equal(await page.isDisabled("#ps-go"), false);
   assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["replacement.txt"]);
 });

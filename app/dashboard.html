@@ -2095,30 +2095,32 @@ const PLUS = s("svg", {width:13, height:13, viewBox:"0 0 24 24", fill:"none", st
 function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // dash.py _slug
 function taskSheet(){
   const repo = localGet("taskRepo") || "";
-  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: [], fileRev: 0, reading: 0, fileError: ""}; ui.task.err = ""; ui.task.ask = null;
+  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: [], fileRev: 0}; ui.task.err = ""; ui.task.ask = null;
   post({cmd: "task", op: "repos", arg: "-"});  // every open: a repo added to Orca shows up without a relaunch
   render(); const i = document.getElementById(repo || !ui.task.repos ? "ps-task" : "ps-repo");  // the first thing missing gets the caret
   if (i) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); i.scrollTop = i.scrollHeight } catch {} }
 }
 function attach(files){
   const sh = ui.task.sheet; if (!sh) return;
-  if (files?.length) sh.fileError = "";
   for (const f of [...(files || [])]) {
-    sh.fileRev++; sh.reading++;
+    const entry = {name: f.name || "pasted.png", size: f.size, data: null, error: false};
+    sh.files.push(entry); sh.fileRev++;
     const r = new FileReader();
-    r.onload = () => { sh.reading--; if (ui.task.sheet === sh) { sh.files.push({name: f.name || "pasted.png", size: f.size, data: r.result}); render() } };
-    r.onerror = () => { sh.reading--; if (ui.task.sheet === sh) { sh.fileError = `Couldn't read ${f.name || "the file"}. Choose it again.`; render() } };
-    r.readAsDataURL(f);
+    const current = () => ui.task.sheet === sh && sh.files.includes(entry);
+    r.onload = () => { if (current()) { entry.data = r.result; sh.fileRev++; render() } };
+    r.onerror = () => { if (current()) { entry.error = true; sh.fileRev++; render() } };
+    try { r.readAsDataURL(f) } catch { r.onerror() }
   }
-  if (sh.reading) render();
+  render();
 }
 function taskSheetEl(){
   const sh = ui.task.sheet; if (!sh) return null;
   const close = () => { ui.task.sheet = null; render() }, busy = ui.task.busy, repos = ui.task.repos;
   const size = sh.files.reduce((n, f) => n + f.size, 0), big = size > TASK_CAP;
+  const failed = sh.files.filter(f => f.error);
   const line = () => (String(sh.text).split("\n").find(l => l.trim()) || "").trim();  // live: typing doesn't re-render the sheet
   const ask = ui.task.ask, answered = () => { const a = ui.task.ask; return !a || a.qs.every(q => (a.ans[q.id] || "").trim()) };  // live: an edit drops the questions without a render
-  const repo = (repos || []).find(r => r.name === sh.repo), ok = force => !busy && !big && !sh.reading && !sh.fileError && repo && line() && !ui.task.err && (force || answered());
+  const repo = (repos || []).find(r => r.name === sh.repo), ok = force => !busy && !big && sh.files.every(f => !!f.data && !f.error) && repo && line() && !ui.task.err && (force || answered());
   const syncGo = () => { const b = document.getElementById("ps-go"); if (b) b.disabled = !ok() };
   const unerr = () => { ui.task.err = ""; ui.task.errAt = null; document.getElementById("ps-err")?.remove(); document.getElementById("ps-task")?.removeAttribute("aria-invalid"); const hp = document.getElementById("ps-help"); if (hp) hp.textContent = HELP; document.getElementById("ps-task")?.setAttribute("aria-describedby", "ps-help") };  // a changed title or project is a fresh try
   const go = (force = false) => {  // force: Start anyway, past preflight's questions
@@ -2156,11 +2158,11 @@ function taskSheetEl(){
       h("div", {class:"tdrop" + (sh.files.length ? " has" : "")}, over,
         sh.files.length ? h("div", {class:"thd"}, h("b", {}, `Attachments (${sh.files.length})`), h("span", {class:big ? "bad" : ""}, `${kb(size)} of ${kb(TASK_CAP)}`)) : null,
         sh.files.length ? h("div", {class:"tfiles"}, sh.files.map((f, i) => { const m = /^(.+?)(\.[^.]+)?$/.exec(f.name);  // the stem truncates, the extension stays
-          return h("span", {class:"tfile"}, icon("file"), h("span", {class:"mono fn", title: f.name}, h("span", {class:"b"}, m[1]), m[2] || ""), h("small", {}, kb(f.size)),
-          h("button", {type:"button", "aria-label":`Remove ${f.name}`, onclick: () => { sh.files.splice(i, 1); render() }}, icon("close", 12))) })) : null,
+          return h("span", {class:"tfile"}, icon("file"), h("span", {class:"mono fn", title: f.name}, h("span", {class:"b"}, m[1]), m[2] || ""), h("small", {}, f.error ? "Couldn't read" : f.data ? kb(f.size) : "Reading…"),
+          h("button", {type:"button", "aria-label":`Remove ${f.name}`, onclick: () => { sh.files.splice(i, 1); sh.fileRev++; render() }}, icon("close", 12))) })) : null,
         h("span", {class:"hint"}, icon("clip"), h("button", {type:"button", class:"lnk", onclick: () => pick.click()}, "Add files"), " or drop / paste a screenshot"), pick),
       big ? h("div", {class:"perr", role:"alert"}, icon("alert"), h("span", {}, `Attachments are capped at 15 MB together (${kb(size)} now)`)) : null,
-      sh.fileError ? h("div", {class:"perr", role:"alert"}, icon("alert"), h("span", {}, sh.fileError)) : null,
+      failed.length ? h("div", {class:"perr", role:"alert"}, icon("alert"), h("span", {}, `Couldn't read ${failed.map(f => f.name).join(", ")}. Remove ${failed.length === 1 ? "it" : "them"} and choose ${failed.length === 1 ? "it" : "them"} again.`)) : null,
       h("div", {class:"sfoot"}, h("span", {id:"ps-foot", class:"pfoot"}, ...foot()),
         ask && !busy ? h("button", {type:"button", class:"btn ghost", id:"ps-anyway", title:"Start it as written, without answering", onclick: () => go(true)}, "Start anyway") : null,
         h("button", {type:"button", class:"btn ghost", onclick: close}, "Cancel"),
