@@ -40,8 +40,10 @@ def cli(*args, stdin=""):
 
 KD = "\nOptions: mark ready | keep draft"
 
-# risk: a no-op answer is low; merges, sign-offs and deploys are human gates (high); deletes can't be taken back (medium)
-assert [autonomy.risk(o) for o in ("keep draft", "not yet", "keep holding", "mark ready", "set 3.22")] == ["low"] * 5
+# risk: only inert answers are low; actions need confirmation; human gates are high
+assert [autonomy.risk(o) for o in ("keep draft", "not yet", "keep holding")] == ["low"] * 3
+assert [autonomy.risk(o) for o in ("mark ready", "set 3.22", "nudge it", "keep the branch and delete workspace")] == ["medium"] * 4
+assert autonomy.risk("keep draft and merge") == "high"
 assert [autonomy.risk(o) for o in ("merge", "merge anyway", "deployed, sign off all", "approve")] == ["high"] * 4
 assert [autonomy.risk(o) for o in ("delete", "delete all 3", "close it")] == ["medium"] * 3
 
@@ -82,6 +84,7 @@ past("delete-workspace", "delete", ["delete", "keep"], 30)
 autonomy.save_settings(autonomy.settings() | {"auto": ["delete-workspace"]})
 p = autonomy.propose("delete-workspace", "done. Delete it?\nOptions: delete | keep")
 assert (p["tier"], p["risk"]) == (2, "medium"), p
+assert autonomy.propose("keep-draft", "Ready?\nOptions: mark ready | keep draft and merge")["tier"] == 3
 # signoff and merge-held can't be opted in at all
 autonomy.save_settings({"auto": [], "gate": 0.35})
 assert cli("set", "--auto", "signoff", "on").returncode != 0 and autonomy.settings()["auto"] == []
@@ -136,10 +139,25 @@ assert (a["act"], a["record"], a["choice"], a["kind"]) == ("auto", rec["id"], "k
 assert "feat-9" not in greenlight.pinged()  # nothing waits on the user
 # its own answer isn't evidence: the tally is the 25 human answers
 assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load()) == ([0, 25], 25)
-# calibration: an auto answer not undone counts right
-assert decisions.calibrate()["keep-draft"]["bands"]["auto"] == {"n": 1, "right": 1, "acc": 1.0}
+# an unchallenged auto answer isn't a measured success
+assert "keep-draft" not in decisions.calibrate()
+# repeated scans do not add auto answers, records, or notifications for the same question
+with contextlib.redirect_stdout(io.StringIO()):
+    assert greenlight.ping("feat-9 (!9): still a draft. Mark it ready?" + KD, "feat-9", kind="keep-draft") is None
+assert len(outbox()) == 1 and len(autonomy.audit_log()) == 1 and len(decisions.load()) == 26
 
 # undo: marked undone, counted a miss, and the question goes to the user again (no auto, no preselect)
+original_ping = greenlight.ping
+greenlight.ping = lambda *a, **kw: (_ for _ in ()).throw(OSError("outbox unavailable"))
+try:
+    try:
+        autonomy.undo(res["id"])
+        assert False, "undo should surface a failed re-ask"
+    except OSError:
+        pass
+finally:
+    greenlight.ping = original_ping
+assert not autonomy.audit_log()[0].get("undone")  # retry must still be possible
 with contextlib.redirect_stdout(io.StringIO()):
     autonomy.undo(res["id"])
 assert autonomy.audit_log()[0]["undone"]
@@ -147,10 +165,10 @@ assert decisions.calibrate()["keep-draft"]["bands"]["auto"] == {"n": 1, "right":
 again = outbox()[-1]
 assert "auto" not in again and "suggest" not in again and again["text"].startswith("Undo: greenlight answered 'keep draft'") and again["text"].endswith(KD), again
 assert decisions.load()[-1]["answer"] is None and "feat-9" in greenlight.pinged()
-assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load())[0] == [0, 24]  # a vote against
+assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load())[0] == [0, 25]  # Undo cannot change human history
 assert cli("undo", "nope").returncode != 0
 # a grouped (@) ping answered for you asks again on undo, though its key was pinged within the flap window
-assert autonomy.propose("keep-draft", "x?" + KD)["tier"] == 2  # the undo cost it: 25 of 27 now, under 0.95
+assert autonomy.propose("keep-draft", "x?" + KD)["tier"] == 1  # one correction is not enough to cap the band
 past("keep-draft", "keep draft", ["mark ready", "keep draft"], 20)
 with contextlib.redirect_stdout(io.StringIO()):
     res = greenlight.ping("4 drafts still drafts. Ready?" + KD, "@drafts-2", kind="keep-draft")

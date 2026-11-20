@@ -7,8 +7,8 @@ A question of a known kind (KINDS) gets a proposal before it's pinged:
     P = how likely you'd pick its top option: past answers to the same kind (decisions.jsonl) plus the
         system-one model's pick (decide.choice, given those answers and memory/MEMORY.md as context),
         capped by how often proposals like it turned out right (calibrate)
-    Tier 1  P >= 0.95, the option is low risk and reversible, and you opted the kind in (Settings → Autonomy):
-            greenlight answers it itself, logs it in autonomy.jsonl, and the app shows it with Undo
+    Tier 1  P >= 0.95, the option is inert, and you opted the kind in (Settings → Autonomy):
+            greenlight answers it itself, logs it in autonomy.jsonl, and the app can ask you again
     Tier 2  0.65 <= P < 0.95 (or 0.95+ but not opted in): asked, with that option preselected and a badge
             ("you chose it 6 of 7 times")
     Tier 3  P < 0.65, or the option is high risk (a merge you held, a sign-off, a deploy): asked as before
@@ -21,7 +21,7 @@ kinds can't be opted in at all (not even their "not yet"): the lifecycle's human
     autonomy.py gate --kind K [<text>]  # may a proactive question go out now? JSON {ok, score, ...}; exit 1 when held
     autonomy.py settings [--json]       # opted-in kinds, gate threshold, calibration, candidates, recent auto acts
     autonomy.py set [--auto K on|off]... [--gate 0.35]
-    autonomy.py undo <audit id>         # take back an auto answer: the question goes to you again
+    autonomy.py undo <audit id>         # ask again after an auto answer; does not reverse an action
     autonomy.py log [--json]            # autonomy.jsonl: auto answers, held pings, undos
 
 State in $GREENLIGHT_HOME: autonomy.json (settings), autonomy.jsonl (audit). Stdlib only; never imports greenlight.py
@@ -60,19 +60,19 @@ RUBRIC = ("Is this message worth interrupting the user for right now? 1 when it 
           "specific workspace or MR, says what changed, and asks for one decision only they can make. 0 when it is "
           "filler, a status recap, a repeat, or something greenlight could do or wait out by itself.")
 
-# What an option would do. "Not yet" / "keep" / "hold" do nothing and are always low risk.
-NOOP_RE = re.compile(r"^\s*(?:no\b|not\b|keep\b|wait\b|hold\b|skip\b|later\b|leave\b|ignore\b|don'?t\b|stay\b)", re.I)
+# Only these complete answers are inert enough to answer without the user. Other actions still get a suggestion.
+NOOP_RE = re.compile(r"^\s*(?:no|not yet|keep(?: draft| it a draft| holding)?|wait|hold|skip|later|leave it|ignore|stay)\s*[.!]?\s*$", re.I)
 HIGH_RE = re.compile(r"\b(?:merge[sd]?|deploy(?:ed)?|sign(?:ed)?[ -]?off|approve[sd]?|release[sd]?|publish(?:ed)?|force|ship)\b", re.I)
 GONE_RE = re.compile(r"\b(?:delete[sd]?|remove[sd]?|close[sd]?|discard(?:ed)?|drop(?:ped)?|kill(?:ed)?|abandon(?:ed)?|wipe[sd]?|reset|stop)\b", re.I)
 
 
 def risk(option):
-    """low (reversible, nothing lost), medium (can't be taken back: a delete) or high (a human gate: merge, sign-off, deploy)."""
-    if NOOP_RE.match(option):
-        return "low"
+    """low (inert), medium (needs confirmation), or high (a human gate)."""
     if HIGH_RE.search(option):
         return "high"
-    return "medium" if GONE_RE.search(option) else "low"
+    if GONE_RE.search(option):
+        return "medium"
+    return "low" if NOOP_RE.fullmatch(option) else "medium"
 
 
 def settings():
@@ -144,9 +144,6 @@ def tally(kind, options, recs):
         i = match(label, options) if label is not None else None
         if i is not None:
             counts[i] += 1
-    for e in audit_log():  # an undone auto answer is a vote against what it chose
-        if e.get("kind") == kind and e.get("undone") and (i := match(e.get("choice", ""), options)) is not None:
-            counts[i] = max(0, counts[i] - 1)
     return counts, n
 
 
@@ -310,7 +307,7 @@ def act(rec_id, prop, text, key=None, ws=()):
 
 
 def undo(aid):
-    """Take back an auto answer: mark it undone (calibration counts it a miss) and ask the user the question again."""
+    """Reask an auto answer, then record the user's correction for calibration."""
     log = audit_log()
     hit = [e for e in log if e.get("id") == aid and e.get("act") == "auto"]
     if not hit:
@@ -318,14 +315,14 @@ def undo(aid):
     e = hit[0]
     if e.get("undone"):
         return e
-    e["undone"] = int(time.time())
-    tmp = STATE / "autonomy.jsonl.tmp"
-    tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
-    os.replace(tmp, STATE / "autonomy.jsonl")
     import greenlight  # lazily: its import reads config
     q, opts = decisions.split_options(e["text"])
     greenlight.ping(f"Undo: greenlight answered {e['choice']!r} for you; it's yours now.\n{q}\nOptions: {' | '.join(opts)}",
                     e.get("key"), e.get("ws") or (), e["kind"], ask=True)
+    e["undone"] = int(time.time())
+    tmp = STATE / "autonomy.jsonl.tmp"
+    tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
+    os.replace(tmp, STATE / "autonomy.jsonl")
     return e
 
 
