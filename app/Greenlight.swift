@@ -5653,13 +5653,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     // Windows answer out of order: only the newest ask is heard, so the window you left can't win over the one you're in. tick asks
     // again only once an answer came back empty (a page still loading), never over one on its way, so a slow page isn't starved.
     weak var focusWin: NSWindow?  // the window noteFocus last asked: the one Chief's scope is about
-    var focusAsked = 0, focusInFlight = false, focusAskedAt = Date.distantPast, pendingSince = Date.distantPast
+    var focusAsked = 0, focusInFlight = false, focusAskedAt = Date.distantPast
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
     /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
-        if !greenlight.scopePending { pendingSince = Date() }
         focusAsked += 1; focusWin = w; focusAskedAt = Date(); focusInFlight = true
         let asked = focusAsked
         greenlight.scopePending = true  // the watch waits for the answer rather than ask with the window you left
@@ -6678,9 +6677,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
         syncPick()  // ahead of the watch: a pick that changed holds it until the window answers with the new scope
-        if greenlight.scopePending {  // gone, or 10s without an answer (a hung or crashed page): stop waiting, with the last scope it had
-            if focusWin?.isVisible != true || Date().timeIntervalSince(pendingSince) > 10 { greenlight.scopePending = false }
-            else if !focusInFlight, Date().timeIntervalSince(focusAskedAt) > 2, let w = focusWin { noteFocus(w) }  // it answered empty: ask again
+        // The window you're in hasn't said what it shows: ask again 2s after an empty answer (a page still loading), or 10s into one
+        // that hangs. The watch holds meanwhile: no other scope is the window you're in (the last one may be another project's).
+        // Gone: every project. ponytail: a crashed page holds it until you switch windows; reload it (no terminal webview has a
+        // navigationDelegate for webViewWebContentProcessDidTerminate yet) if that turns up
+        if greenlight.scopePending {
+            if focusWin?.isVisible != true { greenlight.scopePending = false }
+            else if Date().timeIntervalSince(focusAskedAt) > (focusInFlight ? 10 : 2), let w = focusWin { noteFocus(w) }
         }
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
