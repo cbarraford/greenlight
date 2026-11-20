@@ -3750,8 +3750,11 @@ final class Core: ObservableObject {
         let activityAt = lastActive
         gate("check-in", text: "Idle check-in after \(checkInMins) minutes without Greenlight activity; ask what workspace to work on next") { [weak self] ok in
             guard let self, ok, self.checkedIn, self.lastActive == activityAt, self.checkInMins > 0,
-                  Date().timeIntervalSince(self.lastActive) > Double(self.checkInMins * 60),
-                  self.run == nil, self.clearing == 0, self.queue.isEmpty else { return }
+                  Date().timeIntervalSince(self.lastActive) > Double(self.checkInMins * 60) else { return }
+            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else {
+                self.checkedIn = false  // the timer can retry after the competing work finishes
+                return
+            }
             self.checkInTurn()
         }
     }
