@@ -951,9 +951,10 @@ def park(name, on):
     return {"ok": True, "goal": goal}
 
 
-def run(name, prompt):
+def run(name, prompt, worktree_id=None):
     """Launch an agent in the workspace with `prompt`. Refuses while its agent is working or waiting on an answer."""
-    w, ag = next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
+    w, ag = next(((w, ag) for w, ag in live_agents().values() if w["worktreeId"] == worktree_id), (None, None)) if worktree_id else \
+        next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
     if not w:
         return {"error": f"no workspace {name}"}
     if ag.get("state") == "working":
