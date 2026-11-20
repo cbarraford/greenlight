@@ -438,19 +438,27 @@ func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin")
 func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
+/// Read once per launch, then kept in memory: voice mode needs its key every sentence, and each Keychain read can ask your password.
+/// ponytail: a denied read stays denied until you relaunch or set the key again
 @discardableResult
 func keychain(_ account: String, set value: String? = nil) -> String? {
+    keyLock.lock(); defer { keyLock.unlock() }
     let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "greenlight", kSecAttrAccount as String: account]
     if let value {
         SecItemDelete(q as CFDictionary)
         if !value.isEmpty { SecItemAdd(q.merging([kSecValueData as String: Data(value.utf8)]) { $1 } as CFDictionary, nil) }
+        keys[account] = .some(value.isEmpty ? nil : value)
         return value
     }
+    if let k = keys[account] { return k }
     var out: AnyObject?
-    guard SecItemCopyMatching(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out) == errSecSuccess,
-          let d = out as? Data else { return nil }
-    return String(decoding: d, as: UTF8.self)
+    let k = SecItemCopyMatching(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out) == errSecSuccess
+        ? (out as? Data).map { String(decoding: $0, as: UTF8.self) } : nil
+    keys[account] = .some(k)
+    return k
 }
+private var keys: [String: String?] = [:]
+private let keyLock = NSLock()
 
 /// Transcribes a recorded file; done(text, error) runs on any thread, exactly once.
 func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -> Void) {
@@ -1688,6 +1696,7 @@ final class Speech {
 
     /// Start Kokoro if it's the voice (at launch, and on picking it); a warm-up line loads the model before the first real one.
     func warm() {
+        if kind == "eleven" { q.async { _ = keychain("elevenlabs") } }  // any Keychain prompt at launch, not with the first line (which would go to Apple's voice)
         guard kind == "kokoro", proc == nil else { return }
         let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
         guard let uv, let script = Bundle.main.path(forResource: "kokoro", ofType: "py") else { status = "Kokoro needs uv (brew install uv)"; return }
