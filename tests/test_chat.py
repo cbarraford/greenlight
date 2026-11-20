@@ -193,6 +193,66 @@ def test_stop_shell(tmp_path, monkeypatch):
         parent.kill()
 
 
+# The gpt-live-24h-cost bug: asked what GPT-Live cost over the last 24 hours, the chat created a workspace and
+# dispatched an agent to look it up. This fake `claude -p` does exactly that, through greenlight.py and a fake Orca
+# CLI that logs every call, so the test sees whether a workspace was really made.
+FAKE_DISPATCH = """#!/usr/bin/env python3
+import json, subprocess, sys
+sys.stdin.read()
+gl = sys.argv[0].rsplit("/", 1)[0] + "/greenlight.py"
+p = subprocess.run([sys.executable, %r, "ade", "worktree", "create", "--name", "gpt-live-24h-cost", "--repo", "greenlight",
+                    "--comment", "Report GPT-Live's 24h spend", "--agent", "claude", "--prompt", "Query org costs for 24h"],
+                   capture_output=True, text=True)
+reply = ("Created gpt-live-24h-cost" if p.returncode == 0 else "Answered directly: " + p.stderr.strip())
+print(json.dumps({"type": "assistant", "session_id": "s1", "message": {"content": [{"type": "text", "text": reply}]}}))
+print(json.dumps({"type": "result", "session_id": "s1", "result": reply, "is_error": False, "duration_ms": 10}))
+"""
+FAKE_ORCA = """#!/usr/bin/env python3
+import json, sys
+open(sys.argv[0] + ".log", "a").write(json.dumps(sys.argv[1:]) + "\\n")
+print(json.dumps({"ok": True, "result": {"worktree": {"id": "w1"}}}))
+"""
+
+
+def dispatch_turn(tmp_path, monkeypatch, msg):
+    scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
+    fake, orca = tmp_path / "claude", tmp_path / "orca"
+    fake.write_text(FAKE_DISPATCH % os.path.join(scripts, "greenlight.py"))
+    orca.write_text(FAKE_ORCA)
+    for f in (fake, orca):
+        f.chmod(f.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
+    monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
+    monkeypatch.delenv("GREENLIGHT_REQUEST", raising=False)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn(msg, "claude-haiku-5-5", None)
+    log = str(orca) + ".log"
+    calls = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+    return [e["text"] for e in events if e["e"] == "done"], calls
+
+
+def test_billing_question_creates_no_workspace(tmp_path, monkeypatch):
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "How much has GPT-Live cost us in the last 24 hours?")
+    assert not any(c[:2] == ["worktree", "create"] for c in calls), calls
+    assert len(done) == 1 and done[0].startswith("Answered directly: refused"), done
+
+
+def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "Add a 24h GPT-Live cost meter to the dashboard")
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+    assert done == ["Created gpt-live-24h-cost"], done
+
+
+def test_prompt_answers_questions_directly():
+    p = chat.PROMPT
+    assert "only asks" in p and "never create a workspace to answer one" in p
+    assert "investigations" not in p  # the old rule sent every investigation to a workspace
+
+
 if __name__ == "__main__":
     test_norm()
     print("ok")

@@ -77,7 +77,8 @@ def agent(a, engine, log):
     own = engine == provider(a)  # a model name only means something to its own harness
     try:
         cmd, text = harness.argv(engine, a["prompt"], model=own and a.get("model"), effort=own and a.get("effort"))
-        p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True,
+        env = {**os.environ, "GREENLIGHT_REQUEST": a["prompt"]}  # a read-only automation can't create workspaces (greenlight.read_only)
+        p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(a.get("timeout") or 120) * 60)
         out, code = p.stdout, p.returncode
     except subprocess.TimeoutExpired as e:

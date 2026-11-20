@@ -148,6 +148,37 @@ def orca_cli(*args, timeout=120):
     return out["result"]
 
 
+# A request that only asks (status, research, billing lookups, inspections) is answered where it's asked, never
+# by a new workspace; a workspace is for a change. GREENLIGHT_REQUEST is the user's message (chat.py) or the
+# automation's prompt (auto.py); `ade worktree create` refuses while it's read-only. Unclear means a change: allowed.
+ASKS_RE = re.compile(r"\?|^\W*(what|what's|whats|how|why|when|where|who|which|is|are|was|were|does|do|did|can|could|has|have|"
+                     r"should|will|would|any|status|check|look|lookup|research|investigate|inspect|find|show|list|tell|"
+                     r"summari[sz]e|explain|compare|give me|report|see|audit)\b", re.I)
+CHANGES_RE = re.compile(r"\b(fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|"
+                        r"set|refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|"
+                        r"reply|comment|open|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|"
+                        r"restart|kill|stop|start|run|launch|dispatch|retry|re-?run|draft|publish|resolve|tag|release|save|"
+                        r"record|archive|clean|turn (on|off)|hold|park|rotate|revoke|pay|buy|order|schedule|book|undo|"
+                        r"apply|land|split|squash|rewrite|document|test)\b", re.I)  # base forms only: "is !42 merged?" asks
+READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
+                     "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
+                     "glab / gh, the APIs and files on this host) instead of creating a workspace. Workspaces are for "
+                     "requests that change something (code, docs, settings, an external system).")
+
+
+def read_only(text):
+    """True when the request only asks: a question or lookup with no change in it."""
+    # an answer to a ping is judged on its own words: "yes" to "recreate it?" asks nothing, so it's a change
+    text = re.sub(r'^\s*\(Replying to your (question|notification): ".*?"\)\n', "", text or "", flags=re.S)
+    return bool(text.strip()) and bool(ASKS_RE.search(text)) and not CHANGES_RE.search(text)
+
+
+def create_refused(args):
+    """READ_ONLY_REFUSAL when args create a workspace for a read-only request, else None."""
+    a = [x for x in args if not x.startswith("-")][:2]
+    return READ_ONLY_REFUSAL if a == ["worktree", "create"] and read_only(os.environ.get("GREENLIGHT_REQUEST", "")) else None
+
+
 def gl(path):
     return json.loads(run(["glab", "api", path], timeout=45, tries=3))  # worst case ~2.4 min
 
@@ -925,6 +956,9 @@ def main():
         resolve(sys.argv[2], " ".join(sys.argv[3:]) or "no longer needed")
         return
     if cmd == "ade":  # greenlight.py ade worktree set --worktree id:<id> --comment "<goal>"
+        if why := create_refused(sys.argv[2:]):
+            print(why, file=sys.stderr)
+            sys.exit(3)
         print(json.dumps(orca(*[a for a in sys.argv[2:] if a != "--json"]), indent=1))
         return
     if cmd == "signoff":  # greenlight.py signoff <project> <iid> <stage>: the user signed off a custom stage on this MR
