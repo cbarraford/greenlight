@@ -41,8 +41,8 @@ def cli(*args, stdin=""):
 KD = "\nOptions: mark ready | keep draft"
 
 # risk: only inert answers are low; actions need confirmation; human gates are high
-assert [autonomy.risk(o) for o in ("keep draft", "keep holding", "keep workspace")] == ["low"] * 3
-assert [autonomy.risk(o) for o in ("no", "not yet", "mark ready", "set 3.22", "nudge it", "keep the branch and delete workspace")] == ["medium"] * 6
+assert [autonomy.risk(o) for o in ("keep draft", "keep workspace")] == ["low"] * 2
+assert [autonomy.risk(o) for o in ("no", "not yet", "keep holding", "mark ready", "set 3.22", "nudge it", "keep the branch and delete workspace")] == ["medium"] * 7
 assert autonomy.risk("keep draft and merge") == "high"
 assert [autonomy.risk(o) for o in ("merge", "merge anyway", "deployed, sign off all", "approve")] == ["high"] * 4
 assert [autonomy.risk(o) for o in ("delete", "delete all 3", "close it")] == ["medium"] * 3
@@ -161,6 +161,18 @@ try:
 finally:
     greenlight.ping = original_ping
 assert not autonomy.audit_log()[0].get("undone")  # retry must still be possible
+original_asked = decisions.asked
+decisions.asked = lambda *a, **kw: (_ for _ in ()).throw(OSError("decision record unavailable"))
+before = len(outbox())
+try:
+    try:
+        autonomy.undo(res["id"])
+        assert False, "unrecorded re-ask must fail"
+    except OSError:
+        pass
+finally:
+    decisions.asked = original_asked
+assert len(outbox()) == before and not autonomy.audit_log()[0].get("undone")
 def ping_with_concurrent_audit(*args, **kw):
     result = original_ping(*args, **kw)
     autonomy.audit({"act": "held", "kind": "watch", "text": "another process wrote this while Undo reasked"})

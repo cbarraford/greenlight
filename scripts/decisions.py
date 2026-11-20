@@ -119,7 +119,7 @@ def record(text, via, key=None, ws=(), kind=None, also=""):
     question, options = split_options(text)
     sits = situations(ws, f"{question}\n{also}")
     now = time.time()
-    rec = {"id": f"{int(now * 1000):x}-{os.getpid():x}", "ts": int(now), "via": via, "key": key, "kind": kind_of(kind, key, sits),
+    rec = {"id": f"{time.time_ns():x}-{os.getpid():x}", "ts": int(now), "via": via, "key": key, "kind": kind_of(kind, key, sits),
            "question": question, "options": options}
     # one workspace: its situation. Several: what they share (the repo, the step), and each one's own under "workspaces"
     rec |= {f: (v.pop() if len(v := {s[f] for s in sits}) == 1 else None) for f in FIELDS}
@@ -142,6 +142,11 @@ def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None
             if not is_open(r) or r["via"] != via:
                 continue
             if via == "ping" and r["question"] == rec["question"] and r["key"] == key:
+                r["kind"] = rec["kind"]
+                if proposal:
+                    r["proposal"] = proposal
+                else:
+                    r.pop("proposal", None)
                 return r["id"]
             if (via == "ping" and key and r["key"] == key) or (via == "chat" and r.get("chat") == chat):
                 r["closed"] = "superseded"
@@ -196,7 +201,8 @@ def turn_kind(message):
 def said(reply, chat=None, kind=None):
     """Greenlight's reply in the menubar chat: a question when it ends with an Options line (the app puts it in the inbox).
     kind: turn_kind() of the message it answered."""
-    return asked(reply, via="chat", chat=chat, kind=kind) if reply and split_options(reply)[1] else None
+    visible = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
+    return asked(visible, via="chat", chat=chat, kind=kind) if split_options(visible)[1] else None
 
 
 def dismiss(text, key=None, ping=True):

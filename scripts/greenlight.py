@@ -1161,6 +1161,13 @@ def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
             return {"auto": prop["choice"], "id": a["id"]}
     if prop and prop["tier"] == 2:
         ev["suggest"] = {f: prop[f] for f in ("choice", "index", "prob", "count", "agree")}
+    if ask:
+        # Undo must be able to link the user's eventual answer before the app sees this re-ask.
+        rid = decisions.asked(text, "ping", key, ws, kind)
+        outbox(ev)
+        if key:
+            pinged(pinged() | {key: int(time.time())})
+        return {"asked": rid}
     outbox(ev)
     rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
     if key:

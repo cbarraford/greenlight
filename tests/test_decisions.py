@@ -106,6 +106,15 @@ main, other = decisions.said("Merge fix-001?" + O), decisions.said("Merge fix-00
 assert decisions.heard("hold", chat="chat-1")["id"] == other and decisions.said("Merge fix-001 now?" + O, chat="chat-1")
 decisions.forget_chat(chat="chat-1")
 assert [r for r in recs() if r["id"] == main][0]["closed"] is None and decisions.heard("merge")["id"] == main
+# Chief's trailing dashboard highlight tag is hidden in the app and cannot hide the Options line from the record.
+tagged = decisions.said("Work on fix-002 next?\nOptions: fix-002 | later\n[hexes: fix-002]", kind="check-in")
+assert tagged and recs()[-1]["kind"] == "check-in" and recs()[-1]["options"] == ["fix-002", "later"]
+# Reusing an open ping updates the proposal to the one actually acted on.
+old = {"choice": "later", "index": 1, "prob": 0.7, "tier": 2}
+new = {"choice": "fix-002", "index": 0, "prob": 0.96, "tier": 1}
+rid = decisions.asked("Work next?\nOptions: fix-002 | later", key="fix-002", kind="agent-stuck", proposal=old)
+assert decisions.asked("Work next?\nOptions: fix-002 | later", key="fix-002", kind="agent-stuck", proposal=new) == rid
+assert next(r for r in recs() if r["id"] == rid)["proposal"] == new
 
 # AskUserQuestion (an on-demand run): the PostToolUse hook gets the questions and the answers at once
 ask = {"questions": [

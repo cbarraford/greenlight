@@ -69,7 +69,7 @@ PREFLIGHT_RUBRICS = {
 }
 
 # Only these complete answers are inert enough to answer without the user. Other actions still get a suggestion.
-NOOP_RE = re.compile(r"^\s*(?:keep(?: draft| it a draft| workspace| the workspace| holding)?|wait|hold|skip|later|leave it|ignore|stay)\s*[.!]?\s*$", re.I)
+NOOP_RE = re.compile(r"^\s*(?:keep draft|keep it a draft|keep workspace|keep the workspace)\s*[.!]?\s*$", re.I)
 HIGH_RE = re.compile(r"\b(?:merge[sd]?|deploy(?:ed)?|sign(?:ed)?[ -]?off|approve[sd]?|release[sd]?|publish(?:ed)?|force|ship)\b", re.I)
 GONE_RE = re.compile(r"\b(?:delete[sd]?|remove[sd]?|close[sd]?|discard(?:ed)?|drop(?:ped)?|kill(?:ed)?|abandon(?:ed)?|wipe[sd]?|reset|stop)\b", re.I)
 
