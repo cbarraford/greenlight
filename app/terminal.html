@@ -1995,6 +1995,7 @@ $("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files 
   const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
 let picked;  // Choose folder…'s answer, from the app
 window.term = {
+  focus: () => cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : null,  // for Chief: the tab you're on
   mode(m, b, f){ mode = m; chrome = {bg: b, fg: f}; paint() },  // the app's Auto/Light/Dark: chrome only, CSS
   only(o){ ONLY = o; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
   picked: d => picked?.(d),

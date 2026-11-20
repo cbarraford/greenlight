@@ -642,6 +642,31 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
           "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
 }
 
+/// The stage's card for one workspace: its MR, where it is and what's next, from the dashboard's snapshot.
+func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
+    let s = { (k: String) in p[k] as? String ?? "" }, mr = p["mr"] as? [String: Any] ?? [:]
+    let label = ["needs": "Needs you", "crashed": "Crashed", "raised": "Your move", "working": "Working", "queued": "Queued", "quiet": "Waiting on others", "done": "Done"]
+    let icon = ["needs": "🟠", "crashed": "🔴", "raised": "🟡", "working": "🔵", "queued": "⚪️", "quiet": "🟣", "done": "✅"]
+    let items: [[String: String]] = [
+        ["label": [mr["ref"] as? String, mr["title"] as? String].compactMap { $0 }.joined(separator: " "),
+         "detail": [mr["draft"] as? Bool == true ? "draft" : nil, (mr["pipeline"] as? String).map { "CI \($0)" }, mr["conflicts"] as? Bool == true ? "conflicts" : nil].compactMap { $0 }.joined(separator: " · ")],
+        ["label": label[s("state")] ?? s("state"), "detail": s("why")],
+        ["label": "Next: " + s("step").replacingOccurrences(of: "_", with: " "), "detail": s("action")],
+        ["label": "Goal", "detail": s("goal")],
+    ].filter { !($0["label"]!.isEmpty || $0["label"] == "Goal" && $0["detail"]!.isEmpty) }
+    return ["title": s("name"), "kind": "list", "icon": icon[s("state")] ?? "", "stat": "", "items": items]
+}
+
+/// The window you were last in, in words for Chief: a terminal's project and tab, or the dashboard's open workspace.
+func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String {
+    let s = { (k: String) in (o[k] as? String).map { String($0.prefix(200)) } ?? "" }
+    if id != nil {
+        let tab = s("name").isEmpty ? "" : ", on the tab for workspace \(s("name")) (\(s("path"))\(s("mr").isEmpty ? "" : ", \(s("mr"))"))"
+        return "a Basement terminal window" + (project.isEmpty ? "" : " showing \(project)") + tab
+    }
+    return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
+}
+
 /// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
 func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
     let low = reply.lowercased()
@@ -658,11 +683,12 @@ func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
 /// Apple's on-device model picks (local, no key; only real names, an enum of them). Without Apple Intelligence: the named ones.
 func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([String]) -> Void) {
     let named = namedHexes(reply, pucks)
-    let ws = pucks.prefix(60).compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
-        guard let n = p["name"] as? String else { return nil }
+    var seen = Set<String>()  // the same workspace twice (a stack's members, two hosts) would be a duplicate enum case
+    let ws = pucks.compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
+        guard let n = p["name"] as? String, seen.insert(n).inserted else { return nil }
         let mr = p["mr"] as? [String: Any]
         return (n, [n, mr?["ref"] as? String, (mr?["title"] as? String).map { String($0.prefix(60)) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
-    }
+    }.prefix(60)
     guard !ws.isEmpty, SystemLanguageModel.default.isAvailable else { return done(named) }
     Task {
         var picked: [String] = []
@@ -679,7 +705,7 @@ func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([Stri
             picked = try r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
             if picked.count > 3 && picked.count >= ws.count { picked = [] }  // all of them is about none in particular
         } catch { NSLog("pick: %@", "\(error)") }
-        let out = named + picked.filter { n in !named.contains(n) && ws.contains { $0.0 == n } }
+        let out = (named + picked.filter { n in ws.contains { $0.0 == n } }).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         await MainActor.run { done(out) }
     }
 }
@@ -820,6 +846,10 @@ final class Voice: NSObject, ObservableObject {
         stageWeb.evaluateJavaScript("(s => { \(delegate.themeVars()) })(document.documentElement.style); \(f)(...\(a))")
     }
     func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
+    func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
+        guard on else { return }
+        drawSeq += 1; shown = true; js("stage.spec", [spec])
+    }
 
     override init() {
         super.init()
@@ -1373,6 +1403,10 @@ final class Core: ObservableObject {
                 + new.map(\.text).joined(separator: "\n") + "\n\n" + text
             for i in attached.indices { attached[i].sent = true }
         }
+        if !focus.isEmpty && focus != focusSent {  // only when it changed: the chat session remembers the last one
+            payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
+            focusSent = focus
+        }
         start(Run(shown ?? text), "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin: payload)
     }
 
@@ -1396,6 +1430,7 @@ final class Core: ObservableObject {
 
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
+    var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
@@ -3647,6 +3682,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var timer: Timer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
+        }
         greenlight.showDockIcon()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -3792,9 +3830,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if let v = viewWindows.first(where: { $0.value.contentView === web })?.key { return #"{"only":"\#(v)"}"# }
         return #"{"away":[\#(viewWindows.keys.map { "\"\($0)\"" }.joined(separator: ","))]}"#
     }
+    var picked: [String] = []  // one Chief, one set of lit hexes: every window shows the same, a window that (re)loads gets them too
     func pick(_ names: [String]) {
-        guard let d = try? JSONSerialization.data(withJSONObject: names), let j = String(data: d, encoding: .utf8) else { return }
-        webs.forEach { $0.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))") }
+        picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        webs.forEach(pushPicks)
+    }
+    /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
+    /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
+    func noteFocus(_ w: NSWindow) {
+        guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
+        let id = termWins.first { $0.value === w }?.key
+        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focus && term.focus())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
+            guard let self else { return }
+            let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
+            let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
+            guard line != self.greenlight.focus else { return }
+            self.greenlight.focus = line
+            let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
+            if let k = key.1, let p = self.greenlight.pucks.first(where: { $0[key.0] as? String == k }) { self.greenlight.voice.show(workspaceSpec(p)) }
+        }
+    }
+    func pushPicks(_ web: WKWebView) {
+        guard let d = try? JSONSerialization.data(withJSONObject: picked), let j = String(data: d, encoding: .utf8) else { return }
+        web.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))")
     }
     func pushMode() { webs.forEach { $0.evaluateJavaScript("window.mc && mc.mode(\(modeJSON(for: $0)))") } }
     lazy var window: NSWindow = {
@@ -3947,13 +4005,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "ready" {
             from.evaluateJavaScript("mc.mode(\(modeJSON(for: from)))")
             if !dashSnap.isEmpty { from.evaluateJavaScript("mc.update(\(dashSnap))") }
-            pushBuilds()
+            pushBuilds(); pushPicks(from)
             if from === web(showing: "hex") { greenlight.attached = [] }  // a reloaded hive starts with an empty dock
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
+        if cmd == "unpick" { pick([]) }  // a click on a lit hex clears them in every window
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
@@ -3993,6 +4052,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "rescan" { rescan() }
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
+        if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
         if cmd == "page", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
@@ -5045,6 +5105,15 @@ func selfTest() {
                                      ["name": "octo/dashboard"], ["name": "acme/mr-533"]]
     check("voice: hexes a reply names outright, by ref or a distinctive name, never a plain word or a longer number",
           namedHexes("Merge [!5339](u) first, then lifecycle-advice; the dashboard can wait. #180 too.", hexPucks) == ["acme/mr-5339", "octo/lifecycle-advice"])
+    let wsCard = workspaceSpec(["name": "mr-5339", "state": "needs", "why": "approve it", "step": "review_bot", "action": "assign the bot", "goal": "",
+                                "mr": ["ref": "!5339", "title": "receipts", "pipeline": "failed", "draft": false]])
+    check("focus: the stage's card for the workspace you switched to",
+          wsCard["title"] as? String == "mr-5339" && (wsCard["items"] as? [[String: String]])?.map { $0["label"]! } == ["!5339 receipts", "Needs you", "Next: review bot"]
+          && (wsCard["items"] as? [[String: String]])?.first?["detail"] == "CI failed")
+    check("focus: Chief hears which window and workspace you were in",
+          focusLine(terminal: 2, project: "Platform", ["name": "mr-5339", "path": "/w/mr-5339", "mr": "!5339"]) == "a Basement terminal window showing Platform, on the tab for workspace mr-5339 (/w/mr-5339, !5339)"
+          && focusLine(terminal: nil, project: "", ["page": "acme/mr-5339", "view": "overview"]) == "the dashboard, with workspace acme/mr-5339 open"
+          && focusLine(terminal: nil, project: "", ["view": "list"]) == "the dashboard (list)")
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     var bufs = 0, ended = false, sc: AVAudioConverter?
