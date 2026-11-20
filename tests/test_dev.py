@@ -102,4 +102,16 @@ assert all(plistlib.loads(plistlib.dumps(p)) == p for p in pl.values()) and list
 argv = dev.on_host({"host": "box"}, "true")  # everything of ours rides that socket
 assert argv[0] == "/usr/bin/ssh" and f"ProxyCommand=/usr/bin/nc -U '{dev.HOME}/ssh/box.sock'" in argv and argv[-2:] == ["box", "true"]
 assert dev.on_host({"host": "local"}, "true") == ["/bin/sh", "-c", "true"]
+# a failed build: a compiler error waits for the sources to change; any other failure (build.sh's signing) is tried again
+dev.banner = lambda *a: banners.append(a); banners = []
+r = dev.Copy("retry"); (r.src / "app").mkdir(parents=True); runs = r.dir / "runs"
+(r.src / "app/Greenlight.swift").write_text("let a = 1\n")
+(r.src / "app/build.sh").write_text(f'echo x >> {runs}; echo "build.sh: error: signing with \\"Apple Development: T (X)\\" failed" >&2; exit 1\n')
+for _ in range(2):
+    dev.make({}, r, {})
+assert runs.read_text().count("x") == 2 and len(banners) == 1, (runs.read_text(), banners)  # built again, one banner
+(r.src / "app/build.sh").write_text(f'echo x >> {runs}; echo "Greenlight.swift:1:5: error: nope"; exit 1\n')
+for _ in range(2):
+    dev.make({}, r, {})
+assert runs.read_text().count("x") == 3 and len(banners) == 1, (runs.read_text(), banners)  # the same sources aren't built again
 print("test_dev ok")
