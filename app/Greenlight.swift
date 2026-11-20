@@ -1213,7 +1213,8 @@ struct StageWeb: NSViewRepresentable {
 /// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions.
 struct VoiceButtons: View, Looked {
     @ObservedObject var v: Voice
-    var pop: (() -> Void)? = nil  // the chat header's pop-out, drawn as one more knob
+    var out = false  // the chat is in its own window
+    var pop: (() -> Void)? = nil  // the chat header's pop-out (or put back), drawn as one more knob
     var body: some View {
         HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
             if v.on {
@@ -1225,7 +1226,8 @@ struct VoiceButtons: View, Looked {
             Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on) }
                 .buttonStyle(.plain).help(v.on ? "End voice mode (or say “goodbye”)" : "Voice mode: talk with it hands-free")
                 .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
-            if let pop { knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
+            if let pop { out ? knob("rectangle.righthalf.inset.filled", "Put back in the main window's right pane", label: "Put back in the main window", pop)
+                : knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
         }
     }
     func knob(_ icon: String, _ help: String, label: String? = nil, _ act: @escaping () -> Void) -> some View {
@@ -1634,7 +1636,7 @@ final class Core: ObservableObject {
     var shortcut: String { shortcutName(voiceMods, voiceKey) }
     var popoverShown: () -> Bool = { false }  // the chat visible and in front
     @Published var chatOut = ud.bool(forKey: "chatOut") { didSet { ud.set(chatOut, forKey: "chatOut") } }  // in its own window, not the right pane
-    var popChat: () -> Void = {}
+    var popChat: (Bool) -> Void = { _ in }  // true: its own window; false: back in the right pane
     var openPage: (String) -> Void = { _ in }  // show a workspace's page in the dashboard (the inbox's Open workspace)
     @Published var missed = 0  // replies and pings that landed while the chat was hidden: the dashboard toggle's badge
     @Published var greenlightEveryLoading = false  // the schedule is being read; greenlightEveryNote says why the last read or save failed
@@ -3823,7 +3825,7 @@ struct ChatView: View, Looked {
                 title
                 Spacer(minLength: Theme.sp2)
                 meta
-                VoiceButtons(v: c.voice, pop: c.chatOut ? nil : { c.popChat() })
+                VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) })
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
             if lk.id == "editorial" { masthead }
@@ -4664,7 +4666,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         item.button?.action = #selector(click)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         greenlight.popoverShown = { [weak self] in NSApp.isActive && self?.chatShown == true }
-        greenlight.popChat = { [weak self] in self?.popChat(out: true) }
+        greenlight.popChat = { [weak self] in self?.popChat(out: $0) }
         greenlight.openPage = { [weak self] name in  // as the page's own openPage message
             guard let self, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil else { return }
             self.greenlight.inboxOpen = false
@@ -5163,6 +5165,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !out { chatWindow.orderOut(nil) }
         chatHidden = false
         placeChat()
+        if !out { window.makeKeyAndOrderFront(nil) }  // back on the right wall: show it there
     }
 
     /// Puts the chat view where it belongs: the pane, or its window; hidden if `chatHidden`.
