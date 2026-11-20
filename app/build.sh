@@ -49,13 +49,21 @@ security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
 kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
 case " ${kcs[*]} " in *" $kc "*) ;; *) security list-keychains -d user -s "${kcs[@]}" "$kc" ;; esac
 id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
-# Designated by the cert alone, not the bundle id too: a Keychain key trusts the apps it lets in by this requirement, so with
-# the id in it, every workspace's dev copy (its own id, see scripts/dev.py) asked for your password again. Code that could
-# sign with this cert could already claim Greenlight's id, so the key lets in nothing new. (`identifier` takes no wildcard,
-# and the Keychain wouldn't match a copy on `info[CFBundleIdentifier] = "dev.greenlight.app*"`: tried on macOS 26.5.)
-if [ -z "$id" ]; then codesign -fs - "$app"
-else codesign -fs "$id" --keychain "$kc" -r="designated => certificate leaf = H\"$id\"" "$app" ||
-  { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
+# The Keychain pins a key Greenlight saves to the build that saved it, unless the build has a Team ID: its partition list says
+# `cdhash:<this build>` (seen in a login keychain on macOS 26.5), so every rebuild of Greenlight or of a dev copy asked for your
+# password again, for each key it read. An Apple Development cert (free with an Apple ID: Xcode → Settings → Accounts → Manage
+# Certificates) gives the build one, and the key is pinned to `teamid:` instead, so set one up and every build after it uses it.
+# Either way the requirement names the signer, not the bundle id: every workspace's dev copy has its own id (scripts/dev.py), and
+# Keychain entries trust apps by this requirement. Code that could sign as that signer could already claim Greenlight's id, so
+# this lets in nothing new. (`identifier` takes no wildcard, and the Keychain didn't match a copy on `info[CFBundleIdentifier]`.)
+apple=$(security find-identity -v -p codesigning | awk '/"Apple Development: /{print $2; exit}' || true)
+team=$([ -n "$apple" ] && codesign -fs "$apple" "$app" 2>/dev/null && codesign -dv "$app" 2>&1 | sed -n 's/^TeamIdentifier=\([A-Z0-9]\{10\}\)$/\1/p' || true)
+if [ -n "$team" ] && codesign -fs "$apple" -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$app"; then :
+elif [ -z "$id" ]; then codesign -fs - "$app"
+else
+  [ -z "$apple" ] || echo "build.sh: signing with your Apple Development cert failed; using Greenlight Dev" >&2
+  codesign -fs "$id" --keychain "$kc" -r="designated => certificate leaf = H\"$id\"" "$app" ||
+    { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
