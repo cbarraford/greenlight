@@ -682,7 +682,7 @@ def card_diff(text, pucks, one):
     import subprocess
     base = (one.get("mr") or {}).get("target_branch") or "main"
     try:
-        out = subprocess.run(["git", "-C", one["path"], "diff", "--numstat", f"origin/{base}...HEAD"], capture_output=True, text=True, timeout=0.5).stdout
+        out = subprocess.run(["git", "-C", one["path"], "diff", "--numstat", f"origin/{base}"], capture_output=True, text=True, timeout=0.5).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     files = []
