@@ -1689,6 +1689,13 @@ struct StageWeb: NSViewRepresentable {
     func updateNSView(_ v: WKWebView, context: Context) {}
 }
 
+/// The voice button's help and accessibility label. While a start is under way (its retries take up to ~3 s) a press cancels it, so it says so.
+func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) {
+    on ? ("End voice mode (or say “goodbye”)", "End voice mode")
+        : starting ? ("Starting voice mode… click to cancel", "Cancel starting voice mode")
+        : ("Voice mode: talk with it hands-free", "Start voice mode")
+}
+
 /// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions.
 struct VoiceButtons: View, Looked {
     @ObservedObject var v: Voice
@@ -1702,9 +1709,9 @@ struct VoiceButtons: View, Looked {
             }
             // one style for live and standard chat
             knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
-            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on) }
-                .buttonStyle(.plain).help(v.on ? "End voice mode (or say “goodbye”)" : "Voice mode: talk with it hands-free")
-                .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
+            let t = voiceButtonText(on: v.on, starting: v.starting)
+            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
+                .buttonStyle(.plain).help(t.help).accessibilityLabel(t.label)
             if let pop { out ? knob("rectangle.righthalf.inset.filled", "Put back in the main window's right pane", label: "Put back in the main window", pop)
                 : knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
         }
@@ -1741,7 +1748,8 @@ final class Voice: NSObject, ObservableObject {
     var claimedAt = 0.0  // when this app's voice mode started, for voiceYields (another Greenlight starting later takes over)
     var bargeIn: Bool { ud.object(forKey: "voiceBargeIn") as? Bool ?? true }
     var pause: Double { ud.object(forKey: "voicePause") as? Double ?? 1.1 }  // seconds of quiet that end your turn; hardware and rooms differ
-    let engine = AVAudioEngine(), player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
+    var engine = AVAudioEngine()  // replaced by freshEngine() after a start that failed
+    let player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
     let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!, micFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
     let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
     var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
@@ -1791,30 +1799,63 @@ final class Voice: NSObject, ObservableObject {
             self.stopAll()
             self.core?.msgs.append(Msg(.note, "Voice mode moved to \(n.object as? String ?? "another Greenlight"), so this one stopped listening: two would both answer you, over each other."))
         }
-        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            guard let self, self.on else { return }  // a headset in or out: the engine stopped itself
-            do { try self.startEngine(); self.listen() } catch { self.stopAll() }  // listen() is a no-op on GPT-Live, whose socket stays up
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] n in
+            guard let self, self.on, n.object as AnyObject? === self.engine else { return }  // a headset in or out: the engine stopped itself
+            self.restart()
+        }
+    }
+    /// The engine stopped itself (a headset in or out): start it again. If it won't, voice mode stops and says so, and the next start
+    /// gets a new engine. Not a new one now: play() reads the engine off the main thread while voice mode is on.
+    func restart() {
+        do { try startEngine(); listen() }  // listen() is a no-op on GPT-Live, whose socket stays up
+        catch {
+            NSLog("voice: audio restart failed: %@", "\(error)")
+            core?.msgs.append(Msg(.note, "Voice mode stopped: the audio didn't restart after the devices changed (\(error.localizedDescription)). Start it again to pick it up."))
+            stopAll()
+            staleEngine = true
         }
     }
 
-    func toggle() { on ? stopAll() : start() }
-    func start() { start(tries: 3) }
-    func start(tries: Int) {
-        guard !on, core?.recording == nil else { return }  // dictation has the mic
+    func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
+    @Published var starting = false  // a start (and its retries) under way: the voice button shows it, and a press cancels it
+    var startGen = 0  // stopAll() bumps it, which ends a start still under way
+    var staleEngine = false  // its restart failed: the next start begins on a new engine
+    func start() {
+        guard !on, !starting else { return }
+        starting = true; startGen += 1
+        start(attempt: 0, gen: startGen)
+    }
+    /// Waits before each retry of a start that failed: about 3 s in all, then the error is shown.
+    static let startRetries = [0.3, 0.8, 1.5]
+    func start(attempt: Int, gen g: Int) {
+        guard g == startGen else { return }  // cancelled
+        guard !on, core?.recording == nil else { starting = false; return }  // dictation has the mic
         let live = Speech.shared.kind == "live"  // GPT-Live hears you itself: Speech Recognition isn't needed
         AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
+            guard g == self.startGen else { return }
             guard ok, st == .authorized || live else {
+                self.starting = false
                 self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
                 return
             }
             self.isLive = live
             LivePreview.shared.stop()  // a voice preview would talk over voice mode
+            if self.staleEngine { self.freshEngine(); self.staleEngine = false }
             do { try self.startEngine() } catch {
-                // Right after the permission prompts the input isn't ready yet (AVAudio -10875): try again shortly, so one click is enough
-                if tries > 1 { self.engine.stop(); return DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.start(tries: tries - 1) } }
+                // The first start often fails with AVAudio -10875 (kAudioUnitErr_FailedInitialization): the voice-processing unit
+                // didn't initialize. Retrying the same engine fails the same way, because enabling voice processing again does nothing
+                // and the failed unit stays. A second click worked because stopping turned voice processing off. So each retry gets a
+                // new engine with its own voice-processing unit, and one click is enough.
+                NSLog("voice: audio start %d failed: %@", attempt + 1, "\(error)")
+                self.freshEngine()
+                if attempt < Self.startRetries.count && (error as NSError).domain != "Voice" {  // not when there's no mic: no retry finds one
+                    return DispatchQueue.main.asyncAfter(deadline: .now() + Self.startRetries[attempt]) { self.start(attempt: attempt + 1, gen: g) }
+                }
                 self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
                 return self.stopAll()
             }
+            if attempt > 0 { NSLog("voice: audio started on try %d", attempt + 1) }
+            self.starting = false
             self.on = true
             self.fallback = ""; self.toldFallback = ""
             self.claimedAt = Date().timeIntervalSince1970
@@ -1825,6 +1866,18 @@ final class Voice: NSObject, ObservableObject {
             self.listen()
             self.wait("Listening", "Say something, or “goodbye” to stop.")
         }}}
+    }
+
+    /// Drops an engine whose start failed, voice processing and all, for a new one. The player moves to the new engine.
+    /// Only while voice mode is off: play() reads `engine` off the main thread, and bails out first when it's off.
+    func freshEngine() {
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        engine.mainMixerNode.removeTap(onBus: 0)
+        if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
+        player.stop()
+        if engine.attachedNodes.contains(player) { engine.detach(player) }
+        engine = AVAudioEngine()
     }
 
     func startEngine() throws {
@@ -2119,6 +2172,7 @@ final class Voice: NSObject, ObservableObject {
     }
 
     func stopAll() {
+        startGen += 1; starting = false  // and any start still retrying
         hush()
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
@@ -3111,7 +3165,7 @@ final class Core: ObservableObject {
 
     /// Mic button / voice shortcut: start recording, or stop and transcribe into the input box (not sent).
     func toggleVoice() {
-        if voice.on { return }  // voice mode has the mic
+        if voice.on || voice.starting { return }  // voice mode has the mic, or is about to
         if recording != nil { stopVoice() } else if !transcribing { startVoice() }
     }
 
@@ -6386,7 +6440,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return c.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
-            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on,  // Esc leaves live chat (sheets keep theirs)
+            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on || self.greenlight.voice.starting,  // Esc leaves live chat, or stops it starting (sheets keep theirs)
                !self.greenlight.settingsOpen, !self.greenlight.inboxOpen { self.greenlight.voice.stopAll(); return nil }
             guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
                   e.keyCode == kVK_UpArrow || e.keyCode == kVK_DownArrow,
@@ -6850,7 +6904,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var lastToggle = Date.distantPast
     @objc func appLive() {  // ⇧⌘L: live chat on (showing the chat first) or off
-        if !greenlight.voice.on { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
+        if !greenlight.voice.on && !greenlight.voice.starting { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
         greenlight.voice.toggle()
     }
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
@@ -8142,6 +8196,9 @@ func selfTest() {
     check("voice: of two Greenlights in voice mode, exactly one keeps it (the later start; the pid breaks a tie)",
           voiceYields(mine: (100, 7), theirs: (101, 3)) && !voiceYields(mine: (101, 3), theirs: (100, 7))
           && voiceYields(mine: (100, 3), theirs: (100, 7)) != voiceYields(mine: (100, 7), theirs: (100, 3)) && !voiceYields(mine: (100, 7), theirs: (200, 7)))
+    check("voice: while voice mode is starting, its button says a press cancels the start",
+          voiceButtonText(on: false, starting: true).label == "Cancel starting voice mode" && voiceButtonText(on: false, starting: false).label == "Start voice mode"
+          && voiceButtonText(on: true, starting: false).label == "End voice mode" && voiceButtonText(on: false, starting: true).help.contains("cancel"))
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     var bufs = 0, ended = false, sc: AVAudioConverter?
