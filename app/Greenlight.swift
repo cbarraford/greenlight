@@ -978,7 +978,7 @@ func isBargeIn(_ heard: String, _ spoken: String) -> Bool {
 /// words: a verb dwim.py knows. dwim.py decides the rest (the route, the workspaces, the guards) and anything it won't do goes to Chief.
 let dwimVerbs = try! NSRegularExpression(pattern: #"\b(?:un-?park|park|shelve|snooze|un-?shelve|unsnooze|un-?hold|hold|freeze|do ?n[o'’]?t merge|do not merge|"#
     + #"release (?:the )?hold|lift (?:the )?hold|remove (?:the )?hold|clear (?:the )?hold|ok to merge|rebase|put (?:\w+ ){0,4}aside|bring (?:\w+ ){0,4}back|"#
-    + #"fix(?:es|ing)? (?:the |its |their )?(?:ci|build|builds|pipelines?|tests?|red|(?:merge )?conflicts?)|ci fix(?:es)?|get (?:\w+ ){0,3}green|"#
+    + #"fix(?:es|ing)? (?:the |its |their )?(?:ci|build|builds|pipelines?|tests?|red|(?:merge )?conflicts?)|fix (?:for )?ci|ci fix(?:es)?|get (?:\w+ ){0,3}green|put .{1,80} on ice|"#
     + #"(?:address|answer|fix|resolve|handle)(?:es)? (?:the |its |their )?(?:review |open )?(?:threads|comments|feedback|review))\b"#, options: [.caseInsensitive])
 func dwimCandidate(_ t: String) -> Bool {
     let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1017,10 +1017,15 @@ func keepingToast(_ toasts: [DwimToast], _ t: DwimToast) -> [DwimToast] {
     return out
 }
 struct DwimPlans {
-    private var pending = Set<UUID>()
-    mutating func begin() -> UUID { let id = UUID(); pending.insert(id); return id }
-    mutating func finish(_ id: UUID) -> Bool { pending.remove(id) != nil }
-    mutating func cancel() { pending.removeAll() }
+    private var pending = [UUID: String]()
+    mutating func begin(_ text: String) -> UUID { let id = UUID(); pending[id] = text; return id }
+    mutating func finish(_ id: UUID) -> Bool { pending.removeValue(forKey: id) != nil }
+    mutating func cancel() -> [String] { let texts = Array(pending.values); pending.removeAll(); return texts }
+}
+func dwimUndoReply(_ out: String, _ code: Int) -> [String: Any]? {
+    guard code == 0, let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] else { return nil }
+    if r["error"] is String { return r }
+    return r["ok"] as? Bool == true && r["undone"] is [String] && r["kept"] is [String] ? r : nil
 }
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
@@ -2069,7 +2074,7 @@ final class Voice: NSObject, ObservableObject {
         if let cmd = voiceCommand(t) { return run(cmd) }
         lastHeard = t
         caption = ""
-        if c.files.isEmpty && c.reading == 0 && dwimCandidate(t) { return c.dwim(t, source: "voice") { note in c.spoken(t, note: note) } }  // files go to Chief
+        if c.files.isEmpty && c.refused.isEmpty && c.reading == 0 && dwimCandidate(t) { return c.dwim(t, source: "voice") { note in c.spoken(t, note: note) } }  // files go to Chief
         c.spoken(t)
     }
     /// The instant card (dwim.py stage): a table, timeline, diff or lifecycle drawn from the snapshot while Chief thinks. It only
@@ -2091,7 +2096,8 @@ final class Voice: NSObject, ObservableObject {
         switch cmd {
         case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
         case .undo: if let t = core?.latestUndoableToast { core?.undoToast(t.id) } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
-        case .stop: core?.cancelPlans(); if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
+        case .stop: if core?.run != nil { hush(); core?.stop(); return }
+            core?.cancelPlans(); if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
@@ -3552,8 +3558,7 @@ final class Core: ObservableObject {
     }
 
     func stop() {
-        cancelPlans()
-        guard let r = run, !r.stopping else { return }
+        guard let r = run, !r.stopping else { if run == nil { cancelPlans() }; return }
         r.stopping = true
         r.status = "Stopping"; r.thinking = false
         ssh("\(chief) stop")
@@ -3740,7 +3745,9 @@ final class Core: ObservableObject {
     var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
     var toastListeners: [UUID: (DwimToast?) -> Void] = [:]
     var plans = DwimPlans()
-    func cancelPlans() { plans.cancel() }
+    func cancelPlans() {
+        for text in plans.cancel() { msgs.append(Msg(.you, text)); msgs.append(Msg(.note, "Cancelled before applying.")) }
+    }
     static let launchGrace = 5.0, toastFor = 8.0, planDeadline = 1.5
     var dwimJSON: (Any) -> String = { o in (try? JSONSerialization.data(withJSONObject: o)).map { String(decoding: $0, as: UTF8.self) } ?? "{}" }
 
@@ -3750,7 +3757,7 @@ final class Core: ObservableObject {
     func dwim(_ text: String, source: String, otherwise: @escaping (String) -> Void) {
         active()
         if source != "jump" { toasted = nil }  // the palette's window shows only the toasts it asked for
-        let request = plans.begin()
+        let request = plans.begin(text)
         let t0 = Date(), body = dwimJSON(["text": text, "source": source, "focus": focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(pucks, scope()))])
         var out = "", answered = false
         let late = DispatchWorkItem { [weak self] in
@@ -3858,9 +3865,16 @@ final class Core: ObservableObject {
         guard let u = t.undo else { if t.applying { t.undoing = true; show(t, for: nil) }; return }  // still applying: undone as soon as it's in
         t.undoing = true; show(t, for: nil)
         var out = ""
-        ssh("\(py)/dwim.py undo \(shellQuote(u))", onLine: { out += $0 }, onExit: { [weak self] _ in
+        ssh("\(py)/dwim.py undo \(shellQuote(u))", onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
-            let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+            guard let r = dwimUndoReply(out, Int(code)) else {
+                var retry = t; retry.undoing = false; retry.failed = true
+                self.show(retry, for: nil)
+                self.msgs.append(Msg(.note, "Undo didn't finish. Try Undo again."))
+                if self.voice.on { self.voice.say("Undo didn't finish. Try again.") }
+                self.log(.greenlight, "dwim", .failed, "undo failed (exit \(code))")
+                return
+            }
             let back = r["undone"] as? [String] ?? [], kept = r["kept"] as? [String] ?? []
             let said = r["error"] as? String ?? (back.isEmpty ? "Nothing to undo" : "Undid \(t.text.prefix(1).lowercased() + t.text.dropFirst())")
                 + (kept.isEmpty ? "" : ". Left \(kept.joined(separator: ", ")): edited since")
@@ -8642,6 +8656,7 @@ func selfTest() {
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("dwim: only words dwim.py knows leave the Chief path", dwimCandidate("park the two auth ones") && dwimCandidate("Kick off CI fixes on the red ones")
           && dwimCandidate("hold #42") && dwimCandidate("don't merge #42") && dwimCandidate("unpark billing") && dwimCandidate("fix the merge conflicts on search")
+          && dwimCandidate("fix for CI #42") && dwimCandidate("put #42 on ice")
           && !dwimCandidate("what's on fire?") && !dwimCandidate("merge #42") && !dwimCandidate("parking lot ideas") && !dwimCandidate("")
           && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo #42") == nil && voiceCommand("cancel #42") == nil && voiceCommand("undo the deploy") == nil)
     check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
@@ -8651,8 +8666,10 @@ func selfTest() {
     let firstToast = DwimToast(text: "Hold A", applying: true), secondToast = DwimToast(text: "Hold B", applying: true)
     var finishedFirst = firstToast; finishedFirst.applying = false; finishedFirst.undo = "undo-a"
     check("dwim: each quick action keeps its own Undo", keepingToast(keepingToast([firstToast], secondToast), finishedFirst) == [finishedFirst, secondToast])
-    var planGate = DwimPlans(); let cancelledPlan = planGate.begin(); planGate.cancel(); let activePlan = planGate.begin()
-    check("dwim: Stop and Clear invalidate an in-flight plan", !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
+    var planGate = DwimPlans(); let cancelledPlan = planGate.begin("hold #42"); let cancelledText = planGate.cancel(); let activePlan = planGate.begin("park #42")
+    check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
+    check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil
+          && dwimUndoReply(#"{"ok":true,"undone":["a"],"kept":[]}"#, 0) != nil)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil
