@@ -1536,7 +1536,7 @@ const OUT_IDLE = 5000, OUT_FOLLOW = 40;
 let OUT_WAIT = 20000;  // a reply later than this counts as lost (let: the tests shorten it)  // px from the bottom that still counts as "at the bottom"
 function openOut(name){
   closeOut(false);
-  ui.out = {name, entries: [], ids: new Set(), more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
+  ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
   const p = puckOf(name) || {name, agent: {}}, codex = /codex/i.test(p.agent.type || "");
   const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
     h("header", {class:"aohd"},
@@ -1557,7 +1557,7 @@ function closeOut(refocus){
   clearTimeout(o.timer); ui.out = null;
   const el = document.getElementById("aout"); if (el) el.remove();
   const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
-  const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2, #main"));
+  const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2") || document.getElementById("main"));
   if (back && !back.matches("button")) back.setAttribute("tabindex", "-1");
   if (back) back.focus();
 }
@@ -1582,7 +1582,8 @@ function nextPoll(){
 function olderOut(){
   const o = ui.out; if (!o || !o.more || o.older) return;
   o.older = true; o.olderErr = null; outMore(); post({cmd: "transcript", name: o.name, before: o.more});
-  const cur = o.more; setTimeout(() => { if (ui.out === o && o.older && o.more === cur) gotOut({name: o.name, before: cur, error: "no answer"}) }, OUT_WAIT);
+  const cur = o.more, req = o.olderReq = (o.olderReq || 0) + 1;  // a retry gets its own 20s
+  setTimeout(() => { if (ui.out === o && o.older && o.olderReq === req) gotOut({name: o.name, before: cur, error: "no answer"}) }, OUT_WAIT);
 }
 function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page (before: the cursor asked with)
   const o = ui.out; if (!o || r.name !== o.name) return;
@@ -1592,34 +1593,39 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     if (r.error) { o.olderErr = r.error; outMore(); return }
     const log = document.getElementById("aout-log"), h0 = log.scrollHeight, t0 = log.scrollTop;
     const add = arr(r.entries).filter(e => !o.ids.has(e.id));
-    add.forEach(e => o.ids.add(e.id)); o.entries = add.concat(o.entries); o.more = r.more || null;
-    document.getElementById("aout-list").prepend(...add.map(outEntry));
+    add.forEach(e => { o.ids.add(e.id); if (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]) o.tip[stemOf(e)] = idxOf(e) }); o.entries = add.concat(o.entries); o.more = r.more || null;
+    document.getElementById("aout-list").prepend(...add.map(e => outEntry(e)));
     log.scrollTop = t0 + log.scrollHeight - h0;  // what you were reading stays put
     outMore(); return;
   }
   if (!o.inflight) return;  // a stale answer (an earlier open's): the next poll is already set
   o.inflight = false; o.err = r.error || null;
   if (!r.error) {
-    const page = arr(r.entries), first = !o.loaded, seen = page.filter(e => !o.ids.has(e.id));
-    const add = seen.concat(arr(r.recent).filter(e => !o.ids.has(e.id) && !seen.some(x => x.id === e.id)));  // another session busy at the same time: its new lines too
-    const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // no cursor: the page reaches back to the start, nothing skipped  // more arrived than one page holds: what's between is skipped, and said so
-    if (first) o.more = r.more || null;  // Load earlier always continues from the top of what's shown
-    add.forEach(e => o.ids.add(e.id)); o.entries.push(...add); o.loaded = true;
+    const page = arr(r.entries), first = !o.loaded;
+    // new to it: a line past the last one shown for its session (a session that flips between newest and recent never
+    // brings its older, unseen lines in at the bottom), or any line of a session not shown yet
+    const fresh = e => !o.ids.has(e.id) && (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]);
+    const seen = page.filter(fresh), add = seen.concat(arr(r.recent).filter(e => fresh(e) && !seen.some(x => x.id === e.id)));  // another session busy at the same time: its new lines too
+    const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // more arrived than one page holds: what's between is skipped, and said so (no cursor: the page reaches the start)
+    if (first) { o.more = r.more || null; const last = page[page.length - 1]; o.main = last ? stemOf(last) : null }  // Load earlier continues from the top of what's shown; main: the session newest at open
+    for (const e of seen) if (e.role === "sep" && !first) o.main = stemOf(e);  // a new session started: it's the main one now
+    add.forEach(e => { o.ids.add(e.id); o.tip[stemOf(e)] = Math.max(o.tip[stemOf(e)] ?? -1, idxOf(e)) }); o.entries.push(...add); o.loaded = true;
     if (first) outPaint();  // outPaint lands at the bottom
     else if (add.length) {
       const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
       if (note) note.remove();  // "No output yet" was true until now
       if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
-      list.append(...outRun(add));
+      list.append(...add.map(e => outEntry(e, stemOf(e) !== o.main)));
       if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
   }
   outHead(); nextPoll();
 }
-function outEntry(e){
+function outEntry(e, other){  // other: a line of another session running alongside the main one
   const p = ui.out && puckOf(ui.out.name), who = (e.kind || (p && p.agent.type) || "") .match(/codex/i) ? "Codex" : "Claude";  // the session that wrote it
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
+  if (e.role === "tool" && other) e = {...e, text: e.text + "  (another session)"};
   if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open"); 
       ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
       outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
@@ -1630,20 +1636,13 @@ function outEntry(e){
       Object.entries({tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"}).forEach(([k, v]) => el.setAttribute(k, v)) });
     return el }
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
-    h("div", {class:"aow"}, e.role === "user" ? "Prompt" : who), h("div", {class:"aotx"}, e.text));
+    h("div", {class:"aow"}, (e.role === "user" ? "Prompt" : who) + (other ? " · another session" : "")), h("div", {class:"aotx"}, e.text));
 }
 const stemOf = e => String(e.id).replace(/:[^:]*$/, "");
-function outRun(es){  // entries to append, with a marker where the output switches to another session (two agents at once)
-  const o = ui.out, out = [];
-  for (const e of es) {
-    if (o.lastStem && stemOf(e) !== o.lastStem && e.role !== "sep") out.push(h("div", {class:"aosep"}, `${/codex/i.test(e.kind || "") ? "Codex" : "Claude"} · another session`));
-    o.lastStem = stemOf(e); out.push(outEntry(e));
-  }
-  return out;
-}
+const idxOf = e => { const n = Number(String(e.id).replace(/^.*:/, "")); return isFinite(n) ? n : -1 };  // "<session>:start" is before its first line
 function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
-  o.lastStem = null; list.replaceChildren(...outRun(o.entries));
+  list.replaceChildren(...o.entries.map(e => outEntry(e)));
   if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
   outMore(); outBottom();
 }
@@ -1683,7 +1682,7 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
   const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", t0 = since(a.since);
   sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
     ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
-  const key = [o.err, a.state, a.tool, a.input].join("\u0000");
+  const key = o.err ? "err\u0000" + o.err : [a.state, a.tool, a.input].join("\u0000");  // failing: only the error shows, so only it counts
   if (now.dataset.key === key) return;  // unchanged: a screen reader doesn't hear the same alert again
   now.dataset.key = key;
   now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]

@@ -766,17 +766,23 @@ test("All output: another busy session's lines ride along, a lost reply doesn't 
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [E(1, "assistant", "main 1")], recent: []});
   await nextPoll(page, 2);
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [E(1, "assistant", "main 1"), E(2, "assistant", "main 2")],
-    recent: [{id: "rv:7", role: "assistant", text: "LGTM", kind: "codex"}]});
-  assert.deepEqual(await page.$$eval("#aout-list > *", es => es.map(e => e.textContent)), ["Claudemain 1", "Claudemain 2", "Codex · another session", "CodexLGTM"]);
-  await nextPoll(page, 3);  // no reply this time: the watchdog says so and keeps polling
+    recent: [{id: "rv:38", role: "assistant", text: "b38", kind: "codex"}, {id: "rv:39", role: "assistant", text: "LGTM", kind: "codex"}]});
+  assert.deepEqual(await page.$$eval("#aout-list > *", es => es.map(e => e.textContent)), ["Claudemain 1", "Claudemain 2", "Codex · another sessionb38", "Codex · another sessionLGTM"]);
+  // the review writes once more and is the newest session now: its page carries 40 older lines never shown; only its new one comes in
+  await nextPoll(page, 3);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "s1:0",
+    entries: Array.from({length: 41}, (_, k) => ({id: "rv:" + k, role: "assistant", text: "b" + k, kind: "codex"})), recent: [E(2, "assistant", "main 2")]});
+  assert.deepEqual((await page.$$eval("#aout-list .aotx", es => es.map(e => e.textContent))).slice(-3), ["b38", "LGTM", "b40"], "no old lines dumped at the bottom");
+  assert.equal(await page.$("#aout-list .aosep.gap"), null, "and no false skipped line");
+  await nextPoll(page, 4);  // no reply this time: the watchdog says so and keeps polling
   await page.waitForFunction(() => /no answer from the host/.test(document.getElementById("aout-now").textContent));
   const alert = await page.$("#aout-now .aerr");
-  await nextPoll(page, 4);
+  await nextPoll(page, 5);
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, error: "no answer from the host"});
-  await page.evaluate(s => mc.update(s), SNAP);
+  await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, tool: "Bash", input: "ls " + Math.random()}}))}), SNAP);  // its tool moves meanwhile
   assert.equal(await page.evaluate(a => a === document.querySelector("#aout-now .aerr"), alert), true, "the same alert node: not announced again");
   await page.evaluate(() => { OUT_WAIT = 20000 });
-  await nextPoll(page, 5);
+  await nextPoll(page, 6);
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [{id: "s1:3", role: "tool", text: "Bash " + "y ".repeat(2000)}]});
   await page.$eval("#aout-log", e => { e.style.flex = "none"; e.style.height = "80px"; e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event("scroll")) });
   await page.waitForFunction(() => ui.out.follow);
