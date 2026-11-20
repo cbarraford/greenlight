@@ -197,8 +197,8 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
             assert any(any(e["after"] == a[5] for e in rec["edits"]) for rec in records)  # durable before Orca changes it
         return orca(*a, **k)
     with mock.patch.object(gl, "orca", side_effect=journaled_orca):
-        r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
-    assert r["ok"] and dwim.undo(r["undo"])["undone"] == ["search"]
+        r = dwim.apply({"undo": "abc123abc123", "actions": [{"verb": "hold", "ws": "search"}]})
+    assert r["ok"] and r["undo"] == "abc123abc123" and dwim.undo(r["undo"])["undone"] == ["search"]
     def slow_orca(*a, **k):
         time.sleep(.03)
         return orca(*a, **k)
