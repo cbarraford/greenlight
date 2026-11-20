@@ -32,7 +32,7 @@ def test_norm():
     assert c.codex({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "exit_code": 0, "aggregated_output": "x"}})[0]["ok"]
     c.codex({"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": "done"}})
     assert c.codex({"type": "error", "message": "Reconnecting... 2/5 (401)"})[0]["e"] == "status"
-    assert c.codex({"type": "turn.completed", "usage": {"input_tokens": 30640}})[-1]["text"] == "done"
+    assert c.codex({"type": "turn.completed", "usage": {"input_tokens": 30640}})[0]["text"] == "done"
 
     assert step_title("Read", {"file_path": "/a/b/SKILL.md"}) == ("Read SKILL.md", "/a/b/SKILL.md")
     assert step_title("mcp__x__do_thing", {"q": "z"}) == ("do thing", "z")
@@ -678,13 +678,12 @@ def test_a_line_ending_in_an_attached_lines_start_shows(tmp_path):
     assert not attach.hide(D, e, attach.needles(D))
 
 
-
 # Voice mode speaks streamed text as it comes, but a whole message (codex, opencode) only once the turn ends on it: a progress
 # note ("I'll check the board.") looks just like the reply. Speaking each, the user heard the reply's phrases two or three times
 # (in 15 of 180 voice turns' logs). The streams below are codex exec --json's (0.167) and opencode's shapes.
-def replay(tmp_path, monkeypatch, engine, lines, code=0):
+def replay(tmp_path, monkeypatch, engine, lines):
     src = tmp_path / "harness.py"
-    src.write_text("import json, sys\nfor l in json.loads(sys.argv[1]): print(json.dumps(l), flush=True)\nsys.exit(%d)\n" % code)
+    src.write_text("import json, sys\nfor l in json.loads(sys.argv[1]): print(json.dumps(l), flush=True)\n")
     events = []
     for k, v in (("DIR", tmp_path), ("PIDFILE", tmp_path / "pid"), ("BGFILE", tmp_path / "bg")):
         monkeypatch.setattr(chat, k, str(v))
