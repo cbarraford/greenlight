@@ -412,6 +412,72 @@ final class Run: ObservableObject {
     init(_ q: String) { question = q }
 }
 
+// MARK: verbose activity
+
+/// One line of verbose activity (Settings › Chat & voice › Verbose activity).
+struct FeedLine: Identifiable {
+    enum Kind { case status, call, input, output, failed, think, said, agent, move, action }
+    /// Who it's from, for the log's filter: Chief's own turn, the workspaces' agents, or Greenlight's moves and buttons.
+    enum Src: String, CaseIterable { case chief = "Chief", agents = "Agents", greenlight = "Greenlight" }
+    let id = UUID()
+    let ts: Date, src: Src, who: String, kind: Kind
+    var text: String
+}
+
+/// The verbose live log: what's actually happening, newest last. Chief's turn in full (every call's whole input and output, its
+/// thinking), each workspace agent's state, tool and last words (from the 5s snapshot), and Greenlight's moves (a workspace's
+/// lifecycle step moving, the dashboard's buttons). In memory only; Core fills it only while the setting is on.
+final class Feed: ObservableObject {
+    static let cap = 400, thinkCap = 4000
+    @Published private(set) var lines: [FeedLine] = []
+    @Published var only: FeedLine.Src? = nil  // the log's filter; nil: everything
+    @Published var open = true  // the chat's log expanded, or just its header and newest line
+    var shown: [FeedLine] { only.map { o in lines.filter { $0.src == o } } ?? lines }
+    func add(_ src: FeedLine.Src, _ who: String, _ kind: FeedLine.Kind, _ text: String, at: Date = Date()) {
+        if let l = lines.last, l.src == src, l.who == who, l.kind == kind {
+            if kind == .think { lines[lines.count - 1].text = String((l.text + text).suffix(Self.thinkCap)); return }  // thinking streams in deltas: one line per stretch
+            if kind == .status && l.text == text { return }
+        }
+        let t = kind == .think ? text : text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        lines.append(FeedLine(ts: at, src: src, who: who, kind: kind, text: t))
+        if lines.count > Self.cap { lines.removeFirst(lines.count - Self.cap) }
+    }
+    func clear() { lines = [] }
+}
+
+/// What the feed watches in one workspace from dash.py's snapshot: its agent, and its place in the lifecycle.
+struct Watched: Equatable { var agent = "", type = "", tool = "", input = "", last = "", state = "", step = "", owner = "", action = "" }
+func watchedOf(_ p: [String: Any]) -> Watched {
+    let a = p["agent"] as? [String: Any] ?? [:], s = { (d: [String: Any], k: String) in d[k] as? String ?? "" }
+    return Watched(agent: s(a, "state"), type: s(a, "type"), tool: s(a, "tool"), input: s(a, "input"), last: s(a, "last"),
+                   state: s(p, "state"), step: s(p, "step"), owner: s(p, "owner"), action: s(p, "action"))
+}
+/// One snapshot against the last, as feed lines (src, who, kind, text). No last snapshot (launch, or the setting just turned on):
+/// nothing, what's already so isn't news.
+func feedDiff(_ old: [String: Watched]?, _ pucks: [[String: Any]]) -> (now: [String: Watched], lines: [(FeedLine.Src, String, FeedLine.Kind, String)]) {
+    var now = [String: Watched]()
+    for p in pucks { if let n = p["name"] as? String { now[n] = watchedOf(p) } }
+    guard let old else { return (now, []) }
+    var out = [(FeedLine.Src, String, FeedLine.Kind, String)]()
+    let word = ["working": "working", "waiting": "waiting on you", "done": "finished", "idle": "idle", "none": "no agent"]
+    for n in now.keys.sorted() {
+        let w = now[n]!, agent = w.type.isEmpty ? "agent" : w.type
+        guard let o = old[n] else {
+            out.append((.greenlight, n, .move, "on the board: \(w.state), \(w.step) (waits on \(w.owner))" + (w.action.isEmpty ? "" : " · \(w.action)")))
+            continue
+        }
+        if (o.state, o.step, o.owner) != (w.state, w.step, w.owner) {
+            out.append((.greenlight, n, .move, "\(o.state) → \(w.state), \(o.step == w.step ? w.step : "\(o.step) → \(w.step)") (waits on \(w.owner))" + (w.action.isEmpty ? "" : " · \(w.action)")))
+        }
+        if o.agent != w.agent, !w.agent.isEmpty { out.append((.agents, n, .agent, "\(agent) \(word[w.agent] ?? w.agent)")) }
+        if w.agent == "working", !w.tool.isEmpty, (o.tool, o.input) != (w.tool, w.input) { out.append((.agents, n, .call, "\(w.tool)(\(w.input))")) }
+        if o.last != w.last, !w.last.isEmpty { out.append((.agents, n, .said, String(w.last.suffix(300)))) }
+    }
+    for n in old.keys.sorted() where now[n] == nil { out.append((.greenlight, n, .move, "off the board")) }
+    return (now, out)
+}
+
 func fmt(_ t: TimeInterval) -> String {
     let s = Int(t.rounded())
     return s < 60 ? "\(s)s" : String(format: "%d:%02d", s / 60, s % 60)
@@ -928,8 +994,14 @@ struct Live {
     var tokens: String { c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window))" : kfmt(c.context) }
     var name: String { c.name }
     /// The live line, in the look's colors, while Chief works (off in Settings → Chat & voice).
+    /// With verbose activity on, the live log's newest lines follow it.
     @ViewBuilder func activity(_ l: Look, ink: Color? = nil, accent: Color? = nil, size: CGFloat = 12) -> some View {
-        if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size).frame(maxWidth: .infinity, alignment: .leading) }
+        if c.verbose {
+            VStack(alignment: .leading, spacing: 6) {
+                if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size) }
+                FeedTail(f: c.feed, n: 3, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size - 1)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        } else if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size).frame(maxWidth: .infinity, alignment: .leading) }
     }
     func clear() { v.run(.reset) }
     /// The stage, inset in its card so the card's rounded corners show (the web view itself is square).
@@ -1755,6 +1827,24 @@ final class Core: ObservableObject {
     @Published var tps = 0.0
     @Published var outTok = 0  // this run's output tokens, for the live line
     @Published var liveLine = ud.object(forKey: "liveLine") as? Bool ?? true { didSet { ud.set(liveLine, forKey: "liveLine") } }
+    /// Verbose activity: the chat's live log (Feed). Off: the concise view, and chat.py sends no more than it used to.
+    @Published var verbose = ud.bool(forKey: "verboseActivity") {
+        didSet { ud.set(verbose, forKey: "verboseActivity"); if !verbose { feed.clear() }; fedFrom = nil }
+    }
+    let feed = Feed()
+    var fedFrom: [String: Watched]?  // the last snapshot the feed saw; nil: the next one is the baseline
+    func log(_ src: FeedLine.Src, _ who: String, _ kind: FeedLine.Kind, _ text: String) { if verbose { feed.add(src, who, kind, text) } }
+    /// A dashboard button's command, and how it ended: its JSON's error, else the exit code.
+    func acted(_ who: String, _ what: String, _ code: Int32, _ out: String) {
+        let err = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) .flatMap { $0 as? [String: Any] }?["error"] as? String
+        log(.greenlight, who, code == 0 && err == nil ? .action : .failed, "\(what): " + (err ?? (code == 0 ? "done" : "exit \(code)")))
+    }
+    /// A snapshot's agent and lifecycle changes, into the feed.
+    func fed(_ pucks: [[String: Any]]) {
+        let (now, lines) = feedDiff(fedFrom, pucks)
+        fedFrom = now
+        for l in lines { log(l.0, l.1, l.2, l.3) }
+    }
     @Published var lastTps = 0.0
     @Published var connected = false
     @Published var unread = 0
@@ -2073,7 +2163,7 @@ final class Core: ObservableObject {
     var focusPaths: [String]?  // its workspaces: Chief's BOARD has only these (nil: the window shows every project)
     var chatSend: String {
         let only = focusPaths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) }.map { " --only \(shellQuote($0))" } ?? ""
-        return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only
+        return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     @Published var agents: [Agent] = []  // the chat footer's agents button
@@ -2124,6 +2214,7 @@ final class Core: ObservableObject {
     private func start(_ r: Run, _ remote: String, stdin: String) {
         run = r
         tps = 0; outTok = 0
+        log(.chief, name, .status, r.watch ? "watch: \(r.question)" : r.checkIn ? "check-in: \(r.question)" : "asked: \(r.question)")
         if !r.watch && !r.checkIn { voice.began(r) }
         proc = ssh(remote, stdin: stdin, onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
@@ -2136,18 +2227,27 @@ final class Core: ObservableObject {
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let e = j["e"] as? String else { return }
         connected = true
         switch e {
-        case "start": r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
-        case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
+        case "start":
+            r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
+            log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
+        case "status":
+            if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
+            if let t = j["text"] as? String, t != r.steps.last?.title { log(.chief, name, .status, t) }  // a step's own title is its call line
         case "step":
             let s = Step(id: j["id"] as? String ?? UUID().uuidString, title: j["title"] as? String ?? "", detail: j["detail"] as? String ?? "")
             r.steps.append(s); r.call = j["call"] as? String ?? ""
             if !r.stopping { r.status = s.title; voice.status(s.title) }
+            log(.chief, name, .call, r.call.isEmpty ? [s.title, s.detail].filter { !$0.isEmpty }.joined(separator: ": ") : r.call)
+            if let input = j["input"] as? String, !r.call.contains(input) { log(.chief, name, .input, input) }  // the whole call, when the line cut it short
         case "step_done":
             if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
                 r.steps[i].ok = j["ok"] as? Bool ?? true
                 r.steps[i].out = j["out"] as? String ?? ""
                 r.steps[i].end = Date()
+                let out = j["full"] as? String ?? r.steps[i].out, ok = r.steps[i].ok == true
+                log(.chief, name, ok ? .output : .failed, "\(ok ? "" : "failed · ")\(fmt(Date().timeIntervalSince(r.steps[i].start)))" + (out.isEmpty ? " · no output" : "\n" + out))
             }
+        case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
         case "text_reset": r.live = ""; voice.said = 0
         case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
         case "usage":
@@ -2166,6 +2266,8 @@ final class Core: ObservableObject {
     }
 
     private func finish(_ r: Run, ok: Bool, text: String) {
+        log(.chief, name, ok ? .status : .failed, (ok ? "replied in \(fmt(Date().timeIntervalSince(r.start)))" : "ended: \(text)")
+            + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace
             run = nil; tps = 0
             if !queue.isEmpty { send(queue.removeFirst()) }
@@ -2303,6 +2405,108 @@ struct StepRow: View, Looked {
         case "zen": return ("●", [dim.opacity(0.45), accent, crashed][st], sys(size: 7), 6)
         default: return ("●", st == 2 ? crashed : accent, sys(size: 10), 8)  // Orb: amber dots, the running one glowing
         }
+    }
+}
+
+let feedClock: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
+
+/// A feed line's mark and ink, in the given look colors. Shared by the chat's log and the voice looks' tail.
+func feedMark(_ k: FeedLine.Kind, accent: Color, dim: Color, failed: Color, agent: Color, move: Color) -> (String, Color) {
+    switch k {
+    case .status: return ("·", dim)
+    case .call: return ("⏺", accent)
+    case .input: return ("↳", dim)
+    case .output: return ("⎿", dim)
+    case .failed: return ("✕", failed)
+    case .think: return ("✻", dim)
+    case .said: return ("“", agent)
+    case .agent: return ("●", agent)
+    case .move: return ("→", move)
+    case .action: return ("▸", move)
+    }
+}
+
+/// Verbose activity's live log, between the conversation and the composer: a header (live dot, filter, follow, Clear, fold)
+/// over the newest lines, monospaced. Folded, it's the header and the newest line. Click a long line to read all of it.
+struct FeedPanel: View, Looked {
+    @ObservedObject var f: Feed
+    @ObservedObject var c: Core
+    @State private var unfolded = Set<UUID>()
+    @State private var paused = false  // stop following the newest line, to read
+    var body: some View {
+        let lines = f.shown, live = c.run != nil || c.agents.contains { $0.state == "working" }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Theme.sp2) {
+                Button { f.open.toggle() } label: {
+                    HStack(spacing: Theme.sp1) {
+                        Image(systemName: f.open ? "chevron.down" : "chevron.right").font(sys(size: Theme.glyph, weight: .bold)).frame(width: 10)
+                        Circle().fill(live ? accent : dim.opacity(0.5)).frame(width: 6, height: 6).accessibilityHidden(true)
+                        Text("Live log").font(sys(size: Theme.fs1, weight: .semibold))
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundColor(sub).accessibilityLabel(f.open ? "Fold the live log" : "Open the live log")
+                if f.open {
+                    ForEach([nil] + FeedLine.Src.allCases.map { Optional($0) }, id: \.self) { s in
+                        Button { f.only = s } label: {
+                            Text(s?.rawValue ?? "All").font(sys(size: Theme.fs1, weight: f.only == s ? .semibold : .regular))
+                                .foregroundColor(f.only == s ? fg : dim).padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(f.only == s ? fg.opacity(0.08) : .clear))
+                        }.buttonStyle(.plain).help(s == nil ? "Everything" : s == .chief ? "\(c.name)'s own turn: calls, their output, thinking" : s == .agents ? "Your workspaces' agents" : "Greenlight's moves and the dashboard's buttons")
+                    }
+                    Spacer(minLength: 0)
+                    Button { paused.toggle() } label: { Image(systemName: paused ? "play.fill" : "pause.fill").font(sys(size: Theme.glyph)) }
+                        .buttonStyle(.plain).foregroundColor(dim).help(paused ? "Follow the newest line" : "Stop following, to read").accessibilityLabel(paused ? "Follow" : "Pause following")
+                } else if let l = lines.last {
+                    row(l, limit: 1).frame(maxWidth: .infinity, alignment: .leading)
+                } else { Spacer(minLength: 0) }
+                Button("Clear") { f.clear(); unfolded = [] }.buttonStyle(.plain).font(sys(size: Theme.fs1)).foregroundColor(dim).disabled(f.lines.isEmpty)
+            }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
+            if f.open {
+                ScrollViewReader { sv in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            if lines.isEmpty {
+                                Text(f.only == nil ? "Nothing yet. \(c.name)'s calls, your agents and Greenlight's moves show here as they happen." : "Nothing from \(f.only!.rawValue) yet.")
+                                    .font(sys(size: Theme.fs1)).foregroundColor(dim)
+                            }
+                            ForEach(lines) { l in
+                                row(l, limit: unfolded.contains(l.id) ? nil : l.kind == .think ? 3 : 6)
+                                    .onTapGesture { if unfolded.contains(l.id) { unfolded.remove(l.id) } else { unfolded.insert(l.id) } }
+                            }
+                            Color.clear.frame(height: 1).id("end")
+                        }.padding(.horizontal, Theme.sp3).padding(.bottom, Theme.sp2)
+                    }.frame(height: 190)
+                        .onAppear { sv.scrollTo("end", anchor: .bottom) }
+                        .onChange(of: lines.last?.id) { if !paused { sv.scrollTo("end", anchor: .bottom) } }
+                        .onChange(of: lines.last?.text.count) { if !paused { sv.scrollTo("end", anchor: .bottom) } }  // thinking grows in place
+                }
+            }
+        }.background(fg.opacity(0.035)).textSelection(.enabled)
+    }
+    func row(_ l: FeedLine, limit: Int?) -> some View {
+        let (m, ink) = feedMark(l.kind, accent: accent, dim: dim, failed: crashed, agent: working, move: done)
+        let who = l.src == .chief ? accent : l.src == .agents ? working : done
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(feedClock.string(from: l.ts)).foregroundColor(dim.opacity(0.8))
+            Text(m).foregroundColor(ink).frame(width: 12, alignment: .center)
+            Text("\(Text(l.who).foregroundColor(who).bold()) \(Text(l.text).foregroundColor(l.kind == .think || l.kind == .status ? dim : l.kind == .failed ? crashed : fg).italic(l.kind == .think))")
+                .lineLimit(limit).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
+        }.font(sys(size: Theme.fs1, design: .monospaced)).accessibilityElement(children: .combine)
+    }
+}
+
+/// Verbose activity in a voice look: the log's newest lines under the live line, one line each, in the look's colors.
+struct FeedTail: View {
+    @ObservedObject var f: Feed
+    let n: Int, fg: Color, dim: Color, accent: Color, size: CGFloat
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if f.lines.isEmpty { Text("Live log: waiting for activity").foregroundColor(dim) }
+            ForEach(f.lines.suffix(n)) { l in
+                let (m, ink) = feedMark(l.kind, accent: accent, dim: dim, failed: hx("E5392F"), agent: accent, move: accent)
+                Text("\(Text(m).foregroundColor(ink)) \(Text(l.who).foregroundColor(fg).bold()) \(Text(l.text.split(separator: "\n").first.map(String.init) ?? "").foregroundColor(l.kind == .think || l.kind == .status ? dim : fg))")
+                    .lineLimit(1).truncationMode(.tail)
+            }
+        }.font(sys(size: size, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
     }
 }
 
@@ -3443,6 +3647,7 @@ struct SettingsView: View {
             }
             row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
+            toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
         }
         let status = engineStatus, ready = !status.hasPrefix("Not ready")
         box("Dictation") {
@@ -4025,6 +4230,7 @@ struct ChatView: View, Looked {
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
             }
+            if c.verbose { rule(top: false); FeedPanel(f: c.feed, c: c) }
             rule(top: false)
             footer
             }.id(c.look)
@@ -5159,7 +5365,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func rescan() {
         guard !rescanning else { return }
         rescanning = true
+        greenlight.log(.greenlight, "Greenlight", .action, "rescanning every workspace")
         ssh("\(py)/greenlight.py scan >/dev/null", onExit: { [weak self] code in
+            self?.greenlight.acted("Greenlight", "rescan", code, "")
             DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
         })
     }
@@ -5183,6 +5391,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.pucks = pucks
         if case let a = agentsOf(pucks), a != greenlight.agents { greenlight.agents = a }
         greenlight.watched(pucks)
+        greenlight.fed(pucks)
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
@@ -5303,7 +5512,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let remote = cmd == "answer" ? "\(py)/dash.py answer '\(name)'"
                 : "\(py)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
+            if cmd == "answer" { greenlight.log(.greenlight, name, .action, "answering its agent: \(text)") }
             ssh(remote, stdin: text, onLine: { out += $0 }, onExit: { code in
+                if cmd == "answer" { self.greenlight.acted(name, "answer", code, out) }
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.\(cmd == "ask" ? "asked" : "answered")(\(js))")
             })
@@ -5311,7 +5522,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // The hover card's Next step: greenlight's next-step prompt for a workspace, and running a prompt there as a new agent.
         if cmd == "park", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil, let on = b["on"] as? Bool {
             var out = ""
+            greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
             ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
+                self.greenlight.acted(name, on ? "park" : "unpark", code, out)
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
@@ -5331,8 +5544,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
         if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            let op = cmd == "undraft" ? "ready" : cmd
+            let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path
+            greenlight.log(.greenlight, who, .action, ["merge": "merging", "ready": "marking ready", "signoff": "signing off"][op] ?? op)
             ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
+                self.greenlight.acted(who, op, code, out)
                 let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
@@ -5345,7 +5560,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let prompt = b["prompt"] as? String ?? ""
             if prompt.isEmpty { return }
             var out = ""
+            greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
             ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
+                self.greenlight.acted(name, "start agent", code, out)
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
@@ -6295,7 +6512,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 /// (send, Stop, answer buttons, Compact, Codex, Clear) on a scratch session where greenlight runs, plus the menubar width.
 func selfTest() {
     let d = UserDefaults.standard
-    let keep = ["model", "effort", "context", "window", "name", "seen", "sent"].map { ($0, d.object(forKey: $0)) }
+    let keep = ["model", "effort", "context", "window", "name", "seen", "sent", "verboseActivity"].map { ($0, d.object(forKey: $0)) }
     var failed = false
     func onMain<T>(_ f: () -> T) -> T { DispatchQueue.main.sync(execute: f) }
     func check(_ what: String, _ ok: Bool) { print(ok ? "ok  " : "FAIL", what); fflush(stdout); failed = failed || !ok }
@@ -6323,6 +6540,25 @@ func selfTest() {
     check("agents button: agents only, the one asking you first",
           agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
                     ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
+    let p0: [[String: Any]] = [["name": "a", "state": "working", "step": "ci", "owner": "agent", "action": "fix CI", "agent": ["state": "working", "type": "claude", "tool": "Bash", "input": "make", "last": "On it."]],
+                               ["name": "z", "state": "done", "step": "merged", "owner": "nobody"]]
+    let p1: [[String: Any]] = [["name": "a", "state": "needs", "step": "review", "owner": "me", "action": "approve it", "agent": ["state": "waiting", "type": "claude", "tool": "Bash", "input": "make", "last": "CI is green. Merge?"]],
+                               ["name": "b", "state": "working", "step": "ci", "owner": "agent", "agent": ["state": "working", "type": "codex"]]]
+    let f0 = feedDiff(nil, p0), f1 = feedDiff(f0.now, p1), said = f1.lines.map { "\($0.1) \($0.2) \($0.3)" }
+    check("verbose: launch's snapshot is the baseline, then moves, agents and last words: \(said)", f0.lines.isEmpty && said == [
+        "a move working → needs, ci → review (waits on me) · approve it", "a agent claude waiting on you", "a said CI is green. Merge?",
+        "b move on the board: working, ci (waits on agent)", "z move off the board"]
+        && f1.lines.first!.0 == .greenlight && f1.lines[1].0 == .agents)
+    let work: [[String: Any]] = [["name": "a", "state": "working", "step": "ci", "owner": "agent", "agent": ["state": "working", "type": "claude", "tool": "Edit", "input": "x.go", "last": "On it."]]]
+    let wl = feedDiff(feedDiff(nil, p0).now, work).lines.map { "\($0.1) \($0.2) \($0.3)" }
+    check("verbose: a working agent's new tool call, and nothing else that stayed put: \(wl)", wl == ["a call Edit(x.go)", "z move off the board"])
+    let fd = Feed()
+    fd.add(.chief, "C", .think, "Check "); fd.add(.chief, "C", .think, "CI."); fd.add(.chief, "C", .status, "Thinking"); fd.add(.chief, "C", .status, "Thinking")
+    fd.add(.chief, "C", .call, "  "); (0..<(Feed.cap + 5)).forEach { _ in fd.add(.agents, "a", .said, "hi") }
+    check("verbose: thinking streams into one line, a status isn't repeated, blanks dropped, the newest \(Feed.cap) kept",
+          fd.lines.count == Feed.cap && fd.lines.allSatisfy { $0.src == .agents } && { let g = Feed(); g.add(.chief, "C", .think, "Check "); g.add(.chief, "C", .think, "CI.")
+              g.add(.chief, "C", .status, "Thinking"); g.add(.chief, "C", .status, "Thinking"); g.add(.chief, "C", .call, " "); g.only = .agents
+              return g.lines.map(\.text) == ["Check CI.", "Thinking"] && g.shown.isEmpty }())
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
@@ -6369,13 +6605,17 @@ func selfTest() {
     check("voice: a second of Kokoro/ElevenLabs PCM plays as about a second (\(kc?.frameLength ?? 0) frames)", kb?.frameLength == 24000 && abs(Int(kc?.frameLength ?? 0) - 22050) < 200 && (kc?.floatChannelData?[0][5] ?? 0) != 0)
     let c = Core()
     Thread.detachNewThread {
-        onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
+        onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low"; c.verbose = true }
         Thread.sleep(forTimeInterval: 3)
 
         onMain { c.send("Run this exact bash command: python3 -c \"import time; time.sleep(60)\" then say finished.") }
         wait("a live step", 90) { !(c.run?.steps.isEmpty ?? true) }
         check("live step while working: \(onMain { c.run?.steps.first?.title ?? "-" })", onMain { c.run != nil })
         check("live line names the call: \(onMain { c.run?.call ?? "-" })", onMain { c.run?.call.contains("(") ?? false })
+        check("verbose: the send asks for it, and the call is in the log: \(onMain { c.feed.lines.map(\.text).suffix(3) })",
+              onMain { c.chatSend.hasSuffix(" --verbose") && c.feed.lines.contains { $0.kind == .call && $0.text.contains("sleep(60)") } })
+        onMain { c.verbose = false }
+        check("verbose off: the log empties and the send is the concise one", onMain { c.feed.lines.isEmpty && !c.chatSend.contains("--verbose") })
         onMain { c.stop() }
         wait("stop", 30) { c.run == nil }
         check("Stop ends the turn as \"Stopped.\"", onMain { c.msgs.last?.text == "Stopped." && c.msgs.last?.failed == true })
