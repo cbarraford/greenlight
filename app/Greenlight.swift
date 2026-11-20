@@ -3326,7 +3326,9 @@ final class Core: ObservableObject {
             }
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
         case "text_reset": r.live = ""; voice.said = 0
-        case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
+        case "text":  // a note (codex's "I'll check the board.") shows but isn't spoken: the reply says it again
+            r.live += j["delta"] as? String ?? ""
+            if !r.watch && !r.checkIn && j["note"] as? Bool != true { voice.live(r) }
         case "usage":
             if let c = j["context"] as? Int, c > 0 { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }

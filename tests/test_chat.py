@@ -32,7 +32,7 @@ def test_norm():
     assert c.codex({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "exit_code": 0, "aggregated_output": "x"}})[0]["ok"]
     c.codex({"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": "done"}})
     assert c.codex({"type": "error", "message": "Reconnecting... 2/5 (401)"})[0]["e"] == "status"
-    assert c.codex({"type": "turn.completed", "usage": {"input_tokens": 30640}})[0]["text"] == "done"
+    assert c.codex({"type": "turn.completed", "usage": {"input_tokens": 30640}})[-1]["text"] == "done"
 
     assert step_title("Read", {"file_path": "/a/b/SKILL.md"}) == ("Read SKILL.md", "/a/b/SKILL.md")
     assert step_title("mcp__x__do_thing", {"q": "z"}) == ("do thing", "z")
@@ -676,3 +676,56 @@ def test_a_line_ending_in_an_attached_lines_start_shows(tmp_path):
     attach.store(D, [("urls.txt", "text", b"https://api.example.com/v1/orders?id=42&expand=items\n")])
     e = {"full": "Base URL: https://api.example.com/v1"}
     assert not attach.hide(D, e, attach.needles(D))
+
+
+# Voice mode speaks a text event unless it's a note. Codex and opencode send whole messages, and a progress note ("I'll check
+# the board.") looks just like the reply until the turn goes on past it. Speaking both, the user heard the reply's phrases twice
+# or three times (seen in 15 of 180 voice turns' logs). The streams below are codex exec --json's and opencode's shapes.
+def replay(tmp_path, monkeypatch, engine, lines, code=0):
+    src = tmp_path / "harness.py"
+    src.write_text("import json, sys\nfor l in json.loads(sys.argv[1]): print(json.dumps(l), flush=True)\nsys.exit(%d)\n" % code)
+    events = []
+    for k, v in (("DIR", tmp_path), ("PIDFILE", tmp_path / "pid"), ("BGFILE", tmp_path / "bg")):
+        monkeypatch.setattr(chat, k, str(v))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.run([sys.executable, str(src), json.dumps(lines)], engine, "", Norm())
+    texts = [(e["delta"], e.get("note", False)) for e in events if e["e"] == "text"]
+    return events, texts
+
+
+def test_codex_progress_notes_are_not_spoken(tmp_path, monkeypatch):
+    msg = lambda i, t: {"type": "item.completed", "item": {"id": i, "type": "agent_message", "text": t}}
+    cmd = lambda i, st: {"type": "item." + st, "item": {"id": i, "type": "command_execution", "command": "/usr/bin/zsh -lc ls",
+                                                         "exit_code": 0 if st == "completed" else None, "aggregated_output": ""}}
+    events, texts = replay(tmp_path, monkeypatch, "codex", [
+        {"type": "thread.started", "thread_id": "th1"}, {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "i0", "type": "error", "message": "Falling back from WebSockets to HTTPS transport."}},
+        msg("i1", "PR 22 is the only open one. I'll check its CI."), cmd("i2", "started"), cmd("i2", "completed"),
+        msg("i3", "Its CI is green. I'll check the review."), {"type": "item.started", "item": {"id": "r", "type": "reasoning"}},
+        msg("i4", "PR 22 is the only open one, its CI is green and it's ready to merge."),
+        {"type": "error", "message": "Reconnecting... 1/5"},
+        {"type": "turn.completed", "usage": {"input_tokens": 9}}])
+    assert texts == [("PR 22 is the only open one. I'll check its CI.", True), ("Its CI is green. I'll check the review.", True),
+                     ("PR 22 is the only open one, its CI is green and it's ready to merge.", False)], texts
+    kinds = [e["e"] for e in events]
+    assert kinds.index("step") > kinds.index("text"), kinds  # a note shows before the command it announced, not after
+    assert [e["text"] for e in events if e["e"] == "done"] == ["PR 22 is the only open one, its CI is green and it's ready to merge."]
+
+
+def test_codex_reply_alone_and_failed_turn(tmp_path, monkeypatch):
+    _, texts = replay(tmp_path, monkeypatch, "codex", [{"type": "item.completed", "item": {"id": "a", "type": "agent_message", "text": "Hi."}},
+                                                       {"type": "turn.completed", "usage": {}}])
+    assert texts == [("Hi.", False)], texts
+    events, texts = replay(tmp_path, monkeypatch, "codex", [{"type": "item.completed", "item": {"id": "a", "type": "agent_message", "text": "Checking."}},
+                                                            {"type": "turn.failed", "error": {"message": "boom"}}])
+    assert texts == [("Checking.", True)] and events[-1]["e"] == "done" and not events[-1]["ok"], events
+
+
+def test_opencode_progress_notes_are_not_spoken(tmp_path, monkeypatch):
+    text = lambda t: {"type": "text", "part": {"text": t}}
+    tool = {"type": "tool_use", "part": {"id": "t1", "tool": "bash", "state": {"status": "completed", "input": {"command": "ls"}, "output": "a"}}}
+    _, texts = replay(tmp_path, monkeypatch, "opencode", [text("Let me look. One sec."), tool, {"type": "step_finish", "part": {}},
+                                                          text("Two files. Both new."), {"type": "step_finish", "part": {}}])
+    assert texts == [("Let me look. One sec.", True), ("Two files. Both new.", False)], texts
+    _, texts = replay(tmp_path, monkeypatch, "opencode", [text("Let me look."), tool], code=1)
+    assert texts == [("Let me look.", True)], texts
