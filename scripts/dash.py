@@ -1014,9 +1014,10 @@ def design(f, model="claude-haiku-5-5", effort="low"):
 
 
 def ask(prompt, model, effort):
-    """One headless answer from config llm_harness. The model names here are Claude's, so another harness uses its default."""
-    h = greenlight.CONFIG["llm_harness"]
-    cmd, text = harness.argv(h, prompt, model=model if h == "claude" else None, effort=effort)
+    """One headless answer: a gemini-* model runs on Gemini CLI, anything else on config llm_harness
+    (a Claude model name means nothing to another harness, so that one uses its default)."""
+    h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
+    cmd, text = harness.argv(h, prompt, model=model, effort=effort)
     return subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180).stdout
 
 

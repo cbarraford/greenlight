@@ -10,7 +10,7 @@ It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**
 
 - Python 3.10+ (stdlib only).
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
-- At least one coding agent CLI: `claude`, `codex`, `opencode` or `pi`.
+- At least one coding agent CLI: `claude`, `codex`, `opencode`, `pi` or `gemini` (Gemini CLI).
 - One workspace manager (ADE): Orca (default), cmux, herdr, or T3 Code. Pick it with `GREENLIGHT_ADE=orca|cmux|herdr|t3`.
 - The menubar app: macOS with the Command Line Tools (`swiftc`).
 
@@ -70,11 +70,13 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 | codex | workspace-write sandbox | `--dangerously-bypass-approvals-and-sandbox` |
 | opencode | permission asks are rejected | `--auto` |
 | pi | **refuses to run** | no flags (pi has no permission gate or sandbox) |
+| gemini | `--approval-mode auto_edit --skip-trust` (headless Gemini CLI won't start in an untrusted folder; trusting it loads that folder's `.gemini` settings) | `--approval-mode yolo --skip-trust` |
 
 Unattended work (automations, the menubar chat) runs shell commands, so in safe mode some tasks stop at a refused permission. Only set `bypass` on a machine you're comfortable letting an agent drive.
 
 Support differs by harness:
-- All four: dispatch, automations, the menubar chat, limit fallback, cmux launch.
+- All five: dispatch, automations, the menubar chat, limit fallback, cmux launch.
+- Gemini CLI also runs the dashboard's workspace pages and next-step suggestions when you pick a Gemini model for them (Settings › Background agents), whatever `llm_harness` says. The app offers **Gemini 4 Neon** (`gemini-4-neon`); Gemini CLI 0.70 passes it to the API unchanged but doesn't list it yet ([gemini-cli#30385](https://github.com/google-gemini/gemini-cli/issues/30385)), so your Gemini account needs access to it. Gemini CLI has no effort flag or system-prompt flag: effort is ignored and the system prompt rides in the first message.
 - Claude and codex only: the dashboard's transcript mirror and question picker, herdr's `--kind`, T3 providers.
 - Claude only: Greenlight tells an idle agent from one with an unsent draft by reading Claude Code's TUI (`ade_common.py`), and only Claude conversations can be compacted from the chat.
 
