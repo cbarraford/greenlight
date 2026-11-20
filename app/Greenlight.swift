@@ -11,7 +11,9 @@ import Combine
 import CoreAudio
 import AVFoundation
 import Carbon
+import CryptoKit
 import FoundationModels
+import Network
 import Security
 import Speech
 import SwiftUI
@@ -2147,80 +2149,241 @@ func audible(_ pcm: Data) -> Bool {
     return (sum / Double(n)).squareRoot() > 150
 }
 
+// The socket is our own RFC 6455 client on an NWConnection, not URLSessionWebSocketTask. Measured 2026-11-20: api.openai.com
+// upgrades over HTTP/1.1 only. Carried over HTTP/2 as an extended CONNECT (RFC 8441), the same request gets Cloudflare's
+// "400 Bad Request" page (its SETTINGS lack ENABLE_CONNECT_PROTOCOL). URLSession picks the protocol itself and hides a refused
+// upgrade's body. Here TLS offers only http/1.1, and a refusal's status, message and request id are read off the reply.
+
+let liveALPN = ["http/1.1"]
+/// The upgrade request: plain HTTP/1.1, the key as a bearer token.
+func wsHandshake(host: String, path: String, key: String, nonce: String) -> Data {
+    Data(("GET \(path) HTTP/1.1\r\nHost: \(host)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(nonce)\r\n"
+        + "Sec-WebSocket-Version: 13\r\nAuthorization: Bearer \(key)\r\nUser-Agent: Greenlight\r\n\r\n").utf8)
+}
+/// What a server must answer to `nonce` in Sec-WebSocket-Accept.
+func wsAccept(_ nonce: String) -> String { Data(Insecure.SHA1.hash(data: Data((nonce + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))).base64EncodedString() }
+/// A reply's head once it has all come in (nil before): status, headers by lowercase name, and the bytes after it.
+func wsReply(_ d: Data) -> (status: Int, headers: [String: String], rest: Data)? {
+    guard let r = d.range(of: Data("\r\n\r\n".utf8)), let head = String(data: d[..<r.lowerBound], encoding: .utf8) else { return nil }
+    var lines = head.components(separatedBy: "\r\n"), h = [String: String]()
+    let st = lines.removeFirst().split(separator: " ")
+    for l in lines { if let c = l.firstIndex(of: ":") { h[l[..<c].lowercased()] = l[l.index(after: c)...].trimmingCharacters(in: .whitespaces) } }
+    return (st.count > 1 ? Int(st[1]) ?? 0 : 0, h, Data(d[r.upperBound...]))
+}
+/// Whether a refusal's body has all come in: by its length, the last chunk, or (neither) when the server closes.
+func wsBodyDone(_ h: [String: String], _ body: Data) -> Bool {
+    if let n = h["content-length"].flatMap(Int.init) { return body.count >= n }
+    return h["transfer-encoding"]?.lowercased() == "chunked" && body.range(of: Data("0\r\n\r\n".utf8)) != nil
+}
+/// A refused upgrade's reason: OpenAI's error message, else an HTML page's title ("400 Bad Request" from Cloudflare).
+func liveRefusal(_ body: Data) -> String {
+    let t = String(decoding: body, as: UTF8.self)
+    if let a = t.firstIndex(of: "{"), let b = t.lastIndex(of: "}"), a < b,
+       let j = try? JSONSerialization.jsonObject(with: Data(t[a...b].utf8)) as? [String: Any],
+       let m = (j["error"] as? [String: Any])?["message"] as? String ?? j["message"] as? String { return m }
+    if let r = t.range(of: #"(?<=<title>)[^<]*"#, options: .regularExpression) { return t[r].trimmingCharacters(in: .whitespaces) }
+    return String(t.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+}
+enum WSMessage: Equatable { case text(Data), binary(Data), ping(Data), pong, close(Int, String) }
+/// One frame. A client masks its frames (RFC 6455 5.3); pass no mask for a server's.
+func wsFrame(_ op: UInt8, _ payload: Data, mask: [UInt8]? = (0..<4).map { _ in UInt8.random(in: 0...255) }, fin: Bool = true) -> Data {
+    var f = Data([(fin ? 0x80 : 0) | op]), n = payload.count, m: UInt8 = mask == nil ? 0 : 0x80
+    if n < 126 { f.append(m | UInt8(n)) }
+    else if n <= 0xFFFF { f.append(m | 126); f.append(contentsOf: [UInt8(n >> 8), UInt8(n & 0xFF)]) }
+    else { f.append(m | 127); f.append(contentsOf: (0..<8).reversed().map { UInt8((n >> ($0 * 8)) & 0xFF) }) }
+    guard let k = mask else { return f + payload }
+    f.append(contentsOf: k)
+    n = 0
+    f.append(contentsOf: payload.map { b in defer { n += 1 }; return b ^ k[n & 3] })
+    return f
+}
+/// Frames, however the bytes arrive: whole messages out (fragments joined), with pings and closes.
+struct WSReader {
+    private var buf = [UInt8](), frag = Data(), fragOp: UInt8 = 0
+    static let limit = 16 << 20
+    var broken = false  // a frame over the limit: the socket is closed
+    mutating func feed(_ d: Data) -> [WSMessage] {
+        buf += d
+        var out = [WSMessage]()
+        while !broken, buf.count >= 2 {
+            let fin = buf[0] & 0x80 != 0, op = buf[0] & 0x0F, masked = buf[1] & 0x80 != 0
+            var n = Int(buf[1] & 0x7F), at = 2
+            if n == 126 { guard buf.count >= 4 else { break }; n = Int(buf[2]) << 8 | Int(buf[3]); at = 4 }
+            else if n == 127 { guard buf.count >= 10 else { break }; n = buf[2..<10].reduce(0) { $0 << 8 | Int($1) }; at = 10 }
+            if n > WSReader.limit || n < 0 { broken = true; break }
+            let k = masked ? at : -1
+            if masked { at += 4 }
+            guard buf.count >= at + n else { break }
+            var p = Data(buf[at..<at + n])
+            if k >= 0 { let key = Array(buf[k..<k + 4]); p = Data(p.enumerated().map { $1 ^ key[$0 & 3] }) }
+            buf.removeFirst(at + n)
+            switch op {
+            case 0x8: let c = p.count >= 2 ? Int(p[p.startIndex]) << 8 | Int(p[p.startIndex + 1]) : 1005
+                out.append(.close(c, String(decoding: p.dropFirst(2), as: UTF8.self)))
+            case 0x9: out.append(.ping(p))
+            case 0xA: out.append(.pong)
+            case 0x0, 0x1, 0x2:
+                if op != 0 { frag = Data(); fragOp = op }
+                frag += p
+                if frag.count > WSReader.limit { broken = true; break }
+                if fin { out.append(fragOp == 0x2 ? .binary(frag) : .text(frag)); frag = Data() }
+            default: break
+            }
+        }
+        return out
+    }
+}
+
 /// One GPT-Live session over a WebSocket. Events come to `on` on the main queue; `send` and `mic` are safe from any thread.
 final class LiveVoice {
-    static let model = "gpt-live-1.1"
+    static let model = "gpt-live-1.1", host = "api.openai.com", path = "/v1/live/sessions"
     static let voices = ["marin", "cedar", "quartz", "ripple", "vesper", "willow", "stone", "gleam", "meridian", "bossa", "tempo", "beacon", "delta", "cinder",
                          "nuri", "juni", "flitz", "brise", "sillage", "nira", "harema", "shida", "noeul"]
     static var voice: String { ud.string(forKey: "liveVoice").flatMap { voices.contains($0) ? $0 : nil } ?? "marin" }
     let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true)!
     let q = DispatchQueue(label: "live")
-    var task: URLSessionWebSocketTask?, pending = Data(), on: ((LiveEvent) -> Void)?
+    /// One socket's state, touched only on q. Callbacks from a socket that isn't `sock` any more are ignored.
+    private final class Sock {
+        let c: NWConnection, nonce: String, key: String
+        var waited: NWError?, up = false, dead = false, head = Data(), reply: (status: Int, headers: [String: String])?, body = Data(), reader = WSReader(), queued = [Data]()
+        init(_ c: NWConnection, _ key: String) { self.c = c; self.key = key; nonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString() }
+    }
+    private var sock: Sock?
+    var pending = Data(), on: ((LiveEvent) -> Void)?
+    /// Where the socket goes: api.openai.com over TLS; the selftest's fake server is plain TCP on this Mac.
+    var endpoint = (host: LiveVoice.host, port: UInt16(443), tls: true)
 
     func open(_ key: String, voice: String = LiveVoice.voice, instructions: String = liveRule, _ on: @escaping (LiveEvent) -> Void) {
         close()
-        var r = URLRequest(url: URL(string: "wss://api.openai.com/v1/live/sessions")!)
-        r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        let t = URLSession.shared.webSocketTask(with: r)
-        t.maximumMessageSize = 16 << 20
-        q.sync { task = t; pending = Data() }
+        let tls = NWProtocolTLS.Options()
+        for p in liveALPN { sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, p) }
+        let e = endpoint
+        let s = Sock(NWConnection(host: .init(e.host), port: .init(rawValue: e.port)!, using: e.tls ? NWParameters(tls: tls) : .tcp), key)
+        q.sync { sock = s; pending = Data() }
         self.on = on
-        t.resume()
-        send(liveStart(voice: voice, instructions: instructions))
-        receive(t)
+        s.c.stateUpdateHandler = { [weak self] st in self?.state(s, st) }
+        s.c.start(queue: q)
+        send(liveStart(voice: voice, instructions: instructions))  // goes out once the upgrade is through
+        q.asyncAfter(deadline: .now() + 10) { [weak self] in if let self, !s.up { self.end(s, s.waited.map { LiveVoice.why(0, "", $0) } ?? "didn't answer in time") } }
     }
-    private func receive(_ t: URLSessionWebSocketTask) {
-        t.receive { [weak self] res in
-            guard let self else { return }
-            switch res {
-            case .success(let m):
-                let d: Data? = { switch m { case .data(let d): return d; case .string(let s): return Data(s.utf8); @unknown default: return nil } }()
-                if let d { let e = liveEvent(d); if e != .other { DispatchQueue.main.async { if self.q.sync(execute: { self.task === t }) { self.on?(e) } } } }
-                self.receive(t)
-            case .failure(let err):
-                let why = LiveVoice.why((t.response as? HTTPURLResponse)?.statusCode ?? 0, err)
-                DispatchQueue.main.async { if self.q.sync(execute: { self.task === t }) { self.q.sync { self.task = nil }; self.on?(.closed(why)) } }
+    private func state(_ s: Sock, _ st: NWConnection.State) {
+        switch st {
+        case .ready:
+            s.c.send(content: wsHandshake(host: LiveVoice.host, path: LiveVoice.path, key: s.key, nonce: s.nonce), completion: .contentProcessed { _ in })
+            read(s)
+        case .waiting(let e): s.waited = e  // Network retries from here (a path that's down, a refused connection); the deadline says why
+        case .failed(let e): end(s, LiveVoice.why(0, "", e))
+        default: break
+        }
+    }
+    private func read(_ s: Sock) {
+        s.c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] d, _, done, err in
+            guard let self, !s.dead else { return }
+            if let d, !d.isEmpty { s.up ? self.frames(s, d) : self.upgrade(s, d) }
+            if s.dead { return }
+            if done || err != nil {
+                if !s.up, let r = s.reply { return self.refused(s, r.status, r.headers) }
+                return self.end(s, err.map { LiveVoice.why(0, "", $0) } ?? (s.up ? "lost the connection" : "closed the connection before answering"))
+            }
+            self.read(s)
+        }
+    }
+    /// The reply to the upgrade: 101 and the right accept opens the socket; anything else is a refusal, read to its end.
+    private func upgrade(_ s: Sock, _ d: Data) {
+        if s.reply != nil { s.body += d; if wsBodyDone(s.reply!.headers, s.body) { refused(s, s.reply!.status, s.reply!.headers) }; return }
+        s.head += d
+        guard let r = wsReply(s.head) else { if s.head.count > 64 << 10 { end(s, "sent a reply Greenlight can't read") }; return }
+        s.head = Data()
+        guard r.status == 101 else {
+            s.reply = (r.status, r.headers); s.body = r.rest
+            if wsBodyDone(r.headers, s.body) { refused(s, r.status, r.headers) }
+            else { q.asyncAfter(deadline: .now() + 2) { [weak self] in self?.refused(s, r.status, r.headers) } }
+            return
+        }
+        guard r.headers["sec-websocket-accept"] == wsAccept(s.nonce) else { return end(s, "answered the upgrade wrongly (a proxy in the way?)") }
+        s.up = true
+        for f in s.queued { s.c.send(content: f, completion: .contentProcessed { _ in }) }
+        s.queued = []
+        if !r.rest.isEmpty { frames(s, r.rest) }
+    }
+    private func refused(_ s: Sock, _ status: Int, _ h: [String: String]) {
+        guard !s.dead else { return }
+        let m = liveRefusal(s.body)
+        NSLog("GPT-Live: upgrade refused, HTTP %d, request %@: %@", status, h["x-request-id"] ?? "-", m)
+        end(s, LiveVoice.why(status, m))
+    }
+    private func frames(_ s: Sock, _ d: Data) {
+        for m in s.reader.feed(d) {
+            switch m {
+            case .text(let p), .binary(let p):
+                let e = liveEvent(p)
+                if e != .other { DispatchQueue.main.async { if self.q.sync(execute: { self.sock === s }) { self.on?(e) } } }
+            case .ping(let p): s.c.send(content: wsFrame(0xA, p), completion: .contentProcessed { _ in })
+            case .pong: break
+            case .close(let c, let why):
+                return end(s, c == 1000 || c == 1005 ? "closed the connection" : "closed the connection (\(c)\(why.isEmpty ? "" : ": \(why)"))",
+                           last: wsFrame(0x8, Data([0x03, 0xE8])))  // the close's answer, sent before the socket goes
             }
         }
+        if s.reader.broken { end(s, "sent a message over 16 MB") }
+    }
+    /// On q: the socket is done; voice mode hears why, unless it has moved on to another.
+    private func end(_ s: Sock, _ why: String, last: Data? = nil) {
+        guard !s.dead else { return }
+        s.dead = true
+        if let last { s.c.send(content: last, completion: .contentProcessed { _ in s.c.cancel() }) } else { s.c.cancel() }
+        DispatchQueue.main.async { if self.q.sync(execute: { self.sock === s }) { self.q.sync { self.sock = nil }; self.on?(.closed(why)) } }
+    }
+    /// On q: a text frame, now or once the upgrade is through.
+    private func write(_ s: Sock, _ text: String) {
+        let f = wsFrame(0x1, Data(text.utf8))
+        if s.up { s.c.send(content: f, completion: .contentProcessed { _ in }) } else { s.queued.append(f) }
     }
     func send(_ o: [String: Any]) {
         guard let d = try? JSONSerialization.data(withJSONObject: o), let s = String(data: d, encoding: .utf8) else { return }
-        q.async { self.task?.send(.string(s)) { _ in } }
+        q.async { if let k = self.sock, !k.dead { self.write(k, s) } }
     }
     /// Mic audio, already 24 kHz 16-bit mono, sent in 100 ms pieces.
     func mic(_ b: AVAudioPCMBuffer) {
         guard let p = b.int16ChannelData, b.frameLength > 0 else { return }
         let d = Data(bytes: p[0], count: Int(b.frameLength) * 2)
         q.async {
-            guard let t = self.task else { return }
+            guard let k = self.sock, !k.dead else { return }
             self.pending += d
             guard self.pending.count >= 4800 else { return }
             let o = ["type": "session.input_audio.append", "audio": self.pending.base64EncodedString()]
             self.pending = Data()
-            if let j = try? JSONSerialization.data(withJSONObject: o), let s = String(data: j, encoding: .utf8) { t.send(.string(s)) { _ in } }
+            if let j = try? JSONSerialization.data(withJSONObject: o), let s = String(data: j, encoding: .utf8) { self.write(k, s) }
         }
     }
     func close() {
         on = nil
         q.async {
-            guard let t = self.task else { return }
-            self.task = nil
-            t.send(.string(#"{"type":"session.close"}"#)) { _ in t.cancel(with: .normalClosure, reason: nil) }
+            guard let s = self.sock else { return }
+            self.sock = nil
+            guard !s.dead else { return }
+            s.dead = true
+            guard s.up else { return s.c.cancel() }
+            s.c.send(content: wsFrame(0x1, Data(#"{"type":"session.close"}"#.utf8)), completion: .contentProcessed { _ in })
+            s.c.send(content: wsFrame(0x8, Data([0x03, 0xE8])), completion: .contentProcessed { _ in s.c.cancel() })
         }
     }
-    /// Why the socket failed, in words.
-    static func why(_ code: Int, _ err: Error) -> String {
+    /// Why the socket failed, in words: an HTTP status with the server's reason, or a network error.
+    static func why(_ code: Int, _ detail: String = "", _ err: Error? = nil) -> String {
+        let more = detail.isEmpty ? "" : ": \(detail)"
         switch code {
         case 401: return "refused the OpenAI key (401)"
-        case 403, 404: return "isn't available to this OpenAI key's project (\(code)): it needs access to \(model)"
-        case 429: return "is over its rate or concurrent-session limit (429)"
+        case 403, 404: return "isn't available to this OpenAI key's project (\(code)\(more)): it needs access to \(model)"
+        case 429: return "is over its rate or concurrent-session limit (429\(more))"
         case 0: break
-        default: return "failed to connect (\(code))"
+        default: return "refused the connection (\(code)\(more))"
         }
-        if let e = err as? URLError {
-            return e.code == .timedOut ? "didn't answer in time" : "couldn't reach api.openai.com (\(e.localizedDescription)); a firewall like Little Snitch may be blocking it"
+        if let e = err as? NWError {
+            if case .posix(let c) = e, c == .ETIMEDOUT { return "didn't answer in time" }
+            if case .dns = e { return "couldn't look up api.openai.com (\(e.localizedDescription)); is this Mac online?" }
+            return "couldn't reach api.openai.com (\(e.localizedDescription)); a firewall like Little Snitch may be blocking it"
         }
-        return "lost the connection (\(err.localizedDescription))"
+        return err.map { "lost the connection (\($0.localizedDescription))" } ?? "lost the connection"
     }
 }
 
@@ -7401,8 +7564,95 @@ func selfTest() {
     sd.set("eleven", forKey: "speech"); Speech.switchToLive(sd)
     check("voice: ElevenLabs moves to GPT-Live once, and picking it again sticks", moved == "live" && sd.string(forKey: "speech") == "eleven")
     sd.removePersistentDomain(forName: "greenlight-selftest-live")
-    check("voice: GPT-Live's socket errors say what to fix", LiveVoice.why(401, URLError(.badServerResponse)).contains("key")
-          && LiveVoice.why(0, URLError(.cannotConnectToHost)).contains("Little Snitch") && LiveVoice.why(429, URLError(.badServerResponse)).contains("429"))
+    check("voice: GPT-Live's socket errors say what to fix", LiveVoice.why(401).contains("key")
+          && LiveVoice.why(0, "", NWError.posix(.ECONNREFUSED)).contains("Little Snitch") && LiveVoice.why(429).contains("429")
+          && LiveVoice.why(0, "", NWError.posix(.ETIMEDOUT)) == "didn't answer in time" && LiveVoice.why(0, "", NWError.dns(-65554)).contains("online")
+          && LiveVoice.why(400, "Bad Request") == "refused the connection (400: Bad Request)")
+    // The socket: HTTP/1.1 only (over HTTP/2, api.openai.com answers the upgrade with Cloudflare's 400 page), RFC 6455 framing
+    let hs = String(decoding: wsHandshake(host: "api.openai.com", path: "/v1/live/sessions", key: "sk-test", nonce: "dGhlIHNhbXBsZSBub25jZQ=="), as: UTF8.self)
+    check("voice: GPT-Live's socket upgrades over HTTP/1.1 (TLS offers nothing else), with the key as a bearer token",
+          liveALPN == ["http/1.1"] && hs.hasPrefix("GET /v1/live/sessions HTTP/1.1\r\nHost: api.openai.com\r\n") && hs.hasSuffix("\r\n\r\n")
+          && ["Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Version: 13", "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "Authorization: Bearer sk-test"].allSatisfy { hs.contains("\r\n\($0)\r\n") })
+    check("voice: a WebSocket accept is the RFC's", wsAccept("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    // what api.openai.com answered an HTTP/2 upgrade on 2026-11-20, and a bad key over HTTP/1.1
+    let cf400 = "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n"
+    let cfReply = Data("HTTP/1.1 400 Bad Request\r\nServer: cloudflare\r\nContent-Type: text/html\r\nContent-Length: \(cf400.utf8.count)\r\n\r\n\(cf400)".utf8)
+    let k401 = #"{"error":{"message":"Incorrect API key provided: sk-bogus.","type":"invalid_request_error","code":"invalid_api_key"},"status":401}"#
+    let partial = wsReply(cfReply.prefix(30)), whole = wsReply(cfReply), up = wsReply(Data("HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: x\r\n\r\n".utf8) + wsFrame(0x1, Data("{}".utf8), mask: nil))
+    var upReader = WSReader(); let upFrames = up.map { upReader.feed($0.rest) } ?? []
+    check("voice: a refused upgrade's status and reason are read off the reply (Cloudflare's page, OpenAI's message), a 101's frames kept",
+          partial == nil && whole?.status == 400 && whole.map { wsBodyDone($0.headers, $0.rest) } == true && whole.map { liveRefusal($0.rest) } == "400 Bad Request"
+          && liveRefusal(Data(k401.utf8)) == "Incorrect API key provided: sk-bogus." && !wsBodyDone(["transfer-encoding": "chunked"], Data("5\r\nhello\r\n".utf8))
+          && wsBodyDone(["transfer-encoding": "chunked"], Data("5\r\nhello\r\n0\r\n\r\n".utf8))
+          && up?.status == 101 && up?.headers["sec-websocket-accept"] == "x" && upFrames == [WSMessage.text(Data("{}".utf8))])
+    do {
+        let big = Data((0..<70_000).map { UInt8($0 & 0xFF) }), mid = Data(repeating: 7, count: 300)
+        var bytes = wsFrame(0x1, Data("hi".utf8)) + wsFrame(0x2, mid) + wsFrame(0x1, big, mask: nil) + wsFrame(0x9, Data("p".utf8))
+        bytes += wsFrame(0x1, Data("frag".utf8), fin: false) + wsFrame(0x0, Data("ment".utf8)) + wsFrame(0x8, Data([0x03, 0xE8]) + Data("bye".utf8))
+        var r = WSReader(), got = [WSMessage]()
+        var i = 0
+        while i < bytes.count { let n = [1, 3, 7, 1000][i % 4]; got += r.feed(bytes.subdata(in: i..<min(bytes.count, i + n))); i += n }  // in odd pieces
+        let masked = wsFrame(0x1, Data("hi".utf8), mask: [1, 2, 3, 4])
+        var over = WSReader(); _ = over.feed(Data([0x82, 127, 0, 0, 0, 0, 0x7F, 0xFF, 0xFF, 0xFF]))
+        check("voice: WebSocket frames survive any split: 7-, 16- and 64-bit lengths, masked or not, fragments joined, pings, a close's code and reason",
+              got == [.text(Data("hi".utf8)), .binary(mid), .text(big), .ping(Data("p".utf8)), .text(Data("fragment".utf8)), .close(1000, "bye")]
+              && Array(masked) == [0x81, 0x82, 1, 2, 3, 4, UInt8(ascii: "h") ^ 1, UInt8(ascii: "i") ^ 2] && over.broken)
+    }
+    // the whole socket against a fake server on this Mac: the 400 page, a JSON 401, then an upgrade that sends events, a ping and a close
+    do {
+        final class Fake {
+            let l = try! NWListener(using: .tcp, on: .any), q = DispatchQueue(label: "fake")
+            var reply: (String) -> [Data] = { _ in [] }, requests = [String](), frames = [WSMessage]()
+            init() { l.newConnectionHandler = { [unowned self] c in c.start(queue: self.q); self.serve(c, Data(), nil) }; l.start(queue: q) }
+            func serve(_ c: NWConnection, _ buf: Data, _ r: WSReader?) {
+                c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [unowned self] d, _, done, _ in
+                    var buf = buf + (d ?? Data()), r = r
+                    if r == nil, let h = buf.range(of: Data("\r\n\r\n".utf8)) {
+                        let req = String(decoding: buf[..<h.upperBound], as: UTF8.self)
+                        self.requests.append(req); buf = Data(buf[h.upperBound...]); r = WSReader()
+                        let out = self.reply(req)
+                        for (n, o) in out.enumerated() { self.q.asyncAfter(deadline: .now() + 0.05 * Double(n)) { c.send(content: o, completion: .contentProcessed { _ in }) } }
+                    }
+                    if var rr = r, !buf.isEmpty { self.frames += rr.feed(buf); buf = Data(); r = rr }
+                    if !done { self.serve(c, buf, r) }
+                }
+            }
+        }
+        let fake = Fake()
+        let w0 = Date(); while fake.l.state != .ready && Date() < w0 + 3 { RunLoop.main.run(until: Date() + 0.02) }
+        func session(_ until: @escaping ([LiveEvent]) -> Bool) -> [LiveEvent] {
+            let l = LiveVoice(); l.endpoint = ("127.0.0.1", fake.l.port?.rawValue ?? 1, false)
+            var evs = [LiveEvent]()
+            l.open("sk-test", voice: "cedar") { evs.append($0) }
+            let end = Date() + 5; while !until(evs) && Date() < end { RunLoop.main.run(until: Date() + 0.02) }
+            l.close(); RunLoop.main.run(until: Date() + 0.1)
+            return evs
+        }
+        let closed = { (e: [LiveEvent]) in e.contains { if case .closed = $0 { return true }; return false } }
+        fake.reply = { _ in [cfReply.prefix(60), cfReply.dropFirst(60)] }  // in two pieces, the head split
+        let refused = session(closed)
+        fake.reply = { _ in [Data("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: \(k401.utf8.count)\r\n\r\n\(k401)".utf8)] }
+        let badKey = session(closed)
+        let audio = Data([1, 0, 2, 0]).base64EncodedString()
+        let delta = wsFrame(0x1, Data(#"{"type":"session.output_audio.delta","delta":"\#(audio)"}"#.utf8), mask: nil)
+        fake.reply = { req in
+            let n = req.components(separatedBy: "\r\n").first { $0.hasPrefix("Sec-WebSocket-Key: ") }.map { String($0.dropFirst(19)) } ?? ""
+            return [Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(wsAccept(n))\r\n\r\n".utf8)
+                    + wsFrame(0x1, Data(#"{"type":"session.started","session":{}}"#.utf8), mask: nil),  // in the 101's own packet
+                    delta.prefix(5), delta.dropFirst(5) + wsFrame(0x9, Data("p".utf8), mask: nil), wsFrame(0x8, Data([0x03, 0xE8]), mask: nil)]
+        }
+        let opened = session(closed)
+        RunLoop.main.run(until: Date() + 0.2)
+        let sent = fake.frames.compactMap { if case .text(let d) = $0 { return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] }; return nil }
+        check("voice: GPT-Live's socket says why the server refused it: Cloudflare's 400 page (\(refused)), a bad key (\(badKey))",
+              refused == [.closed("refused the connection (400: 400 Bad Request)")] && badKey == [.closed("refused the OpenAI key (401)")])
+        check("voice: GPT-Live's socket upgrades over HTTP/1.1, sends session.start once it's up, reads split frames, answers a ping, ends on a close (\(opened), \(fake.requests.count) requests, sent \(sent.compactMap { $0["type"] }), got \(fake.frames.filter { if case .text = $0 { return false }; return true }))",
+              fake.requests.count == 3 && fake.requests.allSatisfy { $0.hasPrefix("GET /v1/live/sessions HTTP/1.1\r\n") && $0.contains("\r\nAuthorization: Bearer sk-test\r\n") }
+              && opened == [.started, .audio(Data([1, 0, 2, 0])), .closed("closed the connection")]
+              && sent.first?["type"] as? String == "session.start" && ((sent.first?["session"] as? [String: Any])?["audio"] as? [String: Any]).flatMap { ($0["output"] as? [String: Any])?["voice"] as? String } == "cedar"
+              && fake.frames.contains(.pong) && fake.frames.contains(.close(1000, "")))
+        fake.l.cancel()
+    }
     // Settings' voice preview: a session of its own that speaks first, played from the first speech to the quiet after it
     let ps = liveStart(voice: "vesper", instructions: livePreviewRule)["session"] as? [String: Any]
     check("voice: a GPT-Live preview starts in the picked voice, told to say the line first; voice mode keeps its own rule",
