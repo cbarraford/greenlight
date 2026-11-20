@@ -711,46 +711,13 @@ func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
 }
 
 /// The window you were last in, in words for Chief: a terminal's project and tab, or the dashboard's open workspace.
-func focusLine(terminal id: Int?, project: String, _ o: [String: Any], console: ConsoleTarget? = nil) -> String {
+func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String {
     let s = { (k: String) in (o[k] as? String).map { String($0.prefix(200)) } ?? "" }
     if id != nil {
         let tab = s("name").isEmpty ? "" : ", on the tab for workspace \(s("name")) (\(s("path"))\(s("mr").isEmpty ? "" : ", \(s("mr"))"))"
         return "a Basement terminal window" + (project.isEmpty ? "" : " showing \(project)") + tab
     }
-    let foot = console.map { ", and the console footer under it on \($0.name) (\($0.ws.isEmpty ? "home" : $0.ws), tmux session \($0.session))" } ?? ""
-    return (s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open") + foot
-}
-
-/// What the dashboard's console footer shows: a tmux session, its worktree, the name its header shows; owned: the footer started it (a
-/// worktree with no tab yet), so closing the footer ends it. Every other session belongs to a Basement tab and closing only detaches.
-struct ConsoleTarget: Equatable { var session: String; var ws: String; var name: String; var owned = false }
-/// Chief's [console: …] → that target: a tmux session (mc-…), a worktree path or the end of one, or a tab's name, looked up in the Basement's
-/// saved tabs (each tab's tree of panes, {s: session} at the leaves); a worktree path with no tab gets `fresh`, a new shell there.
-/// What the footer is `showing` wins when it's the one asked for, so asking again never starts a second shell.
-/// ponytail: a tab with split panes shows its first one, as the layout doesn't save which pane had the focus
-func consoleTarget(_ said: String, tabs: [[String: Any]], fresh: String, showing: ConsoleTarget? = nil) -> ConsoleTarget? {
-    let w = said.trimmingCharacters(in: CharacterSet(charactersIn: "`'\" ")), sessionRe = #"^mc-[\w-]{1,64}$"#
-    guard !w.isEmpty else { return nil }
-    if let c = showing, w == c.session || (!c.ws.isEmpty && (c.ws == w || c.ws == w + "/" || c.ws.hasSuffix("/" + w))) || c.name.lowercased() == w.lowercased() { return c }
-    func sessions(_ n: Any?) -> [String] {
-        guard let n = n as? [String: Any] else { return [] }
-        if let s = n["s"] as? String { return s.range(of: sessionRe, options: .regularExpression) != nil ? [s] : [] }
-        return (n["kids"] as? [Any] ?? []).flatMap(sessions)
-    }
-    func label(_ ws: String, _ t: [String: Any]?) -> String {
-        if let n = t?["name"] as? String, !n.isEmpty { return String(n.prefix(80)) }
-        return ws.isEmpty ? "Home" : (ws as NSString).lastPathComponent
-    }
-    if w.range(of: sessionRe, options: .regularExpression) != nil {
-        let t = tabs.first { sessions($0["tree"]).contains(w) }, ws = t?["ws"] as? String ?? ""
-        return paneWhere(ws) == nil ? nil : ConsoleTarget(session: w, ws: ws, name: label(ws, t))
-    }
-    let path = w.count > 1 && w.hasSuffix("/") ? String(w.dropLast()) : w
-    let t = tabs.first { t in let ws = t["ws"] as? String ?? ""; return !ws.isEmpty && (ws == path || ws.hasSuffix("/" + path)) && !sessions(t["tree"]).isEmpty }
-        ?? tabs.first { ($0["name"] as? String ?? "").localizedCaseInsensitiveContains(w) && !sessions($0["tree"]).isEmpty }
-    if let t, let ws = t["ws"] as? String, paneWhere(ws) != nil, let s = sessions(t["tree"]).first { return ConsoleTarget(session: s, ws: ws, name: label(ws, t)) }
-    if path.hasPrefix("/"), paneWhere(path) != nil, fresh.range(of: sessionRe, options: .regularExpression) != nil { return ConsoleTarget(session: fresh, ws: path, name: label(path, nil), owned: true) }
-    return nil
+    return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
 }
 
 /// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
@@ -4434,7 +4401,7 @@ struct ChatView: View, Looked {
         let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
         func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : "working")\(g.type.isEmpty ? "" : " · \(g.type)")" }
         return Menu {
-            ForEach(a) { g in Button(say(g)) { delegate.toConsole(g.id) } }  // in Greenlight Center, the console footer
+            ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
         } label: {
             HStack(spacing: Theme.sp1) {
                 Circle().fill(onair ? accent : dot).frame(width: 7, height: 7)
@@ -5109,7 +5076,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focus && term.focus())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
-            let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o, console: id == nil && w === self.window && self.consoleOpen ? self.consoleAt : nil)
+            let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
             self.greenlight.focusPaths = o["paths"] as? [String]
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
@@ -5136,16 +5103,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); ride(up: false) }
         floorGo[ObjectIdentifier(w)] = (l1Floor, go)
         floorBar(w, Floors(s: l1Floor, c: greenlight, pick: { [unowned self] in l1Pick() }, go: go))
-        let root = NSView()  // the dashboard (over its console footer) and its overlays, left of the chat
-        dashSplit.isVertical = false
-        dashSplit.dividerStyle = .thin
-        dashSplit.wantsLayer = true; dashSplit.layer?.backgroundColor = NSColor.black.cgColor  // the 1pt divider shows this, as the web views' own backing
-        dashSplit.delegate = self
-        dashSplit.addArrangedSubview(fluid)
-        dashSplit.addArrangedSubview(consoleSlot)  // hidden: collapsed until Chief opens a console
-        dashSplit.setHoldingPriority(.defaultLow, forSubviewAt: 0)  // a window resize goes to the dashboard, the footer keeps its height
-        dashSplit.setHoldingPriority(.defaultLow + 1, forSubviewAt: 1)
-        for v in [dashSplit, inboxHost] as [NSView] {
+        let root = NSView()  // the dashboard and its overlays, left of the chat
+        for v in [fluid, inboxHost] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
             NSLayoutConstraint.activate([v.leadingAnchor.constraint(equalTo: root.leadingAnchor), v.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -5512,124 +5471,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return w
     }()
 
-    // the dashboard keeps 480pt, the chat pane 320pt; over the console footer, the dashboard keeps 160pt and the footer its header
-    func splitView(_ v: NSSplitView, constrainMinCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { max(p, v === dashSplit ? 160 : 480) }
-    func splitView(_ v: NSSplitView, constrainMaxCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat {
-        v === dashSplit ? min(p, v.bounds.height - App.consoleHead - v.dividerThickness) : min(p, v.bounds.width - 320)
-    }
-    /// The footer's 1pt divider is a few points taller to grab (its header drags too).
-    func splitView(_ v: NSSplitView, effectiveRect r: NSRect, forDrawnRect d: NSRect, ofDividerAt i: Int) -> NSRect { v === dashSplit ? r.insetBy(dx: 0, dy: -3) : r }
-
-    // MARK: the console footer: Chief's [console: …] while you're in Greenlight Center opens that terminal under the dashboard, which stays
-    // as it was (its page, the chat, your focus). It's terminal.html in console mode, one pane on the session; window id consoleId for termMessage.
-
-    static let consoleId = -1, consoleHead: CGFloat = 30  // the page's header (#chead): what a folded footer shows
-    let dashSplit = Split()
-    let consoleSlot: NSView = { let v = NSView(); v.isHidden = true; return v }()
-    var consoleWeb: WKWebView?, consoleLoaded = false, placingConsole = false
-    var consoleAt: ConsoleTarget?  // what it shows; nil while closed
-    var consoleOwned = Set<String>()  // sessions the footer started (a worktree with no tab): closing ends them
-    var consoleFolded = false
-    var consoleHeight = CGFloat(ud.double(forKey: "consoleHeight")) { didSet { ud.set(Double(consoleHeight), forKey: "consoleHeight") } }  // 0: the default
-    var consoleOpen: Bool { consoleAt != nil && !consoleSlot.isHidden }
-
-    /// Every terminal window's saved tabs, the orb's first: where a session or worktree Chief names is.
-    func savedTabs() -> [[String: Any]] {
-        ([0] + termWins.keys.filter { $0 > 0 }.sorted()).flatMap { id in
-            ((try? Data(contentsOf: termState(id))).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["tabs"] as? [[String: Any]] ?? []
-        }
-    }
-    func openConsole(_ t: ConsoleTarget) {
-        if t.owned { consoleOwned.insert(t.session) }
-        consoleAt = t
-        if consoleWeb == nil {
-            let cfg = WKWebViewConfiguration()
-            cfg.userContentController.add(self, name: "term")
-            let web = WKWebView(frame: .zero, configuration: cfg)
-            web.setValue(false, forKey: "drawsBackground")
-            web.translatesAutoresizingMaskIntoConstraints = false
-            consoleSlot.addSubview(web)
-            NSLayoutConstraint.activate([web.leadingAnchor.constraint(equalTo: consoleSlot.leadingAnchor), web.trailingAnchor.constraint(equalTo: consoleSlot.trailingAnchor),
-                                         web.topAnchor.constraint(equalTo: consoleSlot.topAnchor), web.bottomAnchor.constraint(equalTo: consoleSlot.bottomAnchor)])
-            consoleWeb = web
-            loadTerm(web, only: nil, console: true)
-        }
-        if consoleSlot.isHidden { consoleSlot.isHidden = false; dashSplit.adjustSubviews(); dashSplit.layoutSubtreeIfNeeded() }
-        setConsole(folded: false)
-        if consoleLoaded { pushConsole() }  // else the page's ready sends it
-        if !window.isVisible || !upstairs { show() }  // up front, but the focus stays where it was (the chat you asked from)
-        noteFocus(window)
-    }
-    func pushConsole() {
-        guard let t = consoleAt, let d = try? JSONSerialization.data(withJSONObject: ["session": t.session, "ws": t.ws, "name": t.name]),
-              let j = String(data: d, encoding: .utf8) else { return }
-        consoleWeb?.evaluateJavaScript("term.console(\(j))")
-    }
-    /// Folded: just its header, the session still attached (the page leaves the pty's size alone); open: the height you last left it at.
-    func setConsole(folded: Bool) {
-        consoleFolded = folded
-        consoleWeb?.evaluateJavaScript("window.term && term.folded(\(folded))")
-        guard !consoleSlot.isHidden else { return }
-        let room = dashSplit.bounds.height - dashSplit.dividerThickness
-        let open = min(max(consoleHeight > 0 ? consoleHeight : 280, 120), max(120, room - 160))
-        placingConsole = true
-        dashSplit.setPosition(room - (folded ? App.consoleHead : open), ofDividerAt: 0)
-        placingConsole = false
-    }
-    /// The header dragged to a height (the page measures it): below a sliver it folds, and back up it opens.
-    func resizeConsole(_ h: CGFloat) {
-        guard consoleOpen else { return }
-        if h < App.consoleHead + 40 { if !consoleFolded { setConsole(folded: true) }; return }
-        consoleHeight = h
-        if consoleFolded { consoleFolded = false; consoleWeb?.evaluateJavaScript("window.term && term.folded(false)") }
-        placingConsole = true
-        dashSplit.setPosition(dashSplit.bounds.height - dashSplit.dividerThickness - h, ofDividerAt: 0)
-        placingConsole = false
-        consoleHeight = consoleSlot.frame.height  // as the split allowed it
-    }
-    /// The native divider dragged: folded below a sliver, else its height is remembered.
-    func consoleDragged() {
-        guard consoleOpen, !placingConsole else { return }
-        let h = consoleSlot.frame.height, folded = h < App.consoleHead + 20
-        if folded != consoleFolded { consoleFolded = folded; consoleWeb?.evaluateJavaScript("window.term && term.folded(\(folded))") }
-        if !folded { consoleHeight = h }
-    }
-    /// Close (its × or ⌘W in it): the footer goes, its pane detaches; a session it started itself ends.
-    func closeConsole() {
-        consoleWeb?.evaluateJavaScript("window.term && term.consoleEnd && term.consoleEnd()")  // its close posts end the ptys
-        hideConsole()
-    }
-    func hideConsole() {
-        consoleAt = nil
-        if !consoleSlot.isHidden { consoleSlot.isHidden = true; dashSplit.adjustSubviews() }
-        if window.firstResponder.map({ ($0 as? NSView)?.isDescendant(of: consoleSlot) ?? false }) == true { window.makeFirstResponder(fluid) }
-        noteFocus(window)
-    }
-    /// The console page's messages it handles itself (true); the rest (in, size, url, copy, file, port, edit…) are a terminal's as anywhere.
-    func consoleMessage(_ b: [String: Any], _ web: WKWebView?) -> Bool {
-        let tid = b["id"] as? Int ?? 0
-        switch b["cmd"] as? String {
-        case "ready":
-            for k in ptys.keys where k.hasPrefix("\(App.consoleId):") { ptys.removeValue(forKey: k)?.stop() }
-            consoleLoaded = true
-            web?.evaluateJavaScript("term.folded(\(consoleFolded))")
-            pushConsole()
-        case "close":  // detach; the session lives on in its Basement tab, unless the footer started it
-            ptys.removeValue(forKey: "\(App.consoleId):\(tid)")?.stop()
-            if let s = b["session"] as? String, consoleOwned.remove(s) != nil, let at = paneWhere(b["ws"] as? String ?? "") {
-                ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
-            }
-        case "hide": hideConsole()  // its shell exited
-        case "consoleFold": setConsole(folded: !consoleFolded)
-        case "consoleResize": if let h = b["h"] as? Double { resizeConsole(CGFloat(h)) }
-        case "consoleClose": closeConsole()
-        case "consoleGo": if let t = consoleAt { toWorkspace(t.ws) }  // the Basement, on that worktree's tab
-        case "name": web?.evaluateJavaScript("term.named(\(b["tab"] as? Int ?? 0), '')")  // no AI names here: still answer, the page counts runs in flight
-        case "save", "notify", "badge", "side", "title", "band", "only", "window", "projects", "trees", "suggest", "tree", "look", "localName", "up", "pickdir": break  // the Basement's
-        default: return false
-        }
-        return true
-    }
+    // the dashboard keeps 480pt, the chat pane 320pt
+    func splitView(_ v: NSSplitView, constrainMinCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { max(p, 480) }
+    func splitView(_ v: NSSplitView, constrainMaxCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { min(p, v.bounds.width - 320) }
 
     // MARK: L1's projects: the Open projects dialog B1/B2 have (in the dashboard page), over the projects a terminal page last listed; the dashboard shows their repos
     // ponytail: until a terminal page has loaded, the list is empty and L1 shows All projects
@@ -5681,7 +5525,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var floorGo = [ObjectIdentifier: (FloorState, (String) -> Void)]()  // every window with floors (L1's too): where it is, how it rides; ⌘↑/⌘↓ use it
     lazy var termWindow: NSWindow = makeTermWindow(0, only: ud.array(forKey: "termOnly0") as? [String])  // the orb's window shows all projects unless you narrowed it
     var termWebs: [WKWebView] { termWins.values.compactMap { $0.contentView as? WKWebView } }
-    func termId(_ web: WKWebView?) -> Int? { web != nil && web === consoleWeb ? App.consoleId : termWins.first { $0.value.contentView === web }?.key }
+    func termId(_ web: WKWebView?) -> Int? { termWins.first { $0.value.contentView === web }?.key }
     func termState(_ wid: Int) -> URL { support.appendingPathComponent(wid == 0 ? "terminals.json" : "terminals-\(wid).json") }
     var projectsFile: URL { support.appendingPathComponent("projects.json") }
     var savedProjects: [[String: Any]] { (try? Data(contentsOf: projectsFile)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? [] }
@@ -5805,15 +5649,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return look.merging(termMode) { _, m in m }
     }
     var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
-    func loadTerm(_ web: WKWebView, only: [String]?, console: Bool = false) {
+    func loadTerm(_ web: WKWebView, only: [String]?) {
         guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
         let look = termLook()
-        if !console, let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
+        if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
         q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
-        if console { q.queryItems?.append(.init(name: "console", value: "1")) }
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
     }
@@ -5823,14 +5666,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if termWindow.isVisible && termWindow.isKeyWindow { termWindow.orderOut(nil); hideFloaters(); return }
         basement()
     }
-    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name. In Greenlight Center (the
-    /// dashboard, or the chat over it) it opens in the console footer, the dashboard staying as it is; in the Basement, terminal.html's
-    /// term.ws finds the tab there.
-    /// ponytail: in the Basement, the key window's tabs only; a tab in another Basement window isn't found
-    func toConsole(_ w: String) {
-        if upstairs || termWins[0]?.isVisible != true, let t = consoleTarget(w, tabs: savedTabs(), fresh: "mc-" + UUID().uuidString.prefix(10).lowercased(), showing: consoleOpen ? consoleAt : nil) { return openConsole(t) }
-        toWorkspace(w)
-    }
+    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
+    /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
+    func toConsole(_ w: String) { toWorkspace(w) }
     var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
     /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
     func toWorkspace(_ path: String) {
@@ -5921,7 +5759,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
         guard let wid = termId(web) else { return }  // a closed window's page, still flushing
-        if wid == App.consoleId, consoleMessage(b, web) { return }
         let tid = b["id"] as? Int ?? 0, id = "\(wid):\(tid)", cols = b["cols"] as? Int ?? 80, rows = b["rows"] as? Int ?? 24
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
@@ -6146,7 +5983,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let v = w.contentView, v.bounds.width > 0, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return done(nil) }
         v.cacheDisplay(in: v.bounds, to: rep)
         let base = NSImage(size: v.bounds.size); base.addRepresentation(rep)
-        let webs = ([fluid] + termWebs + [consoleWeb].compactMap { $0 }).filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }
+        let webs = ([fluid] + termWebs).filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }
         var parts = [(NSImage, NSRect)](), left = webs.count
         func finish() {
             done(NSImage(size: v.bounds.size, flipped: v.isFlipped) { _ in
@@ -6164,13 +6001,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// so the orb never covers them, and a small margin.
     var orbArea: NSRect {
         if !upstairs { return termWindow.convertToScreen(termWindow.contentLayoutRect).insetBy(dx: 8, dy: 8) }
-        let d = fluid, r = window.convertToScreen(d.convert(d.bounds, to: nil))
+        let d = split.arrangedSubviews[0], r = window.convertToScreen(d.convert(d.bounds, to: nil))
         return NSRect(x: r.minX, y: r.minY + 32, width: r.width - 64, height: r.height - 32).insetBy(dx: 8, dy: 8)
     }
-    func splitViewDidResizeSubviews(_ n: Notification) {
-        if n.object as? NSSplitView === dashSplit { consoleDragged() }
-        if termOrb.isVisible { placeOrb(termOrb) }
-    }
+    func splitViewDidResizeSubviews(_ n: Notification) { if termOrb.isVisible { placeOrb(termOrb) } }
     /// Saved as an offset from the window's bottom-right corner, where it starts.
     func placeOrb(_ p: NSWindow) {
         let a = orbArea, s = p.frame.size
@@ -6199,8 +6033,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return false
         }
         if let v = viewWindows.first(where: { $0.value === w })?.key { attach(v); return false }
-        if w === window, consoleOpen, NSApp.currentEvent?.type == .keyDown, let cw = consoleWeb,
-           (w.firstResponder as? NSView)?.isDescendant(of: cw) == true { closeConsole(); return false }  // ⌘W in the console footer closes it
         if w === window { hideFloaters() }
         return true
     }
@@ -6491,25 +6323,6 @@ func selfTest() {
     check("agents button: agents only, the one asking you first",
           agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
                     ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
-    let ctabs: [[String: Any]] = [["ws": "/w/selkie", "name": "", "tree": ["col": false, "kids": [["s": "mc-a1"], ["s": "mc-a2"]]]],
-                                  ["ws": "@devbox", "name": "Deploy shell", "tree": ["s": "mc-b1"]], ["ws": "/w/bad", "tree": ["s": "x; rm"]]]
-    check("console footer: a session, a worktree (or its end) and a tab name find their tab; a bare path starts its own shell; nothing else does",
-          consoleTarget("mc-a2", tabs: ctabs, fresh: "mc-new") == ConsoleTarget(session: "mc-a2", ws: "/w/selkie", name: "selkie")
-          && consoleTarget("selkie", tabs: ctabs, fresh: "mc-new") == ConsoleTarget(session: "mc-a1", ws: "/w/selkie", name: "selkie")
-          && consoleTarget("`/w/selkie/`", tabs: ctabs, fresh: "mc-new")?.session == "mc-a1"
-          && consoleTarget("deploy", tabs: ctabs, fresh: "mc-new") == ConsoleTarget(session: "mc-b1", ws: "@devbox", name: "Deploy shell")
-          && consoleTarget("mc-zz9", tabs: ctabs, fresh: "mc-new") == ConsoleTarget(session: "mc-zz9", ws: "", name: "Home")
-          && consoleTarget("/w/fresh", tabs: ctabs, fresh: "mc-new") == ConsoleTarget(session: "mc-new", ws: "/w/fresh", name: "fresh", owned: true)
-          && consoleTarget("/w/bad", tabs: ctabs, fresh: "mc-new")?.owned == true && consoleTarget("nope", tabs: ctabs, fresh: "mc-new") == nil
-          && consoleTarget("/w/../etc", tabs: ctabs, fresh: "mc-new") == nil && consoleTarget("", tabs: ctabs, fresh: "mc-new") == nil)
-    let showing = ConsoleTarget(session: "mc-own", ws: "/w/fresh", name: "fresh", owned: true)
-    check("console footer: asking again for what it shows reuses it, never a second shell; another one still switches",
-          consoleTarget("/w/fresh", tabs: ctabs, fresh: "mc-new2", showing: showing) == showing && consoleTarget("fresh", tabs: ctabs, fresh: "mc-new2", showing: showing) == showing
-          && consoleTarget("mc-own", tabs: ctabs, fresh: "mc-new2", showing: showing) == showing && consoleTarget("selkie", tabs: ctabs, fresh: "mc-new2", showing: showing)?.session == "mc-a1")
-    check("console footer: Chief hears what it shows, beside the dashboard's page",
-          focusLine(terminal: nil, project: "", ["page": "selkie"], console: ConsoleTarget(session: "mc-a1", ws: "/w/selkie", name: "selkie"))
-            == "the dashboard, with workspace selkie open, and the console footer under it on selkie (/w/selkie, tmux session mc-a1)"
-          && focusLine(terminal: nil, project: "", ["page": "selkie"]) == "the dashboard, with workspace selkie open")
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
