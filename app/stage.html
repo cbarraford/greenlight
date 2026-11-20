@@ -10,41 +10,173 @@
 @media (prefers-color-scheme: light){:root{--bg:var(--mc-bg,#FFFFFF);--text:var(--mc-text,#1F2328);--text2:var(--mc-text2,#3D444D);
   --dim:var(--mc-dim,#59636E);--card:var(--mc-surface,#F6F8FA);--line:var(--mc-line,#D1D9E0);--accent:var(--mc-accent,#0969DA)}}
 *{box-sizing:border-box}
+:root{--mono:ui-monospace,"SF Mono",Menlo,monospace}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:15px/1.45 var(--font);-webkit-font-smoothing:antialiased;overflow:auto}
-#s{min-height:100%;padding:20px;display:flex;flex-direction:column;justify-content:center;gap:14px;animation:in .18s ease-out}
+/* Ledger: a mono eyebrow, the headline in the look's font, then rows on hairlines. Each look below only changes flavor. */
+#s{min-height:100%;padding:24px;display:flex;flex-direction:column;justify-content:center;gap:6px;animation:in .18s ease-out}
 @keyframes in{from{opacity:0;transform:translateY(4px)}}
-h1{margin:0;font-size:22px;line-height:1.25;font-weight:650;display:flex;gap:10px;align-items:baseline}
-.icon{font-size:26px}
-.stat{font-size:56px;font-weight:700;line-height:1;color:var(--accent);font-variant-numeric:tabular-nums}
-.items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;counter-reset:n}
-.items li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;counter-increment:n}
-.items b{display:block;font-weight:600}
-.items span{color:var(--text2);font-size:13px}
-.steps li::before{content:counter(n);float:left;width:22px;height:22px;margin:0 10px 0 0;border-radius:50%;background:var(--accent);
-  color:var(--bg);font:600 12px/22px var(--font);text-align:center}
-.flow{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px}
-.flow li+li::before{content:"→";color:var(--dim);margin:0 8px 0 -2px}
-.flow li{display:flex;align-items:center;background:none;border:0;padding:0}
-.flow li b{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 12px}
+.eyebrow{font:11px/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+h1{margin:0 0 12px;font-size:22px;line-height:1.25;font-weight:600}
+.cursor{display:inline-block;width:10px;height:18px;margin-left:6px;vertical-align:-3px;background:var(--accent);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.sub{font:13px/1.5 var(--mono);color:var(--text2)}
+.stat{font:700 48px/1 var(--mono);color:var(--accent);font-variant-numeric:tabular-nums;margin-bottom:14px}
+.items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;counter-reset:n}
+.items li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:3px;counter-increment:n}
+.items li:first-child{border-top:1px solid var(--line)}
+.items b{font-weight:600}
+.items span{font:12px/1.45 var(--mono);color:var(--text2)}
+.steps li{display:grid;grid-template-columns:32px minmax(0,1fr);column-gap:8px;border:0!important;padding:6px 0}
+.steps li::before{content:"[ ]";grid-row:1/span 2;font:13px/1.6 var(--mono);color:var(--dim)}
+.steps li:first-child::before{content:"[>]";color:var(--accent)}
+.steps li>*{grid-column:2}
+.items.stat li{flex-direction:row;align-items:baseline;gap:8px;border:0;padding:3px 0;font:13px var(--mono)}
+.items.stat b{font-weight:400;color:var(--text2)}
+.items.stat li::after{content:"";flex:1;order:1;border-bottom:1px dotted var(--line)}
+.items.stat span{order:2;font-weight:600;color:var(--text)}
+.flow{flex-direction:row;flex-wrap:wrap;gap:6px 0;font:14px var(--mono)}
+.flow li{flex-direction:row;border:0!important;padding:0}
+.flow li+li::before{content:"→";color:var(--dim);margin:0 10px}
 .flow li span{display:none}
-.compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-.quote li{background:none;border:0;border-left:3px solid var(--accent);border-radius:0;font-size:19px}
-.wait{align-items:center;text-align:center;color:var(--text2)}
-.wait h1{justify-content:center}
-.dots{display:flex;gap:6px}
-.dots i{width:9px;height:9px;border-radius:50%;background:var(--accent);animation:b 1s infinite ease-in-out}
-.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
-@keyframes b{0%,80%,100%{opacity:.25;transform:scale(.8)}40%{opacity:1;transform:none}}
-.sub{color:var(--dim);font-size:13px}
+.compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px}
+.compare li{border:0;border-top:2px solid var(--line)!important;padding-top:10px}
+.compare li:first-child{border-top-color:var(--accent)!important}
+.quote li{border:0!important;border-left:3px solid var(--accent)!important;padding:4px 0 4px 16px;font-size:19px}
+.quote b{font-weight:500}
+.bars{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;gap:12px 10px;align-items:center;font:13px var(--mono);margin-top:6px}
+.bar{display:contents}
+.bar .k{color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{height:14px;background:var(--card)}
+.track i{display:block;height:100%;background:var(--accent)}
+.bar b{font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.foot{margin-top:18px;padding-top:10px;border-top:1px solid var(--line);font:12px var(--mono);color:var(--text2)}
 iframe{border:0;width:100%;height:100%;display:block;background:var(--bg)}
 #s.frame{padding:0;height:100%}
-svg.chart{width:100%;height:auto;max-height:62vh;overflow:visible;font:12px var(--font)}
+svg.chart{width:100%;height:auto;max-height:62vh;overflow:visible;font:12px var(--mono)}
 svg.chart text{fill:var(--dim)}
 svg.chart text.v{fill:var(--text);font-size:13px;font-weight:600}
 svg.chart .axis{stroke:var(--line)}
-.legend{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--text2)}
-.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--text2);font:12px var(--mono)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:6px}
+
+/* The looks (Greenlight.swift sets data-look). */
+[data-look=conversation],[data-look=editorial]{.cursor{width:auto;height:auto;margin:0;background:none;color:var(--accent);animation:none}.cursor::after{content:"…"}}
+[data-look=conversation]{
+  .eyebrow{font:600 12px var(--font);letter-spacing:0;text-transform:none}
+  .items span,.sub,.foot,.bars,.items.stat b{font-family:var(--font)}
+  .items.list,.items.stat{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .items.list li,.items.stat li{padding:10px 12px;border-top:0;border-bottom:1px solid var(--line)}
+  .items.list li:last-child,.items.stat li:last-child{border-bottom:0}
+  .items.stat li::after{border:0}
+  .items.stat span{font-family:var(--mono)}
+  .steps li::before{content:"";width:16px;height:16px;margin-top:3px;border:1.5px solid var(--line);border-radius:4px}
+  .steps li:first-child::before{content:"";border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+  .track{height:12px;border-radius:6px;border:1px solid var(--line);overflow:hidden}
+}
+[data-look=onair]{
+  h1{font-size:30px;line-height:1.05;font-weight:800;letter-spacing:-.02em;text-transform:uppercase}
+  .eyebrow{font:800 11px var(--font);letter-spacing:.16em;color:var(--accent)}
+  .items:not(.flow,.compare,.quote),.bars{border-top:3px solid var(--text);padding-top:6px}
+  .items li:first-child{border-top:0}
+  .items b{font-size:16px;font-weight:700}
+  .items span,.sub{font:13px var(--font)}
+  .items.stat b{font:800 11px var(--font);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .steps li::before,.steps li:first-child::before{content:counter(n);font:800 20px/1.2 var(--font)}
+  .stat,.bars{font-family:var(--font);font-weight:800}
+  .bar .k{text-transform:uppercase;letter-spacing:.1em;font-size:12px}
+  .track{height:18px}
+  .track i{background:var(--text)}
+  .track i.peak{background:var(--accent)}
+  .foot{border:0;padding:8px 10px;background:var(--accent);color:var(--bg);font:800 12px var(--font);letter-spacing:.1em;text-transform:uppercase}
+}
+[data-look=phosphor]{
+  body{text-shadow:0 0 6px color-mix(in srgb,var(--accent) 45%,transparent)}
+  h1{font-size:18px;font-weight:700}
+  h1::before{content:"> "}
+  .eyebrow{letter-spacing:0;text-transform:none;font-size:12px}
+  .eyebrow::before{content:"-- "}.eyebrow::after{content:" --"}
+  .items li{border-bottom-style:dashed}
+  .items li:first-child{border-top-style:dashed}
+  .foot{border-top-style:dashed}
+  .items b{font-weight:400}
+  .items span{color:var(--dim)}
+  .track{background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--dim) 35%,transparent) 0 8px,transparent 8px 10px)}
+  .track i{background:repeating-linear-gradient(90deg,var(--accent) 0 8px,transparent 8px 10px)}
+  .legend i{border-radius:0}
+}
+[data-look=editorial]{
+  #s::before{content:"";border-top:3px solid var(--text);margin-bottom:12px}
+  #s.frame::before{display:none}
+  h1{font-size:28px;line-height:1.15}
+  .eyebrow{font:700 11px -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.14em;color:var(--accent)}
+  .items span,.sub,.foot,.bar .k,.items.stat b{font:italic 14px var(--font);color:var(--text2)}
+  .items b{font-size:17px}
+  .items li:first-child{border-top-color:var(--text)}
+  .steps li{grid-template-columns:28px minmax(0,1fr)}
+  .steps li::before,.steps li:first-child::before{content:counter(n);font:600 26px/1 var(--font);color:var(--line)}
+  .steps li:first-child::before{color:var(--accent)}
+  .stat{font-family:var(--font)}
+  .track{height:10px;background:none;border-bottom:1px solid var(--line)}
+  .track i{background:var(--text)}
+  .track i.peak{background:var(--accent)}
+  .foot{border-top-color:var(--text)}
+}
+/* HUD: instrument panel. Corner brackets on the frame, mono caps labels, segmented cyan fills, a faint glow on live values. */
+[data-look=hud] #s{font-variant-numeric:tabular-nums;margin:10px;border:1px solid var(--line);min-height:calc(100% - 20px);
+  background:linear-gradient(var(--accent),var(--accent)) 0 0/12px 1px,linear-gradient(var(--accent),var(--accent)) 0 0/1px 12px,
+  linear-gradient(var(--accent),var(--accent)) 100% 0/12px 1px,linear-gradient(var(--accent),var(--accent)) 100% 0/1px 12px,
+  linear-gradient(var(--accent),var(--accent)) 0 100%/12px 1px,linear-gradient(var(--accent),var(--accent)) 0 100%/1px 12px,
+  linear-gradient(var(--accent),var(--accent)) 100% 100%/12px 1px,linear-gradient(var(--accent),var(--accent)) 100% 100%/1px 12px;background-repeat:no-repeat}
+[data-look=hud] .eyebrow{letter-spacing:.16em}
+[data-look=hud] h1 .cursor{box-shadow:0 0 8px color-mix(in srgb,var(--accent) 60%,transparent)}
+[data-look=hud] .sub,[data-look=hud] .foot{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+[data-look=hud] .items li>span{font-family:var(--mono);font-size:12px}
+[data-look=hud] .items.list li>b{font-weight:600}
+[data-look=hud] .items.steps li::before{content:"0" counter(n);color:var(--dim);letter-spacing:.08em}
+[data-look=hud] .items.steps li:first-child::before{content:"01";color:var(--accent)}
+[data-look=hud] .items.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px}
+[data-look=hud] .items.stat li{flex-direction:column;align-items:flex-start;gap:4px;background:var(--card);border:1px solid var(--line);padding:8px 10px}
+[data-look=hud] .items.stat li::after{display:none}
+[data-look=hud] .items.stat li>b{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+[data-look=hud] .items.stat li>span{font-size:16px;color:var(--text)}
+[data-look=hud] .items.flow li>b{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);padding:4px 8px}
+[data-look=hud] .items.compare li{background:var(--card);border:1px solid var(--line);border-top:1px solid var(--accent);padding:10px}
+[data-look=hud] .items.quote li{border-left-width:1px;box-shadow:-3px 0 10px -4px var(--accent)}
+[data-look=hud] .stat{text-shadow:0 0 12px color-mix(in srgb,var(--accent) 45%,transparent)}
+[data-look=hud] .bars .k{text-transform:uppercase;letter-spacing:.08em;font-size:12px}
+[data-look=hud] .track{height:12px;border:1px solid var(--line);padding:1px;background:repeating-linear-gradient(90deg,transparent 0 calc(100%/6 - 1px),var(--line) calc(100%/6 - 1px) calc(100%/6))}
+[data-look=hud] .track>i{background:repeating-linear-gradient(90deg,var(--accent) 0 6px,transparent 6px 8px);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 35%,transparent)}
+[data-look=hud] svg.chart text{font-family:var(--mono);letter-spacing:.06em}
+/* Zen: quiet and airy. Light weights, lowercase eyebrows, hairlines, dims do the work, accent once. */
+[data-look=zen] #s{padding:32px;gap:16px}
+[data-look=zen] .eyebrow{font:12px var(--font);letter-spacing:.02em;text-transform:lowercase;color:var(--dim)}
+[data-look=zen] h1{font-size:26px;line-height:1.3;font-weight:400}
+[data-look=zen] h1 .cursor{width:2px;background:var(--accent)}
+[data-look=zen] .sub{color:var(--dim);font-size:13px}
+[data-look=zen] ul.items{gap:0}
+[data-look=zen] ul.items li{border:0;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding:14px 0}
+[data-look=zen] ul.items li b{font-weight:500}
+[data-look=zen] ul.items li span{color:var(--dim)}
+[data-look=zen] .items.steps li{border:0;padding:8px 0}
+[data-look=zen] .items.steps li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--line);margin:7px 14px 0 0}
+[data-look=zen] .items.steps li:first-child::before{content:"";background:var(--accent)}
+[data-look=zen] ul.stat li{border:0;padding:4px 0}
+[data-look=zen] ul.stat li::after{border:0}
+[data-look=zen] ul.stat li b{font-weight:400;color:var(--dim)}
+[data-look=zen] ul.stat li span{color:var(--text2)}
+[data-look=zen] ul.flow li b{font-weight:400}
+[data-look=zen] ul.compare li{border-top:1px solid var(--line)}
+[data-look=zen] ul.quote li{border-left:1px solid var(--accent);font-size:20px;font-weight:300;padding-left:18px}
+[data-look=zen] .stat{font-weight:300;color:var(--text)}
+[data-look=zen] .bars{gap:18px}
+[data-look=zen] .bar .track{height:4px;border-radius:2px;background:var(--card)}
+[data-look=zen] .bar .track i{border-radius:2px;background:var(--dim)}
+[data-look=zen] .bar b{font-weight:400;color:var(--text2)}
+[data-look=zen] .foot{font-family:var(--font);border-top:0;color:var(--dim)}
+[data-look=zen] .bar .track i.peak{background:var(--accent)}
+/* Chief's own page fills the stage in every look. */
+[data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
 </style></head>
 <body><div id="s"></div>
 <script>
@@ -54,14 +186,13 @@ const vars = () => { const cs = getComputedStyle(document.documentElement);  // 
 function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); }
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
-  wait(title, sub){ const d = $("div", "dots"); d.append($("i"), $("i"), $("i")); show([d, $("h1", null, title || "One minute"), $("div", "sub", sub || "")], "wait"); },
-  // Haiku's (or the local fallback's) drawing: {title, kind, icon, stat, items:[{label, detail}]}; text only, never markup.
+  wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], "wait"); },
+  // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   spec(o){
     const kind = ["list", "steps", "stat", "flow", "compare", "quote"].includes(o.kind) ? o.kind : "list";
-    const h = $("h1"); if (o.icon) h.append($("span", "icon", o.icon)); h.append($("span", null, o.title || ""));
     const ul = $(kind === "steps" ? "ol" : "ul", "items " + kind);
     for (const it of (o.items || []).slice(0, 8)) { const li = $("li"); li.append($("b", null, it.label || "")); if (it.detail) li.append($("span", null, it.detail)); ul.append(li); }
-    show([h].concat(o.stat ? [$("div", "stat", o.stat)] : [], ul.children.length ? [ul] : []));
+    show((o.eyebrow ? [$("div", "eyebrow", o.eyebrow)] : []).concat([$("h1", null, o.title || "")], o.stat ? [$("div", "stat", o.stat)] : [], ul.children.length ? [ul] : []));
   },
   // Chief's chart (a ```stage block of JSON): {chart: bar|line|pie, title, sub, labels, series: [{name, values, color}], stacked, note}.
   // Drawn here so Chief sends numbers, not markup: a few hundred tokens instead of a hand-written SVG. Text only, like spec.
@@ -71,8 +202,17 @@ window.stage = {
       num = v => (isFinite(+v) ? +v : 0), fmt = v => new Intl.NumberFormat(undefined, {notation: "compact", maximumFractionDigits: 1}).format(v),
       S = (tag, a, text) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const k in a) e.setAttribute(k, a[k]); if (text != null) e.textContent = text; return e; };
     const kind = ["bar", "line", "pie"].includes(o.chart) ? o.chart : "bar", labels = (o.labels || []).slice(0, 40).map(String),
-      ser = (o.series || []).slice(0, 8).map((s, i) => ({name: String(s.name ?? ""), v: labels.map((_, j) => num((s.values || [])[j])), c: col(s.color, i)}));
+      ser = (o.series || []).slice(0, 8).map((s, i) => ({name: String(s.name ?? ""), v: labels.map((_, j) => num((s.values || [])[j])), c: col(s.color, i), c0: s.color}));
     const W = 600, H = 300, T = 26, B = 28, g = S("svg", {viewBox: `0 0 ${W} ${H}`, class: "chart"}), y0 = H - B, h = y0 - T, legend = [];
+    if (kind === "bar" && ser.length === 1 && labels.length <= 16) {  // Ledger rows: label, bar, value; the peak marked for looks that light it
+      const v = ser[0].v, max = Math.max(1e-9, ...v), peak = v.indexOf(Math.max(...v)), rows = $("div", "bars");
+      labels.forEach((l, j) => { const r = $("div", "bar"), t = $("div", "track"), f = $("i", j === peak ? "peak" : null);
+        f.style.width = Math.max(0, v[j]) / max * 100 + "%"; if (PAL[ser[0].c0]) f.style.background = PAL[ser[0].c0];
+        t.append(f); r.append($("span", "k", l), t, $("b", null, fmt(v[j]))); rows.append(r); });
+      const tot = v.reduce((a, b) => a + b, 0);
+      return show((o.sub ? [$("div", "eyebrow", o.sub)] : []).concat([$("h1", null, o.title || ""), rows,
+        $("div", "foot", o.note || `total ${fmt(tot)} · avg ${fmt(tot / (v.length || 1))} · peak ${labels[peak] ?? ""}`)]));
+    }
     if (kind === "pie") {  // one series, a slice per label
       const v = ser[0]?.v || [], tot = v.reduce((a, b) => a + b, 0) || 1, R = 120, cx = W / 2, cy = H / 2; let a = -Math.PI / 2;
       v.forEach((x, i) => { const b = a + x / tot * 2 * Math.PI, c = col(null, i), p = (t, r = R) => `${cx + r * Math.cos(t)} ${cy + r * Math.sin(t)}`;
@@ -97,7 +237,7 @@ window.stage = {
       ser.forEach(s => legend.push([s.c, (kind === "bar" ? fmt(s.v.reduce((a, b) => a + b, 0)) + " " : "") + s.name]));
     }
     const lg = $("div", "legend"); if (ser.length > 1 || kind === "pie") legend.forEach(([c, t]) => { const d = $("span", null, t), i = $("i"); i.style.background = c; d.prepend(i); lg.append(d) });
-    show([$("h1", null, o.title || "")].concat(o.sub ? [$("div", "sub", o.sub)] : [], [g], lg.children.length ? [lg] : [], o.note ? [$("div", "sub", o.note)] : []));
+    show((o.sub ? [$("div", "eyebrow", o.sub)] : []).concat([$("h1", null, o.title || ""), g], lg.children.length ? [lg] : [], o.note ? [$("div", "foot", o.note)] : []));
   },
   // Chief's own page (a ```stage block): sandboxed, so it can't run scripts, reach the app or load anything.
   html(str){
