@@ -574,13 +574,14 @@ func openAIKeySource() -> String {
     if settingsOpenAIKey() != nil { return "Stored in your Keychain." }
     guard let env = peekEnvironmentOpenAIKey() else { return "Looking for OPENAI_API_KEY in your shell…" }
     return env == nil ? "No key: set one here, or export OPENAI_API_KEY in your shell and relaunch Greenlight."
-        : "Using OPENAI_API_KEY from your shell; a key set here comes first."
+        : "Using OPENAI_API_KEY; a key set here comes first."
 }
 /// OPENAI_API_KEY from this app's environment, else your login shell's: an app opened from the Finder or the Dock gets launchd's
 /// environment, without your shell's exports. Read once a launch on envKeyQueue, so a caller that needs the key waits for the one
 /// read and Settings (peek) never does. The selftest sets envKeyRead.
 var envKeyRead: (done: Bool, key: String?) = (false, nil)
 private let envKeyLock = NSLock(), envKeyQueue = DispatchQueue(label: "env-key")
+private var envKeyStarted = false  // peek started the read: Settings redraws ask once, not on every render
 func environmentOpenAIKey(_ env: [String: String] = ProcessInfo.processInfo.environment) -> String? { envKeyQueue.sync { readEnvironmentOpenAIKey(env) } }
 /// On envKeyQueue: the stored answer, else the read.
 private func readEnvironmentOpenAIKey(_ env: [String: String]) -> String? {
@@ -593,8 +594,9 @@ private func readEnvironmentOpenAIKey(_ env: [String: String]) -> String? {
 }
 /// The read's result without waiting: .some(key or nil) once read; before that nil, and the read starts (Settings redraws when it's in).
 func peekEnvironmentOpenAIKey() -> String?? {
-    envKeyLock.lock(); let r = envKeyRead; envKeyLock.unlock()
+    envKeyLock.lock(); let r = envKeyRead, start = !r.done && !envKeyStarted; envKeyStarted = true; envKeyLock.unlock()
     if r.done { return .some(r.key) }
+    guard start else { return nil }
     envKeyQueue.async { _ = readEnvironmentOpenAIKey(ProcessInfo.processInfo.environment); DispatchQueue.main.async { (NSApp.delegate as? App)?.greenlight.objectWillChange.send() } }
     return nil
 }
@@ -617,8 +619,9 @@ func shellVariable(_ name: String, shell: String, timeout: Double = 5) -> String
         lock.lock(); defer { lock.unlock() }
         guard !over else { return }
         data += d
-        if data.count > 1 << 20 { data = data.suffix(64 << 10) }  // a noisy rc: keep the tail, where the value comes
-        if d.isEmpty || data.range(of: Data(close.utf8)) != nil { over = true; h.readabilityHandler = nil; got.signal() }  // EOF, or the value is in
+        let done = d.isEmpty || data.range(of: Data(close.utf8)) != nil  // EOF, or the value is in
+        if !done && data.count > 1 << 20 { data = data.suffix(64 << 10) }  // a noisy rc: keep the tail (the open marker is in it, or still to come)
+        if done { over = true; h.readabilityHandler = nil; got.signal() }
     }
     defer { out.fileHandleForReading.readabilityHandler = nil }  // the handle closes once released: never under a running handler
     do { try p.run() } catch { return nil }
@@ -630,7 +633,7 @@ func shellVariable(_ name: String, shell: String, timeout: Double = 5) -> String
 }
 /// Read OPENAI_API_KEY again on next use: you may have exported one since launch (Set key… does this). Settings redraws to start it.
 func forgetEnvironmentOpenAIKey() {
-    envKeyQueue.async { envKeyLock.lock(); envKeyRead = (false, nil); envKeyLock.unlock(); DispatchQueue.main.async { (NSApp.delegate as? App)?.greenlight.objectWillChange.send() } }
+    envKeyQueue.async { envKeyLock.lock(); envKeyRead = (false, nil); envKeyStarted = false; envKeyLock.unlock(); DispatchQueue.main.async { (NSApp.delegate as? App)?.greenlight.objectWillChange.send() } }
 }
 /// The Keychain calls `keychain` makes; the selftest swaps in fakes.
 struct KeychainOps {
@@ -2274,8 +2277,9 @@ func liveRefusal(_ body: Data, _ h: [String: String] = [:]) -> String {
     let t = String(decoding: body, as: UTF8.self)
     if let m = message(t) { return m }
     if let x = h["x-error-json"].flatMap({ Data(base64Encoded: $0) }), let m = message(String(decoding: x, as: UTF8.self)) { return m }
-    if let r = t.range(of: #"(?<=<title>)[^<]*"#, options: .regularExpression), let title = t[r].trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty { return title }
-    let plain = t.range(of: "<title", options: .caseInsensitive) != nil ? "" : t.trimmingCharacters(in: .whitespacesAndNewlines)  // a page with a blank title: no markup
+    let title = t.range(of: #"(?i)(?<=<title)(\s[^>]*)?>[^<]*"#, options: .regularExpression).map { t[$0].drop { $0 != ">" }.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines) }
+    if let title, !title.isEmpty { return title }
+    let plain = title != nil ? "" : t.trimmingCharacters(in: .whitespacesAndNewlines)  // a page with a blank title: no markup
     if !plain.isEmpty { return String(plain.prefix(120)) }
     let from = [h["server"], h["content-type"]].compactMap { $0 }.joined(separator: ", ")
     return "an empty reply" + (from.isEmpty ? "" : " from \(from)")
@@ -2478,7 +2482,8 @@ final class LiveVoice {
     /// `ref` (a request id) goes on every refusal, so a screenshot of one is enough to look it up.
     static func why(_ code: Int, _ detail: String = "", _ err: Error? = nil, ref: String? = nil) -> String {
         let d = detail.hasPrefix("\(code) ") ? String(detail.dropFirst("\(code) ".count)) : detail  // Cloudflare's title has the code
-        let more = (d.isEmpty ? "" : ": \(d.hasSuffix(".") ? String(d.dropLast()) : d)") + (ref.map { "; \($0)" } ?? "")
+        let r = d.hasSuffix(".") ? String(d.dropLast()) : d
+        let more = (r.isEmpty ? "" : ": \(r)") + (ref.map { "; \($0)" } ?? "")
         switch code {
         case 401: return "refused the OpenAI key (401\(ref.map { "; \($0)" } ?? ""))"
         case 403, 404: return "isn't available to this OpenAI key's project (\(code)\(more)): it needs access to \(model)"
@@ -7733,6 +7738,8 @@ func selfTest() {
               && liveRefusal(Data(#"{"error":{"message":"","code":" ","type":""}}"#.utf8), ["x-error-json": xe]) == "Voice sessions are not enabled for this project."
               && liveRefusal(Data("<html><title> </title></html>".utf8), ["server": "nginx"]) == "an empty reply from nginx"
               && liveRefusal(Data("<title>\n</title>".utf8)) == "an empty reply"
+              && liveRefusal(Data("<HTML><TITLE>Forbidden</TITLE></HTML>".utf8)) == "Forbidden" && liveRefusal(Data(#"<title lang="en"> Blocked </title>"#.utf8)) == "Blocked"
+              && LiveVoice.why(400, ".") == "refused the connection (400)"
               && LiveVoice.why(400, "Voice is off.") == "refused the connection (400: Voice is off)"
               && LiveVoice.why(403, "", ref: "request req_3").contains("(403; request req_3)"))
     }
@@ -7820,8 +7827,8 @@ func selfTest() {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-shell-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let sh = dir.appendingPathComponent("sh"), slow = dir.appendingPathComponent("slow"), held = dir.appendingPathComponent("held")
-        try? "#!/bin/sh\necho 'rc noise <<greenlight>>x <</greenlight>> <</'\nOPENAI_API_KEY='sk-shell'\neval \"$2\"\necho trailing\n".write(to: sh, atomically: true, encoding: .utf8)
-        try? "#!/bin/sh\ntrap '' TERM\nsleep 4\n".write(to: slow, atomically: true, encoding: .utf8)  // ignores SIGTERM, as an interactive shell does
+        try? "#!/bin/sh\necho 'rc noise'\nOPENAI_API_KEY='sk-shell'\neval \"$2\"\necho trailing\n".write(to: sh, atomically: true, encoding: .utf8)
+        try? "#!/bin/sh\ntrap '' TERM\nsleep 30\n".write(to: slow, atomically: true, encoding: .utf8)  // ignores SIGTERM, as an interactive shell does
         try? "#!/bin/sh\nsleep 4 &\nOPENAI_API_KEY='sk-held'\neval \"$2\"\nsleep 4\n".write(to: held, atomically: true, encoding: .utf8)  // a prompt helper holding stdout
         for f in [sh, slow, held] { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path) }
         let fromShell = shellVariable("OPENAI_API_KEY", shell: sh.path), s0 = Date()
