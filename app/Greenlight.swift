@@ -7141,17 +7141,17 @@ func selfTest() {
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
-    let wp: [[String: Any]] = [["name": "octo/rsi-loop", "path": "/w/widgets/rsi-loop", "repo": "widgets", "state": "needs"],
+    let wp: [[String: Any]] = [["name": "ana/rsi-loop", "path": "/w/ledger/rsi-loop", "repo": "ledger", "state": "needs"],
                                ["name": "chat-scope", "path": "/w/greenlight/chat-scope", "repo": "greenlight", "state": "needs"],
                                ["name": "made-since", "path": "/w/greenlight/made-since", "repo": "greenlight", "state": "needs"],
                                ["name": "no-repo", "path": "/w/x/no-repo", "repo": "", "state": "needs"],
-                               ["name": "fix-ci", "path": "/w/widgets/fix-ci", "repo": "widgets", "state": "needs"],
+                               ["name": "fix-ci", "path": "/w/ledger/fix-ci", "repo": "ledger", "state": "needs"],
                                ["name": "fix-ci", "path": "/w/greenlight/fix-ci", "repo": "greenlight", "state": "working"]]
-    let wn = ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal", "fix-ci": "ci"]
+    let wn = ["ana/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal", "fix-ci": "ci"]
     let gl = focusScope(["paths": ["/w/greenlight/chat-scope"], "repos": ["greenlight"]]), byPath = focusScope(["paths": ["/w/x/no-repo"], "repos": [""]])
-    check("watch: in the greenlight window it asks about greenlight's workspaces only, and holds widgets's for a window that shows it",
-          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["octo/rsi-loop": "decide", "no-repo": "goal", "fix-ci": "ci"])
-          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "fix-ci": "ci"])
+    check("watch: in the greenlight window it asks about greenlight's workspaces only, and holds ledger's for a window that shows it",
+          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["ana/rsi-loop": "decide", "no-repo": "goal", "fix-ci": "ci"])
+          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["ana/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "fix-ci": "ci"])
           && inScope(wn, wp, nil) == (wn, [:]) && inScope(wn, wp, focusScope(["paths": [], "repos": []])) == ([:], wn))
     check("watch: the scope is the projects picked while a window shows them; none picked or no window up hears every project",
           windowScope(paths: ["/w/greenlight/chat-scope"], repos: ["greenlight"], shown: true) == gl
