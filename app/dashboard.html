@@ -2213,7 +2213,8 @@ function pickProjects(list, only, here = true){
   const boxes = [...grid.querySelectorAll("input")], all = boxes[0], tot = E("span", "tot");
   const count = () => { const on = all.checked ? list : list.filter((_, i) => boxes[i + 1].checked);
     tot.textContent = `${on.length} project${on.length === 1 ? "" : "s"} · ${nR(on.reduce((n, p) => n + p.repos.length, 0))}` };
-  boxes.forEach(b => b.onchange = () => { if (b.checked) (b === all ? boxes.slice(1) : [all]).forEach(x => x.checked = false); count() }); count();
+  boxes.forEach(b => b.onchange = () => { if (b.checked) (b === all ? boxes.slice(1) : [all]).forEach(x => x.checked = false);
+    if (!boxes.some(x => x.checked)) all.checked = true; count() }); count();
   find.oninput = () => grid.querySelectorAll("label").forEach(l => l.hidden = !l.textContent.toLowerCase().includes(find.value.trim().toLowerCase()));
   const lf = E("label", "find", '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'); lf.append(find);
   const err = E("p", "err"); body.append(lf, grid, ...list.some(p => p.id) ? [] : [E("p", "", "No projects yet: <b>Edit projects…</b> makes them.")], err);
@@ -2225,7 +2226,6 @@ function pickProjects(list, only, here = true){
   const no = Object.assign(E("button"), {type: "button", textContent: "Cancel", onclick: end}), dh = E("div", "dh", "<h3>Open projects</h3>"), btns = E("div", "btns");
   dh.append(E("span", "gap"), seg); btns.append(ed, E("span", "gap"), tot, no, yes); f.append(dh, body, btns);
   f.onsubmit = e => { e.preventDefault(); const on = boxes.filter(b => b.checked).map(b => b.value), any = on.includes("*");
-    if (!on.length) { err.textContent = "Tick a project, or All projects."; return }
     post({cmd: inPlace ? "project" : "window", only: any ? null : on}); end() };
   f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end() };
   d.replaceChildren(f); d.hidden = false; mode(); find.focus();

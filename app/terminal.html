@@ -1091,7 +1091,7 @@ function merge(){
   if (treesIn) acctCfg = acct()?.home?.cfg || {};  // until the trees come, the copy the layout saved
   offer();
 }
-let ONLY = (() => { try { const o = JSON.parse(q.get("only") || "null"); return Array.isArray(o) ? o : null } catch { return null } })();
+let ONLY = (() => { try { const o = JSON.parse(q.get("only") || "null"); return Array.isArray(o) && o.length ? o : null } catch { return null } })();
 const under = (path, d) => path === d || path?.startsWith(d + "/");
 // a workspace's project is its repo's (repoIn: the project that names the repo, else the one holding its main checkout), wherever the ADE
 // put the worktree; only a tree whose repo is in none goes by its own folder
@@ -1312,7 +1312,8 @@ function pickProjects(here){
   const boxes = [...grid.querySelectorAll("input")], all = boxes[0], tot = el("span", "tot");
   const count = () => { const on = all.checked ? rsOf.map((_, i) => i) : boxes.slice(1).flatMap((b, i) => b.checked ? [i] : []);
     tot.textContent = `${on.length} project${on.length === 1 ? "" : "s"} · ${nRepos(on.reduce((n, i) => n + rsOf[i].length, 0))}` };
-  boxes.forEach(b => b.onchange = () => { if (b.checked) (b === all ? boxes.slice(1) : [all]).forEach(x => x.checked = false); count() }); count();
+  boxes.forEach(b => b.onchange = () => { if (b.checked) (b === all ? boxes.slice(1) : [all]).forEach(x => x.checked = false);
+    if (!boxes.some(x => x.checked)) all.checked = true; count() }); count();
   find.oninput = () => grid.querySelectorAll("label").forEach(l => l.hidden = !l.textContent.toLowerCase().includes(find.value.trim().toLowerCase()));
   const lf = el("label", "find", svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>')); lf.append(find);
   const err = el("p", "err"); body.append(lf, grid, ...allP.length ? [] : [el("p", "", "No projects yet: <b>Edit projects…</b> makes them.")], err);
@@ -1322,7 +1323,6 @@ function pickProjects(here){
   const ed = Object.assign(el("button", "lite"), {type: "button", textContent: "Edit projects…"}); ed.onclick = () => editProjects();
   dlgForm("Open projects", body, "", () => {
     const only = boxes.filter(b => b.checked).map(b => b.value), any = only.includes("*");
-    if (!only.length) { err.textContent = "Tick a project, or All projects."; return false }
     if (!inPlace) { post({cmd: "window", only: any ? null : only}); return true }
     ONLY = any ? null : only; post({cmd: "only", only: ONLY}); merge(); paint(); setTitle(); render(); save(); return true;
   }, null, {cls: "big nw", head: [seg], left: [ed], right: [tot]});
@@ -2014,7 +2014,7 @@ window.term = {
   focusInfo: () => ({...cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : {}, paths: ONLY ? trees.filter(inView).map(w => w.path) : null,
     repos: ONLY ? [...new Set(trees.filter(inView).map(w => w.project).filter(Boolean))] : null}),  // for Chief: the tab you're on, the window's workspaces and their repos (one made since the trees came is in them). Not `focus`: that's below, the keyboard's
   mode(m, b, f){ mode = m; chrome = {bg: b, fg: f}; paint() },  // the app's Auto/Light/Dark: chrome only, CSS
-  only(o){ ONLY = o; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
+  only(o){ ONLY = Array.isArray(o) && o.length ? o : null; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
   picked: d => picked?.(d),
   slide: v => { slide = +v || 0 },
   localName: v => { LOCALNAME = v || "Local"; render() },
