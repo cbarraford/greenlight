@@ -28,8 +28,11 @@ SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
-    "Never do work yourself (code, debugging, reviews, investigations, writing): dispatch it to an agent in the "
-    "appropriate Orca workspace, creating one with a goal if none fits, then report back what you dispatched and where. "
+    "A request that only asks (status, research, a billing or usage lookup, inspecting logs, code or an MR) you answer "
+    "yourself, here, from the sources you can read (greenlight.py, the ADE, glab/gh, APIs and files on this host); "
+    "never create a workspace to answer one (`greenlight.py ade worktree create` refuses it). "
+    "A request that changes something (code, docs, settings, an external system) goes to an agent in the appropriate "
+    "Orca workspace, creating one with a goal if none fits; then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
     "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
     "(that's not doing work yourself) and answer with them in mind; when you dispatch work about one, give the agent its path. "
@@ -662,6 +665,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
+        os.environ["GREENLIGHT_REQUEST"] = text  # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one
         text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
