@@ -445,7 +445,8 @@ func timeLeft(_ s: Double) -> String? {
 }
 
 /// The live byline under a run's status: the plan's progress, its time left, and what just finished (✓ or ✗ and its title).
-/// lead (voice mode's stage, whose title is only a wait word): first what's happening now, and the steps done when there's no plan.
+/// lead (voice mode's stage, whose title is only a wait word): first what's happening now, the steps done when there's no plan,
+/// and no time left (the stage only redraws on events).
 /// Only what the agent's events say: no filler, no time left without a plan that's paced itself.
 func byline(_ r: Run, now: Date, lead: Bool) -> String {
     let fin = r.steps.filter { $0.ok != nil }, failed = fin.filter { $0.ok == false }.count
@@ -456,9 +457,10 @@ func byline(_ r: Run, now: Date, lead: Bool) -> String {
     }
     if let p = r.plan, p.total > 0 { parts.append("\(p.done) of \(p.total) tasks done") }
     else if lead && !fin.isEmpty { parts.append("\(fin.count) step\(fin.count == 1 ? "" : "s") done" + (failed > 0 ? ", \(failed) failed" : "")) }
-    if let p = r.plan, let e = p.eta, let left = timeLeft(e - now.timeIntervalSince(p.at)) { parts.append(left) }
+    // the time left only where the clock redraws it (the card); the stage changes only on events, where it would go stale
+    if !lead, let p = r.plan, let e = p.eta, let left = timeLeft(e - now.timeIntervalSince(p.at)) { parts.append(left) }
     if let l = fin.max(by: { ($0.end ?? $0.start) < ($1.end ?? $1.start) }), !(lead && parts.first == l.title) {
-        parts.append("\(l.ok == true ? "✓" : "✗") \(l.title)")
+        parts.append("\(l.ok == true ? "✓" : "✗") \(l.title.count > 40 ? l.title.prefix(39) + "…" : l.title)")
     }
     return parts.filter { !$0.isEmpty }.joined(separator: " · ")
 }
@@ -3704,7 +3706,7 @@ struct RunCard: View, Looked {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(mono ? "> \(r.status.lowercased())" : r.status).lineLimit(1).foregroundColor(fg)
                         .font(lk.id == "onair" ? sys(size: Theme.fs5, weight: .heavy) : lk.id == "zen" ? sys(size: 20, weight: .light) : ui(lk.id == "conversation" ? 14 : mono ? Theme.fs3 : Theme.fs4, mono ? .bold : .semibold))
-                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(1) }
+                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(2) }
                 }
                 Spacer(minLength: 4)
                 stop
@@ -3797,7 +3799,8 @@ struct RunCard: View, Looked {
         let b = byline(r, now: c.now, lead: false), by = b.isEmpty ? "" : " · " + b  // the plan, time left, what just finished
         // ponytail: HUD's step number isn't lit apart from the rest of the line
         if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(by.uppercased())\(tps.uppercased())" }
-        let s = "\(n == 0 ? "No steps yet" : "Step \(n)") · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(by)\(tps)"
+        // the byline before time and speed: the card is narrow, and those two are on the live line under it too
+        let s = "\(n == 0 ? "No steps yet" : "Step \(n)")\(by) · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)"
         return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
     }
 }
@@ -8073,12 +8076,14 @@ func selfTest() {
     check("byline: a finished step is what just completed, and the lead moves on: \(byline(br, now: t0 + 9, lead: true))",
           byline(br, now: t0 + 9, lead: true) == "Writing a reply · 3 steps done, 1 failed · ✓ Ran greenlight.py scan")
     br.plan = Plan(done: 2, total: 5, title: "Checking CI", eta: 150, at: t0 + 9); br.thinking = true
-    check("byline: the agent's plan, its paced time left (coarse), its item on now: \(byline(br, now: t0 + 10, lead: true))",
-          byline(br, now: t0 + 10, lead: true) == "Checking CI · 2 of 5 tasks done · about 2 min left · ✓ Ran greenlight.py scan"
+    check("byline: the agent's plan and its item on now; its paced time left (coarse) on the card: \(byline(br, now: t0 + 10, lead: true))",
+          byline(br, now: t0 + 10, lead: true) == "Checking CI · 2 of 5 tasks done · ✓ Ran greenlight.py scan"  // the stage can't count it down
           && byline(br, now: t0 + 10, lead: false) == "2 of 5 tasks done · about 2 min left · ✓ Ran greenlight.py scan"
           && byline(br, now: t0 + 9 + 151, lead: false) == "2 of 5 tasks done · ✓ Ran greenlight.py scan")  // run past it: no estimate, never a negative one
     br.plan?.eta = nil
     check("byline: no pace, no time left", !byline(br, now: t0 + 10, lead: false).contains("left"))
+    br.steps[0].title = String(repeating: "x", count: 60); br.steps[1].end = nil; br.steps[1].ok = nil; br.steps[2].end = t0
+    check("byline: a long finished title is cut, so the line stays one glance", byline(br, now: t0 + 10, lead: false).hasSuffix("✓ " + String(repeating: "x", count: 39) + "…"))
     check("byline: time left is never seconds", timeLeft(10) == "under a minute left" && timeLeft(70) == "about a minute left" && timeLeft(400) == "about 7 min left"
           && timeLeft(3000) == "over 20 min left" && timeLeft(0) == nil && timeLeft(-5) == nil)
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")

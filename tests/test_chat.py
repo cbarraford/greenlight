@@ -692,6 +692,11 @@ def test_cmd_title_names_what_ran():
     assert t("python3 -c 'print(1)'") == "Ran python3"
     assert t("cat a.txt | grep b") == "Ran cat"  # the first program; arguments are the step's detail
     assert t("echo hi") == t("") == t("cd /x") == "Ran a shell command"  # nothing real ran: the generic line
+    assert t("bash -c 'cd /w && make test'") == "Ran make test" and t("sh -c 'echo x; ls'") == "Ran ls"  # inside the wrapper
+    assert t("sudo -E") == "Ran sudo" and t("sudo -u root git status") == "Ran git status"  # a runner's flag values aren't the program
+    assert t("git commit -m fix") == "Ran git commit" and t("docker login -u me --password-stdin") == "Ran docker login"  # arguments stay out
+    assert t("kubectl -n prod get pods") == "Ran kubectl get" and t("codex exec --full-auto fix") == "Ran codex exec"
+    assert t("python3 - <<'EOF'") == "Ran python3" and t("nohup python3 a.py") == "Ran a.py" and t("for f in *.py; do wc -l $f; done") == "Ran wc"
     assert step_title("Bash", {"command": "gh pr view 3"}) == ("Ran gh pr view", "gh pr view 3")
     assert step_title("Bash", {"command": "ls", "description": "List files"})[0] == "List files"  # the agent's own words win
     assert step_title("TodoWrite", {"todos": []})[0] == "Updated the plan"
@@ -714,7 +719,9 @@ def test_plan_progress_and_pace(monkeypatch):
     p = plan(todo("completed", "completed", "in_progress", "pending", "pending"))
     assert p["done"] == 2 and p["eta"] == 90, p  # 2 items in 60s → 3 left at 30s each
     clock[0] += 10
-    assert plan(todo("completed", "completed", "in_progress", "pending", "pending"))["eta"] == 90  # an update with nothing done keeps the pace
+    assert plan(todo("completed", "completed", "in_progress", "pending", "pending"))["eta"] == 80  # nothing done since: it counts down
+    clock[0] += 100
+    assert plan(todo("completed", "completed", "in_progress", "pending", "pending"))["eta"] is None  # run past its pace: no estimate
     p = plan(todo("completed", "completed", "completed", "completed", "completed"))
     assert p["done"] == p["total"] == 5 and p["eta"] is None and p["title"] == ""  # finished: nothing left to estimate
     clock[0] += 5
@@ -722,6 +729,37 @@ def test_plan_progress_and_pace(monkeypatch):
     assert p["eta"] is None and p["done"] == 1, p  # a rewritten plan: its pace starts over; items already done carry no timing
     clock[0] += 20
     assert plan(todo("completed", "completed", "pending"))["eta"] is None  # still only one item timed
+
+
+def test_plan_pace_needs_two_updates_and_the_same_list(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(chat.time, "time", lambda: clock[0])
+    n = Norm()
+    items = lambda k, total=5, name="T": [(f"{name}{i}", "completed" if i < k else "", None) for i in range(total)]
+    n.plan(items(0))
+    clock[0] = 60
+    assert n.plan(items(3))[0]["eta"] is None  # one update ticking off three is one observation, not a pace
+    clock[0] = 90
+    assert n.plan(items(4))[0]["eta"] == 22  # two: 4 items in 90s → 1 left
+    clock[0] = 100
+    assert n.plan(items(4, 8, "U"))[0]["eta"] is None  # a different list, even at the same count: its pace starts over
+    sub = {"type": "assistant", "parent_tool_use_id": "task1", "message": {"content": [{"type": "tool_use", "id": "x", "name": "TodoWrite",
+           "input": {"todos": [{"content": "sub", "status": "pending"}]}}]}}
+    assert [e["e"] for e in n.claude(sub)] == ["step"]  # a subagent's list isn't the turn's plan
+
+
+def test_a_retry_clears_the_last_runs_plan(tmp_path, monkeypatch):
+    out = []
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "BGFILE", str(tmp_path / "bg.json"))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "emit", lambda **e: out.append(e))
+    n = Norm()
+    n.plan([("a", "completed", None), ("b", "", None)])
+    n.running = [("s", "Ran ls")]
+    chat.run([sys.executable, "-c", "print('{}')"], "claude", "", n)
+    assert out[0] == {"e": "plan", "done": 0, "total": 0, "title": "", "eta": None}, out  # the app drops the plan
+    assert n.plan_t0 is None and n.running == []
 
 
 def test_plan_from_codex_and_opencode():

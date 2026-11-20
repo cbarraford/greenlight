@@ -109,45 +109,55 @@ def short(s, n=160):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nice", "exec", "timeout", "command"}  # name what they run
+RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nice", "nohup", "exec", "timeout", "command"}  # name what they run
 SHELLS = {"sh", "bash", "zsh"}
 SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude"}  # their subcommands name them
-VALUED = {"--with", "--python", "--from", "-C", "-L", "-S", "-R", "-t", "-F", "--repo"}  # flags that take the next word
+NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
+VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace"}  # a subcommand tool's flags that take the next word
+RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
+                 "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
 
 def cmd_title(cmd):
     """A shell command as what it ran, not "Ran a shell command": the first real program (the script, for an interpreter), with
     its subcommand (`cd x && python3 /a/greenlight.py scan | tail` → "Ran greenlight.py scan", `gh pr list -R a/b` → "Ran gh pr
     list"). Arguments stay out: the step's detail has the whole command. The generic line when nothing's left (echo, cd)."""
+    m = re.match(r"^\s*(?:\S*/)?(?:ba|z)?sh\s+-l?c\s+(['\"]?)(.*)\1\s*$", str(cmd or ""), re.S)
+    if m:  # bash -c 'cd /w && make test': what's inside, split on its own && and ;
+        return cmd_title(m.group(2))
     for seg in re.split(r"&&|\|\||;|\||\n", str(cmd or "")):
         w = [x.strip("'\"()") for x in seg.split()]
-        w = [x for x in w if x and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", x)]  # env assignments
-        if not w or w[0] in ("cd", "export", "set", "source", ".", "true", ":", "echo", "printf", "sleep", "[", "test", "if", "then", "fi", "do", "done"):
+        w = [x for x in w if x and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=|^\d?[<>]", x)]  # env assignments, redirections
+        while w and w[0] in ("do", "then", "else", "!"):
+            w = w[1:]
+        if not w or w[0] in ("cd", "export", "set", "source", ".", "true", ":", "echo", "printf", "sleep", "[", "test", "if", "fi",
+                             "done", "for", "while", "until", "case", "esac", "EOF"):
             continue
         if os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
             return cmd_title(" ".join(w[2:]))
         while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
-            if w[1] in ("-c", "-e"):  # python3 -c '…': inline code, the interpreter is the name
+            if w[1] in ("-c", "-e", "-"):  # python3 -c '…' or a heredoc: inline code, the interpreter is the name
                 w = w[:1]
                 break
-            i = 1
+            i, valued = 1, RUNNER_VALUED.get(os.path.basename(w[0]), ())
             while i < len(w) and (w[i].startswith("-") or w[i] == "run" or re.match(r"^\d+[smh]?$", w[i])):
                 if w[i] == "-m" and i + 1 < len(w):  # python -m pytest: the module
                     i += 1
                     break
-                i += 2 if w[i] in VALUED else 1
-            w = w[i:] or w[-1:]
+                i += 2 if w[i] in valued else 1
+            w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
         prog, sub = os.path.basename(w[0]), []
         if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
             i = 1
-            while i < len(w) and len(sub) < (2 if prog in SUBCOMMANDS else 1):
-                if w[i] in VALUED:
-                    i += 2
-                    continue
-                if not w[i].startswith("-"):
-                    if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
+            while i < len(w) and len(sub) < (2 if prog in NOUN_VERB else 1):
+                if w[i].startswith("-"):
+                    if sub:  # flags after the subcommand: its arguments start, and they stay out
                         break
-                    sub.append(w[i])
+                    i += 2 if w[i] in VALUED else 1  # git -C /w status: the flags before it
+                    continue
+                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
+                    break
+                sub.append(w[i])
                 i += 1
         return short(" ".join(["Ran", prog] + sub), 60)
     return "Ran a shell command"
@@ -218,8 +228,9 @@ class Norm:
         self.running = []  # (id, title) of steps started and not yet done, oldest first
         self.musing = None  # the phrase for the current stretch of thinking; None once anything else shows
         self.mused = None  # the last one, so the next stretch picks a different phrase
-        self.plan_t0 = self.plan_last = None  # the plan's first sight, and when an item last got done (this turn's evidence of pace)
-        self.plan_k = self.plan_base = 0  # items done now, and already done when it was first seen (no timing for those)
+        self.plan_t0 = self.plan_last = None  # the plan's first sight, and when an item last got done (this run's evidence of pace)
+        self.plan_k = self.plan_base = self.plan_obs = 0  # items done now, done when first seen (untimed), updates that finished some
+        self.plan_keys = None  # its items, so a replaced list starts its pace over
 
     def more(self, e, **kw):
         """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
@@ -228,24 +239,25 @@ class Norm:
         return e
 
     def plan(self, items):
-        """The agent's own task list (TodoWrite, codex's todo_list) → a plan event: done of total, the item on now, and a time left
-        only from this turn's pace: the items seen getting done since the plan appeared, at least two, over the time it took."""
-        n, k, t = len(items), sum(1 for _, st in items if st == "completed"), time.time()
-        if self.plan_t0 is None or k < self.plan_k:  # a new plan, or one rewritten: its pace starts over
-            self.plan_t0, self.plan_base, self.plan_last = t, k, None
+        """The agent's own task list (TodoWrite, codex's todo_list), as (item, status, label now) → a plan event: done of total,
+        the item on now, and a time left only from this run's pace: items seen getting done since the plan appeared, over two
+        or more updates (one update ticking off a batch is one observation), counted down from the last one to now."""
+        n, k, t, keys = len(items), sum(1 for _, st, _ in items if st == "completed"), time.time(), [x for x, _, _ in items]
+        if self.plan_t0 is None or k < self.plan_k or keys != self.plan_keys:  # a new plan, or one rewritten: its pace starts over
+            self.plan_t0, self.plan_base, self.plan_last, self.plan_obs, self.plan_keys = t, k, None, 0, keys
         elif k > self.plan_k:
-            self.plan_last = t
+            self.plan_last, self.plan_obs = t, self.plan_obs + 1
         self.plan_k = k
-        on = next((x for x, st in items if st == "in_progress"), None) or next((x for x, st in items if st != "completed"), "")
-        timed, eta = k - self.plan_base, None
-        if timed >= 2 and k < n and self.plan_last:
-            eta = round((self.plan_last - self.plan_t0) / timed * (n - k))
+        on = next((now or x for x, st, now in items if st == "in_progress"), None) or next((x for x, st, _ in items if st != "completed"), "")
+        eta = None
+        if self.plan_obs >= 2 and k < n:
+            eta = round((self.plan_last - self.plan_t0) / (k - self.plan_base) * (n - k) - (t - self.plan_last))
+            eta = eta if eta > 0 else None  # run past its pace: no estimate
         return [{"e": "plan", "done": k, "total": n, "title": short(on, 80), "eta": eta}]
 
     def todos(self, todos):
         """TodoWrite's (claude, opencode) todos: the active one by its present-tense form."""
-        return self.plan([((x.get("activeForm") if x.get("status") == "in_progress" else None) or x.get("content") or "", x.get("status", ""))
-                          for x in todos or [] if isinstance(x, dict)])
+        return self.plan([(x.get("content") or "", x.get("status", ""), x.get("activeForm")) for x in todos or [] if isinstance(x, dict)])
 
     def think(self, s):
         return [{"e": "think", "delta": s}] if self.verbose and s else []
@@ -329,7 +341,7 @@ class Norm:
                     title, detail = step_title(c["name"], c.get("input", {}))
                     out.append(self.more({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))},
                                          input=full_input(c["name"], c.get("input", {}))))
-                    if c["name"] == "TodoWrite":
+                    if c["name"] == "TodoWrite" and not d.get("parent_tool_use_id"):  # a subagent's list isn't the turn's plan
                         out += self.todos(c.get("input", {}).get("todos"))
                 elif c.get("type") == "text":
                     self.text = c["text"]
@@ -361,7 +373,7 @@ class Norm:
             self.text = it["text"]
             out += [{"e": "text_reset"}, {"e": "text", "delta": it["text"]}]
         elif it.get("type") == "todo_list" and t in ("item.started", "item.updated", "item.completed"):
-            out += self.plan([(x.get("text", ""), "completed" if x.get("completed") else "") for x in it.get("items") or [] if isinstance(x, dict)])
+            out += self.plan([(x.get("text", ""), "completed" if x.get("completed") else "", None) for x in it.get("items") or [] if isinstance(x, dict)])
         elif it.get("type") in ("mcp_tool_call", "web_search") and t in ("item.started", "item.completed"):
             mcp = it["type"] == "mcp_tool_call"
             title, detail = (it.get("tool", "tool").replace("_", " "), it.get("server", "")) if mcp else ("Searched the web", it.get("query", ""))
@@ -462,6 +474,9 @@ def run(cmd, engine, text, norm, check=False, guard=None):
     p.stdin.write(text)
     p.stdin.close()
     sid, done, private = None, False, set()
+    if norm.plan_keys is not None:  # a retry is a new process: the last run's plan, pace and steps aren't this one's
+        emit(e="plan", done=0, total=0, title="", eta=None)
+    norm.plan_t0, norm.plan_keys, norm.running = None, None, []
     hiding, needles = guard or watch_for_attachments()
     for line in p.stdout:
         try:
