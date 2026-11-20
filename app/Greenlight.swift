@@ -3404,6 +3404,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
         }
+        // The CI view: dash.py ci (runs per day across the tracked MRs/PRs; cached 15 min there, Refresh passes fresh).
+        if cmd == "ci" {
+            let days = min(max(b["days"] as? Int ?? 30, 1), 99), fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
+            var out = ""
+            ssh("\(py)/dash.py ci --days \(days)\(fresh)", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"error":"\#(host) didn't answer (exit \#(code))"}"#
+                from.evaluateJavaScript("mc.ci(\(js))")
+            })
+        }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
            let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
