@@ -3537,8 +3537,9 @@ final class Core: ObservableObject {
         return waiting.first { $0.text == about }
     }
     func expiredNotification(_ about: String, reply: String) {
-        let message = "That notification is no longer open. Your reply was saved here to resend:\n\(reply)"
+        let message = "That notification is no longer open. Copy your reply below to resend it.\nNotification: \(about)\nReply: \(reply)"
         msgs.append(Msg(.note, message))
+        if !popoverShown() { missed += 1 }
         notify(title: name, body: "That notification is no longer open. Your reply is saved in chat.", subtitle: nil, reply: false, id: "expired:\(about)")
     }
     func reply(to about: String, _ text: String, questionID: UUID? = nil, freeform: Bool = false) {
@@ -4581,7 +4582,7 @@ struct MsgView: View, Looked {
         switch m.role {
         case .you: you
         case .note:
-            Text(m.text).font(ui(Theme.fs1)).foregroundColor(dim).frame(maxWidth: .infinity)
+            Text(m.text).font(ui(Theme.fs1)).foregroundColor(dim).textSelection(.enabled).frame(maxWidth: .infinity)
         case .greenlight:
             let open = !m.options.isEmpty && ask != nil && ask?.answer == nil
             let (said, q) = open ? asked : (m.text, nil)
@@ -9708,9 +9709,12 @@ func selfTest() {
             check("a banner reply targets its ping despite same-text chat", c.notificationQuestion("ws-f: choose?", id: pingQuestion.id)?.id == pingQuestion.id)
             let beforeExpired = c.msgs.count
             let unreadBeforeExpired = c.unread
+            let missedBeforeExpired = c.missed, hiddenChat = !c.popoverShown()
             c.reply(to: "ws-f: choose?", "stale choice", questionID: UUID())
-            check("an expired banner reply never reaches the agent and keeps the typed text", c.run == nil && c.msgs.count == beforeExpired + 1
-                  && c.msgs.last?.text.contains("stale choice") == true && c.unread == unreadBeforeExpired)
+            check("an expired banner reply never reaches the agent and keeps its context and typed text", c.run == nil && c.msgs.count == beforeExpired + 1
+                  && c.msgs.last?.text.contains("Notification: ws-f: choose?") == true
+                  && c.msgs.last?.text.contains("Reply: stale choice") == true && c.unread == unreadBeforeExpired
+                  && c.missed == missedBeforeExpired + (hiddenChat ? 1 : 0))
             c.reply(to: "ws-f: choose?", "legacy choice")
             check("a legacy banner without an ID keeps the reply for resending", c.run == nil && c.msgs.last?.text.contains("legacy choice") == true)
             c.answer(chatQuestion, "(dismissed)", send: false)
