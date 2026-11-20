@@ -651,11 +651,11 @@ def asked_question(reply):
     """The end of a reply that ends on a question (a `?` or the Options line, under the app's [hexes:] lines), else None:
     the question with the offer above it, "I can add a meter.\n\nWhere should it go?"."""
     text = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
-    if not re.search(r"\?\s*\Z|^`?options:.*\Z", re.split(r"\n\s*\n", text)[-1], re.M | re.I):
-        return None
     paras = re.split(r"\n\s*\n", text)
+    if not re.search(r"\?\s*\Z|^`?options:.*\Z", paras[-1], re.M | re.I):
+        return None
     n = 3 if re.match(r"`?options:", paras[-1], re.I) else 2  # an Options paragraph of its own: the question above it too
-    return "\n\n".join(paras[-n:])[-1000:]  # the question and the paragraph above, for an offer
+    return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
