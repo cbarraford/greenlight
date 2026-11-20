@@ -372,7 +372,7 @@ def run(cmd, engine, text, norm, check=False):
     open(PIDFILE, "w").write(str(p.pid))
     p.stdin.write(text)
     p.stdin.close()
-    sid, done, private = None, False, set()
+    sid, done, private, needles = None, False, set(), attach.needles(DIR, text)
     for line in p.stdout:
         try:
             d = json.loads(line)
@@ -392,7 +392,7 @@ def run(cmd, engine, text, norm, check=False):
         for e in evs:
             if e["e"] == "step" and attach.mentions(DIR, e):
                 private.add(e["id"])
-            elif e["e"] == "step_done" and e.get("id") in private:  # what the agent read of an attached file: not shown, not kept in the transcript
+            elif e["e"] == "step_done" and (e.get("id") in private or attach.shows(e, needles)):  # what the agent read of an attached file: not shown, not kept in the transcript
                 e["out"] = "(attached file)"
                 e.pop("full", None)
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
