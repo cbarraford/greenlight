@@ -7337,14 +7337,15 @@ func selfTest() {
         RunLoop.main.run(until: b0 + 14.5)  // past the 12 s timer with its leeway
         check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 14.5 s (\(bad.hint ?? "-"))",
               { if case .failed(_, let w) = bad.phase { return w.contains("key") || w.contains("401") }; return false }() && failedIn < 12 && bad.hint == early)
-        // saving a key while a preview is already asking OpenAI with the old one: its refusal mustn't land over the new key
+        // saving a key while a preview's session is already opening on the old one: the session closes (so its 401 never
+        // lands) and the preview's 12 s timer is void, so the note stays clear past both
         let mid = LivePreview(), m0 = Date()
         mid.play("vesper", voiceOn: false, muted: false, settle: 0, key: { "sk-not-a-key" })
-        while mid.opened == 0 && Date() < m0 + 2 { RunLoop.main.run(until: Date() + 0.01) }
+        while mid.opened == 0 && Date() < m0 + 2 { RunLoop.main.run(mode: .default, before: Date() + 0.01) }  // back as soon as begin() ran
         let asking = mid.opened == 1 && mid.phase == .loading("vesper")
         mid.keyChanged("openai", to: "sk-new")
-        RunLoop.main.run(until: Date() + 3)
-        check("voice: saving a key while a preview is asking with the old one stops it, and the old key's refusal doesn't show (\(mid.hint ?? "-"))", asking && mid.phase == .idle)
+        RunLoop.main.run(until: m0 + 14.5)
+        check("voice: saving a key while a preview's session opens on the old one stops it; neither its 401 nor its 12 s timer shows (\(mid.hint ?? "-"))", asking && mid.phase == .idle)
     }
     // GREENLIGHT_LIVE_TEST=1 with OPENAI_API_KEY: a real gpt-live-1.1 session (a few cents). Apple's voice asks a question into it, as the mic
     // would; it must hand the turn off, then read a line exactly under that hand-off, as audible audio, which plays through a player node.
