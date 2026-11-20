@@ -2534,6 +2534,7 @@ final class Core: ObservableObject {
     var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
     var focusShown: () -> Bool = { true }  // that window is still up; closed or hidden, you're in the menubar alone and hear every project
     var scope: String? { focusShown() ? focusScope : nil }
+    var scopePending = false  // a window's focus() is on its way: the scope is about to change
     var chatSend: String {
         let only = scope.map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
@@ -2549,7 +2550,7 @@ final class Core: ObservableObject {
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
         let (ask, hold) = inScope(fresh, pucks, scope)  // another project's waits: the chat speaks for the window you're in
-        guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        guard watch, !ask.isEmpty, !scopePending, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
@@ -5650,11 +5651,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
     /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
+    weak var focusWin: NSWindow?  // the window noteFocus last asked: the one Chief's scope is about
+    var focusAsked = 0  // the newest noteFocus: windows answer out of order, and the one you left mustn't win over the one you're in
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
+        focusAsked += 1; focusWin = w
+        let asked = focusAsked
+        greenlight.scopePending = true  // the watch waits for the answer rather than ask with the window you left
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
-            guard let self else { return }
+            guard let self, asked == self.focusAsked else { return }
+            self.greenlight.scopePending = false
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
             self.greenlight.focusScope = focusScope(o)
@@ -5839,6 +5846,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
             setPick(only)  // one pick for every floor and window
+            if let w = from.window { noteFocus(w) }  // the page set its pick before posting: Chief's scope follows it now, not a tick later
         }
         if cmd == "window" {  // L1's Open projects, New window
             let only = b["only"] as? [String]
@@ -6661,7 +6669,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let repos = "\(json(l1Paths)), \(json(l1Repos))"
         if pushedRepos != repos {  // the projects picked changed: the window you're in now shows others, so Chief's scope follows
             pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))")
-            if let w = NSApp.keyWindow { noteFocus(w) }  // queued after mc.paths (and setPick's term.only): focus() reads the new pick
+            if let w = focusWin ?? NSApp.keyWindow { noteFocus(w) }  // queued after mc.paths (and setPick's term.only): focus() reads the new pick
         }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
