@@ -1274,8 +1274,8 @@ const setTitle = () => { const t = $("shead").querySelector(".ttl");
   // the window bar names it too (not in the Pipe), centered like a title, with each project's square (none: All projects)
   const hex = i => i < 0 ? "#8E8E93" : getComputedStyle(document.documentElement).getPropertyValue("--" + "obgptyr"[i % 7]).trim();
   t.title = t.textContent + " · Show projects…"; post({cmd: "title", text: ONLY ? t.textContent : "All projects", colors: ONLY ? ONLY.map(id => hex(allP.findIndex(p => p.id === id))) : [],
-    list: [...allP, null].map((p, i) => { const rs = reposOf(allP, p ?? undefined); return {id: p ? p.id : "", name: p ? p.name : NML, color: hex(p ? i : -1), repos: rs, paths: trees.filter(w => rs.includes(w.project)).map(w => w.path),
-      busy: trees.filter(w => w.agent === "working" && rs.includes(w.project)).length} })}) };  // list: every project and No Man's Land, for L1's Open projects
+    list: [...allP, null].map((p, i) => { const mine = w => (projOf(w)?.id ?? "") === (p ? p.id : ""), rs = reposOf(allP, p ?? undefined).filter(r => trees.every(w => w.project !== r || mine(w)));
+      return {id: p ? p.id : "", name: p ? p.name : NML, color: hex(p ? i : -1), repos: rs, paths: trees.filter(mine).map(w => w.path), busy: trees.filter(w => w.agent === "working" && mine(w)).length} })}) };  // list: every project and No Man's Land, for L1's Open projects; paths: the trees inView puts in it (a no-repo or folder-only one too: the app scopes Chief by them)
 $("shead").querySelector(".ttl").onclick = () => pickProjects(true);  // the title names the window's projects: a click changes them (or edits them)
 setTitle();
 // a form in the modal: onOk() true closes it, false keeps it (a field said why). opt: cls "big" for the roomy layout (a title bar, a footer bar),

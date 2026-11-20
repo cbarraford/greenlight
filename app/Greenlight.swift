@@ -367,6 +367,18 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
     return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
 }
 
+/// The watch's news split by the window you're in (focusScope's JSON, the same rule as dash.py's board): `ask` is about its
+/// worktrees or repos, `hold` is another project's and waits until you're in a window that shows it. nil scope: every project's.
+func inScope(_ fresh: [String: String], _ pucks: [[String: Any]], _ scope: String?) -> (ask: [String: String], hold: [String: String]) {
+    guard let scope, let o = (try? JSONSerialization.jsonObject(with: Data(scope.utf8))) as? [String: Any] else { return (fresh, [:]) }
+    let paths = o["paths"] as? [String] ?? [], repos = o["repos"] as? [String] ?? []
+    let shown = Set(pucks.filter { p in  // a needing one: a same-named workspace elsewhere that's fine doesn't let another project's in
+        p["state"] as? String == "needs"
+            && ((p["path"] as? String).map(paths.contains) == true || (p["repo"] as? String).map { !$0.isEmpty && repos.contains($0) } == true)
+    }.compactMap { $0["name"] as? String })
+    return (fresh.filter { shown.contains($0.key) }, fresh.filter { !shown.contains($0.key) })
+}
+
 func ago(_ d: Date) -> String {
     let s = Int(Date().timeIntervalSince(d))
     return s < 60 ? "now" : s < 3600 ? "\(s / 60)m ago" : s < 86400 ? "\(s / 3600)h ago" : "\(s / 86400)d ago"
@@ -836,6 +848,13 @@ func focusScope(_ o: [String: Any]) -> String? {
     guard let paths = o["paths"] as? [String] else { return nil }
     let scope: [String: [String]] = ["paths": paths, "repos": o["repos"] as? [String] ?? []]
     return (try? JSONSerialization.data(withJSONObject: scope, options: .sortedKeys)).flatMap { String(data: $0, encoding: .utf8) }
+}
+
+/// Chief's scope from the projects picked: their worktrees and repos while a window showing them is up. nil: every project (none
+/// picked, or no window up: you're in the menubar alone).
+func windowScope(paths: [String]?, repos: [String]?, shown: Bool) -> String? {
+    guard shown, let paths else { return nil }
+    return focusScope(["paths": paths, "repos": repos ?? []])
 }
 
 /// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
@@ -2729,9 +2748,11 @@ final class Core: ObservableObject {
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
-    var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
+    // The projects every window shows (one pick for all of them) as JSON, while one is up: Chief's BOARD and the watch have only
+    // these. nil: every project (none picked, or no window up: you're in the menubar alone). App.pickScope.
+    var scope: () -> String? = { nil }
     var chatSend: String {
-        let only = focusScope.map { " --only \(shellQuote($0))" } ?? ""
+        let only = scope().map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
@@ -2744,10 +2765,11 @@ final class Core: ObservableObject {
         watchTurn()
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
-        guard watch, !fresh.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        let (ask, hold) = inScope(fresh, pucks, scope())  // another project's waits: the chat speaks for the windows you're in
+        guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
-        let list = fresh.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
-        fresh = [:]
+        let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
+        fresh = hold
         let r = Run("Watching the workspaces"); r.watch = true
         start(r, chatSend, stdin:
             "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
@@ -5696,6 +5718,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
         }
+        greenlight.scope = { [weak self] in self?.pickScope }
         greenlight.showDockIcon()
         Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
@@ -5858,7 +5881,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
-            self.greenlight.focusScope = focusScope(o)
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -6285,6 +6307,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var l1Picked: [[String: Any]] { (l1Only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
     var l1Paths: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["paths"] as? [String] ?? [] })).sorted() }  // sorted: the tick compares it
     var l1Repos: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["repos"] as? [String] ?? [] })).sorted() }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
+    /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
+    /// them is up. Read straight from the pick, not asked of a page: nothing to wait on, and no answer from a window you've left.
+    var pickScope: String? {
+        windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
+    }
     func syncL1() {
         let ps = l1Picked, names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
         l1Floor.project = l1Only == nil ? "All projects" : names.isEmpty ? "No projects" : names
@@ -7114,6 +7141,22 @@ func selfTest() {
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
+    let wp: [[String: Any]] = [["name": "ana/rsi-loop", "path": "/w/ledger/rsi-loop", "repo": "ledger", "state": "needs"],
+                               ["name": "chat-scope", "path": "/w/greenlight/chat-scope", "repo": "greenlight", "state": "needs"],
+                               ["name": "made-since", "path": "/w/greenlight/made-since", "repo": "greenlight", "state": "needs"],
+                               ["name": "no-repo", "path": "/w/x/no-repo", "repo": "", "state": "needs"],
+                               ["name": "fix-ci", "path": "/w/ledger/fix-ci", "repo": "ledger", "state": "needs"],
+                               ["name": "fix-ci", "path": "/w/greenlight/fix-ci", "repo": "greenlight", "state": "working"]]
+    let wn = ["ana/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal", "fix-ci": "ci"]
+    let gl = focusScope(["paths": ["/w/greenlight/chat-scope"], "repos": ["greenlight"]]), byPath = focusScope(["paths": ["/w/x/no-repo"], "repos": [""]])
+    check("watch: in the greenlight window it asks about greenlight's workspaces only, and holds ledger's for a window that shows it",
+          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["ana/rsi-loop": "decide", "no-repo": "goal", "fix-ci": "ci"])
+          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["ana/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "fix-ci": "ci"])
+          && inScope(wn, wp, nil) == (wn, [:]) && inScope(wn, wp, focusScope(["paths": [], "repos": []])) == ([:], wn))
+    check("watch: the scope is the projects picked while a window shows them; none picked or no window up hears every project",
+          windowScope(paths: ["/w/greenlight/chat-scope"], repos: ["greenlight"], shown: true) == gl
+          && windowScope(paths: ["/w/greenlight/chat-scope"], repos: ["greenlight"], shown: false) == nil
+          && windowScope(paths: nil, repos: nil, shown: true) == nil && windowScope(paths: [], repos: nil, shown: true) == focusScope(["paths": [], "repos": []]))
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
     check("hexes: Chief's [hexes: …] line, stripped and resolved; the model's picks only when the reply points at them",
