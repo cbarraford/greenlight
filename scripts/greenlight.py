@@ -508,7 +508,9 @@ def check(step, mr, ws, milestone):
                 return "dependency", f"targets {base}: waiting on {ref(ws.get('forge'), mr['_base_mr'])} to merge first", None
             return "me", f"mergeable into {base}, not {default}: merge it by hand?", None
         if st == "mergeable" and CONFIG["require_human_approval"] and not set(mr.get("_approved_by", [])) - {ME, BOT}:
-            if "automerge" in opts:  # the lifecycle's own steps (the agent's reviews, its try-out) stand in for a human approval
+            keys = [s["key"] for s in lifecycle_doc(proj)["stages"]]
+            checks = [k for k in (keys[:keys.index("merge")] if "merge" in keys else keys) if k not in BUILTIN]
+            if "automerge" in opts and checks:  # the lifecycle's own steps (the agent's reviews, its try-out) stand in for a human approval; none, no automerge
                 return "greenlight", "merge (automerge: every step before it passed)", merge
             if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
                 return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
