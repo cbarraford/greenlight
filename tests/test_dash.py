@@ -245,6 +245,7 @@ _t = dash.trees()
 dash.greenlight.orca_cli = _orca
 assert [(t["ade"], t["path"]) for t in _t] == [("cmux", "/cmux"), ("herdr", "/herdr"), ("t3", "/t3"), ("cmux", "/r/a")], _t
 _mr = _t[-1].pop("mr")
+assert [m["kind"] for m in _t[-1].pop("moves")] == ["ci"]  # its pipeline failed: Fix CI, though the MR isn't yours
 assert _mr["ref"] == "!7" and _mr["threads"] == 2 and _mr["rebase"] and "author" not in _mr and _mr["by"] == {"name": "x", "avatar": "u"}, _mr  # the card byline
 # the live agent (working) wins over the scan's (waiting): not "needs you"
 assert _t[-1] == {"ade": "cmux", "project": "r", "name": "a", "path": "/r/a", "branch": "x", "main": False, "agent": "working",
@@ -324,16 +325,18 @@ g = dash.settings("prompt-get", "greenlight/review", "")
 assert g["own"] and g["text"].startswith("Mine") and "{last_review_sha}" in g["default"] and "last_review_sha" in g["vars"], g
 assert not dash.settings("prompt-set", "greenlight/review", "  ")["own"] and not dash.settings("prompt-get", "greenlight/review", "")["own"]
 assert dash.settings("prompt-get", "../x/review", "")["error"] and dash.settings("prompt-get", "greenlight/nope", "")["error"]
-# your own MR: conflicts › ci › threads › review; merge only when none of those apply; a reviewer's MR gets none of the fixes
+# conflicts › ci › threads › review, on your MR or one you review; merge only when none of those apply
 mine = {**r, "next": {"owner": "greenlight", "step": "merge", "action": "merge", "cmd": ["glab", "mr", "merge", "58", "-R", "octo/greenlight", "--yes", "--squash"]},
         "mr": {**r["mr"], "role": "author", "conflicts": True, "pipeline": "failed", "pipeline_url": "https://ci/1",
                "failed_jobs": [{"name": "unit", "stage": "test", "url": "https://ci/1/j"}], "todo_threads": ['sam, a.py:3: "why?"', "sam"]}}
 mv = dash.moves(mine)
 assert [m["kind"] for m in mv] == ["conflicts", "ci", "threads"] and mv[2]["n"] == 2, mv
 assert "- unit (test): https://ci/1/j" in mv[1]["prompt"] and "https://ci/1" in mv[1]["prompt"] and '- sam, a.py:3: "why?"\n- sam' in mv[2]["prompt"]
-mv = dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})
+_clean = {"conflicts": False, "pipeline": "success", "todo_threads": []}
+assert [m["kind"] for m in dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})] == ["conflicts", "ci", "threads"]  # a review's fixes too
+mv = dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}})
 assert [m["kind"] for m in mv] == ["merge"] and mv[0]["how"] == "Squash", mv
-assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}, "next": {**mine["next"], "cmd": None}}) == []  # no cmd: greenlight won't merge it now
+assert dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}, "next": {**mine["next"], "cmd": None}}) == []  # no cmd: greenlight won't merge it now
 _rv = {**mine, "next": {**mine["next"], "owner": "me", "action": "mergeable, and nobody else reviews this repo: review it, then merge?"},
        "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}
 assert [m["kind"] for m in dash.moves(_rv)] == ["review", "merge"]  # a review doesn't hide Merge (a fix does)
@@ -347,7 +350,8 @@ mv = {m["kind"]: m for m in dash.moves(mine)}
 assert mv["ci"]["auto"].startswith(dash.AUTO_HEAD + "You have my OK to push") and mv["ci"]["prompt"] in mv["ci"]["auto"] and mv["ci"]["sha"] == "abc123"
 assert "auto" not in mv["conflicts"] and "auto" not in mv["threads"]
 assert not any("auto" in m for m in dash.moves({**mine, "goal": "fix it (hold)"}))
-assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})[0]["auto"] is True
+assert dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}})[0]["auto"] is True
+assert not any("auto" in m for m in dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}}))  # never pushes unattended to someone else's branch
 assert not any("auto" in m for m in dash.moves(_rv))  # auto-merge never jumps a pending review
 dash.settings("autorun-set", "greenlight", "{}")
 assert not any("auto" in m for m in dash.moves(mine))
