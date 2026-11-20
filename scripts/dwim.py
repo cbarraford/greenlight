@@ -170,7 +170,7 @@ def words(s):
 def facts_of(p):
     """A puck in a line: what decide.py and Chief are told about a candidate workspace."""
     mr = p.get("mr") or {}
-    bits = [p.get("name", ""), f"repo {p.get('repo', '')}", f"goal: {(p.get('goal') or '')[:140]}"]
+    bits = [p.get("name", ""), f"repo {p.get('repo', '')}", f"path {p.get('path', '')}", f"goal: {(p.get('goal') or '')[:140]}"]
     if mr:
         bits.append(f"{mr.get('ref') or '#' + str(mr.get('iid'))} {mr.get('title', '')[:100]} (ci {mr.get('pipeline') or 'none'}"
                     f"{', conflicts' if mr.get('conflicts') else ''}{', draft' if mr.get('draft') else ''})")
@@ -273,9 +273,9 @@ def pick_targets(g, pool, answers):
     """The workspaces meant, out of structural()'s pool, or (None, why) when it isn't clear."""
     if g["tokens"]:
         lex = lexical(g, pool)
-        sem = {p["name"]: sure_bool(answers.get("is:" + p["name"])) for p in pool if "is:" + p["name"] in answers}
+        sem = {i: sure_bool(answers.get(f"is:{i}")) for i, _ in enumerate(pool) if f"is:{i}" in answers}
         if any(v is not None for v in sem.values()):  # System One read the phrase: its yes/no beats the substring match
-            pool = [p for p in pool if sem.get(p["name"]) or (sem.get(p["name"]) is None and p in lex)]
+            pool = [p for i, p in enumerate(pool) if sem.get(i) or (sem.get(i) is None and p in lex)]
         else:
             pool = lex
     if not pool:
@@ -336,8 +336,9 @@ def plan(o):
     if g["tokens"]:
         phrase = " ".join(g["tokens"])
         lex = lexical(g, pool)
-        for p in (lex + [p for p in pool if p not in lex])[:12]:  # the substring matches first, then the rest of the pool
-            qs["is:" + p["name"]] = {"kind": "bool", "question": f"Does “{phrase}” in “{text}” refer to this workspace?", "context": facts_of(p)}
+        ranked = [(i, p) for i, p in enumerate(pool) if p in lex] + [(i, p) for i, p in enumerate(pool) if p not in lex]
+        for i, p in ranked[:12]:  # lexical matches first, then the rest of the pool
+            qs[f"is:{i}"] = {"kind": "bool", "question": f"Does “{phrase}” in “{text}” refer to this workspace?", "context": facts_of(p)}
     answers, provider, dec_ms = ask(state, qs)
     ms = {"grammar": gram_ms, "decide": dec_ms}
     route, verb_d = sure_choice(answers.get("route")), sure_choice(answers.get("verb"))
@@ -547,7 +548,7 @@ def undo(uid):
     if not f.exists():
         return {"error": "nothing to undo"}
     rec = json.loads(f.read_text())
-    back, kept = [], []
+    back, kept, unresolved = [], [], []
     for e in rec["edits"]:
         with _lock_for(e["id"]).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -557,6 +558,7 @@ def undo(uid):
                 continue  # journaled before the set, but the set may never have run
             if not w or (w.get("comment") or "") != e["after"]:
                 kept.append(e["ws"])
+                unresolved.append(e)
                 continue
             greenlight.orca("worktree", "set", "--worktree", f"id:{e['id']}", "--comment", e["before"])
             back.append(e["ws"])
@@ -564,7 +566,11 @@ def undo(uid):
                 _note(e["ws"], f"undid: “{rec.get('text', '')}”")
             except OSError as err:
                 log({"op": "history_error", "ws": e["ws"], "error": str(err)[:200]})
-    f.unlink(missing_ok=True)
+    if unresolved:
+        rec["edits"] = unresolved
+        _write_undo(f, rec)
+    else:
+        f.unlink(missing_ok=True)
     log({"op": "undo", "text": rec.get("text"), "back": back, "kept": kept})
     return {"ok": True, "undone": back, "kept": kept}
 

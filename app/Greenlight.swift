@@ -1027,6 +1027,13 @@ func dwimUndoReply(_ out: String, _ code: Int) -> [String: Any]? {
     if r["error"] is String { return r }
     return r["ok"] as? Bool == true && r["undone"] is [String] && r["kept"] is [String] ? r : nil
 }
+func dwimSkipped(_ plan: [String: Any]) -> String {
+    let skipped = (plan["skipped"] as? [[String: String]] ?? []).compactMap { s -> String? in
+        guard let name = s["ws"], let why = s["why"] else { return nil }
+        return "\(name): \(why)"
+    }
+    return skipped.isEmpty ? "" : " Skipped " + skipped.joined(separator: "; ") + "."
+}
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
 func fallbackSpec(_ text: String) -> [String: Any] {
@@ -3787,7 +3794,7 @@ final class Core: ObservableObject {
         let acts = o["actions"] as? [[String: Any]] ?? [], line = o["toast"] as? String ?? "", say = o["say"] as? String ?? line
         msgs.append(Msg(.you, text))  // the chat keeps the record: Chief reads the board, not this
         let pending = o["launch"] as? Bool == true
-        let notice = acts.isEmpty ? say : pending ? "Starting after \(Int(Core.launchGrace)) seconds: \(line)" : "Applying: \(text)"
+        let notice = acts.isEmpty ? say : (pending ? "Starting after \(Int(Core.launchGrace)) seconds: \(line)" : "Applying: \(text)") + dwimSkipped(o)
         msgs.append(Msg(.note, notice))
         log(.greenlight, "dwim", .status, "\(o["verb"] as? String ?? "") planned in \(ms) ms: \(notice)")
         if voice.on {
@@ -3796,7 +3803,7 @@ final class Core: ObservableObject {
         }
         if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor) }
         if pending {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
-            let t = DwimToast(text: line, pending: true)
+            let t = DwimToast(text: line + dwimSkipped(o), pending: true)
             show(t, for: nil)
             let w = DispatchWorkItem { [weak self] in
                 guard let self else { return }
@@ -3819,7 +3826,7 @@ final class Core: ObservableObject {
             guard let self else { return }
             let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["errors": ["\(host) didn't answer (exit \(code))"]]
             let errs = r["errors"] as? [String] ?? [], done = r["done"] as? [String] ?? [], unchanged = r["unchanged"] as? [String] ?? [], undo = r["undo"] as? String
-            let line = done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))"
+            let line = (done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))") + (done.isEmpty ? "" : dwimSkipped(o))
             if !done.isEmpty {
                 self.msgs.append(Msg(.note, line))
                 if self.voice.on {
@@ -3885,8 +3892,14 @@ final class Core: ObservableObject {
             self.msgs.append(Msg(.note, said))
             if self.voice.on { self.voice.say(back.isEmpty ? said : "Undone.") }
             self.log(.greenlight, "dwim", r["error"] == nil ? .action : .failed, said)
-            self.removeToast(t.id)
-            self.show(DwimToast(text: said), for: 4)
+            if !kept.isEmpty {
+                var retry = t; retry.undoing = false; retry.failed = true
+                self.show(retry, for: nil)
+                self.msgs.append(Msg(.note, "Undo the newer edit, then try this Undo again."))
+            } else {
+                self.removeToast(t.id)
+                self.show(DwimToast(text: said), for: 4)
+            }
         })
     }
 }
@@ -8674,6 +8687,7 @@ func selfTest() {
     check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
     check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil
           && dwimUndoReply(#"{"ok":true,"undone":["a"],"kept":[]}"#, 0) != nil)
+    check("dwim: mixed bulk notice names skipped targets", dwimSkipped(["skipped": [["ws": "billing", "why": "agent working"]]]) == " Skipped billing: agent working.")
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil
