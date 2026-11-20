@@ -3,6 +3,7 @@
 
 Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
+  chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
                                      # M: a claude model, or a harness name (codex|opencode|pi) for its default model
   chat.py compact [--model M]       # claude only
@@ -14,6 +15,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
 import json, os, random, re, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import attach  # noqa: E402
 import decisions  # noqa: E402
 import harness  # noqa: E402
 
@@ -29,6 +31,8 @@ PROMPT = (
     "Never do work yourself (code, debugging, reviews, investigations, writing): dispatch it to an agent in the "
     "appropriate Orca workspace, creating one with a goal if none fits, then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
+    "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
+    "(that's not doing work yourself) and answer with them in mind; when you dispatch work about one, give the agent its path. "
     "Answer concisely: the answer first, only what was asked, no preamble, no restating the question, no closing offers. "
     "Replies render as markdown in a narrow popover: a few short lines at most, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
@@ -360,7 +364,7 @@ def session(engine, val=None):
     return open(f).read().strip() if os.path.exists(f) else None
 
 
-def run(cmd, engine, text, norm, check=False):
+def run(cmd, engine, text, norm, check=False, guard=None):
     """Run one turn, stream events. Returns (sid or None, error or None or "retry").
     check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -368,14 +372,24 @@ def run(cmd, engine, text, norm, check=False):
     open(PIDFILE, "w").write(str(p.pid))
     p.stdin.write(text)
     p.stdin.close()
-    sid, done = None, False
+    sid, done, private = None, False, set()
+    hiding, needles = guard or watch_for_attachments()
     for line in p.stdout:
         try:
             d = json.loads(line)
         except ValueError:
             continue
         sid = d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
-        evs = norm.phrase(norm.track(getattr(norm, engine)(d)))  # track first, so its "Thinking" gets a phrase too
+        raw = getattr(norm, engine)(d)
+        for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
+            if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
+                private.add(e["id"])
+            elif hiding and e["e"] == "step_done" and e.get("id") in private:
+                e["out"] = attach.HIDDEN
+                e.pop("full", None)
+            if hiding and e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+                attach.hide(DIR, e, needles)
+        evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
         if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
             try:
                 os.killpg(p.pid, signal.SIGTERM)
@@ -387,6 +401,8 @@ def run(cmd, engine, text, norm, check=False):
             return sid, "retry"
         for e in evs:
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
+                for sh in e["shells"] if hiding else ():
+                    attach.hide(DIR, sh, needles)  # its title is the step's: hidden as the step's is
                 json.dump(e["shells"], open(BGFILE, "w"))
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice
@@ -410,6 +426,12 @@ def run(cmd, engine, text, norm, check=False):
             return sid, "Stopped"
         return sid, p.stderr.read().strip() or f"exit {p.returncode}"
     return (None if done else sid), None  # done: its session is saved already
+
+
+def watch_for_attachments():
+    """(hide?, needles) for a turn, decided at its start: a Clear during it (even between a retry's runs) doesn't stop it;
+    nothing attached, nothing hidden."""
+    return os.path.isdir(attach.root(DIR)), attach.needles(DIR)
 
 
 def agent_title(a):
@@ -460,8 +482,17 @@ def stop_shell(task_id):
     return bool(hits)
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
     engine, model = (model, None) if model in harness.H else ("claude", model)
+    stored = []
+    if files:
+        try:
+            stored = attach.store(DIR, attach.check(files))
+        except attach.Rejected as e:
+            return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+        except OSError as e:
+            return emit(e="done", ok=False, text=f"The attached files couldn't be saved where greenlight runs ({e.strerror or e}).", context=0, window=None, ms=None)
+        attach.prune(DIR)
     prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
     if os.path.exists(rules):  # the user's standing instructions (Settings → Model), read every turn
@@ -471,26 +502,27 @@ def turn(text, model, effort, compact=False, name=None, verbose=False):
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
-        text = board_note() + WRAP + text
+        text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
-    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
+    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
+                                   images=attach.images(stored))
     emit(e="start", engine=engine, model=model or "default")
-    norm = Norm(verbose)
+    norm, guard = Norm(verbose), watch_for_attachments()
     try:
         cmd, t = mk(sid, text)
-        new_sid, err = run(cmd, engine, t, norm, check=not compact)
+        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard)
     except (ValueError, OSError) as e:  # unknown harness, pi without bypass, binary missing
         return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
         cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-        new_sid, err = run(cmd, engine, t, norm)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard)
         sid = None  # don't fall into the session-lost retry below
     if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
         emit(e="status", text="Session lost, starting a new one")
         cmd, t = mk(None, text)
-        new_sid, err = run(cmd, engine, t, norm)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard)
     if new_sid:
         session(engine, new_sid)
     if not compact and not err:
@@ -508,6 +540,7 @@ def main():
         for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
+        attach.clear(DIR)
         decisions.quiet("forget_chat", chat=CHAT)
     elif cmd == "stop":
         if os.path.exists(PIDFILE):
@@ -527,7 +560,14 @@ def main():
     else:
         if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
             os.environ["GREENLIGHT_ONLY"] = opt("--only")
-        turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args)
+        text, files = sys.stdin.read(), None
+        if "--attach" in args:
+            try:
+                j = json.loads(text)
+                text, files = str(j.get("text") or ""), j.get("files") or []
+            except (ValueError, AttributeError):
+                return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
+        turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
 
 
 if __name__ == "__main__":
