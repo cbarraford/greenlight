@@ -249,6 +249,9 @@ test("L1's project list: each project's paths are the trees this window shows un
   assert.deepEqual(paths("p1"), ["/w/fix-login", "/w/widgets"], "by its repo");
   assert.deepEqual(paths("p2"), ["/w/review"], "by its folder: no repo of its own");
   assert.deepEqual(paths(""), ["/w/shipped", "/w/sidebar", "/x/scratch"], "No Man's Land: a no-repo workspace is in it");
+  const at = id => list.find(p => p.id === id);
+  assert.deepEqual([at("p1").repos, at("p2").repos, at("").repos], [["acme/widgets"], [], []], "a repo with a tree filed under another project's folder isn't No Man's Land's");
+  assert.deepEqual([at("p1").busy, at("p2").busy, at("").busy], [1, 0, 0], "working agents counted where they're shown");
 });
 
 test("a repo's .greenlight.json: its project, and a window of it wears its look, hosts and host; Save to repo writes it", async page => {
