@@ -618,6 +618,11 @@ test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [
   assert.equal(await page.$eval("#hcard", e => e.dataset.name), name, "one picked hex on screen: its card opens");
   await page.evaluate(() => window.mc.pick([]));
   assert.ok(!(await page.$(".fieldwrap.picking")) && !(await page.$(".cell.picked")) && !(await page.$("#hcard")), "[] clears, card too");
+  await page.evaluate(n => window.mc.pick([n], false), name);
+  assert.deepEqual(await page.$$eval(".cell.picked", e => e.map(c => c.dataset.name)), [name]);
+  assert.ok(!(await page.$("#hcard")), "lit but not sure enough (open false): no card");
+  await page.evaluate(n => window.mc.pick([n], true), name);
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), name, "sure (open true): its card opens");
   await page.evaluate(n => window.mc.pick([n]), name);
   await page.click(`.cell.picked`);
   assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");

@@ -38,6 +38,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade_common  # noqa: E402
+import decide  # noqa: E402
 import decisions  # noqa: E402
 import lifestage  # noqa: E402
 
@@ -70,16 +72,25 @@ def config():
 CONFIG = config()
 BOT = CONFIG["review_bot"]
 NOW_MS = time.time() * 1000
-DEAD_RE = re.compile(r"\b401\b|OAuth access token has been revoked|Please run /login|login expired|API key (?:has expired|is invalid|not valid|expired)", re.I)
-LIMIT_RE = re.compile(r"usage limit|limit reached|5-hour limit|weekly limit|out of (?:extra )?usage"
-                      r"|rate limit exceeded|exceeded your current quota|insufficient_quota|429 Too Many Requests"
-                      r"|exhausted your daily quota|quota will reset after", re.I)  # last line: Gemini CLI's own words (a bare RESOURCE_EXHAUSTED is any gRPC error)
+DEAD_RE, LIMIT_RE = ade_common.DEAD_RE, ade_common.LIMIT_RE  # an agent logged out / out of usage, in any harness's words
 # Instructions I add to a goal. A word joined to its neighbour by - or _ ("security-hold") is part of a name, not an instruction.
 KEEP_DRAFT_RE = re.compile(r"(?<![\w-])(stay|keep|remain)s? (?:a |as )?draft(?![\w-])", re.I)
 HOLD_RE = re.compile(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", re.I)
 AUTOMATION_RE = re.compile(r"\(automation\)", re.I)  # free-form goal driven by an Orca automation: don't dispatch
 REVISIT_RE = re.compile(r"revisit (\d{4}-\d\d-\d\d)", re.I)  # "(revisit 2026-11-06)" parks it until then
 PARKED_RE = re.compile(r"\(parked\)", re.I)  # parked with no end date, and hidden from the dashboard and report
+# The same instructions in my own words, asked of System One (decide.py). A model can only add to what the patterns
+# above find, never take a hold or a draft away; the bar is low for the safe direction (hold, stay draft), high for
+# parking (it hides the workspace) and for a date.
+INTENTS = {
+    "is_held": ("Does the goal tell the bot to hold off merging this PR/MR: hold, don't merge, wait for something "
+                "or someone before merging, or ask first?", 0.6),
+    "stay_draft": ("Does the goal say to keep the PR/MR as a draft, not mark it ready for review?", 0.6),
+    "is_parked": ("Does the goal say to park this work: set it aside, pause it, put it on ice, don't work on it for now?", 0.85),
+    "revisit": ("Does the goal say to leave this work alone until a particular later date?", 0.7),
+}
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 ISSUE_GOAL_RE = re.compile(r"^Merge MR for #(\d+)")  # dash.py plan_send: the MR/PR that closes issue N
 PLAN_RE = re.compile(r"^Plan:")  # a planner workspace (dash.py plan): the Plan view's, never driven by greenlight
 # Old /workspaces status lines ("Rebase !42 — dispatched 2026-01-13") aren't goals.
@@ -521,6 +532,61 @@ def said(ws, mr):
     return "\n".join(texts)
 
 
+def when(text, today=None):
+    """The first date in a goal's words, as YYYY-MM-DD: 2026-12-01, Dec 3 (2026), 3 December, tomorrow, next week,
+    in 3 days/weeks, next Monday / on Friday. None when there's none (a month-day already past this year means next year)."""
+    import datetime as dt
+    t, today = text.lower(), today or dt.date.today()
+    if m := re.search(r"\b(\d{4})-(\d\d)-(\d\d)\b", t):
+        try:
+            return dt.date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+        except ValueError:
+            return None
+    mon = "|".join(MONTHS)
+    m = re.search(rf"\b({mon})[a-z]*\.? (\d{{1,2}})(?:st|nd|rd|th)?\b(?:,? (\d{{4}}))?", t) or \
+        re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)? ({mon})[a-z]*\b(?:,? (\d{{4}}))?", t)
+    if m:
+        a, b = (m[1], m[2]) if m[1][:3] in MONTHS else (m[2], m[1])
+        try:
+            d = dt.date(int(m[3] or today.year), MONTHS.index(a[:3]) + 1, int(b))
+        except ValueError:
+            return None
+        return (d.replace(year=d.year + 1) if d < today and not m[3] else d).isoformat()
+    if re.search(r"\btomorrow\b", t):
+        return (today + dt.timedelta(days=1)).isoformat()
+    if m := re.search(r"\bin (\d{1,3}|a|one|two|three) (day|week|month)s?\b", t):
+        n = {"a": 1, "one": 1, "two": 2, "three": 3}.get(m[1]) or int(m[1])
+        return (today + dt.timedelta(days=n * {"day": 1, "week": 7, "month": 30}[m[2]])).isoformat()
+    if re.search(r"\bnext week\b", t):
+        return (today + dt.timedelta(days=7 - today.weekday())).isoformat()  # next Monday
+    if m := re.search(rf"\b(?:next|on|until|till|after) ({'|'.join(DAYS)})\b", t):
+        ahead = (DAYS.index(m[1]) - today.weekday()) % 7 or 7
+        return (today + dt.timedelta(days=ahead)).isoformat()
+    return None
+
+
+def intents(ws, mr=None):
+    """What my goal tells greenlight: {is_held, stay_draft, is_parked, revisit_date (YYYY-MM-DD or None)}, read from
+    said(): the patterns first, then System One for the same thing in other words. Once per scan row."""
+    if "_intents" in ws:
+        return ws["_intents"]
+    text = said(ws, mr or {})
+    out = {"is_held": bool(HOLD_RE.search(text)), "stay_draft": bool(KEEP_DRAFT_RE.search(text)),
+           "is_parked": bool(PARKED_RE.search(text)), "revisit_date": (m := REVISIT_RE.search(text)) and m[1]}
+    if text.strip() and decide.configured() != "local":
+        asked = {k: {"type": "bool", "question": q, "context": "The goal a user wrote for a coding workspace; a PR/MR title in it is a name, not an instruction."}
+                 for k, (q, _) in INTENTS.items() if not out.get("revisit_date" if k == "revisit" else k)}
+        got = decide.batch(text, asked) if asked else {}
+        for k, a in got.items():
+            if a["provider"] != "local" and a["prob"] >= INTENTS[k][1]:
+                if k == "revisit":
+                    out["revisit_date"] = when(text)
+                else:
+                    out[k] = True
+    ws["_intents"] = out
+    return out
+
+
 def check(step, mr, ws, milestone):
     """-> None when the step passes, else (owner, action, cmd|None)."""
     iid, proj = mr["iid"], ws["project"]
@@ -556,7 +622,7 @@ def check(step, mr, ws, milestone):
         if not mr["draft"]:
             return None
         ready = ["gh", "pr", "ready", str(iid), "-R", proj] if github else upd + ["--ready"]
-        if KEEP_DRAFT_RE.search(said(ws, mr)):
+        if intents(ws, mr)["stay_draft"]:
             return "me", "goal says keep draft but everything else is green: take it out of draft?", ready  # the card's Mark ready runs it
         return "greenlight", "mark ready for review", ready
     if step == "threads":
@@ -577,7 +643,7 @@ def check(step, mr, ws, milestone):
         how = CONFIG["merge_method"]
         merge = (["gh", "pr", "merge", str(iid), "-R", proj, f"--{how}"] if github
                  else ["glab", "mr", "merge", str(iid), "-R", proj, "--yes"] + ([f"--{how}"] if how != "merge" else []))
-        if st == "mergeable" and HOLD_RE.search(said(ws, mr)):
+        if st == "mergeable" and intents(ws, mr)["is_held"]:
             return "me", "mergeable, but the goal says hold: merge now?", merge  # yes runs it (the card's Merge button too)
         opts = lifecycle_opts(proj)
         base, default = mr.get("target_branch"), mr.get("_default_branch")
@@ -618,12 +684,13 @@ def check(step, mr, ws, milestone):
 
 def evaluate(ws, mr, milestone):
     """-> {step, owner, action, cmd}."""
-    snooze = REVISIT_RE.search(ws["goal"])
-    if snooze and snooze[1] > time.strftime("%Y-%m-%d") and not (mr and mr["state"] in ("merged", "closed")):
-        return {"step": "parked", "owner": "parked", "action": f"parked until {snooze[1]}"}
+    goal = intents(ws, mr)
+    snooze = goal["revisit_date"]
+    if snooze and snooze > time.strftime("%Y-%m-%d") and not (mr and mr["state"] in ("merged", "closed")):
+        return {"step": "parked", "owner": "parked", "action": f"parked until {snooze}"}
     if PLAN_RE.match(ws["goal"]):
         return {"step": "plan", "owner": "parked", "action": "being planned in the Plan view", "hidden": True}
-    if PARKED_RE.search(ws["goal"]) and not (mr and mr["state"] in ("merged", "closed")):
+    if goal["is_parked"] and not (mr and mr["state"] in ("merged", "closed")):
         return {"step": "parked", "owner": "parked", "action": "parked until you unpark it", "hidden": True}
     if not mr:
         if ws.get("branch_gone"):
@@ -674,32 +741,64 @@ def upstream_gone(r):
     return p.stdout.strip() == "[gone]"
 
 
+def screen(ws, terminals):
+    """What the workspace's newest agent terminal shows (ade_common.agent_state over its last 60 lines), or None."""
+    terms = sorted((t for t in terminals.get(ws["id"], []) if t.get("agentIdentity")),
+                   key=lambda t: t.get("lastOutputAt") or 0, reverse=True)
+    if not terms:
+        return None
+    ws["agent"]["terminal"] = terms[0]["handle"]
+    try:
+        tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "60")["terminal"].get("tail", "")
+    except Exception:
+        return None
+    lines = tail.splitlines() if isinstance(tail, str) else [str(x) for x in tail]
+    seen = ade_common.agent_state(lines, ws["agent"].get("type") or terms[0].get("agentIdentity") or "")
+    ws["agent"]["screen"] = {k: seen[k] for k in ("state", "prob", "provider")}
+    return seen
+
+
+SURE = 0.7  # how sure the screen reading must be before it overrides Orca's state or the step's owner
+
+
 def agent_overlay(ws, terminals):
-    """Agent-owned work is only actionable if no agent is already on it, and the agent is alive."""
-    nxt, ag = ws["next"], ws["agent"]
+    """Agent-owned work is only actionable if no agent is already on it, and the agent is alive. The terminal says
+    which: logged out, out of usage, looping, a draft left in the box, or a stale "waiting" (a background task's
+    or a restored session's alert, while the screen shows it working or done)."""
+    nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
     if ag["state"] == "waiting":
-        nxt.update(owner="me", action=f"agent is waiting on you: {ag['last'][:200]}")
-        return
+        seen = screen(ws, terminals)
+        if seen and seen["prob"] >= SURE and seen["state"] in ("working", "finished"):
+            ag["state"] = "working" if seen["state"] == "working" else "done"
+        elif seen and seen["prob"] >= SURE and seen["state"] == "logged_out":
+            nxt.update(owner="me", action=f"agent logged out: /login in {ag['terminal']}, then greenlight re-dispatches")
+            return
+        else:
+            nxt.update(owner="me", action=f"agent is waiting on you: {ag['last'][:200]}")
+            return
     if nxt["owner"] != "agent":
         return
     if ag["state"] == "working":
         nxt["owner"] = "working"
         return
-    terms = sorted((t for t in terminals.get(ws["id"], []) if t.get("agentIdentity")),
-                   key=lambda t: t.get("lastOutputAt") or 0, reverse=True)
-    if not terms:
+    seen = screen(ws, terminals) if seen is False else seen
+    if not seen or seen["prob"] < SURE:
         return
-    ws["agent"]["terminal"] = terms[0]["handle"]
-    try:
-        tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "200")["terminal"].get("tail", "")
-    except Exception:
-        return
-    tail = tail if isinstance(tail, str) else "\n".join(map(str, tail))
-    if DEAD_RE.search(tail[-3000:]):
-        nxt.update(owner="me", action=f"agent logged out: /login in {terms[0]['handle']}, then greenlight re-dispatches")
-    elif LIMIT_RE.search(tail[-3000:]) and len(CONFIG["agents"]) > 1:
-        first, nxt["agent"] = CONFIG["agents"][:2]  # ponytail: assumes the stuck agent is the first; walk the list if they mix
-        nxt["action"] += f" [{first} out of tokens: dispatch with {nxt['agent']}]"
+    h = ag["terminal"]
+    if seen["state"] == "working":
+        nxt["owner"] = "working"
+    elif seen["state"] == "logged_out":
+        nxt.update(owner="me", action=f"agent logged out: /login in {h}, then greenlight re-dispatches")
+    elif seen["state"] == "rate_limited" and len(CONFIG["agents"]) > 1:
+        now = ag.get("type") if ag.get("type") in CONFIG["agents"] else CONFIG["agents"][0]
+        nxt["agent"] = next((a for a in CONFIG["agents"] if a != now), CONFIG["agents"][1])
+        nxt["action"] += f" [{now} out of tokens: dispatch with {nxt['agent']}]"
+    elif seen["state"] == "stuck_looping":
+        nxt.update(owner="me", action=f"agent looks stuck in a loop in {h}: look at it, then stop or redirect it")
+    elif seen["state"] == "unsent_draft":
+        nxt.update(owner="me", action=f"a draft sits unsent in {h}'s input box: send or clear it, then greenlight dispatches")
+    elif seen["state"] == "waiting_for_user":
+        nxt.update(owner="me", action=f"agent is waiting on you in {h}")
 
 
 def scan(save=True):
