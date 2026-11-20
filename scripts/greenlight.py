@@ -175,11 +175,12 @@ AND_DO_RE = re.compile(rf"\band (?:then )?(?!(?:{DET})\b)(\w+) (?:(?:{DET})\b|(?
 NAME_RE = re.compile(r"(?!\d+[.)]\s)[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # chat.py: request, (asked) the chat's question, (answer) the user's answer, …
 OFFER_VERB = rf"\b(?!(?:use|do|get|keep|try|set(?! ?up))\b)({CHANGES})\b"  # not "should I use prod?"
-S = r"(?:[^.?!\n]|[.!](?=\S))"  # within one sentence ("greenlight.py", "e.g." don't end it)
+S = r"(?:[^.?!\n]|[.!](?=\S))"  # within one sentence ("greenlight.py" doesn't end it)
 OFFER_RE = re.compile(  # the chat's question offered a change, not an answer that mentions one ("since the deploy")
     rf"\b(?:i|me|we|us)\b{S}*?{OFFER_VERB}{S}*\?|\bwant (?:a|an|me to|us to|it|this|that|one)\b{S}*\?"  # "can I add a meter?"
     rf"|\b(?:i can|i could|i'll|i will|let me|happy to)\s+(?:\S+\s+){{0,2}}?{OFFER_VERB}"  # "I can add a meter."
-    rf"|^[ \t]*(?:[-*•]|\d+[.)])\s+{OFFER_VERB}[^\n:]*$"  # "1. Add a cost meter", not a "- Agent runs: $3" breakdown
+    rf"|^[ \t]*(?:[-*•]|\d+[.)])\s+(?:\*\*|__)?{OFFER_VERB}"  # "1. **Add a cost meter**: $2/mo", not a breakdown row:
+    rf"(?!(?:[ \t]+\w+)?[ \t]*:)(?!(?:[ \t]+\w+){{0,2}}[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
     rf"|^`?options:[^\n]*{OFFER_VERB}|{OFFER_VERB}[^\n]*\n`?options:", re.I | re.M)  # "Add a meter?\nOptions: …"
 AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do|go for it|sounds good)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
@@ -198,7 +199,7 @@ def read_only(text):
     answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ANSWER]
     clauses = [c for c in CLAUSE_RE.split(req) if c and not COURTESY_RE.fullmatch(c)]
     proposed = not asked or any(CHANGE_RE.search(q) or not ASKS_RE.search(re.sub(r"^.*?\b(?:me|us) to (?:also )?", "", q, flags=re.S))
-                                for q in asked)  # "yes" agrees to a change, unless only a lookup was offered ("want me to check staging?")
+                                for q in asked)  # "yes" agrees to a change, unless only a lookup was offered ("would you like me to check staging?")
     def answer_changes(a):  # "prod" narrows the question; "sure" to a proposed change, or a sentence that doesn't ask, is a request
         return CHANGE_RE.search(a) or proposed and AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
     if any(not ASKS_RE.match(req[m.start(1):]) for m in AND_DO_RE.finditer(req)):  # "and tell me why" still asks
