@@ -740,6 +740,7 @@ final class Voice: NSObject, ObservableObject {
     let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
     var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
     var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     static let best: AVSpeechSynthesisVoice? = {
@@ -794,6 +795,9 @@ final class Voice: NSObject, ObservableObject {
         if !engine.attachedNodes.contains(player) { engine.attach(player) }
         engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
         let inFormat = input.outputFormat(forBus: 0)  // after voice processing, which can change it
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {  // no input device: installTap would raise, not throw
+            throw NSError(domain: "Voice", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone is connected."])
+        }
         let conv = AVAudioConverter(from: inFormat, to: micFormat)
         if inFormat.channelCount > 1 { conv?.channelMap = [0] }
         input.removeTap(onBus: 0)
@@ -866,7 +870,7 @@ final class Voice: NSObject, ObservableObject {
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; drewAt = 0; chiefDrew = false; shown = false
+        said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false
         guard on else { return }
         wait("One minute", r.question)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -894,6 +898,13 @@ final class Voice: NSObject, ObservableObject {
         said = 0
         if !chiefDrew { draw(plain(body), last: true) }
     }
+    /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
+    func failed(_ text: String) {
+        guard on else { return }
+        said = 0
+        wait("Listening", plain(text))
+        say(text)
+    }
     /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
     func stage(_ h: String) {
         guard !chiefDrew else { return }
@@ -918,7 +929,7 @@ final class Voice: NSObject, ObservableObject {
 
     func say(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard on, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        guard on, !muted, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
         lastSpoken = String((lastSpoken + " " + t).suffix(600))
         lines.append(t)
         if lines.count == 1 { caption = t }
@@ -926,7 +937,7 @@ final class Voice: NSObject, ObservableObject {
         u.voice = Voice.best
         let g = gen
         synth.write(u) { [weak self] buf in
-            guard let self, self.gen == g, let b = buf as? AVAudioPCMBuffer else { return }
+            guard let self, self.gen == g, self.on, let b = buf as? AVAudioPCMBuffer else { return }
             let end = b.frameLength == 0  // the utterance is over: a silent frame marks it in the player
             let out: AVAudioPCMBuffer?
             if end { out = AVAudioPCMBuffer(pcmFormat: self.speechFormat, frameCapacity: 1); out?.frameLength = 1 }
@@ -942,12 +953,12 @@ final class Voice: NSObject, ObservableObject {
                 if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
                 if self.speaking == 0 && self.lines.isEmpty && self.on { self.listen() }  // Chief's echo is in that request
             }}
-            if !self.player.isPlaying { self.player.play() }
+            if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
         }
     }
     /// Stop talking (you cut in, or said stop); the turn itself goes on.
     func hush() {
-        gen += 1
+        gen += 1; muted = true
         synth.stopSpeaking(at: .immediate)
         player.stop()
         speaking = 0; lines = []
@@ -1414,7 +1425,7 @@ final class Core: ObservableObject {
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
-        if !r.stopping && ok { voice.finished(st, body) }
+        if !r.stopping && ok { voice.finished(st, body) } else if !r.watch && !r.checkIn { voice.failed(body) }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
@@ -4946,6 +4957,17 @@ func selfTest() {
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full)
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
+    let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
+    var bufs = 0, ended = false, sc: AVAudioConverter?
+    syn.write(AVSpeechUtterance(string: "One minute.")) { b in
+        guard let b = b as? AVAudioPCMBuffer else { return }
+        if b.frameLength == 0 { ended = true; return }
+        if sc?.inputFormat != b.format { sc = AVAudioConverter(from: b.format, to: pf) }
+        if sc.flatMap({ convert(b, $0, pf) }) != nil { bufs += 1 }
+    }
+    let until = Date() + 15
+    while !ended && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+    check("voice: speech converts for the player and ends with an empty buffer (\(bufs) buffers)", bufs > 0 && ended)
     let c = Core()
     Thread.detachNewThread {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
