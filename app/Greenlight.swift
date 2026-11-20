@@ -904,8 +904,8 @@ func level(_ b: AVAudioPCMBuffer) -> Float {
     return max(0, min(1, (20 * log10(max(sqrt(sum / Float(b.frameLength)), 1e-6)) + 50) / 45))
 }
 
-let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer in 1–3 short spoken sentences: "
-    + "no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
+let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer concisely, like a person talking: "
+    + "one or two short sentences, the answer first, no preamble or recap, more only if they ask; no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
