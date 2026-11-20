@@ -164,6 +164,7 @@ class Norm:
         self.context = 0
         self.window = None
         self.text = ""  # last text block, the fallback reply
+        self.held = None  # codex/opencode: the latest whole message, until what follows says if it's the reply or a progress note
         self.reply = None  # what the turn ended on, when it ended well: a question if it closes with an Options line
         self.cmds = {}  # Bash tool_use id → command, so a background shell can be found and stopped
         self.shells = {}  # task_id → {id, title, cmd, started}
@@ -208,6 +209,13 @@ class Norm:
             elif e["e"] == "done":
                 self.running = []
         return out
+
+    def settle(self, final):
+        """The held message as text events: the reply when the turn ends on it (final), else a progress note ("I'll check the
+        board."): note=True, shown while the turn runs but not spoken. Voice mode used to speak each note, then the reply, which
+        restates it: the user heard the same phrase two or three times."""
+        h, self.held = self.held, None
+        return [] if h is None else [{"e": "text_reset"}, {"e": "text", "delta": h, **({} if final else {"note": True})}]
 
     def usage(self, u):
         return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
@@ -277,6 +285,9 @@ class Norm:
 
     def codex(self, d):
         t, it, out = d.get("type"), d.get("item", {}), []
+        reconnect = t == "error" and str(d.get("message", "")).startswith("Reconnecting")
+        if t not in ("thread.started", "turn.started", "turn.completed") and not reconnect and it.get("type") != "error":
+            out += self.settle(final=False)  # the turn went on past the held message (a command, another message, a failure)
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
             out.append(self.more({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
@@ -286,14 +297,14 @@ class Norm:
         elif t == "item.completed" and it.get("type") == "reasoning":
             out += self.think(it.get("text", ""))
         elif t == "item.completed" and it.get("type") == "agent_message":
-            self.text = it["text"]
-            out += [{"e": "text_reset"}, {"e": "text", "delta": it["text"]}]
+            self.text = self.held = it["text"]
         elif t == "item.started":
             out.append({"e": "status", "text": it.get("type", "working").replace("_", " ").capitalize()})
-        elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
+        elif reconnect:  # a retry, not the end
             out.append({"e": "status", "text": short(d["message"], 80)})
         elif t == "turn.completed":
             self.context = d.get("usage", {}).get("input_tokens", 0)
+            out += self.settle(final=True)
             out.append({"e": "done", "ok": True, "text": self.text, "context": self.context, "window": CODEX_WINDOW, "ms": None})
         elif t in ("turn.failed", "error"):
             out.append({"e": "done", "ok": False, "text": str(d.get("error") or d.get("message")), "context": self.context, "window": CODEX_WINDOW, "ms": None})
@@ -302,6 +313,8 @@ class Norm:
     def opencode(self, d):
         """`opencode run --format json`: whole parts, a tool only once it finished; no final event (run() adds the done)."""
         t, pt, out = d.get("type"), d.get("part") or {}, []
+        if t in ("tool_use", "text", "reasoning", "error"):
+            out += self.settle(final=False)  # the turn went on past the held text (run() settles the last one as the reply)
         if t == "tool_use":
             st = pt.get("state") or {}
             title, detail = step_title(pt.get("tool", "tool").capitalize(), st.get("input") or {})
@@ -310,8 +323,7 @@ class Norm:
                               input=full_input(pt.get("tool", ""), st.get("input") or {})),
                     self.more({"e": "step_done", "id": pt.get("id"), "ok": st.get("status") == "completed", "out": short(res, 120)}, full=clip(res, tail=True))]
         elif t == "text":
-            self.text = pt.get("text", "")
-            out += [{"e": "text_reset"}, {"e": "text", "delta": self.text}]
+            self.text = self.held = pt.get("text", "")
         elif t == "reasoning":
             out.append({"e": "status", "text": "Thinking"})
             out += self.think(pt.get("text", ""))
@@ -413,6 +425,9 @@ def run(cmd, engine, text, norm, check=False, guard=None):
                 done, norm.reply = True, e["text"] if e["ok"] else None
             emit(**e)
     p.wait()
+    if not done:  # opencode's last text: the reply if it exited cleanly
+        for e in norm.phrase(norm.track(norm.settle(final=not p.returncode))):
+            emit(**e)
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
         if sid:
             session(engine, sid)
