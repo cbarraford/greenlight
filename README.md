@@ -91,11 +91,31 @@ Support differs by harness:
 | `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
 | `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |
 | `scripts/sync.sh` | copies the checkout to a remote host |
+| `scripts/dev.py` | dev copies: the app per worktree, live on your Mac |
 | `app/` | the macOS menubar app (Swift + `dashboard.html`, `terminal.html`) |
 | `lifecycles/`, `prompts/` | bundled defaults; yours in `~/.greenlight/` override them |
 | `examples/` | a sample lifecycle |
 | `brand/` | names, colors, icons |
 | `tests/` | Python and Playwright tests |
+
+## Dev copies
+
+Working on the app itself: every worktree of this repo gets its own `~/Applications/greenlight-<workspace>.app`, kept live as the worktree changes. Nothing to run or relaunch after the one install:
+
+```bash
+# on the Mac, once. <host>: where the worktrees are (an ssh host, or "local"); <repo>: a checkout of this repo there
+ssh <host> cat <repo>/scripts/dev.py | python3 - install <host> <repo>
+```
+
+- **Pages** (`dashboard.html`, `terminal.html`, their scripts) reload in the running copy about half a second after a save.
+- **Swift** and `build.sh` changes rebuild the copy (unoptimized, ~15s) and relaunch it if it was open. A build that fails leaves the copy running as it was.
+- A copy **opens by itself once**, the first time its branch changes the app. After that it's yours to open and quit. Delete the worktree and its copy goes too.
+- A copy is its own app (bundle id `dev.greenlight.app.<workspace>`): its settings start as a copy of Greenlight's, it runs the **worktree's Python** against the real `~/.greenlight`, it has its own terminal tabs, and it posts no banners (Greenlight already does).
+- `python3 scripts/dev.py log --wait`, in a worktree: what the Mac made of the sources as they are now, compiler errors included. That's how an agent on a Linux host checks its Swift.
+- **Firewalls** (Little Snitch): a copy's ssh rides one tunnel's socket, so the only process that connects is launchd's `/usr/bin/ssh`, once, whatever the workspace and however often it's rebuilt. Not covered: a copy's shell on a host other than the one Greenlight runs on, and what you run in a Local pane.
+- A branch from before dev copies gets none until it merges `main` (its `build.sh` would build over Greenlight.app).
+
+`python3 ~/.greenlight-dev/dev.py status` shows the agents and each copy, `… uninstall` removes all of it, and `~/.greenlight-dev/log` is the log.
 
 ## Tests
 
