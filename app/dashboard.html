@@ -175,6 +175,9 @@ main.ov{background:var(--canvas)}
 .fieldwrap.stackopen>.cell,.fieldwrap.stackopen .fan:not(.open){opacity:.25}
 .cell{position:absolute;cursor:default;border-radius:14px;outline:none}
 .cell.dim{opacity:.18}
+/* Chief's picks: the workspaces its last reply is about get an accent ring, the rest of the hive steps back */
+.picking .cell:not(.picked):not(.dim),.picking .hub:not(.picked):not(.dim){opacity:.4;transition:opacity .2s}
+.cell.picked .halo,.hub.picked .halo,.fp.picked .halo{opacity:1;stroke:var(--accent);stroke-width:5}
 .cell .hcap{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:1px;font-size:11px;line-height:14px;color:var(--text2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere} .cell.sel .hcap{color:var(--text);font-weight:600}
 .hx{position:relative}
 .hx svg{position:absolute;inset:0;overflow:visible}
@@ -623,7 +626,7 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 // everywhere else: what the MR still needs, not the step's goal ("No conflicts" read as a status when it meant "has conflicts")
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
-const ui = {view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}};
+const ui = {view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set()};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -920,11 +923,11 @@ function stackFan(st, hx, hy, R, WW, HH){
   const sx = hx - (cx - ext) - R, sy = hy - (cy - ext) - R;  // hub's collapsed spot, in fan coordinates
   st.members.forEach((p, i) => {
     const [q, r] = cells[i], x = ext + rs * SQ3 * (q + r / 2) - mr, y = ext + rs * 1.5 * r - mr;
-    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
-      "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => openPage(p.name), role:"button", tabindex:"0",
+    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
+      "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) mc.pick([]); openPage(p.name) }, role:"button", tabindex:"0",
       onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true})));
   });
-  fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
+  fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
     role:"button", tabindex:"0", "aria-label":`${label}, ${n} workspaces. Hover to fan out, click to open.`,
     onclick: () => drill(st.name), onkeydown: e => e.key === "Enter" && drill(st.name)},
     hexEl(st, R, {stacked: true, num: label, sub: STATE[st.state].label}),
@@ -1104,13 +1107,13 @@ function renderOverview(main){
   if (items.length) {
     const {R, pos, w, h: ht} = honey(items.length, W0, H0, 40, 3);
     const WW = Math.max(W0, w + 32), HH = Math.max(H0, ht + 32), ml = (WW - w) / 2, mt = (HH - ht) / 2;
-    const wrap = h("div", {class:"fieldwrap" + (ui.openStack ? " stackopen" : ""), style:`width:${WW}px;height:${HH}px`});
+    const wrap = h("div", {class:"fieldwrap" + (ui.openStack ? " stackopen" : "") + (items.some(p => ui.picked.has(p.name) || (p.members || []).some(m => ui.picked.has(m.name))) ? " picking" : ""), style:`width:${WW}px;height:${HH}px`});
     items.forEach((p, k) => {
       const x = ml + pos[k].x, y = mt + pos[k].y;
       if (p.members) { wrap.append(stackFan(p, x, y, R, WW, HH)); return }
-      wrap.append(h("div", {class:`cell${matches(p) ? "" : " dim"}`, "data-name": p.name,
+      wrap.append(h("div", {class:`cell${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-name": p.name,
  "data-dock": dockable(p), style:`left:${x - R}px;top:${y - R}px`,
-        "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => openPage(p.name), role:"button", tabindex:"0",
+        "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) mc.pick([]); openPage(p.name) }, role:"button", tabindex:"0",
         onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
         onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, R)));
     });
@@ -1973,6 +1976,7 @@ function pickProjects(list, only, here = true){
 }
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
+  pick(names){ ui.picked = new Set(arr(names)); render() },  // the hexes Chief's last reply is about; [] clears
   paths(r){ ui.paths = r; render() },  // the projects picked: their worktrees' paths, or null for all
   pickProjects,  // L1's project chip
   bell(n, open, asked){  // asked: waiting pings that name workspaces [{id, text, options, ts, ws}]
