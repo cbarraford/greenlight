@@ -3538,6 +3538,14 @@ final class Core: ObservableObject {
     }
     func reply(to about: String, _ text: String, questionID: UUID? = nil) {
         unread = max(0, unread - 1)
+        if let questionID {
+            guard let q = notificationQuestion(about, id: questionID) else {
+                msgs.append(Msg(.note, "That question is no longer open. Check the bell for the latest one."))
+                return
+            }
+            answer(q, text)
+            return
+        }
         if let q = notificationQuestion(about, id: questionID) { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
@@ -9686,6 +9694,10 @@ func selfTest() {
                   && c.waiting.contains { $0.ping && $0.text == "ws-f: choose?" })
             let pingQuestion = c.waiting.first { $0.ping && $0.text == "ws-f: choose?" }!
             check("a banner reply targets its ping despite same-text chat", c.notificationQuestion("ws-f: choose?", id: pingQuestion.id)?.id == pingQuestion.id)
+            let beforeExpired = c.msgs.count
+            c.reply(to: "ws-f: choose?", "stale choice", questionID: UUID())
+            check("an expired banner reply never reaches the agent", c.run == nil && c.msgs.count == beforeExpired + 1
+                  && c.msgs.last?.text.contains("no longer open") == true)
             c.answer(chatQuestion, "(dismissed)", send: false)
             c.answer(pingQuestion, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
