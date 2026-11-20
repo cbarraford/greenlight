@@ -3532,9 +3532,13 @@ final class Core: ObservableObject {
     }
 
     /// A reply typed into a notification banner.
-    func reply(to about: String, _ text: String) {
+    func notificationQuestion(_ about: String, id: UUID? = nil) -> Question? {
+        if let id { return waiting.first { $0.id == id && $0.ping } }
+        return waiting.first { $0.text == about }
+    }
+    func reply(to about: String, _ text: String, questionID: UUID? = nil) {
         unread = max(0, unread - 1)
-        if let q = waiting.first(where: { $0.text == about }) { answer(q, text) }
+        if let q = notificationQuestion(about, id: questionID) { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
 
@@ -4016,11 +4020,11 @@ final class Core: ObservableObject {
         }
         questions.append(q)
         if !popoverShown() && fresh { unread += 1; missed += 1 }
-        notify(title: name, body: text, subtitle: nil, reply: true, id: key ?? "question:\(text)")
+        notify(title: name, body: text, subtitle: nil, reply: true, id: key ?? "question:\(text)", questionID: q.id)
     }
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
-    func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil) {
+    func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil, questionID: UUID? = nil) {
         if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
         let c = UNMutableNotificationContent()
         c.title = title
@@ -4028,7 +4032,9 @@ final class Core: ObservableObject {
         c.body = body
         c.sound = .default
         if reply && session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
-        c.userInfo = ["text": body]
+        var info: [String: Any] = ["text": body]
+        if let questionID { info["questionID"] = questionID.uuidString }
+        c.userInfo = info
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id ?? UUID().uuidString, content: c, trigger: nil))
     }
 
@@ -8793,7 +8799,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                 withCompletionHandler done: @escaping () -> Void) {
         DispatchQueue.main.async {
             if let t = r as? UNTextInputNotificationResponse, !t.userText.isEmpty {
-                self.greenlight.reply(to: r.notification.request.content.userInfo["text"] as? String ?? "", t.userText)
+                let info = r.notification.request.content.userInfo
+                let qid = (info["questionID"] as? String).flatMap { UUID(uuidString: $0) }
+                self.greenlight.reply(to: info["text"] as? String ?? "", t.userText, questionID: qid)
             } else {
                 self.greenlight.inboxOpen = !self.greenlight.waiting.isEmpty
                 self.show()
@@ -9676,8 +9684,10 @@ func selfTest() {
             c.ping(#"{"text": "ws-f: choose?\nOptions: later | now"}"#)
             check("an unkeyed ping cannot replace a chat question", c.questions.first { $0.id == chatQuestion.id }?.answer == nil
                   && c.waiting.contains { $0.ping && $0.text == "ws-f: choose?" })
+            let pingQuestion = c.waiting.first { $0.ping && $0.text == "ws-f: choose?" }!
+            check("a banner reply targets its ping despite same-text chat", c.notificationQuestion("ws-f: choose?", id: pingQuestion.id)?.id == pingQuestion.id)
             c.answer(chatQuestion, "(dismissed)", send: false)
-            c.answer(c.waiting.first { $0.ping && $0.text == "ws-f: choose?" }!, "(dismissed)", send: false)
+            c.answer(pingQuestion, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
             c.ping(#"{"text": "ws-d: goal?", "key": "ws-d"}"#)
             c.ping(#"{"resolve": "ws-c", "why": "workspace removed"}"#)
