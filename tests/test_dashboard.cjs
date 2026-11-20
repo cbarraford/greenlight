@@ -210,6 +210,26 @@ test("a preflight reply for an edited task cannot clear the new goal", async pag
   assert.equal(JSON.parse(started[1].text).answers, undefined);
 });
 
+test("a completed earlier task preserves a newly edited draft and keeps its error off the new goal", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task B");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task B");
+  assert.equal(await page.evaluate(() => localStorage.getItem("taskDraft")), "Task B");
+  assert.match(await page.textContent(".toast"), /Task started.*task-a/);
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task C");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "workspace task-b already exists"}));
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task C");
+  assert.equal(await page.$("#ps-err"), null);
+  assert.equal(await page.isDisabled("#ps-go"), false);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");
