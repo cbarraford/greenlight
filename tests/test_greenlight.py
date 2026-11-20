@@ -229,6 +229,8 @@ assert (e["step"], e["owner"]) == ("reviewed", "agent") and "`reviewed`" in e["a
 assert ev(gh_pr(labels={"nodes": [{"name": "reviewed"}]}))["step"] == "tried"
 with mock.patch.object(greenlight, "lifecycle_opts", return_value={"solo"}):
     assert ev(gh_pr())["owner"] == "me"  # solo without automerge: the user reviews, then merges
+with mock.patch.object(greenlight, "lifecycle_opts", return_value={"automerge"}):
+    assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # automerge with no checking steps (default.md) merges nothing
 assert ev(gh_pr(), gws("Merge MR for #20 (hold)"))["action"].endswith("merge now?")
 e = ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))
 assert (e["owner"], e["cmd"][:3], e["lifecycle"]) == ("greenlight", ["gh", "pr", "merge"], "default.md")  # default lifecycle: approved → greenlight merges
