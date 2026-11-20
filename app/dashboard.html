@@ -2119,7 +2119,7 @@ function taskSheetEl(){
   const unerr = () => { ui.task.err = ""; ui.task.errAt = null; document.getElementById("ps-err")?.remove(); document.getElementById("ps-task")?.removeAttribute("aria-invalid"); const hp = document.getElementById("ps-help"); if (hp) hp.textContent = HELP; document.getElementById("ps-task")?.setAttribute("aria-describedby", "ps-help") };  // a changed title or project is a fresh try
   const go = (force = false) => {  // force: Start anyway, past preflight's questions
     if (!ok(force)) return;
-    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name};
+    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name, files: sh.files.slice()};
     const more = force === true ? {force: true} : ui.task.ask ? {answers: ui.task.ask.ans} : {};
     post({cmd: "task", op: "new", arg: repo.name, text: JSON.stringify({text: sh.text.trim(), files: sh.files.map(({name, data}) => ({name, data})), ...more})}); render();
   };
@@ -2194,7 +2194,7 @@ function toastEl(){
   return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`, onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer,  // read it at your pace: the clock waits
       onfocusin: () => clearTimeout(ui.task.t), onfocusout: e => e.currentTarget.contains(e.relatedTarget) || toastTimer()}, h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
     h("span", {class:"tmsg"}, h("b", {}, d.error ? "Task didn't start" : "Task started"), d.error ? h("span", {}, short(d.error, 160)) : h("span", {}, h("span", {class:"mono"}, d.name), ` · ${d.repo}`)),  // the outcome first, then which one
-    d.error ? h("button", {class:"btn", onclick: () => { ui.task.done = null; taskSheet() }}, "Reopen")
+    d.error ? h("button", {class:"btn", onclick: () => { ui.task.done = null; if (ui.task.sheet) { render(); document.getElementById("ps-task")?.focus() } else taskSheet() }}, "Reopen")
       : h("button", {class:"btn pri", onclick: () => { ui.task.done = null; render(); toBasement(d.name) }}, "Open in Basement"),
     h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: x}, icon("close")));
 }
@@ -2209,7 +2209,8 @@ function tasked(r){
   }
   ui.task.busy = false;
   const pending = ui.task.pending; ui.task.pending = null;
-  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo);
+  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo ||
+    ui.task.sheet.files.length !== pending.files.length || ui.task.sheet.files.some((f, i) => f !== pending.files[i]));
   if (r.paused) {  // preflight wants answers first: nothing was made yet
     if (!ui.task.sheet) { ui.task.done = {error: "It has a question about the goal first. Reopen it to answer."}; toastTimer(); return render() }
     if (changed) return render();
