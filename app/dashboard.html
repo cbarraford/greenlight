@@ -178,6 +178,7 @@ main.ov{background:var(--canvas)}
 /* Chief's picks: the workspaces its last reply is about get an accent ring, the rest of the hive steps back */
 .picking .cell:not(.picked):not(.dim),.picking .hub:not(.picked):not(.dim){opacity:.4;transition:opacity .2s}
 .cell.picked .halo,.hub.picked .halo,.fp.picked .halo{opacity:1;stroke:var(--accent);stroke-width:5}
+.cell.indock .halo,.hub.indock .halo,.fp.indock .halo{opacity:1;stroke:var(--blue);stroke-width:5} .lrow.indock{border-color:var(--blue)}  /* in the chat's context dock */
 .cell .hcap{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:1px;font-size:11px;line-height:14px;color:var(--text2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere} .cell.sel .hcap{color:var(--text);font-weight:600}
 .hx{position:relative}
 .hx svg{position:absolute;inset:0;overflow:visible}
@@ -924,11 +925,11 @@ function stackFan(st, hx, hy, R, WW, HH){
   const sx = hx - (cx - ext) - R, sy = hy - (cy - ext) - R;  // hub's collapsed spot, in fan coordinates
   st.members.forEach((p, i) => {
     const [q, r] = cells[i], x = ext + rs * SQ3 * (q + r / 2) - mr, y = ext + rs * 1.5 * r - mr;
-    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
+    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}${inDock(p) ? " indock" : ""}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
       "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
       onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true})));
   });
-  fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
+  fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}${inDock(st) ? " indock" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
     role:"button", tabindex:"0", "aria-label":`${label}, ${n} workspaces. Hover to fan out, click to open.`,
     onclick: () => drill(st.name), onkeydown: e => e.key === "Enter" && drill(st.name)},
     hexEl(st, R, {stacked: true, num: label, sub: STATE[st.state].label}),
@@ -1112,7 +1113,7 @@ function renderOverview(main){
     items.forEach((p, k) => {
       const x = ml + pos[k].x, y = mt + pos[k].y;
       if (p.members) { wrap.append(stackFan(p, x, y, R, WW, HH)); return }
-      wrap.append(h("div", {class:`cell${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-name": p.name,
+      wrap.append(h("div", {class:`cell${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}${inDock(p) ? " indock" : ""}`, "data-name": p.name,
  "data-dock": dockable(p), style:`left:${x - R}px;top:${y - R}px`,
         "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
         onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
@@ -1155,7 +1156,7 @@ function listAgent(p){
 function listRow(p){
   const col = c(STATE[p.state].color), mr = p.mr || {}, {n, i} = stepsOf(p), mine = ["needs", "raised", "crashed"].includes(p.state);
   const steps = p.steps || [], go = () => openPage(p.name);
-  return h("article", {class:"lrow" + (p.state === "needs" || p.agent.state === "waiting" ? " needs" : ""), "data-name": p.name, "data-dock": dockable(p),
+  return h("article", {class:"lrow" + (p.state === "needs" || p.agent.state === "waiting" ? " needs" : "") + (inDock(p) ? " indock" : ""), "data-name": p.name, "data-dock": dockable(p),
       role:"button", tabindex:"0", onclick: go, onkeydown: e => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()),
       onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     s("svg", {class:"lhex", width:44, height:44, viewBox:"-22 -22 44 44", role:"img", "aria-label": STATE[p.state].label},
@@ -1686,6 +1687,11 @@ document.addEventListener("focusout", e => { const card = document.getElementByI
 const DOCK_R = 22, PARK_R = 22;  // 44px hexes in 60-64px columns; a drop lands on the rail it's over
 ui.dock = []; ui.dk = {};  // dock: [{key, item}] in the chat's context; dk: name -> draggable item from the last render
 function dockable(it){ ui.dk[it.name] = it; return it.name }
+const inDock = p => ui.dock.some(d => d.key === p.name || (d.item.members || []).some(m => m.name === p.name));  // itself, or in a docked stack
+function dockToggle(it){  // ⌘-click a hex or stack: into the chat's context, or out again
+  ui.dock = ui.dock.some(d => d.key === it.name) ? ui.dock.filter(d => d.key !== it.name) : [...ui.dock, {key: it.name, item: it}];
+  dockSync();
+}
 function dockLabel(it){
   if (it.members) return `${STEP_NAMES[it.step] || it.step} · ${it.members.length}`;
   const n = hexLabel(it).num;
@@ -1699,7 +1705,7 @@ function dockSync(){
   const css = getComputedStyle(document.documentElement);
   post({cmd: "context", items: ui.dock.map(d => ({key: d.key, label: dockLabel(d.item), color: css.getPropertyValue(STATE[d.item.state].color).trim(),
     mrs: (d.item.members || [d.item]).length, text: dockText(d.item)}))});
-  renderDock();
+  renderDock(); if (ui.snap) renderMain();  // the field's in-dock halos
 }
 function renderDock(){
   let d = document.getElementById("dock");
@@ -1805,7 +1811,7 @@ document.addEventListener("pointerdown", e => {
   addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("keydown", esc, true);
 });
 
-/* ---------- to the Basement: Basement on a page, ⌘-click a hex, Open in Basement after New task ---------- */
+/* ---------- to the Basement: Basement on a page, Open in Basement after New task ---------- */
 // B1 opens on the workspace's worktree: its latest tab there, or a new shell in it (Greenlight.swift: basement).
 ui.sug = {}; ui.autorun = new Set();  // sug: greenlight's next step per workspace (the hover card's Next step); autorun: ones to run once it's written
 function toBasement(name){ const path = pathOf(name); if (path) post({cmd: "basement", path}) }
@@ -1821,11 +1827,7 @@ function suggestCon(name){
 }
 const cap = t => String(t || "").replace(/^./, m => m.toUpperCase());
 function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
-function conTarget(e){
-  const el = e.target.closest && e.target.closest("[data-dock]"), it = el && ui.dk[el.dataset.dock];
-  return it && !it.members ? it.name : null;  // a stack has no single workspace: fan it out first
-}
-document.addEventListener("click", e => { const n = e.metaKey && conTarget(e); if (n) { e.preventDefault(); e.stopPropagation(); toBasement(n) } }, true);
+document.addEventListener("click", e => { const el = e.metaKey && e.target.closest && e.target.closest("[data-dock]"), it = el && ui.dk[el.dataset.dock]; if (it) { e.preventDefault(); e.stopPropagation(); dockToggle(it) } }, true);
 
 /* ---------- New task: describe it, attach files, pick the project; a fresh workspace and its agent start on it at once ---------- */
 ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0};

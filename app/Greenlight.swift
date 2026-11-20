@@ -3316,7 +3316,7 @@ struct SettingsView: View {
         HStack(spacing: Theme.sp1) {
             ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
                 if i > 0 { Text("or").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-                Text(key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
+                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
                     .padding(.horizontal, Theme.sp2).frame(minWidth: 26).frame(height: 22)
                     .background(RoundedRectangle(cornerRadius: 5).fill(surface)).overlay(RoundedRectangle(cornerRadius: 5).stroke(edge))
             }
