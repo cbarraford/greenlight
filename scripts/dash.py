@@ -7,7 +7,7 @@
     dash.py suggest <ws> [--model M] [--effort E]  one JSON line: the next prompt to give an agent there (the console drawer, the
                                                     hover card's button); cached per state, and snapshots carry it as `suggestion`
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
-    dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the console)
+    dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
@@ -1356,7 +1356,7 @@ def transcript(name, before=None, limit=60):
     Older sessions continue where the newest one starts; `more` is the cursor for the page before this one."""
     w = next((w for w, _ in live_agents().values() if w["displayName"] == name), None)
     if not w:
-        return {"error": f"no workspace {name}"}
+        return {"error": f"no workspace {name}", "before": before}  # before: the page can tell a failed "Load earlier" from a failed refresh
     files = transcript_files(w["path"])
     f, i = 0, None
     if before:

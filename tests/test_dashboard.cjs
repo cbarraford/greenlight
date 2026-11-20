@@ -621,6 +621,119 @@ test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [
   assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");
 });
 
+const STAGES = ["mr_open", "ci_green", "threads", "merge"];
+const staged = (k, i) => ({...SNAP.pucks[1], name: "stg-" + k, path: "/w/stg-" + k, sig: "s" + k, steps: STAGES, step_index: i, step: STAGES[i] || "merge"});
+test("agent card: hovering (or tabbing to) the progress bar lists every stage: done ones ticked, where it is now, what's next", async page => {
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [...SNAP.pucks, staged("a", 1), staged("z", 4)]});
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  const bar = ".acard[data-name='stg-a'] .prog", pop = bar + " .stagepop";
+  assert.equal(await page.isVisible(pop), false, "hidden until asked");
+  await page.hover(bar);
+  await page.waitForSelector(pop, {state: "visible"});
+  const rows = await page.$$eval(pop + " li", es => es.map(e => [e.className, e.children[1].textContent, e.children[2].textContent]));
+  assert.deepEqual(rows, [["done", "MR open", "Done"], ["cur", "CI green", "Now"], ["todo", "Threads", "Next"], ["todo", "Merge", ""]]);
+  assert.match(await page.textContent(pop + " .sph"), /^Step 2 of 4\s*CI green$/);
+  assert.equal(await page.getAttribute(pop + " li.cur", "aria-current"), "step");
+  assert.equal(await page.$eval(bar, e => document.getElementById(e.getAttribute("aria-describedby")) === e.querySelector(".stagepop")), true, "the bar is described by its list");
+  assert.equal(await page.$eval(pop, e => getComputedStyle(e).pointerEvents), "none", "it never takes the click meant for the output line under it");
+  assert.equal(await page.$$eval(".acard[data-name='stg-a'] .lbls span[title]", es => es.length), 0, "no native title tips on top of it");
+  const [card, next] = await page.$$eval(".acard", es => es.filter(e => e.matches(":hover") || e.dataset.name === "stg-z").map(e => getComputedStyle(e).zIndex));
+  assert.ok(+card > +(next === "auto" ? 0 : next), `the hovered card is raised over its neighbours (${card} vs ${next})`);
+  await page.mouse.move(1, 1);
+  await page.waitForSelector(pop, {state: "hidden"});
+  await page.focus(".acard[data-name='stg-a'] .open");
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("prog")), true, "Tab reaches the bar");
+  await page.waitForSelector(pop, {state: "visible"});
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(pop, {state: "hidden"});
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("prog")), true, "Esc hides the list and keeps focus on the bar");
+  await page.hover(".acard[data-name='stg-z'] .prog");
+  const z = ".acard[data-name='stg-z'] .stagepop";
+  await page.waitForSelector(z, {state: "visible"});
+  assert.match(await page.textContent(z + " .sph"), /^All 4 steps done$/);
+  assert.deepEqual(await page.$$eval(z + " li", es => es.map(e => e.className)), ["done", "done", "done", "done"]);
+});
+
+const E = (n, role, text) => ({id: "s1:" + n, role, text});
+const atBottom = page => page.$eval("#aout-log", e => e.scrollHeight - e.scrollTop - e.clientHeight <= 2);
+const tposts = async page => (await posts(page, "transcript")).map(m => m.before || null);
+const nextPoll = (page, n) => page.waitForFunction(n => window.__posts.filter(m => m.cmd === "transcript").length >= n, n, {timeout: 6000});
+test("agent card: clicking its output opens All output over the window, live: follows the bottom, holds when scrolled up, pages back; Esc returns", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  const line = ".acard[data-name='plan-b'] button.aline";
+  await page.click(line);
+  assert.ok(await page.isVisible("#aout"), "the full-window view opened");
+  assert.deepEqual(await page.$eval("#aout", e => { const r = e.getBoundingClientRect(); return [r.width, r.height] }), [1300, 900], "it covers the whole window");
+  assert.deepEqual(await tposts(page), [null], "asked for the newest page");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "aout-log", "the keys scroll it at once");
+  assert.match(await page.textContent("#aout-more"), /Loading output/);
+  const many = Array.from({length: 40}, (_, k) => E(k + 1, k % 3 ? "assistant" : "tool", `line ${k + 1}` + "\nmore".repeat(k % 4)));
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "s0:999999999",
+    entries: [{id: "s1:start", role: "sep", text: "claude session · Nov 20 10:00"}, E(0, "user", "Fix the flake"), ...many]});
+  assert.equal(await page.locator("#aout-list > *").count(), 42);
+  assert.deepEqual(await page.$$eval("#aout-list .aoe.you .aow, #aout-list .aoe.said .aow", es => [...new Set(es.map(e => e.textContent))]), ["Prompt", "Claude"]);
+  assert.ok(await atBottom(page), "it opens at the newest output");
+  await page.evaluate(s => mc.update(s), SNAP);  // the 5s snapshot re-renders the page under it
+  assert.ok(await page.isVisible("#aout") && await atBottom(page), "a re-render leaves it open and where it was");
+  assert.equal(await page.locator(".acard[data-name='plan-b'] .prog, .acard[data-name='plan-b'] button.aline").count(), 1, "the compact card is still there under it");
+
+  await nextPoll(page, 2);  // a working agent: refreshed every 2s
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "x:1", entries: [...many.slice(-5), E(41, "assistant", "new one")]});
+  assert.equal(await page.locator("#aout-list > *").count(), 43, "only the new entry is added");
+  assert.equal(await page.textContent("#aout-list > :last-child .aotx"), "new one");
+  assert.ok(await atBottom(page), "at the bottom, it follows new output");
+
+  await page.$eval("#aout-log", e => { e.scrollTop = 0 });
+  await page.waitForFunction(() => !ui.out.follow);
+  await nextPoll(page, 3);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "x:1", entries: [E(41, "assistant", "new one"), E(42, "tool", "Bash ls")]});
+  assert.equal(await page.$eval("#aout-log", e => e.scrollTop), 0, "scrolled up, new output doesn't move it");
+  assert.match(await page.textContent("#aout-new"), /^1 new/);
+  await nextPoll(page, 4);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, error: "boom"});
+  assert.match(await page.textContent("#aout-now"), /Couldn't refresh: boom/);
+
+  const firstTop = () => page.$eval("#aout-list > :first-child", e => e.getBoundingClientRect().top);
+  const was = await firstTop();
+  await page.click("#aout-older");
+  assert.deepEqual((await tposts(page)).filter(Boolean), ["s0:999999999"], "Load earlier asks for the page before the first one's cursor");
+  assert.equal(await page.isDisabled("#aout-older"), true);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: "s0:999999999", more: null,
+    entries: [{id: "s0:start", role: "sep", text: "codex session · Nov 19 09:00"}, {id: "s0:0", role: "assistant", text: "older work"}]});
+  assert.equal(await page.textContent("#aout-list > :nth-child(2) .aotx"), "older work", "earlier output goes on top");
+  assert.ok(Math.abs(await page.$eval("#aout-list > [data-id='s1:start']", e => e.getBoundingClientRect().top) - was) < 2, "what you were reading stays put");
+  assert.match(await page.textContent("#aout-more"), /Start of this workspace's agent sessions/);
+
+  await page.click("#aout-new");
+  assert.ok(await atBottom(page) && await page.isHidden("#aout-new"), "Latest jumps back down and follows again");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await page.evaluate(() => document.getElementById("aout").contains(document.activeElement)), true, "Tab stays inside the dialog");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$("#aout"), null, "Esc closes it");
+  assert.equal(await page.evaluate(l => document.activeElement === document.querySelector(l), line), true, "and the caret is back on the card's output");
+  const n = (await tposts(page)).length;
+  await page.waitForTimeout(2500);
+  assert.equal((await tposts(page)).length, n, "closed, it stops refreshing");
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, entries: [E(99, "assistant", "late")]});
+  assert.equal(await page.$("#aout"), null, "a late answer doesn't reopen it");
+});
+
+test("All output: Back closes it; more new output than a page holds starts over at the newest; an empty workspace says so", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: []});
+  assert.match(await page.textContent("#aout-list"), /No output from this workspace's agents yet/);
+  await nextPoll(page, 2);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [E(1, "assistant", "a")]});
+  await nextPoll(page, 3);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "s1:5", entries: [E(70, "assistant", "x"), E(71, "assistant", "y")]});
+  assert.deepEqual(await page.$$eval("#aout-list .aotx", es => es.map(e => e.textContent)), ["x", "y"], "no overlap: it restarts at the newest page, not with a gap");
+  assert.ok(await page.isVisible("#aout-older"), "and can page back from there");
+  await page.click("#aout-back");
+  assert.equal(await page.$("#aout"), null);
+});
+
 (async () => {
   const browser = await chromium.launch({executablePath: browserPath()});
   let failed = 0;
