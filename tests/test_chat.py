@@ -233,6 +233,90 @@ def test_stop_shell(tmp_path, monkeypatch):
         parent.kill()
 
 
+# The gpt-live-24h-cost bug: asked what GPT-Live cost over the last 24 hours, the chat created a workspace and
+# dispatched an agent to look it up. This fake `claude -p` does exactly that, through greenlight.py and a fake Orca
+# CLI that logs every call, so the test sees whether a workspace was really made.
+FAKE_DISPATCH = """#!/usr/bin/env python3
+import json, subprocess, sys
+sys.stdin.read()
+p = subprocess.run([sys.executable, %r, "ade", "worktree", "create", "--name", "gpt-live-24h-cost", "--repo", "greenlight",
+                    "--comment", "Report GPT-Live's 24h spend", "--agent", "claude", "--prompt", "Query org costs for 24h"],
+                   capture_output=True, text=True)
+reply = ("Created gpt-live-24h-cost" if p.returncode == 0 else "Answered directly: " + p.stderr.strip())
+print(json.dumps({"type": "assistant", "session_id": "s1", "message": {"content": [{"type": "text", "text": reply}]}}))
+print(json.dumps({"type": "result", "session_id": "s1", "result": reply, "is_error": False, "duration_ms": 10}))
+"""
+FAKE_ORCA = """#!/usr/bin/env python3
+import json, sys
+open(sys.argv[0] + ".log", "a").write(json.dumps(sys.argv[1:]) + "\\n")
+print(json.dumps({"ok": True, "result": {"worktree": {"id": "w1"}}}))
+"""
+
+
+def dispatch_turn(tmp_path, monkeypatch, msg):
+    scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
+    fake, orca = tmp_path / "claude", tmp_path / "orca"
+    fake.write_text(FAKE_DISPATCH % os.path.join(scripts, "greenlight.py"))
+    orca.write_text(FAKE_ORCA)
+    for f in (fake, orca):
+        f.chmod(f.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
+    monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
+    monkeypatch.setenv("GREENLIGHT_REQUEST", "")  # chat.turn sets it: restored after the test
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn(msg, "claude-haiku-5-5", None)
+    log = str(orca) + ".log"
+    calls = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+    return [e["text"] for e in events if e["e"] == "done"], calls
+
+
+def test_billing_question_creates_no_workspace(tmp_path, monkeypatch):
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "How much has GPT-Live cost us in the last 24 hours?")
+    assert not any(c[:2] == ["worktree", "create"] for c in calls), calls
+    assert len(done) == 1 and done[0].startswith("Answered directly: refused"), done
+
+
+def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "Add a 24h GPT-Live cost meter to the dashboard")
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+    assert done == ["Created gpt-live-24h-cost"], done
+
+
+def test_answer_carries_the_request_it_answers(tmp_path, monkeypatch):
+    # the bug over two turns: "what did it cost?" → "prod or staging?" → "prod" still creates nothing
+    (tmp_path / "asked").write_text("How much has GPT-Live cost us in the last 24 hours?" + chat.ASKED + "Prod or staging?")
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "prod")
+    assert not any(c[:2] == ["worktree", "create"] for c in calls), calls
+    assert not (tmp_path / "asked").exists()  # this reply asked nothing
+    # and an answer to a change request's question is a change, though alone it reads as a question
+    (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard" + chat.ASKED + "Which repo?")
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "which repo would you put it in?")
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+
+
+def test_asked_question():
+    assert chat.asked_question("It cost $12.\n\nProd or staging?\n\n[hexes:]") == "It cost $12.\n\nProd or staging?"
+    assert chat.asked_question("Which one?\nOptions: add a meter | skip\n[hexes: a, b]") == "Which one?\nOptions: add a meter | skip"
+    assert "add a cost meter" in chat.asked_question("It cost $12.\n\nI can add a cost meter.\nWhere should it go?\n[hexes:]")
+    assert "add a cost meter" in chat.asked_question("It cost $12.\n\nI can add a cost meter.\n\nWhere should it go?\n[hexes: a]")
+    assert "add a cost meter" in chat.asked_question("I can add a cost meter.\n\nWhich account?\n\nOptions: prod | staging\n[hexes:]")
+    assert chat.asked_question("Done: see https://x.test/?q=1\n[hexes:]") is None  # a ? inside isn't a question
+    assert chat.asked_question("") is None and chat.asked_question(None) is None
+
+
+def test_answer_separator_matches_greenlight():
+    import greenlight
+    assert (chat.ANSWER, chat.ASKED) == (greenlight.ANSWER, greenlight.ASKED)
+
+
+def test_prompt_answers_questions_directly():
+    assert "never create a workspace to answer one" in chat.PROMPT and "investigations" not in chat.PROMPT  # the old rule dispatched them
+
+
 if __name__ == "__main__":
     test_norm()
     print("ok")

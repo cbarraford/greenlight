@@ -28,11 +28,15 @@ SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
-    "Never do work yourself (code, debugging, reviews, investigations, writing): dispatch it to an agent in the "
-    "appropriate Orca workspace, creating one with a goal if none fits, then report back what you dispatched and where. "
+    "A request that only asks (status, research, a billing or usage lookup, inspecting logs, code or an MR) you answer "
+    "yourself, here, from the sources you can read (greenlight.py, the ADE, glab/gh, APIs and files on this host); "
+    "never create a workspace to answer one (`greenlight.py ade worktree create` refuses it; `--change \"<what>\"` "
+    "only when the message does ask for a change). "
+    "A request that changes something (code, docs, settings, an external system) goes to an agent in the appropriate "
+    "Orca workspace, creating one with a goal if none fits; then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
     "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
-    "(that's not doing work yourself) and answer with them in mind; when you dispatch work about one, give the agent its path. "
+    "and answer with them in mind; when you dispatch work about one, give the agent its path. "
     "Answer concisely: the answer first, only what was asked, no preamble, no restating the question, no closing offers. "
     "Replies render as markdown in a narrow popover: a few short lines at most, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
@@ -84,6 +88,7 @@ def board_note():
     scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
     return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{b}\n\n"
 WRAP = "USER MESSAGE (reply to this): "
+ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # greenlight's (not imported: its import reads config and may call the forge)
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 # What the status says while the model thinks: one picked per stretch of thinking, held until something else shows.
 # Playful, never a claim about real work (no "Searching", "Merging", "Testing"), short enough for the narrow popover.
@@ -681,6 +686,17 @@ def stop_shell(task_id):
     return bool(hits)
 
 
+def asked_question(reply):
+    """The end of a reply that ends on a question (a `?` or the Options line, under the app's [hexes:] lines), else None:
+    the question with the offer above it, "I can add a meter.\n\nWhere should it go?"."""
+    text = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
+    paras = re.split(r"\n\s*\n", text)
+    if not re.search(r"\?\s*\Z|^`?options:.*\Z", paras[-1], re.M | re.I):
+        return None
+    n = 3 if re.match(r"`?options:", paras[-1], re.I) else 2  # an Options paragraph of its own: the question above it too
+    return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
+
+
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
     engine, model = harness.route(model)
     stored = []
@@ -701,6 +717,10 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
+        # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
+        # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
+        asked = os.path.join(DIR, "asked")
+        os.environ["GREENLIGHT_REQUEST"] = open(asked).read() + ANSWER + text if os.path.exists(asked) else text
         text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
@@ -726,6 +746,11 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         session(engine, new_sid)
     if not compact and not err:
         decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
+        asked, question = os.path.join(DIR, "asked"), asked_question(norm.reply)
+        if question:  # the next message answers it: judged with this request (greenlight.read_only)
+            open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
+        elif os.path.exists(asked):
+            os.remove(asked)
     if err:
         emit(e="done", ok=False, text=short(err, 500), context=norm.context, window=norm.window, ms=None)
 
@@ -736,7 +761,7 @@ def main():
     cmd = args[0] if args else "send"
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     if cmd == "new":
-        for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
+        for f in ["session", "board", "asked"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
         attach.clear(DIR)

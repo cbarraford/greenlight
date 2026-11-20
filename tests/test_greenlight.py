@@ -389,3 +389,73 @@ try:
 except ValueError:
     pass
 print("custom stages ok")
+
+
+# Read-only requests get answered, not a workspace (the gpt-live-24h-cost bug; tests/test_chat.py runs it end to end)
+asks = ["How much has GPT-Live cost us in the last 24 hours?", "what's !101's status", "Is !42 merged?",
+        "Check the 24h GPT-Live spend", "why is CI red on #12?", "what's running", "look up our OpenAI bill",
+        "Does !42 have conflicts?", "What's the status of fix-001?", "Can you check the 24h spend?",
+        "Could you tell me why CI is red?", "Please check the 24h GPT-Live spend", "What did gpt-live-24h-cost find?",
+        "Can you check if the token expired?", "Why is it so slow?", "Is it also failing on main?", "Is CI ok?",
+        "Could you check the 24h spend, please?", "What are the cost and latency of GPT-Live?", "Compare GPT-Live and Realtime costs", "List my open MRs", "How much did GPT-Live cost?" + greenlight.ASKED + "Last 24h:\n- **Realtime sessions**: $9\n- **Agent runs**: $3\n- **Test calls**: $0.40\n\nWhich account?" + greenlight.ANSWER + "prod", "How much did GPT-Live cost?" + greenlight.ASKED + "Here's the split:\n- Agent runs: $3\n- Deploy: 4 min\nAnything else?" + greenlight.ANSWER + "no",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "Breakdown:\n- Test runs cost $3\n- Review bot cost $2\nWhich account?" + greenlight.ANSWER + "last week", "How much did GPT-Live cost?" + greenlight.ASKED + "Breakdown:\n- Agent runs $3\n- Workspace hosting $2\nWant the daily split?" + greenlight.ANSWER + "last week",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "Costs by item:\n- Build minutes $4\n- Release jobs $1\nWhich week?" + greenlight.ANSWER + "last week", "How much did GPT-Live cost?" + greenlight.ASKED + "Would you like me to check staging too?" + greenlight.ANSWER + "yes", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I look at fix-001 or fix-002?" + greenlight.ANSWER + "the first", "How much did GPT-Live cost?" + greenlight.ASKED + "Last 24h by line item:\n- Realtime sessions: $9\n- Agent runs: $3\n- Test calls: $0.40\n\nWhich account do you mean?" + greenlight.ANSWER + "prod",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "It cost $12. The spike started after Tuesday's deploy.\n\nWhich account?\n`Options: prod | staging`" + greenlight.ANSWER + "prod",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "I can see $12 in prod since the deploy.\n\nDo you also want staging?" + greenlight.ANSWER + "prod",
+        "Check the 24h spend and tell me why it spiked", "What did fix-001 and fix-002 find?", "What is !42 and !43 status?", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I look at prod or staging?" + greenlight.ANSWER + "prod", "What docs cover the API?",
+        "How much has GPT-Live cost us in the last 24 hours?" + greenlight.ASKED + "Do you mean prod or staging?" + greenlight.ANSWER + "prod",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "Which account should I use?\n`Options: prod | staging`" + greenlight.ANSWER + "prod",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "Prod or staging?" + greenlight.ANSWER + "prod" + greenlight.ASKED + "Which window?" + greenlight.ANSWER + "the last 24h"]
+# wrongly refusing a change is the worse mistake: requests, answers and anything unclear may create
+changes = ["Add a 24h cost meter", "fix the failing CI on #12", "Can you rebase !42?", "Merge !42", "do it", "go ahead",
+           "check the spend and then update the dashboard", "/greenlight (automation run: nobody is watching, don't ask questions)",
+           '(Replying to your question: "Workspace for !55 is gone; recreate?")\nyes', "yes", "",
+           '(Replying to your question: "Two options:\n- recreate it ("fresh")\n- or keep it?")\nyes',
+           '(Replying to your notification: "Automation x failed")\nlook into it and fix it', "Create a workspace to check the bill",
+           "Can you take over !88?", "Could you get !42 green?", "Can we get this merged?", "Can you finish !42?",
+           "Can you address the review comments on !42?", "Could you respond to the review?", "Can you port auto.py to Swift?",
+           "Should we wire the cost API into dash.py?", "Can you file an issue for it?", "Do the same for !43",
+           "Show the 24h cost on the dashboard", "Show me the 24h cost on the dashboard", "Why is CI red on #12? Get an agent on it.", "Can you review !42?",
+           "Look into the keychain prompts and sort it out", "yes please, how long will it take?",
+           "Check for flaky tests and get them fixed", "Check the security tracker and triage new issues",
+           "Can you grant a teammate access to the dashboard?", "Why did CI fail on !42? Re-run it.", "Is !42 merged? If so auto-merge !43", "What is the 24h cost? e-mail it to me", "Have codex look at !42", "Check off the completed lifecycle step for !42", "Please list our app on Product Hunt", "Who's on call? Page them.", "Is the token expired? Roll it.",
+           "Check whether the cert expired and renew it", "Has anyone started on the cost meter? Spin one up otherwise",
+           "What about adding a cost meter to the dashboard?", "Is !42 on main? cherry-pick it onto release-1.2",
+           "How much did GPT-Live cost?" + greenlight.ANSWER + "sure", "How much did GPT-Live cost?" + greenlight.ASKED + "Want me to add a cost meter to the dashboard?" + greenlight.ANSWER + "the dashboard",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Anything else?" + greenlight.ANSWER + "put a cost meter on the dashboard",
+           "Check in the hotfix to main", "Check the invoice and refund the customer", "Check the invoice and refund Alice", "Check the invoice and refund $10", "Can you check !42 and sign off?", "How much did GPT-Live cost?" + greenlight.ASKED + "Which?\n1. Add a meter $2/mo\n2. Skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Which?\n1. Add it: $2/mo\n2. Skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Which?\n1. **Fix it**: recommended\n2. Skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Which?\n1. **Add a meter**: $2/mo\n2. Skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I:\n1. Add a cost meter: $2/mo\n2. File an issue: free\nWhich?" + greenlight.ANSWER + "1",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should I:\n- add a meter: cheap\n- skip it\nWhich one?" + greenlight.ANSWER + "the first",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Options:\n1. Add a cost meter (recommended): cheap\n2. Skip\nWhich?" + greenlight.ANSWER + "1",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "It was $12.\n\n1. **Add a cost meter** to the dashboard\n2. **File an issue**\n\nWhich would you like?" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Which would you like?\n1. Add a cost meter: dashboard\n2. Skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I edit greenlight.py?" + greenlight.ANSWER + "the config", "How much did GPT-Live cost?" + greenlight.ASKED + "Next steps:\n- add a meter\n- file an issue\nWhich?" + greenlight.ANSWER + "the first", "How much did GPT-Live cost?" + greenlight.ASKED + "Add a cost meter to the dashboard?" + greenlight.ANSWER + "yes", "How much did GPT-Live cost?" + greenlight.ASKED + "Fix it now?" + greenlight.ANSWER + "ok",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should a cost alert be set up?" + greenlight.ANSWER + "sure", "How much did GPT-Live cost?" + greenlight.ASKED + "Would you like a cost meter on the dashboard?" + greenlight.ANSWER + "yes",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Next steps?\n- add a meter\n- file an issue" + greenlight.ANSWER + "the first", "How much did GPT-Live cost?" + greenlight.ASKED + "Which would you like?\n1. Add a cost meter\n2. File an issue" + greenlight.ANSWER + "1",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "I can:\n\n1. add a meter\n2. file an issue" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Options\n1. add a meter\n2. skip" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I merge !42?" + greenlight.ANSWER + "!42", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I deploy v1.2 or v1.3?" + greenlight.ANSWER + "v1.3",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should I set up a $12.50 alert or a $20 one?" + greenlight.ANSWER + "the second", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I:\n- add a meter\n- skip it\nWhich one?" + greenlight.ANSWER + "the first",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "I can:\n1. add a meter\n2. file an issue\n\nWhich?" + greenlight.ANSWER + "1", "How much did GPT-Live cost?" + greenlight.ASKED + "Want that on the dashboard?" + greenlight.ANSWER + "the dashboard",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should I set an alert at $50?" + greenlight.ANSWER + "go for it", "Summarize the changes in the MR description",
+           "Summarize it in the changelog", "Summarize the incident in a report", "Summarize it in a Google Doc", "How much did GPT-Live cost?" + greenlight.ASKED + "Can I add a cost meter?" + greenlight.ANSWER + "the dashboard", "Check CI and open !42", "Check the logs and open PRs for the fixes", "Explain the architecture in our README",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Add a cost meter?\nOptions: Dashboard | Weekly report | No" + greenlight.ANSWER + "Dashboard",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "`Options: add a meter | skip`" + greenlight.ANSWER + "first one",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should I file an issue for it?" + greenlight.ANSWER + "the backlog",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Want a cost meter on the dashboard?" + greenlight.ANSWER + "the dashboard", "Summarize the incident in the docs",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Which?\nOptions: Add a cost meter | Skip" + greenlight.ANSWER + "the first",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Should I set up an alert?" + greenlight.ANSWER + "prod",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "I can add a cost meter.\n\nWhere should it go?" + greenlight.ANSWER + "dashboard", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I add a meter for it?" + greenlight.ANSWER + "the dashboard", "What is the 24h cost, the dashboard needs a meter for it", "Why is CI red on #12, I want it green before lunch",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Want me to add a cost meter to the dashboard?\nOptions: Dashboard | Weekly report | No thanks" + greenlight.ANSWER + "Dashboard", "How much did GPT-Live cost?" + greenlight.ASKED + "I can add a cost meter.\nWhere should it go?" + greenlight.ANSWER + "dashboard", "Check out a new branch for the cost meter", "Is it possible to put a meter on the dashboard?",
+           "Summarize the incident in a doc", "Explain the architecture in the README", "How much did GPT-Live cost?" + greenlight.ANSWER + "Have codex look into it", "Investigate the flake and put up an MR", "Who should review !42? Spin up a workspace for it"]
+for t in asks:
+    assert greenlight.read_only(t), t
+for t in changes:
+    assert not greenlight.read_only(t), t
+os.environ["GREENLIGHT_REQUEST"] = "How much did GPT-Live cost in the last 24h?"
+assert greenlight.create_refused(["worktree", "create", "--name", "gpt-live-24h-cost"])
+assert not greenlight.create_refused(["worktree", "create", "--name", "x", "--change", "adds the cost meter"])  # the model's override
+assert not greenlight.create_refused(["worktree", "create", "--change=adds it"]) and greenlight.without_change(["--change=adds it", "--name", "x"]) == ["--name", "x"]
+assert greenlight.without_change(["worktree", "create", "--change", "why", "--name", "x"]) == ["worktree", "create", "--name", "x"]
+assert not greenlight.create_refused(["worktree", "ps"])  # reading state is the answer
+assert not greenlight.create_refused(["agent", "launch", "--worktree", "id:w1"])
+os.environ["GREENLIGHT_REQUEST"] = "Add a 24h cost meter"
+assert not greenlight.create_refused(["worktree", "create", "--name", "cost-meter"])
+del os.environ["GREENLIGHT_REQUEST"]  # no request (a person at a terminal, adopt.py): never refused
+assert not greenlight.create_refused(["worktree", "create", "--name", "x"])
+print("read-only ok")
