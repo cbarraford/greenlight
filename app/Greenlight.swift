@@ -2532,8 +2532,10 @@ final class Core: ObservableObject {
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
     var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
+    var focusShown: () -> Bool = { true }  // that window is still up; closed or hidden, you're in the menubar alone and hear every project
+    var scope: String? { focusShown() ? focusScope : nil }
     var chatSend: String {
-        let only = focusScope.map { " --only \(shellQuote($0))" } ?? ""
+        let only = scope.map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
@@ -2546,7 +2548,7 @@ final class Core: ObservableObject {
         watchTurn()
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
-        let (ask, hold) = inScope(fresh, pucks, focusScope)  // another project's waits: the chat speaks for the window you're in
+        let (ask, hold) = inScope(fresh, pucks, scope)  // another project's waits: the chat speaks for the window you're in
         guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
@@ -5656,6 +5658,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
             self.greenlight.focusScope = focusScope(o)
+            self.greenlight.focusShown = { [weak w] in w?.isVisible == true }
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -6656,7 +6659,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedOrb != orb { pushedOrb = orb; fluid.evaluateJavaScript("document.documentElement.style.setProperty('--orb-w', '\(orb)'); window.render && render()") }
         let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
         let repos = "\(json(l1Paths)), \(json(l1Repos))"
-        if pushedRepos != repos { pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))") }
+        if pushedRepos != repos {  // the projects picked changed: the window you're in now shows others, so Chief's scope follows
+            pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))")
+            if let w = NSApp.keyWindow { noteFocus(w) }  // queued after mc.paths (and setPick's term.only): focus() reads the new pick
+        }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
