@@ -44,7 +44,8 @@ Every prompt from tonight, in order. ✅ shipped on `lifecycle-advice` ([#18](ht
 
 ### Voice (live chat)
 - ✅ Free, continuous two-way speech with Chief, like Claude's and ChatGPT's voice modes (researched open-source and paid options)
-- ⬜ Revisit that research: is there an open-source or realtime speech-to-speech option worth switching to?
+- ✅ Revisit that research: is there an open-source or realtime speech-to-speech option worth switching to? Yes: OpenAI GPT-Live 1.1 (`gpt-live-1.1`) now holds voice mode's conversation, handing each request to Chief and reading its answer (Settings → Chat & voice → Speaking voice)
+- ⬜ Hear GPT-Live voice mode on the MacBook (verified on the Mac mini's output path, not by ear)
 - ✅ A live, accurate speech waveform
 - ✅ Chief can draw and visualize anything it's saying, and something is always on screen ("one moment please" or loading)
 - ✅ Drawing is fast and cheap: an HTML stage, plus charts from a few lines of JSON instead of hand-drawn SVG (your graph screenshot)
