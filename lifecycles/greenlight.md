@@ -6,7 +6,7 @@ approval that never comes. Deploying (`sync.sh`) stays the maintainer's call aft
 
 Options: `solo`
 
-1. `mr_open` — A PR exists for the branch (Orca's linked PR, else the head branch, else the open PR that closes the goal's issue). Owner: agent. Implement the goal, push, and open a draft PR that says `Closes #N`.
+1. `mr_open` — A PR exists for the branch (Orca's linked PR, else the head branch, else the open PR that closes the goal's issue). Owner: agent. Implement the goal, push, and open a draft PR that says `Closes #N`. A change under `app/` isn't done until `python3 scripts/dev.py log --wait`, in the worktree, prints `ok` (the Mac built it; a Linux host can't compile the Swift), and the PR says it did; if it prints "No answer", say that instead.
 2. `ci_green` — Every check on the head commit passed (or there are none). Owner: CI while running; agent when one failed.
 3. `no_conflicts` — GitHub reports no conflicts. Owner: agent (rebase).
 4. `ready` — Not a draft. Owner: greenlight (`gh pr ready`), unless the goal says to keep it as a draft. Then ask the user.
