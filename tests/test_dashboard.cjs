@@ -456,6 +456,37 @@ test("terminal: arrows move between tabs, Enter opens the focused one", async pa
   await tp.close();
 });
 
+test("CI view: asks dash.py ci, draws runs per day and minutes, filters by project, refreshes fresh", async page => {
+  await page.click("#bar .seg button:has-text('CI')");
+  assert.deepEqual((await posts(page, "ci")).map(m => [m.days, m.fresh]), [[30, false]], "entering the view asks once");
+  const day = (d, sc, f, c, ms) => ({day: d, success: sc, failed: f, canceled: c, running: 0, median_success: ms, p90_success: ms && ms + 5, median_failed: f ? 3 : null});
+  const agg = days => ({start: days[0].day, end: days.at(-1).day, days, totals: {success: 3, failed: 2, canceled: 1, running: 0, runs: 6, median_success: 20, p90_success: 25, median_failed: 3}});
+  const mr = (ws, project, ref, st) => ({ws, project, ref, web_url: "https://x/" + ref, success: 1, failed: 1, canceled: 0, running: 0, median: 10, durs: [3, 20], statuses: ["failed", st],
+    last: {ts: "2026-11-19T10:00:00Z", status: st, dur: 20, url: "https://x/p"}});
+  await page.evaluate(r => window.mc.ci(r), {ts: Math.floor(Date.now() / 1000), days_n: 30, errors: [],
+    all: {...agg([day("2026-11-18", 2, 1, 1, 20), day("2026-11-19", 1, 1, 0, 30)]), mrs: [mr("plan-a", "acme/widgets", "!7", "success"), mr("other", "acme/tools", "!9", "failed")]},
+    projects: {"acme/widgets": agg([day("2026-11-18", 2, 0, 0, 20), day("2026-11-19", 1, 1, 0, 30)]), "acme/tools": agg([day("2026-11-18", 0, 1, 1, null), day("2026-11-19", 0, 0, 0, null)])}});
+  const text = await page.evaluate(() => document.querySelector(".ci").innerText);
+  assert.ok(/3\s*passed/.test(text) && /2\s*failed/.test(text) && /1\s*canceled/.test(text), text);
+  assert.ok(text.includes("2026-11-18 → 2026-11-19"), "the range is named");
+  assert.equal(await page.$$eval(".ci-card svg", g => g.length), 2, "runs per day and minutes per run");
+  assert.ok((await page.$eval(".ci-card svg", g => g.getAttribute("aria-label"))).includes("2026-11-18 2 passed 1 failed 1 canceled"));
+  assert.equal(await page.$$eval(".ci .w-table tr", r => r.length), 3, "header + one row per MR");
+  await page.setViewportSize({width: 840, height: 800});  // the app's pane beside the chat: MR refs and latest runs stay on their lines
+  await page.evaluate(() => renderMain());
+  assert.deepEqual(await page.$$eval(".ci .w-table td:nth-child(2) a", as => as.map(a => a.getClientRects().length)), [1, 1], "an MR ref never breaks");
+  assert.deepEqual(await page.$$eval(".ci .w-table td:last-child .sub", ss => ss.map(e => e.getClientRects().length)), [1, 1], "latest: status over one unbroken line of time");
+  await page.setViewportSize({width: 1300, height: 900});
+  await page.click(".ci-top .seg button:has-text('tools')");
+  assert.equal(await page.$$eval(".ci .w-table tr", r => r.length), 2, "the project filter keeps its MRs");
+  await page.click(".ci-top button:has-text('Refresh')");
+  assert.deepEqual((await posts(page, "ci")).at(-1), {cmd: "ci", days: 30, fresh: true});
+  await page.click(".ci-top .seg button:has-text('7 days')");
+  assert.deepEqual((await posts(page, "ci")).at(-1), {cmd: "ci", days: 7, fresh: false});
+  await page.evaluate(() => window.mc.ci({error: "gitlab: 401"}));
+  assert.ok((await page.$eval(".ci-err", e => e.textContent)).includes("401"));
+});
+
 test("bridge: the app's theme colors restyle surfaces and chrome, never the state colors", async page => {
   const look = () => page.evaluate(() => { const r = getComputedStyle(document.documentElement), b = document.querySelector("#tbtn") || document.body.appendChild(Object.assign(document.createElement("button"), {id: "tbtn", className: "btn go"}));
     return {bg: r.getPropertyValue("--bg").trim(), orange: r.getPropertyValue("--orange").trim(), red: r.getPropertyValue("--red").trim(), blue: r.getPropertyValue("--blue").trim(),

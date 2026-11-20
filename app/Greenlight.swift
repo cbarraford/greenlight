@@ -902,7 +902,7 @@ func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
     pucks.compactMap { p in
         guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, ["working", "waiting"].contains(st), let path = p["path"] as? String else { return nil }
         return Agent(id: path, name: p["name"] as? String ?? path, state: st, type: a["type"] as? String ?? "")
-    }.sorted { ($0.state != "waiting", $0.name) < ($1.state != "waiting", $1.name) }
+    }.sorted { ($0.state == "waiting" ? 0 : 1, $0.name) < ($1.state == "waiting" ? 0 : 1, $1.name) }  // asking you first
 }
 
 enum Talk { case speaking, listening, thinking }
@@ -5295,6 +5295,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
                 let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.parked(\(js))")
+            })
+        }
+        // The CI view: dash.py ci (runs per day across the tracked MRs/PRs; cached 15 min there, Refresh passes fresh).
+        if cmd == "ci" {
+            let days = min(max(b["days"] as? Int ?? 30, 1), 99), fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
+            var out = ""
+            ssh("\(py)/dash.py ci --days \(days)\(fresh)", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"error":"\#(host) didn't answer (exit \#(code))"}"#
+                from.evaluateJavaScript("mc.ci(\(js))")
             })
         }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.

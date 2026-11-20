@@ -16,6 +16,8 @@
                                                     the diff (stdin: head | branch)
     dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
     dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
+    dash.py ci [--days N] [--fresh]                 one JSON line: CI runs per day (success/failed/canceled, minutes) across the
+                                                    tracked workspaces' MRs/PRs, all and per project; cached 15 min (the CI view)
     dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
     dash.py task repos -                            one JSON line: the repos a task can go to (New task)
     dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs
@@ -809,6 +811,150 @@ def mr_facts(project, iid, forge="gitlab"):
         return {"error": str(e)[:200]}
 
 
+CI_DONE = {"success": "success", "failed": "failed", "canceled": "canceled", "cancelled": "canceled", "skipped": "canceled",
+           "failure": "failed", "timed_out": "failed", "startup_failure": "failed", "action_required": "failed"}  # GitHub conclusions too
+CI_TTL = 900  # `ci` answers from its cache for 15 min: a fetch is one API call per pipeline it hasn't seen finish
+
+
+def ci_day(ts):
+    return ts[:10]  # ISO timestamps from both forges: the UTC day
+
+
+def ci_runs(rows, since, seen=None):
+    """Every pipeline (GitLab) or workflow run (GitHub) of each tracked workspace's MR/PR created since `since` (ISO).
+    One run: {ws, project, ref, web_url, id, ts, status, dur (min, run time without the queue), url}. `seen` maps
+    a finished pipeline's id to its run and is filled in: a finished pipeline never changes, so it's fetched once."""
+    from concurrent.futures import ThreadPoolExecutor
+    seen = {} if seen is None else seen
+    def one(r):
+        mr, out = r["mr"], []
+        base = {"ws": r["name"], "project": r["project"], "ref": mr.get("ref") or greenlight.ref(r.get("forge") or "gitlab", mr["iid"]),
+                "web_url": mr.get("web_url")}
+        if (r.get("forge") or mr.get("forge")) == "github":
+            if not mr.get("source_branch"):
+                return []
+            for x in greenlight.gh("run", "list", "-R", r["project"], "--branch", mr["source_branch"], "-L", "100",
+                                   "--json", "databaseId,createdAt,startedAt,updatedAt,status,conclusion,url"):
+                if x["createdAt"] < since:
+                    continue
+                st = CI_DONE.get(x.get("conclusion") or "", "running" if x["status"] != "completed" else "canceled")
+                t0, t1 = (time.mktime(time.strptime(v[:19], "%Y-%m-%dT%H:%M:%S")) for v in (x.get("startedAt") or x["createdAt"], x["updatedAt"]))
+                out.append({**base, "id": f"gh{x['databaseId']}", "ts": x["createdAt"], "status": st,
+                            "dur": round((t1 - t0) / 60, 1) if st != "running" else None, "url": x["url"]})
+            return out
+        q = greenlight.pid(r["project"])
+        for pl in greenlight.gl_all(f"projects/{q}/merge_requests/{mr['iid']}/pipelines"):
+            if pl["created_at"] < since:
+                continue
+            key = f"gl{pl['id']}"
+            if key in seen:
+                out.append({**seen[key], **base})
+                continue
+            st = CI_DONE.get(pl["status"], "running")
+            dur = None
+            if st != "running":
+                dur = greenlight.gl(f"projects/{q}/pipelines/{pl['id']}").get("duration")
+                dur = round(dur / 60, 1) if dur else None
+            out.append({**base, "id": key, "ts": pl["created_at"], "status": st, "dur": dur, "url": pl["web_url"]})
+        return out
+    tracked = [r for r in rows if (r.get("mr") or {}).get("iid") and r.get("project")]
+    runs, errors = [], []
+    with ThreadPoolExecutor(6) as ex:
+        for r, res in zip(tracked, ex.map(lambda r: _try(one, r), tracked)):
+            if isinstance(res, Exception):
+                errors.append(f"{r['name']}: {str(res)[:120]}")
+                continue
+            runs += res
+    for x in runs:
+        if x["status"] != "running":
+            seen[x["id"]] = {k: x[k] for k in ("id", "ts", "status", "dur", "url")}
+    return runs, errors
+
+
+def _try(f, *a):
+    try:
+        return f(*a)
+    except Exception as e:  # one MR's API error drops that MR, not the chart
+        return e
+
+
+def _median(v):
+    v = sorted(v)
+    return None if not v else v[len(v) // 2] if len(v) % 2 else round((v[len(v) // 2 - 1] + v[len(v) // 2]) / 2, 1)
+
+
+def _p90(v):
+    v = sorted(v)
+    return v[min(len(v) - 1, int(len(v) * 0.9))] if v else None
+
+
+def ci_aggregate(runs, start, end):
+    """Runs -> the chart: one row per UTC day from `start` to `end` (YYYY-MM-DD, both kept, empty days included) with
+    success/failed/canceled/running counts and the median and p90 minutes of finished runs; totals; one summary per
+    workspace MR (newest run last). An MR two workspaces share counts once."""
+    from datetime import date, timedelta
+    d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+    days = {(d0 + timedelta(i)).isoformat(): {"success": 0, "failed": 0, "canceled": 0, "running": 0, "_s": [], "_f": []}
+            for i in range((d1 - d0).days + 1)}
+    uniq = {}
+    for x in runs:
+        uniq.setdefault(x["id"], x)
+    by_mr = {}
+    for x in uniq.values():
+        b = days.get(ci_day(x["ts"]))
+        if b is None:
+            continue
+        b[x["status"]] += 1
+        if x["dur"] is not None and x["status"] in ("success", "failed"):
+            b["_s" if x["status"] == "success" else "_f"].append(x["dur"])
+        by_mr.setdefault((x["project"], x["ref"]), []).append(x)
+    out = []
+    for day, b in days.items():
+        out.append({"day": day, **{k: b[k] for k in ("success", "failed", "canceled", "running")},
+                    "median_success": _median(b["_s"]), "p90_success": _p90(b["_s"]), "median_failed": _median(b["_f"])})
+    allr = [x for x in uniq.values() if ci_day(x["ts"]) in days]
+    s = [x["dur"] for x in allr if x["status"] == "success" and x["dur"] is not None]
+    f = [x["dur"] for x in allr if x["status"] == "failed" and x["dur"] is not None]
+    totals = {k: sum(d[k] for d in out) for k in ("success", "failed", "canceled", "running")}
+    totals.update(runs=len(allr), median_success=_median(s), p90_success=_p90(s), median_failed=_median(f))
+    mrs = []
+    for (project, ref), xs in by_mr.items():
+        xs.sort(key=lambda x: x["ts"])
+        done = [x["dur"] for x in xs if x["dur"] is not None and x["status"] in ("success", "failed")]
+        mrs.append({"ws": sorted({x["ws"] for x in xs})[0], "project": project, "ref": ref, "web_url": xs[-1]["web_url"],
+                    **{k: sum(x["status"] == k for x in xs) for k in ("success", "failed", "canceled", "running")},
+                    "median": _median(done), "durs": [x["dur"] for x in xs][-30:], "statuses": [x["status"] for x in xs][-30:],
+                    "last": {k: xs[-1][k] for k in ("ts", "status", "dur", "url")}})
+    mrs.sort(key=lambda m: m["last"]["ts"], reverse=True)
+    return {"start": start, "end": end, "days": out, "totals": totals, "mrs": mrs}
+
+
+def ci(days=30, fresh=False):
+    """`dash.py ci`: CI health across the tracked workspaces' MRs/PRs for the last `days` days (UTC), all projects
+    together and per project. Cached for CI_TTL; finished pipelines are kept across fetches."""
+    DASH.mkdir(parents=True, exist_ok=True)
+    cf, sf = DASH / f"ci-{days}.json", DASH / "ci-seen.json"
+    if not fresh and cf.exists() and time.time() - cf.stat().st_mtime < CI_TTL:
+        return json.loads(cf.read_text())
+    rows = json.loads((greenlight.STATE / "last.json").read_text())["rows"]
+    end = time.strftime("%Y-%m-%d", time.gmtime())
+    start = time.strftime("%Y-%m-%d", time.gmtime(time.time() - (days - 1) * 86400))
+    try:
+        seen = json.loads(sf.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    runs, errors = ci_runs(rows, start + "T00:00:00Z", seen)
+    old = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 90 * 86400))
+    sf.write_text(json.dumps({k: v for k, v in seen.items() if v["ts"] >= old}))  # forget what fell out of every window
+    out = {"ts": int(time.time()), "days_n": days, "all": ci_aggregate(runs, start, end), "errors": errors[:20],
+           "projects": {p: ci_aggregate([x for x in runs if x["project"] == p], start, end)
+                        for p in sorted({x["project"] for x in runs})}}
+    for a in out["projects"].values():
+        a.pop("mrs")  # the per-MR rows are in "all"; a project view filters them
+    cf.write_text(json.dumps(out))
+    return out
+
+
 def facts(name):
     snap = snapshot(full=True)
     p = next((p for p in snap["pucks"] if p["name"] == name), None)
@@ -1448,6 +1594,14 @@ def main():
         print(board())
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
+    elif a[:1] == ["ci"]:
+        n = a[a.index("--days") + 1] if "--days" in a[:-1] else "30"
+        if not re.fullmatch(r"[1-9]\d?", n):
+            sys.exit("bad --days (1-99)")
+        try:
+            print(json.dumps(ci(int(n), "--fresh" in a)))
+        except Exception as e:
+            print(json.dumps({"error": str(e)[:300]}))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
     elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
