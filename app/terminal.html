@@ -1099,7 +1099,12 @@ const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as 
 // what this window lists: in-view trees, plus each in-view project's folders that aren't a tree already
 const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !ONLY || ONLY.includes(p.id)).flatMap(p => p.dirs)
   .filter((d, i, a) => a.indexOf(d) === i && !wsInfo(d)).map(d => ({project: "", name: d.split("/").pop() || d, path: d, dir: true}))];
-function openWs(ws){ const t = wsTabs(ws).sort((a, b) => b.used - a.used)[0]; t ? show(t) : newTab(ws) }
+function openWs(ws){
+  // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
+  const latest = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0], q = ws.toLowerCase();
+  const t = latest(t => JSON.stringify(t.tree || {}).includes(`"${ws}"`)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
+    || latest(t => (t.name || "").toLowerCase().includes(q));
+  t ? show(t) : ws.startsWith("/") && newTab(ws) }
 // status glyphs (16-unit grid, 1.5 stroke, as the design)
 const g16 = (d, cls = "", label = "", w = 12) => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${d}</svg>`;
 const G = {

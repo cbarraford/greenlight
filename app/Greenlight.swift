@@ -875,6 +875,27 @@ extension Looked {
     }
 }
 
+/// Claude Code's live line, under the reply in the chat and in every voice look: the running call, then the spinner with time, tokens and speed.
+/// ponytail: no live shell output; claude's stream only sends a tool's elapsed seconds while it runs.
+struct Activity: View {
+    @ObservedObject var c: Core
+    @ObservedObject var r: Run
+    let fg: Color, dim: Color, accent: Color, size: CGFloat
+    var body: some View {
+        let t = max(0, c.now.timeIntervalSince(r.start)), cur = r.steps.last.flatMap { $0.ok == nil ? $0 : nil }
+        let w = r.stopping ? "Stopping…" : c.voice.waitWord.hasSuffix("…") ? c.voice.waitWord : c.voice.waitWord + "…"
+        let bits = [fmt(t), c.outTok > 0 ? "↓ \(kfmt(c.outTok)) tokens" : nil, c.tps > 0 ? "\(Int(c.tps)) tok/s" : nil,
+                    r.status == "Thinking" ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
+        VStack(alignment: .leading, spacing: 2) {
+            if let s = cur {
+                Text("\(Text("⏺ ").foregroundColor(accent))\(r.call.isEmpty ? s.title : r.call)").foregroundColor(fg).lineLimit(1).truncationMode(.middle)
+                Text("  ⎿  Running… \(fmt(c.now.timeIntervalSince(s.start)))").foregroundColor(dim)
+            }
+            Text("\(Text(["·", "✢", "✳", "✶", "✻", "✽"][Int(t) % 6] + " ").foregroundColor(accent))\(Text(w).foregroundColor(fg)) \(Text("(\(bits))").foregroundColor(dim))").lineLimit(1)
+        }.font(sys(size: size, design: .monospaced)).textSelection(.enabled).accessibilityElement(children: .combine)
+    }
+}
+
 enum Talk { case speaking, listening, thinking }
 /// What every look shows, from Voice and Core.
 struct Live {
@@ -889,6 +910,10 @@ struct Live {
     var high: Bool { frac > 0.75 }
     var tokens: String { c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window))" : kfmt(c.context) }
     var name: String { c.name }
+    /// The live line, in the look's colors, while Chief works (off in Settings → Chat & voice).
+    @ViewBuilder func activity(_ l: Look, ink: Color? = nil, accent: Color? = nil, size: CGFloat = 12) -> some View {
+        if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size).frame(maxWidth: .infinity, alignment: .leading) }
+    }
     func clear() { v.run(.reset) }
     /// The stage, inset in its card so the card's rounded corners show (the web view itself is square).
     func stage(_ l: Look, r: CGFloat = 12, pad: CGFloat = 8, border: Color? = nil) -> some View {
@@ -961,6 +986,7 @@ struct ConversationLook: View {
             VStack(spacing: 8) {
                 if !s.heard.isEmpty { HStack { Spacer(minLength: 40); bubble(s.heard, fill: hx(l.accent), ink: .white) } }
                 if !s.said.isEmpty { HStack { bubble(s.said, fill: hx(l.card), ink: hx(l.text)); Spacer(minLength: 40) } }
+                s.activity(l).padding(.horizontal, 4)
             }
             HStack(spacing: 10) {
                 Bars(m: s.v.meter, n: 36, on: hx(l.accent), off: hx("8C959F"))
@@ -997,6 +1023,7 @@ struct OrbLook: View {
                     if !s.heard.isEmpty { Text("“\(s.heard)”").font(.system(size: 13)).foregroundColor(hx(l.dim)) }
                 }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 20)
             }
+            s.activity(l).padding(.horizontal, 20)
             HStack(spacing: 12) {
                 s.ctx { Text("\(s.pct)% · \(s.tokens)").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
                 s.clearButton {
@@ -1045,6 +1072,7 @@ struct OnAirLook: View {
             VStack(spacing: 0) {
                 if !s.said.isEmpty { third("CHIEF", s.said, tag: hx(l.accent), tagInk: hx(l.page), fill: hx(l.text), ink: hx(l.page), size: 15) }
                 if !s.heard.isEmpty { third("YOU", s.heard, tag: hx(l.line), tagInk: hx(l.text), fill: hx(l.card), ink: hx(l.text2), size: 13) }
+                s.activity(l).padding(.horizontal, 16).padding(.top, 8)
             }.padding(.bottom, 12)
             HStack(spacing: 12) {
                 s.ctx {
@@ -1094,6 +1122,7 @@ struct PhosphorLook: View {
                 s.stage(l, r: 0, pad: 0)
                 if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(s.heard)") }
                 if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
+                s.activity(l, accent: ink, size: 13)
             }.lineLimit(4).padding(14)
             HStack(spacing: 10) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
                 .padding(.horizontal, 14).padding(.bottom, 10)
@@ -1141,6 +1170,7 @@ struct EditorialLook: View {
                 Text("“\(s.said)”").font(.system(size: 19, design: .serif).italic()).lineSpacing(3).lineLimit(4).padding(.top, 16)
             }
             if !s.heard.isEmpty { Text("In reply to “\(s.heard)”").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 6) }
+            s.activity(l).padding(.top, 8)
             Scope(m: s.v.meter, ink: s.talk == .speaking ? red : ink, rule: hx(l.line)).frame(height: 44).padding(.top, 12)
             Rectangle().fill(ink).frame(height: 1)
             HStack(spacing: 14) {
@@ -1189,6 +1219,7 @@ struct HUDLook: View {
             }.padding(14).background(hx(l.stage)).overlay(Rectangle().stroke(hx(l.line)))
             if !s.said.isEmpty { Text("\(Text("\(s.name.uppercased()) ▸ ").font(mono).foregroundColor(cyan))\(Text(s.said).font(.system(size: 16)))").lineLimit(3) }
             if !s.heard.isEmpty { Text("\(Text("YOU ▸ ").font(mono))\(Text(s.heard).font(.system(size: 13)))").foregroundColor(faint).lineLimit(2) }
+            s.activity(l)
             VStack(spacing: 1) {
                 Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573"))
                 Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573")).scaleEffect(x: 1, y: -1).opacity(0.35)
@@ -1229,6 +1260,7 @@ struct ZenLook: View {
             s.stage(l, r: 0, pad: 0).padding(.horizontal, 32).padding(.top, 24)
             if !s.said.isEmpty { Text(s.said).font(.system(size: 24, weight: .light)).foregroundColor(hx(l.text)).multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 40).padding(.top, 20) }
             if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 8) }
+            s.activity(l).fixedSize().padding(.top, 10)
             Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
             Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)
             HStack {
@@ -1629,7 +1661,11 @@ final class Speech {
             guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
             let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
             return len == 0 ? nil : try kout.read(upToCount: len)
-        } catch { ready = false; status = "Kokoro stopped"; proc?.terminate(); proc = nil; return nil }  // ponytail: no auto-restart; pick it again in Settings
+        } catch {  // it died: restart it, so the lines after this one are Kokoro's again (this one falls back to Apple's)
+            ready = false; status = "Kokoro stopped, restarting"; proc?.terminate(); proc = nil
+            DispatchQueue.main.async { self.warm() }
+            return nil
+        }
     }
 
     /// Start Kokoro if it's the voice (at launch, and on picking it); a warm-up line loads the model before the first real one.
@@ -1647,10 +1683,9 @@ final class Speech {
         status = "Kokoro is loading (the first time downloads about 1 GB)"
         do { try p.run() } catch { status = "Kokoro: \(error.localizedDescription)"; return }
         proc = p; kin = i.fileHandleForWriting; kout = o.fileHandleForReading
-        DispatchQueue.global().async {
-            let ok = self.kokoro("Ready.") != nil
-            self.q.async { self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
-        }
+        // on the speech queue: a line said while it loads (the wait word, often) waits for Kokoro instead of going out in Apple's voice.
+        // ponytail: so the very first start (the ~1 GB download) is silent until it's done, not Apple's voice meanwhile
+        q.async { let ok = self.kokoro("Ready.") != nil; self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
     }
     func stop() { proc?.terminate(); proc = nil; ready = false }
 }
@@ -2135,7 +2170,7 @@ final class Core: ObservableObject {
         }
         run = nil
         tps = 0
-        if ok && !r.stopping, let w = st.console { delegate.toConsole(w) }
+        if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
         if ok && st.reset { DispatchQueue.main.async { [weak self] in self?.clear() } }  // [chat: reset]: after this reply, which says so
         if !popoverShown() && !r.stopping {
             missed += 1
@@ -2274,21 +2309,7 @@ struct RunCard: View, Looked {
             if c.liveLine { activity }
         }
     }
-    /// Claude Code's live line, under the reply in every look: the running call, then the spinner with time, tokens and speed.
-    /// ponytail: no live shell output; claude's stream only sends a tool's elapsed seconds while it runs.
-    var activity: some View {
-        let t = max(0, c.now.timeIntervalSince(r.start)), cur = r.steps.last.flatMap { $0.ok == nil ? $0 : nil }
-        let w = r.stopping ? "Stopping…" : c.voice.waitWord.hasSuffix("…") ? c.voice.waitWord : c.voice.waitWord + "…"
-        let bits = [fmt(t), c.outTok > 0 ? "↓ \(kfmt(c.outTok)) tokens" : nil, c.tps > 0 ? "\(Int(c.tps)) tok/s" : nil,
-                    r.status == "Thinking" ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
-        return VStack(alignment: .leading, spacing: 2) {
-            if let s = cur {
-                Text("\(Text("⏺ ").foregroundColor(accent))\(r.call.isEmpty ? s.title : r.call)").foregroundColor(fg).lineLimit(1).truncationMode(.middle)
-                Text("  ⎿  Running… \(fmt(c.now.timeIntervalSince(s.start)))").foregroundColor(dim)
-            }
-            Text("\(Text(["·", "✢", "✳", "✶", "✻", "✽"][Int(t) % 6] + " ").foregroundColor(accent))\(Text(w).foregroundColor(fg)) \(Text("(\(bits))").foregroundColor(dim))").lineLimit(1)
-        }.font(sys(size: Theme.fs2, design: .monospaced)).textSelection(.enabled).accessibilityElement(children: .combine)
-    }
+    var activity: some View { Activity(c: c, r: r, fg: fg, dim: dim, accent: accent, size: Theme.fs2) }
     var state: String { r.stopping ? "stopping" : "working" }
     /// Chrome in the look's face: mono for Phosphor.
     func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: mono ? .monospaced : .default) }
@@ -5591,16 +5612,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if termWindow.isVisible && termWindow.isKeyWindow { termWindow.orderOut(nil); hideFloaters(); return }
         basement()
     }
-    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name → that worktree's terminal.
-    /// ponytail: opens the worktree's latest tab, not the exact session, when one worktree has several tabs.
-    func toConsole(_ w: String) {
-        let tabs = ((try? Data(contentsOf: termState(0))).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["tabs"] as? [[String: Any]] ?? []
-        func has(_ t: [String: Any]) -> Bool {
-            let ws = t["ws"] as? String ?? "", s = String(data: (try? JSONSerialization.data(withJSONObject: t)) ?? Data(), encoding: .utf8) ?? ""
-            return s.contains("\"\(w)\"") || ws == w || ws.hasSuffix("/" + w) || (t["name"] as? String ?? "").localizedCaseInsensitiveContains(w)
-        }
-        if let ws = tabs.first(where: has)?["ws"] as? String { toWorkspace(ws) } else if w.hasPrefix("/") { toWorkspace(w) }
-    }
+    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
+    /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
+    func toConsole(_ w: String) { toWorkspace(w) }
     var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
     /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
     func toWorkspace(_ path: String) {
