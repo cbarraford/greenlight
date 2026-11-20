@@ -2243,17 +2243,18 @@ final class LivePreview: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in self?.begin(voice, key, g) }
     }
     func stop() {
-        gen += 1
-        teardown()
+        teardown()  // bumps gen: its timers and callbacks are void
         phase = .idle
     }
     /// Voice mode ended: its "voice mode is on" note no longer applies (a muted one still does).
     func voiceModeEnded() {
         if case .skipped(let why) = phase, why.hasPrefix(LivePreview.voiceOnNote) { phase = .idle }
     }
-    /// A new OpenAI key was saved: a failure may not apply to it, so ▶ is worth another try.
-    func keySaved() {
-        if case .failed = phase { phase = .idle }
+    /// A key was saved or removed. A new OpenAI key may fix a failure, so ▶ is worth another try, and a preview still
+    /// starting on the old key is stopped (its refusal would land after the save). Removing a key fixes nothing.
+    func keyChanged(_ account: String, to v: String) {
+        guard account == "openai", !v.isEmpty else { return }
+        switch phase { case .loading: stop(); case .failed: phase = .idle; default: break }
     }
     static let voiceOnNote = "Voice mode is on"
 
@@ -6937,7 +6938,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if keychain(account, set: v) == nil {
             let action = v.isEmpty ? "remove" : "save"
             greenlight.msgs.append(Msg(.note, "Couldn't \(action) the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
-        } else if account == "openai", !v.isEmpty { LivePreview.shared.keySaved() }
+        } else { LivePreview.shared.keyChanged(account, to: v) }
         if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
     }
 
@@ -7235,15 +7236,20 @@ func selfTest() {
         let sp = LivePreview.shared, vm = Voice()
         sp.play("cedar", voiceOn: true, muted: false, settle: 0, key: readKey); vm.stopAll()
         let voiceOnCleared = sp.phase == .idle
-        sp.play("cedar", voiceOn: false, muted: true, settle: 0, key: readKey); vm.stopAll(); sp.keySaved()
+        sp.play("cedar", voiceOn: false, muted: true, settle: 0, key: readKey); vm.stopAll(); sp.keyChanged("openai", to: "sk-new")
         let mutedKept = { if case .skipped(let w) = sp.phase { return w.contains("muted") }; return false }()
         sp.play("cedar", voiceOn: false, muted: false, settle: 0, key: readKey); RunLoop.main.run(until: Date() + 0.1)
         let failedNote = sp.hint ?? ""; vm.stopAll()
+        sp.keyChanged("openai", to: ""); sp.keyChanged("elevenlabs", to: "xi-new")
         let failKept = sp.hint == failedNote
-        sp.keySaved()
+        sp.keyChanged("openai", to: "sk-new")
         let failCleared = sp.phase == .idle
-        check("voice: voice mode ending clears only its own preview note, a saved key only a failure (\(failedNote))",
-              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared)
+        let reads0 = keyReads.count
+        sp.play("juni", voiceOn: false, muted: false, settle: 0.2, key: readKey); sp.keyChanged("openai", to: "sk-new")
+        RunLoop.main.run(until: Date() + 0.4)
+        let loadingStopped = sp.phase == .idle && keyReads.count == reads0
+        check("voice: voice mode ending clears only its own preview note; saving an OpenAI key a failure or a preview still starting, removing it or another key nothing (\(failedNote))",
+              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingStopped)
     }
     do {  // the Keychain cache, on a fake Keychain: what a launch reads again, and what a failed save keeps
         let real = keychainOps, acct = "greenlight-selftest"
@@ -7293,10 +7299,10 @@ func selfTest() {
         let locked = [keychain(acct), keychain(acct)], lockedReads = reads
         readFails = nil
         let unlocked = [keychain(acct), keychain(acct)], unlockedReads = reads
-        updateFails = errSecInteractionNotAllowed  // add and delete would work: a refused update mustn't fall back to them
+        updateFails = errSecInteractionNotAllowed; reads = 0  // add and delete would work: a refused update mustn't fall back to them
         let badSave = keychain(acct, set: "sk-rejected"), afterBadSave = item
         updateFails = nil; deleteFails = errSecInteractionNotAllowed
-        let badRemove = keychain(acct, set: ""), afterBadRemove = item, kept = keychain(acct)
+        let badRemove = keychain(acct, set: ""), afterBadRemove = item, kept = keychain(acct), keptReads = reads  // still cached: no read
         deleteFails = nil; reads = 0
         let removed = keychain(acct, set: ""), afterRemove = keychain(acct), removeReads = reads
         keyLock.lock(); keys[acct] = nil; keychainOps = real; keyLock.unlock()
@@ -7306,7 +7312,7 @@ func selfTest() {
               && denied == [nil, nil] && deniedReads == 1 && refused == [nil, nil] && second == "sk-2" && afterSet == "sk-2" && setReads == 1 && adds == 1
               && locked == [nil, nil] && lockedReads == 2 && unlocked == ["sk-2", "sk-2"] && unlockedReads == 3)
         check("keychain: a refused save or remove keeps the saved and the cached key; a removal sticks",
-              badSave == nil && afterBadSave == "sk-2" && badRemove == nil && afterBadRemove == "sk-2" && kept == "sk-2"
+              badSave == nil && afterBadSave == "sk-2" && badRemove == nil && afterBadRemove == "sk-2" && kept == "sk-2" && keptReads == 0
               && removed == "" && afterRemove == nil && item == nil && removeReads == 0)
     }
     if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
@@ -7327,7 +7333,7 @@ func selfTest() {
         while Date() < b0 + 15 && bad.busy { RunLoop.main.run(until: Date() + 0.05) }
         let early = bad.hint ?? "-", failedIn = Date().timeIntervalSince(b0)
         RunLoop.main.run(until: b0 + 14.5)  // past the 12 s timer with its leeway
-        check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 14 s (\(bad.hint ?? "-"))",
+        check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 14.5 s (\(bad.hint ?? "-"))",
               { if case .failed(_, let w) = bad.phase { return w.contains("key") || w.contains("401") }; return false }() && failedIn < 12 && bad.hint == early)
     }
     // GREENLIGHT_LIVE_TEST=1 with OPENAI_API_KEY: a real gpt-live-1.1 session (a few cents). Apple's voice asks a question into it, as the mic
