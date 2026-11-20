@@ -1105,6 +1105,11 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     if not ask and key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list (an undo asks regardless)
         print(f"skipped: {key} was pinged in the last {FLAP // 3600}h")
         return
+    # A scan may ask the same workspace question again; don't repeatedly answer it for the user.
+    if not ask and key and any(e.get("key") == key and e.get("text") == text and e.get("auto") and e.get("ts", 0) > time.time() - FLAP
+                               for e in outbox_events()):
+        print(f"skipped: {key} was answered for you in the last {FLAP // 3600}h")
+        return
     mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name
     ws = list(dict.fromkeys(mine + list(ws)))
     slug = decisions.slug(kind) if kind else None
@@ -1143,10 +1148,15 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
 FLAP = 24 * 3600
 
 
+def outbox_events():
+    f = STATE / "outbox.jsonl"
+    return [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
+
+
 def recent_keys():
     """Keys pinged within FLAP, read from the outbox itself."""
-    f, cut = STATE / "outbox.jsonl", time.time() - FLAP
-    return {e["key"] for e in map(json.loads, f.read_text().splitlines() if f.exists() else [])
+    cut = time.time() - FLAP
+    return {e["key"] for e in outbox_events()
             if "text" in e and e.get("key") and e["ts"] > cut}
 
 

@@ -219,16 +219,16 @@ def band(p):
 
 def calibrate(recs=None):
     """Empirical accuracy of autonomy.py's proposals, per kind: {kind: {n, right, acc, bands: {auto|suggest|ask: {n, right, acc}}}}.
-    Right: you picked the proposed option, or it was answered for you and not undone (autonomy.jsonl). A typed answer is a miss."""
+    Right: you picked the proposed option. An undone auto answer is a miss; an unchallenged auto answer isn't evidence."""
     recs = load() if recs is None else recs
     f = STATE / "autonomy.jsonl"
     undone = {e.get("record") for e in map(json.loads, f.read_text().splitlines() if f.exists() else []) if e.get("undone")}
     out = {}
     for r in recs:
         prop = r.get("proposal")
-        if not prop or (r["answer"] is None and r["id"] not in undone):
+        if not prop or (r["answer"] is None and r["id"] not in undone) or (r["answer_via"] == "auto" and r["id"] not in undone):
             continue
-        right = False if r["id"] in undone else True if r["answer_via"] == "auto" else r["choice"] == prop["index"]
+        right = r["id"] not in undone and r["choice"] == prop["index"]
         k = out.setdefault(r["kind"], {"n": 0, "right": 0, "bands": {b: {"n": 0, "right": 0} for b in ("auto", "suggest", "ask")}})
         for s in (k, k["bands"][band(prop["prob"])]):
             s["n"] += 1

@@ -3422,12 +3422,16 @@ final class Core: ObservableObject {
     }
     func undoAudit(_ id: String) {
         ssh("\(py)/autonomy.py undo \(shellQuote(id))", onExit: { [weak self] code in
-            if code != 0 { self?.autonomyNote = "Couldn't undo that on \(host)." }
-            self?.loadAutonomy()
+            guard let self else { return }
+            if code != 0 { self.autonomyNote = "Couldn't ask again on \(host)." }
+            else {
+                for i in self.questions.indices where self.questions[i].auto == id {
+                    self.questions[i].auto = nil
+                    self.questions[i].answer = "Reconsidering: " + (self.questions[i].answer ?? "").replacingOccurrences(of: "Auto: ", with: "")
+                }
+            }
+            self.loadAutonomy()
         })
-        for i in questions.indices where questions[i].auto == id {
-            questions[i].auto = nil; questions[i].answer = "Undone: " + (questions[i].answer ?? "").replacingOccurrences(of: "Auto: ", with: "")
-        }
     }
 
     func setGreenlightEvery(_ m: Int) {
@@ -4892,8 +4896,8 @@ struct Inbox: View {
                             Spacer(minLength: 8)
                             Text(q.answer ?? "").lineLimit(1).layoutPriority(1)
                             if q.auto != nil {
-                                Button("Undo") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
-                                    .help("Greenlight answered this for you. Undo asks you again, and what you answer is acted on.")
+                                Button("Ask me again") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
+                                    .help("Greenlight will ask again. This does not reverse an action already taken.")
                             }
                         }.font(sys(size: Theme.fs2))
                     }
@@ -4981,7 +4985,7 @@ struct QuestionRow: View {
     var about: String? { q.key.flatMap { $0.hasPrefix("@") ? nil : $0 } ?? (q.ws?.count == 1 ? q.ws?.first : nil) }
 }
 
-/// One answer greenlight gave for you, in Settings › Autonomy: what, when, how sure, and Undo.
+/// One answer greenlight gave for you, in Settings › Autonomy: what, when, how sure, and reconsideration.
 struct AutonomyActRow: View {
     let a: AutonomyReport.Act, title: String, fg: Color, dim: Color, undo: () -> Void
     var body: some View {
@@ -4993,8 +4997,8 @@ struct AutonomyActRow: View {
                     .font(sys(size: Theme.fs2)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Theme.sp3)
-            if a.undone != nil { Text("Undone").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-            else { Button("Undo", action: undo).help("Asks you again, and what you answer is acted on") }
+            if a.undone != nil { Text("Asked again").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+            else { Button("Ask me again", action: undo).help("Asks you again; it does not reverse an action already taken") }
         }.padding(.horizontal, Theme.sp4).padding(.vertical, 10)
     }
 }
@@ -5832,7 +5836,7 @@ struct SettingsView: View {
         return k.eligible ? past : past + " A human gate: Greenlight never answers these for you, nor preselects merge or sign-off."
     }
     @ViewBuilder var autonomyPane: some View {
-        heading("Autonomy", "Greenlight guesses your answer from what you answered before. 95% sure of a reversible answer, in a sort you turn on here: it answers itself, and you can undo it. 65% or more: it preselects that answer in the bell. Less, or anything risky: it asks.")
+        heading("Autonomy", "Greenlight guesses your answer from what you answered before. At 95% confidence, with the sort turned on here, it may answer an inactive choice such as keep draft. You can ask it to reconsider. At 65% or more, it preselects the answer in the bell. For actions or uncertain choices, it asks.")
         Group {
             if let r = c.autonomy {
                 ForEach(r.candidates, id: \.kind) { cand in
@@ -5840,7 +5844,7 @@ struct SettingsView: View {
                         Button("Turn on") { c.setAutonomy("--auto \(cand.kind) on") }.buttonStyle(.borderedProminent)
                     }
                 }
-                box("Answered for you", aside: "Only when 95%+ sure, and only an answer that can be taken back") {
+                box("Answered for you", aside: "Only when 95%+ sure, and only an inactive answer") {
                     ForEach(r.kinds, id: \.kind) { k in
                         row(Self.kindTitle[k.kind] ?? k.kind, kindStats(k)) {
                             Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy("--auto \(k.kind) \($0 ? "on" : "off")") }))
