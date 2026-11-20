@@ -56,9 +56,9 @@ done = p.pi({"type": "agent_end", "messages": []})[0]
 assert done["ok"] and done["text"] == "pong" and done["context"] == 55, done
 # gemini: the text rides on stdin (no -p: a non-TTY stdin is headless), the system prompt in the first message
 cmd, text = harness.argv("gemini", "hi", model="gemini-4-neon", effort="high", system="SYS", stream=True)
-assert cmd == ["gemini", "--approval-mode", "auto_edit", "--output-format", "stream-json", "-m", "gemini-4-neon"], cmd
+assert cmd == ["gemini", "--approval-mode", "auto_edit", "--skip-trust", "--output-format", "stream-json", "-m", "gemini-4-neon"], cmd
 assert text == "SYS\n\nhi"
-assert harness.argv("gemini", "hi", sid="uuid-1", system="SYS") == (["gemini", "--approval-mode", "auto_edit", "--resume", "uuid-1"], "hi")
+assert harness.argv("gemini", "hi", sid="uuid-1", system="SYS") == (["gemini", "--approval-mode", "auto_edit", "--skip-trust", "--resume", "uuid-1"], "hi")
 H.update(gemini={"bypass": True})
 assert harness.argv("gemini", "x")[0] == ["gemini", "--approval-mode", "yolo", "--skip-trust"]
 assert harness.interactive("gemini", "go") == ["gemini", "-i", "go"] and harness.interactive("gemini", "") == ["gemini"]
@@ -78,18 +78,29 @@ assert g.gemini({"type": "message", "role": "assistant", "content": "Let me ", "
 assert g.gemini({"type": "message", "role": "assistant", "content": "look.", "delta": True}) == [{"e": "text", "delta": "look."}]
 s = g.gemini({"type": "tool_use", "tool_name": "run_shell_command", "tool_id": "t1", "parameters": {"command": "ls", "description": "List files"}})[0]
 assert s["e"] == "step" and s["title"] == "List files" and s["detail"] == "ls" and s["call"] == "Bash(ls)", s
+m = g.gemini({"type": "tool_use", "tool_name": "read_many_files", "tool_id": "t3", "parameters": {"include": ["attachments/a.txt", "b.md"]}})[0]
+assert "attachments/a.txt" in m["detail"] and "attachments/a.txt" in m["call"], m  # attach.mentions reads detail/call: a read of an attachment is hidden
 r = g.gemini({"type": "tool_result", "tool_id": "t1", "status": "success", "output": "a\nb"})[0]
 assert r["e"] == "step_done" and r["ok"] and r["out"] == "a b", r
 assert not g.gemini({"type": "tool_result", "tool_id": "t2", "status": "error", "error": {"type": "x", "message": "denied"}})[0]["ok"]
 assert g.gemini({"type": "message", "role": "assistant", "content": "pong", "delta": True})[0] == {"e": "text_reset"}  # after a tool: a new block
 assert g.gemini({"type": "error", "severity": "warning", "message": "Retrying"}) == [{"e": "status", "text": "Retrying"}]
 done = g.gemini({"type": "result", "status": "success", "stats": {"input_tokens": 1200, "output_tokens": 9, "duration_ms": 800}})[0]
-assert done == {"e": "done", "ok": True, "text": "pong", "context": 1200, "window": None, "ms": 800}, done
+assert done == {"e": "done", "ok": True, "text": "pong", "context": 0, "window": None, "ms": 800}, done  # a run's summed input isn't context
 f = Norm()
-f.gemini({"type": "error", "severity": "error", "message": "RESOURCE_EXHAUSTED: quota exceeded"})
+f.gemini({"type": "error", "severity": "error", "message": "You have exhausted your daily quota on this model."})
 bad = f.gemini({"type": "result", "status": "error", "stats": {}})[0]
 assert not bad["ok"] and "quota" in bad["text"], bad
 assert Norm().gemini({"type": "result", "status": "error", "error": {"type": "API", "message": "model not found"}})[0]["text"] == "model not found"
 import greenlight
-assert greenlight.LIMIT_RE.search("[API Error: RESOURCE_EXHAUSTED] You have exhausted your daily quota")
+assert greenlight.LIMIT_RE.search("You have exhausted your daily quota on this model.") and greenlight.LIMIT_RE.search("Your quota will reset after 3h")
+for other in ("OSError: [Errno 122] Disk quota exceeded", "grpc StatusCode.RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'reads'"):
+    assert not greenlight.LIMIT_RE.search(other), other  # someone else's quota isn't the agent's usage limit
+assert greenlight.DEAD_RE.search("API key not valid. Please pass a valid API key.") and greenlight.DEAD_RE.search("API key expired. Please renew the API key.")
+# a retry (same Norm): the new run's first delta resets the reply, not appends to the ignored one
+k = Norm()
+k.gemini({"type": "message", "role": "assistant", "content": "No response requested.", "delta": True})
+k.text = ""  # turn() before the retry
+k.gemini({"type": "init", "session_id": "uuid-2", "model": "gemini-4-neon"})
+assert k.gemini({"type": "message", "role": "assistant", "content": "real", "delta": True})[0] == {"e": "text_reset"}
 print("test_harness ok")

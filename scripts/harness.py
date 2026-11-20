@@ -22,18 +22,16 @@ H = {
     "codex": {"safe": ["-c", "sandbox_mode=workspace-write"], "bypass": ["--dangerously-bypass-approvals-and-sandbox"], "system": False},
     "opencode": {"safe": [], "bypass": ["--auto"], "system": False},
     "pi": {"safe": None, "bypass": [], "system": True},
-    # Gemini CLI: headless when stdin isn't a TTY (the text rides on stdin); no system-prompt or effort flag. In a folder
-    # it doesn't trust it drops any approval mode back to "default", so bypass also trusts the folder (--skip-trust).
-    "gemini": {"safe": ["--approval-mode", "auto_edit"], "bypass": ["--approval-mode", "yolo", "--skip-trust"], "system": False},
+    # Gemini CLI: headless when stdin isn't a TTY (the text rides on stdin); no system-prompt or effort flag. Headless in a
+    # folder it doesn't trust it refuses to start, so both modes pass --skip-trust (trust loads the folder's .gemini
+    # settings; what the agent may do is still the approval mode).
+    "gemini": {"safe": ["--approval-mode", "auto_edit", "--skip-trust"], "bypass": ["--approval-mode", "yolo", "--skip-trust"], "system": False},
 }
-# Gemini models the app offers by name. Gemini CLI passes any -m id to the API as is; gemini-4-neon isn't in its own
-# model list yet (google-gemini/gemini-cli#30385), so the account must have API access to it.
-GEMINI_MODELS = {"gemini-4-neon": "Gemini 4 Neon"}
-
-
 def route(model, default="claude"):
     """The harness that runs `model` and the model id it gets: a harness name runs its default model, gemini-* runs
-    on gemini, anything else (a Claude model, or nothing) on `default`, which gets the model only when it's claude."""
+    on gemini, anything else (a Claude model, or nothing) on `default`, which gets the model only when it's claude.
+    Gemini CLI passes any -m id to the API as is: gemini-4-neon isn't in its own model list yet
+    (google-gemini/gemini-cli#30385), so the account needs API access to it."""
     if model in H:
         return model, None
     if model and model.startswith("gemini-"):
