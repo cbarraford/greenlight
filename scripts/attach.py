@@ -200,8 +200,8 @@ def needles(chat_dir):
 
 
 def showing(line, needles):
-    """Does an output line hold an attached line: whole, or enough of its start to be it (2×KEY characters, or running to
-    where the output stops: a cut, marked … or not), or the end of one after a leading … (a tail clip)?"""
+    """Does an output line hold an attached line: whole, or enough of its start to be it (2×KEY characters, or KEY up to a
+    cut marked …), or the end of one after a leading … (a tail clip)?"""
     starts, ends = needles
     for t in {" ".join(line.split()), line}:
         stop = t.rfind("…")  # a cut: `out`'s …, `call`'s …), clip's leading …
@@ -211,7 +211,7 @@ def showing(line, needles):
                 k = KEY
                 while i + k < len(t) and k < len(n) and t[i + k] == n[k]:
                     k += 1
-                if k == len(n) or k >= 2 * KEY or i + k == len(t) or i + k == stop:
+                if k == len(n) or k >= 2 * KEY or i + k == stop:  # an unmarked cut needs the 2×KEY
                     return True
             if t.startswith("…"):
                 seg = t[1:i + KEY]
