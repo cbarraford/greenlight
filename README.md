@@ -70,7 +70,7 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 | codex | workspace-write sandbox | `--dangerously-bypass-approvals-and-sandbox` |
 | opencode | permission asks are rejected | `--auto` |
 | pi | **refuses to run** | no flags (pi has no permission gate or sandbox) |
-| gemini | `--approval-mode auto_edit` (only in a folder Gemini CLI trusts; elsewhere it asks, and headless that's a no) | `--approval-mode yolo --skip-trust` |
+| gemini | `--approval-mode auto_edit --skip-trust` (headless Gemini CLI won't start in an untrusted folder; trusting it loads that folder's `.gemini` settings) | `--approval-mode yolo --skip-trust` |
 
 Unattended work (automations, the menubar chat) runs shell commands, so in safe mode some tasks stop at a refused permission. Only set `bypass` on a machine you're comfortable letting an agent drive.
 

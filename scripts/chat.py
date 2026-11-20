@@ -334,7 +334,9 @@ class Norm:
     def gemini(self, d):
         """`gemini --output-format stream-json`: init, message (assistant deltas), tool_use, tool_result, error, result."""
         t, out = d.get("type"), []
-        if t == "message" and d.get("role") == "assistant":
+        if t == "init":  # a new run (turn()'s retries reuse this Norm): its first delta starts a fresh reply
+            self.gem_open = False
+        elif t == "message" and d.get("role") == "assistant":
             s = d.get("content") or ""
             if not d.get("delta") or not self.gem_open:  # a new reply, or a whole one
                 self.text, self.gem_open = "", True
@@ -344,6 +346,8 @@ class Norm:
         elif t == "tool_use":
             self.gem_open = False  # text after a tool is the next reply block
             name, inp = d.get("tool_name") or "tool", d.get("parameters") or {}
+            if isinstance(inp.get("include"), list):  # read_many_files: its paths, where attach.mentions and the step can see them
+                inp = {**inp, "path": " ".join(map(str, inp["include"]))}
             name = GEMINI_TOOLS.get(name, name)
             title, detail = step_title(name, inp)
             out.append(self.more({"e": "step", "id": d.get("tool_id"), "title": short(title, 80), "detail": short(detail), "call": call(name, inp)},
@@ -356,8 +360,7 @@ class Norm:
         elif t == "error":
             self.error = d.get("message")
         elif t == "result":
-            st = d.get("stats") or {}
-            self.context = st.get("input_tokens", 0) or self.context
+            st = d.get("stats") or {}  # its input_tokens sum every request of the run, so they aren't the context size: none shown
             ok = d.get("status") == "success"
             text = self.text if ok else (d.get("error") or {}).get("message") or getattr(self, "error", None) or self.text or "Gemini CLI failed"
             out.append({"e": "done", "ok": ok, "text": text, "context": self.context, "window": None, "ms": st.get("duration_ms")})

@@ -4597,7 +4597,7 @@ struct SettingsView: View {
     }
     /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one (it runs on Gemini CLI there).
     func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        Picker(label, selection: v) { ForEach(models.filter { ["claude", "gemini"].contains(harnessOf($0.1)) && $0.1.contains("-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+        Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
     }
 
     // MARK: This Mac
@@ -4985,7 +4985,7 @@ struct SettingsView: View {
             row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
                 Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "gemini") } }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
