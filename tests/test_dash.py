@@ -379,6 +379,10 @@ _b = lambda n, o, st="freeform": {"name": n, "project": "o/g", "path": "/w/" + n
 _lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))
 assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
                                      "(1 more finished)"], dash.board()
+os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only
+assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
+assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]
+del os.environ["GREENLIGHT_ONLY"]
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")

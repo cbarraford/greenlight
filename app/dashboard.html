@@ -1977,7 +1977,7 @@ function pickProjects(list, only, here = true){
 }
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
-  focus: () => ({page: ui.page?.name || "", view: ui.view}),  // for Chief: what this window shows
+  focus: () => ({page: ui.page?.name || "", view: ui.view, paths: ui.paths}),  // for Chief: what this window shows (paths: its projects' workspaces, null for all)
   pick(names){ ui.picked = new Set(arr(names)); render() },  // the hexes Chief's last reply is about; [] clears
   paths(r){ ui.paths = r; render() },  // the projects picked: their worktrees' paths, or null for all
   pickProjects,  // L1's project chip

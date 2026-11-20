@@ -28,6 +28,9 @@ PROMPT = (
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
     "Replies render as markdown in a narrow popover: keep them short, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
+    "After everything else (even the Options line), end every reply with `[hexes: name, name]`: the workspaces the reply is about, "
+    "by their exact board names, or `[hexes:]` when none. The app hides the line and lights those workspaces' hexes on the dashboard in "
+    "every window until your next reply: it's how you highlight hexes when asked, and the only way. "
     "Each message runs in a process that exits when you reply, so background tasks, Monitor and ScheduleWakeup die "
     "at the end of the turn: never use run_in_background, Monitor or ScheduleWakeup here. Leave follow-up watching to "
     "the Greenlight automation, or record it with `greenlight.py note <workspace> \"...\"`. "
@@ -55,11 +58,14 @@ def board_note():
         b = dash.board()
     except Exception:  # ponytail: no scan yet, or it's mid-write: the chat goes on without the board
         return ""
+    if not b and os.environ.get("GREENLIGHT_ONLY"):
+        b = "(no workspaces in this window)"  # not nothing: the session would go on with the last window's
     f = os.path.join(DIR, "board")  # the board the session last saw: an unchanged one isn't sent again
     if not b or (os.path.exists(f) and open(f).read() == b):
         return ""
     open(f, "w").write(b)
-    return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}):\n{b}\n\n"
+    scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
+    return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{b}\n\n"
 WRAP = "USER MESSAGE (reply to this): "
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
@@ -407,6 +413,8 @@ def main():
         else:
             turn("/compact", opt("--model"), None, compact=True)
     else:
+        if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
+            os.environ["GREENLIGHT_ONLY"] = opt("--only")
         turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"))
 
 
