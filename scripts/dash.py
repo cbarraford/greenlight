@@ -225,11 +225,24 @@ def tree_signoff(path):
 def board(only=None):
     """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
     what to do. Blocks on you first, then your moves, then the rest; finished ones only counted. `only` (else $GREENLIGHT_ONLY,
-    a JSON list the chat sets): just these worktree paths, the window the user is in."""
+    JSON the chat sets): the window the user is in, {"paths": its worktrees, "repos": its projects' repos} (a bare list: paths only).
+    A workspace in one of its repos counts even when the window listed its worktrees before that one existed.
+    Like the dashboard, the scan is joined with a live `worktree ps`: a workspace created since the scan is on the board at once."""
     if only is None and os.environ.get("GREENLIGHT_ONLY"):
         only = json.loads(os.environ["GREENLIGHT_ONLY"])
     rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
-    rows = rows if only is None else [r for r in rows if r.get("path") in only]
+    try:
+        live = live_agents()
+    except Exception:  # noqa: BLE001 - the ADE isn't answering: the scan alone
+        live = None
+    if live is not None:
+        rows = live_rows(rows, live)
+        for r in rows:
+            if ag := live[r["id"]][1]:  # the live agent, not the scan's: one started since shows as working
+                r["agent"] = {**r["agent"], "state": ag.get("state", r["agent"]["state"])}
+    if only is not None:
+        paths, repos = (only, []) if isinstance(only, list) else (only.get("paths") or [], only.get("repos") or [])
+        rows = [r for r in rows if r.get("path") in paths or r.get("repo") and r["repo"] in repos]
     lines, done = [], 0
     for r in rows:
         st, why = state_of(r, blk)
@@ -423,13 +436,14 @@ def live_agents():
     return out
 
 
-def snapshot(full=False):  # full: the agent's whole last message (pages); the 5s stream keeps the tail
-    snap = json.loads((greenlight.STATE / "last.json").read_text())
-    live = live_agents()
-    now = time.time() * 1000
-    rows = [r for r in snap["rows"] if r["id"] in live]  # drop workspaces deleted since the last scan
+def live_rows(rows, live):
+    """The scan's rows joined with a live `worktree ps`: workspaces deleted since the scan dropped, and ones it hasn't seen added
+    as goal-only rows: those on neither GitLab nor GitHub (greenlight.py skips them), and ones created since the scan (a workspace
+    `ade worktree create` just started shows up at once, not at the next scan). Each row gets `repo`, the ADE's repo name: what
+    a window's projects are made of."""
+    rows = [r for r in rows if r["id"] in live]
     known = {r["id"] for r in rows}
-    for wid, (w, ag) in live.items():  # workspaces on neither GitLab nor GitHub, with an agent or a goal (greenlight.py skips them)
+    for wid, (w, ag) in live.items():  # with an agent or a goal
         if wid in known or w.get("isMainWorktree") or w.get("isArchived") or not w.get("branch") \
                 or not (w.get("agents") or w.get("comment")):
             continue
@@ -437,6 +451,16 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                      "goal": (w.get("comment") or "").strip(), "mr": None,
                      "next": {"step": "freeform", "owner": "parked","action": "no lifecycle: goal only"},
                      "agent": {"state": "none", "type": None, "last": ""}})
+    for r in rows:
+        r["repo"] = live[r["id"]][0].get("repo") or ""
+    return rows
+
+
+def snapshot(full=False):  # full: the agent's whole last message (pages); the 5s stream keeps the tail
+    snap = json.loads((greenlight.STATE / "last.json").read_text())
+    live = live_agents()
+    now = time.time() * 1000
+    rows = live_rows(snap["rows"], live)
     pucks, blk = [], blocking.cached()
     for r in rows:
         w, ag = live[r["id"]]
@@ -451,7 +475,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         mr = r.get("mr") or {}
         page = cached_page(r["name"])
         pucks.append({
-            "name": r["name"], "path": r["path"], "project": r["project"], "goal": r["goal"], "state": state, "why": why,
+            "name": r["name"], "path": r["path"], "project": r["project"], "repo": r["repo"], "goal": r["goal"], "state": state, "why": why,
             "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"],
             # the live goal, not last.json's: a park from the dock shows up before the next scan
             "owner": r["next"]["owner"], "hidden": bool(greenlight.PARKED_RE.search(w.get("comment") or "")
