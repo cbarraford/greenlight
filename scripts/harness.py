@@ -10,10 +10,18 @@ config.json `harnesses.<name>.bypass: true` gives that one full access (unattend
 needs it: the chat and automations run shell commands).
 pi has no permission gate at all, so it runs only once you set its bypass.
 `harnesses.<name>.bin` overrides where the binary is.
+
+With config.json `guard` on, every claude run gets guard.py as a PreToolUse hook (`--settings`): a push, a forge
+write, network egress, a delete outside the worktree or a secret read is judged against the goal and the invariants,
+and one it can't clear pings the menubar app and waits, or, in the chat's streamed turns, is refused until the user
+says allow in the chat (see guard.py). The other harnesses have no hook:
+codex's own sandbox blocks the network in safe mode; wrap a command in `guard.py run --` to gate it by hand.
 """
+import json
 import os
 import shutil
 
+import guard
 from greenlight import CONFIG
 
 # safe/bypass: permission args. system: has a system-prompt flag (else it rides in the first message).
@@ -60,7 +68,10 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     opt = lambda flag, v: [flag, v] if v else []
     b = binary(name)
     if name == "claude":
-        cmd = [b, "-p", *perms, *(["--output-format", "stream-json", "--verbose", "--include-partial-messages"] if stream else []),
+        g = CONFIG.get("guard")
+        g = {} if g is True else g
+        hook = ["--settings", json.dumps(guard.settings(g, "chat" if stream else "ping"))] if isinstance(g, dict) and g.get("on", True) else []
+        cmd = [b, "-p", *perms, *hook, *(["--output-format", "stream-json", "--verbose", "--include-partial-messages"] if stream else []),
                *opt("--append-system-prompt", system), *opt("--model", model), *opt("--effort", effort), *opt("--resume", sid)]
     elif name == "codex":
         eff = {"xhigh": "high", "max": "high"}.get(effort, effort)
