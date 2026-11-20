@@ -2751,7 +2751,10 @@ final class Core: ObservableObject {
         questionsURL = session == 0 ? questionsFile : support.appendingPathComponent("questions-\(session).json")
         msgs = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcriptFile)))?.map(Msg.init)) ?? msgs
         questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
+        context = ud.integer(forKey: meterKeys.context); window = ud.integer(forKey: meterKeys.window)
     }
+    /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
+    var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
     var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(greenlightHome)/chat-\(session) \(py)/chat.py" }
     var light: ([String]) -> Void = { delegate.pick($0) }  // the hexes a reply is about, lit in this chat's dashboard
     var subs = Set<AnyCancellable>(), mirroring = false
@@ -2765,7 +2768,6 @@ final class Core: ObservableObject {
         }
         both(\.model, \.$model); both(\.effort, \.$effort); both(\.name, \.$name); both(\.verbose, \.$verbose)
         both(\.liveLine, \.$liveLine); both(\.vim, \.$vim); both(\.vimStart, \.$vimStart); both(\.look, \.$look); both(\.sent, \.$sent)
-        // ponytail: context and window are UserDefaults too, so the last chat to reply sets the meter the main one starts with; per-session keys if that misleads
         $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
     }
     lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
@@ -2867,6 +2869,7 @@ final class Core: ObservableObject {
             UserDefaults.standard.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
                 msgs.append(Msg(.note, isClaude ? "Back to the Claude conversation." : "\(modelName) keeps its own conversation, separate from Claude's."))
+                context = 0; window = 0  // the meter was the other harness's: tokens only until this one reports
             }
         }
     }
@@ -2881,8 +2884,8 @@ final class Core: ObservableObject {
     @Published var nextModel = UserDefaults.standard.string(forKey: "nextModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(nextModel, forKey: "nextModel") } }
     @Published var nextEffort = UserDefaults.standard.string(forKey: "nextEffort") ?? "low" { didSet { UserDefaults.standard.set(nextEffort, forKey: "nextEffort") } }
     @Published var designParallel = UserDefaults.standard.object(forKey: "designParallel") as? Int ?? 3 { didSet { UserDefaults.standard.set(designParallel, forKey: "designParallel") } }
-    @Published var context = UserDefaults.standard.integer(forKey: "context") { didSet { UserDefaults.standard.set(context, forKey: "context") } }
-    @Published var window = UserDefaults.standard.integer(forKey: "window") { didSet { UserDefaults.standard.set(window, forKey: "window") } }
+    @Published var context = 0 { didSet { ud.set(context, forKey: meterKeys.context) } }  // init reads this chat's
+    @Published var window = 0 { didSet { ud.set(window, forKey: meterKeys.window) } }  // 0: unknown, the meter shows tokens only
     @Published var tps = 0.0
     @Published var outTok = 0  // this run's output tokens, for the live line
     @Published var liveLine = ud.object(forKey: "liveLine") as? Bool ?? true { didSet { ud.set(liveLine, forKey: "liveLine") } }
@@ -3278,7 +3281,7 @@ final class Core: ObservableObject {
         picks += 1; light([])  // nor lit anything
         if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
-        context = 0
+        context = 0; window = 0  // the next harness reports its own window
     }
 
     func stop() {
@@ -3334,10 +3337,11 @@ final class Core: ObservableObject {
         case "done":
             r.gotDone = true
             if let c = j["context"] as? Int, c > 0 { context = c }
-            if let w = j["window"] as? Int, w > 0 { window = w }
+            let ok = j["ok"] as? Bool ?? false, w = j["window"] as? Int ?? 0
+            if w > 0 || ok { window = w }  // a good turn without a window (codex unread, opencode, pi): unknown, not the last harness's
             var text = j["text"] as? String ?? ""
             if r.question == "Compact context" { text = text.isEmpty ? "Compacted. Context is now \(kfmt(context))." : text }
-            finish(r, ok: j["ok"] as? Bool ?? false, text: r.stopping ? "Stopped." : text)
+            finish(r, ok: ok, text: r.stopping ? "Stopped." : text)
         default: break
         }
     }
@@ -6988,6 +6992,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         l.c.queue = []; l.c.proc?.terminate(); l.c.run = nil  // its turn's late result writes nothing (onExit checks run)
         ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(greenlightHome) && rm -rf chat-\(l.id)")  // cd: a home with a space fails, not rm's word split
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
+        [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // a later window with this id starts empty
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")

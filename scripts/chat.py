@@ -23,7 +23,7 @@ DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.g
 CHAT = os.path.basename(DIR.rstrip("/")) if os.environ.get("CHAT_DIR") else None  # a second L1 window's Chief (CHAT_DIR=chat-<n>): its questions are its own in the decision record
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
-CODEX_WINDOW = 272000  # ponytail: codex doesn't report its window; fixed guess for the meter
+CODEX_SESSIONS = os.path.join(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions")
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
@@ -152,6 +152,35 @@ def call(name, inp):
     return f"{name.split('__')[-1]}({short(a, 100)})"
 
 
+def codex_usage(thread, tail=1 << 20):
+    """(context, window) from the thread's rollout log, else (None, None).
+    `codex exec --json`'s turn.completed carries the thread's cumulative input, not the context; the rollout's last
+    token_count has the latest request's (last_token_usage, what Codex's own footer uses) and the usable window.
+    ponytail: the rollout is Codex's internal format; anything unexpected falls back to tokens-only, never a wrong %."""
+    if not thread:
+        return None, None
+    try:
+        import glob
+        f = max(glob.glob(os.path.join(CODEX_SESSIONS, "*", "*", "*", f"rollout-*-{glob.escape(thread)}.jsonl")), key=os.path.getmtime)
+        with open(f, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(f) - tail))
+            lines = fh.read().splitlines()
+        for line in reversed(lines):
+            if b'"token_count"' not in line:
+                continue
+            try:
+                p = json.loads(line).get("payload") or {}
+            except ValueError:
+                continue  # the tail's cut first line
+            info = p.get("info") if p.get("type") == "token_count" else None
+            if info and (info.get("last_token_usage") or {}).get("total_tokens"):
+                w = info.get("model_context_window")
+                return info["last_token_usage"]["total_tokens"], w if isinstance(w, int) and w > 0 else None
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None, None
+
+
 class Norm:
     """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
 
@@ -163,6 +192,7 @@ class Norm:
         self.last_tps = 0.0
         self.context = 0
         self.window = None
+        self.thread = None  # codex's thread id, for its rollout log
         self.text = ""  # last text block, the fallback reply
         self.reply = None  # what the turn ended on, when it ended well: a question if it closes with an Options line
         self.cmds = {}  # Bash tool_use id → command, so a background shell can be found and stopped
@@ -277,7 +307,9 @@ class Norm:
 
     def codex(self, d):
         t, it, out = d.get("type"), d.get("item", {}), []
-        if t == "item.started" and it.get("type") == "command_execution":
+        if t == "thread.started":
+            self.thread = d.get("thread_id") or self.thread
+        elif t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
             out.append(self.more({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
         elif t == "item.completed" and it.get("type") == "command_execution":
@@ -293,10 +325,11 @@ class Norm:
         elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
             out.append({"e": "status", "text": short(d["message"], 80)})
         elif t == "turn.completed":
-            self.context = d.get("usage", {}).get("input_tokens", 0)
-            out.append({"e": "done", "ok": True, "text": self.text, "context": self.context, "window": CODEX_WINDOW, "ms": None})
+            ctx, self.window = codex_usage(self.thread)
+            self.context = ctx or d.get("usage", {}).get("input_tokens", 0)  # unread: the cumulative input, shown as tokens only (no window)
+            out.append({"e": "done", "ok": True, "text": self.text, "context": self.context, "window": self.window, "ms": None})
         elif t in ("turn.failed", "error"):
-            out.append({"e": "done", "ok": False, "text": str(d.get("error") or d.get("message")), "context": self.context, "window": CODEX_WINDOW, "ms": None})
+            out.append({"e": "done", "ok": False, "text": str(d.get("error") or d.get("message")), "context": self.context, "window": self.window, "ms": None})
         return out
 
     def opencode(self, d):
