@@ -129,7 +129,7 @@ def merge_how(cmd):
 
 
 def moves(r, blk=None):
-    """Both hover cards' buttons for this row's open MR, most urgent first: conflicts › ci › threads (your MR's fixes) ›
+    """Both hover cards' (and the page's) buttons for this row's open MR, most urgent first: conflicts › ci › threads (the MR's fixes) ›
     review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
     draft, when that waits on you). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
@@ -141,7 +141,7 @@ def moves(r, blk=None):
         return []
     mine = mr.get("role") == "author"
     review = nxt.get("owner") == "me" and (nxt.get("step") == "review" or "signoff" in (nxt.get("cmd") or []) or "review it" in nxt.get("action", ""))
-    on = {"conflicts": mine and mr.get("conflicts"), "ci": mine and mr.get("pipeline") == "failed", "threads": mine and mr.get("todo_threads"),
+    on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]
@@ -163,7 +163,8 @@ def moves(r, blk=None):
     if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "ready"})
     for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
-        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) else None
+        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) \
+            and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
         if isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1])):
             m["sha"], m["auto"] = mr.get("sha"), True if m["kind"] == "merge" else f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]}\n\n{m['prompt']}"
     return out

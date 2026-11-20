@@ -178,6 +178,7 @@ main.ov{background:var(--canvas)}
 /* Chief's picks: the workspaces its last reply is about get an accent ring, the rest of the hive steps back */
 .picking .cell:not(.picked):not(.dim),.picking .hub:not(.picked):not(.dim){opacity:.4;transition:opacity .2s}
 .cell.picked .halo,.hub.picked .halo,.fp.picked .halo{opacity:1;stroke:var(--accent);stroke-width:5}
+#bar .mdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}  /* a fix button's kind, as in the hover card's Also row */
 .cell.indock .halo,.hub.indock .halo,.fp.indock .halo{opacity:1;stroke:var(--blue);stroke-width:5} .lrow.indock{border-color:var(--blue)}  /* in the chat's context dock */
 .cell .hcap{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:1px;font-size:11px;line-height:14px;color:var(--text2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere} .cell.sel .hcap{color:var(--text);font-weight:600}
 .hx{position:relative}
@@ -1015,6 +1016,11 @@ function topBar(){
     bar.append(h("button", {class:"btn back", onclick: closePage}, icon("back"), "Workspaces"),
       h("span", {class:"muted", "aria-hidden":"true"}, "›"), h("span", {class:"mono bcrumb", title: ui.page.name}, ui.page.name),
       h("span", {style:"flex-grow:1"}));
+    const busy = p && p.agent && p.agent.state === "working" ? "Its agent is working" : null;
+    if (p && mr.iid) for (const y of arr(p.moves).filter(y => MOVE[y.kind] && y.kind !== "review")) {  // the MR's fixes, as on the hover card: threads, CI, conflicts
+      const [l, sub, short] = MOVE[y.kind](mr, y);
+      bar.append(h("button", {class:"btn", disabled: !!busy, title: busy || `${l}\n${sub}`, onclick: () => runFor(p.name, y.prompt)}, h("i", {class:"mdot", style:"background:" + DOT[y.kind]}), y.kind === "threads" ? l : short));
+    }
     if (p) bar.append(h("button", {class:"btn", title:"Open this workspace in the Basement (B1)", onclick: () => toBasement(p.name)}, h("span", {class:"mono muted"}, "›_"), "Basement"));
     if (mr.web_url) bar.append(h("a", {class:"btn pri", href: mr.web_url}, `Open ${mrRef(mr)} in ${forgeName(mr)}`));
     return;
