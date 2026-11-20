@@ -3287,7 +3287,7 @@ struct SettingsView: View {
                 }
             }
         }
-        shortcuts("In the app", [("New window", "⌘N"), ("Settings", "⌘,"), ("Show or hide chat", "⇧⌘C"),
+        shortcuts("In the app", [("New window", "⌘N"), ("Settings", "⌘,"), ("Show or hide chat", "⇧⌘C"), ("Live chat on or off (Esc leaves)", "⇧⌘L"),
                                  ("Show or hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R"), ("Up or down a floor", "⌘↑|⌘↓")])
         shortcuts("While typing in the chat", [("Search chat history", "⌃R"), ("Previous or next sent message", "↑|↓"), ("New line", "⇧↩")])
         shortcuts("In any app", [("Show or hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
@@ -4706,6 +4706,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return self.greenlight.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
+            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on,  // Esc leaves live chat (sheets keep theirs)
+               !self.greenlight.settingsOpen, !self.greenlight.inboxOpen { self.greenlight.voice.stopAll(); return nil }
             guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
                   e.keyCode == kVK_UpArrow || e.keyCode == kVK_DownArrow,
                   let w = e.window, let f = self.floorGo[ObjectIdentifier(w)] else { return e }
@@ -5118,7 +5120,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
-                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"),
+                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
         NSApp.mainMenu = bar
@@ -5132,6 +5134,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.palette(true)")
     }
     var lastToggle = Date.distantPast
+    @objc func appLive() {  // ⇧⌘L: live chat on (showing the chat first) or off
+        if !greenlight.voice.on { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
+        greenlight.voice.toggle()
+    }
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
         if Date().timeIntervalSince(lastToggle) < 0.3 { return }
         lastToggle = Date()
