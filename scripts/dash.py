@@ -464,8 +464,8 @@ def tree_new(path, o):
         return {"error": "the worktree was made but its folder didn't come back; refresh the sidebar"}
     cmd = (repo_cfg(main_of(path)) or {}).get("setup")
     if o.get("setup") and o["setup"] == cmd and (err := hook(cmd, new)):
-        return {"ok": True, "path": new, "warn": f"Setup failed ({err}); no agent started"}
-    out = {"ok": True, "path": new}
+        return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
+    out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
     if o.get("agent") and wid:
         r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}", *(["--prompt", goal] if goal else []))
         if s := (r.get("terminal") or {}).get("session"):
