@@ -8,6 +8,7 @@
 // No @State/@Observable: those are macros, and the Command Line Tools swiftc has no SwiftUI macro plugin.
 import AppKit
 import Combine
+import CoreAudio
 import AVFoundation
 import Carbon
 import FoundationModels
@@ -1513,6 +1514,7 @@ final class Voice: NSObject, ObservableObject {
                 return
             }
             self.isLive = live
+            LivePreview.shared.stop()  // a voice preview would talk over voice mode
             do { try self.startEngine() } catch {
                 // Right after the permission prompts the input isn't ready yet (AVAudio -10875): try again shortly, so one click is enough
                 if tries > 1 { self.engine.stop(); return DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.start(tries: tries - 1) } }
@@ -1814,7 +1816,7 @@ final class Voice: NSObject, ObservableObject {
     /// GPT-Live can't go on: say why and end voice mode (no other voice takes over, so two never talk at once).
     func liveFailed(_ why: String) {
         guard on else { return }
-        core?.msgs.append(Msg(.note, "Voice mode stopped: GPT-Live \(why). Settings → Chat & voice → Test checks it."))
+        core?.msgs.append(Msg(.note, "Voice mode stopped: GPT-Live \(why). Settings → Chat & voice → GPT-Live voice → ▶ checks it."))
         stopAll()
     }
 
@@ -2008,8 +2010,8 @@ let liveRule = "You are the voice of Chief, an assistant whose answers come from
     + "Delegate every request the user makes to the backend, including small talk, goodbyes, and asking you to stop or to reset: "
     + "never answer from your own knowledge. While you wait, at most a few words of acknowledgement. "
     + "When given text in <say> tags, read it aloud exactly, word for word, with nothing added, then stop. Stop speaking when the user interrupts."
-func liveStart(voice: String) -> [String: Any] {
-    ["type": "session.start", "session": ["model": LiveVoice.model, "instructions": liveRule,
+func liveStart(voice: String, instructions: String = liveRule) -> [String: Any] {
+    ["type": "session.start", "session": ["model": LiveVoice.model, "instructions": instructions,
                                           "audio": ["format": ["type": "audio/pcm", "rate": 24000], "output": ["voice": voice]]]]
 }
 /// Chief's lines, to be read exactly under the hand-off they answer (the prompting guide's read-aloud wording, plus: "(exit 2)" was
@@ -2049,7 +2051,7 @@ final class LiveVoice {
     let q = DispatchQueue(label: "live")
     var task: URLSessionWebSocketTask?, pending = Data(), on: ((LiveEvent) -> Void)?
 
-    func open(_ key: String, voice: String = LiveVoice.voice, _ on: @escaping (LiveEvent) -> Void) {
+    func open(_ key: String, voice: String = LiveVoice.voice, instructions: String = liveRule, _ on: @escaping (LiveEvent) -> Void) {
         close()
         var r = URLRequest(url: URL(string: "wss://api.openai.com/v1/live/sessions")!)
         r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -2058,7 +2060,7 @@ final class LiveVoice {
         q.sync { task = t; pending = Data() }
         self.on = on
         t.resume()
-        send(liveStart(voice: voice))
+        send(liveStart(voice: voice, instructions: instructions))
         receive(t)
     }
     private func receive(_ t: URLSessionWebSocketTask) {
@@ -2114,21 +2116,146 @@ final class LiveVoice {
         }
         return "lost the connection (\(err.localizedDescription))"
     }
-    /// Settings' Test: a session starts with this key and voice. It can't say a line on its own (it speaks only to you, in voice mode).
-    static func check(_ key: String?, _ done: @escaping (String?) -> Void) {
-        guard let key, !key.isEmpty else { return done("No OpenAI key, or the Keychain didn't let Greenlight read it: Set key… again") }
+}
+
+// MARK: Settings' GPT-Live voice preview
+//
+// GPT-Live has no text-to-speech endpoint, and OpenAI's TTS has only two of its voices (marin, cedar), so a preview is a short session
+// of its own. Told to speak first, it says one line with no hand-off. It speaks only while it hears something, so it hears silence.
+// Measured 2026-11-20: 3 of 3 sessions said the line exactly, with the first audio ~1.9 s after opening.
+
+let livePreviewLine = "Hello. This is how I sound."
+let livePreviewRule = "You are a voice preview. As soon as the session starts, before the user says anything, say exactly: \(livePreviewLine) Then stay silent."
+
+/// Which of a preview's audio to play, and when it's over: nothing before the first speech (GPT-Live streams silence), then all of it
+/// until 0.8 s of quiet, or 8 s of it in all (it shouldn't ramble, but a preview stays short).
+struct PreviewTrack {
+    var spoke = false, quiet = 0.0, length = 0.0
+    mutating func take(_ pcm: Data) -> (play: Bool, done: Bool) {
+        let loud = audible(pcm), secs = Double(pcm.count) / 48000
+        if !spoke { guard loud else { return (false, false) }; spoke = true }
+        quiet = loud ? 0 : quiet + secs
+        length += secs
+        return (true, quiet > 0.8 || length >= 8)
+    }
+}
+
+/// Whether the default output device is muted (then a preview isn't worth a session).
+func outputMuted() -> Bool {
+    var dev = AudioObjectID(0), size = UInt32(MemoryLayout<AudioObjectID>.size)
+    var a = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, &size, &dev) == noErr else { return false }
+    var m = UInt32(0); size = UInt32(MemoryLayout<UInt32>.size)
+    a = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute, mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+    return AudioObjectGetPropertyData(dev, &a, 0, nil, &size, &m) == noErr && m != 0
+}
+
+/// Picking a GPT-Live voice in Settings (or Test) says livePreviewLine in it. One preview at a time: a new pick, Stop, closing Settings,
+/// changing the speaking voice or starting voice mode ends the last one. None while voice mode is on (that would talk over it) or
+/// while the Mac is muted. Its engine is output-only: the mic isn't touched.
+final class LivePreview: ObservableObject {
+    static let shared = LivePreview()
+    enum Phase: Equatable { case idle, loading(String), playing(String), played(String), skipped(String), failed(String, String) }
+    @Published private(set) var phase = Phase.idle
+    private(set) var said = "", gen = 0, opened = 0
+    private var live: LiveVoice?, engine: AVAudioEngine?, node: AVAudioPlayerNode?, conv: AVAudioConverter?, feed: Timer?
+    private(set) var scheduled = 0, played = 0
+    private var track = PreviewTrack(), closed = false
+    private let out = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
+    var busy: Bool { if case .loading = phase { return true }; if case .playing = phase { return true }; return false }
+
+    /// What Settings shows under the voice picker.
+    var hint: String? {
+        switch phase {
+        case .idle: return nil
+        case .loading(let v): return "Getting \(v.capitalized)’s voice…"
+        case .playing(let v): return "Playing \(v.capitalized)…"
+        case .played(let v): return "That was \(v.capitalized). Voice mode uses it from its next start."
+        case .skipped(let why): return why
+        case .failed(let v, let why): return "Couldn’t preview \(v.capitalized): \(why)"
+        }
+    }
+
+    /// key is read only once a quick run through the menu settles (each pick would otherwise open a session).
+    func play(_ voice: String, voiceOn: Bool, muted: Bool = outputMuted(), settle: Double = 0.35, key: @escaping () -> String? = { keychain("openai") }) {
+        stop()
+        Speech.shared.tester?.stop()  // an earlier Test line in another voice
+        if voiceOn { return phase = .skipped("Voice mode is on, so no preview (it would talk over it). \(voice.capitalized) takes over next time voice mode starts.") }
+        if muted { return phase = .skipped("This Mac’s sound is muted: unmute it, then press ▶ to hear \(voice.capitalized).") }
+        let g = gen
+        phase = .loading(voice)
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in self?.begin(voice, key, g) }
+    }
+    func stop() {
+        gen += 1
+        teardown()
+        phase = .idle
+    }
+
+    private func begin(_ voice: String, _ key: () -> String?, _ g: Int) {
+        guard g == gen else { return }
+        guard let k = key(), !k.isEmpty else { return fail(voice, "it needs an OpenAI key: Set key… above") }
+        guard g == gen else { return }  // stopped while the Keychain asked
+        let e = AVAudioEngine(), n = AVAudioPlayerNode()
+        e.attach(n); e.connect(n, to: e.mainMixerNode, format: out)
+        do { try e.start() } catch { return fail(voice, "the audio output didn’t start (\(error.localizedDescription))") }
+        n.play()
+        engine = e; node = n; track = PreviewTrack(); said = ""; scheduled = 0; played = 0; closed = false; opened += 1
         let l = LiveVoice()
-        var over = false
-        let end = { (why: String?) in if !over { over = true; l.close(); done(why) } }
-        l.open(key) { e in
-            switch e {
-            case .started: end(nil)
-            case .failed(_, let m): end("GPT-Live: \(m)")
-            case .closed(let why): end("GPT-Live \(why)")
-            default: break
+        live = l
+        l.open(k, voice: voice, instructions: livePreviewRule) { [weak self] ev in self?.on(ev, voice, g) }
+        let silence = AVAudioPCMBuffer(pcmFormat: l.fmt, frameCapacity: 2400)!  // zeroed: 100 ms of quiet
+        silence.frameLength = 2400
+        let t = Timer(timeInterval: 0.1, repeats: true) { _ in l.mic(silence) }
+        RunLoop.main.add(t, forMode: .common)  // and while the voice menu is open
+        feed = t
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            if let self, self.gen == g, !self.track.spoke { self.fail(voice, "GPT-Live didn’t speak within 12 s") }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.gen == g, self.busy { self.finish(voice) } }  // a lost playback callback
+    }
+    private func on(_ e: LiveEvent, _ voice: String, _ g: Int) {
+        guard g == gen else { return }
+        switch e {
+        case .said(let d): said += d
+        case .audio(let d): audio(d, voice, g)
+        case .failed(_, let m): if !track.spoke { fail(voice, "GPT-Live: \(m)") }  // e.g. "Voice session access denied." for a voice it lacks
+        case .closed(let why): if !track.spoke { fail(voice, "GPT-Live \(why)") } else { closeSession(voice) }
+        default: break
+        }
+    }
+    private func audio(_ d: Data, _ voice: String, _ g: Int) {
+        guard !closed else { return }
+        let (play, done) = track.take(d)
+        if play, let n = node, let b = Speech.shared.buffer(d) {
+            if conv == nil { conv = AVAudioConverter(from: b.format, to: out) }
+            if let c = conv, let o = convert(b, c, out) {
+                if phase == .loading(voice) { phase = .playing(voice) }
+                scheduled += 1
+                n.scheduleBuffer(o, completionCallbackType: .dataPlayedBack) { [weak self] _ in DispatchQueue.main.async {
+                    guard let self, self.gen == g else { return }
+                    self.played += 1
+                    if self.closed && self.played >= self.scheduled { self.finish(voice) }
+                } }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { end("GPT-Live didn't start a session in 12 s") }
+        if done { closeSession(voice) }
+    }
+    /// The line is over: no more audio from it, and the session goes; what's queued still plays out.
+    private func closeSession(_ voice: String) {
+        guard !closed else { return }
+        closed = true
+        feed?.invalidate(); feed = nil
+        live?.close(); live = nil
+        if played >= scheduled { finish(voice) }
+    }
+    private func finish(_ voice: String) { teardown(); phase = .played(voice) }
+    private func fail(_ voice: String, _ why: String) { NSLog("GPT-Live preview: %@", why); teardown(); phase = .failed(voice, why) }
+    private func teardown() {
+        feed?.invalidate(); feed = nil
+        live?.close(); live = nil
+        node?.stop(); engine?.stop(); node = nil; engine = nil; conv = nil
+        closed = true
     }
 }
 
@@ -3537,6 +3664,7 @@ struct SettingsWindowView: View {
 /// Settings: a sidebar of panes, the pane, and a footer with Done. Its own light/dark (the header's toggle), from lightTheme or darkTheme.
 struct SettingsView: View {
     @ObservedObject var c: Core
+    @ObservedObject var preview = LivePreview.shared
     @StateObject var rs = RulesStore()
     /// (pane, SF Symbol, words the sidebar's search also matches). This Mac's panes, then greenlight's on its host.
     static let mac = [("General", "slider.horizontal.3", "startup opens dock icon assistant name"),
@@ -3608,7 +3736,7 @@ struct SettingsView: View {
             .environment(\.colorScheme, theme.dark ? .dark : .light).tint(accent)
             .onAppear { rs.load(); rs.projs = delegate.savedProjects }
             .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
-            .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects }
+            .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
     }
 
     var foot: (String, String) {
@@ -4009,7 +4137,7 @@ struct SettingsView: View {
                 Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
             }
             row("Speaking voice", Speech.shared.status.isEmpty ? (Speech.shared.kind == "live" ? "OpenAI's GPT-Live 1.1 holds the conversation: it hears you, hands each request to \(c.name) and reads its answer. About $0.05 a minute while voice mode is on; if it fails, voice mode stops and says why (no Apple voice standing in)." : "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice.") : Speech.shared.status) {
-                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {
+                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); preview.stop(); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {
                     ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
                 }.labelsHidden().frame(width: menuWidth)
             }
@@ -4020,8 +4148,16 @@ struct SettingsView: View {
             } } }
             if Speech.shared.kind == "live" { dependent(off: false) {
                 row("OpenAI key", "Stored in your Keychain; the same key as the OpenAI Whisper engine.") { Button("Set key…") { delegate.setKey() } }
-                row("GPT-Live voice", "Fixed for each session: a new one takes effect next time voice mode starts.") {
-                    Picker("GPT-Live voice", selection: Binding(get: { LiveVoice.voice }, set: { ud.set($0, forKey: "liveVoice"); c.voiceTest = ""; c.objectWillChange.send() })) {
+                row("GPT-Live voice", preview.hint ?? "Picking one says “\(livePreviewLine)” in it. Fixed for each session: a new one takes effect next time voice mode starts.") {
+                    if case .loading = preview.phase { ProgressView().controlSize(.small).accessibilityLabel("Getting the voice") }
+                    Button { preview.busy ? preview.stop() : preview.play(LiveVoice.voice, voiceOn: c.voice.on) } label: {
+                        Image(systemName: preview.busy ? "stop.fill" : "play.fill").frame(width: 14)
+                    }.help(preview.busy ? "Stop the preview" : "Hear this voice").accessibilityLabel(preview.busy ? "Stop the preview" : "Hear this voice")
+                    Picker("GPT-Live voice", selection: Binding(get: { LiveVoice.voice }, set: {
+                        guard $0 != LiveVoice.voice else { return }
+                        ud.set($0, forKey: "liveVoice"); c.voiceTest = ""; c.objectWillChange.send()
+                        preview.play($0, voiceOn: c.voice.on)
+                    })) {
                         ForEach(LiveVoice.voices, id: \.self) { Text($0.capitalized).tag($0) }
                     }.labelsHidden().frame(width: menuWidth)
                 }
@@ -4032,14 +4168,11 @@ struct SettingsView: View {
                     TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice"); Speech.shared.warm() })).frame(width: menuWidth)
                 }
             } }
-            if Speech.shared.kind != "apple" { dependent(off: false) {
-                row("Test the voice", c.voiceTest.isEmpty ? (Speech.shared.kind == "live" ? "Starts a GPT-Live session with this key and voice, and shows why if it can't. (It speaks only in voice mode, once it hears you.)" : "Says one line now, in this voice, and shows why if it can't.") : c.voiceTest) {
+            if Speech.shared.kind != "apple" && Speech.shared.kind != "live" { dependent(off: false) {
+                row("Test the voice", c.voiceTest.isEmpty ? "Says one line now, in this voice, and shows why if it can't." : c.voiceTest) {
                     Button("Test") {
                         let name = Speech.kinds.first { $0.0 == Speech.shared.kind }?.1 ?? "this voice"
                         c.voiceTest = "Asking \(name)…"
-                        if Speech.shared.kind == "live" {
-                            return LiveVoice.check(keychain("openai")) { why in c.voiceTest = why.map { "Failed: \($0)" } ?? "Connected: \(LiveVoice.model) took the key and the voice \(LiveVoice.voice.capitalized). Voice mode will use it." }
-                        }
                         Speech.shared.test("Hi, this is how \(c.name) sounds.") { why in c.voiceTest = why.map { "Failed: \($0)" } ?? "Played by \(name). Voice mode will use it." }
                     }
                 }
@@ -7015,6 +7148,55 @@ func selfTest() {
     sd.removePersistentDomain(forName: "greenlight-selftest-live")
     check("voice: GPT-Live's socket errors say what to fix", LiveVoice.why(401, URLError(.badServerResponse)).contains("key")
           && LiveVoice.why(0, URLError(.cannotConnectToHost)).contains("Little Snitch") && LiveVoice.why(429, URLError(.badServerResponse)).contains("429"))
+    // Settings' voice preview: a session of its own that speaks first, played from the first speech to the quiet after it
+    let ps = liveStart(voice: "vesper", instructions: livePreviewRule)["session"] as? [String: Any]
+    check("voice: a GPT-Live preview starts in the picked voice, told to say the line first; voice mode keeps its own rule",
+          (ps?["instructions"] as? String)?.contains("say exactly: Hello. This is how I sound.") == true
+          && ((ps?["audio"] as? [String: Any])?["output"] as? [String: Any])?["voice"] as? String == "vesper"
+          && (liveStart(voice: "cedar")["session"] as? [String: Any])?["instructions"] as? String == liveRule)
+    var pt = PreviewTrack(), steps = [Bool]()
+    let quiet = { (secs: Double) in Data(count: Int(secs * 48000)) }
+    for d in [quiet(1), tone, quiet(0.5), quiet(0.4)] { let r = pt.take(d); steps += [r.play, r.done] }
+    var cap = PreviewTrack(), capAt = 0
+    for i in 1...10 where capAt == 0 { if cap.take(tone).done { capAt = i } }
+    check("voice: a preview skips the silence before the line, plays it, ends after 0.8 s of quiet or 8 s in all (\(steps), cap at \(capAt) s)",
+          steps == [false, false, true, false, true, false, true, true] && capAt == 8)
+    let pv = LivePreview()
+    var keyReads = [String](), pick = ""
+    let readKey = { () -> String? in keyReads.append(pick); return nil }
+    pv.play("cedar", voiceOn: true, muted: false, settle: 0, key: readKey)
+    let onSkip = pv.phase, onHint = pv.hint ?? ""
+    pv.play("cedar", voiceOn: false, muted: true, settle: 0, key: readKey)
+    let muteSkip = pv.phase
+    RunLoop.main.run(until: Date() + 0.1)
+    check("voice: no preview while voice mode is on or the Mac is muted, and no key read or session for it",
+          { if case .skipped = onSkip { return onHint.contains("Voice mode is on") }; return false }()
+          && { if case .skipped(let w) = muteSkip { return w.contains("muted") }; return false }() && keyReads.isEmpty && pv.opened == 0)
+    pick = "cedar"; pv.play("cedar", voiceOn: false, muted: false, settle: 0.1, key: readKey)
+    pick = "vesper"; pv.play("vesper", voiceOn: false, muted: false, settle: 0.1, key: readKey)
+    let loadingPhase = pv.phase
+    RunLoop.main.run(until: Date() + 0.4)
+    check("voice: picking twice quickly previews only the last pick, and a missing key says so (\(pv.hint ?? "-"))",
+          loadingPhase == .loading("vesper") && keyReads == ["vesper"] && pv.opened == 0
+          && { if case .failed("vesper", let w) = pv.phase { return w.contains("OpenAI key") }; return false }())
+    pv.play("juni", voiceOn: false, muted: false, settle: 0.1, key: readKey); pv.stop()
+    RunLoop.main.run(until: Date() + 0.3)
+    check("voice: Stop before the preview starts reads no key and leaves nothing playing", keyReads == ["vesper"] && pv.phase == .idle && !pv.busy)
+    if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
+        // a real preview session (a fraction of a cent): it must speak the line, and its audio must play back through the output
+        let lp = LivePreview(), t0 = Date()
+        var firstPlay: Double?
+        lp.play("vesper", voiceOn: false, muted: false, key: { key })
+        let pe = Date() + 25
+        while Date() < pe { RunLoop.main.run(until: Date() + 0.05); if case .playing = lp.phase, firstPlay == nil { firstPlay = Date().timeIntervalSince(t0) }; if !lp.busy { break } }
+        check("voice: a GPT-Live preview says the line (“\(lp.said.trimmingCharacters(in: .whitespaces))”), playing from \(String(format: "%.1f", firstPlay ?? -1)) s, \(lp.played) of \(lp.scheduled) pieces played back (\(lp.hint ?? "-"))",
+              lp.phase == .played("vesper") && lp.said.lowercased().contains("this is how i sound") && lp.scheduled > 5 && lp.played == lp.scheduled)
+        let bad = LivePreview()
+        bad.play("vesper", voiceOn: false, muted: false, key: { "sk-not-a-key" })
+        let be = Date() + 15
+        while Date() < be && bad.busy { RunLoop.main.run(until: Date() + 0.05) }
+        check("voice: a preview with a bad key says why (\(bad.hint ?? "-"))", { if case .failed(_, let w) = bad.phase { return w.contains("key") || w.contains("401") }; return false }())
+    }
     // GREENLIGHT_LIVE_TEST=1 with OPENAI_API_KEY: a real gpt-live-1.1 session (a few cents). Apple's voice asks a question into it, as the mic
     // would; it must hand the turn off, then read a line exactly under that hand-off, as audible audio, which plays through a player node.
     if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
