@@ -3793,11 +3793,15 @@ final class Core: ObservableObject {
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
         gate("watch", text: list) { [weak self] ok in  // score the new workspaces before the watch interrupts
-            guard let self, ok else { return }
-            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = ask.merging(self.fresh) { $1 }; return }  // busy meanwhile
+            guard let self, ok, self.watch else { return }
+            let current = Dictionary(uniqueKeysWithValues: ask.keys.compactMap { name in self.needs?[name].map { (name, $0) } })
+            let (visible, _) = inScope(current, self.pucks, self.scope())
+            guard !visible.isEmpty else { return }
+            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = visible.merging(self.fresh) { $1 }; return }
+            let liveList = visible.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
             let r = Run("Watching the workspaces"); r.watch = true
             self.start(r, self.chatSend, stdin:
-                "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
+                "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(liveList)\n"
                 + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
                 + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
         }
