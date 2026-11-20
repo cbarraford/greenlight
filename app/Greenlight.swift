@@ -3995,9 +3995,9 @@ final class Core: ObservableObject {
         let key = j["key"] as? String
         let ws = (j["ws"] as? [String])?.filter { !$0.isEmpty }
         let auto = j["auto"] as? [String: Any], aid = auto?["id"] as? String, chose = auto?["choice"] as? String
-        if aid == nil, questions.contains(where: { $0.answer == nil && $0.text == text && $0.options == options && $0.key == key }) { return }
+        if aid == nil, questions.contains(where: { $0.ping && $0.answer == nil && $0.text == text && $0.options == options && $0.key == key }) { return }
         var fresh = true  // a newer ping about the same workspace replaces the open one
-        for i in questions.indices where questions[i].answer == nil &&
+        for i in questions.indices where questions[i].ping && questions[i].answer == nil &&
             ((key != nil && questions[i].key == key) || (key == nil && questions[i].key == nil && questions[i].text == text)) {
             questions[i].answer = "(superseded)"
             if replyingTo == questions[i].id { replyingTo = nil }
@@ -4008,7 +4008,7 @@ final class Core: ObservableObject {
         if let aid, let chose {  // answered for you (an opted-in kind, sure and inert): in Answered
             q.answer = "Auto: \(chose)"; q.auto = aid
             questions.append(q)
-            return notify(title: name, body: "Answered for you: \(chose). Ask again under Answered in the bell.\n\(text)", subtitle: nil, reply: false, id: key)
+            return notify(title: name, body: "Answered for you: \(chose). Ask again under Answered in the bell.\n\(text)", subtitle: nil, reply: false, id: key ?? "question:\(text)")
         }
         if let s = j["suggest"] as? [String: Any], let ch = s["choice"] as? String, options.contains(ch) {
             q.suggest = Suggest(choice: ch, prob: (s["prob"] as? NSNumber)?.doubleValue ?? 0, count: (s["count"] as? NSNumber)?.intValue ?? 0,
@@ -4016,7 +4016,7 @@ final class Core: ObservableObject {
         }
         questions.append(q)
         if !popoverShown() && fresh { unread += 1; missed += 1 }
-        notify(title: name, body: text, subtitle: nil, reply: true, id: key)
+        notify(title: name, body: text, subtitle: nil, reply: true, id: key ?? "question:\(text)")
     }
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
@@ -9671,6 +9671,13 @@ func selfTest() {
             c.ping(#"{"text": "ws-e: choose?\nOptions: new | later"}"#)
             check("unkeyed changed options replace old chips", c.waiting.filter { $0.text == "ws-e: choose?" }.map(\.options) == [["new", "later"]])
             c.answer(c.waiting.first { $0.text == "ws-e: choose?" }!, "(dismissed)", send: false)
+            let chatQuestion = Question(text: "ws-f: choose?", options: ["yes", "no"], ping: false)
+            c.questions.append(chatQuestion)
+            c.ping(#"{"text": "ws-f: choose?\nOptions: later | now"}"#)
+            check("an unkeyed ping cannot replace a chat question", c.questions.first { $0.id == chatQuestion.id }?.answer == nil
+                  && c.waiting.contains { $0.ping && $0.text == "ws-f: choose?" })
+            c.answer(chatQuestion, "(dismissed)", send: false)
+            c.answer(c.waiting.first { $0.ping && $0.text == "ws-f: choose?" }!, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
             c.ping(#"{"text": "ws-d: goal?", "key": "ws-d"}"#)
             c.ping(#"{"resolve": "ws-c", "why": "workspace removed"}"#)
