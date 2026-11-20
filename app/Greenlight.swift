@@ -1185,8 +1185,9 @@ struct VoiceButtons: View {
             if v.on {
                 knob(v.transcript ? "waveform" : "text.bubble", v.transcript ? "Show the stage" : "Show the transcript") { v.transcript.toggle() }
                 knob(v.captions ? "captions.bubble.fill" : "captions.bubble", v.captions ? "Captions off" : "Captions on") { v.captions.toggle() }
-                if !v.transcript { knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] } }
             }
+            // one style for live and standard chat
+            knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
             Button(action: v.toggle) {
                 Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)).frame(width: 26, height: 22)
                     .background(RoundedRectangle(cornerRadius: Theme.r1).fill(v.on ? accent : .clear)).foregroundColor(v.on ? bg : dim)
