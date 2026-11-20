@@ -148,10 +148,17 @@ test("started: the sheet closes, the draft clears, a toast opens it in the Basem
   assert.equal(await page.evaluate(() => localStorage.getItem("taskDraft")), "");
   assert.match(await page.textContent(".toast"), /Task started\s*plan-b · widgets/);
   assert.equal((await posts(page, "basement")).length, 0, "it went to the Basement by itself");
-  await page.evaluate(s => window.mc.update(s), SNAP);  // the next scan brings the new workspace in
+  await page.evaluate(s => window.mc.update(s), SNAP);  // the next scan brings the new workspace in: before it, the toast's Open in Basement has no path to send (pre-existing gap)
   await page.click(".toast button:has-text('Open in Basement')");
   assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-b"]);
   assert.equal(await page.$(".toast"), null);
+});
+
+test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
+  await page.click(".toast button:has-text('Reopen')");
+  assert.ok(await sheet(page), "Reopen didn't open the sheet");
+  assert.deepEqual((await posts(page, "task")).map(m => m.op), ["repos"]);
 });
 
 test("toast: the dismiss button closes it", async page => {
