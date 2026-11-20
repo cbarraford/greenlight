@@ -38,6 +38,7 @@ assert r["skipped"] == [{"ws": "billing", "why": "its agent is working"}] and "S
 r = plan("hold #42")
 assert r["route"] == "direct" and r["actions"] == [{"verb": "hold", "ws": "auth-login", "ref": "#42"}]
 assert plan("Can you please hold #42?")["route"] == "direct"  # politeness isn't a question
+assert plan("park #42?")["route"] == "chief"  # a bare question isn't consent to act
 assert plan("don't merge #42")["actions"][0]["verb"] == "hold"  # "don't merge" is a hold, not a merge
 assert plan("release the hold on auth-login")["actions"][0]["verb"] == "release"  # apply checks the fresh goal
 r = plan("unhold billing")  # its goal says hold in its own words: never rewritten
@@ -55,6 +56,8 @@ assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflic
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
+assert plan("hold #42 not #43")["route"] == "chief"  # don't treat an excluded target as another action
+assert [a["ws"] for a in plan("hold the api ones", [puck("api-server", 42), puck("capital-forecast", 43)])["actions"]] == ["api-server"]
 assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
 
 # guards: destructive, reasoning, ambiguous, too broad
@@ -137,8 +140,15 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert not r["ok"] and r["done"] == ["auth-login"] and r["errors"] == ["gone: no such workspace"] and goals["id3"] == "Search box"  # merge isn't a verb
     r = dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "fix it"}]})
     assert r["ok"] and r["undo"] is None and dash.run.call_args.args == ("auth-login", "ci prompt for auth-login", "id1")
+    (dwim.DWIM / "launch" / f"{dwim._lock_for('id1').name}.json").unlink()
     dash.run.return_value = {"error": "its agent is still working; wait for it to finish"}
     assert dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "x"}]})["errors"] == ["auth-login: its agent is still working; wait for it to finish"]
+    def slow_launch(*a):
+        time.sleep(.03)
+        return {"ok": True, "agent": "codex"}
+    with mock.patch.object(dash, "run", side_effect=slow_launch) as launches, cf.ThreadPoolExecutor(max_workers=2) as concurrent:
+        results = list(concurrent.map(lambda _: dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login"}]}), range(2)))
+    assert launches.call_count == 1 and sum(bool(r["done"]) for r in results) == 1 and any("just requested" in str(r["errors"]) for r in results), results
     assert dwim.apply({"actions": [{"verb": "hold", "ws": "auth-login"}]})["unchanged"] == ["auth-login"]  # already held: unchanged, no second "(hold)"
     assert goals["id1"].count("(hold)") == 1
     stale_release = plan("release the hold on #42", [puck("auth-login", 42, goal="Fix the auth login flow")])

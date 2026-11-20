@@ -48,6 +48,7 @@ STAGE_DEADLINE = 0.15  # the stage template pick: "One minute" is already up, so
 SURE = 0.7  # decide's confidence (or prob) that counts as an opinion; below, the grammar decides
 MAX_BULK = 5  # more workspaces than this in one command goes to Chief, who confirms
 UNDO_KEEP = 30
+LAUNCH_RESERVE = 30  # seconds for Orca to surface a just-started agent before another DWIM launch is allowed
 
 # The verbs that may go direct, in the order they're tried: the un- forms first ("unpark" mustn't read as "park").
 VERBS = {
@@ -72,7 +73,8 @@ DESTRUCTIVE = re.compile(r"\b(?:merge[sd]?|merging|close[sd]?|closing|delete[sd]
                          r"cancel(?:led)?|stop|restart|rename|retarget|squash|cherry-?pick)\b", re.I)
 REASONING = re.compile(r"\?\s*$|^\s*(?:why|what|how|which|who|when|where|should|could|would|can|is|are|does|do you|tell|explain|"
                        r"show|summari[sz]e|compare|list)\b|\b(?:if|unless|until|after|before|once|then|instead|because|except|but|or)\b", re.I)
-NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop)\b(?! merge)", re.I)
+NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop|not)\b(?! merge)", re.I)
+REQUEST_PREFIX = re.compile(r"^\s*(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you\b|please\b|go ahead and\b|let'?s\b)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
 HERE_RE = re.compile(r"\b(?:this(?: one)?|it|here|current(?: one)?|that one)\b", re.I)
 NUMS = {"one": 1, "single": 1, "two": 2, "both": 2, "pair": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
@@ -185,8 +187,11 @@ def hay(p):
 
 def grammar(text, pucks, focus=None):
     """What the words alone say: {verbs, refs, names, filters, count, tokens, here, why} (why: a reason it must go to Chief)."""
-    t = POLITE.sub("", " ".join(text.split())).strip()
+    raw = " ".join(text.split())
+    t = POLITE.sub("", raw).strip()
     g = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
+    if raw.endswith("?") and not REQUEST_PREFIX.search(raw):
+        g["why"] = "it's a question or has a condition"
     for v, r in VERB_RES.items():
         if r.search(t):
             g["verbs"].append(v)
@@ -258,7 +263,10 @@ def structural(g, pucks, focus):
 
 
 def lexical(g, pool):
-    return [p for p in pool if all(w in hay(p) for w in g["tokens"])]
+    def matches(p):
+        terms = set(re.findall(r"[a-z0-9]+", hay(p)))
+        return all(w in terms for w in g["tokens"])
+    return [p for p in pool if matches(p)]
 
 
 def pick_targets(g, pool, answers):
@@ -398,7 +406,7 @@ def _lock_for(wid):
 
 
 def _write_undo(path, record):
-    """Replace the recovery journal before a goal edit, so an interrupted apply still has an Undo path."""
+    """Atomically replace a synced JSON record before the side effect it protects."""
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with temp.open("w") as f:
@@ -458,14 +466,30 @@ def apply(o):
             return {"ws": a["ws"], "error": "ambiguous workspace" if matches else "no such workspace"}
         w = matches[0]
         if a["verb"] in LAUNCH:
-            current = current_puck(a, w)
-            if current is None:
-                return {"ws": a["ws"], "error": "workspace or MR changed since planning"}
-            move = next((m for m in (current or {}).get("moves") or [] if m.get("kind") == LAUNCH[a["verb"]]), None)
-            if not move:
-                return {"ws": a["ws"], "error": "that move is no longer available"}
-            r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"])
-            return {"ws": a["ws"], **({"error": r["error"]} if r.get("error") else {"agent": r.get("agent")})}
+            with _lock_for(w["worktreeId"]).open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                fresh = dash.live_agents().get(w["worktreeId"])
+                if not fresh or fresh[0].get("displayName") != a["ws"] or (a.get("path") and fresh[0].get("path") != a["path"]):
+                    return {"ws": a["ws"], "error": "no such workspace"}
+                current = current_puck(a, fresh[0])
+                if current is None:
+                    return {"ws": a["ws"], "error": "workspace or MR changed since planning"}
+                move = next((m for m in (current or {}).get("moves") or [] if m.get("kind") == LAUNCH[a["verb"]]), None)
+                if not move:
+                    return {"ws": a["ws"], "error": "that move is no longer available"}
+                reserve = DWIM / "launch" / f"{_lock_for(w['worktreeId']).name}.json"
+                reserve.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    earlier = json.loads(reserve.read_text())
+                except (OSError, ValueError):
+                    earlier = {}
+                if time.time() - earlier.get("at", 0) < LAUNCH_RESERVE:
+                    return {"ws": a["ws"], "error": "an agent launch was just requested there"}
+                _write_undo(reserve, {"at": time.time(), "verb": a["verb"], "ws": a["ws"]})
+                r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"])
+                if r.get("error"):
+                    reserve.unlink(missing_ok=True)
+                return {"ws": a["ws"], **({"error": r["error"]} if r.get("error") else {"agent": r.get("agent")})}
         with _lock_for(w["worktreeId"]).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             fresh = dash.live_agents().get(w["worktreeId"])
