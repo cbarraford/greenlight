@@ -522,7 +522,454 @@ struct Attached: Identifiable {
     var sent = false
 }
 
+// MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
+
+/// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), a [stage: full|normal]
+/// size directive, and the rest. An unclosed fence (still streaming) hides everything from it on.
+struct Staged: Equatable { var text: String; var stage: String?; var size: String? }
+func staged(_ s: String) -> Staged {
+    var text = s, stage: String?, size: String?
+    if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) {
+        size = text[r].lowercased().contains("full") ? "full" : "normal"
+        text.removeSubrange(r)
+    }
+    if let open = text.range(of: "```stage") {
+        if let close = text[open.upperBound...].range(of: "```") {
+            stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            text.removeSubrange(open.lowerBound..<close.upperBound)
+        } else { text = String(text[..<open.lowerBound]) }
+    }
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size)
+}
+
+/// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
+func plain(_ s: String) -> String {
+    var t = s.replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+    if let r = t.range(of: "```") { t = String(t[..<r.lowerBound]) }
+    for (p, w) in [("\\[([^\\]]*)\\]\\([^)]*\\)", "$1"), ("`([^`]*)`", "$1"), ("https?://\\S+", ""), ("(?m)^[ \\t]*(#+|>|[-*+]|\\d+\\.)[ \\t]+", ""), ("\\*+|~~", "")] {
+        t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
+    }
+    return t
+}
+
+/// The complete sentences in s past `from` (a character offset): ended by . ! ? and a space, or by a line break.
+func sentences(_ s: String, from: Int) -> (said: [String], to: Int) {
+    let cs = Array(s)
+    var out = [String](), start = min(max(from, 0), cs.count), i = start
+    while i < cs.count {
+        if cs[i] == "\n" || (".!?".contains(cs[i]) && i + 1 < cs.count && cs[i + 1].isWhitespace) {
+            let t = String(cs[start...i]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { out.append(t) }
+            start = i + 1
+        }
+        i += 1
+    }
+    return (out, start)
+}
+
+/// What voice mode does itself instead of sending to Chief: only when that's all you said.
+enum VoiceCmd: Equatable { case bye, stop, full, normal, captions(Bool) }
+func voiceCommand(_ heard: String) -> VoiceCmd? {
+    let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
+        .split(separator: " ").joined(separator: " ")
+    switch t {
+    case "that's all", "thats all", "that is all", "stop listening", "goodbye", "bye", "end voice mode": return .bye
+    case "stop", "never mind", "nevermind", "cancel", "stop that": return .stop
+    case "full screen", "fullscreen", "maximize", "bigger", "make it bigger", "go full screen": return .full
+    case "normal size", "smaller", "make it smaller", "exit full screen", "go back to normal": return .normal
+    case "captions on", "turn on captions", "show captions": return .captions(true)
+    case "captions off", "turn off captions", "hide captions": return .captions(false)
+    default: return nil
+    }
+}
+
+/// While Chief speaks: you cutting in, not its own voice leaking back? 3+ of your latest words, mostly not ones it just said.
+func isBargeIn(_ heard: String, _ spoken: String) -> Bool {
+    let w = { (s: String) in s.lowercased().split { !$0.isLetter && $0 != "'" }.map(String.init) }
+    let h = w(heard).suffix(6), said = Set(w(spoken))
+    return h.count >= 3 && Double(h.filter { !said.contains($0) }.count) / Double(h.count) > 0.5
+}
+
+/// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
+func fallbackSpec(_ text: String) -> [String: Any] {
+    let ss = sentences(plain(text) + "\n", from: 0).said
+    return ["title": ss.first ?? "", "kind": "list", "icon": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
+}
+
+/// Haiku 5.5 (no thinking, low effort, structured output) draws what Chief is saying as a card for stage.spec.
+/// nil when there's no key, or on an error, a refusal or a cut-off reply: the caller keeps what's on screen.
+func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
+    guard let key = keychain("anthropic"), !key.isEmpty else { return done(nil) }
+    var q = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+    q.httpMethod = "POST"
+    q.timeoutInterval = 20
+    for (k, v) in ["x-api-key": key, "anthropic-version": "2026-10-21", "content-type": "application/json"] { q.setValue(v, forHTTPHeaderField: k) }
+    let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
+                               "required": ["label", "detail"], "additionalProperties": false]
+    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["title", "kind", "icon", "stat", "items"], "properties": [
+        "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
+        "icon": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
+    let body: [String: Any] = [
+        "model": "claude-haiku-5-5", "max_tokens": 600, "thinking": ["type": "disabled"],
+        "output_config": ["effort": "low", "format": ["type": "json_schema", "schema": schema]],
+        "system": "You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
+            + "title: the point in a few words. kind: list (facts), steps (an order), stat (one number matters: put it in stat, e.g. \"3 MRs\"), "
+            + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
+            + "icon: one emoji or empty. items: at most 6, label a few words, detail one short line or empty. Use names, numbers and MR refs "
+            + "from the reply; never invent any. stat is empty unless kind is stat.",
+        "messages": [["role": "user", "content": "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)"]]]
+    q.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    URLSession.shared.dataTask(with: q) { d, _, _ in
+        let j = d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let text = (j?["content"] as? [[String: Any]])?.first { $0["type"] as? String == "text" }?["text"] as? String
+        let spec = j?["stop_reason"] as? String == "end_turn" ? text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } : nil
+        DispatchQueue.main.async { done(spec) }
+    }.resume()
+}
+
+/// One buffer in another format (rate, channels, sample type): the mic to 16 kHz mono for recognition, speech to the player's.
+func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat) -> AVAudioPCMBuffer? {
+    guard let out = AVAudioPCMBuffer(pcmFormat: to, frameCapacity: AVAudioFrameCount(Double(b.frameLength) * to.sampleRate / b.format.sampleRate) + 32) else { return nil }
+    var fed = false, err: NSError?
+    c.convert(to: out, error: &err) { _, status in
+        if fed { status.pointee = .noDataNow; return nil }
+        fed = true; status.pointee = .haveData; return b
+    }
+    return err == nil && out.frameLength > 0 ? out : nil
+}
+
+/// A buffer's loudness, 0…1 (−50 dB…−5 dB), for the waveforms.
+func level(_ b: AVAudioPCMBuffer) -> Float {
+    guard let ch = b.floatChannelData, b.frameLength > 0 else { return 0 }
+    var sum: Float = 0
+    for i in 0..<Int(b.frameLength) { sum += ch[0][i] * ch[0][i] }
+    return max(0, min(1, (20 * log10(max(sqrt(sum / Float(b.frameLength)), 1e-6)) + 50) / 45))
+}
+
+let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer in 1–3 short spoken sentences: "
+    + "no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
+    + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
+    + "either plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). To make the stage fill the screen, or bring it back, add a line "
+    + "[stage: full] or [stage: normal].)\n"
+
+/// The waveforms' levels, apart from Voice so 40 updates a second redraw only the bars.
+final class Meter: ObservableObject {
+    @Published var you = [Float](repeating: 0, count: 48)
+    @Published var chief = [Float](repeating: 0, count: 48)
+}
+
+/// Voice mode's screen, in place of the chat: the stage (what Chief is saying, drawn), captions, and one live waveform,
+/// accent while Chief speaks, grey while you do.
+struct StageView: View {
+    @ObservedObject var v: Voice
+    @ObservedObject var c: Core
+    var body: some View {
+        VStack(spacing: Theme.sp3) {
+            StageWeb(web: v.stageWeb).frame(maxWidth: .infinity, maxHeight: .infinity)
+            if v.captions {
+                VStack(spacing: Theme.sp1) {
+                    if !v.caption.isEmpty { Text(v.caption).font(sys(size: Theme.fs3)).foregroundColor(fg) }
+                    if !v.heard.isEmpty { Text(v.heard).font(sys(size: Theme.fs2)).foregroundColor(sub) }
+                }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, Theme.sp4).accessibilityElement(children: .combine)
+            }
+            Waves(m: v.meter)
+            Text(v.speaking > 0 ? "\(c.name) is speaking" + (v.vp && v.bargeIn ? " · talk to interrupt" : "") : c.run != nil ? "Thinking… · say “stop” to cancel" : "Listening · “that’s all” ends voice mode")
+                .font(sys(size: Theme.fs1)).foregroundColor(dim).padding(.bottom, Theme.sp3)
+        }
+    }
+}
+
+struct Waves: View {
+    @ObservedObject var m: Meter
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(m.you.indices, id: \.self) { i in
+                let a = m.chief[i], b = m.you[i]
+                Capsule().fill(a >= b && a > 0 ? accent : sub).frame(width: 3, height: 3 + CGFloat(max(a, b)) * 37)
+            }
+        }.frame(height: 44).animation(.linear(duration: 0.06), value: m.you).accessibilityHidden(true)
+    }
+}
+
+struct StageWeb: NSViewRepresentable {
+    let web: WKWebView
+    func makeNSView(context: Context) -> WKWebView { web }
+    func updateNSView(_ v: WKWebView, context: Context) {}
+}
+
+/// The chat header's voice controls: voice mode on/off, and while on, the transcript, captions and full size.
+struct VoiceButtons: View {
+    @ObservedObject var v: Voice
+    var body: some View {
+        HStack(spacing: Theme.sp2) {
+            if v.on {
+                knob(v.transcript ? "waveform" : "text.bubble", v.transcript ? "Show the stage" : "Show the transcript") { v.transcript.toggle() }
+                knob(v.captions ? "captions.bubble.fill" : "captions.bubble", v.captions ? "Captions off" : "Captions on") { v.captions.toggle() }
+                knob(v.full ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", v.full ? "Normal size" : "Full size") { v.full.toggle() }
+            }
+            Button(action: v.toggle) {
+                Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)).frame(width: 26, height: 22)
+                    .background(RoundedRectangle(cornerRadius: Theme.r1).fill(v.on ? accent : .clear)).foregroundColor(v.on ? bg : dim)
+            }.buttonStyle(.plain).help(v.on ? "End voice mode (or say “that’s all”)" : "Voice mode: talk with it hands-free")
+                .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
+        }
+    }
+    func knob(_ icon: String, _ help: String, _ act: @escaping () -> Void) -> some View {
+        Button(action: act) { Image(systemName: icon).font(sys(size: Theme.fs3)).foregroundColor(dim).frame(width: 22, height: 22) }
+            .buttonStyle(.plain).help(help).accessibilityLabel(help)
+    }
+}
+
+/// Voice mode. One audio engine: the mic, voice-processed so Chief's own voice is cancelled out of it, into on-device speech
+/// recognition; Chief's speech out through a player node whose mix draws its waveform. The mic is on only while `on`.
+final class Voice: NSObject, ObservableObject {
+    weak var core: Core?
+    @Published var on = false
+    @Published var heard = ""  // your turn so far
+    let meter = Meter()
+    @Published var caption = ""  // the sentence Chief is saying
+    @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
+    @Published var transcript = false  // the chat instead of the stage
+    @Published var full = false { didSet { if full != oldValue { delegate.stageSize(full) } } }
+    @Published var speaking = 0  // speech buffers queued and not yet played
+    var bargeIn: Bool { ud.object(forKey: "voiceBargeIn") as? Bool ?? true }
+    var pause: Double { ud.object(forKey: "voicePause") as? Double ?? 1.1 }  // seconds of quiet that end your turn; hardware and rooms differ
+    let engine = AVAudioEngine(), player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
+    let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!, micFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+    let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
+    var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
+    var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?
+    var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
+    static let best: AVSpeechSynthesisVoice? = {
+        let en = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let rank = { (v: AVSpeechSynthesisVoice) in (v.quality.rawValue, v.language == "en-US" ? 1 : 0) }
+        return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
+    }()
+
+    lazy var stageWeb: WKWebView = {  // no message handlers: nothing on the stage can reach the app
+        let v = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        v.setValue(false, forKey: "drawsBackground")
+        v.appearance = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the app's theme, not the system's
+        if let u = Bundle.main.url(forResource: "stage", withExtension: "html") { v.loadFileURL(u, allowingReadAccessTo: u) }
+        return v
+    }()
+    func js(_ f: String, _ args: [Any]) {
+        guard let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
+        stageWeb.evaluateJavaScript("(s => { \(delegate.themeVars()) })(document.documentElement.style); \(f)(...\(a))")
+    }
+    func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            guard let self, self.on else { return }  // a headset in or out: the engine stopped itself
+            do { try self.startEngine(); self.listen() } catch { self.stopAll() }
+        }
+    }
+
+    func toggle() { on ? stopAll() : start() }
+    func start() {
+        guard !on, core?.recording == nil else { return }  // dictation has the mic
+        AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
+            guard ok, st == .authorized else {
+                self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
+                return
+            }
+            do { try self.startEngine() } catch {
+                self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
+                return self.stopAll()
+            }
+            self.on = true
+            self.listen()
+            self.wait("Listening", "Say something, or “that’s all” to stop.")
+        }}}
+    }
+
+    func startEngine() throws {
+        engine.stop()
+        let input = engine.inputNode
+        vp = (try? input.setVoiceProcessingEnabled(true)) != nil
+        if !engine.attachedNodes.contains(player) { engine.attach(player) }
+        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+        let inFormat = input.outputFormat(forBus: 0)  // after voice processing, which can change it
+        let conv = AVAudioConverter(from: inFormat, to: micFormat)
+        if inFormat.channelCount > 1 { conv?.channelMap = [0] }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
+            guard let self, let conv, let m = convert(b, conv, self.micFormat) else { return }
+            self.lock.lock(); let r = self.request; self.lock.unlock()
+            r?.append(m)
+            let l = level(m)
+            DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
+        }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
+            let l = level(b)
+            DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
+        }
+        engine.prepare()
+        try engine.start()
+    }
+
+    /// A fresh recognition request: after each of your turns, after Chief speaks (its echo is in the old one), after an error.
+    func listen() {
+        task?.cancel()
+        let r = SFSpeechAudioBufferRecognitionRequest()
+        r.shouldReportPartialResults = true
+        if rec?.supportsOnDeviceRecognition == true { r.requiresOnDeviceRecognition = true }
+        lock.lock(); request = r; lock.unlock()
+        heard = ""
+        task = rec?.recognitionTask(with: r) { [weak self] res, err in DispatchQueue.main.async {
+            guard let self, self.on, self.request === r else { return }
+            if let res { self.partial(res.bestTranscription.formattedString) }
+            guard err != nil || res?.isFinal == true else { return }
+            if !self.heard.isEmpty { self.turn() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if self.on && self.request === r { self.listen() } } }  // e.g. no speech yet
+        }}
+    }
+
+    func partial(_ t: String) {
+        if speaking > 0 {  // Chief is talking: its echo, or you cutting in
+            guard vp && bargeIn && (isBargeIn(t, lastSpoken) || voiceCommand(t) != nil) else { return }
+            hush()
+        }
+        heard = t
+        endTurn?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.turn() }
+        endTurn = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + pause, execute: w)  // ponytail: silence ends your turn; a turn-taking model if it cuts you off
+    }
+
+    func turn() {
+        endTurn?.cancel()
+        let t = heard.trimmingCharacters(in: .whitespacesAndNewlines)
+        listen()
+        guard !t.isEmpty, let c = core else { return }
+        if let cmd = voiceCommand(t) { return run(cmd) }
+        lastHeard = t
+        caption = ""
+        c.send(t)  // send() adds voiceNote
+    }
+
+    func run(_ cmd: VoiceCmd) {
+        switch cmd {
+        case .bye: stopAll()
+        case .stop: hush(); core?.stop()
+        case .full: full = true
+        case .normal: full = false
+        case .captions(let b): captions = b
+        }
+    }
+
+    // Core's turn, from start to finish
+
+    func began(_ r: Run) {
+        said = 0; drewAt = 0; chiefDrew = false; shown = false
+        guard on else { return }
+        wait("One minute", r.question)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
+            self.say("One minute.")
+        }
+    }
+    func status(_ s: String) { if on && !shown { wait("One minute", s) } }
+    func live(_ r: Run) {
+        guard on else { return }
+        let st = staged(r.live), p = plain(st.text)
+        if let h = st.stage { stage(h) }
+        if let s = st.size { full = s == "full" }
+        let (ss, to) = sentences(p, from: said)
+        said = to
+        ss.forEach(say)
+        if !chiefDrew && !drawing && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
+    }
+    func finished(_ st: Staged, _ body: String) {
+        guard on else { return }
+        if let h = st.stage { stage(h) }
+        if let s = st.size { full = s == "full" }
+        let p = plain(body) + "\n"
+        sentences(p, from: min(said, p.count)).said.forEach(say)
+        said = 0
+        if !chiefDrew { draw(plain(body), last: true) }
+    }
+    /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
+    func stage(_ h: String) {
+        guard !chiefDrew else { return }
+        chiefDrew = true; shown = true
+        drawSeq += 1
+        if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
+    }
+    func draw(_ text: String, last: Bool, force: Bool = false) {
+        drawSeq += 1
+        let n = drawSeq
+        drawing = true
+        drawSpec(lastHeard, text) { [weak self] spec in
+            guard let self, n == self.drawSeq else { return }  // a newer drawing was asked for
+            self.drawing = false
+            guard self.on, force || !self.chiefDrew else { return }
+            if let spec { self.shown = true; self.js("stage.spec", [spec]) }
+            else if last { self.shown = true; self.js("stage.spec", [fallbackSpec(text)]) }  // mid-reply, a failure leaves the card up
+        }
+    }
+
+    // speech
+
+    func say(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard on, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        lastSpoken = String((lastSpoken + " " + t).suffix(600))
+        lines.append(t)
+        if lines.count == 1 { caption = t }
+        let u = AVSpeechUtterance(string: t)
+        u.voice = Voice.best
+        let g = gen
+        synth.write(u) { [weak self] buf in
+            guard let self, self.gen == g, let b = buf as? AVAudioPCMBuffer else { return }
+            let end = b.frameLength == 0  // the utterance is over: a silent frame marks it in the player
+            let out: AVAudioPCMBuffer?
+            if end { out = AVAudioPCMBuffer(pcmFormat: self.speechFormat, frameCapacity: 1); out?.frameLength = 1 }
+            else {
+                if self.synthConv?.inputFormat != b.format { self.synthConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
+                out = self.synthConv.flatMap { convert(b, $0, self.speechFormat) }
+            }
+            guard let out else { return }
+            DispatchQueue.main.async { if self.gen == g { self.speaking += 1 } }
+            self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
+                guard self.gen == g else { return }
+                self.speaking = max(0, self.speaking - 1)
+                if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
+                if self.speaking == 0 && self.lines.isEmpty && self.on { self.listen() }  // Chief's echo is in that request
+            }}
+            if !self.player.isPlaying { self.player.play() }
+        }
+    }
+    /// Stop talking (you cut in, or said stop); the turn itself goes on.
+    func hush() {
+        gen += 1
+        synth.stopSpeaking(at: .immediate)
+        player.stop()
+        speaking = 0; lines = []
+    }
+
+    func stopAll() {
+        hush()
+        endTurn?.cancel()
+        task?.cancel(); task = nil
+        lock.lock(); request = nil; lock.unlock()
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        engine.mainMixerNode.removeTap(onBus: 0)
+        if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
+        on = false; full = false; transcript = false
+        heard = ""; caption = ""
+        meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
+    }
+}
+
 final class Core: ObservableObject {
+    lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
     @Published var attached: [Attached] = []
     var unattach: ((String) -> Void)?  // tells the dashboard to empty that dock slot
     @Published var msgs: [Msg] = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcript)))?.map(Msg.init))
@@ -731,6 +1178,7 @@ final class Core: ObservableObject {
 
     /// Mic button / voice shortcut: start recording, or stop and transcribe into the input box (not sent).
     func toggleVoice() {
+        if voice.on { return }  // voice mode has the mic
         if recording != nil { stopVoice() } else if !transcribing { startVoice() }
     }
 
@@ -844,7 +1292,7 @@ final class Core: ObservableObject {
         active()
         if run != nil { queue.append(text); return }
         msgs.append(Msg(.you, shown ?? text))
-        var payload = text
+        var payload = voice.on ? voiceNote + text : text
         let new = attached.filter { !$0.sent }  // each docked hex goes over once; the chat session keeps it
         if !new.isEmpty {
             payload = "The user dragged these workspaces from the dashboard into the chat; this message is about them:\n"
@@ -918,6 +1366,7 @@ final class Core: ObservableObject {
     private func start(_ r: Run, _ remote: String, stdin: String) {
         run = r
         tps = 0
+        if !r.watch && !r.checkIn { voice.began(r) }
         proc = ssh(remote, stdin: stdin, onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
             self.finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
@@ -930,19 +1379,19 @@ final class Core: ObservableObject {
         connected = true
         switch e {
         case "start": r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
-        case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status }
+        case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
         case "step":
             let s = Step(id: j["id"] as? String ?? UUID().uuidString, title: j["title"] as? String ?? "", detail: j["detail"] as? String ?? "")
             r.steps.append(s)
-            if !r.stopping { r.status = s.title }
+            if !r.stopping { r.status = s.title; voice.status(s.title) }
         case "step_done":
             if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
                 r.steps[i].ok = j["ok"] as? Bool ?? true
                 r.steps[i].out = j["out"] as? String ?? ""
                 r.steps[i].end = Date()
             }
-        case "text_reset": r.live = ""
-        case "text": r.live += j["delta"] as? String ?? ""
+        case "text_reset": r.live = ""; voice.said = 0
+        case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
         case "usage":
             if let c = j["context"] as? Int, c > 0 { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }
@@ -963,7 +1412,9 @@ final class Core: ObservableObject {
             if !queue.isEmpty { send(queue.removeFirst()) }
             return
         }
-        let (body, options) = splitOptions(text.isEmpty ? "(no reply)" : text)
+        let st = staged(text)  // a ```stage block is for the stage, never the transcript
+        let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
+        if !r.stopping && ok { voice.finished(st, body) }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
@@ -1905,6 +2356,14 @@ struct SettingsView: View {
             if c.engine == "openai" { dependent(off: false) { row("OpenAI key", "Stored in your Keychain.") { Button("Set key…") { delegate.setKey() } } } }
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
         }
+        box("Voice mode") {
+            row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
+                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
+            }
+            row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
+                Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+            }
+        }
         HStack(spacing: Theme.sp1) {
             note("Standing instructions for Greenlight have their own page:")
             Button("Instructions") { c.settingsTab = "Instructions" }.buttonStyle(.link).font(sys(size: Theme.fs2))
@@ -2411,6 +2870,14 @@ struct SettingsView: View {
     }
 }
 
+/// The stage while voice mode is on (and the transcript isn't asked for), else the chat.
+struct StageOr<A: View, B: View>: View {
+    @ObservedObject var v: Voice
+    @ViewBuilder var stage: () -> A
+    @ViewBuilder var chat: () -> B
+    var body: some View { if v.on && !v.transcript { stage() } else { chat() } }
+}
+
 struct ChatView: View {
     @ObservedObject var c: Core
     @FocusState private var typing: Bool
@@ -2421,6 +2888,7 @@ struct ChatView: View {
             Divider().overlay(line)
             ZStack(alignment: .top) {
             Group {  // settings cover the dashboard pane: App.settingsHost
+            StageOr(v: c.voice) { StageView(v: c.voice, c: c) } chat: {
             VStack(spacing: 0) {
             ScrollViewReader { sv in
                 ScrollView {
@@ -2452,6 +2920,7 @@ struct ChatView: View {
             }.id(c.look)
             }
             }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(bg)
@@ -2475,6 +2944,7 @@ struct ChatView: View {
                 }.font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim)
             }
             Spacer()
+            VoiceButtons(v: c.voice)
             if !c.chatOut {
                 Button { c.popChat() } label: { Text("⧉").font(sys(size: Theme.fs4)).foregroundColor(dim) }.buttonStyle(.plain)
                     .help("Move to its own window (close it to bring it back)").accessibilityLabel("Move to its own window")
@@ -3600,6 +4070,23 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         tick()  // the dashboard's chat toggle
     }
 
+    var beforeFull: (out: Bool, frame: NSRect)?
+    /// Voice mode's stage at full size: the chat pops out and fills the screen; normal puts it back as it was.
+    func stageSize(_ full: Bool) {
+        if full, beforeFull == nil {
+            beforeFull = (greenlight.chatOut, chatWindow.frame)
+            if !greenlight.chatOut { popChat(out: true) }
+            chatWindow.setFrameAutosaveName("")  // ponytail: the maximised frame isn't saved as "chat"
+            chatWindow.setFrame((chatWindow.screen ?? NSScreen.main)?.visibleFrame ?? chatWindow.frame, display: true, animate: true)
+            chatWindow.makeKeyAndOrderFront(nil)
+        } else if !full, let b = beforeFull {
+            beforeFull = nil
+            chatWindow.setFrame(b.frame, display: true, animate: true)
+            chatWindow.setFrameAutosaveName("chat")
+            if !b.out { popChat(out: false) }
+        }
+    }
+
     lazy var chatWindow: NSWindow = {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 680), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
@@ -4167,7 +4654,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func hideFloaters() { termOrb.parent?.removeChildWindow(termOrb); termOrb.orderOut(nil) }
 
     func windowShouldClose(_ w: NSWindow) -> Bool {
-        if w === chatWindow { popChat(out: false); return false }
+        if w === chatWindow { if greenlight.voice.full { greenlight.voice.full = false; return false }; popChat(out: false); return false }
         if let wid = termWins.first(where: { $0.value === w })?.key {  // ⌘W closes the tab; the close button hides the orb's window (shells kept), closes a New window one (shells killed)
             if NSApp.currentEvent?.type == .keyDown { (w.contentView as? WKWebView)?.evaluateJavaScript("term.closeTab()") }
             else if wid == 0 { w.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }
@@ -4289,17 +4776,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "whisperModel") }
     }
 
-    @objc func setKey() {
+    @objc func setKey() { askKey("openai", "OpenAI API key", "the OpenAI Whisper engine") }
+    func askKey(_ account: String, _ title: String, _ use: String) {
         let a = NSAlert()
-        a.messageText = "OpenAI API key"
-        a.informativeText = "Stored in your login Keychain. Used only for the OpenAI Whisper engine. Leave empty to remove it."
+        a.messageText = title
+        a.informativeText = "Stored in your login Keychain. Used only for \(use). Leave empty to remove it."
         let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         a.accessoryView = f
         a.addButton(withTitle: "Save")
         a.addButton(withTitle: "Cancel")
         a.window.initialFirstResponder = f
         NSApp.activate(ignoringOtherApps: true)
-        if a.runModal() == .alertFirstButtonReturn { keychain("openai", set: f.stringValue.trimmingCharacters(in: .whitespaces)) }
+        if a.runModal() == .alertFirstButtonReturn { keychain(account, set: f.stringValue.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
@@ -4451,6 +4939,13 @@ func selfTest() {
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
+    let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
+    check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>", size: "full") && open.text == "Here." && open.stage == nil)
+    let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
+    check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
+    check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
+          && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full)
+    check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let c = Core()
     Thread.detachNewThread {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
