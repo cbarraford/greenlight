@@ -246,11 +246,16 @@ def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
     assert done == ["Created gpt-live-24h-cost"], done
 
 
-def test_answer_to_chat_question_not_judged_alone(tmp_path, monkeypatch):
-    (tmp_path / "asked").write_text("")  # the last reply asked "which repo?": this answer carries the change it was about
-    done, calls = dispatch_turn(tmp_path, monkeypatch, "what about the greenlight repo?")  # refused if judged alone
-    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+def test_answer_carries_the_request_it_answers(tmp_path, monkeypatch):
+    # the bug over two turns: "what did it cost?" → "prod or staging?" → "prod" still creates nothing
+    (tmp_path / "asked").write_text("How much has GPT-Live cost us in the last 24 hours?")
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "prod")
+    assert not any(c[:2] == ["worktree", "create"] for c in calls), calls
     assert not (tmp_path / "asked").exists()  # this reply asked nothing
+    # and an answer to a change request's question is a change, though alone it reads as a question
+    (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard")
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "which repo would you put it in?")
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
 
 
 def test_prompt_answers_questions_directly():

@@ -667,8 +667,9 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
         # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
-        # chat's own question ("which repo?" → "greenlight, ok?") isn't judged alone: it carries the request it answers.
-        os.environ["GREENLIGHT_REQUEST"] = "" if os.path.exists(os.path.join(DIR, "asked")) else text
+        # chat's own question ("prod or staging?" → "prod") is judged with the request it answers (greenlight.ANSWER).
+        asked = os.path.join(DIR, "asked")
+        os.environ["GREENLIGHT_REQUEST"] = open(asked).read() + "\n(answer) " + text if os.path.exists(asked) else text
         text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
@@ -696,7 +697,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
         asked = os.path.join(DIR, "asked")
         if re.search(r"(\?|^Options:.*)\Z", (norm.reply or "").rstrip(), re.M):  # it ended on a question
-            open(asked, "w").close()
+            open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", ""))
         elif os.path.exists(asked):
             os.remove(asked)
     if err:

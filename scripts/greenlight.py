@@ -151,11 +151,12 @@ def orca_cli(*args, timeout=120):
 # A request that only asks (status, research, billing lookups, inspections) is answered where it's asked, never
 # by a new workspace; a workspace is for a change. GREENLIGHT_REQUEST is the user's message (chat.py) or the
 # automation's prompt (auto.py); `ade worktree create` refuses while it's read-only. Wrongly refusing a change is
-# the worse mistake, so only a plain question or lookup counts: anything else (a request, an answer, unclear) is a change.
-LOOKUP = (r"how (much|many|long|often)|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|have|"
-          r"does|status|check|look up|lookup|tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
-ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)  # a ping's answer opens "(Replying to …": never
-POLITE_RE = re.compile(r"\b(?:(?:can|could|would|will) (?:you|we)|please)\s+(?:please\s+)?(\w+(?: \w+)?)", re.I)
+# the worse mistake, so only plain questions and lookups count: every clause has to open with one ("Who's on call?
+# Page them." asks for a change), and anything else (a request, unclear) is a change.
+LOOKUP = (r"how|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|does|status|check|look up|lookup|"
+          r"tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
+ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)
+CLAUSE_RE = re.compile(r"[?.;,:\n]+|!(?=\s|$)|\b(?:and|then|so|otherwise|but|also|if)\b", re.I)
 CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
            r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
            r"comment|open|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
@@ -164,21 +165,24 @@ CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|ren
            r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
            r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
+           r"what about|how about|what if|why not|yes|yeah|yep|sure|ok|okay|"
            r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
 NAME_RE = re.compile(r"[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
+ANSWER = "\n(answer) "  # chat.py: the request a reply asked about, then the user's answers to it
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
                      "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
                      "glab / gh, the APIs and files on this host) instead of creating a workspace. Workspaces are for "
-                     "requests that change something (code, docs, settings, an external system). Only if the user's "
-                     "message does ask for a change, run the same command with --change \"<what it changes>\".")
+                     "requests that change something (code, docs, settings, an external system). Only if the request "
+                     "(the user's message, or the automation's prompt) does ask for a change, run the same command with "
+                     "--change \"<what it changes>\".")
 
 
 def read_only(text):
-    """True when the request is plainly a question or lookup: no change in it and no request for one."""
-    text = NAME_RE.sub(" ", text or "")
-    return bool(ASKS_RE.search(text)) and not CHANGE_RE.search(text) and all(
-        re.match(rf"({LOOKUP})\b", m.group(1), re.I) for m in POLITE_RE.finditer(text))  # "can you X": X must look up
+    """True when the request is plainly questions or lookups, and no answer to a clarifying question asks for a change."""
+    req, *answers = NAME_RE.sub(" ", text or "").split(ANSWER)
+    clauses = [c for c in CLAUSE_RE.split(req) if c and c.strip(" \t'\"()-*")]
+    return bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not any(CHANGE_RE.search(t) for t in [req, *answers])
 
 
 def create_refused(args):
