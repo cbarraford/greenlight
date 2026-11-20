@@ -553,7 +553,10 @@ func plain(_ s: String) -> String {
     for (p, w) in [("\\[([^\\]]*)\\]\\([^)]*\\)", "$1"), ("`([^`]*)`", "$1"), ("https?://\\S+", ""), ("(?m)^[ \\t]*(#+|>|[-*+]|\\d+\\.)[ \\t]+", ""), ("\\*+|~~", "")] {
         t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
     }
-    return t
+    return t.filter { ch in  // Chief's mood emoji aren't spoken (Apple's voice reads their names); digits, # and * are "emoji" too, so keep those
+        guard let u = ch.unicodeScalars.first, u.properties.isEmoji else { return true }
+        return !(u.properties.isEmojiPresentation || ch.unicodeScalars.count > 1)
+    }
 }
 
 /// The complete sentences in s past `from` (a character offset): ended by . ! ? and a space, or by a line break.
@@ -6177,6 +6180,7 @@ func selfTest() {
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
+    check("voice: mood emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
