@@ -2267,7 +2267,7 @@ final class Core: ObservableObject {
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
-    @Published var agents: [Agent] = []  // the chat footer's agents button
+    @Published var agents: [Agent] = []  // the agents in your workspaces: the activity feed is live while one works
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
         let (now, new) = newNeeds(needs, pucks)
@@ -4638,7 +4638,6 @@ struct ChatView: View, Looked {
                     .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
             }
             Spacer(minLength: 4)
-            if !c.agents.isEmpty { agentsButton }
             if !onair && model { modelButton.fixedSize() }
             ContextButton(c: c)
             newChat
@@ -4709,27 +4708,6 @@ struct ChatView: View, Looked {
                 .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
                 .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
         }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
-    }
-
-    /// The agents running in your workspaces: a dot for the busiest (amber asking you, blue working), a pick opens its terminal.
-    var agentsButton: some View {
-        let a = c.agents, onair = lk.id == "onair", n = a.count
-        let dot = a.contains { $0.state == "waiting" } ? needs : working
-        let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
-        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : "working")\(g.type.isEmpty ? "" : " · \(g.type)")" }
-        return Menu {
-            ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
-        } label: {
-            HStack(spacing: Theme.sp1) {
-                Circle().fill(onair ? accent : dot).frame(width: 7, height: 7)
-                tag(word, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1)
-            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
-                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
-                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
-                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
-        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .modifier(Tip(c: c, text: "Agents in your workspaces: pick one to open its terminal"))
-            .accessibilityLabel("\(n) agent\(n == 1 ? "" : "s")\(a.contains { $0.state == "waiting" } ? ", one asking you" : ""). Open an agent's terminal")
     }
 
     static let newTip = "New chat — forget this conversation and start fresh"
@@ -6658,9 +6636,6 @@ func selfTest() {
           && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
-    check("agents button: agents only, the one asking you first",
-          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
-                    ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
     let p0: [[String: Any]] = [["name": "a", "state": "working", "step": "ci", "owner": "agent", "action": "fix CI", "agent": ["state": "working", "type": "claude", "tool": "Bash", "input": "make", "last": "On it."]],
                                ["name": "z", "state": "done", "step": "merged", "owner": "nobody"]]
     let p1: [[String: Any]] = [["name": "a", "state": "needs", "step": "review", "owner": "me", "action": "approve it", "agent": ["state": "waiting", "type": "claude", "tool": "Bash", "input": "make", "last": "CI is green. Merge?"]],
