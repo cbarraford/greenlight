@@ -366,6 +366,17 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
     return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
 }
 
+/// The watch's news split by the window you're in (focusScope's JSON, the same rule as dash.py's board): `ask` is about its
+/// worktrees or repos, `hold` is another project's and waits until you're in a window that shows it. nil scope: every project's.
+func inScope(_ fresh: [String: String], _ pucks: [[String: Any]], _ scope: String?) -> (ask: [String: String], hold: [String: String]) {
+    guard let scope, let o = (try? JSONSerialization.jsonObject(with: Data(scope.utf8))) as? [String: Any] else { return (fresh, [:]) }
+    let paths = o["paths"] as? [String] ?? [], repos = o["repos"] as? [String] ?? []
+    let shown = Set(pucks.filter { p in
+        (p["path"] as? String).map(paths.contains) == true || (p["repo"] as? String).map { !$0.isEmpty && repos.contains($0) } == true
+    }.compactMap { $0["name"] as? String })
+    return (fresh.filter { shown.contains($0.key) }, fresh.filter { !shown.contains($0.key) })
+}
+
 func ago(_ d: Date) -> String {
     let s = Int(Date().timeIntervalSince(d))
     return s < 60 ? "now" : s < 3600 ? "\(s / 60)m ago" : s < 86400 ? "\(s / 3600)h ago" : "\(s / 86400)d ago"
@@ -2535,10 +2546,11 @@ final class Core: ObservableObject {
         watchTurn()
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
-        guard watch, !fresh.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        let (ask, hold) = inScope(fresh, pucks, focusScope)  // another project's waits: the chat speaks for the window you're in
+        guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
-        let list = fresh.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
-        fresh = [:]
+        let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
+        fresh = hold
         let r = Run("Watching the workspaces"); r.watch = true
         start(r, chatSend, stdin:
             "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
@@ -6898,6 +6910,16 @@ func selfTest() {
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
+    let wp: [[String: Any]] = [["name": "octo/rsi-loop", "path": "/w/widgets/rsi-loop", "repo": "widgets", "state": "needs"],
+                               ["name": "chat-scope", "path": "/w/greenlight/chat-scope", "repo": "greenlight", "state": "needs"],
+                               ["name": "made-since", "path": "/w/greenlight/made-since", "repo": "greenlight", "state": "needs"],
+                               ["name": "no-repo", "path": "/w/x/no-repo", "repo": "", "state": "needs"]]
+    let wn = ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal"]
+    let gl = focusScope(["paths": ["/w/greenlight/chat-scope"], "repos": ["greenlight"]]), byPath = focusScope(["paths": ["/w/x/no-repo"], "repos": [""]])
+    check("watch: in the greenlight window it asks about greenlight's workspaces only, and holds widgets's for a window that shows it",
+          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["octo/rsi-loop": "decide", "no-repo": "goal"])
+          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci"])
+          && inScope(wn, wp, nil) == (wn, [:]) && inScope(wn, wp, focusScope(["paths": [], "repos": []])) == ([:], wn))
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
     check("hexes: Chief's [hexes: …] line, stripped and resolved; the model's picks only when the reply points at them",
