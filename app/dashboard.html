@@ -608,6 +608,11 @@ body:has(>main.ov){background:var(--canvas)}  /* the toast's row reads as part o
 .ci-runs{display:inline-flex;gap:1px;align-items:flex-end;height:18px;vertical-align:middle}
 .ci-runs i{width:4px;border-radius:1px;min-height:2px}
 .ci-err{color:var(--red-ink);font-size:var(--fs-2)}
+.ci-card.tbl{overflow-x:auto}
+.ci .w-table td,.ci .w-table th{white-space:nowrap;overflow-wrap:normal;vertical-align:middle}
+.ci .w-table td:first-child{white-space:normal;overflow-wrap:anywhere;min-width:120px}
+.ci .w-table .cnt{font-variant-numeric:tabular-nums} .ci .w-table .cnt i{font-style:normal;color:var(--text3)}
+.ci .w-table .sub{display:block;font-size:var(--fs-1);color:var(--text3)}
 </style>
 </head>
 <body>
@@ -1510,18 +1515,21 @@ function renderCI(main){
   wrap.append(h("div", {class:"ci-card"}, h("h3", {}, `Runs per day (UTC) · ${part.start} → ${part.end}`, lg("--green", "passed"), lg("--red", "failed"), lg("--gray", "canceled"), t.running ? lg("--blue", "running") : null), ciBars(part.days)));
   wrap.append(h("div", {class:"ci-card"}, h("h3", {}, "Minutes per run", lg("--green", "passing median (dashed: p90)"), lg("--red", "failing median")), ciDurations(part.days)));
   const mrs = arr(d.all.mrs).filter(m => !st.proj || m.project === st.proj);
-  wrap.append(h("div", {class:"ci-card"}, h("h3", {}, `By workspace · ${mrs.length} MR${mrs.length === 1 ? "" : "s"}`),
-    h("table", {class:"w-table"}, h("tr", {}, ["Workspace", "MR", "Passed", "Failed", "Canceled", "Median", "Runs (oldest → newest)", "Latest"].map(x => h("th", {}, x))),
+  wrap.append(h("div", {class:"ci-card tbl"}, h("h3", {}, `By workspace · ${mrs.length} MR${mrs.length === 1 ? "" : "s"}`),
+    h("table", {class:"w-table"}, h("tr", {}, ["Workspace", "MR", "Passed · failed · canceled", "Median", "Runs (oldest → newest)", "Latest"].map(x => h("th", {}, x))),
       mrs.map(m => { const mx = Math.max(1, ...arr(m.durs).map(num));
         return h("tr", {},
           h("td", {}, puckOf(m.ws) ? h("a", {href:"#", onclick: e => { e.preventDefault(); openPage(m.ws) }}, short(m.ws, 40)) : short(m.ws, 40),
             h("div", {class:"muted", style:"font-size:var(--fs-1)"}, m.project.split("/").pop())),
           h("td", {}, m.web_url ? h("a", {href: m.web_url}, m.ref) : m.ref),
-          h("td", {}, String(m.success)), h("td", {style: m.failed ? `color:${ink("--red")}` : null}, String(m.failed)), h("td", {}, String(m.canceled)),
+          h("td", {class:"cnt", title:`${m.success} passed, ${m.failed} failed, ${m.canceled} canceled${m.running ? `, ${m.running} running` : ""}`},
+            h("span", {style:`color:${ink("--green")}`}, String(m.success)), h("i", {}, " · "),
+            h("span", {style: m.failed ? `color:${ink("--red")}` : null}, String(m.failed)), h("i", {}, " · "), String(m.canceled)),
           h("td", {}, ciMin(m.median)),
           h("td", {}, h("span", {class:"ci-runs", "aria-label": arr(m.statuses).join(", ")}, arr(m.statuses).map((x, i) =>
             h("i", {style:`height:${Math.max(2, Math.round(18 * num(m.durs[i]) / mx))}px;background:${c(CI_TONE[x] || "--gray")}`, title:`${x} · ${ciMin(m.durs[i])}`})))),
-          h("td", {}, h("a", {href: m.last.url, style:`color:${ink(CI_TONE[m.last.status] || "--gray")}`}, m.last.status), ` ${ciMin(m.last.dur)} · ${m.last.ts.slice(5, 16).replace("T", " ")}`));
+          h("td", {}, h("a", {href: m.last.url, style:`color:${ink(CI_TONE[m.last.status] || "--gray")}`}, m.last.status),
+            h("span", {class:"sub"}, `${ciMin(m.last.dur)} · ${m.last.ts.slice(5, 16).replace("T", " ")} UTC`)));
       }))));
   if (arr(d.errors).length) wrap.append(h("p", {class:"ci-err"}, `Couldn't read ${d.errors.length} MR${d.errors.length > 1 ? "s" : ""}: ${d.errors.slice(0, 3).join("; ")}`));
   main.append(wrap);
