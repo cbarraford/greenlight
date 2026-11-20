@@ -269,6 +269,26 @@ test("a selected file counts as an edit before its reader finishes", async page 
   assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["before.txt", "later.txt"]);
 });
 
+test("a failed file read asks for a replacement without offering task Retry", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,b2s="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", {name: "broken.txt", mimeType: "text/plain", buffer: Buffer.from("bad")});
+  await page.evaluate(() => window.__reads[0].onerror());
+  assert.match(await page.textContent(".perr"), /Couldn't read broken.txt.*Choose it again/);
+  assert.equal(await page.$("#ps-retry"), null);
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  await page.setInputFiles(".tdrop input[type=file]", {name: "replacement.txt", mimeType: "text/plain", buffer: Buffer.from("ok")});
+  assert.equal(await page.$(".perr"), null);
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  await page.evaluate(() => window.__reads[1].onload());
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["replacement.txt"]);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");
