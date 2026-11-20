@@ -10,7 +10,7 @@
     greenlight.py ping [--key <ws>|@k] [--kind <kind>] [--ws <ws>]... [--proactive] <text>  question for the Greenlight menubar app
                                        (outbox.jsonl); --ws names a workspace it's about (its hex is lifted until answered);
                                        --kind names the sort of question for the decision record (decisions.py). A known kind gets
-                                       autonomy.py's proposal: preselected in the app, or (opted-in, sure, reversible) answered for
+                                       autonomy.py's proposal: preselected in the app, or (opted-in, sure, inert) answered for
                                        you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
                                        autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
@@ -27,6 +27,7 @@ normalised into the GitLab MR shape (gh_pr), so the lifecycle steps, report and 
 State and config live in $GREENLIGHT_HOME (default ~/.greenlight). config.json there overrides DEFAULTS below.
 """
 
+import fcntl
 import html
 import importlib
 import json
@@ -1097,6 +1098,14 @@ def pinged(update=None):
 
 
 def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
+    """Serialize the decision, audit and outbox path across concurrent scans."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "ping.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _ping(text, key, ws, kind, proactive, ask)
+
+
+def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     """ws: the workspaces (names) it's about; a workspace key counts as one. The app lifts their hexes until it's answered.
     kind: the sort of question, for the decision record (decisions.py); guessed from the key or the lifecycle step when not given.
     A kind autonomy.py knows gets its proposal (tier 1: answered for you and returned as {"auto": option, "id": audit id};
@@ -1107,7 +1116,7 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
         records = {r["id"]: r for r in decisions.load()}
         for a in reversed(autonomy.audit_log()):
             r = records.get(a.get("record"))
-            if (a.get("act") == "auto" and not a.get("undone") and a.get("key") == key and a.get("text") == text
+            if (a.get("act") == "auto" and not a.get("undone") and not a.get("cancelled") and a.get("key") == key and a.get("text") == text
                     and a.get("ts", 0) > time.time() - FLAP and r and r.get("answer_via") == "auto"):
                 if not any(e.get("auto", {}).get("id") == a["id"] for e in outbox_events()):
                     outbox({"text": text, "key": key, "ws": a.get("ws") or [],

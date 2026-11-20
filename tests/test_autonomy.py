@@ -2,7 +2,7 @@
 tiers, calibration, graduation, undo, and the anti-slop gate on proactive pings."""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
-import contextlib, io, json, subprocess, time, types
+import concurrent.futures, contextlib, io, json, subprocess, time, types
 from pathlib import Path
 import autonomy, decisions, greenlight
 
@@ -79,6 +79,9 @@ autonomy.save_settings(autonomy.settings() | {"auto": ["keep-draft", "signoff", 
 for kind, opts in (("signoff", "deployed | not yet"), ("merge-held", "merge | hold")):
     p = autonomy.propose(kind, f"x?\nOptions: {opts}")
     assert p["tier"] == 3 and p["risk"] == "high" and p["prob"] > 0.95, p
+# Even generic labels cannot preselect a human-gated action.
+past("merge-held", "Yes", ["Yes", "Later"], 30)
+assert autonomy.propose("merge-held", "Merge this held PR?\nOptions: Yes | Later")["tier"] == 3
 # ...and a delete is never answered for you, only preselected
 past("delete-workspace", "delete", ["delete", "keep"], 30)
 autonomy.save_settings(autonomy.settings() | {"auto": ["delete-workspace"]})
@@ -227,6 +230,33 @@ assert decisions.load()[-1]["answer_via"] == "auto" and outbox() == []
 with contextlib.redirect_stdout(io.StringIO()):
     recovered = greenlight.ping("outbox failed?" + KD, "@outbox-failed", kind="keep-draft")
 assert recovered["id"] == saved["id"] and len(autonomy.audit_log()) == 1 and len(outbox()) == 1
+# Two scan processes racing for one question still make one auto decision.
+reset()
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
+autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool, contextlib.redirect_stdout(io.StringIO()):
+    results = list(pool.map(lambda _: greenlight.ping("race?" + KD, "@race", kind="keep-draft"), range(2)))
+assert sum(bool(r and r.get("auto")) for r in results) == 1 and len(autonomy.audit_log()) == 1 and len(outbox()) == 1
+# A decision commit that fails after audit creation leaves no reported auto answer.
+reset()
+rid = decisions.asked("Failed commit?" + KD, kind="keep-draft")
+original_book = decisions.book
+@contextlib.contextmanager
+def fail_commit():
+    with original_book() as recs:
+        yield recs
+        raise OSError("decision commit unavailable")
+decisions.book = fail_commit
+try:
+    try:
+        autonomy.act(rid, {"kind": "keep-draft", "choice": "keep draft", "prob": 0.99, "provider": "history"}, "Failed commit?" + KD)
+        assert False, "commit failure must surface"
+    except OSError:
+        pass
+finally:
+    decisions.book = original_book
+assert decisions.load()[-1]["answer"] is None and autonomy.audit_log()[-1]["cancelled"]
+assert autonomy.report()["recent"] == []
 
 # tier 2: preselected in the app, with the numbers for its badge
 reset()

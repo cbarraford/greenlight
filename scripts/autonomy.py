@@ -61,6 +61,12 @@ DEFAULTS = {"auto": [], "gate": 0.35}
 RUBRIC = ("Is this message worth interrupting the user for right now? 1 when it is concrete and new: it names a "
           "specific workspace or MR, says what changed, and asks for one decision only they can make. 0 when it is "
           "filler, a status recap, a repeat, or something greenlight could do or wait out by itself.")
+PREFLIGHT_RUBRICS = {
+    "check-in": "Given this idle interval and the user's recent response to check-ins, is it useful to ask what work to do next? "
+                "The board-based question has not been drafted yet. Score the timing, not whether this description names a workspace.",
+    "watch": "Do these newly changed workspaces appear to need a decision only the user can make now? "
+             "This is a preflight list, not the final question. Do not require an Options line.",
+}
 
 # Only these complete answers are inert enough to answer without the user. Other actions still get a suggestion.
 NOOP_RE = re.compile(r"^\s*(?:keep(?: draft| it a draft| workspace| the workspace| holding)?|wait|hold|skip|later|leave it|ignore|stay)\s*[.!]?\s*$", re.I)
@@ -87,9 +93,17 @@ def settings():
 
 def save_settings(s):
     STATE.mkdir(parents=True, exist_ok=True)
-    tmp = STATE / "autonomy.json.tmp"
+    tmp = STATE / f"autonomy.json.{os.getpid()}.{time.time_ns()}.tmp"
     tmp.write_text(json.dumps(s, indent=1))
     os.replace(tmp, STATE / "autonomy.json")
+
+
+@contextlib.contextmanager
+def settings_lock():
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "autonomy-settings.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 @contextlib.contextmanager
@@ -102,7 +116,7 @@ def audit_lock():
 
 def audit(ev):
     STATE.mkdir(parents=True, exist_ok=True)
-    ev = {"id": f"{int(time.time() * 1000):x}-{os.getpid():x}", "ts": int(time.time())} | ev
+    ev = {"id": f"{time.time_ns():x}-{os.getpid():x}", "ts": int(time.time())} | ev
     with audit_lock():
         with (STATE / "autonomy.jsonl").open("a") as fh:
             fh.write(json.dumps(ev) + "\n")
@@ -112,6 +126,17 @@ def audit(ev):
 def audit_log():
     f = STATE / "autonomy.jsonl"
     return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+
+
+def amend_audit(aid, **changes):
+    with audit_lock():
+        log = audit_log()
+        e = next(x for x in log if x.get("id") == aid)
+        e.update(changes)
+        tmp = STATE / "autonomy.jsonl.tmp"
+        tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
+        os.replace(tmp, STATE / "autonomy.jsonl")
+        return e
 
 
 def norm(s):
@@ -243,7 +268,7 @@ def propose(kind, text, recs=None, s=None):
             p = b["acc"]
     r = risk(options[i])
     opted = kind in s["auto"] and kind not in GATES
-    t = tier_of(p, r, opted)
+    t = 3 if kind in GATES else tier_of(p, r, opted)
     if r != "low":
         why.append(f"{options[i]!r} is {r} risk: {'always asked' if r == 'high' else 'never answered for you'}")
     elif p >= T1 and not opted:
@@ -296,7 +321,7 @@ def gate(kind, text="", recs=None, s=None, now=None):
     provider = "history"
     if text and decide is not None:
         try:
-            d = decide.score(STATE, RUBRIC, context=text)
+            d = decide.score(STATE, PREFLIGHT_RUBRICS.get(kind, RUBRIC), context=text)
             if d.get("provider") != "local":
                 score = (score + max(0.0, min(1.0, float(d["score"])))) / 2
                 provider = d.get("provider") or "?"
@@ -311,14 +336,22 @@ def act(rec_id, prop, text, key=None, ws=()):
     """Tier 1: answer the record for the user, and log it with what undo needs. Returns the audit entry."""
     if not rec_id:
         raise ValueError("auto answer has no saved decision record")
-    entry = audit({"act": "auto", "record": rec_id, "kind": prop["kind"], "choice": prop["choice"], "prob": prop["prob"],
-                   "provider": prop["provider"], "text": text, "key": key, "ws": list(ws)})
-    with decisions.book() as recs:
-        for r in recs:
-            if r["id"] == rec_id:
-                decisions.settle(r, prop["choice"], "auto")
-                return entry
-    raise ValueError(f"auto answer record {rec_id} vanished")
+    entry = None
+    try:
+        with decisions.book() as recs:
+            for r in recs:
+                if r["id"] == rec_id and decisions.is_open(r):
+                    decisions.settle(r, prop["choice"], "auto")
+                    entry = audit({"act": "auto", "record": rec_id, "kind": prop["kind"], "choice": prop["choice"],
+                                   "prob": prop["prob"], "provider": prop["provider"], "text": text, "key": key, "ws": list(ws)})
+                    break
+            else:
+                raise ValueError(f"auto answer record {rec_id} is not open")
+    except Exception:
+        if entry:
+            amend_audit(entry["id"], cancelled=int(time.time()))
+        raise
+    return entry
 
 
 def undo(aid):
@@ -335,21 +368,13 @@ def undo(aid):
                             e.get("key"), e.get("ws") or (), e["kind"], ask=True)
     if not asked or not asked.get("asked"):
         raise RuntimeError("re-ask was not recorded")
-    with audit_lock():
-        log = audit_log()  # read again under the same lock used by audit() so concurrent events survive
-        e = next(x for x in log if x.get("id") == aid)
-        e["undone"] = int(time.time())
-        e["reasked_record"] = asked["asked"]
-        tmp = STATE / "autonomy.jsonl.tmp"
-        tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
-        os.replace(tmp, STATE / "autonomy.jsonl")
-        return e
+    return amend_audit(aid, undone=int(time.time()), reasked_record=asked["asked"])
 
 
 def report(s=None):
     s = settings() if s is None else s
     cal = calibrate()
-    recent = [e for e in audit_log() if e.get("act") == "auto"][-20:]
+    recent = [e for e in audit_log() if e.get("act") == "auto" and not e.get("cancelled")][-20:]
     return {"auto": s["auto"], "gate": s["gate"], "kinds": [{"kind": k, "eligible": k not in GATES, "opted": k in s["auto"] and k not in GATES,
             **{f: cal.get(k, {}).get(f) for f in ("n", "right", "acc")}, "bands": cal.get(k, {}).get("bands")} for k in KINDS],
             "candidates": candidates(cal, s), "recent": recent[::-1]}
@@ -385,14 +410,15 @@ def main():
         for c in candidates(cal):
             print(f"graduate? {c['kind']}: {c['right']} of {c['n']} tier-1 proposals right; `autonomy.py set --auto {c['kind']} on`")
     elif cmd == "set":
-        s = settings()
-        for kind, on in opt("--auto") or []:
-            if kind not in KINDS or kind in GATES or on not in ("on", "off"):
-                sys.exit(f"autonomy.py set --auto: one of {', '.join(k for k in KINDS if k not in GATES)}, then on|off")
-            s["auto"] = sorted(set(s["auto"]) | {kind}) if on == "on" else [k for k in s["auto"] if k != kind]
-        if opt("--gate") is not None:
-            s["gate"] = max(0.0, min(1.0, float(opt("--gate"))))
-        save_settings(s)
+        with settings_lock():
+            s = settings()
+            for kind, on in opt("--auto") or []:
+                if kind not in KINDS or kind in GATES or on not in ("on", "off"):
+                    sys.exit(f"autonomy.py set --auto: one of {', '.join(k for k in KINDS if k not in GATES)}, then on|off")
+                s["auto"] = sorted(set(s["auto"]) | {kind}) if on == "on" else [k for k in s["auto"] if k != kind]
+            if opt("--gate") is not None:
+                s["gate"] = max(0.0, min(1.0, float(opt("--gate"))))
+            save_settings(s)
         print(json.dumps(s))
     elif cmd == "undo":
         if not pos:
