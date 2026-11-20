@@ -648,9 +648,10 @@ def stop_shell(task_id):
 
 
 def asked_question(reply):
-    """The question a reply ended on (its last line, a `?` or the Options line, under the app's [hexes:] lines), else None."""
-    last = (re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").rstrip().split("\n") or [""])[-1]
-    return last if re.search(r"\?\s*\Z|^Options:", last) else None
+    """The paragraph a reply ended on when it ends on a question (a `?` or the Options line, under the app's [hexes:]
+    lines), else None. A paragraph, not a line: "I can add a meter.\nWhere should it go?" offers the change it asks about."""
+    para = re.split(r"\n\s*\n", re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip())[-1]
+    return para[-600:] if re.search(r"\?\s*\Z|^`?options:.*\Z", para, re.M | re.I) else None
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
