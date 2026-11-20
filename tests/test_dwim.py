@@ -84,18 +84,25 @@ def fake(answers, delay=0):
     return types.SimpleNamespace(batch=batch)
 sure = lambda k, q: ({"choice": "direct_board_action", "index": 0, "probs": {}, "confidence": 0.9, "provider": "jev"} if k == "route" else
                      {"choice": "park", "confidence": 0.9, "provider": "jev"} if k == "verb" else
-                     {"value": k == "is:auth-tokens", "prob": 0.95, "provider": "jev"})
+                     {"value": q["context"].startswith("auth-tokens"), "prob": 0.95, "provider": "jev"})
 with mock.patch.object(dwim, "decide", fake(sure)):
     r = plan("park the token one")  # "token" is in auth-tokens's goal; System One agrees, and says no to the rest
     assert r["route"] == "direct" and [a["ws"] for a in r["actions"]] == ["auth-tokens"] and r["provider"] == "jev", r
     st, qs = calls[-1]
     assert qs["route"]["options"] == ["direct_board_action", "needs_chief_reasoning"] and qs["route"]["kind"] == "choice"
     assert {"route", "verb"} < set(qs) and all(q["kind"] == "bool" for k, q in qs.items() if k.startswith("is:")) and "board" in st
-    assert "is:old-thing" not in qs  # only the pool the structural words leave is asked about
+    assert not any(q.get("context", "").startswith("old-thing") for q in qs.values())  # hidden isn't a candidate
     r = plan("park the tokens one with the auth")  # System One's yes overrides a substring miss
     assert [a["ws"] for a in r["actions"]] == ["auth-tokens"]
     calls.clear()
     assert plan("merge #42")["route"] == "chief" and not calls  # the guards don't even ask
+twins = [puck("search", 42, path="/one", goal="Login auth"), puck("search", 43, path="/two", goal="Billing")]
+twin_pick = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
+                          {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else
+                          {"value": "path /one" in q["context"], "prob": .95, "provider": "jev"})
+with mock.patch.object(dwim, "decide", fake(twin_pick)):
+    r = plan("park the login one", twins)
+    assert [a.get("path") for a in r["actions"]] == ["/one"] and len([k for k in calls[-1][1] if k.startswith("is:")]) == 2, r
 chief = lambda k, q: {"choice": "needs_chief_reasoning", "confidence": 0.8, "provider": "haiku"} if k == "route" else {"choice": "none", "confidence": 0.2, "provider": "haiku"}
 with mock.patch.object(dwim, "decide", fake(chief)):
     assert plan("hold #42")["why"] == "System One says it needs reasoning"
@@ -135,6 +142,9 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     goals["id2"] = "Rotate auth tokens, edited since (parked)"  # someone edited it after: undo leaves it
     u = dwim.undo(r["undo"])
     assert u == {"ok": True, "undone": ["auth-login"], "kept": ["auth-tokens"]} and goals["id1"] == "Fix the auth login flow", u
+    assert dwim.undo(r["undo"])["kept"] == ["auth-tokens"]
+    goals["id2"] = "Rotate auth tokens (parked)"
+    assert dwim.undo(r["undo"])["undone"] == ["auth-tokens"]
     assert dwim.undo(r["undo"])["error"] == "nothing to undo" and dwim.undo("../../etc")["error"] == "bad undo id"
     r = dwim.apply({"text": "hold #42", "actions": [{"verb": "hold", "ws": "auth-login"}, {"verb": "hold", "ws": "gone"}, {"verb": "merge", "ws": "search"}]})
     assert not r["ok"] and r["done"] == ["auth-login"] and r["errors"] == ["gone: no such workspace"] and goals["id3"] == "Search box"  # merge isn't a verb
@@ -191,6 +201,11 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
     with mock.patch.object(dwim, "_note", side_effect=OSError("history unavailable")):
         assert dwim.undo(r["undo"])["undone"] == ["search"] and goals["id3"] == "Search box"
+    first = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})["undo"]
+    second = dwim.apply({"actions": [{"verb": "park", "ws": "search"}]})["undo"]
+    assert dwim.undo(first)["kept"] == ["search"] and (dwim.DWIM / "undo" / f"{first}.json").exists()
+    assert dwim.undo(second)["undone"] == ["search"] and goals["id3"] == "Search box (hold)"
+    assert dwim.undo(first)["undone"] == ["search"] and goals["id3"] == "Search box"
     goals["d1"], goals["d2"] = "First", "Second"
     dupes = {k: ({"worktreeId": k, "displayName": "duplicate", "path": path, "comment": goals[k]}, {})
              for k, path in [("d1", "/one"), ("d2", "/two")]}
