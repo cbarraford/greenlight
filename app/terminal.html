@@ -327,13 +327,22 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #drop .n{width:100%;box-sizing:border-box;padding:8px 10px;border-radius:9px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--hair)} #drop kbd{padding:1px 5px;border-radius:4px;background:var(--hair);font:11px -apple-system,sans-serif}
 /* palette: a saved command says where it goes */
 #pres .sd{flex-shrink:0;color:var(--dim);font-size:11px}
+/* console mode (?console=1): the dashboard's footer. One pane under a header (its workspace, Basement, fold, close); the header drags to resize */
+#chead{display:none} body.console #side,body.console #sdv,body.console #bar{display:none}
+body.console #chead{display:flex;align-items:center;gap:8px;height:30px;flex-shrink:0;padding:0 6px 0 10px;background:var(--strip);box-shadow:inset 0 1px 0 var(--hair),inset 0 -1px 0 var(--hair);cursor:row-resize;-webkit-user-select:none;user-select:none}
+body.console.folded #chead{box-shadow:inset 0 1px 0 var(--hair)} body.console.folded #stage{display:none}
+#chead .cl{color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.06em;font-size:10.5px} #chead b{font-weight:650;white-space:nowrap}
+#chead .ct{flex:1;min-width:0;overflow:hidden;color:var(--dim);text-overflow:ellipsis;white-space:nowrap;font:11px ui-monospace,"SF Mono",Menlo,monospace}
+#chead button{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 7px;border:0;border-radius:6px;background:none;color:var(--dim);font:500 11px -apple-system,sans-serif;cursor:default}
+#chead button:hover{background:var(--hair);color:var(--fg)} #chead button:focus-visible{outline:2px solid var(--focus);outline-offset:-2px} #chead svg{flex:0 0 auto}
+body.console.folded #chead .fold svg{transform:rotate(180deg)}
 </style>
 <script src="ghostty-web.js"></script>
 </head><body class="noside">
 <nav id="side" aria-label="Workspaces"><div id="shead"><button type="button" class="ttl">Workspaces</button><span class="sp"></span></div>
 <button id="jump" type="button"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/></svg><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
-<div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
+<div id="main"><div id="chead" role="toolbar" aria-label="Console"></div><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
 <div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
 <div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span class="tx"><b></b><small></small></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
 <div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><svg id="pico" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
@@ -345,6 +354,10 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 // app → page: term.restore(state), term.workspaces({trees}), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
 // page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
+// console mode: this page is the dashboard's footer (Chief's [console: …]), one pane on a session the app names; nothing is saved
+const CONSOLE = q.get("console") === "1";
+let conName = "";
+if (CONSOLE) document.body.classList.add("console");
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
 const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, lightBg, lightFg, optAlt, ...colors} = look, root = document.documentElement.style;
 // the window bar's Auto/Light/Dark (term.mode): the chrome follows it; the terminal screen keeps its own colors, always
@@ -695,6 +708,7 @@ function render(){
   });
   tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
   renderSide(); save(); badgeSync();
+  if (CONSOLE) conHead();
   $("tabs").replaceChildren(...setTabs(cur).map((x, i) => {
     const b = el("div", "tab" + (x === cur ? " on" : "")), name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell);
     b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x === cur); b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
@@ -1736,6 +1750,7 @@ $("pal").onmousedown = e => { if (e.target === $("pal")) { e.preventDefault(); p
 // ⌘[ / ⌘] or ⌘⌥← / → pane, ⌘⇧↵ zoom a pane, ⌘⌃arrows resize, ⌘⌃= equalize, ⌘= / ⌘- / ⌘0 size, ⌘K clear, ⌘A select all, ⌘C copy,
 // ⌘F / ⌘E find (⌘G / ⌘⇧G next / previous while it's open), ⌘Home / End / PgUp / PgDn scroll, ⌘← / → / ⌫ line start / end / kill,
 // ⌘⇧P actions, ⌘B sidebar; tabs and ⌘1–9 count within the workspace
+const CON_KEYS = new Set(["arrowleft", "arrowright", "backspace", "home", "end", "pageup", "pagedown", "k", "a", "c", "f", "e", "g", "=", "+", "-", "0"]);  // console mode: the terminal's own ⌘ keys
 addEventListener("keydown", e => {
   if (e.target.closest?.("#card textarea")) return;  // the goal box keeps its own keys (this listener captures)
   if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
@@ -1744,6 +1759,7 @@ addEventListener("keydown", e => {
   if (!e.metaKey || !free) return;
   const k = e.key.toLowerCase(), ws = setTabs(cur), i = ws.indexOf(cur), mine = paneOf(cur), j = mine.indexOf(cur.focus);
   const wss = [...(isShut("§host") ? [] : homes()), ...sideOrder()], t = cur.focus.t, inT = e.target.closest?.(".t"), only = !e.shiftKey && !e.altKey && !e.ctrlKey;
+  if (CONSOLE && !CON_KEYS.has(k)) { if (k !== "v") e.stopImmediatePropagation(); return }  // one pane, no tabs or sidebar: the rest go to the app (⌘W closes the console)
   if (k === "j" && !e.shiftKey) palette(true);
   else if (k === "b" && !e.shiftKey) toggleSide();
   else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) openWs(wss[(wss.indexOf(curWs) + (e.key === "ArrowDown" ? 1 : -1) + wss.length) % wss.length]);
@@ -2009,8 +2025,44 @@ $("stage").addEventListener("dragover", e => { if (!e.dataTransfer?.types.includ
   $("stage").classList.add("drop"); clearTimeout(dropT); dropT = setTimeout(() => $("stage").classList.remove("drop"), 200) });
 $("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files || []]; if (!fs.length) return; e.preventDefault(); $("stage").classList.remove("drop");
   const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
+// Console mode's header: what it's showing, then Basement, fold and close. The app owns the height and the fold (a native split under the
+// dashboard); dragging the header (not a button) asks it for a height, a double-click folds. Closing detaches: the session keeps running.
+function conHead(){
+  const h = $("chead"), p = cur?.focus;
+  if (!h.firstChild) {
+    const ic = el("span", "ci"), go = iconBtn("go", svg16("M8 3v10M4 9l4 4 4-4", 14) + "<span>Basement</span>", "Open this console in the Basement", () => post({cmd: "consoleGo"}));
+    const fold = iconBtn("fold", I.chev(14), "Collapse the console", () => post({cmd: "consoleFold"})), x = iconBtn("x", I.x(14), "Close the console (its session keeps running)", () => post({cmd: "consoleClose"}), "Close the console");
+    h.append(ic, Object.assign(el("span", "cl"), {textContent: "Console"}), el("b"), el("span", "ct"), go, fold, x);
+    h.addEventListener("dblclick", e => { if (!e.target.closest("button")) post({cmd: "consoleFold"}) });
+    h.addEventListener("mousedown", e => {
+      if (e.button || e.target.closest("button")) return;
+      e.preventDefault();
+      const y0 = e.screenY, h0 = innerHeight; let raf = 0, want = h0;
+      const move = m => { want = Math.round(h0 - (m.screenY - y0)); raf ||= requestAnimationFrame(() => { raf = 0; post({cmd: "consoleResize", h: want}) }) };
+      const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up) };
+      addEventListener("mousemove", move); addEventListener("mouseup", up);
+    });
+  }
+  h.querySelector(".ci").innerHTML = p ? paneIcon(p, 13) : I.shell(13);
+  h.querySelector("b").textContent = conName || (cur ? wsName(cur.ws) : "");
+  const t = p ? shown(paneTitle(p)) : "", ct = h.querySelector(".ct"); ct.textContent = t && t !== h.querySelector("b").textContent ? t : ""; ct.title = p?.session || "";
+  const folded = document.body.classList.contains("folded"), fb = h.querySelector(".fold");
+  fb.title = folded ? "Expand the console" : "Collapse the console"; fb.setAttribute("aria-label", fb.title); fb.setAttribute("aria-expanded", String(!folded));
+}
 let picked;  // Choose folder…'s answer, from the app
 window.term = {
+  // console mode: show this session ({session, ws, name}): the one already showing stays, another is detached first (never ended)
+  console: o => {
+    if (!CONSOLE || !o || !/^mc-[\w-]{1,64}$/.test(o.session || "")) return false;
+    conName = String(o.name || "").slice(0, 80);
+    if (cur?.focus?.session === o.session) { render(); cur.focus.t.focus(); return true }
+    [...panes.values()].forEach(kill); tabs.forEach(t => t.r.remove()); tabs.length = 0; cur = null;
+    const tab = mkTab(typeof o.ws === "string" ? o.ws : ""), {p, mount} = newPane(tab, undefined, o.session);
+    tab.r.append(p.box); tab.focus = p; mount(); show(tab);
+    return true;
+  },
+  consoleEnd: () => { if (!CONSOLE) return; [...panes.values()].forEach(kill); tabs.forEach(t => t.r.remove()); tabs.length = 0; cur = null; conName = ""; render() },  // closed: each pane detaches, no hide
+  folded: f => { if (!CONSOLE) return; document.body.classList.toggle("folded", !!f); render(); if (!f && cur) setTimeout(() => { cur.focus.fit.fit(); cur.focus.t.focus() }, 0) },
   focus: () => ({...cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : {}, paths: ONLY ? trees.filter(inView).map(w => w.path) : null}),  // for Chief: the tab you're on, the window's workspaces
   mode(m, b, f){ mode = m; chrome = {bg: b, fg: f}; paint() },  // the app's Auto/Light/Dark: chrome only, CSS
   only(o){ ONLY = o; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
