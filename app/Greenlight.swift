@@ -4981,6 +4981,24 @@ struct QuestionRow: View {
     var about: String? { q.key.flatMap { $0.hasPrefix("@") ? nil : $0 } ?? (q.ws?.count == 1 ? q.ws?.first : nil) }
 }
 
+/// One answer greenlight gave for you, in Settings › Autonomy: what, when, how sure, and Undo.
+struct AutonomyActRow: View {
+    let a: AutonomyReport.Act, title: String, fg: Color, dim: Color, undo: () -> Void
+    var body: some View {
+        let said = a.text.map { String(splitOptions($0).0.prefix(120)) } ?? ""
+        HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(a.choice) · \(title)").font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+                Text("\(ago(Date(timeIntervalSince1970: a.ts))) · \(Int((a.prob * 100).rounded()))% sure · \(said)")
+                    .font(sys(size: Theme.fs2)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Theme.sp3)
+            if a.undone != nil { Text("Undone").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+            else { Button("Undo", action: undo).help("Asks you again, and what you answer is acted on") }
+        }.padding(.horizontal, Theme.sp4).padding(.vertical, 10)
+    }
+}
+
 /// The badge under a preselected chip: "Likely: keep · you picked it 6 of 7 times (86%)".
 func likelyNote(_ s: Suggest) -> String {
     "Likely: \(s.choice) · you picked it \(s.agree) of \(s.count) time\(s.count == 1 ? "" : "s") (\(Int((s.prob * 100).rounded()))%)"
@@ -5840,15 +5858,7 @@ struct SettingsView: View {
                 if !r.recent.isEmpty {
                     box("Answered for you lately") {
                         ForEach(r.recent) { a in
-                            ruled(HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(a.choice) · \(Self.kindTitle[a.kind] ?? a.kind)").font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
-                                    note("\(ago(Date(timeIntervalSince1970: a.ts))) · \(Int((a.prob * 100).rounded()))% sure · " + (a.text.map { String(splitOptions($0).0.prefix(120)) } ?? ""))
-                                }
-                                Spacer(minLength: Theme.sp3)
-                                if a.undone != nil { Text("Undone").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-                                else { Button("Undo") { c.undoAudit(a.id) }.help("Asks you again, and what you answer is acted on") }
-                            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+                            ruled(AutonomyActRow(a: a, title: Self.kindTitle[a.kind] ?? a.kind, fg: fg, dim: dim) { c.undoAudit(a.id) })
                         }
                     }
                 }
