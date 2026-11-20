@@ -7245,11 +7245,13 @@ func selfTest() {
         sp.keyChanged("openai", to: "sk-new")
         let failCleared = sp.phase == .idle
         let reads0 = keyReads.count
-        sp.play("juni", voiceOn: false, muted: false, settle: 0.2, key: readKey); sp.keyChanged("openai", to: "sk-new")
+        sp.play("juni", voiceOn: false, muted: false, settle: 0.2, key: readKey); sp.keyChanged("openai", to: ""); sp.keyChanged("elevenlabs", to: "xi-new")
+        let loadingKept = sp.phase == .loading("juni")
+        sp.keyChanged("openai", to: "sk-new")  // before it reads a key; the live check below covers one already asking
         RunLoop.main.run(until: Date() + 0.4)
         let loadingStopped = sp.phase == .idle && keyReads.count == reads0
         check("voice: voice mode ending clears only its own preview note; saving an OpenAI key a failure or a preview still starting, removing it or another key nothing (\(failedNote))",
-              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingStopped)
+              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingKept && loadingStopped)
     }
     do {  // the Keychain cache, on a fake Keychain: what a launch reads again, and what a failed save keeps
         let real = keychainOps, acct = "greenlight-selftest"
@@ -7335,6 +7337,14 @@ func selfTest() {
         RunLoop.main.run(until: b0 + 14.5)  // past the 12 s timer with its leeway
         check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 14.5 s (\(bad.hint ?? "-"))",
               { if case .failed(_, let w) = bad.phase { return w.contains("key") || w.contains("401") }; return false }() && failedIn < 12 && bad.hint == early)
+        // saving a key while a preview is already asking OpenAI with the old one: its refusal mustn't land over the new key
+        let mid = LivePreview(), m0 = Date()
+        mid.play("vesper", voiceOn: false, muted: false, settle: 0, key: { "sk-not-a-key" })
+        while mid.opened == 0 && Date() < m0 + 2 { RunLoop.main.run(until: Date() + 0.01) }
+        let asking = mid.opened == 1 && mid.phase == .loading("vesper")
+        mid.keyChanged("openai", to: "sk-new")
+        RunLoop.main.run(until: Date() + 3)
+        check("voice: saving a key while a preview is asking with the old one stops it, and the old key's refusal doesn't show (\(mid.hint ?? "-"))", asking && mid.phase == .idle)
     }
     // GREENLIGHT_LIVE_TEST=1 with OPENAI_API_KEY: a real gpt-live-1.1 session (a few cents). Apple's voice asks a question into it, as the mic
     // would; it must hand the turn off, then read a line exactly under that hand-off, as audible audio, which plays through a player node.
