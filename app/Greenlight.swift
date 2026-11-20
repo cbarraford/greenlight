@@ -949,7 +949,7 @@ Domino-toppling Jigsawing
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
 enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset, undo }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
-    let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
+    let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z0-9' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
         .split(separator: " ").joined(separator: " ")
     switch t {
@@ -2993,7 +2993,7 @@ final class Core: ObservableObject {
     @Published var queue: [Queued] = []
     /// spoken: a voice-mode turn. It takes the tray's files (and refusals) when said; waits: files were still being read then, so it takes
     /// the tray's files when it goes, and holds until they're read.
-    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false, waits = false; var refused: [String] = []; var note = "" }  // note: for Chief, not shown
+    struct Queued { let text: String; var shown: String? = nil; var files: [ChatFile] = []; var spoken = false, waits = false; var refused: [String] = []; var note = ""; var display: String { shown ?? text } }  // note: for Chief, not shown
     @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
     @Published var fileNote = ""  // why the last file didn't attach; clears itself
     @Published var dropping = false  // files dragged over the chat
@@ -3424,12 +3424,12 @@ final class Core: ObservableObject {
         let fs = q.waits ? files : q.files, no = q.waits ? refused : q.refused
         if q.waits { files = []; refused = [] }
         let told = no.isEmpty ? "" : "(Greenlight, not said by the user: files they tried to attach weren't: \(no.joined(separator: " ")) Tell them briefly.)\n"
-        send(told + q.note + q.text, shown: q.text, files: fs, spoken: q.spoken)  // send() adds voiceNote
+        send(told + q.note + q.text, shown: q.display, files: fs, spoken: q.spoken)  // send() adds voiceNote
     }
 
     func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = [], spoken: Bool = false) {
         active()
-        if run != nil || clearing > 0 { queue.append(Queued(text: text, files: fs)); return }  // after Clear's `new`: it deletes attachments
+        if run != nil || clearing > 0 { queue.append(Queued(text: text, shown: shown, files: fs, spoken: spoken)); return }  // after Clear's `new`: it deletes attachments
         let you = [shown ?? text, fs.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n")
         msgs.append(Msg(.you, you))
         var payload = voice.on ? voiceNote + text : text
@@ -3708,7 +3708,7 @@ final class Core: ObservableObject {
 
     @Published var toast: DwimToast?
     var focusName: String?  // the workspace of the window you were last in (noteFocus): what "park this" means
-    var launchWork: DispatchWorkItem?  // an agent launch waiting out its grace
+    var launchWorks: [UUID: DispatchWorkItem] = [:]  // each accepted launch keeps its own grace and Undo
     var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
     static let launchGrace = 5.0, toastFor = 8.0, planDeadline = 1.5
     var dwimJSON: (Any) -> String = { o in (try? JSONSerialization.data(withJSONObject: o)).map { String(decoding: $0, as: UTF8.self) } ?? "{}" }
@@ -3752,19 +3752,19 @@ final class Core: ObservableObject {
             if run == nil { voice.show(["kind": "list", "eyebrow": acts.isEmpty ? "nothing to do" : "done", "title": line, "stat": "",
                                         "items": acts.map { ["label": $0["ws"] as? String ?? "", "detail": $0["ref"] as? String ?? ""] }]) }
         }
-        launchWork?.cancel(); launchWork = nil  // a newer command: the older grace ends with its toast (it's cancelled, and said so below)
-        if toast?.pending == true { msgs.append(Msg(.note, "Cancelled: \(toast!.text)")) }
         if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor) }
         if o["launch"] as? Bool == true {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
             let t = DwimToast(text: line, pending: true)
             show(t, for: nil)
             let w = DispatchWorkItem { [weak self] in
-                guard let self, self.toast?.id == t.id else { return }
-                self.launchWork = nil
-                var now = t; now.pending = false; self.show(now, for: nil)
+                guard let self else { return }
+                guard self.launchWorks.removeValue(forKey: t.id) != nil else { return }  // Undo may have cancelled its grace
+                if self.toast?.id == t.id {
+                    var now = t; now.pending = false; self.show(now, for: nil)
+                }
                 self.apply(o, text: text, id: t.id)
             }
-            launchWork = w
+            launchWorks[t.id] = w
             DispatchQueue.main.asyncAfter(deadline: .now() + Core.launchGrace, execute: w)
         } else {
             let t = DwimToast(text: line, applying: true)
@@ -3803,7 +3803,7 @@ final class Core: ObservableObject {
     func undoToast() {
         guard var t = toast else { return }
         if t.pending {
-            launchWork?.cancel(); launchWork = nil
+            launchWorks.removeValue(forKey: t.id)?.cancel()
             msgs.append(Msg(.note, "Cancelled: \(t.text)"))
             if voice.on { voice.say("Cancelled.") }
             return show(DwimToast(text: "Cancelled"), for: 3)
@@ -5739,7 +5739,7 @@ struct ChatView: View, Looked {
                         ForEach(c.msgs.filter { !(started && $0.role == .note && $0.text.hasPrefix("Ask me anything")) }) { m in MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)) }
                         if let r = c.run { RunCard(r: r, c: c) }
                         ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in
-                            HStack { Spacer(minLength: 60); queued([q.text, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
+                            HStack { Spacer(minLength: 60); queued([q.display, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(Theme.sp4)
@@ -8587,9 +8587,10 @@ func selfTest() {
     check("dwim: only words dwim.py knows leave the Chief path", dwimCandidate("park the two auth ones") && dwimCandidate("Kick off CI fixes on the red ones")
           && dwimCandidate("hold #42") && dwimCandidate("don't merge #42") && dwimCandidate("unpark billing") && dwimCandidate("fix the merge conflicts on search")
           && !dwimCandidate("what's on fire?") && !dwimCandidate("merge #42") && !dwimCandidate("parking lot ideas") && !dwimCandidate("")
-          && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo the deploy") == nil)
+          && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo #42") == nil && voiceCommand("cancel #42") == nil && voiceCommand("undo the deploy") == nil)
     check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
         $0["page"] == nil && ($0["agent"] as? [String: String]) == ["state": "working"] && $0["name"] as? String == "a" } == true)
+    check("dwim: queued fallback shows only the user's words", Core.Queued(text: "(routing note)\npark #42", shown: "park #42").display == "park #42")
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil

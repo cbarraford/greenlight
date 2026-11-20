@@ -51,6 +51,7 @@ assert plan("park it", focus="search")["actions"][0]["ws"] == "search"
 assert plan("park this")["route"] == "chief"  # nowhere to point "this"
 assert plan("rebase the 45 one", [puck("mr-45", 7, conflicts=True, moves=["conflicts"]), puck("mr-46", 8)])["route"] == "chief"  # 45 is a count-sized number
 assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflicts=True, moves=["conflicts"]), puck("mr-5108", 8)])["actions"]] == ["mr-5107"]
+assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 
 # guards: destructive, reasoning, ambiguous, too broad
 for text, why in [("merge #42", "isn't something"), ("close the auth ones", "isn't something"), ("delete search", "isn't something"),
@@ -135,6 +136,10 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "x"}]})["errors"] == ["auth-login: its agent is still working; wait for it to finish"]
     assert dwim.apply({"actions": [{"verb": "hold", "ws": "auth-login"}]})["done"] == ["auth-login"]  # already held: unchanged, no second "(hold)"
     assert goals["id1"].count("(hold)") == 1
+    with mock.patch.object(dwim, "_note", side_effect=OSError("history unavailable")):
+        r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
+    assert r["ok"] and r["undo"] and goals["id3"] == "Search box (hold)"
+    assert dwim.undo(r["undo"])["undone"] == ["search"] and goals["id3"] == "Search box"
 log = [json.loads(l) for l in (Path(os.environ["GREENLIGHT_HOME"]) / "dwim" / "log.jsonl").read_text().splitlines()]
 assert {"apply", "undo"} <= {e["op"] for e in log}
 
