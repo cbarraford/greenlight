@@ -1300,7 +1300,8 @@ final class Voice: NSObject, ObservableObject {
     }
 
     func toggle() { on ? stopAll() : start() }
-    func start() {
+    func start() { start(tries: 3) }
+    func start(tries: Int) {
         guard !on, core?.recording == nil else { return }  // dictation has the mic
         AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
             guard ok, st == .authorized else {
@@ -1308,6 +1309,8 @@ final class Voice: NSObject, ObservableObject {
                 return
             }
             do { try self.startEngine() } catch {
+                // Right after the permission prompts the input isn't ready yet (AVAudio -10875): try again shortly, so one click is enough
+                if tries > 1 { self.engine.stop(); return DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.start(tries: tries - 1) } }
                 self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
                 return self.stopAll()
             }
