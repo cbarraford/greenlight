@@ -59,7 +59,11 @@ assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflic
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
+assert plan("hold #42 and release the hold on #43")["route"] == "chief"
+assert plan("park #42 and unpark #46")["route"] == "chief"
 assert plan("hold #42 when CI fails", [puck("auth-login", 42, goal="CI fails when tests run")])["route"] == "chief"
+assert "it says 0 but 1 match" in plan("park 0 red ones", [puck("auth-login", 42, pipeline="failed")])["why"]
+assert "it says 0 but 1 match" in plan("park zero red ones", [puck("zero-tests", 42, goal="zero regressions", pipeline="failed")])["why"]
 assert plan("hold #42 not #43")["route"] == "chief"  # don't treat an excluded target as another action
 assert [a["ws"] for a in plan("hold the api ones", [puck("api-server", 42), puck("capital-forecast", 43)])["actions"]] == ["api-server"]
 assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
@@ -210,6 +214,11 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert dwim.undo(first)["kept"] == ["search"] and (dwim.DWIM / "undo" / f"{first}.json").exists()
     assert dwim.undo(second)["undone"] == ["search"] and goals["id3"] == "Search box (hold)"
     assert dwim.undo(first)["undone"] == ["search"] and goals["id3"] == "Search box"
+    many_undos = [dwim.apply({"actions": [{"verb": "hold" if i % 2 == 0 else "release", "ws": "search"}]})["undo"] for i in range(31)]
+    assert all(many_undos) and (dwim.DWIM / "undo" / f"{many_undos[0]}.json").exists()
+    for uid in reversed(many_undos):
+        assert dwim.undo(uid)["undone"] == ["search"]
+    assert goals["id3"] == "Search box"
     goals["d1"], goals["d2"] = "First", "Second"
     dupes = {k: ({"worktreeId": k, "displayName": "duplicate", "path": path, "comment": goals[k]}, {})
              for k, path in [("d1", "/one"), ("d2", "/two")]}
