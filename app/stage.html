@@ -5,10 +5,10 @@
 <!-- Voice mode's visual card: what Chief is saying, drawn. The app calls stage.wait / stage.spec / stage.html; no message handlers. -->
 <style>
 :root{--bg:var(--mc-bg,#1C1C1F);--text:var(--mc-text,#ECECEE);--text2:var(--mc-text2,#C9C9CF);--dim:var(--mc-dim,#9A9AA1);
-  --card:var(--mc-surface,#232327);--line:rgba(255,255,255,.1);--accent:var(--mc-accent,#F5A524);
-  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif}
+  --card:var(--mc-surface,#232327);--line:var(--mc-line,rgba(255,255,255,.1));--accent:var(--mc-accent,#F5A524);
+  --font:var(--mc-font,-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif)}
 @media (prefers-color-scheme: light){:root{--bg:var(--mc-bg,#FFFFFF);--text:var(--mc-text,#1F2328);--text2:var(--mc-text2,#3D444D);
-  --dim:var(--mc-dim,#59636E);--card:var(--mc-surface,#F6F8FA);--line:#D1D9E0;--accent:var(--mc-accent,#0969DA)}}
+  --dim:var(--mc-dim,#59636E);--card:var(--mc-surface,#F6F8FA);--line:var(--mc-line,#D1D9E0);--accent:var(--mc-accent,#0969DA)}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:15px/1.45 var(--font);-webkit-font-smoothing:antialiased;overflow:auto}
