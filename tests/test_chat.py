@@ -444,7 +444,7 @@ def test_reading_an_attachment_shows_no_contents(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("read it", "claude-haiku-5-5", None, verbose=True, files=[{"name": "notes.log", "data": b64(("SECRET-TOKEN\n" * 6000).encode())}])
     done = {e["id"]: e for e in events if e["e"] == "step_done"}
-    assert done["r1"]["out"] == done["r2"]["out"] == "(attached file)" and "full" not in done["r1"], done
+    assert done["r1"]["out"] == done["r2"]["out"] == attach.HIDDEN and "full" not in done["r1"], done
     assert done["r3"]["out"] == "a b" and done["r3"]["full"] == "a b"  # other steps as before
     assert not any("SECRET-TOKEN" in json.dumps(e) for e in events), events
 
@@ -479,4 +479,29 @@ def test_attachment_text_found_another_way_is_hidden_too(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("find it", "claude-haiku-5-5", None, verbose=True, files=[{"name": "my y.env", "data": b64(b"db password = hunter2-very-secret\nshort\n")}])
     assert not any("hunter2" in json.dumps(e) for e in events if e["e"] == "step_done"), events
-    assert next(e for e in events if e["e"] == "step_done")["out"] == "(attached file)"
+    assert next(e for e in events if e["e"] == "step_done")["out"] == attach.HIDDEN
+
+
+def test_needles_match_what_the_events_show(tmp_path):
+    attach.store(str(tmp_path), [("k.py", "text", ("#!/usr/bin/env python3\n" + "filler line number\n" * 900 + "pin code is 4821 now\n").encode())])
+    ns, D = attach.needles(str(tmp_path)), str(tmp_path)
+    e = {"out": chat.short("found: pin  code is 4821   now", 120), "full": "ok\n./attachments/2026/k.py:x\nall   good here\npin code is 4821 now"}
+    assert attach.hide(D, e, ns) and e["out"] == attach.HIDDEN  # past line 400, spaces collapsed
+    assert e["full"] == f"ok\n{attach.HIDDEN}\nall   good here\n{attach.HIDDEN}"  # only the lines that show it go
+    e = {"out": "grep found attachments in chat.py", "full": "#!/usr/bin/env python3\nprint(1)"}
+    assert attach.hide(D, e, ns) and e["out"] == "grep found attachments in chat.py" and e["full"].endswith("\nprint(1)")  # a common line costs one line, not the output
+    assert not attach.mentions(D, {"detail": "grep -n attachments scripts/chat.py"}) and attach.mentions(D, {"detail": "cat attachments/x"})
+
+
+def test_an_earlier_turns_attachment_is_hidden_too(tmp_path, monkeypatch):
+    attach.store(str(tmp_path), [("y.env", "text", b"db password = hunter2-very-secret\n")])  # turn 1's file
+    fake = tmp_path / "claude"
+    fake.write_text(GREP)
+    fake.chmod(0o755)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("find the db password", "claude-haiku-5-5", None)  # turn 2: nothing attached
+    assert not any("hunter2" in json.dumps(e) for e in events), events
