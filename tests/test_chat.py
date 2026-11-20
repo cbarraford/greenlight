@@ -45,6 +45,11 @@ def out(**d):
 ignored = "BUG" in msg and ("previous reply ignored" not in msg or "STUBBORN" in msg)
 if ignored:
     out(type="user", message={"role": "user", "content": "<task-notification> status: stopped. NOT user input. No human input has been received."})
+if "SHELL" in msg:  # a command with no description, then the reply: the stuck-status bug
+    out(type="assistant", message={"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]})
+    out(type="user", message={"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "a b"}]})
+    out(type="stream_event", event={"type": "content_block_start", "content_block": {"type": "text"}})
+    out(type="stream_event", event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Deleted"}})
 reply = "No response requested." if ignored else "Deleted it."
 out(type="assistant", message={"content": [{"type": "text", "text": reply}]})
 out(type="result", result=reply, is_error=False, duration_ms=10)
@@ -85,6 +90,57 @@ def test_normal_turn_no_retry(tmp_path, monkeypatch):
     events, prompts = turn(tmp_path, monkeypatch, "status update")
     assert prompts == [chat.WRAP + "status update"]
     assert [e["text"] for e in events if e["e"] == "done"] == ["Deleted it."]
+
+
+def shown(events):
+    """The status line the app shows after each event: its rule in Greenlight.swift event() (status, step)."""
+    status, seen = "Connecting", []
+    for e in events:
+        if e["e"] == "status":
+            status = e["text"]
+        elif e["e"] == "step":
+            status = e["title"]
+        elif e["e"] == "done":
+            status = None  # finish() drops the run card: no status at all
+        seen.append(status)
+    return seen
+
+
+def test_status_follows_the_turn():
+    # regression: "Ran a shell command" stayed on screen after the command ended, through the whole reply
+    n, evs = Norm(), []
+    for d in [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "a b"}]}},
+        {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Two files."}}},
+        {"type": "result", "result": "Two files.", "is_error": False},
+    ]:
+        evs += n.track(n.claude(d))
+    seen = shown(evs)
+    assert seen[0] == "Ran a shell command"  # while it runs
+    i = next(k for k, e in enumerate(evs) if e["e"] == "step_done")
+    assert seen[i + 1] == "Thinking", (evs, seen)  # the moment it ends
+    assert seen[-2] == "Writing a reply" and seen[-1] is None, seen
+
+
+def test_status_parallel_steps():
+    n = Norm()
+    n.track([{"e": "step", "id": "a", "title": "Read a"}, {"e": "step", "id": "b", "title": "Read b"}])
+    assert n.track([{"e": "step_done", "id": "b", "ok": True}])[-1] == {"e": "status", "text": "Read a"}  # a still runs
+    assert n.track([{"e": "step_done", "id": "a", "ok": True}])[-1] == {"e": "status", "text": "Thinking"}
+    n.track([{"e": "step", "id": "c", "title": "x"}, {"e": "done", "ok": False, "text": "Stopped."}])
+    assert n.running == []  # a stopped turn leaves nothing to show next time
+
+
+def test_status_not_stuck_through_run(tmp_path, monkeypatch):
+    # through run() itself, so the tracking can't come unwired
+    events, _ = turn(tmp_path, monkeypatch, "SHELL then answer")
+    seen = shown(events)
+    i = next(k for k, e in enumerate(events) if e["e"] == "step_done")
+    assert "Ran a shell command" in seen[:i] and "Ran a shell command" not in seen[i + 1:], (events, seen)
+    assert seen[i + 1] in chat.THINKING, seen  # track() then phrase(): the "Thinking" after a step gets a playful phrase
+    assert seen[-1] is None, seen  # the turn's end clears it
 
 
 def test_ignored_pattern():
