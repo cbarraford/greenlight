@@ -49,6 +49,8 @@ assert plan("rebase search")["actions"][0]["prompt"] == "conflicts prompt for se
 assert plan("fix the merge conflicts on search")["actions"][0]["verb"] == "rebase"  # "merge conflicts" isn't a merge
 assert plan("park it", focus="search")["actions"][0]["ws"] == "search"
 assert plan("park this")["route"] == "chief"  # nowhere to point "this"
+assert plan("rebase the 45 one", [puck("mr-45", 7, conflicts=True, moves=["conflicts"]), puck("mr-46", 8)])["route"] == "chief"  # 45 is a count-sized number
+assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflicts=True, moves=["conflicts"]), puck("mr-5108", 8)])["actions"]] == ["mr-5107"]
 
 # guards: destructive, reasoning, ambiguous, too broad
 for text, why in [("merge #42", "isn't something"), ("close the auth ones", "isn't something"), ("delete search", "isn't something"),
