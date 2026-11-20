@@ -263,6 +263,29 @@ test("hover card: the recommendation shows when it's on you; the steps bar opens
   assert.equal(await page.$("#hcard .sbar"), null, "a lifecycle bar for a tree with no lifecycle");
 });
 
+test("hover card: the lifecycle line says where the change is and who holds it; the button says the move until its prompt is written", async page => {
+  const card = life => page.evaluate(life => { const p = puckOf("plan-a"); p.agent.state = "idle"; p.life = life; hideCard(); document.body.append(hoverCard(p)) }, life);
+  await page.evaluate(() => { delete ui.sug["plan-a"] });
+  await card({stage_name: "Review", sub_name: "Open for review", holder: "you", pile: "yours", suggestion: {label: "Pick a milestone", kind: "you"},
+    do: "!12 has no milestone, and no single release stands out. Pick the milestone it ships in."});
+  assert.equal(await page.textContent("#hcard .lf"), "Review › Open for review · held by you");
+  // greyed out with the lifecycle's move, not "Please wait…"; once written, the label is what the prompt a click sends will do
+  assert.equal(await page.textContent("#hcard .btn.nx"), "Pick a milestone");
+  assert.equal(await page.$eval("#hcard .btn.nx", b => b.disabled), true);
+  await page.evaluate(() => window.mc.suggest({name: "plan-a", prompt: "List the open release milestones.", label: "List milestones", sig: puckOf("plan-a").sig}));
+  assert.equal(await page.textContent("#hcard .btn.nx"), "List milestones");
+  assert.equal(await page.$eval("#hcard .btn.nx", b => b.disabled), false);
+  await page.click("#hcard .btn.nx");
+  assert.deepEqual((await posts(page, "run")).map(m => m.prompt), ["List the open release milestones."]);
+  // nobody holds a finished change, and one that isn't on the path has no line
+  await card({stage_name: "Land", sub_name: "Merged", holder: null, pile: "done", suggestion: null});
+  assert.equal(await page.textContent("#hcard .lf"), "Land › Merged");
+  await card({stage_name: null, sub_name: null, holder: null, pile: "parked", suggestion: null});
+  assert.equal(await page.$("#hcard .lf"), null);
+  await card(undefined);  // a snapshot from before lifestage.py
+  assert.equal(await page.$("#hcard .lf"), null);
+});
+
 test("hover card button: a failed step leaves a button that asks again", async page => {
   await page.evaluate(() => { puckOf("plan-a").agent.state = "idle"; document.body.append(hoverCard(puckOf("plan-a"))) });
   await page.evaluate(() => window.mc.suggest({name: "plan-a", error: "claude timed out"}));

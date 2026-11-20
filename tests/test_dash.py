@@ -178,6 +178,12 @@ with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName":
                                                                   "branch": "refs/heads/b"}, {})}):
     pk = dash.snapshot()["pucks"][0]
 assert (pk["mr"]["ref"], pk["mr"]["forge"], pk["state"], pk["steps"][0]) == ("#23", "github", "queued", "mr_open")
+# lifestage.py's place for it rides on the puck (this row predates `life`, so it's worked out here), with the live agent's state on top
+assert (pk["life"]["at"], pk["life"]["pile"], pk["life"]["holder"], pk["life"]["suggestion"]["label"]) == ("4.1", "working", "Greenlight", "Mark it ready")
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20",
+                                                                  "branch": "refs/heads/b"}, {"state": "waiting", "lastAssistantMessage": "Which one?"})}):
+    asked = dash.snapshot()["pucks"][0]["life"]
+assert (asked["at"], asked["pile"], asked["holder"], asked["suggestion"]["label"]) == ("4.1", "yours", "you", "Answer your agent")
 # the hover card's button is written ahead: a snapshot carries the cached step only while it's for the puck's current state
 assert pk["suggestion"] is None  # nothing written yet: the app queues `suggest`, the card says "Please wait…"
 LIVE = {"w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20", "branch": "refs/heads/b"}, {})}
