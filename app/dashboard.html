@@ -268,6 +268,7 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .br{font:11.5px var(--mono);color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #hcard .steps{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:3px;margin-bottom:6px}
 #hcard .sl{font-size:var(--fs-2);color:var(--text2)}#hcard .sl b{font-weight:600}
+#hcard .lf{font-size:var(--fs-2);color:var(--text2)}#hcard .lf b{font-weight:600;color:var(--text)}
 #hcard .steps{align-items:center} #hcard .steps i{height:4px;border-radius:2px;background:var(--track)} #hcard .steps i.cur{height:8px;border-radius:3px}  /* where it is, without color */
 #hcard .sbar{all:unset;display:block;cursor:pointer;border-radius:6px} #hcard .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 #hcard .sbar .sl::after{content:" ▸";color:var(--text3)} #hcard .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
@@ -1641,6 +1642,7 @@ function hoverCard(p){
     h("div", {class: "hhd"}, mr ? h("div", {class: "id"}, h("a", {href: mr.web_url}, mrRef(mr), icon("external", 12)), h("span", {class: "hm"}, [p.project, mr.author].filter(Boolean).join(" · "))) : h("span", {class: "hm"}, p.project),
       h("div", {class: "tt"}, mr ? mr.title : p.name),
       sayOf(p) ? h("div", {class: "say", style: `color:${ink(STATE[p.state].color)}`}, short(sayOf(p), 140)) : null,  // what it's waiting on, in a line
+      lifeLine(p),  // where it is in its life, and who holds it
       branch ? h("div", {class: "br"}, branch, mr && mr.target_branch ? h("span", {class: "hm"}, ` → ${mr.target_branch}`) : null) : null),
     recEl(p),  // what to do about it, when that's you (or an agent step nobody's on)
     mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
@@ -1742,14 +1744,22 @@ function merged(o){
   box.replaceChildren(...(o.error ? [h("b", {}, rd ? "Didn't mark it ready" : "Didn't merge"), h("code", {}, o.error)]
     : rd ? [h("b", {}, `${o.ref} is ready for review`), h("small", {}, "Out of draft")] : [h("b", {}, `Merged ${o.ref} into ${o.target}`), h("small", {}, o.how)]));
 }
-// the button names the step in 1-4 words (dash.py suggest's label; the full prompt on hover). The app writes it ahead,
-// whenever the puck's state moves, and the snapshot carries it; until it's there the button is greyed out and waits
+// where the change is in its life and who holds it (lifestage.py, on the snapshot as p.life): "Review › Respond · held by reviewers"
+function lifeLine(p){
+  const l = p.life;
+  if (!l || !l.stage_name) return null;
+  return h("div", {class: "lf"}, h("b", {}, l.stage_name), l.sub_name ? ` › ${l.sub_name}` : "",
+    l.holder ? h("span", {class: "hm"}, ` · held by ${l.holder}`) : null);
+}
+// the button names the step in 1-4 words (dash.py suggest's label: what the prompt a click sends will do; the full prompt on hover).
+// The app writes it ahead, whenever the puck's state moves, and the snapshot carries it; until it's there the button is greyed
+// out and says the lifecycle's move (lifestage.py's p.life.suggestion) rather than just "Please wait…"
 function nextBtn(p){
   suggestCon(p.name);  // normally already written or on its way; the app never asks twice at once
-  const sg = ui.sug[p.name] || {}, ready = !!(sg.prompt || sg.error);
+  const sg = ui.sug[p.name] || {}, ready = !!(sg.prompt || sg.error), mv = p.life && p.life.suggestion || {};
   return h("button", {class: "btn sm go nx", title: sg.prompt || "", disabled: !ready, "aria-busy": ready ? null : "true",
     onclick: () => { hideCard(); nextStep(p.name) }},
-    sg.prompt ? sg.label || "Run next step" : sg.error ? "Run next step" : "Please wait…");
+    sg.prompt ? sg.label || mv.label || "Run next step" : sg.error ? mv.label || "Run next step" : mv.label || "Please wait…");
 }
 function relabelCard(name){  // the open card's button now says what it will send
   const card = document.getElementById("hcard"), b = card && card.dataset.name === name && card.querySelector(".nx"), p = b && puckOf(name);
