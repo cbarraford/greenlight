@@ -2789,7 +2789,7 @@ final class Core: ObservableObject {
     func attach(_ data: Data, name: String) { read { [chatFile(data, name: name)] } }
     private func read(_ work: @escaping () -> [(file: ChatFile?, error: String?)]) {
         reading += 1
-        reader.async { let rs = work(); DispatchQueue.main.async { [weak self] in self?.reading -= 1; rs.forEach { self?.add($0) } } }
+        reader.async { [weak self] in let rs = work(); DispatchQueue.main.async { self?.reading -= 1; rs.forEach { self?.add($0) } } }
     }
     private func add(_ r: (file: ChatFile?, error: String?)) {
         guard let f = r.file else { return fileSays(r.error ?? "That file couldn't be attached.") }
@@ -2838,11 +2838,11 @@ final class Core: ObservableObject {
         let release = { [weak self] (k: Int) in let k = min(k, left.held); left.held -= k; self?.reading -= k }
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { release(left.held) }
         for r in ps {
-            r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: q) { url, err in
+            r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: q) { [weak self] url, err in
                 let got = err == nil ? chatFile(at: url) : (nil, "A dropped file couldn't be received.")
                 left.n -= 1
                 if left.n <= 0 { try? FileManager.default.removeItem(at: dir) } else { try? FileManager.default.removeItem(at: url) }
-                DispatchQueue.main.async { [weak self] in release(1); self?.add(got) }
+                DispatchQueue.main.async { release(1); self?.add(got) }
             }
         }
         return true
