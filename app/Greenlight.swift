@@ -527,9 +527,14 @@ struct Attached: Identifiable {
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), a [stage: full|normal]
 /// size directive, and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var size: String?; var end = false }
+struct Staged: Equatable { var text: String; var stage: String?; var size: String?; var end = false; var hexes: [String]? = nil }
 func staged(_ s: String) -> Staged {
-    var text = s, stage: String?, size: String?, end = false
+    var text = s, stage: String?, size: String?, end = false, hexes: [String]?
+    if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
+        let inner = text[r].dropFirst().drop { $0 != ":" }.dropFirst().replacingOccurrences(of: "]", with: "")
+        hexes = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0.lowercased() != "none" }
+        text.removeSubrange(r)
+    }
     if let r = text.range(of: #"\[voice: ?off\]"#, options: [.regularExpression, .caseInsensitive]) { end = true; text.removeSubrange(r) }  // Chief ends voice mode
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) {
         size = text[r].lowercased().contains("full") ? "full" : "normal"
@@ -541,7 +546,7 @@ func staged(_ s: String) -> Staged {
             text.removeSubrange(open.lowerBound..<close.upperBound)
         } else { text = String(text[..<open.lowerBound]) }
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size, end: end)
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size, end: end, hexes: hexes)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -667,6 +672,27 @@ func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String
     return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
 }
 
+/// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
+func resolveHexes(_ said: [String], _ pucks: [[String: Any]]) -> [String] {
+    let names = pucks.compactMap { $0["name"] as? String }
+    return said.compactMap { w in
+        let k = w.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "`*\"' "))
+        return names.first { $0.lowercased() == k } ?? names.first { $0.lowercased().split(separator: "/").last.map(String.init) == k }
+            ?? pucks.first { ((($0["mr"] as? [String: Any])?["ref"] as? String)?.lowercased()) == k }?["name"] as? String
+    }.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+}
+
+/// The model's pick counts only when the reply points at it: its name, its MR number, or two of its title's longer words.
+/// ponytail: without this the small model lights the top of the list for small talk
+func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
+    let low = reply.lowercased(), mr = p["mr"] as? [String: Any] ?? [:]
+    let name = String((p["name"] as? String ?? "").lowercased().split(separator: "/").last ?? "")
+    let num = (mr["ref"] as? String).map { String($0.drop { !$0.isNumber }) } ?? ""
+    let has = { (k: String) in low.range(of: "(?<![\\w])" + NSRegularExpression.escapedPattern(for: k) + "(?![\\w])", options: .regularExpression) != nil }
+    let words = (mr["title"] as? String ?? "").lowercased().split { !$0.isLetter }.map(String.init).filter { $0.count >= 5 }
+    return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
+}
+
 /// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
 func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
     let low = reply.lowercased()
@@ -705,7 +731,8 @@ func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([Stri
             picked = try r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
             if picked.count > 3 && picked.count >= ws.count { picked = [] }  // all of them is about none in particular
         } catch { NSLog("pick: %@", "\(error)") }
-        let out = (named + picked.filter { n in ws.contains { $0.0 == n } }).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let ok = Set(picked.filter { n in pucks.contains { $0["name"] as? String == n && grounded(reply, $0) } })
+        let out = (named + picked.filter(ok.contains)).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         await MainActor.run { done(out) }
     }
 }
@@ -1407,7 +1434,7 @@ final class Core: ObservableObject {
             payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
             focusSent = focus
         }
-        start(Run(shown ?? text), "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin: payload)
+        start(Run(shown ?? text), chatSend, stdin: payload)
     }
 
     // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
@@ -1422,7 +1449,7 @@ final class Core: ObservableObject {
         checkedIn = true
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next"); r.checkIn = true
-        start(r, "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin:
+        start(r, chatSend, stdin:
             "(Greenlight's idle check-in, not typed by the user: they're at their Mac but haven't done anything in Greenlight for \(checkInMins) minutes.) "
             + "From the board, suggest which 1–3 workspaces they should work on next, most valuable first: for each, where it is in its lifecycle, "
             + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
@@ -1431,6 +1458,11 @@ final class Core: ObservableObject {
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
+    var focusPaths: [String]?  // its workspaces: Chief's BOARD has only these (nil: the window shows every project)
+    var chatSend: String {
+        let only = focusPaths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) }.map { " --only \(shellQuote($0))" } ?? ""
+        return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only
+    }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
@@ -1445,7 +1477,7 @@ final class Core: ObservableObject {
         let list = fresh.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = [:]
         let r = Run("Watching the workspaces"); r.watch = true
-        start(r, "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin:
+        start(r, chatSend, stdin:
             "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
             + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
             + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
@@ -1536,7 +1568,8 @@ final class Core: ObservableObject {
             picks += 1
             let n = picks
             delegate.pick([])
-            pickHexes(body, pucks) { [weak self] names in if n == self?.picks { delegate.pick(names) } }
+            if let h = st.hexes { delegate.pick(resolveHexes(h, pucks)) }  // Chief said which: no guessing
+            else { pickHexes(body, pucks) { [weak self] names in if n == self?.picks { delegate.pick(names) } } }
         }
         run = nil
         tps = 0
@@ -1671,7 +1704,7 @@ struct RunCard: View {
             .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card))
             .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
             if !r.live.isEmpty {
-                (Text(md(r.live)) + Text(" ▍").foregroundColor(accent)).foregroundColor(sub).textSelection(.enabled)
+                (Text(md(staged(r.live).text)) + Text(" ▍").foregroundColor(accent)).foregroundColor(sub).textSelection(.enabled)
             }
         }
     }
@@ -3844,6 +3877,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
+            self.greenlight.focusPaths = o["paths"] as? [String]
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -5093,6 +5127,14 @@ func selfTest() {
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
+    let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
+    check("hexes: Chief's [hexes: …] line, stripped and resolved; the model's picks only when the reply points at them",
+          staged("Merge it.\nOptions: yes | no\n[hexes: selkie, !5339, nope]").hexes == ["selkie", "!5339", "nope"]
+          && staged("Merge it.\nOptions: yes | no\n[hexes: selkie]").text == "Merge it.\nOptions: yes | no"
+          && staged("Nothing.\n[hexes:]").hexes == [] && staged("Hi").hexes == nil && staged("Hi [hexes: sel").text == "Hi"
+          && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
+          && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
+          && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, size: nil, end: true))
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>", size: "full") && open.text == "Here." && open.stage == nil)
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)

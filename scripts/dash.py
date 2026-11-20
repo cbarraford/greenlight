@@ -217,10 +217,14 @@ def tree_signoff(path):
     return {**base, "ok": True, "ran": m["run"]}
 
 
-def board():
+def board(only=None):
     """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
-    what to do. Blocks on you first, then your moves, then the rest; finished ones only counted."""
+    what to do. Blocks on you first, then your moves, then the rest; finished ones only counted. `only` (else $GREENLIGHT_ONLY,
+    a JSON list the chat sets): just these worktree paths, the window the user is in."""
+    if only is None and os.environ.get("GREENLIGHT_ONLY"):
+        only = json.loads(os.environ["GREENLIGHT_ONLY"])
     rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
+    rows = rows if only is None else [r for r in rows if r.get("path") in only]
     lines, done = [], 0
     for r in rows:
         st, why = state_of(r, blk)
