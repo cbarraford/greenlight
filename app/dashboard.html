@@ -2209,14 +2209,15 @@ function tasked(r){
   }
   ui.task.busy = false;
   const pending = ui.task.pending; ui.task.pending = null;
+  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo);
   if (r.paused) {  // preflight wants answers first: nothing was made yet
     if (!ui.task.sheet) { ui.task.done = {error: "It has a question about the goal first. Reopen it to answer."}; toastTimer(); return render() }
-    if (pending && (ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo)) return render();
+    if (changed) return render();
     ui.task.ask = {qs: r.questions || [], ans: {}, p: r.p_ambiguous}; render();
     return document.querySelector("#ps-ask .pchips button")?.focus();
   }
-  if (r.error && ui.task.sheet) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
-  if (!r.error) { ui.task.sheet = null; localSet("taskDraft", ""); ui.task.fresh = r.name }
+  if (r.error && ui.task.sheet && !changed) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
+  if (!r.error) { if (!changed) { ui.task.sheet = null; localSet("taskDraft", "") } ui.task.fresh = r.name }
   ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};
   toastTimer(); render();
 }
