@@ -1675,7 +1675,7 @@ function palDraw(){
     r.onclick = () => palRun(it.go);
     out.push(r);
   });
-  if (!pal.items.length) out.push(el("div", "nil", `<div>Nothing here by that name.</div>${pal.act ? "⌫ goes back to Jump" : pal.scope !== "all" ? "⇥ widens the scope" : "Type > for actions"}`));
+  if (!pal.items.length) out.push(el("div", "nil", `<div>Nothing here by that name.</div>${pal.act ? "⌫ goes back to Jump" : $("pq").value.trim() ? "↵ asks Greenlight to do it (“park the red ones”, “hold #42”)" : pal.scope !== "all" ? "⇥ widens the scope" : "Type > for actions"}`));
   $("pres").replaceChildren(...out);
   $("pres").querySelector(".sel")?.scrollIntoView({block: "nearest"});
   const qs = $("pq").value.trim();
@@ -1722,6 +1722,7 @@ $("pq").onkeydown = e => {
   const k = e.key, it = pal.items[pal.sel], n = pal.items.length, top = pal.items[0]?.top && pal.items[0];
   const run = fn => { e.preventDefault(); if (fn) palRun(fn) };
   if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); pal.sel = (pal.sel + (k === "ArrowDown" ? 1 : -1) + n) % (n || 1); palDraw() }
+  else if (k === "Enter" && !it && e.target.value.trim() && !pal.act) run(() => post({cmd: "dwim", text: e.target.value.trim()}));  // nothing to jump to: a board command, or Chief's
   else if (k === "Enter") run(!it ? null : it.kind === "act" ? it.go : e.metaKey ? () => newTab(it.ws, undefined, true) : e.altKey ? () => palSplit(it) : it.go);
   else if (k === "Tab" && !pal.act) { e.preventDefault(); const i = SCOPES.findIndex(s => s[0] === pal.scope); pal.scope = SCOPES[(i + (e.shiftKey ? 3 : 1)) % 4][0]; palRender() }
   else if (k === "Backspace" && pal.act && !e.target.value) { e.preventDefault(); pal.act = false; palRender() }
@@ -2043,7 +2044,8 @@ window.term = {
   filed: (id, path) => { const p = panes.get(id); if (!p) return; if (!path) return toast("Couldn't copy the file over"); p.t.paste(shq(path) + " ");
     toast(`${/-pasted\.png$/.test(path) ? "Screenshot" : "File"} sent to ${hostOf(p.tab.ws) === "local" ? "this Mac" : hostOf(p.tab.ws)}`, {sub: path, act: ["Copy path", () => post({cmd: "copy", text: path})]}) },
   tunnel: (key, st) => { tun.set(key, st); const c = $("card"), pr = !c.hidden && c.querySelector(".ports"); if (pr && facts.get(cardWs)) portsFill(pr, cardWs, facts.get(cardWs)) },
-  toast: t => toast(String(t)),  // not the promise: a dialog it opens waits on you, not on the caller
+  toast: t => toast(String(t)),
+  dwimToast: (t, undo) => toast(String(t), undo ? {act: [String(undo), () => post({cmd: "dwimUndo"})]} : undefined),  // a board command from ⌘J  // not the promise: a dialog it opens waits on you, not on the caller
   looked: out => { looked(out); const a = !$("dlg").hidden && $("dlg").querySelector("#look-ask"); if (a) lookDialog(a.value) },  // the Colors dialog, if open, shows it
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },

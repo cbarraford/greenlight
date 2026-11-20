@@ -59,6 +59,40 @@ svg.chart text.v{fill:var(--text);font-size:13px;font-weight:600}
 svg.chart .axis{stroke:var(--line)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--text2);font:12px var(--mono)}
 .legend i{display:inline-block;width:10px;height:10px;margin-right:6px}
+/* The native templates (dwim.py stage and Chief's specs): table, timeline, diff, lifecycle. Text only, like the rest. */
+:root{--bad:#F85149;--ok:#3FB950}
+table.grid{width:100%;border-collapse:collapse;font:13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
+table.grid th{font:11px/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);text-align:left;font-weight:400;padding:0 10px 6px 0}
+table.grid td{padding:8px 10px 8px 0;border-top:1px solid var(--line);color:var(--text2);vertical-align:top}
+table.grid td:first-child{color:var(--text);font-weight:600}
+table.grid tr.bad td:first-child::before,table.grid tr.now td:first-child::before,table.grid tr.ok td:first-child::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;vertical-align:1px;background:var(--dim)}
+table.grid tr.bad td:first-child::before{background:var(--bad)}
+table.grid tr.now td:first-child::before{background:var(--accent)}
+table.grid tr.ok td:first-child::before{background:var(--ok)}
+ol.timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+ol.timeline li{display:grid;grid-template-columns:88px 14px minmax(0,1fr);column-gap:10px;padding:0 0 12px;position:relative}
+ol.timeline time{font:12px/1.5 var(--mono);color:var(--dim);text-align:right}
+ol.timeline i{width:9px;height:9px;margin-top:5px;border:1.5px solid var(--accent);background:var(--bg);position:relative;z-index:1}
+ol.timeline li:first-child i{background:var(--accent)}
+ol.timeline li:not(:last-child)::after{content:"";position:absolute;left:102px;top:14px;bottom:-1px;border-left:1px solid var(--line)}
+ol.timeline b{font-weight:500;font-size:14px}
+ol.timeline span{grid-column:3;font:12px/1.45 var(--mono);color:var(--text2)}
+.diff{display:grid;grid-template-columns:minmax(0,1fr) max-content max-content 90px;gap:8px 12px;align-items:center;font:13px var(--mono);font-variant-numeric:tabular-nums}
+.diff .f{display:contents}
+.diff .p{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.diff .a{color:var(--ok)}.diff .d{color:var(--bad)}
+.diff .m{display:flex;height:8px;background:var(--card)}
+.diff .m i{display:block;height:100%}.diff .m .a{background:var(--ok)}.diff .m .d{background:var(--bad)}
+.diff-sum{font:600 13px var(--mono);margin-bottom:10px}.diff-sum .a{color:var(--ok)}.diff-sum .d{color:var(--bad)}
+pre.hunk{margin:12px 0 0;padding:10px 12px;background:var(--card);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow:hidden;max-height:40vh}
+pre.hunk .a{color:var(--ok)}pre.hunk .d{color:var(--bad)}pre.hunk .c{color:var(--dim)}
+ol.life{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0}
+ol.life li{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:3px solid var(--line);font:12px/1.35 var(--mono);color:var(--dim)}
+ol.life li.done{border-top-color:color-mix(in srgb,var(--accent) 55%,transparent);color:var(--text2)}
+ol.life li.now{border-top-color:var(--accent);color:var(--text)}
+ol.life li b{font-weight:600;font-size:13px}
+ol.life li.now b::after{content:" ●";color:var(--accent)}
+ol.life li span{color:var(--text2)}
 
 /* The looks (Greenlight.swift sets data-look). */
 [data-look=conversation],[data-look=editorial]{.cursor{width:auto;height:auto;margin:0;background:none;color:var(--accent);animation:none}.cursor::after{content:"…"}}
@@ -175,6 +209,90 @@ svg.chart .axis{stroke:var(--line)}
 [data-look=zen] .bar b{font-weight:400;color:var(--text2)}
 [data-look=zen] .foot{font-family:var(--font);border-top:0;color:var(--dim)}
 [data-look=zen] .bar .track i.peak{background:var(--accent)}
+/* The templates in each look. Orb wears the Ledger above. */
+[data-look=conversation]{
+  table.grid,.diff{font-family:var(--font)}
+  table.grid{border:1px solid var(--line);border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden}
+  table.grid th{padding:8px 12px;background:var(--card);font:600 12px var(--font);letter-spacing:0;text-transform:none}
+  table.grid td{padding:9px 12px}
+  table.grid tr td:first-child::before{border-radius:50%}
+  ol.timeline i{border-radius:50%}
+  ol.timeline span,ol.life li{font-family:var(--font)}
+  ol.life li{border-top-width:4px;border-radius:2px}
+  .diff .m{border-radius:4px;overflow:hidden}
+  pre.hunk{border-radius:8px;border:1px solid var(--line)}
+}
+[data-look=onair]{
+  table.grid{border-top:3px solid var(--text)}
+  table.grid th{font:800 11px var(--font);letter-spacing:.16em;padding-top:8px}
+  table.grid td{font:13px var(--font)}
+  table.grid td:first-child{font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+  ol.timeline time{font:800 11px var(--font);letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+  ol.timeline b{font-weight:700}
+  ol.life li{border-top-width:8px;font:800 11px var(--font);letter-spacing:.12em;text-transform:uppercase}
+  ol.life li.done{border-top-color:var(--text)}
+  ol.life li span{text-transform:none;letter-spacing:0;font-weight:400}
+  .diff-sum{font:800 14px var(--font);text-transform:uppercase;letter-spacing:.08em}
+}
+[data-look=phosphor]{
+  table.grid td{border-top-style:dashed}
+  table.grid th::before{content:"["}table.grid th::after{content:"]"}
+  table.grid tr td:first-child::before{content:"[ ]";width:auto;height:auto;background:none!important;color:var(--dim)}
+  table.grid tr.bad td:first-child::before{content:"[!]";color:var(--bad)}
+  table.grid tr.now td:first-child::before{content:"[>]";color:var(--accent)}
+  table.grid tr.ok td:first-child::before{content:"[x]";color:var(--ok)}
+  ol.timeline i{border:0;background:none;width:auto;height:auto;margin:0}
+  ol.timeline i::before{content:"*";color:var(--accent)}
+  ol.timeline li:not(:last-child)::after{border-left-style:dashed}
+  ol.life li{border-top-style:dashed}
+  ol.life li.done b::before{content:"[x] "}ol.life li.now b::before{content:"[>] "}ol.life li.todo b::before{content:"[ ] "}
+  ol.life li.now b::after{content:""}
+  .diff .m{background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--dim) 35%,transparent) 0 6px,transparent 6px 8px)}
+  pre.hunk{background:none;border:1px dashed var(--line)}
+}
+[data-look=editorial]{
+  table.grid th{font:700 11px -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.14em;color:var(--accent)}
+  table.grid td{font:italic 14px var(--font);border-top-color:var(--line)}
+  table.grid tr:first-child td{border-top-color:var(--text)}
+  table.grid td:first-child{font:600 16px var(--font)}
+  ol.timeline time{font:italic 13px var(--font)}
+  ol.timeline b{font-size:16px}
+  ol.timeline span{font:italic 14px var(--font)}
+  ol.life li{font:italic 13px var(--font);border-top-width:2px}
+  ol.life li.done{border-top-color:var(--text)}
+  ol.life li b{font:600 15px var(--font)}
+  .diff-sum{font:italic 15px var(--font)}
+}
+[data-look=hud]{
+  table.grid{border:1px solid var(--line)}
+  table.grid th{font-size:10px;letter-spacing:.16em;padding:6px 10px;background:var(--card)}
+  table.grid td{padding:6px 10px;font-size:12px}
+  table.grid tr.bad td:first-child::before{box-shadow:0 0 6px var(--bad)}
+  table.grid tr.now td:first-child::before{box-shadow:0 0 6px var(--accent)}
+  ol.timeline time{letter-spacing:.08em}
+  ol.timeline li:first-child i{box-shadow:0 0 8px var(--accent)}
+  ol.life{gap:4px}
+  ol.life li{border:1px solid var(--line);padding:8px;background:var(--card);letter-spacing:.1em;text-transform:uppercase;font-size:10px}
+  ol.life li.done{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+  ol.life li.now{border-color:var(--accent);box-shadow:0 0 10px -2px var(--accent)}
+  ol.life li b{font-size:11px}
+  ol.life li span{text-transform:none;letter-spacing:0}
+  .diff .m{border:1px solid var(--line);padding:1px}
+}
+[data-look=zen]{
+  table.grid th{font:12px var(--font);letter-spacing:.02em;text-transform:lowercase}
+  table.grid td{font:13px var(--font);border-top-color:color-mix(in srgb,var(--line) 60%,transparent);padding:12px 10px 12px 0}
+  table.grid td:first-child{font-weight:500}
+  table.grid tr td:first-child::before{border-radius:50%;width:6px;height:6px}
+  ol.timeline i{border-radius:50%;border-width:1px;width:7px;height:7px}
+  ol.timeline time,ol.timeline span{font-family:var(--font);color:var(--dim)}
+  ol.timeline b{font-weight:400}
+  ol.life li{border-top-width:1px;font:12px var(--font);color:var(--dim)}
+  ol.life li.now{border-top-width:2px}
+  ol.life li b{font-weight:400}
+  .diff .m{height:4px;border-radius:2px;overflow:hidden}
+  .diff-sum{font-weight:400}
+}
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
 </style></head>
@@ -184,11 +302,60 @@ const $ = (tag, cls, text) => { const e = document.createElement(tag); if (cls) 
 const vars = () => { const cs = getComputedStyle(document.documentElement);  // the theme, for Chief's own page
   return ["--bg", "--text", "--text2", "--dim", "--card", "--line", "--accent"].map(k => k + ":" + cs.getPropertyValue(k).trim()).join(";"); };
 function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); }
+const head = o => (o.eyebrow ? [$("div", "eyebrow", String(o.eyebrow))] : []).concat([$("h1", null, String(o.title ?? ""))]);
+const str = v => v == null ? "" : String(v), int = v => Math.max(0, Math.round(+v) || 0), arr = v => Array.isArray(v) ? v : [];
+// The native templates: a spec with one of these kinds draws from facts (dwim.py stage fills them from the snapshot, ~150 ms),
+// not prose. Text only: every value goes in as textContent.
+const TEMPLATES = {
+  // {columns: [..], rows: [[..]], tones: ["bad"|"now"|"ok"|""]}: up to 5 columns and 10 rows
+  table(o){
+    const cols = arr(o.columns).slice(0, 5).map(str), rows = arr(o.rows).filter(Array.isArray).slice(0, 10);
+    if (!rows.length) return null;
+    const t = $("table", "grid"), hr = $("tr"); cols.forEach(c => hr.append($("th", null, c)));
+    if (cols.length) { const th = $("thead"); th.append(hr); t.append(th) }
+    const tb = $("tbody");
+    rows.forEach((r, i) => { const tr = $("tr", ["bad", "now", "ok"].includes(arr(o.tones)[i]) ? o.tones[i] : null);
+      r.slice(0, cols.length || 5).forEach(c => tr.append($("td", null, str(c)))); tb.append(tr) });
+    t.append(tb); return t;
+  },
+  // {items: [{at, label, detail}]}: newest first
+  timeline(o){
+    const ol = $("ol", "timeline");
+    for (const it of arr(o.items).slice(0, 8).map(Object)) { const li = $("li"); li.append($("time", null, str(it.at)), $("i"), $("b", null, str(it.label)));
+      if (it.detail) li.append($("span", null, str(it.detail))); ol.append(li) }
+    return ol.children.length ? ol : null;
+  },
+  // {files: [{path, add, del}], add, del, lines?: [{t: "+"|"-"|" "|"@", s}]}
+  diff(o){
+    const fs = arr(o.files).slice(0, 10).map(Object), out = [], max = Math.max(1, ...fs.map(f => int(f.add) + int(f.del)));
+    const add = o.add ?? fs.reduce((a, f) => a + int(f.add), 0), del = o.del ?? fs.reduce((a, f) => a + int(f.del), 0);
+    const sum = $("div", "diff-sum"); sum.append($("span", "a", "+" + int(add)), " ", $("span", "d", "−" + int(del))); out.push(sum);
+    if (fs.length) { const g = $("div", "diff");
+      fs.forEach(f => { const r = $("div", "f"), m = $("div", "m"), a = $("i", "a"), d = $("i", "d");
+        a.style.width = int(f.add) / max * 100 + "%"; d.style.width = int(f.del) / max * 100 + "%"; m.append(a, d);
+        const p = $("span", "p"); p.append($("bdi", null, str(f.path))); r.append(p, $("span", "a", "+" + int(f.add)), $("span", "d", "−" + int(f.del)), m); g.append(r) });
+      out.push(g) }
+    if (arr(o.lines).length) { const pre = $("pre", "hunk");
+      arr(o.lines).slice(0, 40).map(Object).forEach(l => { const t = str(l.t)[0] || " "; pre.append($("span", t === "+" ? "a" : t === "-" ? "d" : "c", (t === "@" ? "" : t) + str(l.s) + "\n")) });
+      out.push(pre) }
+    return out;
+  },
+  // {stages: [{label, state: done|now|todo, detail}], holder, at}
+  lifecycle(o){
+    const ol = $("ol", "life");
+    for (const st of arr(o.stages).slice(0, 8).map(Object)) { const li = $("li", ["done", "now", "todo"].includes(st.state) ? st.state : "todo");
+      li.append($("b", null, str(st.label))); if (st.detail) li.append($("span", null, str(st.detail))); ol.append(li) }
+    if (!ol.children.length) return null;
+    const foot = [o.at && "at " + str(o.at), o.holder && "with " + str(o.holder)].filter(Boolean).join(" · ");
+    return [ol].concat(foot ? [$("div", "foot", foot)] : []);
+  },
+};
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], "wait"); },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   spec(o){
+    if (TEMPLATES[o.kind]) return show(head(o).concat(TEMPLATES[o.kind](o) || []));
     const kind = ["list", "steps", "stat", "flow", "compare", "quote"].includes(o.kind) ? o.kind : "list";
     const ul = $(kind === "steps" ? "ol" : "ul", "items " + kind);
     for (const it of (o.items || []).slice(0, 8)) { const li = $("li"); li.append($("b", null, it.label || "")); if (it.detail) li.append($("span", null, it.detail)); ul.append(li); }
