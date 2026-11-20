@@ -2804,7 +2804,7 @@ struct MsgView: View, Looked {
         let t = Text(m.text), f = chatFace(size: Theme.fs3 + 1)
         switch lk.id {
         case "phosphor":
-            (Text("you> ").foregroundColor(dim) + t).font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(Text("you> ").foregroundColor(dim))\(t)").font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         case "editorial":
             VStack(alignment: .leading, spacing: Theme.sp1) {
                 Text("LETTERS · YOU ASKED").font(sys(size: 10, weight: .bold)).tracking(1.4).foregroundColor(dim)
@@ -3092,7 +3092,7 @@ struct Inbox: View {
         let w = c.waiting
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                (Text("Questions waiting").fontWeight(.semibold) + Text(" · \(w.count)").foregroundColor(dim))
+                Text("\(Text("Questions waiting").fontWeight(.semibold))\(Text(" · \(w.count)").foregroundColor(dim))")
                 Spacer()
                 if let o = w.map(\.ts).min() { Text("oldest \(ago(o))").font(sys(size: Theme.fs1)).foregroundColor(dim) }
                 Button { c.inboxOpen = false } label: {
@@ -4460,7 +4460,7 @@ struct ChatView: View, Looked {
     /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
     @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
         let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
-        let text = lk.id == "phosphor" ? Text("you> ").foregroundColor(dim) + Text(q) : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
+        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
         VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
             if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
             text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(lk.id == "conversation" ? accent : lk.id == "zen" ? dim : lk.id == "phosphor" ? fg : sub)
@@ -6183,9 +6183,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
             let path = "/tmp/greenlight/\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
             // ponytail: stdin is written on the main thread, so a 10 MB drop over a slow ssh stalls the UI for its upload
-            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data) { [weak web] code in
+            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data, onExit: { [weak web] code in
                 web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 ? path : "")))")
-            }
+            })
         case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
             guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
                   let u = URL(string: "http://localhost:\(port)") else { return }
@@ -6293,7 +6293,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                         at(0, 0.3, Animation.easeOut) { s.to = Squash() }
                     }
                     // the backdrop lifts only once the level is in place, so what's behind the app never shows through mid-ride
-                    later(reduce ? 0.22 : 0.3) { [self] in to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
+                    later(reduce ? 0.22 : 0.3) { to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
                     later(reduce ? 0.22 : 0.5) { [self] in
                         rideWin?.orderOut(nil); rideWin = nil; riding = false
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
