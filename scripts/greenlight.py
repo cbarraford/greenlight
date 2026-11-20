@@ -6,8 +6,9 @@
     greenlight.py precheck        Orca automation gate: exit 0 when something is actionable, else 1
     greenlight.py note <ws> <text>  append a dated line to ~/.greenlight/history/<ws>.md
     greenlight.py history <ws>      print that workspace's history
-    greenlight.py ping [--key <ws>|@k] [--ws <ws>]... <text>  question for the Greenlight menubar app (outbox.jsonl);
-                                       --ws names a workspace it's about (its hex is lifted until answered)
+    greenlight.py ping [--key <ws>|@k] [--kind <kind>] [--ws <ws>]... <text>  question for the Greenlight menubar app
+                                       (outbox.jsonl); --ws names a workspace it's about (its hex is lifted until answered);
+                                       --kind names the sort of question for the decision record (decisions.py)
     greenlight.py resolve <key> <why>       close that question in the app
     greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out
 
@@ -34,6 +35,9 @@ import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import decisions  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent  # the skill dir: lifecycles/, prompts/, examples/, memory/
@@ -730,14 +734,16 @@ def pinged(update=None):
     f.write_text(json.dumps(update))
 
 
-def ping(text, key=None, ws=()):
-    """ws: the workspaces (names) it's about; a workspace key counts as one. The app lifts their hexes until it's answered."""
+def ping(text, key=None, ws=(), kind=None):
+    """ws: the workspaces (names) it's about; a workspace key counts as one. The app lifts their hexes until it's answered.
+    kind: the sort of question, for the decision record (decisions.py); guessed from the key or the lifecycle step when not given."""
     if key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list
         print(f"skipped: {key} was pinged in the last {FLAP // 3600}h")
         return
     mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name
     ws = list(dict.fromkeys(mine + list(ws)))
     outbox({"text": text} | ({"key": key} if key else {}) | ({"ws": ws} if ws else {}))
+    decisions.quiet("asked", text, "ping", key, ws, kind)
     if key:
         pinged(pinged() | {key: int(time.time())})
 
@@ -760,12 +766,14 @@ def scanned_names():
 
 
 def ping_cli(args):
-    """greenlight.py ping [--key K] [--ws W]... <text>: --ws takes a workspace name or id; an unknown one sends nothing."""
-    key, ws = None, []
-    while len(args) > 1 and args[0] in ("--key", "--ws"):
+    """greenlight.py ping [--key K] [--kind KIND] [--ws W]... <text>: --ws takes a workspace name or id; an unknown one sends nothing."""
+    key, kind, ws = None, None, []
+    while len(args) > 1 and args[0] in ("--key", "--kind", "--ws"):
         flag, val, args = args[0], args[1], args[2:]
         if flag == "--key":
             key = val
+        elif flag == "--kind":
+            kind = val
         else:
             ws.append(val)
     if not re.search(r"\nOptions: *\S.*\|", " ".join(args)):  # no buttons, only "Reply", in the app
@@ -773,11 +781,12 @@ def ping_cli(args):
     names = scanned_names()
     if unknown := [w for w in ws if w not in names]:
         sys.exit(f"greenlight.py ping: unknown workspace {', '.join(unknown)} (not in the last scan); nothing sent")
-    ping(" ".join(args), key, [names[w] for w in ws])
+    ping(" ".join(args), key, [names[w] for w in ws], kind)
 
 
 def resolve(key, why):
     outbox({"resolve": key, "why": why})
+    decisions.quiet("resolve", key, why)
     pinged({k: t for k, t in pinged().items() if k != key})
 
 
