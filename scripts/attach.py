@@ -7,7 +7,7 @@ Only the file's own name comes over, never the folder it was in on the Mac. Each
 Nothing here prints a file's path or contents: the only things said about a file are its name, kind and size.
 The app checks the same rules first (Greenlight.swift's chatFile), so a rejection here is a backstop.
 """
-import base64, binascii, os, re, secrets, shutil, time
+import base64, binascii, json, os, re, secrets, shutil, time
 
 MB = 1 << 20
 LIMITS = {"image": 5 * MB, "pdf": 10 * MB, "text": 1 * MB}  # image: what Claude takes per image
@@ -163,7 +163,7 @@ def note(stored):
     return "\n".join(lines)
 
 
-SEGMENT = re.compile(r"(^|[^\w.-])(\.?/)?attachments/")  # a path into the attachments folder, not the word
+SEGMENT = re.compile(r"(^|[\s'\"=(:])(\./)?attachments/")  # a relative path into the folder at a token's start (grep -R prints ./attachments/…), not app/attachments/ or a URL  # a path into the attachments folder, not the word
 
 
 def mentions(chat_dir, step):
@@ -172,42 +172,56 @@ def mentions(chat_dir, step):
     return root(chat_dir) in s or SEGMENT.search(s) is not None
 
 
+KEY = 16  # characters: a line's start and end of this length are what's looked for
+
+
 def needles(chat_dir):
-    """Lines (16+ characters, whitespace collapsed as the events show it) of every text file still kept: to spot attachment
-    contents in a tool's output however the agent got there, this turn or a later one. A heuristic: shorter lines, or text an
-    agent rewrites, aren't recognised."""
+    """What attachment contents look like in a tool's output, however the agent got there (a grep -R, a Write that copies
+    a line, this turn or a later one): the first and last KEY characters of every 16+ character line of every text file
+    still kept, as the events show them (whitespace collapsed) and as JSON shows them (a tool's input). A set, so checking
+    an output costs one lookup per character. A heuristic: shorter lines, or text an agent rewrites, aren't recognised."""
     out = set()
     for d, _, names in os.walk(root(chat_dir)):
         for n in names:
-            p = os.path.join(d, n)
             try:
-                with open(p, "rb") as fh:
+                with open(os.path.join(d, n), "rb") as fh:
                     b = fh.read(LIMITS["text"] + 1)
             except OSError:
                 continue
-            if kind(b) == "text":
-                out |= {x for x in (" ".join(l.split()) for l in b.decode("utf-8").splitlines()) if len(x) >= 16}
+            if kind(b) != "text":
+                continue
+            for l in b.decode("utf-8").splitlines():
+                for x in {" ".join(l.split()), l.strip(), json.dumps(l.strip(), ensure_ascii=False)[1:-1]}:
+                    if len(x) >= KEY:
+                        out |= {x[:KEY], x[-KEY:]}
     return out
 
 
 HIDDEN = "(from an attached file)"
 
 
+def showing(line, needles):
+    flat = " ".join(line.split())
+    return any(t[i:i + KEY] in needles for t in {flat, line} for i in range(len(t) - KEY + 1))
+
+
 def hide(chat_dir, e, needles):
     """A step event with what it shows of an attachment taken out, line by line: a line that names a path into the folder
-    (grep -R prints them) or holds a line of an attached text file. Other lines stay. True if anything was taken."""
+    or holds the start or end of a line of an attached text file (so a line an output cut short is caught from the side
+    that shows). Other lines stay. True if anything was taken."""
     took = False
+    if not os.path.isdir(root(chat_dir)):
+        return False  # nothing attached in this conversation
     def clean(text, lines):
         nonlocal took
         out = []
         for l in (text.split("\n") if lines else [text]):
-            flat = " ".join(l.split())
-            if flat and (root(chat_dir) in flat or SEGMENT.search(flat) or any(n in flat for n in needles)):
+            if l.strip() and (root(chat_dir) in l or SEGMENT.search(l) or showing(l, needles)):
                 took = True
                 l = HIDDEN
             out.append(l)
         return "\n".join(out)
-    for k, lines in (("out", False), ("detail", False), ("full", True), ("input", True)):
+    for k, lines in (("out", False), ("detail", False), ("call", False), ("title", False), ("full", True), ("input", True)):
         if isinstance(e.get(k), str) and e[k]:
             e[k] = clean(e[k], lines)
     return took

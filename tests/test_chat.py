@@ -490,6 +490,10 @@ def test_needles_match_what_the_events_show(tmp_path):
     assert e["full"] == f"ok\n{attach.HIDDEN}\nall   good here\n{attach.HIDDEN}"  # only the lines that show it go
     e = {"out": "grep found attachments in chat.py", "full": "#!/usr/bin/env python3\nprint(1)"}
     assert attach.hide(D, e, ns) and e["out"] == "grep found attachments in chat.py" and e["full"].endswith("\nprint(1)")  # a common line costs one line, not the output
+    long = "the deploy token for staging is " + "x" * 200
+    attach.store(D, [("t.txt", "text", (long + "\n").encode())])
+    e = {"out": chat.short("token: " + long, 120), "call": "Read(" + D + "/attachments/a/t.txt)"}
+    assert attach.hide(D, e, attach.needles(D)) and e["out"] == e["call"] == attach.HIDDEN  # a line cut short still shows its start
     assert not attach.mentions(D, {"detail": "grep -n attachments scripts/chat.py"}) and attach.mentions(D, {"detail": "cat attachments/x"})
 
 
@@ -505,3 +509,29 @@ def test_an_earlier_turns_attachment_is_hidden_too(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("find the db password", "claude-haiku-5-5", None)  # turn 2: nothing attached
     assert not any("hunter2" in json.dumps(e) for e in events), events
+
+
+def test_hide_catches_json_cut_lines_and_is_fast(tmp_path):
+    D = str(tmp_path)
+    attach.store(D, [("y.env", "text", b'API_TOKEN="sk-live-abcdef0123456789"\n')])
+    ns = attach.needles(D)
+    e = {"input": json.dumps({"file_path": "/tmp/out.env", "content": 'API_TOKEN="sk-live-abcdef0123456789"\n'}),
+         "out": chat.short("x" * 100 + ' API_TOKEN="sk-live-abcdef0123456789"', 120),  # cut mid-line: its start shows
+         "full": 'live-abcdef0123456789"\nok'}  # a tail clip: its end shows
+    assert attach.hide(D, e, ns) and e["input"] == e["out"] == attach.HIDDEN and e["full"] == attach.HIDDEN + "\nok", e
+    for i in range(5):  # five 1 MB files kept: cleaning a big verbose event stays quick
+        attach.store(D, [(f"big{i}.txt", "text", "".join(f"line {i} {k} of a long attached text file\n" for k in range(24000)).encode()[: 1 << 20])])
+    ns, t0 = attach.needles(D), time.time()
+    attach.hide(D, {"full": "\n".join("plain output line %d with nothing attached in it" % k for k in range(100)), "input": "y" * 4000}, ns)
+    assert time.time() - t0 < 0.2, time.time() - t0
+
+
+def test_hide_leaves_other_paths_alone(tmp_path):
+    D = str(tmp_path)
+    e = {"detail": "ls app/models/attachments/", "out": "https://cdn.example.com/attachments/1/x.png"}
+    assert not attach.hide(D, dict(e), set())  # nothing attached: nothing to hide
+    attach.store(D, [("n.txt", "text", b"hi\n")])
+    assert not attach.hide(D, e, attach.needles(D)) and e["detail"] == "ls app/models/attachments/"
+    assert not attach.mentions(D, {"detail": "ls app/models/attachments/"}) and attach.mentions(D, {"detail": "grep -R x ./attachments/"})
+    f = {"out": "./attachments/2026/n.txt:hi", "title": "Copy " + D + "/attachments/a/n.txt"}
+    assert attach.hide(D, f, set()) and f["out"] == f["title"] == attach.HIDDEN
