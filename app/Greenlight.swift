@@ -768,6 +768,7 @@ struct ChatFile: Identifiable {
     static let kinds = ["image": "image", "pdf": "PDF", "text": "text"]
     static let supported = "images (PNG, JPEG, GIF, WebP), PDFs and text files"
     var json: [String: String] { ["name": name, "data": data.base64EncodedString()] }
+    var kindName: String { let k = ChatFile.kinds[kind] ?? kind; return k.prefix(1).uppercased() + k.dropFirst() }  // "Image", "PDF", "Text"
 }
 func byteSize(_ n: Int) -> String { n < 1024 ? "\(n) B" : n < 1 << 20 ? "\(Int((Double(n) / 1024).rounded())) KB" : String(format: "%.1f MB", Double(n) / Double(1 << 20)) }
 /// image | pdf | text, from the bytes (never the name), as attach.kind.
@@ -1393,7 +1394,7 @@ struct StageFiles: View {
             }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
         }.padding(.leading, 4).padding(.trailing, 3).frame(height: 24)
             .background(RoundedRectangle(cornerRadius: 6).fill(hx(l.stage))).overlay(RoundedRectangle(cornerRadius: 6).stroke(hx(l.line)))
-            .help("\(ChatFile.kinds[f.kind]!.prefix(1).uppercased() + ChatFile.kinds[f.kind]!.dropFirst()), goes to \(c.name) with what you say next")
+            .help("\(f.kindName), goes to \(c.name) with what you say next")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
 }
@@ -1888,6 +1889,7 @@ final class Voice: NSObject, ObservableObject {
     func start() {
         guard !on, !starting else { return }
         starting = true; startGen += 1
+        core?.refused = []  // refusals from before voice mode were shown in the composer: Chief isn't told them now
         start(attempt: 0, gen: startGen)
     }
     /// Waits before each retry of a start that failed: about 3 s in all, then the error is shown.
@@ -2018,8 +2020,8 @@ final class Voice: NSObject, ObservableObject {
 
     func run(_ cmd: VoiceCmd) {
         switch cmd {
-        case .bye: stopAll()
-        case .stop: hush(); core?.queue.removeAll { $0.spoken }; core?.stop()
+        case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
+        case .stop: hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
         }
@@ -2197,7 +2199,7 @@ final class Voice: NSObject, ObservableObject {
         heard = ""; delegation = id; liveDrop = false
         guard !t.isEmpty else { return }
         if let cmd = voiceCommand(t) { return run(cmd) }
-        if c.run != nil { muted = true; liveBuf = [] }  // a new request mid-answer: the rest of the old one goes unsaid (send() queues the new one)
+        if c.run != nil { muted = true; liveBuf = [] }  // a new request mid-answer: the rest of the old one goes unsaid (spoken() queues the new one)
         lastHeard = t
         c.spoken(t)
     }
@@ -2239,7 +2241,6 @@ final class Voice: NSObject, ObservableObject {
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
         hush()
-        core?.queue.removeAll { $0.spoken }  // turns said but still waiting on a file: voice mode is over, so they don't go
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
@@ -2938,8 +2939,9 @@ final class Core: ObservableObject {
     }
     @Published var run: Run?
     @Published var queue: [Queued] = []
-    /// spoken: a voice-mode turn. It takes the tray's files when it goes (not when it was said), and waits while any are still being read.
-    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false }
+    /// spoken: a voice-mode turn. It takes the tray's files (and refusals) when said; waits: files were still being read then, so it takes
+    /// the tray's files when it goes, and holds until they're read.
+    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false, waits = false; var refused: [String] = [] }
     @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
     @Published var fileNote = ""  // why the last file didn't attach; clears itself
     @Published var dropping = false  // files dragged over the chat
@@ -2956,7 +2958,7 @@ final class Core: ObservableObject {
         if files.count >= ChatFile.maxFiles { return refuse("\(f.name) wasn't attached: attach up to \(ChatFile.maxFiles) files at a time.") }
         if files.reduce(f.data.count, { $0 + $1.data.count }) > ChatFile.maxTotal { return refuse("\(f.name) wasn't attached: these files come to more than \(byteSize(ChatFile.maxTotal)).") }
         files.append(f)
-        fileNote = ""
+        fileNote = ""; refused.removeAll { $0.hasPrefix("\(f.name) ") }  // it's attached now
         log(.chief, name, .status, "attached a file (\(ChatFile.kinds[f.kind]!), \(byteSize(f.data.count)))")  // never its name's folder, never its contents
     }
     /// Files that didn't attach since the last message: shown, and in voice mode told to Chief with the next spoken turn, so it says so out loud.
@@ -2993,19 +2995,22 @@ final class Core: ObservableObject {
         guard let ps = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !ps.isEmpty else { return false }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-drop-" + UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        final class Left { var n = 0, held = 0 }  // n: files still to come (the promise queue's); held: of `reading` (the main thread's)
+        final class Left { var n = 0, held = 0, late = false }  // n: files still to come (the promise queue's); held: of `reading` (the main thread's)
         let left = Left(), q = OperationQueue()
         q.maxConcurrentOperationCount = 1
         left.n = ps.reduce(0) { $0 + max(1, $1.fileNames.count) }
         left.held = left.n; reading += left.n  // Send waits for them, but not forever: a promise may never be kept
         let release = { [weak self] (k: Int) in let k = min(k, left.held); left.held -= k; self?.reading -= k }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { release(left.held) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in  // what hasn't come by then is dropped, and said: a turn waiting on it goes without it
+            if left.held > 0 { left.late = true; self?.refuse("\(left.held == 1 ? "A dropped file" : "\(left.held) dropped files") didn't arrive in 30 seconds: drop \(left.held == 1 ? "it" : "them") again.") }
+            release(left.held)
+        }
         for r in ps {
             r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: q) { [weak self] url, err in
                 let got = err == nil ? chatFile(at: url) : (nil, "A dropped file couldn't be received.")
                 left.n -= 1
                 if left.n <= 0 { try? FileManager.default.removeItem(at: dir) } else { try? FileManager.default.removeItem(at: url) }
-                DispatchQueue.main.async { self?.add(got); release(1) }
+                DispatchQueue.main.async { if !left.late { self?.add(got) }; release(1) }  // a late one would ride with something said after
             }
         }
         return true
@@ -3347,20 +3352,22 @@ final class Core: ObservableObject {
         return false
     }
 
-    /// A turn said out loud in voice mode. It goes through the queue, in the order said: when its turn comes, it takes the files waiting
-    /// in the composer (dropped, pasted or picked on the stage), as a typed message does, and files still being read hold it until
-    /// they land or fail (a promised file gives up after 30 s). So Clear, "stop" and the end of voice mode cancel it like any queued message.
+    /// A turn said out loud in voice mode. It goes through the queue, in the order said, with the files waiting in the composer
+    /// (dropped, pasted or picked on the stage) as a typed message does. Files still being read hold it until they land or fail
+    /// (a promised file gives up after 30 s); then it takes the tray as it goes. Clear cancels it like any queued message, and so do
+    /// "stop" and "bye" while it waits on a file (during an answer, "stop" stops the answer and what was said after still goes).
     func spoken(_ text: String) {
-        queue.append(Queued(text: text, spoken: true))
+        if reading > 0 { queue.append(Queued(text: text, spoken: true, waits: true)) }
+        else { queue.append(Queued(text: text, files: files, spoken: true, refused: refused)); files = []; refused = [] }  // a later drop is for a later turn
         if reading > 0 && run == nil && clearing == 0 { voice.wait("Reading your file", "It goes with what you said, once it's read.") }
         next()
     }
     /// The next queued message, when nothing is running: a spoken one waits for files still being read.
     func next() {
-        guard run == nil, clearing == 0, let q = queue.first, !(q.spoken && reading > 0) else { return }
+        guard run == nil, clearing == 0, let q = queue.first, !(q.waits && reading > 0) else { return }
         queue.removeFirst()
-        let fs = q.spoken ? files : q.files, no = q.spoken ? refused : []
-        if q.spoken { files = []; refused = [] }
+        let fs = q.waits ? files : q.files, no = q.waits ? refused : q.refused
+        if q.waits { files = []; refused = [] }
         let told = no.isEmpty ? "" : "(Greenlight, not said by the user: files they tried to attach weren't: \(no.joined(separator: " ")) Tell them briefly.)\n"
         send(told + q.text, shown: q.text, files: fs, spoken: q.spoken)  // send() adds voiceNote
     }
@@ -3396,7 +3403,7 @@ final class Core: ObservableObject {
     func active() { lastActive = Date(); checkedIn = false; if session > 0 { delegate.greenlight.active() } }  // the check-in is the main chat's
     func checkIn() {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
-        guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
+        guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, queue.isEmpty, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
         checkedIn = true
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next"); r.checkIn = true
@@ -3447,6 +3454,7 @@ final class Core: ObservableObject {
     func clear(keepQueue: Bool = false) {
         if run != nil { run?.files = []; stop() }  // a new conversation: its files don't come back
         if !keepQueue { queue = [] }
+        refused = []  // about the old conversation's files
         clearing += 1
         ssh("\(chief) new", onExit: { [weak self] _ in
             guard let self else { return }
@@ -5877,7 +5885,7 @@ struct ChatView: View, Looked {
         }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : 3).padding(.trailing, 3).frame(height: 24)
             .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
             .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
-            .help("\(ChatFile.kinds[f.kind]!.prefix(1).uppercased() + ChatFile.kinds[f.kind]!.dropFirst()), goes to \(c.name) with your next message")
+            .help("\(f.kindName), goes to \(c.name) with your next message")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
     /// Files dragged over the chat: where they'll go.
@@ -8213,7 +8221,24 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
     wait("spoken refusal", 60) { c.run == nil && c.queue.isEmpty }
     check("voice attach: a refused file on a spoken turn is named, not put back to go again: \(onMain { c.fileNote })",
           onMain { c.msgs.last!.failed && c.files.isEmpty && c.input.isEmpty && c.fileNote.hasPrefix("Not sent: fake.txt.") })
-    onMain { c.fileNote = "" }
+    onMain {  // turns said during an answer: each has the files there when it was said; "stop" stops the answer, not them (stopAll, which no longer touches
+        // the queue, can't run here: the mini's mic is behind a prompt nobody can click)
+        c.fileNote = ""; c.files = []; c.refused = []
+        c.spoken("Say one word.")
+        c.spoken("And another.")  // queued behind the answer, nothing in the tray
+        c.files = [ChatFile(name: "notes.txt", kind: "text", data: Data("The codeword is FENNEL-4821.\n".utf8), thumb: nil)]
+        c.spoken("What's the codeword in notes.txt?")
+        check("voice attach: a turn said before a drop doesn't take the file", c.run != nil && c.queue.count == 2 && c.queue[0].files.isEmpty
+              && c.queue[1].files.map(\.name) == ["notes.txt"] && c.files.isEmpty)
+        c.voice.run(.stop)
+        check("voice attach: \"stop\" during an answer keeps what was said after it: \(c.queue.map(\.text))", c.queue.count == 2)
+    }
+    wait("queued spoken turns", 240) { c.run == nil && c.queue.isEmpty }
+    onMain {
+        let you = c.msgs[c.msgs.count - 2].text, r = c.msgs.last!.text, before = c.msgs[c.msgs.count - 4].text
+        check("voice attach: ...they go in order, the file with the turn said after it: \(before) / \(you) / \(r)",
+              before == "And another." && you == "What's the codeword in notes.txt?\n📎 notes.txt" && r.contains("FENNEL-4821"))
+    }
     try? FileManager.default.removeItem(at: tmp)
 }
 
