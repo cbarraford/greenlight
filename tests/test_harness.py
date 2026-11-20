@@ -38,9 +38,8 @@ n = Norm()
 assert n.opencode({"type": "step_start", "sessionID": "ses_1", "part": {}}) == []
 s = n.opencode({"type": "tool_use", "part": {"id": "p1", "tool": "bash", "state": {"status": "completed", "input": {"command": "ls"}, "output": "a\nb", "title": "ls"}}})
 assert [e["e"] for e in s] == ["step", "step_done"] and s[1]["ok"] and s[0]["detail"] == "ls", s
-assert n.opencode({"type": "text", "part": {"text": "pong"}}) == [] and n.text == "pong"  # held: a note or the reply, by what follows
+assert n.opencode({"type": "text", "part": {"text": "pong"}})[1] == {"e": "text", "delta": "pong", "whole": True} and n.text == "pong"
 assert n.opencode({"type": "step_finish", "part": {"tokens": {"input": 10, "output": 2, "cache": {"read": 90, "write": 0}}}}) == [{"e": "usage", "context": 100}]
-assert n.settle(final=True) == [{"e": "text_reset"}, {"e": "text", "delta": "pong"}] and n.settle(final=True) == []
 err = n.opencode({"type": "error", "error": {"name": "APIError", "data": {"message": "This API key has expired."}}})[0]
 assert err["e"] == "done" and not err["ok"] and "expired" in err["text"]
 
