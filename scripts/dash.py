@@ -706,8 +706,11 @@ def tree_new(path, o):
         return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
     out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
     if o.get("agent") and wid:
+        prompt = (goal + (gate or {}).get("brief", "")
+                  + f"\n\nIf you implement code, run its tests with `python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` "
+                    "in this worktree before opening a draft PR, so the self-test is on record.")
         r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}",
-                 *(["--prompt", goal + (gate or {}).get("brief", "")] if goal else []))
+                 *(["--prompt", prompt] if goal else []))
         if gate:
             lifestage.save("preflight", new, gate["record"])
         if s := (r.get("terminal") or {}).get("session"):
@@ -1356,7 +1359,8 @@ def task_new(repo_name, payload):
     brief = (f"Your task in {repo['path']}: {title}. My whole request is below (verbatim in {d}/request.md)."
              + (f" I attached {len(files)} file{'s' * (len(files) > 1)}, in {d}/files: {', '.join(fn for fn, _ in files)}. Read them first."
                 if files else "")
-             + " Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the "
+             + " Follow my request and clarifying answers. If they ask for a plan or investigation first, stop at that deliverable. "
+               "Otherwise implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the "
                f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess. Before you open the MR, run its tests with "
                f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record."
              + f"\n\nMy request:\n\n{quoted}{gate['brief']}")
@@ -1375,6 +1379,8 @@ def task_new(repo_name, payload):
         except RuntimeError:
             pass
     lifestage.save("preflight", name, gate["record"])
+    if path := (res.get("worktree") or {}).get("path"):
+        lifestage.save("preflight", path, gate["record"])
     _note(name, f"task started ({a}, {len(files)} file{'s' * (len(files) != 1)}): {title} [preflight: {gate['why']}]")
     return {"ok": True, "name": name, "repo": repo["name"]}
 
