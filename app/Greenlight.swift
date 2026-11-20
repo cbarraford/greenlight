@@ -507,28 +507,45 @@ func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin")
 func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
-/// Read once per launch, then kept in memory: voice mode needs its key every sentence, and each Keychain read can ask your password.
-/// ponytail: a denied read stays denied until you relaunch or set the key again
+/// Successful reads are cached: voice mode needs its key every sentence, and each Keychain read can ask your password.
 @discardableResult
 func keychain(_ account: String, set value: String? = nil) -> String? {
     keyLock.lock(); defer { keyLock.unlock() }
     let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "greenlight", kSecAttrAccount as String: account]
-    if let value {  // nil back: it isn't saved (this launch still uses it)
-        keys[account] = .some(value.isEmpty ? nil : value)
-        let gone = SecItemDelete(q as CFDictionary)
-        if value.isEmpty { return gone == errSecSuccess || gone == errSecItemNotFound ? value : nil }
+    if let value {
+        if value.isEmpty {
+            let st = SecItemDelete(q as CFDictionary)
+            guard st == errSecSuccess || st == errSecItemNotFound else {
+                NSLog("keychain delete %@: %d", account, st)
+                return nil
+            }
+            keys[account] = .some(nil)
+            return value
+        }
         let data = Data(value.utf8)
-        var st = SecItemAdd(q.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil)
-        if st == errSecDuplicateItem { st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) }  // an older build's item it couldn't delete
-        if st != errSecSuccess { NSLog("keychain %@: %d", account, st) }
-        return st == errSecSuccess ? value : nil
+        var st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if st == errSecItemNotFound {
+            st = SecItemAdd(q.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil)
+            if st == errSecDuplicateItem { st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) }
+        }
+        guard st == errSecSuccess else {
+            NSLog("keychain save %@: %d", account, st)
+            return nil
+        }
+        keys[account] = .some(value)
+        return value
     }
     if let k = keys[account] { return k }
     var out: AnyObject?
-    let k = SecItemCopyMatching(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out) == errSecSuccess
-        ? (out as? Data).map { String(decoding: $0, as: UTF8.self) } : nil
-    keys[account] = .some(k)
-    return k
+    let st = SecItemCopyMatching(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out)
+    if st == errSecItemNotFound { keys[account] = .some(nil); return nil }
+    guard st == errSecSuccess, let data = out as? Data else {
+        NSLog("keychain read %@: %d", account, st)
+        return nil  // a locked or denied Keychain can be retried later in this launch
+    }
+    let value = String(decoding: data, as: UTF8.self)
+    keys[account] = .some(value)
+    return value
 }
 private var keys: [String: String?] = [:]
 private let keyLock = NSLock()
@@ -6889,8 +6906,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         NSApp.activate(ignoringOtherApps: true)
         guard a.runModal() == .alertFirstButtonReturn else { return }
         let v = f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if keychain(account, set: v) == nil && !v.isEmpty {
-            greenlight.msgs.append(Msg(.note, "Couldn't save the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
+        if keychain(account, set: v) == nil {
+            let action = v.isEmpty ? "remove" : "save"
+            greenlight.msgs.append(Msg(.note, "Couldn't \(action) the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
         }
         if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
     }
