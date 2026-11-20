@@ -60,6 +60,8 @@ assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
 assert plan("hold #42 and this", [puck("auth-login", 42), puck("search", 43)], focus="search")["route"] == "chief"
+assert plan("hold #42 and 1", [puck("auth-login", 42), puck("first", 1)])["route"] == "chief"
+assert [a["ws"] for a in plan("hold #42 and #1", [puck("auth-login", 42), puck("first", 1)])["actions"]] == ["auth-login", "first"]
 assert plan("hold #42 and release the hold on #43")["route"] == "chief"
 assert plan("park #42 and unpark #46")["route"] == "chief"
 assert plan("hold #42 when CI fails", [puck("auth-login", 42, goal="CI fails when tests run")])["route"] == "chief"
