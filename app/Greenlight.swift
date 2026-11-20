@@ -1002,6 +1002,11 @@ struct DwimToast: Identifiable, Equatable {
     var undoing = false, failed = false
     var undoable: Bool { pending || applying || undo != nil }
 }
+func keepingToast(_ toasts: [DwimToast], _ t: DwimToast) -> [DwimToast] {
+    var out = toasts
+    if let i = out.firstIndex(where: { $0.id == t.id }) { out[i] = t } else { out.append(t) }
+    return out
+}
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
 func fallbackSpec(_ text: String) -> [String: Any] {
@@ -3706,10 +3711,12 @@ final class Core: ObservableObject {
 
     // MARK: DWIM: board commands without a Chief turn (scripts/dwim.py)
 
-    @Published var toast: DwimToast?
+    @Published var toasts: [DwimToast] = []
+    var toast: DwimToast? { toasts.last }
     var focusName: String?  // the workspace of the window you were last in (noteFocus): what "park this" means
     var launchWorks: [UUID: DispatchWorkItem] = [:]  // each accepted launch keeps its own grace and Undo
     var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
+    var toastListeners: [UUID: (DwimToast?) -> Void] = [:]
     static let launchGrace = 5.0, toastFor = 8.0, planDeadline = 1.5
     var dwimJSON: (Any) -> String = { o in (try? JSONSerialization.data(withJSONObject: o)).map { String(decoding: $0, as: UTF8.self) } ?? "{}" }
 
@@ -3759,9 +3766,7 @@ final class Core: ObservableObject {
             let w = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.launchWorks.removeValue(forKey: t.id) != nil else { return }  // Undo may have cancelled its grace
-                if self.toast?.id == t.id {
-                    var now = t; now.pending = false; self.show(now, for: nil)
-                }
+                var now = t; now.pending = false; self.show(now, for: nil)
                 self.apply(o, text: text, id: t.id)
             }
             launchWorks[t.id] = w
@@ -3784,32 +3789,37 @@ final class Core: ObservableObject {
                 if self.voice.on { self.voice.say("That didn't all work: \(errs.count == 1 ? errs[0] : "\(errs.count) failed").") }
             }
             self.log(.greenlight, "dwim", errs.isEmpty ? .action : .failed, "applied in \(r["ms"] ?? "?") ms" + (errs.isEmpty ? "" : ": " + errs.joined(separator: "; ")))
-            guard var t = self.toast, t.id == id else { return }  // a newer toast is up: this one's Undo went with it
+            guard var t = self.toasts.first(where: { $0.id == id }) else { return }
             t.undo = undo; t.failed = !errs.isEmpty; t.applying = false
             if !errs.isEmpty { t.text += " · \(errs.count) failed" }
-            if t.undoing && undo != nil { t.undoing = false; self.toast = t; return self.undoToast() }  // Undo was pressed before the apply came back
+            if t.undoing && undo != nil { t.undoing = false; self.show(t, for: nil); return self.undoToast(id) }  // Undo was pressed before the apply came back
             t.undoing = false
             self.show(t, for: Core.toastFor)
         })
     }
 
     private func show(_ t: DwimToast, for secs: Double?) {
-        toast = t; toasted?(t)
+        if !toasts.contains(where: { $0.id == t.id }), let toasted { toastListeners[t.id] = toasted }
+        toasts = keepingToast(toasts, t)
+        toastListeners[t.id]?(t)
         guard let secs else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in if self?.toast?.id == t.id { self?.toast = nil; self?.toasted?(nil) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in self?.removeToast(t.id) }
     }
 
+    private func removeToast(_ id: UUID) { toasts.removeAll { $0.id == id }; toastListeners.removeValue(forKey: id) }
+
     /// The toast's Undo (and "undo" said in voice mode): cancels a launch still in its grace, or puts the edited goals back.
-    func undoToast() {
-        guard var t = toast else { return }
+    func undoToast(_ id: UUID? = nil) {
+        guard let target = id ?? toast?.id, var t = toasts.first(where: { $0.id == target }) else { return }
         if t.pending {
             launchWorks.removeValue(forKey: t.id)?.cancel()
             msgs.append(Msg(.note, "Cancelled: \(t.text)"))
             if voice.on { voice.say("Cancelled.") }
+            removeToast(t.id)
             return show(DwimToast(text: "Cancelled"), for: 3)
         }
-        guard let u = t.undo else { if t.applying { t.undoing = true; toast = t }; return }  // still applying: undone as soon as it's in
-        show(DwimToast(text: "Undoing…"), for: nil)
+        guard let u = t.undo else { if t.applying { t.undoing = true; show(t, for: nil) }; return }  // still applying: undone as soon as it's in
+        t.undoing = true; show(t, for: nil)
         var out = ""
         ssh("\(py)/dwim.py undo \(shellQuote(u))", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
@@ -3820,6 +3830,7 @@ final class Core: ObservableObject {
             self.msgs.append(Msg(.note, said))
             if self.voice.on { self.voice.say(back.isEmpty ? said : "Undone.") }
             self.log(.greenlight, "dwim", r["error"] == nil ? .action : .failed, said)
+            self.removeToast(t.id)
             self.show(DwimToast(text: said), for: 4)
         })
     }
@@ -3830,7 +3841,13 @@ struct DwimToastBar: View {
     @ObservedObject var c: Core
     let l: Look
     var body: some View {
-        if let t = c.toast {
+        if !c.toasts.isEmpty {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 4) { ForEach(c.toasts) { t in row(t) } }
+            }.frame(maxHeight: 160)
+        }
+    }
+    private func row(_ t: DwimToast) -> some View {
             HStack(spacing: 10) {
                 if t.pending { ProgressView().controlSize(.mini) }
                 else { Image(systemName: t.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").font(.system(size: 12))
@@ -3838,16 +3855,18 @@ struct DwimToastBar: View {
                 Text(t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text).font(.system(size: 12, weight: .medium)).foregroundColor(hx(l.text))
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if t.undoable {
-                    Button(t.undoing ? "Undoing…" : t.pending ? "Cancel" : "Undo") { c.undoToast() }.buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .semibold)).foregroundColor(hx(l.accent)).disabled(t.undoing)
-                        .keyboardShortcut("z", modifiers: [.command, .shift]).help(t.pending ? "Don't start it" : "Put it back (⇧⌘Z)")
-                }
+                if t.undoable { action(t) }
             }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(hx(l.card))).overlay(RoundedRectangle(cornerRadius: 8).stroke(hx(l.line)))
                 .accessibilityElement(children: .contain).accessibilityLabel(t.text)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
+    }
+    @ViewBuilder private func action(_ t: DwimToast) -> some View {
+        let button = Button(t.undoing ? "Undoing…" : t.pending ? "Cancel" : "Undo") { c.undoToast(t.id) }.buttonStyle(.plain)
+            .font(.system(size: 12, weight: .semibold)).foregroundColor(hx(l.accent)).disabled(t.undoing)
+            .help(t.pending ? "Don't start it" : "Put it back (⇧⌘Z)")
+        if c.toast?.id == t.id { button.keyboardShortcut("z", modifiers: [.command, .shift]) }
+        else { button }
     }
 }
 
@@ -7755,7 +7774,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let c = greenlight
             c.toasted = { [weak web] t in  // the toast shows where you typed it, with its own Undo (the palette's window has no chat)
                 guard let t else { return }
-                let d = (try? JSONSerialization.data(withJSONObject: [t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text, t.undoable ? (t.pending ? "Cancel" : "Undo") : ""])).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+                let d = (try? JSONSerialization.data(withJSONObject: [t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text, t.undoable ? (t.pending ? "Cancel" : "Undo") : "", t.id.uuidString])).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
                 web?.evaluateJavaScript("window.term && term.dwimToast && term.dwimToast(...\(d))")
             }
             let ask = { [weak self, weak web] (note: String) in
@@ -7765,7 +7784,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 self?.toastTerm(web, "Asked \(c.name): the answer is in the chat")
             }
             if dwimCandidate(t) { c.dwim(t, source: "jump", otherwise: ask) } else { ask("") }
-        case "dwimUndo": greenlight.undoToast()
+        case "dwimUndo": greenlight.undoToast((b["id"] as? String).flatMap(UUID.init(uuidString:)))
         case "url":  // a link in a terminal: web links only, the output isn't ours to trust
             if let u = URL(string: b["url"] as? String ?? ""), ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
         case "settings":  // the hover card's "Edit <repo>'s prompt…"
@@ -8591,6 +8610,9 @@ func selfTest() {
     check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
         $0["page"] == nil && ($0["agent"] as? [String: String]) == ["state": "working"] && $0["name"] as? String == "a" } == true)
     check("dwim: queued fallback shows only the user's words", Core.Queued(text: "(routing note)\npark #42", shown: "park #42").display == "park #42")
+    let firstToast = DwimToast(text: "Hold A", applying: true), secondToast = DwimToast(text: "Hold B", applying: true)
+    var finishedFirst = firstToast; finishedFirst.applying = false; finishedFirst.undo = "undo-a"
+    check("dwim: each quick action keeps its own Undo", keepingToast(keepingToast([firstToast], secondToast), finishedFirst) == [finishedFirst, secondToast])
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil

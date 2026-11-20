@@ -361,15 +361,15 @@ def plan(o):
 # ---- doing it -----------------------------------------------------------------------------------------------------------
 
 def _goal_after(verb, goal):
-    goal = " ".join((goal or "").split())
+    goal = goal or ""
     if verb == "park":
-        return goal if re.search(r"\(parked\)", goal, re.I) else f"{goal} (parked)".strip()
+        return goal if re.search(r"\(parked\)", goal, re.I) else f"{goal}{' ' if goal else ''}(parked)"
     if verb == "unpark":
-        return " ".join(re.sub(r"\(parked\)", "", goal, flags=re.I).split())
+        return re.sub(r" ?\(parked\)", "", goal, count=1, flags=re.I)
     if verb == "hold":
-        return goal if HOLD.search(goal) else f"{goal} (hold)".strip()
+        return goal if HOLD.search(goal) else f"{goal}{' ' if goal else ''}(hold)"
     if verb == "release":
-        return " ".join(re.sub(r"\(hold\)", "", goal, flags=re.I).split())
+        return re.sub(r" ?\(hold\)", "", goal, count=1, flags=re.I)
     return goal
 
 
@@ -401,7 +401,7 @@ def apply(o):
             return {"ws": a["ws"], **({"error": r["error"]} if r.get("error") else {"agent": r.get("agent")})}
         before = w.get("comment") or ""
         after = _goal_after(a["verb"], before)
-        if after == " ".join(before.split()):
+        if after == before:
             return {"ws": a["ws"], "unchanged": True}
         greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
         try:
@@ -447,7 +447,7 @@ def undo(uid):
     back, kept = [], []
     for e in rec["edits"]:
         w = live.get(e["id"])
-        if not w or " ".join((w.get("comment") or "").split()) != " ".join(e["after"].split()):
+        if not w or (w.get("comment") or "") != e["after"]:
             kept.append(e["ws"])
             continue
         greenlight.orca("worktree", "set", "--worktree", f"id:{e['id']}", "--comment", e["before"])
@@ -492,6 +492,14 @@ def _named(text, pucks, focus):
 
 def card_table(text, pucks, one):
     rows = [p for p in pucks if not p.get("hidden")]
+    named = [p for p in pucks if len(p.get("name", "")) >= 3 and re.search(rf"(?<![\w-]){re.escape(p['name'])}(?![\w-])", text, re.I)]
+    refs = [int(m) for m in REF_RE.findall(text)]
+    if named:
+        rows = [p for p in named if not p.get("hidden")]
+    elif refs:
+        rows = [p for p in rows if (p.get("mr") or {}).get("iid") in refs]
+    elif one:
+        rows = [one]
     for f, (r, test) in FILTERS.items():
         if r.search(text):
             rows = [p for p in rows if test(p)]
