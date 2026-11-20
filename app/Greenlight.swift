@@ -3536,17 +3536,28 @@ final class Core: ObservableObject {
         if let id { return waiting.first { $0.id == id && $0.ping } }
         return waiting.first { $0.text == about }
     }
+    func expiredNotification(_ about: String) {
+        let message = "That question is no longer open. Check the bell for the latest one."
+        msgs.append(Msg(.note, message))
+        notify(title: name, body: message, subtitle: nil, reply: false, id: "expired:\(about)")
+    }
     func reply(to about: String, _ text: String, questionID: UUID? = nil) {
-        unread = max(0, unread - 1)
         if let questionID {
             guard let q = notificationQuestion(about, id: questionID) else {
-                msgs.append(Msg(.note, "That question is no longer open. Check the bell for the latest one."))
+                expiredNotification(about)
                 return
             }
+            unread = max(0, unread - 1)
             answer(q, text)
             return
         }
-        if let q = notificationQuestion(about, id: questionID) { answer(q, text) }
+        let oldPing = questions.contains { $0.ping && $0.text == about && $0.answer != nil }
+        if oldPing || (notificationQuestion(about) == nil && questions.contains { $0.ping && $0.text == about }) {
+            expiredNotification(about)  // a banner from before question IDs were included
+            return
+        }
+        unread = max(0, unread - 1)
+        if let q = notificationQuestion(about) { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
 
@@ -9695,9 +9706,10 @@ func selfTest() {
             let pingQuestion = c.waiting.first { $0.ping && $0.text == "ws-f: choose?" }!
             check("a banner reply targets its ping despite same-text chat", c.notificationQuestion("ws-f: choose?", id: pingQuestion.id)?.id == pingQuestion.id)
             let beforeExpired = c.msgs.count
+            let unreadBeforeExpired = c.unread
             c.reply(to: "ws-f: choose?", "stale choice", questionID: UUID())
             check("an expired banner reply never reaches the agent", c.run == nil && c.msgs.count == beforeExpired + 1
-                  && c.msgs.last?.text.contains("no longer open") == true)
+                  && c.msgs.last?.text.contains("no longer open") == true && c.unread == unreadBeforeExpired)
             c.answer(chatQuestion, "(dismissed)", send: false)
             c.answer(pingQuestion, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
