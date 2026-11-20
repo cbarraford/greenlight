@@ -41,7 +41,7 @@
   /* spacing (4px grid) */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
   /* layout */
-  --bar-h:52px; --foot-h:32px; --dock-w:64px; --park-w:60px;
+  --bar-h:52px; --foot-h:32px; --dock-w:76px; --park-w:60px;
   --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
 }
 @media (prefers-color-scheme: light){
@@ -94,6 +94,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .qwrap{position:relative;display:flex;flex:0 4 180px;min-width:110px}.qwrap .search{width:100%;min-width:0}.qwrap .ic{position:absolute;left:8px;top:6px;color:var(--text3);pointer-events:none}.qwrap .search{padding-left:28px}
 .seg.wait{background:none;box-shadow:inset 0 0 0 1px var(--line)}
 .seg.wait button,.seg.wait button[aria-pressed=true]{background:none;box-shadow:none;color:var(--text3);cursor:default}
+@media (max-width:640px){.bar{gap:8px} .qwrap{min-width:32px} .bar .ntl{display:none}}  /* the dashboard at its 480px floor: New task keeps its +, the search its glass */
 .qwrap.wait .search{background:none;border-color:var(--hair);cursor:default} .qwrap.wait .search::placeholder{color:var(--text3);opacity:1}
 .btn.ico{width:30px;padding:0;justify-content:center;position:relative;color:var(--text2)}
 .btn.ico.on{color:var(--blue);background:color-mix(in srgb,var(--blue) 18%,transparent)}
@@ -238,7 +239,7 @@ body.dockhot #dock .dslot.target .sock polygon{fill:var(--blue-tint)}
 .dname{height:26px;max-width:100%;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere;text-align:center;font-size:11px;line-height:13px;color:var(--text2)}
 .dhint{padding:0 var(--sp-1);text-align:center;font-size:var(--fs-1);line-height:var(--lh-1);font-weight:600;color:var(--text3)}
 .dhint .hot,body.dockhot #dock .dhint .idle,body.parkhot #park .dhint .idle{display:none} body.dockhot #dock .dhint .hot,body.parkhot #park .dhint .hot{display:inline}
-.dcount{margin-top:auto;text-align:center;font-size:var(--fs-1);line-height:var(--lh-1);color:var(--text3)}
+.dcount{padding:0 var(--sp-1);text-align:center;font-size:var(--fs-1);line-height:var(--lh-1);color:var(--text3)}
 body.dragging #dock,body.dragging #park{outline:1px dashed var(--line);outline-offset:-4px}  /* both rails say they take a drop; only the one under the pointer lights up */
 body.dockhot #dock{outline:2px solid var(--blue);outline-offset:-2px;background:color-mix(in srgb,var(--blue) 12%,var(--bar))}
 body.parkhot #park{outline:2px solid var(--gray);outline-offset:-2px;background:color-mix(in srgb,var(--gray) 14%,var(--bar))}
@@ -331,8 +332,8 @@ body.nohex main{margin-left:0;padding-right:0}  /* the rails are hidden: so are 
 @keyframes spin{to{transform:rotate(360deg)}}
 .rescan{margin-left:-8px;border:0;background:none;color:inherit;font:inherit;font-size:13px;cursor:pointer;padding:0 4px;border-radius:4px;opacity:.7}
 .rescan:hover{opacity:1;background:var(--hair)}.rescan.on{animation:spin 1s linear infinite;cursor:default}
-.shelf{display:flex;flex-direction:column;gap:6px;padding:4px calc(16px + var(--orb-w, 0px)) 12px 16px}
-.shrow{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:8px}
+.shelf{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px 12px;padding:4px calc(16px + var(--orb-w, 0px)) 12px 16px}
+.shrow{display:contents}  /* one grid for the shelf: the chips start just past the longest label */
 .slab{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);white-space:nowrap}.slab i{width:8px;height:8px;border-radius:50%}.slab b{font-weight:500;color:var(--text3)}
 .shrow .chips{display:flex;flex-wrap:wrap;gap:6px;max-height:24px;overflow:hidden} .shelf.all .chips{max-height:none}
 .chip.more{color:var(--blue-ink);font-weight:600;border-style:dashed}
@@ -1061,7 +1062,7 @@ function topBar(){
       onclick: () => { ui.view = v; localSet("view", v); render() }}, {overview: "Overview", list: "List", ci: "CI"}[v]))),
     h("span", {class:"qwrap" + (live ? "" : " wait")}, icon("search"), h("input", {class:"search", id:"q", type:"search", readonly: !live, "aria-disabled": live ? null : "true", placeholder:"Search", value: ui.q, "aria-label":"Search workspaces",
       oninput: e => { ui.q = e.target.value; renderMain() }})),
-    h("button", {class:"btn" + (live ? " go" : none ? "" : " ghost"), title:"Describe a task; it starts in a new workspace", onclick: taskSheet}, PLUS, "New task"), ...barTail().filter(Boolean));  // not connected yet: the status leads, not this
+    h("button", {class:"btn" + (live ? " go" : none ? "" : " ghost"), title:"Describe a task; it starts in a new workspace", "aria-label":"New task", onclick: taskSheet}, PLUS, h("span", {class:"ntl"}, "New task")), ...barTail().filter(Boolean));  // not connected yet: the status leads, not this
 
 }
 function barTail(){  // the bell and the chat toggle, the same in both modes; Settings is ⌘, and the app menu
@@ -1847,7 +1848,7 @@ function renderDock(){
   if (flip && ui.snap) renderMain();  // the field lays out in the width that's left
   if (!on) return d.replaceChildren();
   const n = dr ? ui.dock.length + 1 : Math.max(1, ui.dock.length);  // one socket mid-drag: where it lands
-  d.replaceChildren(h("div", {class: "dhint"}, dr ? [h("span", {class: "idle"}, "Add to chat"), h("span", {class: "hot"}, "Release to add")] : ui.dock.length ? "In chat" : "Context dock"),
+  d.replaceChildren(h("div", {class: "dhint"}, dr ? [h("span", {class: "idle"}, "Add to chat"), h("span", {class: "hot"}, "Release to add")] : ui.dock.length ? "In chat" : "Context"),
     ...Array.from({length: n}, (_, i) => {
       const k = ui.dock[i], it = k && k.item;
       if (!it) return h("div", {class: "dslot" + (i === ui.dock.length && dr && !dr.out ? " target" : "")},
