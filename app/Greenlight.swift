@@ -432,6 +432,8 @@ final class Feed: ObservableObject {
     @Published private(set) var lines: [FeedLine] = []
     @Published var only: FeedLine.Src? = nil  // the log's filter; nil: everything
     @Published var open = true  // the chat's log expanded, or just its header and newest line
+    @Published var paused = false  // the log stops following the newest line, to read (no @State: see the top of the file)
+    @Published var unfolded = Set<UUID>()  // long lines clicked open in full
     var shown: [FeedLine] { only.map { o in lines.filter { $0.src == o } } ?? lines }
     func add(_ src: FeedLine.Src, _ who: String, _ kind: FeedLine.Kind, _ text: String, at: Date = Date()) {
         if let l = lines.last, l.src == src, l.who == who, l.kind == kind {
@@ -443,7 +445,7 @@ final class Feed: ObservableObject {
         lines.append(FeedLine(ts: at, src: src, who: who, kind: kind, text: t))
         if lines.count > Self.cap { lines.removeFirst(lines.count - Self.cap) }
     }
-    func clear() { lines = [] }
+    func clear() { lines = []; unfolded = [] }
 }
 
 /// What the feed watches in one workspace from dash.py's snapshot: its agent, and its place in the lifecycle.
@@ -2431,8 +2433,6 @@ func feedMark(_ k: FeedLine.Kind, accent: Color, dim: Color, failed: Color, agen
 struct FeedPanel: View, Looked {
     @ObservedObject var f: Feed
     @ObservedObject var c: Core
-    @State private var unfolded = Set<UUID>()
-    @State private var paused = false  // stop following the newest line, to read
     var body: some View {
         let lines = f.shown, live = c.run != nil || c.agents.contains { $0.state == "working" }
         VStack(alignment: .leading, spacing: 0) {
@@ -2453,12 +2453,12 @@ struct FeedPanel: View, Looked {
                         }.buttonStyle(.plain).help(s == nil ? "Everything" : s == .chief ? "\(c.name)'s own turn: calls, their output, thinking" : s == .agents ? "Your workspaces' agents" : "Greenlight's moves and the dashboard's buttons")
                     }
                     Spacer(minLength: 0)
-                    Button { paused.toggle() } label: { Image(systemName: paused ? "play.fill" : "pause.fill").font(sys(size: Theme.glyph)) }
-                        .buttonStyle(.plain).foregroundColor(dim).help(paused ? "Follow the newest line" : "Stop following, to read").accessibilityLabel(paused ? "Follow" : "Pause following")
+                    Button { f.paused.toggle() } label: { Image(systemName: f.paused ? "play.fill" : "pause.fill").font(sys(size: Theme.glyph)) }
+                        .buttonStyle(.plain).foregroundColor(dim).help(f.paused ? "Follow the newest line" : "Stop following, to read").accessibilityLabel(f.paused ? "Follow" : "Pause following")
                 } else if let l = lines.last {
                     row(l, limit: 1).frame(maxWidth: .infinity, alignment: .leading)
                 } else { Spacer(minLength: 0) }
-                Button("Clear") { f.clear(); unfolded = [] }.buttonStyle(.plain).font(sys(size: Theme.fs1)).foregroundColor(dim).disabled(f.lines.isEmpty)
+                Button("Clear") { f.clear() }.buttonStyle(.plain).font(sys(size: Theme.fs1)).foregroundColor(dim).disabled(f.lines.isEmpty)
             }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
             if f.open {
                 ScrollViewReader { sv in
@@ -2469,15 +2469,15 @@ struct FeedPanel: View, Looked {
                                     .font(sys(size: Theme.fs1)).foregroundColor(dim)
                             }
                             ForEach(lines) { l in
-                                row(l, limit: unfolded.contains(l.id) ? nil : l.kind == .think ? 3 : 6)
-                                    .onTapGesture { if unfolded.contains(l.id) { unfolded.remove(l.id) } else { unfolded.insert(l.id) } }
+                                row(l, limit: f.unfolded.contains(l.id) ? nil : l.kind == .think ? 3 : 6)
+                                    .onTapGesture { if f.unfolded.contains(l.id) { f.unfolded.remove(l.id) } else { f.unfolded.insert(l.id) } }
                             }
                             Color.clear.frame(height: 1).id("end")
                         }.padding(.horizontal, Theme.sp3).padding(.bottom, Theme.sp2)
                     }.frame(height: 190)
                         .onAppear { sv.scrollTo("end", anchor: .bottom) }
-                        .onChange(of: lines.last?.id) { if !paused { sv.scrollTo("end", anchor: .bottom) } }
-                        .onChange(of: lines.last?.text.count) { if !paused { sv.scrollTo("end", anchor: .bottom) } }  // thinking grows in place
+                        .onChange(of: lines.last?.id) { if !f.paused { sv.scrollTo("end", anchor: .bottom) } }
+                        .onChange(of: lines.last?.text.count) { if !f.paused { sv.scrollTo("end", anchor: .bottom) } }  // thinking grows in place
                 }
             }
         }.background(fg.opacity(0.035)).textSelection(.enabled)
