@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -228,6 +229,11 @@ def grammar(text, pucks, focus=None):
 def structural(g, pucks, focus):
     """The workspaces the names, #refs, "this" and status words leave (before the free words are read), or (None, why)."""
     verb = g["verbs"][0] if g["verbs"] else None
+    if verb != "unpark" and (g["names"] or g["refs"]):
+        hidden = [p for p in pucks if p.get("hidden") and (not g["names"] or p.get("name") in g["names"])
+                  and (not g["refs"] or (p.get("mr") or {}).get("iid") in g["refs"])]
+        if hidden:
+            return None, "an explicitly named workspace is parked"
     pool = [p for p in pucks if verb == "unpark" or "parked" in g["filters"] or not p.get("hidden")]
     if g["names"]:
         pool = [p for p in pool if p.get("name") in g["names"]]
@@ -391,6 +397,19 @@ def _lock_for(wid):
     return locks / hashlib.sha256(wid.encode()).hexdigest()
 
 
+def _write_undo(path, record):
+    """Replace the recovery journal before a goal edit, so an interrupted apply still has an Undo path."""
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp.open("w") as f:
+            json.dump(record, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def apply(o):
     """Run a direct plan's actions in parallel. Goal edits record what they replaced, for undo."""
     import dash
@@ -401,6 +420,16 @@ def apply(o):
         return {"ok": True, "done": [], "errors": []}
     live = [w for w, _ in dash.live_agents().values()]
     said = " ".join((o.get("text") or "").split())[:200]
+    undo = uuid.uuid4().hex[:12] if any(a["verb"] not in LAUNCH for a in acts) else None
+    record = {"at": time.time(), "text": said, "edits": []}
+    journal_lock = threading.Lock()
+    journal = DWIM / "undo" / f"{undo}.json" if undo else None
+    if journal:
+        try:
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            _write_undo(journal, record)
+        except OSError as e:
+            return {"ok": False, "undo": None, "done": [], "unchanged": [], "errors": [f"can't record Undo: {e}"], "ms": round((time.monotonic() - t0) * 1000)}
 
     def current_puck(a, w):
         if a.get("branch") and (w.get("branch") or "").removeprefix("refs/heads/") != a["branch"]:
@@ -408,13 +437,17 @@ def apply(o):
         linked = greenlight.linked_number(w.get("linkedPR") or w.get("linkedGitLabMR"))
         if linked and a.get("ref") and str(linked) != re.sub(r"\D", "", a["ref"]):
             return None
+        try:
+            pucks = dash.snapshot()["pucks"]
+        except (OSError, KeyError):
+            return {} if not a.get("ref") and a["verb"] not in LAUNCH else None  # a fresh scratch home has no board cache
         if not a.get("path"):
             if a["verb"] not in LAUNCH and not a.get("ref"):
                 return {}  # older callers without a path still need a unique live name, checked above
-            matches = [p for p in dash.snapshot()["pucks"] if p.get("name") == a["ws"]]
+            matches = [p for p in pucks if p.get("name") == a["ws"]]
             p = matches[0] if len(matches) == 1 else None
             return p if p and (not a.get("ref") or ((p.get("mr") or {}).get("ref") == a["ref"])) else None
-        p = next((p for p in dash.snapshot()["pucks"] if p.get("path") == a["path"]), None)
+        p = next((p for p in pucks if p.get("path") == a["path"]), None)
         if a.get("ref") and ((p or {}).get("mr") or {}).get("ref") != a["ref"]:
             return None
         return p
@@ -444,6 +477,13 @@ def apply(o):
             after = _goal_after(a["verb"], before)
             if after == before:
                 return {"ws": a["ws"], "unchanged": True}
+            with journal_lock:
+                record["edits"].append({"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after})
+                try:
+                    _write_undo(journal, record)
+                except OSError:
+                    record["edits"].pop()
+                    raise
             greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
             try:
                 _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
@@ -454,12 +494,10 @@ def apply(o):
     out = list(_pool.map(lambda a: _safe(one, a), acts))
     done = [r for r in out if not r.get("error") and not r.get("unchanged")]
     unchanged = [r["ws"] for r in out if r.get("unchanged")]
-    undo = None
-    edits = [r for r in done if "after" in r]
-    if edits:
-        undo = uuid.uuid4().hex[:12]
-        (DWIM / "undo").mkdir(parents=True, exist_ok=True)
-        (DWIM / "undo" / f"{undo}.json").write_text(json.dumps({"at": time.time(), "text": said, "edits": edits}))
+    if journal and not record["edits"]:
+        journal.unlink(missing_ok=True)
+        undo = None
+    if undo:
         for f in sorted((DWIM / "undo").glob("*.json"), key=lambda f: f.stat().st_mtime)[:-UNDO_KEEP]:
             f.unlink(missing_ok=True)
     res = {"ok": not any(r.get("error") for r in out), "undo": undo, "done": [r["ws"] for r in done], "unchanged": unchanged,
@@ -491,6 +529,8 @@ def undo(uid):
             fcntl.flock(lock, fcntl.LOCK_EX)
             fresh = dash.live_agents().get(e["id"])
             w = fresh[0] if fresh else None
+            if w and (w.get("comment") or "") == e["before"]:
+                continue  # journaled before the set, but the set may never have run
             if not w or (w.get("comment") or "") != e["after"]:
                 kept.append(e["ws"])
                 continue
@@ -551,12 +591,18 @@ def card_table(text, pucks, one):
     for f, (r, test) in FILTERS.items():
         if r.search(text):
             rows = [p for p in rows if test(p)]
+    if re.search(r"\bwaiting\b", text, re.I):
+        rows = [p for p in rows if (p.get("agent") or {}).get("state") == "waiting" or p.get("state") == "needs"
+                or (p.get("life") or {}).get("pile") == "waiting"]
+    if re.search(r"\bneeds? me\b", text, re.I):
+        rows = [p for p in rows if (p.get("life") or {}).get("pile") == "yours" or p.get("state") == "needs"]
+    total = len(rows)
     rows = sorted(rows, key=lambda p: (p.get("life") or {}).get("pile") != "yours")[:10]
     if not rows:
         return None
     tone = lambda p: "bad" if (p.get("mr") or {}).get("pipeline") == "failed" or p.get("state") == "crashed" else \
         "now" if (p.get("life") or {}).get("pile") == "yours" else "ok" if (p.get("life") or {}).get("pile") == "done" else ""
-    return {"kind": "table", "eyebrow": "the board", "title": f"{len(rows)} workspace{'s' * (len(rows) != 1)}",
+    return {"kind": "table", "eyebrow": "the board", "title": f"{len(rows)} of {total} workspaces" if total > len(rows) else f"{total} workspace{'s' * (total != 1)}",
             "columns": ["Workspace", "MR", "CI", "Next"],
             "rows": [[p["name"], (p.get("mr") or {}).get("ref") or "—", CI_WORD.get((p.get("mr") or {}).get("pipeline"), "—"),
                       ((p.get("life") or {}).get("do") or p.get("action") or "")[:80]] for p in rows],
@@ -627,7 +673,7 @@ def stage(o):
                               deadline=STAGE_DEADLINE)
     pick = sure_choice(a["t"]) or words_pick
     spec = None
-    for k in ([pick] if pick in CARDS else []) + (["lifecycle"] if one and pick != "none" else []):  # one workspace named: at least where it is
+    for k in ([pick] if pick in CARDS else []) + (["lifecycle"] if one and pick not in CARDS and pick != "none" else []):
         if spec := CARDS[k](text, pucks, one):
             break
     return (spec or {"kind": None}) | {"provider": provider, "ms": round((time.monotonic() - t0) * 1000), "decide_ms": dec_ms}
