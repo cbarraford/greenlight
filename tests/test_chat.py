@@ -248,14 +248,26 @@ def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
 
 def test_answer_carries_the_request_it_answers(tmp_path, monkeypatch):
     # the bug over two turns: "what did it cost?" → "prod or staging?" → "prod" still creates nothing
-    (tmp_path / "asked").write_text("How much has GPT-Live cost us in the last 24 hours?")
+    (tmp_path / "asked").write_text("How much has GPT-Live cost us in the last 24 hours?" + chat.ASKED + "Prod or staging?")
     done, calls = dispatch_turn(tmp_path, monkeypatch, "prod")
     assert not any(c[:2] == ["worktree", "create"] for c in calls), calls
     assert not (tmp_path / "asked").exists()  # this reply asked nothing
     # and an answer to a change request's question is a change, though alone it reads as a question
-    (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard")
+    (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard" + chat.ASKED + "Which repo?")
     done, calls = dispatch_turn(tmp_path, monkeypatch, "which repo would you put it in?")
     assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+
+
+def test_asked_question():
+    assert chat.asked_question("It cost $12.\nProd or staging?\n\n[hexes:]") == "Prod or staging?"
+    assert chat.asked_question("Which one?\nOptions: add a meter | skip\n[hexes: a, b]") == "Options: add a meter | skip"
+    assert chat.asked_question("Done: see https://x.test/?q=1\n[hexes:]") is None  # a ? inside isn't a question
+    assert chat.asked_question("") is None and chat.asked_question(None) is None
+
+
+def test_answer_separator_matches_greenlight():
+    import greenlight
+    assert (chat.ANSWER, chat.ASKED) == (greenlight.ANSWER, greenlight.ASKED)
 
 
 def test_prompt_answers_questions_directly():
