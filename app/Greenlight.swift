@@ -1687,6 +1687,13 @@ struct StageWeb: NSViewRepresentable {
     func updateNSView(_ v: WKWebView, context: Context) {}
 }
 
+/// The voice button's help and accessibility label. While a start is under way (its retries take up to ~3 s) a press cancels it, so it says so.
+func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) {
+    on ? ("End voice mode (or say “goodbye”)", "End voice mode")
+        : starting ? ("Starting voice mode… click to cancel", "Cancel starting voice mode")
+        : ("Voice mode: talk with it hands-free", "Start voice mode")
+}
+
 /// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions.
 struct VoiceButtons: View, Looked {
     @ObservedObject var v: Voice
@@ -1700,9 +1707,9 @@ struct VoiceButtons: View, Looked {
             }
             // one style for live and standard chat
             knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
-            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on) }
-                .buttonStyle(.plain).help(v.on ? "End voice mode (or say “goodbye”)" : "Voice mode: talk with it hands-free")
-                .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
+            let t = voiceButtonText(on: v.on, starting: v.starting)
+            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
+                .buttonStyle(.plain).help(t.help).accessibilityLabel(t.label)
             if let pop { out ? knob("rectangle.righthalf.inset.filled", "Put back in the main window's right pane", label: "Put back in the main window", pop)
                 : knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
         }
@@ -1808,7 +1815,8 @@ final class Voice: NSObject, ObservableObject {
     }
 
     func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
-    var starting = false, startGen = 0  // a start (and its retries) under way; stopAll() bumps startGen, which ends it
+    @Published var starting = false  // a start (and its retries) under way: the voice button shows it, and a press cancels it
+    var startGen = 0  // stopAll() bumps it, which ends a start still under way
     var staleEngine = false  // its restart failed: the next start begins on a new engine
     func start() {
         guard !on, !starting else { return }
@@ -8176,6 +8184,9 @@ func selfTest() {
     check("voice: of two Greenlights in voice mode, exactly one keeps it (the later start; the pid breaks a tie)",
           voiceYields(mine: (100, 7), theirs: (101, 3)) && !voiceYields(mine: (101, 3), theirs: (100, 7))
           && voiceYields(mine: (100, 3), theirs: (100, 7)) != voiceYields(mine: (100, 7), theirs: (100, 3)) && !voiceYields(mine: (100, 7), theirs: (200, 7)))
+    check("voice: while voice mode is starting, its button says a press cancels the start",
+          voiceButtonText(on: false, starting: true).label == "Cancel starting voice mode" && voiceButtonText(on: false, starting: false).label == "Start voice mode"
+          && voiceButtonText(on: true, starting: false).label == "End voice mode" && voiceButtonText(on: false, starting: true).help.contains("cancel"))
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     var bufs = 0, ended = false, sc: AVAudioConverter?
