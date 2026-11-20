@@ -9,8 +9,9 @@ id=dev.greenlight.app
 [ "$name" = Greenlight ] || id=$id.$(printf %s "${name#greenlight-}" | tr -c 'A-Za-z0-9-' -)
 dest=~/Applications/$name.app
 # Built and signed aside, then moved in: a failed build (or signing) leaves the installed app as it was, and a running one
-# keeps its binary. The staging folder is on the same volume, so the move is a rename.
-mkdir -p ~/Applications; stage=$(mktemp -d ~/Applications/".$name.build.XXXXXX") app=$stage/$name.app
+# keeps its binary. Staged in the temp folder, not ~/Applications: a build killed mid-way (dev.py's timeout) leaves no
+# second signed copy where LaunchServices would find it.
+mkdir -p ~/Applications; stage=$(mktemp -d -t greenlight-stage) app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
 trap 'rm -rf "$bin" "$stage"' EXIT
 # Command Line Tools swiftc: avoids needing the Xcode license accepted
@@ -56,12 +57,17 @@ id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print
 # password again, for each key it read. An Apple Development cert (free with an Apple ID: Xcode → Settings → Accounts → Manage
 # Certificates) gives the build one, and the key is pinned to `teamid:` instead, so set one up and every build after it uses it.
 # Its requirement names the cert, not the bundle id: every workspace's dev copy has its own id (scripts/dev.py), and Keychain
-# entries trust apps by this requirement. Only code signed with your cert matches, and that could already claim Greenlight's id.
+# entries trust apps by this requirement. Any code signed with your cert matches (and could claim Greenlight's id anyway): once
+# codesign may use the cert's key without asking, a process running as you can sign with it, as it could with Greenlight Dev.
 # (`identifier` takes no wildcard, and the Keychain didn't match a copy on `info[CFBundleIdentifier]`.) Greenlight Dev keeps
 # codesign's default: its builds are pinned to `cdhash:` whatever the requirement, and a new one would cost your mic and speech grants.
 # Yours by name too, not just the team's: on a shared team, a teammate's builds would match the team alone. A renewed cert
 # keeps both. Picked by name, not by the listing's order, so one with two teams doesn't switch between them.
 line=$(security find-identity -v -p codesigning | grep '"Apple Development: ' | sort -t'"' -k2 | head -1 || true)
+# An expired one (or one that no longer validates) isn't listed with -v: fail, not Greenlight Dev, which your grants don't match
+if [ -z "$line" ] && security find-identity -p codesigning | grep -q '"Apple Development: '; then
+  echo "build.sh: error: your Apple Development cert isn't valid (expired?): renew it in Xcode → Settings → Accounts → Manage Certificates" >&2; exit 1
+fi
 apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"' -f2)
 # Its team is the cert's OU. Signing asks for the key once ("codesign wants to sign using…": Always Allow), on screen even
 # for a dev copy's unattended build, which waits for it.
@@ -79,7 +85,12 @@ else
   codesign -fs "$id" --keychain "$kc" "$app" ||
     { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
-[ ! -e "$dest" ] || mv "$dest" "$stage/old.app"; mv "$app" "$dest"; app=$dest  # the old one goes with the staging folder
+# The old one goes with the staging folder, or back if the new one can't go in (or another build put one there meanwhile)
+[ ! -e "$dest" ] || mv "$dest" "$stage/old.app"
+if [ -e "$dest" ] || ! mv "$app" "$dest"; then
+  [ -e "$dest" ] || [ ! -e "$stage/old.app" ] || mv "$stage/old.app" "$dest"; echo "build.sh: error: couldn't move the new $name.app into ~/Applications" >&2; exit 1
+fi
+app=$dest
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"
