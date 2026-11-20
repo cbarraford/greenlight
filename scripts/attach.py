@@ -166,7 +166,7 @@ def note(stored):
 def mentions(chat_dir, step):
     """Does a step event (a tool call) touch the attachments? By its absolute path, or relative to the chat dir (the agent's cwd)."""
     s = " ".join(str(step.get(k) or "") for k in ("detail", "input", "call"))
-    return root(chat_dir) in s or re.search(r"(^|[\s'\"(=])\.?/?attachments/", s) is not None
+    return root(chat_dir) in s or re.search(r"(^|[^\w-])attachments\b", s) is not None
 
 
 def needles(chat_dir, message):
