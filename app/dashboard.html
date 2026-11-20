@@ -1605,17 +1605,19 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     // new to it: a line past the last one shown for its session (a session that flips between newest and recent never
     // brings its older, unseen lines in at the bottom), or any line of a session not shown yet
     const fresh = e => !o.ids.has(e.id) && (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]);
-    const seen = page.filter(fresh), add = seen.concat(arr(r.recent).filter(e => fresh(e) && !seen.some(x => x.id === e.id)));  // another session busy at the same time: its new lines too
+    const seen = page.filter(fresh), rec = arr(r.recent).filter(e => fresh(e) && !seen.some(x => x.id === e.id)), add = seen.concat(rec);  // another session busy at the same time: its new lines too
     const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // more arrived than one page holds: what's between is skipped, and said so (no cursor: the page reaches the start)
-    if (first) { o.more = r.more || null; const last = page[page.length - 1]; o.main = last ? stemOf(last) : null }  // Load earlier continues from the top of what's shown; main: the session newest at open
-    for (const e of seen) if (e.role === "sep" && !first) o.main = stemOf(e);  // a new session started: it's the main one now
+    if (first) o.more = r.more || null;  // Load earlier continues from the top of what's shown
+    const newest = page.length ? stemOf(page[page.length - 1]) : null;  // the page ends in the newest session's tail
+    if (newest && (first || !o.main || !add.some(e => stemOf(e) === o.main))) o.main = newest;  // main: the newest, once the old main has gone quiet
+    for (const e of add) e.other = !!o.main && stemOf(e) !== o.main && (rec.includes(e) || !first);  // the first page's older sessions are history, not "another"
     add.forEach(e => { o.ids.add(e.id); o.tip[stemOf(e)] = Math.max(o.tip[stemOf(e)] ?? -1, idxOf(e)) }); o.entries.push(...add); o.loaded = true;
     if (first) outPaint();  // outPaint lands at the bottom
     else if (add.length) {
       const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
       if (note) note.remove();  // "No output yet" was true until now
       if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
-      list.append(...add.map(e => outEntry(e, stemOf(e) !== o.main)));
+      list.append(...add.map(e => outEntry(e, e.other)));
       if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
@@ -1642,7 +1644,7 @@ const stemOf = e => String(e.id).replace(/:[^:]*$/, "");
 const idxOf = e => { const n = Number(String(e.id).replace(/^.*:/, "")); return isFinite(n) ? n : -1 };  // "<session>:start" is before its first line
 function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
-  list.replaceChildren(...o.entries.map(e => outEntry(e)));
+  list.replaceChildren(...o.entries.map(e => outEntry(e, e.other)));
   if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
   outMore(); outBottom();
 }
