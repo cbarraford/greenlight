@@ -167,19 +167,20 @@ CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|ren
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
            r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
            r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our \w+|my \w+) on|let|put|renew|roll|nudge|"
-           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible to|in(?:to)? (?:a|the|our|my|its|this) (?:[\w-]+ )?(?:docs?|readme|wiki|changelog|description)|"
+           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible to|in(?:to)? (?:a|the|our|my|its|this) (?:[\w-]+ )?(?:docs?|readme|wiki|changelog|description|report|notes?)|"
            r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
 DET = r"the|a|an|it|its|them|this|that|these|those|my|our|your|their|his|her|me|us|him|all|every"
 AND_DO_RE = re.compile(rf"\band (?:then )?(?!(?:{DET})\b)(\w+) (?:(?:{DET})\b|(?-i:[A-Z])|[\s$€£]|(?:prs?|mrs?|issues?|tickets?)\b)", re.I)  # "and refund the customer / Alice / !42"
-NAME_RE = re.compile(r"[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
+NAME_RE = re.compile(r"(?!\d+[.)]\s)[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # chat.py: request, (asked) the chat's question, (answer) the user's answer, …
 OFFER_VERB = rf"\b(?!(?:use|do|get|keep|try|set(?! ?up))\b)({CHANGES})\b"  # not "should I use prod?"
-S = r"[^.?!\n]"  # within one sentence
+S = r"(?:[^.?!\n]|[.!](?=\S))"  # within one sentence ("!42", "v1.2" and "$12.50" don't end it)
 OFFER_RE = re.compile(  # the chat's question offered a change, not an answer that mentions one ("since the deploy")
     rf"\b(?:i|me|we|us)\b{S}*?{OFFER_VERB}{S}*\?|\bwant (?:a|an|me to|us to|it|this|that|one)\b{S}*\?"  # "can I add a meter?"
     rf"|\b(?:i can|i could|i'll|i will|let me|happy to)\s+(?:\S+\s+){{0,2}}?{OFFER_VERB}"  # "I can add a meter."
-    rf"|^\s*(?:[-*•]|\d+[.)])\s+{OFFER_VERB}"  # "Should I:\n- add a meter\n- skip it"
+    rf"|^[^\n]*\b(?:i|we|should|want|can|could|options)\b[^\n]*:[ \t]*\n(?:[ \t]*(?:[-*•]|\d+[.)])[^\n]*\n)*?"
+    rf"[ \t]*(?:[-*•]|\d+[.)])\s+{OFFER_VERB}"  # "Should I:\n- add a meter", not a "- Agent runs: $3" breakdown
     rf"|^`?options:[^\n]*{OFFER_VERB}|{OFFER_VERB}[^\n]*\n`?options:", re.I | re.M)  # "Add a meter?\nOptions: …"
 AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do|go for it|sounds good)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
@@ -193,13 +194,13 @@ READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, resear
 def read_only(text):
     """True when the request is plainly questions or lookups, no question the chat asked about it offered a change,
     and no answer to one asks for a change."""
-    req, *turns = re.split("(" + "|".join(map(re.escape, (ASKED, ANSWER))) + ")", text or "")
-    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ASKED]  # as written: "1. add a meter" offers
-    answers = [NAME_RE.sub(" ", t) for k, t in zip(turns[0::2], turns[1::2]) if k == ANSWER]
-    req = NAME_RE.sub(" ", req)
+    req, *turns = re.split("(" + "|".join(map(re.escape, (ASKED, ANSWER))) + ")", NAME_RE.sub(" ", text or ""))
+    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ASKED]
+    answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ANSWER]
     clauses = [c for c in CLAUSE_RE.split(req) if c and not COURTESY_RE.fullmatch(c)]
-    def answer_changes(a):  # "prod" narrows the question; "sure", or a sentence that doesn't ask, is its own request
-        return CHANGE_RE.search(a) or AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
+    proposed = not asked or any(re.search(rf"\b(?:i|me|we|us)\b{S}*?\b({CHANGES})\b", q, re.I) for q in asked)  # "should I set an alert?"
+    def answer_changes(a):  # "prod" narrows the question; "sure" to a proposed change, or a sentence that doesn't ask, is a request
+        return CHANGE_RE.search(a) or proposed and AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
     if any(not ASKS_RE.match(req[m.start(1):]) for m in AND_DO_RE.finditer(req)):  # "and tell me why" still asks
         return False
     return (bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not CHANGE_RE.search(req)
