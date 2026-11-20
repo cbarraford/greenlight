@@ -83,6 +83,7 @@ Support differs by harness:
 | `SKILL.md` | the skill: how Claude Code runs Greenlight |
 | `scripts/greenlight.py` | scan, next step per workspace, report, pings |
 | `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
+| `scripts/lifestage.py` | where each change is in its lifecycle (stage and sub-stage), who holds it, the suggested move |
 | `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |
 | `scripts/decisions.py` | the decision record: every question Greenlight asked you, the situation, and your answer (`~/.greenlight/decisions.jsonl`) |
 | `scripts/auto.py` | Greenlight's own cron-style automations |

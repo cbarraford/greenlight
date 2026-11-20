@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """greenlight: work out the next lifecycle step, and who it's waiting on, for every Orca workspace.
 
-    greenlight.py scan [--json]   facts + next step per workspace; snapshot saved to ~/.greenlight/last.json
+    greenlight.py scan [--json]   facts + next step per workspace; snapshot saved to ~/.greenlight/last.json. Each row also
+                                  carries `life`: its lifecycle stage and sub-stage, who holds it, and the suggested move (lifestage.py)
     greenlight.py report          scan, then write ~/.greenlight/report.html (needs-you first)
     greenlight.py precheck        Orca automation gate: exit 0 when something is actionable, else 1
     greenlight.py note <ws> <text>  append a dated line to ~/.greenlight/history/<ws>.md
@@ -38,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import decisions  # noqa: E402
+import lifestage  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent  # the skill dir: lifecycles/, prompts/, examples/, memory/
@@ -541,6 +543,8 @@ def evaluate(ws, mr, milestone):
     if PARKED_RE.search(ws["goal"]) and not (mr and mr["state"] in ("merged", "closed")):
         return {"step": "parked", "owner": "parked", "action": "parked until you unpark it", "hidden": True}
     if not mr:
+        if ws.get("branch_gone"):
+            return {"step": "done", "owner": "done", "action": "its branch was deleted on the remote, so the change is over: cleanup.py removes it if its commits are on the remote, else delete it yourself"}
         if ws["branch"].startswith("auto-") and not ws["goal"]:
             return {"step": "automation", "owner": "me", "action": "automation run with no MR: delete?"}
         if not ws["goal"]:
@@ -575,6 +579,16 @@ def evaluate(ws, mr, milestone):
             return {"step": step, "owner": owner, "action": action, "cmd": cmd, "lifecycle": name}
     return {"step": "merge", "owner": "ci", "action": f"all steps green, waiting on {'GitHub' if ws.get('forge') == 'github' else 'GitLab'}",
             "lifecycle": name}
+
+
+def upstream_gone(r):
+    """The branch was pushed and its remote branch has since been deleted (as of the checkout's last `fetch --prune`,
+    which cleanup.py runs). Merged or abandoned on the forge: either way the change is over."""
+    if not os.path.isdir(r["path"]):
+        return False
+    p = subprocess.run(["git", "-C", r["path"], "for-each-ref", "--format=%(upstream:track)", f"refs/heads/{r['branch']}"],
+                       capture_output=True, text=True)
+    return p.stdout.strip() == "[gone]"
 
 
 def agent_overlay(ws, terminals):
@@ -691,6 +705,7 @@ def scan(save=True):
         return mr
 
     face = lambda u: {"name": u.get("login") or u["username"], "avatar": u.get("avatar_url")}
+    roster = lifestage.blocks()  # blocking.py's last scan: the MRs someone is waiting on me for
 
     def one(r):
         try:
@@ -713,10 +728,14 @@ def scan(save=True):
                 "todo_threads": [thread_line(d) for d in unresolved(mr) if d["notes"][-1]["author"]["username"] not in (ME, BOT)][:40],
                 "failed_jobs": mr.get("_failed_jobs", [])[:40],  # the Resolve threads / Fix CI prompts' {threads} / {failed_jobs}
                 "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable"))}
+            r["branch_gone"] = not mr and upstream_gone(r)
             r["next"] = evaluate(r, mr, milestones.get(r["project"]))
+            life = lifestage.place(r)  # before the overlay: who the step itself is waiting on
             agent_overlay(r, terminals)
         except Exception as e:
             r["mr"], r["next"] = None, {"step": "error", "owner": "me", "action": f"greenlight couldn't evaluate: {e}"}
+            life = lifestage.place(r)
+        r["life"] = lifestage.now(life, r["agent"]["state"], "logged out" in r["next"].get("action", ""), lifestage.block_of(r, roster))
         return r
 
     with ThreadPoolExecutor(8) as ex:
