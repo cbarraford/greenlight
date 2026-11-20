@@ -250,6 +250,25 @@ test("a late reply preserves edited attachments, and Reopen keeps the current sh
   assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
 });
 
+test("a selected file counts as an edit before its reader finishes", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,bGF0ZXI="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", {name: "before.txt", mimeType: "text/plain", buffer: Buffer.from("before")});
+  assert.equal(await page.isDisabled("#ps-go"), true, "a pending read was omitted from a submitted task");
+  await page.evaluate(() => window.__reads[0].onload());
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  await page.press("#ps-task", "Enter");
+  await page.setInputFiles(".tdrop input[type=file]", {name: "later.txt", mimeType: "text/plain", buffer: Buffer.from("later")});
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page), "success closed a sheet with a selected file still loading");
+  await page.evaluate(() => window.__reads[1].onload());
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["before.txt", "later.txt"]);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");

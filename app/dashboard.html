@@ -2095,7 +2095,7 @@ const PLUS = s("svg", {width:13, height:13, viewBox:"0 0 24 24", fill:"none", st
 function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // dash.py _slug
 function taskSheet(){
   const repo = localGet("taskRepo") || "";
-  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: []}; ui.task.err = ""; ui.task.ask = null;
+  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: [], fileRev: 0, reading: 0}; ui.task.err = ""; ui.task.ask = null;
   post({cmd: "task", op: "repos", arg: "-"});  // every open: a repo added to Orca shows up without a relaunch
   render(); const i = document.getElementById(repo || !ui.task.repos ? "ps-task" : "ps-repo");  // the first thing missing gets the caret
   if (i) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); i.scrollTop = i.scrollHeight } catch {} }
@@ -2103,10 +2103,13 @@ function taskSheet(){
 function attach(files){
   const sh = ui.task.sheet; if (!sh) return;
   for (const f of [...(files || [])]) {
+    sh.fileRev++; sh.reading++;
     const r = new FileReader();
-    r.onload = () => { if (ui.task.sheet === sh) { sh.files.push({name: f.name || "pasted.png", size: f.size, data: r.result}); render() } };
+    r.onload = () => { sh.reading--; if (ui.task.sheet === sh) { sh.files.push({name: f.name || "pasted.png", size: f.size, data: r.result}); render() } };
+    r.onerror = () => { sh.reading--; if (ui.task.sheet === sh) { ui.task.err = `Couldn't read ${f.name || "the file"}`; render() } };
     r.readAsDataURL(f);
   }
+  if (sh.reading) render();
 }
 function taskSheetEl(){
   const sh = ui.task.sheet; if (!sh) return null;
@@ -2114,12 +2117,12 @@ function taskSheetEl(){
   const size = sh.files.reduce((n, f) => n + f.size, 0), big = size > TASK_CAP;
   const line = () => (String(sh.text).split("\n").find(l => l.trim()) || "").trim();  // live: typing doesn't re-render the sheet
   const ask = ui.task.ask, answered = () => { const a = ui.task.ask; return !a || a.qs.every(q => (a.ans[q.id] || "").trim()) };  // live: an edit drops the questions without a render
-  const repo = (repos || []).find(r => r.name === sh.repo), ok = force => !busy && !big && repo && line() && !ui.task.err && (force || answered());
+  const repo = (repos || []).find(r => r.name === sh.repo), ok = force => !busy && !big && !sh.reading && repo && line() && !ui.task.err && (force || answered());
   const syncGo = () => { const b = document.getElementById("ps-go"); if (b) b.disabled = !ok() };
   const unerr = () => { ui.task.err = ""; ui.task.errAt = null; document.getElementById("ps-err")?.remove(); document.getElementById("ps-task")?.removeAttribute("aria-invalid"); const hp = document.getElementById("ps-help"); if (hp) hp.textContent = HELP; document.getElementById("ps-task")?.setAttribute("aria-describedby", "ps-help") };  // a changed title or project is a fresh try
   const go = (force = false) => {  // force: Start anyway, past preflight's questions
     if (!ok(force)) return;
-    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name, files: sh.files.slice()};
+    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name, files: sh.files.slice(), fileRev: sh.fileRev};
     const more = force === true ? {force: true} : ui.task.ask ? {answers: ui.task.ask.ans} : {};
     post({cmd: "task", op: "new", arg: repo.name, text: JSON.stringify({text: sh.text.trim(), files: sh.files.map(({name, data}) => ({name, data})), ...more})}); render();
   };
@@ -2209,7 +2212,7 @@ function tasked(r){
   }
   ui.task.busy = false;
   const pending = ui.task.pending; ui.task.pending = null;
-  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo ||
+  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo || ui.task.sheet.fileRev !== pending.fileRev ||
     ui.task.sheet.files.length !== pending.files.length || ui.task.sheet.files.some((f, i) => f !== pending.files[i]));
   if (r.paused) {  // preflight wants answers first: nothing was made yet
     if (!ui.task.sheet) { ui.task.done = {error: "It has a question about the goal first. Reopen it to answer."}; toastTimer(); return render() }
