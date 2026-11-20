@@ -674,6 +674,12 @@ test("agent card: clicking its output opens All output over the window, live: fo
   assert.equal(await page.locator("#aout-list > *").count(), 42);
   assert.deepEqual(await page.$$eval("#aout-list .aoe.you .aow, #aout-list .aoe.said .aow", es => [...new Set(es.map(e => e.textContent))]), ["Prompt", "Claude"]);
   assert.ok(await atBottom(page), "it opens at the newest output");
+  const tool = "#aout-list .aoe.tool >> nth=0", tall = () => page.$eval("#aout-list .aoe.tool", e => e.getBoundingClientRect().height);
+  await page.evaluate(() => { const e = document.querySelector("#aout-list .aoe.tool"); e.textContent = "Bash " + "x ".repeat(2000) });
+  const folded = await tall();
+  await page.click(tool);
+  assert.ok(folded < 60 && await tall() > folded * 3, `a long tool line folds to 3 lines and a click unfolds it (${folded} → ${await tall()})`);
+  await page.evaluate(() => outBottom());
   await page.evaluate(s => mc.update(s), SNAP);  // the 5s snapshot re-renders the page under it
   assert.ok(await page.isVisible("#aout") && await atBottom(page), "a re-render leaves it open and where it was");
   assert.equal(await page.locator(".acard[data-name='plan-b'] .prog, .acard[data-name='plan-b'] button.aline").count(), 1, "the compact card is still there under it");
