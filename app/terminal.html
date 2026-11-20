@@ -1077,7 +1077,7 @@ const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES
 const NML = "No Man's Land";
 let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
 const pid = n => "p" + n.toLowerCase().replace(/\W+/g, "_").slice(0, 40);
-const acct = () => ONLY?.length === 1 ? allP.find(p => p.id === ONLY[0]) : null;
+const acct = () => activeOnly()?.length === 1 ? allP.find(p => p.id === activeOnly()[0]) : null;
 function merge(){
   allP = projects.map(p => ({...p, repos: [...p.repos], own: true}));
   for (const w of trees) {
@@ -1092,15 +1092,17 @@ function merge(){
   offer();
 }
 let ONLY = (() => { try { const o = JSON.parse(q.get("only") || "null"); return Array.isArray(o) && o.length ? o : null } catch { return null } })();
+// Keep the saved pick so a project that comes back is picked again; show All while none of its ids are listed.
+const activeOnly = () => { if (!ONLY || !treesIn) return ONLY; const live = ONLY.filter(id => !id || allP.some(p => p.id === id)); return live.length ? live : null };
 const under = (path, d) => path === d || path?.startsWith(d + "/");
 // a workspace's project is its repo's (repoIn: the project that names the repo, else the one holding its main checkout), wherever the ADE
 // put the worktree; only a tree whose repo is in none goes by its own folder
 const projOf = w => (w.project ? repoIn(allP, w.project) : undefined) ?? allP.find(p => p.dirs.some(d => under(w.path, d)));
-const inView = w => !ONLY || ONLY.includes(projOf(w)?.id ?? "");
+const inView = w => !activeOnly() || activeOnly().includes(projOf(w)?.id ?? "");
 const fullDir = d => (HOME && /^~(\/|$)/.test(d) ? HOME + d.slice(1) : d).replace(/(.)\/+$/, "$1");
 const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as the app's paneWhere
 // what this window lists: in-view trees, plus each in-view project's folders that aren't a tree already
-const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !ONLY || ONLY.includes(p.id)).flatMap(p => p.dirs)
+const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !activeOnly() || activeOnly().includes(p.id)).flatMap(p => p.dirs)
   .filter((d, i, a) => a.indexOf(d) === i && !wsInfo(d)).map(d => ({project: "", name: d.split("/").pop() || d, path: d, dir: true}))];
 function openWs(ws){
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
@@ -1270,10 +1272,11 @@ waitB.onclick = () => { const p = [...panes.values()].find(p => p.bell && isClau
 $("shead").append(waitB, iconBtn("ib acc", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
   iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
-  t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
+  const only = activeOnly();
+  t.textContent = only ? only.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
   // the window bar names it too (not in the Pipe), centered like a title, with each project's square (none: All projects)
   const hex = i => i < 0 ? "#8E8E93" : getComputedStyle(document.documentElement).getPropertyValue("--" + "obgptyr"[i % 7]).trim();
-  t.title = t.textContent + " · Show projects…"; post({cmd: "title", text: ONLY ? t.textContent : "All projects", colors: ONLY ? ONLY.map(id => hex(allP.findIndex(p => p.id === id))) : [],
+  t.title = t.textContent + " · Show projects…"; post({cmd: "title", text: only ? t.textContent : "All projects", colors: only ? only.map(id => hex(allP.findIndex(p => p.id === id))) : [],
     list: [...allP, null].map((p, i) => { const mine = w => (projOf(w)?.id ?? "") === (p ? p.id : ""), rs = reposOf(allP, p ?? undefined).filter(r => trees.every(w => w.project !== r || mine(w)));
       return {id: p ? p.id : "", name: p ? p.name : NML, color: hex(p ? i : -1), repos: rs, paths: trees.filter(mine).map(w => w.path), busy: trees.filter(w => w.agent === "working" && mine(w)).length} })}) };  // list: every project and No Man's Land, for L1's Open projects; paths: the trees inView puts in it (a no-repo or folder-only one too: the app scopes Chief by them)
 $("shead").querySelector(".ttl").onclick = () => pickProjects(true);  // the title names the window's projects: a click changes them (or edits them)
@@ -1302,13 +1305,13 @@ const tilde = p => HOME && under(p, HOME) ? "~" + p.slice(HOME.length) : p;
 // Open projects: in a new window (the app opens one, to put on any display) or this one (its shells stay); all projects, or the ones you tick
 // (No Man's Land: repos in none)
 function pickProjects(here){
-  const some = here && ONLY, body = el("div", "nwb"), find = Object.assign(el("input"), {type: "text", placeholder: "Filter projects"}), grid = el("div", "tiles");
+  const some = here && activeOnly(), body = el("div", "nwb"), find = Object.assign(el("input"), {type: "text", placeholder: "Filter projects"}), grid = el("div", "tiles");
   find.setAttribute("aria-label", "Filter projects");
   const tile = (v, name, sub, on, c) => `<label class="tile"><input type="checkbox" value="${esc(v)}" ${on ? "checked" : ""}>${sq(c)}<span><b>${esc(name)}</b><small>${esc(sub)}</small></span></label>`;
   const busy = rs => { const n = trees.filter(w => w.agent === "working" && rs.includes(w.project)).length; return n ? ` · ${n} agent${n === 1 ? "" : "s"} working` : "" };
   const rsOf = [...allP, null].map(p => reposOf(allP, p ?? undefined));
   grid.innerHTML = tile("*", "All projects", "Everything, and new projects as you add them", !some, "var(--dim)")
-    + [...allP, null].map((p, i) => { const rs = rsOf[i]; return tile(p ? p.id : "", p ? p.name : NML, p || rs.length ? nRepos(rs.length) + busy(rs) : "Repos in no project", some && ONLY.includes(p ? p.id : ""), pcol(p ? i : -1)) }).join("");
+    + [...allP, null].map((p, i) => { const rs = rsOf[i]; return tile(p ? p.id : "", p ? p.name : NML, p || rs.length ? nRepos(rs.length) + busy(rs) : "Repos in no project", some && some.includes(p ? p.id : ""), pcol(p ? i : -1)) }).join("");
   const boxes = [...grid.querySelectorAll("input")], all = boxes[0], tot = el("span", "tot");
   const count = () => { const on = all.checked ? rsOf.map((_, i) => i) : boxes.slice(1).flatMap((b, i) => b.checked ? [i] : []);
     tot.textContent = `${on.length} project${on.length === 1 ? "" : "s"} · ${nRepos(on.reduce((n, i) => n + rsOf[i].length, 0))}` };
@@ -1323,8 +1326,8 @@ function pickProjects(here){
   const ed = Object.assign(el("button", "lite"), {type: "button", textContent: "Edit projects…"}); ed.onclick = () => editProjects();
   dlgForm("Open projects", body, "", () => {
     const only = boxes.filter(b => b.checked).map(b => b.value), any = only.includes("*");
-    if (!inPlace) { post({cmd: "window", only: any ? null : only}); return true }
-    ONLY = any ? null : only; post({cmd: "only", only: ONLY}); merge(); paint(); setTitle(); render(); save(); return true;
+    if (!inPlace) { post({cmd: "window", only: any || !only.length ? null : only}); return true }
+    ONLY = any || !only.length ? null : only; post({cmd: "only", only: ONLY}); merge(); paint(); setTitle(); render(); save(); return true;
   }, null, {cls: "big nw", head: [seg], left: [ed], right: [tot]});
   mode();
 }
@@ -1869,7 +1872,7 @@ function toAgent(ws, text){
 // a branch name from the goal: its first five words, lowercase, dashed
 const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 5).join("-").slice(0, 40).replace(/-+$/, "");
 function newWsDialog(){
-  const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (ONLY && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
+  const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
   if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
@@ -2011,8 +2014,8 @@ $("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files 
   const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
 let picked;  // Choose folder…'s answer, from the app
 window.term = {
-  focusInfo: () => ({...cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : {}, paths: ONLY ? trees.filter(inView).map(w => w.path) : null,
-    repos: ONLY ? [...new Set(trees.filter(inView).map(w => w.project).filter(Boolean))] : null}),  // for Chief: the tab you're on, the window's workspaces and their repos (one made since the trees came is in them). Not `focus`: that's below, the keyboard's
+  focusInfo: () => ({...cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : {}, paths: activeOnly() ? trees.filter(inView).map(w => w.path) : null,
+    repos: activeOnly() ? [...new Set(trees.filter(inView).map(w => w.project).filter(Boolean))] : null}),  // for Chief: the tab you're on, the window's workspaces and their repos (one made since the trees came is in them). Not `focus`: that's below, the keyboard's
   mode(m, b, f){ mode = m; chrome = {bg: b, fg: f}; paint() },  // the app's Auto/Light/Dark: chrome only, CSS
   only(o){ ONLY = Array.isArray(o) && o.length ? o : null; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
   picked: d => picked?.(d),
