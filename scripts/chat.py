@@ -88,6 +88,7 @@ def board_note():
     scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
     return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{b}\n\n"
 WRAP = "USER MESSAGE (reply to this): "
+ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # greenlight's (not imported: its import reads config and may call the forge)
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 # What the status says while the model thinks: one picked per stretch of thinking, held until something else shows.
 # Playful, never a claim about real work (no "Searching", "Merging", "Testing"), short enough for the narrow popover.
@@ -646,6 +647,12 @@ def stop_shell(task_id):
     return bool(hits)
 
 
+def asked_question(reply):
+    """The question a reply ended on (its last line, a `?` or the Options line, under the app's [hexes:] lines), else None."""
+    last = (re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").rstrip().split("\n") or [""])[-1]
+    return last if re.search(r"\?\s*\Z|^Options:", last) else None
+
+
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
     engine, model = harness.route(model)
     stored = []
@@ -667,9 +674,9 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
         # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
-        # chat's own question ("prod or staging?" → "prod") is judged with the request it answers (greenlight.ANSWER).
+        # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
         asked = os.path.join(DIR, "asked")
-        os.environ["GREENLIGHT_REQUEST"] = open(asked).read() + "\n(answer) " + text if os.path.exists(asked) else text
+        os.environ["GREENLIGHT_REQUEST"] = open(asked).read() + ANSWER + text if os.path.exists(asked) else text
         text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
@@ -695,9 +702,9 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         session(engine, new_sid)
     if not compact and not err:
         decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
-        asked = os.path.join(DIR, "asked")
-        if re.search(r"(\?|^Options:.*)\Z", (norm.reply or "").rstrip(), re.M):  # it ended on a question
-            open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", ""))
+        asked, question = os.path.join(DIR, "asked"), asked_question(norm.reply)
+        if question:  # the next message answers it: judged with this request (greenlight.read_only)
+            open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
         elif os.path.exists(asked):
             os.remove(asked)
     if err:

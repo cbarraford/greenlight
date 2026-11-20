@@ -156,7 +156,7 @@ def orca_cli(*args, timeout=120):
 LOOKUP = (r"how|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|does|status|check|look up|lookup|"
           r"tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
 ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)
-CLAUSE_RE = re.compile(r"[?.;,:\n]+|!(?=\s|$)|\b(?:and|then|so|otherwise|but|also|if)\b", re.I)
+CLAUSE_RE = re.compile(r"[?.;:\n]+|!(?=\s|$)|,?\s*\b(?:(?:and )?then|otherwise|if so|if not)\b", re.I)  # sentences, not "and"
 CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
            r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
            r"comment|open|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
@@ -165,11 +165,13 @@ CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|ren
            r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
            r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
-           r"what about|how about|what if|why not|yes|yeah|yep|sure|ok|okay|"
+           r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our|my)|let|put|renew|roll|nudge|"
+           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible|docs?|readme|"
            r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
 NAME_RE = re.compile(r"[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
-ANSWER = "\n(answer) "  # chat.py: the request a reply asked about, then the user's answers to it
+ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # chat.py: request, (asked) the chat's question, (answer) the user's answer, …
+AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
                      "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
                      "glab / gh, the APIs and files on this host) instead of creating a workspace. Workspaces are for "
@@ -180,9 +182,15 @@ READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, resear
 
 def read_only(text):
     """True when the request is plainly questions or lookups, and no answer to a clarifying question asks for a change."""
-    req, *answers = NAME_RE.sub(" ", text or "").split(ANSWER)
+    req, *turns = re.split(r"\n\((asked|answer)\) ", NAME_RE.sub(" ", text or ""))
+    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == "asked"]
+    answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == "answer"]
     clauses = [c for c in CLAUSE_RE.split(req) if c and c.strip(" \t'\"()-*")]
-    return bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not any(CHANGE_RE.search(t) for t in [req, *answers])
+    def answer_changes(a):  # "prod" narrows the question; "sure", or a sentence that doesn't ask, is its own request
+        return CHANGE_RE.search(a) or AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
+    return (bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not CHANGE_RE.search(req)
+            and not any(CHANGE_RE.search(q) for q in asked)  # "want me to add a meter?" offered a change
+            and not any(answer_changes(a) for a in answers))
 
 
 def create_refused(args):
