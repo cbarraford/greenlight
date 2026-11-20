@@ -49,7 +49,14 @@ security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
 kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
 case " ${kcs[*]} " in *" $kc "*) ;; *) security list-keychains -d user -s "${kcs[@]}" "$kc" ;; esac
 id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
-codesign -fs "${id:--}" --keychain "$kc" "$app" || { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
+# Designated by the cert alone, not the bundle id too: a Keychain key trusts the apps it lets in by this requirement, so with
+# the id in it, every workspace's dev copy (its own id, see scripts/dev.py) asked for your password again. Code that could
+# sign with this cert could already claim Greenlight's id, so the key lets in nothing new. (`identifier` takes no wildcard,
+# and the Keychain wouldn't match a copy on `info[CFBundleIdentifier] = "dev.greenlight.app*"`: tried on macOS 26.5.)
+if [ -z "$id" ]; then codesign -fs - "$app"
+else codesign -fs "$id" --keychain "$kc" -r="designated => certificate leaf = H\"$id\"" "$app" ||
+  { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
+fi
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"
