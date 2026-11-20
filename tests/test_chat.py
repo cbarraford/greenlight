@@ -688,6 +688,8 @@ def test_cmd_title_names_what_ran():
     assert t('echo "x | grep" | wc') == "Ran wc" and t('echo "a; rm -rf /"') == "Ran a shell command"  # quoted separators don't split
     assert t("command -v jq") == "Ran a shell command" and t("npm --prefix app run test") == "Ran npm run test"
     assert t('claude -p "fix the tests"') == "Ran claude" and t('codex "fix it"') == "Ran codex" and t("codex exec -") == "Ran codex exec"
+    assert t('claude -p "update the docs"') == t('claude "apply the patch"') == "Ran claude" and t('codex "review my diff"') == "Ran codex"  # the prompt
+    assert t("codex review --base main") == "Ran codex review" and t("/opt/bin/claude mcp list") == "Ran claude mcp"
     assert t("npm run build") == "Ran npm run build" and t("docker compose up -d") == "Ran docker compose up" and t("git stash pop") == "Ran git stash pop"
     assert t("tmux -L greenlight capture-pane -p -t '=s:' -S -60") == "Ran tmux capture-pane"
     assert t("git -C /w status --short") == "Ran git status"
@@ -763,7 +765,8 @@ def test_a_retry_clears_the_last_runs_plan(tmp_path, monkeypatch):
     n.plan([("a", "completed", None), ("b", "", None)])
     n.running = [("s", "Ran ls")]
     chat.run([sys.executable, "-c", "print('{}')"], "claude", "", n)
-    assert out[0] == {"e": "plan", "done": 0, "total": 0, "title": "", "eta": None}, out  # the app drops the plan
+    assert out[0] == {"e": "step_done", "id": "s", "ok": False, "out": ""}, out  # the dead run's open step ends with it
+    assert out[1] == {"e": "plan", "done": 0, "total": 0, "title": "", "eta": None}, out  # the app drops the plan
     assert n.plan_t0 is None and n.running == []
 
 
