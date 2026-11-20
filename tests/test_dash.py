@@ -310,7 +310,7 @@ import json
 from pathlib import Path
 dash.MEMORY = Path(tempfile.mkdtemp())
 g = dash.settings("lifecycle-get", "greenlight", "")
-assert g["source"] == "bundled" and "solo" in g["options"], g
+assert g["source"] == "bundled" and "automerge" in g["options"], g
 dash.settings("lifecycle-set", "greenlight", json.dumps({**g, "rules": "Always add a test."}))
 g2 = dash.settings("lifecycle-get", "greenlight", "")
 assert (g2["source"], g2["rules"], g2["intro"]) == ("yours", "Always add a test.", g["intro"])
