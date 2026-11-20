@@ -362,9 +362,11 @@ def make(c, k, ev):
         if r.returncode:
             err = errors(r.stdout + r.stderr)
             say(f"{k.title}: build failed\n{err}")
-            if not failed[0]:  # one banner per broken stretch, not per save
+            if not failed[1]:  # one banner per broken stretch (no failure on record yet), not per save
                 banner(k.title, "Build failed: " + err.splitlines()[0] if err else "Build failed")
-            (k.dir / "failed").write_text(key + "\n" + err)
+            # a compiler error waits for the sources to change; anything else (build.sh's signing, a full disk) is tried again on the next save
+            compiled = any(re.search(r"\.swift:\d+:\d+: error:", l) for l in err.splitlines())
+            (k.dir / "failed").write_text((key if compiled else "") + "\n" + err)
             return report(c, ev, ok=False, what="build", secs=secs, errors=err)
         (k.dir / "failed").unlink(missing_ok=True)
         if not (k.dir / "id").is_file():
