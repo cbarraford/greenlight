@@ -2681,10 +2681,10 @@ struct RunCard: View, Looked {
     /// Orb's lead: the amber orb with two soft rings. ponytail: static; the live stage's orb is the one that moves.
     var orbMark: some View {
         ZStack {
-            Circle().fill(accent.opacity(0.07)).frame(width: 60, height: 60)
-            Circle().fill(accent.opacity(0.16)).frame(width: 46, height: 46)
-            Circle().fill(RadialGradient(colors: [hx("FFD27A"), hx("F5A524"), hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 22))
-        }.frame(width: 34, height: 34).accessibilityHidden(true)
+            Circle().fill(accent.opacity(0.07)).frame(width: 36, height: 36)  // the rings stay inside the card
+            Circle().fill(accent.opacity(0.16)).frame(width: 28, height: 28)
+            Circle().fill(RadialGradient(colors: [hx("FFD27A"), hx("F5A524"), hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 11)).frame(width: 20, height: 20)
+        }.frame(width: 36, height: 36).accessibilityHidden(true)
     }
     var stop: some View {
         let (t, ink, fill, edge, r0): (String, Color, Color, Color, CGFloat) = switch lk.id {
@@ -4361,7 +4361,7 @@ struct ChatView: View, Looked {
             HStack(spacing: Theme.sp2) {
                 title
                 Spacer(minLength: Theme.sp2)
-                meta
+                ViewThatFits { HStack(spacing: Theme.sp2) { meta }.fixedSize(); EmptyView() }.layoutPriority(-1)  // a narrow pane drops the host, never clips
                 VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) })
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
@@ -4374,7 +4374,7 @@ struct ChatView: View, Looked {
         if c.editingName {
             TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } }).textFieldStyle(.plain).font(f).frame(width: 160).onSubmit(c.doneNaming)
         } else {
-            Text(shown).font(f).tracking(track).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
+            Text(shown).font(f).tracking(track).lineLimit(1).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
         }
     }
 
@@ -4416,7 +4416,7 @@ struct ChatView: View, Looked {
                 .frame(width: 14, height: 14).background(Circle().fill(accent.opacity(c.connected ? 0.14 : 0)).padding(-4))
                 .background(Circle().fill(accent.opacity(busy ? 0.06 : 0)).padding(-9)).padding(.horizontal, 4).accessibilityHidden(true)
             nameView(n.uppercased(), sys(size: Theme.fs2, weight: .semibold), track: 1.7)
-            tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk)
+            tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk).lineLimit(1).fixedSize()
         }
     }
 
@@ -4612,21 +4612,29 @@ struct ChatView: View, Looked {
                 Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(sys(size: Theme.fs1)).foregroundColor(dim)
             }
             let onair = lk.id == "onair"
-            HStack(spacing: Theme.sp2) {
-                if onair { modelButton }  // On Air: the model first, inverse, on the amber strip
-                ViewThatFits {  // the hint gives way first when the row is tight
-                    tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send", lk.id == "editorial" ? Theme.fs1 - 1 : Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .semibold : .regular)
-                        .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
-                    EmptyView()
-                }.layoutPriority(-1)
-                Spacer(minLength: 4)
-                if !c.agents.isEmpty { agentsButton }
-                if !onair { modelButton }
-                ContextButton(c: c)
-                newChat
+            ViewThatFits(in: .horizontal) {  // a narrow pane drops the hint, then the model; it never clips
+                footRow(hint: true, model: true)
+                footRow(hint: false, model: true)
+                footRow(hint: false, model: false)
             }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small)
                 .padding(.trailing, onair ? inset : 0).background(onair ? accent : .clear).padding(.horizontal, onair ? -inset : 0)  // full-bleed, the model flush left
         }.padding(.horizontal, inset).padding(.top, Theme.sp3).padding(.bottom, lk.id == "onair" ? 0 : Theme.sp4)
+    }
+
+    func footRow(hint: Bool, model: Bool) -> some View {
+        let onair = lk.id == "onair"
+        return HStack(spacing: Theme.sp2) {
+            if onair && model { modelButton.fixedSize() }  // On Air: the model first, inverse, on the amber strip
+            if hint {
+                tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send", lk.id == "editorial" ? Theme.fs1 - 1 : Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .semibold : .regular)
+                    .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
+            }
+            Spacer(minLength: 4)
+            if !c.agents.isEmpty { agentsButton }
+            if !onair && model { modelButton.fixedSize() }
+            ContextButton(c: c)
+            newChat
+        }
     }
 
     var bare: Bool { lk.id == "editorial" || lk.id == "zen" }  // no boxes, just type and rules
@@ -5293,7 +5301,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         un.getNotificationSettings { s in NSLog("greenlight notifications: authorization %d, alert %d", s.authorizationStatus.rawValue, s.alertSetting.rawValue) }
     }
 
-    lazy var chat = NSHostingView(rootView: ChatView(c: greenlight))
+    lazy var chat: NSHostingView<ChatView> = { let h = NSHostingView(rootView: ChatView(c: greenlight)); h.sizingOptions = []; return h }()  // the pane sets the width, SwiftUI fits it
     lazy var settingsHost: NSHostingView<SettingsWindowView> = { let h = NSHostingView(rootView: SettingsWindowView(c: greenlight)); h.sizingOptions = []; return h }()
     /// Settings: its own window, over whichever floor you're on; closing it leaves you there
     lazy var settingsWindow: NSWindow = {
@@ -5429,6 +5437,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         split.addArrangedSubview(chatSlot)
         split.setHoldingPriority(.defaultLow, forSubviewAt: 0)  // a window resize goes to the dashboard
         split.setHoldingPriority(.defaultLow + 1, forSubviewAt: 1)
+        for (v, w, pr) in [(root, 480, NSLayoutConstraint.Priority.defaultHigh + 1), (chatSlot, 320, .defaultHigh)] as [(NSView, CGFloat, NSLayoutConstraint.Priority)] {
+            let k = v.widthAnchor.constraint(greaterThanOrEqualToConstant: w); k.priority = pr; k.isActive = true  // a window too narrow for both: the chat gives
+        }
         w.contentView = split
         split.layoutSubtreeIfNeeded()
         split.setPosition(split.bounds.width - 440, ofDividerAt: 0)
