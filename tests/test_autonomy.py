@@ -210,6 +210,9 @@ with contextlib.redirect_stdout(io.StringIO()):
     autonomy.undo(old_auto["id"])
 assert any(r["question"] == "A newer review question?" and decisions.is_open(r) for r in decisions.load())
 assert outbox()[-1]["key"] == f"@undo:{old_auto['id']}"
+greenlight.close_stale([])
+assert f"@undo:{old_auto['id']}" not in greenlight.pinged()
+assert any(r["key"] == f"@undo:{old_auto['id']}" and r["closed"] == "resolved: workspaces no longer waiting on you" for r in decisions.load())
 
 # failed writes must not invent an auto answer or duplicate one on retry
 reset()
