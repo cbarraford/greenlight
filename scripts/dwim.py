@@ -85,7 +85,7 @@ STOP = set("""a an the on of in for to and or with my our your all every each on
            just go ahead can you could would kick off start run fix fixes get put back aside workspace workspaces ws prs pr mrs mr pull request
            requests branch branches agent agents some few couple ci build builds pipeline pipelines tests test review threads comments feedback
            conflicts conflict merge rebase hold park unpark release lift remove clear shelve snooze unhold freeze ok do don't dont not
-           green red failing failed broken busted conflicted conflicting drafts draft parked idle stuck quiet stalled up let's lets""".split())
+           green red failing failed broken busted conflicted conflicting drafts draft parked idle stuck quiet stalled up ice let's lets""".split())
 POLITE = re.compile(r"^(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you (?:please )?|please |go ahead and |let'?s )|[\s,]*(?:please|thanks|thank you)?[.!?\s]*$", re.I)
 SOURCES = ("voice", "chat", "jump")
 HOLD = re.compile(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", re.I)  # greenlight.HOLD_RE: not imported, plan stays light
@@ -219,8 +219,7 @@ def grammar(text, pucks, focus=None):
     bare = NOT_DESTRUCTIVE.sub(" ", rest)
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)
-    g["tokens"] = [] if g["names"] or g["refs"] or g["here"] else \
-        [w for w in words(bare) if w not in STOP and w not in NUMS and (not w.isdigit() or len(w) >= 3) and len(w) > 1]  # a long number may be part of a name
+    g["tokens"] = [w for w in words(bare) if w not in STOP and w not in NUMS and (not w.isdigit() or len(w) >= 3) and len(w) > 1]  # a long number may be part of a name
     return g
 
 
@@ -405,7 +404,10 @@ def apply(o):
         if after == " ".join(before.split()):
             return {"ws": a["ws"], "unchanged": True}
         greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
-        _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
+        try:
+            _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
+        except OSError as e:
+            log({"op": "history_error", "ws": a["ws"], "error": str(e)[:200]})
         return {"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after}
 
     out = list(_pool.map(lambda a: _safe(one, a), acts))
