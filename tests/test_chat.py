@@ -263,6 +263,7 @@ def test_asked_question():
     assert chat.asked_question("Which one?\nOptions: add a meter | skip\n[hexes: a, b]") == "Which one?\nOptions: add a meter | skip"
     assert "add a cost meter" in chat.asked_question("It cost $12.\n\nI can add a cost meter.\nWhere should it go?\n[hexes:]")
     assert "add a cost meter" in chat.asked_question("It cost $12.\n\nI can add a cost meter.\n\nWhere should it go?\n[hexes: a]")
+    assert "add a cost meter" in chat.asked_question("I can add a cost meter.\n\nWhich account?\n\nOptions: prod | staging\n[hexes:]")
     assert chat.asked_question("Done: see https://x.test/?q=1\n[hexes:]") is None  # a ? inside isn't a question
     assert chat.asked_question("") is None and chat.asked_question(None) is None
 
