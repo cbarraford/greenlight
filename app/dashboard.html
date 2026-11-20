@@ -688,7 +688,7 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {ci: {days: [7, 14, 30].includes(+localGet("ciDays")) ? +localGet("ciDays") : 30, proj: localGet("ciProj") || null, data: null, loading: false, err: null},
-  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
+  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
