@@ -1098,9 +1098,51 @@ func asksToShow(_ s: String) -> Bool {
             options: [.regularExpression, .caseInsensitive]) != nil
 }
 
-/// `asked`: the user asked to see some (asksToShow), so skip the "about particular workspaces?" gate; grounding still applies.
-func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, done: @escaping ([String]) -> Void) {
+/// How sure System One must be that a reply is about a workspace before its hex lights, and before its card opens by itself.
+let lightAt = 0.70, openAt = 0.85
+
+/// The hexes a reply is about, and whether the dashboard should open the one lit hex's card (`open`: it's that sure).
+/// The ones it names outright are certain. The others it points at (grounded: a name, an MR number, title words) go to System One
+/// (`decide.py batch` where greenlight runs, one yes/no each): P > 0.70 lights, a lone hex at P > 0.85 opens. With no System One model
+/// set up there, Apple's on-device model picks as before, and only a hex named outright opens.
+/// `asked`: the user asked to see some (asksToShow): the questions say so, and the on-device picker skips its "particular ones?" gate.
+func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, done: @escaping ([String], Bool) -> Void) {
     let named = namedHexes(reply, pucks)
+    var seen = Set(named)
+    let cands = pucks.filter { p in  // ponytail: 12 at most; a reply grounded in more is about the board, not particular ones
+        guard let n = p["name"] as? String, seen.insert(n).inserted else { return false }
+        return grounded(reply, p)
+    }.prefix(12)
+    guard !cands.isEmpty else { return done(named, named.count == 1) }
+    var qs: [String: Any] = [:]
+    for (i, p) in cands.enumerated() {
+        let mr = p["mr"] as? [String: Any]
+        let what = [p["name"] as? String, mr?["ref"] as? String, (mr?["title"] as? String).map { String($0.prefix(80)) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | ")
+        qs["h\(i)"] = ["type": "bool", "question": "Is the reply about this workspace in particular (it names, recommends, asks about or acts on it): \(what)?",
+                       "context": "An assistant's reply to the user, about the user's coding workspaces." + (asked ? " The user asked to be shown workspaces." : "")
+                         + " A reply about all of them in general is about none in particular."]
+    }
+    guard let d = try? JSONSerialization.data(withJSONObject: ["state": String(reply.prefix(4000)), "questions": qs]) else { return done(named, named.count == 1) }
+    var out = ""
+    ssh("\(py)/decide.py batch", stdin: String(decoding: d, as: UTF8.self), onLine: { out += $0 }, onExit: { code in
+        let a = code == 0 ? (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: [String: Any]] : nil
+        guard let a, a.values.contains(where: { $0["provider"] as? String != "local" }) else {  // no model there (or no answer): on-device
+            return applePick(reply, pucks, asked: asked, named: named) { names in done(names, names.count == 1 && named.contains(names[0])) }
+        }
+        let probs = cands.enumerated().compactMap { i, p -> (String, Double)? in
+            guard let n = p["name"] as? String, let pr = a["h\(i)"]?["prob"] as? Double, pr > lightAt else { return nil }
+            return (n, pr)
+        }
+        let lit = named + probs.map(\.0)
+        let sure = lit.count == 1 && (named.count == 1 || probs.first.map { $0.1 > openAt } == true)
+        NSLog("pick: %@", probs.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+        done(lit, sure)
+    })
+}
+
+/// Apple's on-device model's picks (local, no key; only real names, an enum of them), grounded, after the named ones.
+/// Without Apple Intelligence: the named ones.
+func applePick(_ reply: String, _ pucks: [[String: Any]], asked: Bool, named: [String], done: @escaping ([String]) -> Void) {
     var seen = Set<String>()  // the same workspace twice (a stack's members, two hosts) would be a duplicate enum case
     let ws = pucks.compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
         guard let n = p["name"] as? String, seen.insert(n).inserted else { return nil }
@@ -2914,7 +2956,7 @@ final class Core: ObservableObject {
     /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
     var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(greenlightHome)/chat-\(session) \(py)/chat.py" }
-    var light: ([String]) -> Void = { delegate.pick($0) }  // the hexes a reply is about, lit in this chat's dashboard
+    var light: ([String], Bool) -> Void = { delegate.pick($0, open: $1) }  // the hexes a reply is about, lit in this chat's dashboard; true: open the lone one's card
     var subs = Set<AnyCancellable>(), mirroring = false
     /// A second window's chat keeps the main one's settings, both ways: Settings (the main chat's) and this chat's own name agree.
     func follow(_ m: Core) {
@@ -3196,6 +3238,52 @@ final class Core: ObservableObject {
             onExit: { [weak self] code in DispatchQueue.main.async { self?.greenlightEveryNote = code == 0 ? "" : "Couldn't save the schedule on \(host)." } })
     }
 
+    // System One (decide.py where greenlight runs): the model for its quick decisions. config.json's system_one is the truth; this is the last read.
+    @Published var s1Provider = "local"
+    @Published var s1Fallback = ""
+    @Published var s1Key = false
+    @Published var s1Loading = false
+    @Published var s1Note = ""  // why the last read or save failed
+    @Published var s1Test = ""  // the last Test's result
+
+    func loadSystemOne() { systemOne("config") }
+    func setSystemOne(provider: String? = nil, fallback: String? = nil) {
+        if let provider { s1Provider = provider }
+        if let fallback { s1Fallback = fallback }
+        systemOne("config" + (provider.map { " --provider \(shellQuote($0))" } ?? "") + (fallback.map { " --fallback \($0.isEmpty ? "none" : shellQuote($0))" } ?? ""))
+    }
+    /// The TypeSafe key goes to decide.py on greenlight's host (its secrets file, 0600) over stdin: never on a command line.
+    func setSystemOneKey(_ v: String) { systemOne(v.isEmpty ? "key --clear" : "key", stdin: v) }
+    func systemOne(_ cmd: String, stdin: String = "") {
+        var out = ""
+        s1Loading = true
+        ssh("\(py)/decide.py \(cmd)", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
+            guard let self else { return }
+            self.s1Loading = false
+            guard code == 0, let a = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] else {
+                self.s1Note = "Couldn't reach decide.py on \(host)."; return
+            }
+            if let p = a["provider"] as? String { self.s1Provider = p }
+            if a.keys.contains("fallback") { self.s1Fallback = a["fallback"] as? String ?? "" }
+            if let k = a["key"] as? Bool { self.s1Key = k }
+            self.s1Note = ""
+        })
+    }
+    /// `decide.py test`: each model in the chain asked a question with a known answer; the result in a line.
+    func testSystemOne() {
+        var out = ""
+        s1Test = "Asking…"
+        ssh("\(py)/decide.py test", onLine: { out += $0 }, onExit: { [weak self] _ in
+            let a = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any]
+            let rows = a?["results"] as? [[String: Any]] ?? []
+            self?.s1Test = a == nil ? "✗ No answer from decide.py on \(host)." : rows.isEmpty ? "Off: nothing to ask. Greenlight's own patterns decide."
+                : rows.map { r in
+                    let p = (r["provider"] as? String ?? "?").capitalized, ms = r["ms"] as? Int ?? 0
+                    return r["ok"] as? Bool == true ? "✓ \(p) answered in \(ms) ms" : "✗ \(p): \((r["error"] as? String).map { String($0.prefix(120)) } ?? "wrong answers")"
+                }.joined(separator: " · ")
+        })
+    }
+
     var isClaude: Bool { harnessOf(model) == "claude" }
     var waiting: [Question] { questions.filter { $0.answer == nil } }
     /// The waiting pings that name workspaces, for the dashboard (mc.bell's third argument).
@@ -3465,7 +3553,7 @@ final class Core: ObservableObject {
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
         focusSent = ""  // the new conversation hasn't heard where you are
-        picks += 1; light([])  // nor lit anything
+        picks += 1; light([], false)  // nor lit anything
         if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
         context = 0; window = 0; run?.meterStale = true  // the next harness reports its own window
@@ -3572,9 +3660,9 @@ final class Core: ObservableObject {
         if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
             picks += 1
             let n = picks
-            light([])
-            if let h = st.hexes { light(resolveHexes(h, pucks)) }  // Chief said which: no guessing
-            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names in if n == self?.picks { self?.light(names) } } }
+            light([], false)
+            if let h = st.hexes { light(resolveHexes(h, pucks), true) }  // Chief said which: no guessing
+            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names, open in if n == self?.picks { self?.light(names, open) } } }
         }
         run = nil
         tps = 0
@@ -4487,7 +4575,7 @@ struct SettingsView: View {
                       ("Keyboard", "keyboard", "vim shortcuts keys"),
                       ("Terminal", "terminal", "tab names basement orbs floors sidebar slide ride animation up button"),
                       ("Hosts", "server.rack", "ssh host state code relaunch connection")]
-    static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions"),
+    static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions system one jev haiku typesafe decisions"),
                      ("Projects", "folder", "folders default folder new terminals open"),
                      ("Repositories", "arrow.triangle.branch", "repo lifecycle stages rules prompts auto-run project solo merge"),
                      ("Instructions", "doc.text", "standing rules"),
@@ -5189,6 +5277,29 @@ struct SettingsView: View {
                 Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
             dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "gemini") } }
+        }
+        box("System One", aside: "decide.py on \(hostLabel)") {
+            row("Quick decisions", c.s1Provider == "local" ? "Off: greenlight's own patterns decide. On: a fast model reads what each agent's terminal shows (any harness), what your goals ask (hold, stay draft, park, revisit) and which hexes Chief's reply is about."
+                : "Reads what each agent's terminal shows, what your goals ask and which hexes Chief's reply is about. Patterns still hold: a model only adds a hold, never takes one away.") {
+                if c.s1Loading { ProgressView().controlSize(.small) }
+                Picker("System One model", selection: Binding(get: { c.s1Provider }, set: { c.setSystemOne(provider: $0) })) {
+                    Text("Off").tag("local"); Text("Jev").tag("jev"); Text("Haiku").tag("haiku")
+                }.labelsHidden().pickerStyle(.segmented).fixedSize().onAppear(perform: c.loadSystemOne)
+            }
+            dependent(off: c.s1Provider == "local") {
+                row("If it fails", "Asked when the first model errors or times out; after it, the patterns.") {
+                    Picker("System One fallback", selection: Binding(get: { c.s1Fallback }, set: { c.setSystemOne(fallback: $0) })) {
+                        Text("Patterns").tag("")
+                        if c.s1Provider != "haiku" { Text("Haiku").tag("haiku") }
+                        if c.s1Provider != "jev" { Text("Jev").tag("jev") }
+                    }.labelsHidden().fixedSize()
+                }
+                row("TypeSafe key", c.s1Key ? "Stored on \(hostLabel), for Jev." : "Jev needs one: set it here, or TYPESAFE_API_KEY on \(hostLabel).") {
+                    Button(c.s1Key ? "Change key…" : "Set key…") { delegate.setTypesafeKey() }
+                }
+                row("Test", c.s1Test.isEmpty ? "Asks each model a question with a known answer." : c.s1Test) { Button("Test") { c.testSystemOne() } }
+            }
+            if !c.s1Note.isEmpty { ruled(note(c.s1Note).padding(Theme.sp4)) }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
@@ -6653,8 +6764,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return #"{"away":[\#(viewWindows.keys.map { "\"\($0)\"" }.joined(separator: ","))]}"#
     }
     var picked: [String] = []  // one Chief, one set of lit hexes: every window shows the same, a window that (re)loads gets them too
-    func pick(_ names: [String]) {
+    var pickOpen = false  // and whether the lone lit hex's card opens (System One was sure, or the reply named it)
+    func pick(_ names: [String], open: Bool = false) {
         picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        pickOpen = open
         webs.forEach(pushPicks)
     }
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
@@ -6677,7 +6790,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func pushPicks(_ web: WKWebView) {
         guard let d = try? JSONSerialization.data(withJSONObject: l1(web)?.picked ?? picked), let j = String(data: d, encoding: .utf8) else { return }
-        web.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))")
+        web.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j), \(l1(web)?.pickOpen ?? pickOpen))")
     }
     func pushMode() { webs.forEach { $0.evaluateJavaScript("window.mc && mc.mode(\(modeJSON(for: $0)))") } }
     lazy var window: NSWindow = {
@@ -6847,7 +6960,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
-        if cmd == "unpick" { if let l { l.c.light([]) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
+        if cmd == "unpick" { if let l { l.c.light([], false) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
@@ -7138,7 +7251,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     final class L1 {
         let id: Int, w: NSWindow, web: WKWebView, c: Core, chat: NSHostingView<ChatView>, split = Split(), floor = FloorState()
-        var only: [String]?, picked = [String](), pushedRepos = "", pushedChat = ""
+        var only: [String]?, picked = [String](), pickOpen = false, pushedRepos = "", pushedChat = ""
         init(_ id: Int, _ w: NSWindow, _ web: WKWebView, _ c: Core, _ only: [String]?) {
             self.id = id; self.w = w; self.web = web; self.c = c; self.only = only
             chat = NSHostingView(rootView: ChatView(c: c)); chat.sizingOptions = []
@@ -7160,9 +7273,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         c.follow(greenlight)
         c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
         c.popoverShown = { [weak w] in NSApp.isActive && w?.isKeyWindow == true }
-        c.light = { [weak self, weak l] names in
+        c.light = { [weak self, weak l] names, open in
             guard let self, let l else { return }
             l.picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+            l.pickOpen = open
             self.pushPicks(l.web)
         }
         c.unattach = { [weak l] key in
@@ -7878,6 +7992,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "whisperModel") }
     }
 
+    /// Jev's key: stored by decide.py where greenlight runs (it reads it there), not in this Mac's Keychain.
+    func setTypesafeKey() {
+        let a = NSAlert()
+        a.messageText = "TypeSafe API key"
+        a.informativeText = "Stored by decide.py on \(host.isEmpty || host == "local" ? "this Mac" : host) (GREENLIGHT_HOME/secrets, readable only by you). Used only for Jev, System One's quick decisions. Leave empty to remove it; TYPESAFE_API_KEY is used then, if it’s set."
+        let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        a.accessoryView = f
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = f
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        greenlight.setSystemOneKey(f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
     @objc func setKey() { askKey("openai", "OpenAI API key", "the OpenAI Whisper engine and GPT-Live voice mode") }
     func askKey(_ account: String, _ title: String, _ use: String) {
         let a = NSAlert()

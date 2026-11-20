@@ -1,5 +1,6 @@
-"""Helpers the non-Orca backends share: git facts Orca reports itself, orca flag parsing, Claude draft
-detection, and goal storage for ADEs with no comment/description field."""
+"""Helpers the non-Orca backends share: git facts Orca reports itself, orca flag parsing, what an agent's terminal shows
+(agent_state: one System One choice over its last lines, for any harness; draft: text typed but not sent), and goal
+storage for ADEs with no comment/description field."""
 import json
 import os
 import re
@@ -7,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 GOALS = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight") / "goals.json"  # {workspace path: goal}
-MENU_ITEM_RE = re.compile(r"❯\s*\d\.")
+MENU_ITEM_RE = re.compile(r"[❯›●]\s*\d\.")  # a picker's highlighted row: Claude ❯, Codex ›, Gemini ●
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
 DIM_RE = re.compile(r"\x1b\[2m.*?(?=\x1b\[(?:0|22)?m|$)")  # dim text: Claude's prompt suggestion, not a draft
 
@@ -70,11 +71,99 @@ def flags(args):
     return out
 
 
+BOX_RE = re.compile(r"^[│┃|]\s?|\s?[│┃|]$")  # an input box's side borders (Gemini, opencode)
+PLACEHOLDER_RE = re.compile(r"^(?:Type your message|Ask Codex to do anything|Ask anything|Try \"|Send a message)", re.I)  # read as plain text: not typed
+
+
 def draft(lines):
-    # Claude's input box is the last `❯` line; text after it is a draft the user hasn't sent (menu items aren't).
-    # ponytail: Claude-only; a codex draft reads as empty until its prompt glyph is added here
-    box = [x.strip() for x in lines if x.strip().startswith("❯")]
-    return box[-1][1:].strip() if box and not MENU_ITEM_RE.match(box[-1]) else ""
+    """Text in the agent's input box the user hasn't sent: Claude's ❯ box, Codex's ›, Gemini's │ > … │ (menu rows aren't).
+    A plain-text read can't tell a dim placeholder from typed text: the known placeholders read as empty."""
+    box = []
+    for x in lines:
+        t = x.strip()
+        inner = BOX_RE.sub("", t).strip() if BOX_RE.search(t) else None
+        if t[:1] in "❯›":
+            box.append(t)
+        elif inner is not None and inner.startswith(">"):
+            box.append(inner)
+    if not box or MENU_ITEM_RE.match(box[-1]) or re.match(r"^>\s*\d\.", box[-1]):
+        return ""
+    text = box[-1][1:].strip()
+    return "" if PLACEHOLDER_RE.match(text) else text
+
+
+# ---- what an agent's terminal shows, for any harness ----
+
+STATES = {  # the classifier's options: name → when it applies (System One reads these)
+    "working": "The agent is busy right now: a spinner or timer, 'esc to interrupt'/'esc to cancel', a tool or command running.",
+    "waiting_for_user": "The agent stopped to ask the user something: a permission or approval prompt, a numbered menu, a yes/no, "
+                        "or a question at the end of its reply that it needs answered before it can go on.",
+    "finished": "The agent finished its turn and sits at an empty prompt with nothing asked: done, or idle.",
+    "stuck_looping": "The agent repeats itself: the same error, command or message over and over without progress.",
+    "rate_limited": "The agent hit a usage, rate or quota limit and can't continue until it resets (5-hour/weekly limit, 429, quota).",
+    "logged_out": "The agent can't authenticate: logged out, expired or revoked token or API key, 401, asked to /login or sign in.",
+    "unsent_draft": "Text is typed into the agent's input box but not sent: the turn is over and the draft waits on Enter.",
+}
+QUESTION = ("This is the bottom of a coding agent's terminal (Claude Code, Codex, opencode, pi or Gemini CLI). "
+            "What state is the agent in now? Judge by the bottom of the screen: older lines are history.")
+DEAD_RE = re.compile(r"\b401\b|OAuth access token has been revoked|Please run /login|run `?\w+ login`?|login expired|not logged in|"
+                     r"API key (?:has expired|is invalid|not valid|expired)|Invalid API key|authentication_error|Please (?:log|sign) in", re.I)
+LIMIT_RE = re.compile(r"usage limit|limit reached|5-hour limit|weekly limit|out of (?:extra )?usage"
+                      r"|rate limit exceeded|exceeded your current quota|insufficient_quota|429 Too Many Requests"
+                      r"|exhausted your daily quota|quota will reset after", re.I)  # last line: Gemini CLI's own words (a bare RESOURCE_EXHAUSTED is any gRPC error)
+BUSY_RE = re.compile(r"esc to (?:interrupt|cancel)|esc interrupt|ctrl\+c to (?:interrupt|stop)|"
+                     r"^\W{0,3}\S[^(]{0,40}…\s*\(\d+[smh]\b|^[⠀-⣿]\s|\bWorking\s*\(\d+s\b", re.I | re.M)  # spinners and timers
+ASK_RE = re.compile(r"^\s*[❯›●]\s*\d\.\s+\S|Do you want to|Allow (?:execution|command|this)|\(y/n\)|\[Y/n\]|\[y/N\]|"
+                    r"Waiting for (?:your )?(?:approval|confirmation|input)", re.I | re.M)
+HEURISTIC_P = 0.75  # a pattern hit: above the 0.7 that greenlight acts on, as the regexes it replaces were acted on
+
+
+def screen_state(lines):
+    """The deterministic reading, for when no System One model is set up: patterns every harness's TUI shares."""
+    ls = [plain(str(x)).rstrip() for x in lines][-60:]
+    nonblank = [x for x in ls if x.strip()]
+    bottom = "\n".join(nonblank[-8:])
+    text = "\n".join(nonblank)
+    reps = {}
+    for x in nonblank:
+        k = re.sub(r"\d+", "#", x.strip())
+        if len(k) >= 20 and not BOX_RE.fullmatch(k) and not re.fullmatch(r"[─━═\-–—╭╮╰╯ ]+", k):
+            reps[k] = reps.get(k, 0) + 1
+    if BUSY_RE.search(bottom):
+        label = "working"
+    elif ASK_RE.search("\n".join(nonblank[-15:])):
+        label = "waiting_for_user"
+    elif DEAD_RE.search(text[-3000:]):
+        label = "logged_out"
+    elif LIMIT_RE.search(text[-3000:]):
+        label = "rate_limited"
+    elif reps and max(reps.values()) >= 5:
+        label = "stuck_looping"
+    elif draft(ls):
+        label = "unsent_draft"
+    else:
+        label = "finished"
+    p = HEURISTIC_P if label != "finished" else 0.5
+    rest = round((1 - p) / (len(STATES) - 1), 4)
+    return {"state": label, "prob": p, "probs": {k: (p if k == label else rest) for k in STATES}, "provider": "local"}
+
+
+def agent_state(lines, agent=""):
+    """The agent's state from its terminal's last ~60 lines, any harness: one System One choice over STATES
+    ({state, prob, probs, provider}; `draft` too when it's unsent_draft). With no model set up (provider local), the patterns decide."""
+    import decide  # here, not at the top: decide's haiku path imports harness → greenlight → the adapters → us
+    ls = [plain(str(x)).rstrip() for x in lines]
+    while ls and not ls[-1].strip():
+        ls.pop()
+    ls = ls[-60:]
+    h = screen_state(ls)
+    if ls:
+        r = decide.choice("\n".join(ls), QUESTION, STATES, context=f"The agent is {agent}." if agent else "")
+        if r["provider"] != "local":
+            h = {"state": r["choice"], "prob": r["confidence"], "probs": r["probs"], "provider": r["provider"]}
+    if h["state"] == "unsent_draft":
+        h["draft"] = draft(ls)
+    return h
 
 
 def goals():

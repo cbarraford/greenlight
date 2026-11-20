@@ -78,7 +78,22 @@ Support differs by harness:
 - All five: dispatch, automations, the menubar chat, limit fallback, cmux launch.
 - Gemini CLI also runs the dashboard's workspace pages and next-step suggestions when you pick a Gemini model for them (Settings › Background agents), whatever `llm_harness` says. The app offers **Gemini 4 Neon** (`gemini-4-neon`); Gemini CLI 0.70 passes it to the API unchanged but doesn't list it yet ([gemini-cli#30385](https://github.com/google-gemini/gemini-cli/issues/30385)), so your Gemini account needs access to it. Gemini CLI has no effort flag or system-prompt flag: effort is ignored and the system prompt rides in the first message.
 - Claude and codex only: the dashboard's transcript mirror and question picker, herdr's `--kind`, T3 providers.
-- Claude only: Greenlight tells an idle agent from one with an unsent draft by reading Claude Code's TUI (`ade_common.py`), and only Claude conversations can be compacted from the chat.
+- All five: Greenlight reads an agent's terminal (its last ~60 lines, `ade_common.agent_state`) as one of working, waiting for you, finished, stuck in a loop, rate limited, logged out or an unsent draft. Claude, Codex and Gemini drafts are recognised (`ade_common.draft`); opencode and pi drafts read as empty.
+- Claude only: conversations can be compacted from the chat.
+
+## System One
+
+`scripts/decide.py` makes Greenlight's quick, calibrated calls: `bool`, `choice`, `score` and `batch` over one piece of text, each answer with its probability and the provider that gave it. It reads agents' terminals, the instructions in your goals (hold, stay draft, park, revisit on a date) and which hexes Chief's reply is about (P > 0.70 lights one; a lone hex at P > 0.85 opens its card). Set it in config.json, or in Settings › Automation › System One:
+
+```json
+"system_one": {"provider": "jev", "fallback": "haiku"}
+```
+
+- `jev`: TypeSafe's System One API. Key: `TYPESAFE_API_KEY`, the macOS login Keychain (service `greenlight`, account `typesafe`), or `decide.py key` (stdin; Settings' Set key… uses it).
+- `haiku`: Claude Haiku 5.5 with structured output, over the Messages API when `ANTHROPIC_API_KEY` is set, else through `claude -p`.
+- `local` (the default): no model. Every answer comes back uninformative (provider `local`), so Greenlight's own patterns decide, as before. Any failure falls back to this.
+
+A model can only add to what the patterns find: it can add a hold or a draft but never remove one, and it parks a workspace only at P ≥ 0.85. `decide.py test` asks each configured model a question with a known answer.
 
 ## Layout
 
@@ -93,6 +108,7 @@ Support differs by harness:
 | `scripts/auto.py` | Greenlight's own cron-style automations |
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
+| `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
 | `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
 | `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |
 | `scripts/sync.sh` | copies the checkout to a remote host |
