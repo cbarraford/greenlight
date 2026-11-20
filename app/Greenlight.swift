@@ -2732,16 +2732,19 @@ final class Core: ObservableObject {
         guard let ps = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !ps.isEmpty else { return false }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-drop-" + UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        final class Left { var n = 0 }
+        final class Left { var n = 0, held = 0 }  // n: files still to come (the promise queue's); held: of `reading` (the main thread's)
         let left = Left(), q = OperationQueue()
         q.maxConcurrentOperationCount = 1
-        left.n = ps.reduce(0) { $0 + max(1, $1.fileNames.count) }  // not counted in `reading`: a promise may never be kept
+        left.n = ps.reduce(0) { $0 + max(1, $1.fileNames.count) }
+        left.held = left.n; reading += left.n  // Send waits for them, but not forever: a promise may never be kept
+        let release = { [weak self] (k: Int) in let k = min(k, left.held); left.held -= k; self?.reading -= k }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { release(left.held) }
         for r in ps {
             r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: q) { url, err in
                 let got = err == nil ? chatFile(at: url) : (nil, "A dropped file couldn't be received.")
                 left.n -= 1
                 if left.n <= 0 { try? FileManager.default.removeItem(at: dir) } else { try? FileManager.default.removeItem(at: url) }
-                DispatchQueue.main.async { [weak self] in self?.add(got) }
+                DispatchQueue.main.async { [weak self] in release(1); self?.add(got) }
             }
         }
         return true
@@ -3084,7 +3087,7 @@ final class Core: ObservableObject {
 
     func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = []) {
         active()
-        if run != nil || clearing != nil { queue.append(Queued(text: text, files: fs)); return }  // after Clear's `new`: it deletes attachments
+        if run != nil || clearing > 0 { queue.append(Queued(text: text, files: fs)); return }  // after Clear's `new`: it deletes attachments
         let you = [shown ?? text, fs.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n")
         msgs.append(Msg(.you, you))
         var payload = voice.on ? voiceNote + text : text
@@ -3160,13 +3163,15 @@ final class Core: ObservableObject {
         start(Run("Compact context"), "\(chief) compact --model \(model)", stdin: "")
     }
 
-    var clearing: Process?  // Clear's `chat.py new`, until it's done: a send waits for it
+    var clearing = 0  // Clear's `chat.py new`s still running: a send waits for all of them
     func clear(keepQueue: Bool = false) {
         if run != nil { stop() }
         if !keepQueue { queue = [] }
-        clearing = ssh("\(chief) new", onExit: { [weak self] _ in
+        clearing += 1
+        ssh("\(chief) new", onExit: { [weak self] _ in
             guard let self else { return }
-            self.clearing = nil
+            self.clearing -= 1
+            guard self.clearing == 0 else { return }
             if self.run == nil, !self.queue.isEmpty { let q = self.queue.removeFirst(); self.send(q.text, files: q.files) }
         })
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
@@ -3247,8 +3252,10 @@ final class Core: ObservableObject {
             if !queue.isEmpty { let q = queue.removeFirst(); send(q.text, files: q.files) }
             return
         }
-        if !ok && !r.files.isEmpty && files.isEmpty {  // not sent, or sent and failed: the files come back to try again
-            files = r.files
+        if !ok && !r.files.isEmpty {  // not sent, or sent and failed: the files come back to try again, ahead of any added since, as many as fit
+            var back = [ChatFile]()
+            for f in r.files + files where back.count < ChatFile.maxFiles && back.reduce(f.data.count, { $0 + $1.data.count }) <= ChatFile.maxTotal && !back.contains(where: { $0.id == f.id }) { back.append(f) }
+            files = back
             fileSays("Your files are back above the field, to send again.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript

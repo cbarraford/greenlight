@@ -169,5 +169,23 @@ def mentions(chat_dir, step):
     return root(chat_dir) in s or re.search(r"(^|[\s'\"(=])\.?/?attachments/", s) is not None
 
 
+def needles(chat_dir, message):
+    """Lines of this turn's attached text files, to spot their contents in a tool's output however the agent got there
+    (a `grep -R` names no attachment). From the files the message names: [str]."""
+    out = []
+    for path in re.findall(r"^- .+? \(text, [^)]*\) at (.+?)(?:, its contents:|: too long to include here)", message, re.M):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                out += [l.strip() for l in fh.read(INLINE * 4).splitlines() if len(l.strip()) >= 12][:400]
+        except OSError:
+            pass
+    return out
+
+
+def shows(step_done, needles):
+    s = " ".join(str(step_done.get(k) or "") for k in ("out", "full"))
+    return any(n in s for n in needles)
+
+
 def images(stored):
     return [f["path"] for f in stored if f["kind"] == "image"]
