@@ -653,7 +653,7 @@ def asked_question(reply):
     text = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
     if not re.search(r"\?\s*\Z|^`?options:.*\Z", re.split(r"\n\s*\n", text)[-1], re.M | re.I):
         return None
-    return text[-1000:]  # with the offer above it (more text only finds more offers); capped, it's a state file
+    return "\n\n".join(re.split(r"\n\s*\n", text)[-2:])[-1000:]  # the question and the paragraph above, for an offer
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
