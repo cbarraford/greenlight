@@ -31,9 +31,9 @@ cat > "$app/Contents/Info.plist" <<EOF
 </dict></plist>
 EOF
 mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
-# Ad-hoc signing changes the app's identity every build, so macOS asks for the mic, speech and Keychain keys again.
-# A self-signed "Greenlight Dev" cert keeps it stable. It lives in its own keychain (password in a 0600 file), because
-# codesign can't use a key in the login keychain without your login password (errSecInternalComponent).
+# Ad-hoc signing changes the app's identity every build, so macOS asks for the mic and speech again. Without an Apple
+# Development cert (below), a self-signed "Greenlight Dev" one keeps those, though not the Keychain keys. It lives in its own
+# keychain (password in a 0600 file), because codesign can't use a key in the login keychain over ssh (errSecInternalComponent).
 d=~/.config/greenlight kc=~/.config/greenlight/signing.keychain-db
 if [ ! -f "$kc" ]; then
   (umask 077; mkdir -p "$d"; openssl rand -hex 16 > "$d/signing.pass"); t=$(mktemp -d)
@@ -54,14 +54,23 @@ id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print
 # password again, for each key it read. An Apple Development cert (free with an Apple ID: Xcode → Settings → Accounts → Manage
 # Certificates) gives the build one, and the key is pinned to `teamid:` instead, so set one up and every build after it uses it.
 # Either way the requirement names the signer, not the bundle id: every workspace's dev copy has its own id (scripts/dev.py), and
-# Keychain entries trust apps by this requirement. Code that could sign as that signer could already claim Greenlight's id, so
+# Keychain entries trust apps by this requirement. Code that could sign with that cert could already claim Greenlight's id, so
 # this lets in nothing new. (`identifier` takes no wildcard, and the Keychain didn't match a copy on `info[CFBundleIdentifier]`.)
-apple=$(security find-identity -v -p codesigning | awk '/"Apple Development: /{print $2; exit}' || true)
-team=$([ -n "$apple" ] && codesign -fs "$apple" "$app" 2>/dev/null && codesign -dv "$app" 2>&1 | sed -n 's/^TeamIdentifier=\([A-Z0-9]\{10\}\)$/\1/p' || true)
-if [ -n "$team" ] && codesign -fs "$apple" -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$app"; then :
-elif [ -z "$id" ]; then codesign -fs - "$app"
+# Yours by name too, not just the team's: on a shared team, a teammate's builds would match the team alone. A renewed cert
+# keeps both. Picked by name, not by the listing's order, so one with two teams doesn't switch between them.
+line=$(security find-identity -v -p codesigning | grep '"Apple Development: ' | sort -t'"' -k2 | head -1 || true)
+apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"' -f2)
+# Its team is the cert's OU. Signing asks for the key once ("codesign wants to sign using…": Always Allow), on screen even
+# for a dev copy's unattended build, which waits for it.
+team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-256 hash:/{on=0} /^SHA-1 hash:/{on=($3==h)} on' |
+  openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
+if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
+elif [ -n "$apple" ]; then
+  # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match
+  echo "build.sh: signing with \"$cn\" failed (a locked login keychain, as over ssh, or the key's prompt refused); build again" >&2; exit 1
+elif [ -z "$id" ]; then
+  echo "build.sh: no signing cert; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"
 else
-  [ -z "$apple" ] || echo "build.sh: signing with your Apple Development cert failed; using Greenlight Dev" >&2
   codesign -fs "$id" --keychain "$kc" -r="designated => certificate leaf = H\"$id\"" "$app" ||
     { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
