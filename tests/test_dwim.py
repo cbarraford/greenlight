@@ -59,6 +59,7 @@ assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflic
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
+assert plan("hold #42 and this", [puck("auth-login", 42), puck("search", 43)], focus="search")["route"] == "chief"
 assert plan("hold #42 and release the hold on #43")["route"] == "chief"
 assert plan("park #42 and unpark #46")["route"] == "chief"
 assert plan("hold #42 when CI fails", [puck("auth-login", 42, goal="CI fails when tests run")])["route"] == "chief"
@@ -67,6 +68,10 @@ assert "it says 0 but 1 match" in plan("park zero red ones", [puck("zero-tests",
 assert plan("hold #42 not #43")["route"] == "chief"  # don't treat an excluded target as another action
 assert [a["ws"] for a in plan("hold the api ones", [puck("api-server", 42), puck("capital-forecast", 43)])["actions"]] == ["api-server"]
 assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
+assert plan("park-api", [puck("park-api", 42)])["route"] == "chief"
+assert plan("park park-api", [puck("park-api", 42)])["actions"][0]["ws"] == "park-api"
+assert plan("hold #42", [puck("button", 42, goal="Fix the Hold button")])["actions"][0]["verb"] == "hold"
+assert dwim._goal_after("hold", "Fix the Hold button") == "Fix the Hold button (hold)"
 
 # guards: destructive, reasoning, ambiguous, too broad
 for text, why in [("merge #42", "isn't something"), ("close the auth ones", "isn't something"), ("delete search", "isn't something"),
@@ -193,6 +198,10 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     goals["id3"] = multiline.replace("\n\n", "\n") + " (parked)"  # a formatting-only edit since apply
     assert dwim.undo(r["undo"])["kept"] == ["search"] and goals["id3"] != multiline
     assert dwim._goal_after("unpark", multiline + " (parked)") == multiline
+    assert dwim._goal_after("unpark", "Investigate (parked) label behavior (parked)") == "Investigate (parked) label behavior (parked)"
+    assert dwim._goal_after("release", "Review (hold) marker semantics (hold)") == "Review (hold) marker semantics (hold)"
+    assert dwim.applies("unpark", puck("search", goal="Investigate (parked) label behavior (parked)", hidden=True))
+    assert dwim.applies("release", puck("search", goal="Review (hold) marker semantics (hold)"))
     goals["id3"] = "Search box"
     with mock.patch.object(dwim, "_write_undo", side_effect=OSError("disk full")):
         r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
