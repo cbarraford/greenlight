@@ -16,6 +16,16 @@ const assert = require("assert");
   const f = p.frameLocator("iframe");
   assert.equal(await f.locator("#h").textContent(), "Hi");
   assert.equal(await p.evaluate(() => document.body.dataset.pwned), undefined);
+  await p.evaluate(() => stage.chart({ chart: "bar", title: "CI runs", stacked: true, labels: ["Oct 20", "<i>x</i>"], note: "n",
+    series: [{ name: "success", values: [44, 30], color: "green" }, { name: "failed", values: [31, "nope"], color: "red" }] }));
+  assert.equal(await p.locator("svg.chart rect").count(), 4);
+  assert.deepEqual(await p.locator("svg.chart text.v").allTextContents(), ["75", "30"]);  // stack totals; a bad value is 0
+  assert.match(await p.textContent(".legend"), /74 success.*31 failed/);
+  assert.equal(await p.locator("svg.chart i").count(), 0);  // labels are text
+  await p.evaluate(() => stage.chart({ chart: "line", labels: ["a", "b", "c"], series: [{ name: "x", values: [1, 3, 2] }] }));
+  assert.equal(await p.locator("svg.chart polyline").count(), 1);
+  await p.evaluate(() => stage.chart({ chart: "pie", labels: ["a", "b"], series: [{ values: [3, 1] }] }));
+  assert.equal(await p.locator("svg.chart path").count(), 2);
   await p.evaluate(() => stage.wait("One minute", "Scanning"));
   assert.match(await p.textContent("#s"), /One minute\s*Scanning/);
   console.log("stage ok"); await b.close();

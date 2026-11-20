@@ -28,6 +28,8 @@ PROMPT = (
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
     "Replies render as markdown in a narrow popover: keep them short, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
+    "When the user asks you to reset, clear the context or start over, say a short ok and add a line `[chat: reset]`: the app clears "
+    "the conversation after your reply. "
     "After everything else (even the Options line), end every reply with `[hexes: name, name]`: the workspaces the reply is about, "
     "by their exact board names, or `[hexes:]` when none. The app hides the line and lights those workspaces' hexes on the dashboard in "
     "every window until your next reply: it's how you highlight hexes when asked, and the only way. "
@@ -288,10 +290,14 @@ def run(cmd, engine, text, norm, check=False):
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice
                 continue
+            if e["e"] == "done" and sid:  # saved before the app hears done: a Clear right after must not be undone by a late save
+                session(engine, sid)
             done |= e["e"] == "done"
             emit(**e)
     p.wait()
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
+        if sid:
+            session(engine, sid)
         emit(e="done", ok=True, text=norm.text, context=norm.context, window=norm.window, ms=None)
         done = True
     for f in (PIDFILE, BGFILE):  # the process is gone, and its shells with it
@@ -301,7 +307,7 @@ def run(cmd, engine, text, norm, check=False):
         if p.returncode in (-15, 143):  # SIGTERM from `chat.py stop`
             return sid, "Stopped"
         return sid, p.stderr.read().strip() or f"exit {p.returncode}"
-    return sid, None
+    return (None if done else sid), None  # done: its session is saved already
 
 
 def agent_title(a):

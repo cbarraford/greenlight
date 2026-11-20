@@ -531,8 +531,9 @@ test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [
   await page.evaluate(n => window.mc.pick([n, "not-a-workspace"]), name);
   assert.ok(await page.$(".fieldwrap.picking"), "the hive steps back");
   assert.deepEqual(await page.$$eval(".cell.picked", e => e.map(c => c.dataset.name)), [name]);
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), name, "one picked hex on screen: its card opens");
   await page.evaluate(() => window.mc.pick([]));
-  assert.ok(!(await page.$(".fieldwrap.picking")) && !(await page.$(".cell.picked")), "[] clears");
+  assert.ok(!(await page.$(".fieldwrap.picking")) && !(await page.$(".cell.picked")) && !(await page.$("#hcard")), "[] clears, card too");
   await page.evaluate(n => window.mc.pick([n]), name);
   await page.click(`.cell.picked`);
   assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");
