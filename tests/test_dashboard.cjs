@@ -434,6 +434,11 @@ test("CI view: asks dash.py ci, draws runs per day and minutes, filters by proje
   assert.equal(await page.$$eval(".ci-card svg", g => g.length), 2, "runs per day and minutes per run");
   assert.ok((await page.$eval(".ci-card svg", g => g.getAttribute("aria-label"))).includes("2026-11-18 2 passed 1 failed 1 canceled"));
   assert.equal(await page.$$eval(".ci .w-table tr", r => r.length), 3, "header + one row per MR");
+  await page.setViewportSize({width: 840, height: 800});  // the app's pane beside the chat: MR refs and latest runs stay on their lines
+  await page.evaluate(() => renderMain());
+  assert.deepEqual(await page.$$eval(".ci .w-table td:nth-child(2) a", as => as.map(a => a.getClientRects().length)), [1, 1], "an MR ref never breaks");
+  assert.deepEqual(await page.$$eval(".ci .w-table td:last-child .sub", ss => ss.map(e => e.getClientRects().length)), [1, 1], "latest: status over one unbroken line of time");
+  await page.setViewportSize({width: 1300, height: 900});
   await page.click(".ci-top .seg button:has-text('tools')");
   assert.equal(await page.$$eval(".ci .w-table tr", r => r.length), 2, "the project filter keeps its MRs");
   await page.click(".ci-top button:has-text('Refresh')");
