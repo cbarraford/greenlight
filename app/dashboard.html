@@ -1020,10 +1020,9 @@ function topBar(){
     return;
   }
   const n = ui.snap ? counts() : {}, none = ui.snap && !ui.snap.pucks.length, live = ui.snap && !none;  // none: nothing to switch or search; the page's own button starts the first task
-  const total = ui.snap ? shown().length : 0;
   const att = (n.needs || 0) + (n.raised || 0) + (n.crashed || 0);
   const bits = [att && h("span", {style:`color:${ink(n.crashed && !n.needs ? "--red" : "--orange")}`}, `${att} need${att > 1 ? "" : "s"} attention`), !att && n.working && `${n.working} working`].filter(Boolean);
-  bar.append(h("div", {class:"title"}, h("b", {}, ui.snap ? `${total} workspaces` : "Workspaces"),
+  bar.append(h("div", {class:"title"}, h("b", {}, "Spaces"),
       h("span", {}, bits.flatMap((b, i) => i ? [" · ", b] : [b]))),
     h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
       onclick: () => { ui.view = v; localSet("view", v); render() }}, v === "overview" ? "Overview" : "List"))),
