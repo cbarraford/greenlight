@@ -54,4 +54,42 @@ p.pi({"type": "message_end", "message": {"role": "assistant", "content": [{"type
                                          "usage": {"input": 5, "cacheRead": 50, "cacheWrite": 0}}})
 done = p.pi({"type": "agent_end", "messages": []})[0]
 assert done["ok"] and done["text"] == "pong" and done["context"] == 55, done
+# gemini: the text rides on stdin (no -p: a non-TTY stdin is headless), the system prompt in the first message
+cmd, text = harness.argv("gemini", "hi", model="gemini-4-neon", effort="high", system="SYS", stream=True)
+assert cmd == ["gemini", "--approval-mode", "auto_edit", "--output-format", "stream-json", "-m", "gemini-4-neon"], cmd
+assert text == "SYS\n\nhi"
+assert harness.argv("gemini", "hi", sid="uuid-1", system="SYS") == (["gemini", "--approval-mode", "auto_edit", "--resume", "uuid-1"], "hi")
+H.update(gemini={"bypass": True})
+assert harness.argv("gemini", "x")[0] == ["gemini", "--approval-mode", "yolo", "--skip-trust"]
+assert harness.interactive("gemini", "go") == ["gemini", "-i", "go"] and harness.interactive("gemini", "") == ["gemini"]
+
+# route: which harness runs a model id (chat's model, dash.py's --model)
+assert harness.route("claude-haiku-5-5") == ("claude", "claude-haiku-5-5") and harness.route(None) == ("claude", None)
+assert harness.route("gemini-4-neon") == ("gemini", "gemini-4-neon") and harness.route("gemini") == ("gemini", None)
+assert harness.route("codex") == ("codex", None)
+assert harness.route("gemini-4-neon", "codex") == ("gemini", "gemini-4-neon")  # a Gemini pick wins over llm_harness
+assert harness.route("claude-haiku-5-5", "codex") == ("codex", None)  # a Claude name means nothing to codex: its default
+
+# gemini --output-format stream-json (JsonStreamEvent shapes from gemini-cli-core 0.70's output/types)
+g = Norm()
+assert g.gemini({"type": "init", "timestamp": "t", "session_id": "uuid-1", "model": "gemini-4-neon"}) == []
+assert g.gemini({"type": "message", "role": "user", "content": "hi"}) == []
+assert g.gemini({"type": "message", "role": "assistant", "content": "Let me ", "delta": True}) == [{"e": "text_reset"}, {"e": "text", "delta": "Let me "}]
+assert g.gemini({"type": "message", "role": "assistant", "content": "look.", "delta": True}) == [{"e": "text", "delta": "look."}]
+s = g.gemini({"type": "tool_use", "tool_name": "run_shell_command", "tool_id": "t1", "parameters": {"command": "ls", "description": "List files"}})[0]
+assert s["e"] == "step" and s["title"] == "List files" and s["detail"] == "ls" and s["call"] == "Bash(ls)", s
+r = g.gemini({"type": "tool_result", "tool_id": "t1", "status": "success", "output": "a\nb"})[0]
+assert r["e"] == "step_done" and r["ok"] and r["out"] == "a b", r
+assert not g.gemini({"type": "tool_result", "tool_id": "t2", "status": "error", "error": {"type": "x", "message": "denied"}})[0]["ok"]
+assert g.gemini({"type": "message", "role": "assistant", "content": "pong", "delta": True})[0] == {"e": "text_reset"}  # after a tool: a new block
+assert g.gemini({"type": "error", "severity": "warning", "message": "Retrying"}) == [{"e": "status", "text": "Retrying"}]
+done = g.gemini({"type": "result", "status": "success", "stats": {"input_tokens": 1200, "output_tokens": 9, "duration_ms": 800}})[0]
+assert done == {"e": "done", "ok": True, "text": "pong", "context": 1200, "window": None, "ms": 800}, done
+f = Norm()
+f.gemini({"type": "error", "severity": "error", "message": "RESOURCE_EXHAUSTED: quota exceeded"})
+bad = f.gemini({"type": "result", "status": "error", "stats": {}})[0]
+assert not bad["ok"] and "quota" in bad["text"], bad
+assert Norm().gemini({"type": "result", "status": "error", "error": {"type": "API", "message": "model not found"}})[0]["text"] == "model not found"
+import greenlight
+assert greenlight.LIMIT_RE.search("[API Error: RESOURCE_EXHAUSTED] You have exhausted your daily quota")
 print("test_harness ok")

@@ -5,7 +5,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
-                                     # M: a claude model, or a harness name (codex|opencode|pi) for its default model
+                                     # M: a claude or gemini model, or a harness name (codex|opencode|pi|gemini) for its default model
   chat.py compact [--model M]       # claude only
   chat.py new                        # forget every harness's session (Clear)
   chat.py stop                       # kill the running turn
@@ -59,7 +59,7 @@ PROMPT = (
     "and the workspace already on it; `dash.py forge <owner/repo>` lists everything open in one repo. Suggest from the statuses: "
     "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
     "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
-    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi) each run in a Greenlight terminal tab, a tmux "
+    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
     "session on `tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: you can open those, not read them). "
     "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
     "`capture-pane -p -t '=SESSION:' -S -60` reads an agent's screen, to tell the user what it's doing or asking. When the user asks to "
@@ -109,6 +109,11 @@ def short(s, n=160):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# Gemini CLI's built-in tools as the Claude Code names step_title and call know (same file_path/command/pattern params)
+GEMINI_TOOLS = {"run_shell_command": "Bash", "read_file": "Read", "read_many_files": "Read", "write_file": "Write", "replace": "Edit",
+                "glob": "Glob", "grep_search": "Grep", "web_fetch": "WebFetch", "google_web_search": "WebSearch", "invoke_agent": "Agent"}
+
+
 def step_title(name, inp):
     """A tool call as the one-line step the activity list shows: (title, detail)."""
     p = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
@@ -153,7 +158,7 @@ def call(name, inp):
 
 
 class Norm:
-    """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
+    """Each harness's JSON lines (claude/gemini stream-json, codex/opencode/pi json) → the app's events."""
 
     def __init__(self, verbose=False):
         self.verbose = verbose  # chat.py send --verbose: whole inputs/outputs on steps, and think events
@@ -170,6 +175,7 @@ class Norm:
         self.running = []  # (id, title) of steps started and not yet done, oldest first
         self.musing = None  # the phrase for the current stretch of thinking; None once anything else shows
         self.mused = None  # the last one, so the next stretch picks a different phrase
+        self.gem_open = False  # gemini: an assistant reply block is streaming (its deltas append to self.text)
 
     def more(self, e, **kw):
         """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
@@ -323,6 +329,38 @@ class Norm:
             e = d.get("error") or {}
             out.append({"e": "done", "ok": False, "text": str((e.get("data") or {}).get("message") or e.get("name") or e),
                         "context": self.context, "window": None, "ms": None})
+        return out
+
+    def gemini(self, d):
+        """`gemini --output-format stream-json`: init, message (assistant deltas), tool_use, tool_result, error, result."""
+        t, out = d.get("type"), []
+        if t == "message" and d.get("role") == "assistant":
+            s = d.get("content") or ""
+            if not d.get("delta") or not self.gem_open:  # a new reply, or a whole one
+                self.text, self.gem_open = "", True
+                out.append({"e": "text_reset"})
+            self.text += s
+            out.append({"e": "text", "delta": s})
+        elif t == "tool_use":
+            self.gem_open = False  # text after a tool is the next reply block
+            name, inp = d.get("tool_name") or "tool", d.get("parameters") or {}
+            name = GEMINI_TOOLS.get(name, name)
+            title, detail = step_title(name, inp)
+            out.append(self.more({"e": "step", "id": d.get("tool_id"), "title": short(title, 80), "detail": short(detail), "call": call(name, inp)},
+                                 input=full_input(name, inp)))
+        elif t == "tool_result":
+            r = str(d.get("output") or (d.get("error") or {}).get("message") or "")
+            out.append(self.more({"e": "step_done", "id": d.get("tool_id"), "ok": d.get("status") == "success", "out": short(r, 120)}, full=clip(r, tail=True)))
+        elif t == "error" and d.get("severity") != "error":  # a warning: the turn goes on
+            out.append({"e": "status", "text": short(d.get("message", ""), 80)})
+        elif t == "error":
+            self.error = d.get("message")
+        elif t == "result":
+            st = d.get("stats") or {}
+            self.context = st.get("input_tokens", 0) or self.context
+            ok = d.get("status") == "success"
+            text = self.text if ok else (d.get("error") or {}).get("message") or getattr(self, "error", None) or self.text or "Gemini CLI failed"
+            out.append({"e": "done", "ok": ok, "text": text, "context": self.context, "window": None, "ms": st.get("duration_ms")})
         return out
 
     def pi(self, d):
@@ -483,7 +521,7 @@ def stop_shell(task_id):
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
-    engine, model = (model, None) if model in harness.H else ("claude", model)
+    engine, model = harness.route(model)
     stored = []
     if files:
         try:

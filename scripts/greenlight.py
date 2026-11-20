@@ -48,7 +48,7 @@ STATE = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 DEFAULTS = {
     "me": None,                       # your GitLab/GitHub username; None = ask glab (else gh) once, cached in me.json
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
-    "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi)
+    "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini)
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
@@ -72,7 +72,8 @@ BOT = CONFIG["review_bot"]
 NOW_MS = time.time() * 1000
 DEAD_RE = re.compile(r"\b401\b|OAuth access token has been revoked|Please run /login|login expired|API key (?:has expired|is invalid)", re.I)
 LIMIT_RE = re.compile(r"usage limit|limit reached|5-hour limit|weekly limit|out of (?:extra )?usage"
-                      r"|rate limit exceeded|exceeded your current quota|insufficient_quota|429 Too Many Requests", re.I)
+                      r"|rate limit exceeded|exceeded your current quota|insufficient_quota|429 Too Many Requests"
+                      r"|RESOURCE_EXHAUSTED|quota exceeded|exhausted your (?:daily )?quota", re.I)  # last line: Gemini CLI
 # Instructions I add to a goal. A word joined to its neighbour by - or _ ("security-hold") is part of a name, not an instruction.
 KEEP_DRAFT_RE = re.compile(r"(?<![\w-])(stay|keep|remain)s? (?:a |as )?draft(?![\w-])", re.I)
 HOLD_RE = re.compile(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", re.I)
