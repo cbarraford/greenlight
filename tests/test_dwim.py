@@ -54,6 +54,7 @@ assert plan("rebase the 45 one", [puck("mr-45", 7, conflicts=True, moves=["confl
 assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflicts=True, moves=["conflicts"]), puck("mr-5108", 8)])["actions"]] == ["mr-5107"]
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
+assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
 
 # guards: destructive, reasoning, ambiguous, too broad
 for text, why in [("merge #42", "isn't something"), ("close the auth ones", "isn't something"), ("delete search", "isn't something"),
@@ -120,8 +121,8 @@ def orca(*a, **k):
     assert a[:3] == ("worktree", "set", "--worktree") and a[4] == "--comment"
     goals[a[3].removeprefix("id:")] = a[5]
 dash = types.SimpleNamespace(live_agents=ps, run=mock.Mock(return_value={"ok": True, "agent": "claude"}),
-                             snapshot=lambda: {"pucks": [{"path": None, "moves": [{"kind": "ci", "prompt": "fix it"}]}]})
-gl = types.SimpleNamespace(orca=orca, history_file=lambda n: Path(os.environ["GREENLIGHT_HOME"]) / "history" / f"{n}.md")
+                             snapshot=lambda: {"pucks": BOARD})
+gl = types.SimpleNamespace(orca=orca, linked_number=lambda v: v, history_file=lambda n: Path(os.environ["GREENLIGHT_HOME"]) / "history" / f"{n}.md")
 with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     r = dwim.apply({"text": "park the two auth ones", "source": "voice", "actions": plan("park the two auth ones")["actions"]})
     assert r["ok"] and r["done"] == ["auth-login", "auth-tokens"] and r["undo"], r
@@ -134,7 +135,7 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     r = dwim.apply({"text": "hold #42", "actions": [{"verb": "hold", "ws": "auth-login"}, {"verb": "hold", "ws": "gone"}, {"verb": "merge", "ws": "search"}]})
     assert not r["ok"] and r["done"] == ["auth-login"] and r["errors"] == ["gone: no such workspace"] and goals["id3"] == "Search box"  # merge isn't a verb
     r = dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "fix it"}]})
-    assert r["ok"] and r["undo"] is None and dash.run.call_args.args == ("auth-login", "fix it", "id1")
+    assert r["ok"] and r["undo"] is None and dash.run.call_args.args == ("auth-login", "ci prompt for auth-login", "id1")
     dash.run.return_value = {"error": "its agent is still working; wait for it to finish"}
     assert dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "x"}]})["errors"] == ["auth-login: its agent is still working; wait for it to finish"]
     assert dwim.apply({"actions": [{"verb": "hold", "ws": "auth-login"}]})["unchanged"] == ["auth-login"]  # already held: unchanged, no second "(hold)"
@@ -144,7 +145,7 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert goals["id1"] == "Fix the auth login flow"
     with mock.patch.object(dash, "snapshot", return_value={"pucks": []}):
         before_calls = dash.run.call_count
-        assert dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "stale"}]})["errors"] == ["auth-login: that move is no longer available"]
+        assert dwim.apply({"actions": [{"verb": "ci", "ws": "auth-login", "prompt": "stale"}]})["errors"] == ["auth-login: workspace or MR changed since planning"]
         assert dash.run.call_count == before_calls
     with mock.patch.object(dwim, "_note", side_effect=OSError("history unavailable")):
         r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
@@ -172,8 +173,18 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     dupes = {k: ({"worktreeId": k, "displayName": "duplicate", "path": path, "comment": goals[k]}, {})
              for k, path in [("d1", "/one"), ("d2", "/two")]}
     action = plan("hold #42", [puck("duplicate", 42, path="/one"), puck("duplicate", 43, path="/two")])["actions"][0]
-    with mock.patch.object(dash, "live_agents", return_value=dupes):
+    with mock.patch.object(dash, "live_agents", return_value=dupes), mock.patch.object(dash, "snapshot", return_value={"pucks": [
+        {"name": "duplicate", "path": "/one", "mr": {"ref": "#42"}}, {"name": "duplicate", "path": "/two", "mr": {"ref": "#43"}}]}):
         assert dwim.apply({"actions": [action]})["ok"] and goals["d1"] == "First (hold)" and goals["d2"] == "Second"
+    goals["d1"] = "First"
+    with mock.patch.object(dash, "live_agents", return_value=dupes), mock.patch.object(dash, "snapshot", return_value={"pucks": [
+        {"name": "duplicate", "path": "/one", "mr": {"ref": "#99"}}]}):
+        assert dwim.apply({"actions": [action]})["errors"] == ["duplicate: workspace or MR changed since planning"] and goals["d1"] == "First"
+    with mock.patch.object(dash, "live_agents", return_value=dupes):
+        assert dwim.apply({"actions": [action | {"branch": "other"}]})["errors"] == ["duplicate: workspace or MR changed since planning"]
+    dupes["d1"][0]["linkedPR"] = 99
+    with mock.patch.object(dash, "live_agents", return_value=dupes):
+        assert dwim.apply({"actions": [action]})["errors"] == ["duplicate: workspace or MR changed since planning"]
 log = [json.loads(l) for l in (Path(os.environ["GREENLIGHT_HOME"]) / "dwim" / "log.jsonl").read_text().splitlines()]
 assert {"apply", "undo"} <= {e["op"] for e in log}
 

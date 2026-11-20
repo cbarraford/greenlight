@@ -244,6 +244,8 @@ def structural(g, pucks, focus):
     for f in g["filters"]:
         if f != "parked" or verb != "unpark":
             pool = [p for p in pool if FILTERS[f][1](p)]
+    if (g["names"] or g["here"]) and len({p.get("name") for p in pool}) < len(pool):
+        return None, "that workspace name is used in more than one repo"
     if not (g["names"] or g["refs"] or g["here"] or g["filters"] or g["tokens"]):
         return None, "it doesn't say which workspaces"
     return pool, None
@@ -347,6 +349,8 @@ def plan(o):
         a = {"verb": verb, "ws": p["name"], "ref": (p.get("mr") or {}).get("ref")}
         if p.get("path"):
             a["path"] = p["path"]
+        if p.get("branch"):
+            a["branch"] = p["branch"]
         if verb in LAUNCH:
             a["prompt"] = next(m["prompt"] for m in p["moves"] if m.get("kind") == LAUNCH[verb])
         acts.append(a)
@@ -398,13 +402,32 @@ def apply(o):
     live = [w for w, _ in dash.live_agents().values()]
     said = " ".join((o.get("text") or "").split())[:200]
 
+    def current_puck(a, w):
+        if a.get("branch") and (w.get("branch") or "").removeprefix("refs/heads/") != a["branch"]:
+            return None
+        linked = greenlight.linked_number(w.get("linkedPR") or w.get("linkedGitLabMR"))
+        if linked and a.get("ref") and str(linked) != re.sub(r"\D", "", a["ref"]):
+            return None
+        if not a.get("path"):
+            if a["verb"] not in LAUNCH and not a.get("ref"):
+                return {}  # older callers without a path still need a unique live name, checked above
+            matches = [p for p in dash.snapshot()["pucks"] if p.get("name") == a["ws"]]
+            p = matches[0] if len(matches) == 1 else None
+            return p if p and (not a.get("ref") or ((p.get("mr") or {}).get("ref") == a["ref"])) else None
+        p = next((p for p in dash.snapshot()["pucks"] if p.get("path") == a["path"]), None)
+        if a.get("ref") and ((p or {}).get("mr") or {}).get("ref") != a["ref"]:
+            return None
+        return p
+
     def one(a):
         matches = [w for w in live if w["displayName"] == a["ws"] and (not a.get("path") or w.get("path") == a["path"])]
         if len(matches) != 1:
             return {"ws": a["ws"], "error": "ambiguous workspace" if matches else "no such workspace"}
         w = matches[0]
         if a["verb"] in LAUNCH:
-            current = next((p for p in dash.snapshot()["pucks"] if p.get("path") == w.get("path")), None)
+            current = current_puck(a, w)
+            if current is None:
+                return {"ws": a["ws"], "error": "workspace or MR changed since planning"}
             move = next((m for m in (current or {}).get("moves") or [] if m.get("kind") == LAUNCH[a["verb"]]), None)
             if not move:
                 return {"ws": a["ws"], "error": "that move is no longer available"}
@@ -415,6 +438,8 @@ def apply(o):
             fresh = dash.live_agents().get(w["worktreeId"])
             if not fresh or fresh[0].get("displayName") != a["ws"] or (a.get("path") and fresh[0].get("path") != a["path"]):
                 return {"ws": a["ws"], "error": "no such workspace"}
+            if current_puck(a, fresh[0]) is None:
+                return {"ws": a["ws"], "error": "workspace or MR changed since planning"}
             before = fresh[0].get("comment") or ""
             after = _goal_after(a["verb"], before)
             if after == before:
@@ -502,14 +527,15 @@ CI_WORD = {"failed": "failed", "success": "passed", "running": "running", "pendi
 
 
 def _named(text, pucks, focus):
-    for p in sorted(pucks, key=lambda p: -len(p.get("name", ""))):
-        if len(p.get("name", "")) >= 3 and re.search(rf"(?<![\w-]){re.escape(p['name'])}(?![\w-])", text, re.I):
-            return p
+    named = [p for p in pucks if len(p.get("name", "")) >= 3 and re.search(rf"(?<![\w-]){re.escape(p['name'])}(?![\w-])", text, re.I)]
+    if named:
+        return named[0] if len(named) == 1 else None
     refs = [int(m) for m in REF_RE.findall(text)]
     hits = [p for p in pucks if (p.get("mr") or {}).get("iid") in refs]
     if len(hits) == 1:
         return hits[0]
-    return next((p for p in pucks if p.get("name") == focus), None) if focus and HERE_RE.search(text) else None
+    focused = [p for p in pucks if p.get("name") == focus] if focus and HERE_RE.search(text) else []
+    return focused[0] if len(focused) == 1 else None
 
 
 def card_table(text, pucks, one):
