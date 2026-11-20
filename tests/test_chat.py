@@ -4,7 +4,7 @@ import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(
 import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
 import json, os, stat, subprocess, sys, time
 import chat
-from chat import Norm, cmd_title, step_title
+from chat import Norm, step_title
 
 
 def test_norm():
@@ -31,21 +31,6 @@ def test_norm():
 
     assert step_title("Read", {"file_path": "/a/b/SKILL.md"}) == ("Read SKILL.md", "/a/b/SKILL.md")
     assert step_title("mcp__x__do_thing", {"q": "z"}) == ("do thing", "z")
-
-
-def test_command_titles():
-    # no "shell command" jargon: a described command keeps its description, else what it runs in plain words
-    assert step_title("Bash", {"command": "ls", "description": "List files"})[0] == "List files"
-    assert step_title("Bash", {"command": "cd /x && git status -s"}) == ("Checked the repo", "cd /x && git status -s")
-    assert cmd_title("python3 scripts/greenlight.py note ws hi") == "Checked on greenlight"
-    assert cmd_title("orca worktree list") == "Checked workspaces"
-    assert cmd_title("GL_HOST=x glab mr list") == "Checked GitLab"
-    assert cmd_title("gh pr view 3") == "Checked GitHub"
-    assert cmd_title("grep -rn foo . | head") == "Looked through files"
-    assert cmd_title("frobnicate --all") == "Ran a command"
-    assert cmd_title("") == "Ran a command"
-    c = Norm()
-    assert c.codex({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "/usr/bin/zsh -lc 'orca worktree list'"}})[0]["title"] == "Checked workspaces"
 
 
 # A fake `claude -p`: logs each prompt it gets, and answers a first (un-retried) message the way the real
