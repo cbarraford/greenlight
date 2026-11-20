@@ -20,7 +20,7 @@ cat > "$app/Contents/Info.plist" <<'EOF'
   <key>NSSpeechRecognitionUsageDescription</key><string>Transcribes what you say to Greenlight, on this Mac.</string>
 </dict></plist>
 EOF
-mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
+mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
 # Ad-hoc signing changes the app's identity every build, so macOS asks for the mic and speech again.
 # A self-signed "Greenlight Dev" code-signing cert (Keychain Access → Certificate Assistant) keeps it stable.
 id=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Greenlight Dev/{print $2; exit}')
