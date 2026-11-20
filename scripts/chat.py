@@ -59,40 +59,11 @@ def short(s, n=160):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-# A command with no description, titled by what it runs: first program → plain words (no "shell", no tool names).
-CMD_TITLES = (
-    (("greenlight.py", "dash.py", "auto.py"), "Checked on greenlight"),
-    (("orca",), "Checked workspaces"),
-    (("glab",), "Checked GitLab"),
-    (("gh",), "Checked GitHub"),
-    (("git",), "Checked the repo"),
-    (("pytest", "swift", "xcodebuild", "make", "npm", "node"), "Ran a build or tests"),
-    (("curl", "wget"), "Fetched a page"),
-    (("ls", "cat", "head", "tail", "sed", "grep", "rg", "find", "wc", "jq"), "Looked through files"),
-)
-
-
-def cmd_title(cmd):
-    """A shell command as a short, jargon-free step title; "Ran a command" when it's nothing recognisable."""
-    words = re.split(r"\s*(?:&&|;|\|\|)\s*", str(cmd).strip())
-    for part in words:  # skip a leading `cd dir &&` and `VAR=x`
-        toks = [t for t in part.split() if not re.match(r"^\w+=", t)]
-        if not toks or toks[0] == "cd":
-            continue
-        prog = toks[1] if toks[0] in ("python", "python3", "uv", "sudo") and len(toks) > 1 else toks[0]
-        prog = os.path.basename(prog.strip("'\""))
-        for progs, title in CMD_TITLES:
-            if prog in progs:
-                return title
-        break
-    return "Ran a command"
-
-
 def step_title(name, inp):
     """A tool call as the one-line step the activity list shows: (title, detail)."""
     p = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
     if name == "Bash":
-        return inp.get("description") or cmd_title(inp.get("command", "")), inp.get("command", "")
+        return inp.get("description") or "Ran a shell command", inp.get("command", "")
     if name == "Read":
         return f"Read {os.path.basename(p)}", p
     if name in ("Edit", "Write", "NotebookEdit"):
@@ -203,7 +174,7 @@ class Norm:
         t, it, out = d.get("type"), d.get("item", {}), []
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
-            out.append({"e": "step", "id": it["id"], "title": cmd_title(cmd), "detail": short(cmd)})
+            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd)})
         elif t == "item.completed" and it.get("type") == "command_execution":
             out.append({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)})
         elif t == "item.completed" and it.get("type") == "agent_message":
