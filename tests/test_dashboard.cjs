@@ -430,6 +430,17 @@ test("L1's pick filters by worktree path, not project name (a puck's project is 
   await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[0].path]) }, SNAP);
   assert.equal(await page.evaluate(s => s.pucks.filter(inView).length, SNAP), 1);
 });
+test("L1's pick takes in a workspace made after the terminal page's last trees: the snapshot's own trees match the picked repos", async page => {
+  const [a, b] = SNAP.pucks, snap = {...SNAP, trees: [{path: a.path, project: "alpha"}, {path: b.path, project: "beta"}]};
+  await page.evaluate(s => { mc.update({...s, trees: [s.trees[1]]}); mc.paths([], ["alpha"]) }, snap);  // stale: the app's paths predate plan-a's worktree
+  assert.equal(await page.locator("#main .cell, #main .lrow").count(), 0, "not in the snapshot's trees yet: hidden");
+  await page.evaluate(s => mc.update(s), snap);
+  assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-a"], "the fresh trees bring it in; beta stays out");
+  assert.equal(await page.locator(`#main [data-name="plan-a"]`).count(), 1, "and it's drawn");
+  assert.deepEqual(await page.evaluate(() => mc.focus().paths), [a.path], "Chief's window scope sees it too");
+  await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[1].path]) }, snap);  // an app without repos: paths only, as before
+  assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-b"]);
+});
 test("L1's Open projects: the terminal page's tiles; ticking a project posts it, All projects unticks", async page => {
   const L = [{id: "a", name: "Alpha", color: "#FF9F0A", repos: ["x/a"], busy: 1}, {id: "", name: "No Man's Land", color: "#8E8E93", repos: [], busy: 0}];
   await page.evaluate(L => mc.pickProjects(L, null), L);

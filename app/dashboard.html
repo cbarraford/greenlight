@@ -825,7 +825,10 @@ function sayOf(p){ return p.asked ? p.why : p.action || p.why }
 const BELL_D = ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9", "M13.7 21a2 2 0 0 1-3.4 0"];  // the top bar's inbox bell
 function bellSvg(px, fill){ return s("svg", {width: px, height: px, viewBox:"0 0 24 24", fill: fill ? "currentColor" : "none", stroke:"currentColor", "stroke-width":"1.8", "aria-hidden":"true"},
   ...BELL_D.map(d => s("path", {d}))) }
-const inView = p => !ui.paths || ui.paths.includes(p.path);  // the worktrees of the projects picked (the app sends their paths: a puck's project is its forge path, the terminal's an Orca repo name); null: all
+// the worktrees of the projects picked: the paths the app sent, plus the snapshot's own trees in the picked repos (a puck's project is its forge path,
+// a tree's an Orca repo name). The app's paths are only as new as the terminal page's last trees, which a hidden terminal never refreshes; null: all
+const viewPaths = () => ui.paths && [...new Set([...ui.paths, ...arr(ui.snap?.trees).filter(w => ui.repos?.includes(w.project)).map(w => w.path)])];
+const inView = p => !ui.paths || ui.paths.includes(p.path) || !!ui.repos && arr(ui.snap?.trees).some(w => w.path === p.path && ui.repos.includes(w.project));
 function shown(){  // the workspaces in the picked project (all of them when none is picked), minus "(parked)" ones unless shown
   return ui.snap.pucks.filter(p => inView(p) && (ui.showParked || !isParked(p)));
 }
@@ -1461,7 +1464,7 @@ function renderNone(main){  // no workspaces at all: start one; all hidden by th
     h("h2", {class:"eh"}, none ? "No workspaces yet" : "No workspaces in this view"),
     h("p", {class:"ep"}, none ? "Start a task and an agent will open a workspace for it. Workspaces appear here as hexes." : "The project or parked filter hides every workspace."),
     none ? h("button", {class:"btn primary", onclick: taskSheet}, PLUS.cloneNode(true), "New task")
-      : h("button", {class:"btn primary", onclick: () => { ui.paths = null; post({cmd: "project", only: null}); ui.showParked = true; render() }}, "Clear filters")));
+      : h("button", {class:"btn primary", onclick: () => { ui.paths = ui.repos = null; post({cmd: "project", only: null}); ui.showParked = true; render() }}, "Clear filters")));
 }
 /* ---------- CI view (dash.py ci) ---------- */
 const CI_TONE = {success: "--green", failed: "--red", canceled: "--gray", running: "--blue"};
@@ -2096,14 +2099,14 @@ function pickProjects(list, only, here = true){
 }
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
-  focus: () => ({page: ui.page?.name || "", view: ui.view, paths: ui.paths}),  // for Chief: what this window shows (paths: its projects' workspaces, null for all)
+  focus: () => ({page: ui.page?.name || "", view: ui.view, paths: viewPaths()}),  // for Chief: what this window shows (paths: its projects' workspaces, null for all)
   pick(names){  // the hexes Chief's last reply is about; [] clears. Just one on screen: its card opens too
     const was = ui.picked; ui.picked = new Set(arr(names)); render();
     const on = [...ui.picked].map(n => [document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`), ui.dk[n]]).filter(([e, p]) => e && p && !p.members);
     const card = document.getElementById("hcard");
     if (on.length === 1) showCard(...on[0]); else if (card && was.has(card.dataset.name)) hideCard();
   },
-  paths(r){ ui.paths = r; render() },  // the projects picked: their worktrees' paths, or null for all
+  paths(r, repos){ ui.paths = r; ui.repos = r && arr(repos); render() },  // the projects picked: their worktrees' paths and their repos, or null for all
   pickProjects,  // L1's project chip
   bell(n, open, asked){  // asked: waiting pings that name workspaces [{id, text, options, ts, ws}]
     ui.bell = {n, open, asked: arr(asked)};
