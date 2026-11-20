@@ -2045,7 +2045,7 @@ window.term = {
     toast(`${/-pasted\.png$/.test(path) ? "Screenshot" : "File"} sent to ${hostOf(p.tab.ws) === "local" ? "this Mac" : hostOf(p.tab.ws)}`, {sub: path, act: ["Copy path", () => post({cmd: "copy", text: path})]}) },
   tunnel: (key, st) => { tun.set(key, st); const c = $("card"), pr = !c.hidden && c.querySelector(".ports"); if (pr && facts.get(cardWs)) portsFill(pr, cardWs, facts.get(cardWs)) },
   toast: t => toast(String(t)),
-  dwimToast: (t, undo) => toast(String(t), undo ? {act: [String(undo), () => post({cmd: "dwimUndo"})]} : undefined),  // a board command from ⌘J  // not the promise: a dialog it opens waits on you, not on the caller
+  dwimToast: (t, undo, id) => toast(String(t), undo ? {act: [String(undo), () => post({cmd: "dwimUndo", id})]} : undefined),  // a board command from ⌘J  // not the promise: a dialog it opens waits on you, not on the caller
   looked: out => { looked(out); const a = !$("dlg").hidden && $("dlg").querySelector("#look-ask"); if (a) lookDialog(a.value) },  // the Colors dialog, if open, shows it
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },

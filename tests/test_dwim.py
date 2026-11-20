@@ -140,6 +140,13 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
         r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
     assert r["ok"] and r["undo"] and goals["id3"] == "Search box (hold)"
     assert dwim.undo(r["undo"])["undone"] == ["search"] and goals["id3"] == "Search box"
+    multiline = "Ship feature\n\n- preserve A\n- preserve B"
+    goals["id3"] = multiline
+    r = dwim.apply({"actions": [{"verb": "park", "ws": "search"}]})
+    assert goals["id3"] == multiline + " (parked)" and r["undo"]
+    goals["id3"] = multiline.replace("\n\n", "\n") + " (parked)"  # a formatting-only edit since apply
+    assert dwim.undo(r["undo"])["kept"] == ["search"] and goals["id3"] != multiline
+    assert dwim._goal_after("unpark", multiline + " (parked)") == multiline
 log = [json.loads(l) for l in (Path(os.environ["GREENLIGHT_HOME"]) / "dwim" / "log.jsonl").read_text().splitlines()]
 assert {"apply", "undo"} <= {e["op"] for e in log}
 
@@ -149,6 +156,8 @@ B2 = [puck("auth-login", 42, pipeline="failed", life=life), puck("auth-tokens", 
 c = dwim.stage({"text": "where is auth-login at?", "pucks": B2})
 assert c["kind"] == "lifecycle" and [s["state"] for s in c["stages"]] == ["done", "done", "now", "todo", "todo"] and c["stages"][2]["detail"] == "Pipeline green", c
 assert c["title"] == "CI failed on #42." and c["at"] == "3.2"
+c = dwim.stage({"text": "which CI status for auth-login?", "pucks": B2})
+assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-login"], c
 c = dwim.stage({"text": "which ones are red", "pucks": B2})
 assert c["kind"] == "table" and c["rows"] == [["auth-login", "#42", "failed", "CI failed on #42."]] and c["tones"] == ["bad"], c
 assert dwim.stage({"text": "tell me a joke", "pucks": B2})["kind"] is None
