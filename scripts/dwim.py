@@ -224,6 +224,8 @@ def grammar(text, pucks, focus=None):
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)
     g["tokens"] = [w for w in words(bare) if w not in STOP and w not in NUMS and (not w.isdigit() or len(w) >= 3) and len(w) > 1]  # a long number may be part of a name
+    if (g["names"] or g["refs"]) and re.search(r"\band\b", rest, re.I) and (g["tokens"] or g["filters"]):
+        g["why"] = "part of a combined target isn't identified"
     return g
 
 

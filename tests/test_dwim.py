@@ -104,6 +104,12 @@ with mock.patch.object(dwim, "decide", fake(sure)):
     assert [a["ws"] for a in r["actions"]] == ["auth-tokens"]
     calls.clear()
     assert plan("merge #42")["route"] == "chief" and not calls  # the guards don't even ask
+all_yes = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
+                        {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else
+                        {"value": True, "prob": .95, "provider": "jev"})
+with mock.patch.object(dwim, "decide", fake(all_yes)):
+    assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"
+    assert plan("park auth-login and the red ones", [puck("auth-login", 42), puck("api", 43, pipeline="failed")])["route"] == "chief"
 twins = [puck("search", 42, path="/one", goal="Login auth"), puck("search", 43, path="/two", goal="Billing")]
 twin_pick = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
                           {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else
