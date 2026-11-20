@@ -2,7 +2,9 @@
 
 This repo on GitHub. Same steps as `default.md`, run on the PR with `gh`. The maintainer is the only
 reviewer, and GitHub won't let them approve their own PR, so the agent's three independent reviews and its try-out
-stand in for an approval: once they pass, greenlight merges by itself (`automerge`). Deploying stays the maintainer's call: after the merge, the card's Deploy button pulls `main` into the host's skill checkout and signs the step off.
+stand in for an approval: once they pass, greenlight merges by itself (`automerge`). There's no deploy step: a merged PR is
+done, and cleanup removes its workspace. Updating the host's skill checkout to `main` (and `app/build.sh`
+when `app/` changed) is the maintainer's, outside the lifecycle.
 
 Options: `automerge`
 
@@ -14,4 +16,3 @@ Options: `automerge`
 6. `ready` — Not a draft. Owner: greenlight (`gh pr ready`), unless the goal says to keep it as a draft. Then ask the user.
 7. `threads` — No unresolved review threads. Owner: agent (verify, then fix or reply, and resolve).
 8. `merge` — GitHub reports it mergeable. A PR into `main` is merged by greenlight (`gh pr merge --merge`) once every step above passes; a goal that says "hold" still comes to the user. A PR stacked on another branch waits on that branch's PR to merge first; greenlight never merges it into the side branch.
-9. `deploy` — The host runs `main` (or this change doesn't need deploying). Rebuild the app (`app/build.sh`) if `app/` changed. Done: `signoff` Run: `cd ~/.claude/skills/greenlight && git checkout -q main && git pull -q --ff-only && pkill -f "[d]ash.py stream"; true`
