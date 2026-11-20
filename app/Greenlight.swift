@@ -1346,7 +1346,68 @@ struct StageView: View {
             case "zen": ZenLook(s: s, l: l)
             default: OrbLook(s: s, l: l)
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(hx(l.page)).environment(\.colorScheme, l.dark ? .dark : .light)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) { StageFiles(c: c, l: l) }
+        .background(hx(l.page))
+        .overlay { DropArea(c: c) }  // files dragged anywhere on the stage go with what you say next, as on the chat
+        .overlay { if c.dropping { StageDropHint(l: l) } }
+        .environment(\.colorScheme, l.dark ? .dark : .light)
+    }
+}
+
+/// Voice mode's files: the ones waiting to go with what you say next (dropped on the stage, pasted, or picked with the header's
+/// paperclip), each with × to take it off; why the last one couldn't attach; and that some are still being read. Nothing when there are none.
+struct StageFiles: View {
+    @ObservedObject var c: Core
+    let l: Look
+    var body: some View {
+        if !c.files.isEmpty || !c.fileNote.isEmpty || c.reading > 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                if !c.files.isEmpty || c.reading > 0 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(c.files) { chip($0) }
+                            if c.reading > 0 { HStack(spacing: 5) { ProgressView().controlSize(.mini); Text("Reading…") }.font(.system(size: 11)).foregroundColor(hx(l.dim)) }
+                        }
+                    }
+                    Text(c.reading > 0 && c.files.isEmpty ? "Checking the file…" : "\(c.files.count == 1 ? "Goes" : "These go") to \(c.name) with what you say next")
+                        .font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1)
+                }
+                if !c.fileNote.isEmpty {
+                    Label(c.fileNote, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11, weight: .medium)).foregroundColor(hx(l.dark ? "FF9F0A" : "9A6700"))
+                        .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
+                }
+            }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(hx(l.card)).overlay(alignment: .top) { Rectangle().fill(hx(l.line)).frame(height: 1) }
+        }
+    }
+    func chip(_ f: ChatFile) -> some View {
+        HStack(spacing: 5) {
+            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 3)) }
+            else { Image(systemName: f.kind == "pdf" ? "doc.richtext" : "doc.text").font(.system(size: 11)).foregroundColor(hx(l.dim)) }
+            Text(f.name).font(.system(size: 11, weight: .semibold)).foregroundColor(hx(l.text)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
+            Text(byteSize(f.data.count)).font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1).fixedSize()
+            Button { c.files.removeAll { $0.id == f.id } } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundColor(hx(l.dim)).frame(width: 16, height: 16)
+            }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
+        }.padding(.leading, 4).padding(.trailing, 3).frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(hx(l.stage))).overlay(RoundedRectangle(cornerRadius: 6).stroke(hx(l.line)))
+            .help("\(ChatFile.kinds[f.kind]!.capitalized), goes to \(c.name) with what you say next")
+            .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
+    }
+}
+/// Files dragged over the stage: where they'll go, in the stage's look.
+struct StageDropHint: View {
+    let l: Look
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12).fill(hx(l.page).opacity(0.85))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(hx(l.accent), style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+            .overlay(VStack(spacing: 8) {
+                Image(systemName: "paperclip").font(.system(size: 22)).foregroundColor(hx(l.accent))
+                Text("Drop to attach").font(.system(size: 15, weight: .semibold)).foregroundColor(hx(l.text))
+                Text("Goes with what you say next: \(ChatFile.supported)").font(.system(size: 11)).foregroundColor(hx(l.dim)).multilineTextAlignment(.center)
+            }.padding(.horizontal, 20))
+            .padding(10).allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 
@@ -1704,6 +1765,9 @@ struct VoiceButtons: View, Looked {
     var body: some View {
         HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
             if v.on {
+                if !v.transcript, let c = v.core {  // the stage has no composer: its +. Drops on the stage and ⌘V attach too
+                    knob("paperclip", "Attach files: \(ChatFile.supported). They go with what you say next. Or drop them on the stage, or paste.", label: "Attach files") { c.pickFiles(NSApp.keyWindow) }
+                }
                 knob(v.transcript ? "waveform" : "text.bubble", v.transcript ? "Show the stage" : "Show the transcript") { v.transcript.toggle() }
                 knob(v.captions ? "captions.bubble.fill" : "captions.bubble", v.captions ? "Captions off" : "Captions on") { v.captions.toggle() }
             }
@@ -1948,7 +2012,7 @@ final class Voice: NSObject, ObservableObject {
         if let cmd = voiceCommand(t) { return run(cmd) }
         lastHeard = t
         caption = ""
-        c.send(t)  // send() adds voiceNote
+        c.spoken(t)
     }
 
     func run(_ cmd: VoiceCmd) {
@@ -2134,7 +2198,7 @@ final class Voice: NSObject, ObservableObject {
         if let cmd = voiceCommand(t) { return run(cmd) }
         if c.run != nil { muted = true; liveBuf = [] }  // a new request mid-answer: the rest of the old one goes unsaid (send() queues the new one)
         lastHeard = t
-        c.send(t)  // send() adds voiceNote
+        c.spoken(t)
     }
     /// Hand over the waiting lines, unless it hasn't begun the last ones (then once it has, or after 8 s).
     func flushLive() {
@@ -3275,6 +3339,15 @@ final class Core: ObservableObject {
         if k == kVK_DownArrow, hp >= 0, !s.substring(from: NSMaxRange(r)).contains("\n") { return recall(hp - 1) }
         if k == kVK_Escape, hp >= 0, !vim { return recall(-1) }
         return false
+    }
+
+    /// A turn said out loud in voice mode: the files waiting in the composer (dropped, pasted or picked on the stage) go with it,
+    /// as a typed message's do. Files still being read hold it a moment (at most 15 s), so a file dropped just before you spoke isn't left behind.
+    func spoken(_ text: String, waited: Double = 0) {
+        if reading > 0 && waited < 15 { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.spoken(text, waited: waited + 0.25) } }
+        let fs = files
+        files = []; if !fs.isEmpty { fileNote = "" }
+        send(text, files: fs)  // send() adds voiceNote
     }
 
     func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = []) {
@@ -6417,10 +6490,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return e
         }
         vimMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            let paste = e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command
+                && { let ch = e.charactersIgnoringModifiers?.lowercased(); return ch == "v" || (Int(e.keyCode) == kVK_ANSI_V && ch?.first?.isASCII != true) }()  // the layout's V; a non-Latin layout's on the V key
+            if let self, self.capture == nil, paste, let w = e.window, let c = self.stageUnder(w) { return c.pasteFiles() ? nil : e }  // voice mode's stage: ⌘V of files or an image attaches them
             guard let self, self.capture == nil, let tv = e.window?.firstResponder as? NSTextView,
                   let c = tv.isDescendant(of: self.chat) ? self.greenlight : self.l1s.values.first(where: { tv.isDescendant(of: $0.chat) })?.c else { return e }
-            if e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command, { let ch = e.charactersIgnoringModifiers?.lowercased(); return ch == "v" || (Int(e.keyCode) == kVK_ANSI_V && ch?.first?.isASCII != true) }(),  // the layout's V; a non-Latin layout's on the V key
-               !c.editingName && !c.inboxOpen && !c.settingsOpen && c.replyingTo == nil, c.pasteFiles() { return nil }  // in the composer only  // ⌘V of files or an image attaches them
+            if paste, !c.editingName && !c.inboxOpen && !c.settingsOpen && c.replyingTo == nil, c.pasteFiles() { return nil }  // in the composer only  // ⌘V of files or an image attaches them
             if c.historyKey(e, tv) {  // ↑↓ / ⌃R history and readline keys, ahead of vim (whose ⌃R would be redo)
                 guard c.toEnd else { return nil }
                 c.toEnd = false
@@ -6531,6 +6606,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     /// Closing a view's window hands the view back to the main window.
+    /// The chat whose voice-mode stage has the keys in window w: the stage itself (its web view) or nothing in particular
+    /// (the window), never a text field or another pane (a terminal's ⌘V is its own). Its sheets (Settings, the inbox) aren't the stage.
+    func stageUnder(_ w: NSWindow) -> Core? {
+        let r = w.firstResponder
+        return ([(chat as NSView, greenlight)] + l1s.values.map { ($0.chat as NSView, $0.c) }).first { v, c in
+            c.voice.on && !c.voice.transcript && !c.settingsOpen && !c.inboxOpen && v.window === w
+                && (r === w || ((r as? NSView).map { $0.isDescendant(of: v) && !($0 is NSTextView) } ?? false))
+        }?.1
+    }
     func attach(_ v: String) {
         guard let w = viewWindows.removeValue(forKey: v) else { return }
         (w.contentView as? WKWebView)?.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
@@ -8046,6 +8130,54 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
     check("attach: a send that fails puts its files back: \(onMain { c.msgs.last!.text })",
           onMain { c.msgs.last!.failed && c.msgs.last!.text.hasPrefix("fake.txt isn't a file the chat can use") && c.files.map(\.name) == ["fake.txt"] })
     onMain { c.files = []; c.input = "" }
+    // Voice mode: the stage takes drops as the chat does, shows what waits, and a spoken turn carries it (even a file still being read)
+    onMain {
+        c.attach([tmp.appendingPathComponent("notes.txt"), tmp.appendingPathComponent("square.png")])
+    }
+    read()
+    onMain {
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        let h = NSHostingView(rootView: StageView(v: c.voice, c: c)); w.contentView = h
+        h.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date() + 0.5)
+        func all(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(all) }
+        let sel = NSSelectorFromString("_hitTest:dragTypes:")
+        if let imp = class_getMethodImplementation(NSView.self, sel),
+           class_getInstanceMethod(NSView.self, sel).map({ String(cString: method_getTypeEncoding($0)!) == "@32@0:8^{CGPoint=dd}16@24" }) == true,
+           let web = all(h).first(where: { $0 is WKWebView }) {
+            typealias Hit = @convention(c) (AnyObject, Selector, UnsafePointer<NSPoint>, AnyObject) -> AnyObject?
+            var at = web.convert(NSPoint(x: web.bounds.midX, y: web.bounds.midY), to: nil)
+            let file = withUnsafePointer(to: &at) { unsafeBitCast(imp, to: Hit.self)(h, sel, $0, NSSet(array: [NSPasteboard.PasteboardType.fileURL.rawValue, "NSFilenamesPboardType"])) }
+            check("voice attach: a file dragged onto the stage's drawing attaches (to \(file.map { "\(type(of: $0))" } ?? "nothing")), not opened by the web view", file is DropCatcher)
+        } else { print("skip voice attach: AppKit's drag lookup or the stage's web view isn't there to ask") }
+        if let dir = ProcessInfo.processInfo.environment["GREENLIGHT_SNAP"] {  // UX evidence: the stage with files waiting, a refusal, a drag over it
+            c.fileSays("tool.bin isn't a file the chat can use: attach \(ChatFile.supported).")
+            let was = c.voice.look
+            defer { c.voice.look = was }  // the user's own pick stays
+            for look in ["orb", "conversation"] {
+                c.voice.look = looks.first { $0.id == look }!
+                for (n, drag) in [("files", false), ("drop", true)] {
+                    c.dropping = drag; h.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date() + 0.5)
+                    if let rep = h.bitmapImageRepForCachingDisplay(in: h.bounds) { h.cacheDisplay(in: h.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/stage-\(look)-\(n).png")) }
+                }
+            }
+            c.dropping = false
+        }
+        w.contentView = nil
+        c.fileNote = ""; c.files.removeAll { $0.name == "square.png" }
+        c.attach([tmp.appendingPathComponent("square.png")])
+        c.spoken("What's the codeword in notes.txt, and what color is square.png? One line.")
+        check("voice attach: a spoken turn waits for a file still being read", c.run == nil && c.reading == 1 && c.files.count == 1)
+    }
+    wait("spoken turn sent", 20) { c.reading == 0 && c.files.isEmpty }  // its reply can be in before a poll sees the run: the transcript says what went
+    wait("spoken attachments reply", 180) { c.run == nil }
+    onMain {
+        let you = c.msgs[c.msgs.count - 2].text, r = c.msgs.last!.text
+        check("voice attach: the agent used the files said about: \(r)", r.contains("FENNEL-4821") && r.lowercased().contains("red") && !c.msgs.last!.failed)
+        check("voice attach: the transcript names them: \(you)", you.hasSuffix("📎 notes.txt  📎 square.png"))
+        c.spoken("Thanks, that's all I needed.")
+        check("voice attach: the next turn goes without them", c.run?.files.isEmpty == true)
+    }
+    wait("plain spoken reply", 180) { c.run == nil }
     try? FileManager.default.removeItem(at: tmp)
 }
 
