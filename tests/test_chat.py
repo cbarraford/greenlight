@@ -223,7 +223,7 @@ def dispatch_turn(tmp_path, monkeypatch, msg):
         f.chmod(f.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
     monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
-    monkeypatch.delenv("GREENLIGHT_REQUEST", raising=False)
+    monkeypatch.setenv("GREENLIGHT_REQUEST", "")  # chat.turn sets it: restored after the test
     events = []
     monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
@@ -247,10 +247,15 @@ def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
     assert done == ["Created gpt-live-24h-cost"], done
 
 
+def test_answer_to_chat_question_not_judged_alone(tmp_path, monkeypatch):
+    (tmp_path / "asked").write_text("")  # the last reply asked "which repo?": this answer carries the change it was about
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "greenlight, is that ok?")
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+    assert not (tmp_path / "asked").exists()  # this reply asked nothing
+
+
 def test_prompt_answers_questions_directly():
-    p = chat.PROMPT
-    assert "only asks" in p and "never create a workspace to answer one" in p
-    assert "investigations" not in p  # the old rule sent every investigation to a workspace
+    assert "investigations" not in chat.PROMPT  # the old rule sent every investigation to a workspace
 
 
 if __name__ == "__main__":
