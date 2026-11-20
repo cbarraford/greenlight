@@ -910,6 +910,37 @@ func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, d
     }
 }
 
+// macOS 27 deprecated AVAudio's connect, installTap and play, which raise on failure, for ones that throw: these call the new ones there.
+// ponytail: compiler(>=6.4) stands in for "the macOS 27 SDK" (they came together); an older SDK has only the old calls
+extension AVAudioEngine {
+    func link(_ a: AVAudioNode, to b: AVAudioNode, format f: AVAudioFormat?) throws {
+        #if compiler(>=6.4)
+        if #available(macOS 27, *) { try connectNode(a, to: b, format: f) } else { connect(a, to: b, format: f) }
+        #else
+        connect(a, to: b, format: f)
+        #endif
+    }
+}
+extension AVAudioNode {
+    func tap(onBus bus: AVAudioNodeBus, bufferSize n: AVAudioFrameCount, format f: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) throws {
+        #if compiler(>=6.4)
+        if #available(macOS 27, *) { try __installTap(onBus: bus, bufferSize: n, format: f, error: (), block: block) }  // (): the NSError** the importer turned into throws
+        else { installTap(onBus: bus, bufferSize: n, format: f, block: block) }
+        #else
+        installTap(onBus: bus, bufferSize: n, format: f, block: block)
+        #endif
+    }
+}
+extension AVAudioPlayerNode {
+    func start() throws {
+        #if compiler(>=6.4)
+        if #available(macOS 27, *) { try playAudio() } else { play() }
+        #else
+        play()
+        #endif
+    }
+}
+
 /// One buffer in another format (rate, channels, sample type): the mic to 16 kHz mono for recognition, speech to the player's.
 /// whole: b is all there is (a line from Kokoro/ElevenLabs), so flush the resampler's tail instead of holding it for the next call.
 func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat, whole: Bool = false) -> AVAudioPCMBuffer? {
@@ -1583,7 +1614,7 @@ final class Voice: NSObject, ObservableObject {
         let input = engine.inputNode
         vp = (try? input.setVoiceProcessingEnabled(true)) != nil
         if !engine.attachedNodes.contains(player) { engine.attach(player) }
-        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+        try engine.link(player, to: engine.mainMixerNode, format: speechFormat)
         let inFormat = input.outputFormat(forBus: 0)  // after voice processing, which can change it
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {  // no input device: installTap would raise, not throw
             throw NSError(domain: "Voice", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone is connected."])
@@ -1591,7 +1622,7 @@ final class Voice: NSObject, ObservableObject {
         let conv = AVAudioConverter(from: inFormat, to: micFormat), lconv = isLive ? AVAudioConverter(from: inFormat, to: live.fmt) : nil
         if inFormat.channelCount > 1 { conv?.channelMap = [0]; lconv?.channelMap = [0] }
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
+        try input.tap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
             guard let self, let conv, let m = convert(b, conv, self.micFormat) else { return }
             if let lconv { convert(b, lconv, self.live.fmt).map(self.live.mic) }  // GPT-Live: the mic goes to it, not to Apple's recognizer
             self.lock.lock(); let r = self.request; self.lock.unlock()
@@ -1600,7 +1631,7 @@ final class Voice: NSObject, ObservableObject {
             DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
         }
         engine.mainMixerNode.removeTap(onBus: 0)
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
+        try engine.mainMixerNode.tap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
             let l = level(b)
             DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
         }
@@ -1783,7 +1814,7 @@ final class Voice: NSObject, ObservableObject {
             if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
             if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
         }}
-        if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
+        if !self.player.isPlaying && self.engine.isRunning { try? self.player.start() }  // play() raises on a stopped engine
     }
     /// Stop talking (you cut in, or said stop); the turn itself goes on.
     func hush() {
@@ -1856,7 +1887,7 @@ final class Voice: NSObject, ObservableObject {
         }
         if liveOut == nil { liveOut = AVAudioConverter(from: live.fmt, to: speechFormat) }
         if let b = Speech.shared.buffer(d), let c = liveOut, let out = convert(b, c, speechFormat) { player.scheduleBuffer(out) }
-        if !player.isPlaying && engine.isRunning { player.play() }
+        if !player.isPlaying && engine.isRunning { try? player.start() }
         if quietFor > 0.8 {
             speaking = 0; newCaption = true
             if ending && awaiting == nil && liveBuf.isEmpty { stopAll() }  // it has said the goodbye, not just its own "okay"
@@ -2257,9 +2288,8 @@ final class LivePreview: ObservableObject {
         guard let k = key(), !k.isEmpty else { return fail(voice, "it needs an OpenAI key, or the Keychain didn’t let Greenlight read it: Set key… above") }
         guard g == gen else { return }  // stopped while the Keychain asked
         let e = AVAudioEngine(), n = AVAudioPlayerNode()
-        e.attach(n); e.connect(n, to: e.mainMixerNode, format: out)
-        do { try e.start() } catch { return fail(voice, "the audio output didn’t start (\(error.localizedDescription))") }
-        n.play()
+        e.attach(n)
+        do { try e.link(n, to: e.mainMixerNode, format: out); try e.start(); try n.start() } catch { return fail(voice, "the audio output didn’t start (\(error.localizedDescription))") }
         engine = e; node = n; track = PreviewTrack(); said = ""; scheduled = 0; played = 0; closed = false; opened += 1
         let l = LiveVoice()
         live = l
@@ -2555,7 +2585,7 @@ final class Core: ObservableObject {
     }
 
     func startVoice() {
-        AVCaptureDevice.requestAccess(for: .audio) { ok in DispatchQueue.main.async {
+        AVCaptureDevice.requestAccess(for: .audio) { [self] ok in DispatchQueue.main.async {
             guard ok else { return self.msgs.append(Msg(.note, "Microphone access is off: System Settings → Privacy & Security → Microphone → Greenlight.")) }
             let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1,
                                            AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false]
@@ -7353,10 +7383,10 @@ func selfTest() {
         try? wav(got, rate: 24000).write(to: URL(fileURLWithPath: NSTemporaryDirectory() + "greenlight-live-selftest.wav"))
         // and through the same path voice mode plays it: 24 kHz PCM → the player's format → a player node in an engine
         let e = AVAudioEngine(), pl = AVAudioPlayerNode(), oc = AVAudioConverter(from: l.fmt, to: pf)!
-        e.attach(pl); e.connect(pl, to: e.mainMixerNode, format: pf)
+        e.attach(pl)
         var playedFrames = 0, scheduled = 0
         do {
-            try e.start(); pl.play()
+            try e.link(pl, to: e.mainMixerNode, format: pf); try e.start(); try pl.start()
             for o in stride(from: 0, to: got.count - 4800, by: 4800) {
                 guard let b = Speech.shared.buffer(got.subdata(in: o..<o + 4800)), let c = convert(b, oc, pf) else { continue }
                 scheduled += Int(c.frameLength)
