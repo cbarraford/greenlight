@@ -242,6 +242,15 @@ test("the title changes this window's projects in place", async page => {
   assert.equal(await strip(page), 1, "its shells stay");
 });
 
+test("L1's project list: each project's paths are the trees this window shows under it, a no-repo or folder-only one too", async page => {
+  await page.evaluate(p => term.projects(p), PROJ);
+  await page.evaluate(t => term.workspaces({trees: [...t.trees, {ade: "orca", project: "", name: "scratch", path: "/x/scratch", branch: "", main: false, agent: "none"}]}), TREES);
+  const list = (await posts(page, "title")).pop().list, paths = id => list.find(p => p.id === id).paths.sort();
+  assert.deepEqual(paths("p1"), ["/w/fix-login", "/w/widgets"], "by its repo");
+  assert.deepEqual(paths("p2"), ["/w/review"], "by its folder: no repo of its own");
+  assert.deepEqual(paths(""), ["/w/shipped", "/w/sidebar", "/x/scratch"], "No Man's Land: a no-repo workspace is in it");
+});
+
 test("a repo's .greenlight.json: its project, and a window of it wears its look, hosts and host; Save to repo writes it", async page => {
   const cfg = {name: "Acme", look: {strip: "#112233", bg: "#000"}, host: "mini", hosts: ["mini"]};
   const trees = {trees: TREES.trees.map(w => w.name === "widgets" ? {...w, cfg} : w)};
