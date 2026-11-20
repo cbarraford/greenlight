@@ -1228,8 +1228,14 @@ def resolve(key, why):
 def close_stale(rows):
     """Questions about a workspace close once it's gone or no longer waiting on me."""
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
+    undo_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@undo:") and e.get("ws")}
     for key in pinged():
-        if key.startswith("@"):  # not a workspace: closed by hand with `greenlight.py resolve`
+        if key.startswith("@undo:"):
+            names = undo_ws.get(key, [])
+            if names and not any((r := by_key.get(name)) and r["next"]["owner"] == "me" for name in names):
+                resolve(key, "workspaces no longer waiting on you")
+            continue
+        if key.startswith("@"):  # other grouped questions are closed by hand with `greenlight.py resolve`
             continue
         r = by_key.get(key)
         if r is None:

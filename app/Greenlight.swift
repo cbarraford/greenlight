@@ -3995,7 +3995,7 @@ final class Core: ObservableObject {
         let key = j["key"] as? String
         let ws = (j["ws"] as? [String])?.filter { !$0.isEmpty }
         let auto = j["auto"] as? [String: Any], aid = auto?["id"] as? String, chose = auto?["choice"] as? String
-        if aid == nil, questions.contains(where: { $0.answer == nil && $0.text == text }) { return }  // already in the inbox
+        if aid == nil, questions.contains(where: { $0.answer == nil && $0.text == text && $0.options == options && $0.key == key }) { return }
         var fresh = true  // a newer ping about the same workspace replaces the open one
         for i in questions.indices where key != nil && questions[i].answer == nil && questions[i].key == key {
             questions[i].answer = "(superseded)"
@@ -9661,7 +9661,9 @@ func selfTest() {
             let w = c.waiting
             check("pings land in the inbox with options: \(w.map(\.options))", w.count == 2 && w[0].options == ["merge", "hold"] && w[0].text == "ws-a: merge !1?" && w[1].options.isEmpty)
             check("pings stay out of the chat", c.msgs.count == n)
-            c.answer(w[0], "dismissed", send: false)
+            c.ping(#"{"text": "ws-a: merge !1?\nOptions: hold | merge"}"#)
+            check("changed options replace old inbox chips", c.waiting.first { $0.text == "ws-a: merge !1?" }?.options == ["hold", "merge"])
+            c.answer(c.waiting.first { $0.text == "ws-a: merge !1?" }!, "dismissed", send: false)
             c.answer(w[1], "(dismissed)", send: false)
             check("dismissing clears the bell without sending", c.waiting.isEmpty && c.run == nil)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
