@@ -507,14 +507,17 @@ func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin")
 func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
-/// Successful reads are cached: voice mode needs its key every sentence, and each Keychain read can ask your password.
+/// Reads are cached for the launch: Settings asks on every redraw, voice mode every sentence, and each Keychain read can ask your password.
+/// A missing key and a read you denied stay cached (so a Deny isn't asked again a moment later) until you set the key again;
+/// a locked Keychain that couldn't ask, or any other error, is read again next time.
 @discardableResult
 func keychain(_ account: String, set value: String? = nil) -> String? {
     keyLock.lock(); defer { keyLock.unlock() }
+    let sec = keychainOps
     let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "greenlight", kSecAttrAccount as String: account]
     if let value {
         if value.isEmpty {
-            let st = SecItemDelete(q as CFDictionary)
+            let st = sec.delete(q as CFDictionary)
             guard st == errSecSuccess || st == errSecItemNotFound else {
                 NSLog("keychain delete %@: %d", account, st)
                 return nil
@@ -523,10 +526,10 @@ func keychain(_ account: String, set value: String? = nil) -> String? {
             return value
         }
         let data = Data(value.utf8)
-        var st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        var st = sec.update(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if st == errSecItemNotFound {
-            st = SecItemAdd(q.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil)
-            if st == errSecDuplicateItem { st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) }
+            st = sec.add(q.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil)
+            if st == errSecDuplicateItem { st = sec.update(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) }
         }
         guard st == errSecSuccess else {
             NSLog("keychain save %@: %d", account, st)
@@ -536,17 +539,25 @@ func keychain(_ account: String, set value: String? = nil) -> String? {
         return value
     }
     if let k = keys[account] { return k }
-    var out: AnyObject?
-    let st = SecItemCopyMatching(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out)
-    if st == errSecItemNotFound { keys[account] = .some(nil); return nil }
-    guard st == errSecSuccess, let data = out as? Data else {
-        NSLog("keychain read %@: %d", account, st)
-        return nil  // a locked or denied Keychain can be retried later in this launch
+    var out: CFTypeRef?
+    let st = sec.copy(q.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &out)
+    if st == errSecSuccess, let data = out as? Data {
+        let value = String(decoding: data, as: UTF8.self)
+        keys[account] = .some(value)
+        return value
     }
-    let value = String(decoding: data, as: UTF8.self)
-    keys[account] = .some(value)
-    return value
+    if st != errSecItemNotFound { NSLog("keychain read %@: %d", account, st) }
+    if st == errSecItemNotFound || st == errSecUserCanceled || st == errSecAuthFailed { keys[account] = .some(nil) }
+    return nil
 }
+/// The Keychain calls `keychain` makes; the selftest swaps in fakes.
+struct KeychainOps {
+    var copy: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemCopyMatching
+    var update: (CFDictionary, CFDictionary) -> OSStatus = SecItemUpdate
+    var add: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemAdd
+    var delete: (CFDictionary) -> OSStatus = SecItemDelete
+}
+var keychainOps = KeychainOps()
 private var keys: [String: String?] = [:]
 private let keyLock = NSLock()
 
@@ -7200,6 +7211,40 @@ func selfTest() {
     pv.play("juni", voiceOn: false, muted: false, settle: 0.1, key: readKey); pv.stop()
     RunLoop.main.run(until: Date() + 0.3)
     check("voice: Stop before the preview starts reads no key and leaves nothing playing", keyReads == ["vesper"] && pv.phase == .idle && !pv.busy)
+    do {  // the Keychain cache, on fake Keychain calls: what a launch reads again, and what a failed save keeps
+        let real = keychainOps, acct = "greenlight-selftest"
+        var reads = 0, readStatus = errSecUserCanceled, saveStatus = errSecSuccess
+        func mine(_ q: CFDictionary) -> Bool { (q as NSDictionary)[kSecAttrAccount as String] as? String == acct }  // other accounts go to the real Keychain
+        var fake = real
+        fake.copy = { q, out in
+            guard mine(q) else { return real.copy(q, out) }
+            reads += 1
+            if readStatus == errSecSuccess { out?.pointee = Data("sk-old".utf8) as CFData }
+            return readStatus
+        }
+        fake.update = { q, v in mine(q) ? saveStatus : real.update(q, v) }
+        fake.add = { q, out in mine(q) ? saveStatus : real.add(q, out) }
+        fake.delete = { q in mine(q) ? saveStatus : real.delete(q) }
+        keyLock.lock(); keychainOps = fake; keys[acct] = nil; keyLock.unlock()
+        let denied = [keychain(acct), keychain(acct)]
+        let deniedReads = reads
+        let afterSet = keychain(acct, set: "sk-new")
+        let afterSetRead = keychain(acct), setReads = reads
+        keyLock.lock(); keys[acct] = nil; keyLock.unlock(); reads = 0; readStatus = errSecInteractionNotAllowed
+        let locked = [keychain(acct), keychain(acct)]
+        let lockedReads = reads
+        readStatus = errSecSuccess
+        let unlocked = [keychain(acct), keychain(acct)]
+        let unlockedReads = reads
+        saveStatus = errSecInteractionNotAllowed
+        let badSave = keychain(acct, set: "sk-rejected"), badRemove = keychain(acct, set: "")
+        let kept = keychain(acct)
+        keyLock.lock(); keys[acct] = nil; keychainOps = real; keyLock.unlock()
+        check("keychain: a denied read isn't asked again until the key is set; a locked one is read again, then cached; a failed save or remove keeps the key",
+              denied == [nil, nil] && deniedReads == 1 && afterSet == "sk-new" && afterSetRead == "sk-new" && setReads == 1
+              && locked == [nil, nil] && lockedReads == 2 && unlocked == ["sk-old", "sk-old"] && unlockedReads == 3
+              && badSave == nil && badRemove == nil && kept == "sk-old" && reads == 3)
+    }
     if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
         // a real preview session (a fraction of a cent): it must speak the line, and its audio must play back through the output
         let lp = LivePreview(), t0 = Date()
