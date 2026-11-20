@@ -26,6 +26,7 @@ Page layouts come from Claude Haiku picking widgets out of CATALOG; the page ren
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
 import base64
+import calendar
 import hashlib
 import importlib
 import json
@@ -234,6 +235,85 @@ def board():
                       + (f" · do: {ad}" if ad else "") + (" · agent working" if (r.get("agent") or {}).get("state") == "working" else "")))
     lines.sort(key=lambda x: x[0])
     return "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
+
+
+GH_WORK = """query($q: String!) { search(type: ISSUE, first: 50, query: $q) { nodes {
+  ... on PullRequest { number title url isDraft updatedAt reviewDecision mergeable repository { nameWithOwner }
+    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }
+  ... on Issue { number title url updatedAt repository { nameWithOwner } labels(first: 5) { nodes { name } }
+    closedByPullRequestsReferences(first: 1) { totalCount } } } } }"""
+
+
+def gl_item(m, role):
+    """A GitLab MR or issue in forge_line's shape."""
+    if "iid" in m and "source_branch" in m:
+        st = ["draft"] * bool(m.get("draft")) + ["conflicts"] * bool(m.get("has_conflicts")) + [(m.get("detailed_merge_status") or "").replace("draft_status", "").replace("_", " ")]
+    else:
+        st = [", ".join(m.get("labels") or []), f"due {m['due_date']}" if m.get("due_date") else "", "has an MR" if m.get("merge_requests_count") else "no MR"]
+    return {"role": role, "ref": m["references"]["full"], "title": m["title"], "url": m["web_url"], "updated": m.get("updated_at") or "", "status": st}
+
+
+def gh_item(n, role):
+    """A GitHub PR or issue (GH_WORK's nodes) in forge_line's shape."""
+    ref = f"{n['repository']['nameWithOwner']}#{n['number']}"
+    if "isDraft" in n:
+        ci = ((((n.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}).get("state")
+        st = ["draft"] * n["isDraft"] + ["conflicts"] * (n.get("mergeable") == "CONFLICTING") + [f"CI {ci.lower()}" if ci else "", (n.get("reviewDecision") or "").lower().replace("_", " ")]
+    else:
+        st = [", ".join(l["name"] for l in n["labels"]["nodes"]), "has a PR" if n["closedByPullRequestsReferences"]["totalCount"] else "no PR"]
+    return {"role": role, "ref": ref, "title": n["title"], "url": n["url"], "updated": n.get("updatedAt") or "", "status": st}
+
+
+def forge_line(it, ws, now):
+    """One line for the chat: what it is, its status, how stale, and the workspace already on it."""
+    days = (now - calendar.timegm(time.strptime(it["updated"][:19], "%Y-%m-%dT%H:%M:%S"))) / 86400 if it["updated"] else None
+    age = "" if days is None else "updated today" if days < 1 else f"updated {int(days)}d ago"
+    return (f"- [{it['ref']}]({it['url']}) {it['title'][:90]} · " + " · ".join(x for x in it["status"] + [age] if x)
+            + (f" · workspace: {ws[it['ref']]}" if it["ref"] in ws else ""))
+
+
+def forge(repo=None):
+    """Open issues and MRs/PRs with their statuses, for the chat to suggest what to pick up: mine (to review, authored,
+    assigned issues) on both forges, or with repo every open one in that repo. Workspaces already on one are named."""
+    try:
+        rows = json.loads((greenlight.STATE / "last.json").read_text())["rows"]
+    except (OSError, ValueError, KeyError):
+        rows = []
+    ws = {f"{r['project']}{'#' if (r.get('mr') or {}).get('forge', r.get('forge')) == 'github' else '!'}{r['mr']['iid']}": r["name"]
+          for r in rows if (r.get("mr") or {}).get("iid")}
+    items, errs, me = [], [], greenlight.ME
+    gh_q = lambda q, role: [gh_item(n, role) for n in greenlight.gh("api", "graphql", "-f", f"q={q} is:open archived:false", "-f", f"query={GH_WORK}")["data"]["search"]["nodes"] if n]
+    if repo:
+        forge_of = next((r.get("forge") or (r.get("mr") or {}).get("forge") for r in rows if r["project"] == repo), None)
+        try:
+            if forge_of != "gitlab":
+                items = gh_q(f"repo:{repo} is:pr", "open") + gh_q(f"repo:{repo} is:issue", "open")
+        except Exception as e:  # noqa: BLE001 - not a GitHub repo (or gh is out): try GitLab
+            errs.append(f"github: {str(e)[:120]}")
+        if not items and forge_of != "github":
+            try:
+                pp = f"projects/{greenlight.pid(repo)}"
+                items = [gl_item(m, "open") for m in greenlight.gl(f"{pp}/merge_requests?state=opened&per_page=50")] + \
+                        [gl_item(m, "open") for m in greenlight.gl(f"{pp}/issues?state=opened&per_page=50")]
+                errs = []
+            except Exception as e:  # noqa: BLE001
+                errs.append(f"gitlab: {str(e)[:120]}")
+    else:
+        for name, fetch in (("gitlab", lambda: [gl_item(m, "review") for m in greenlight.gl(f"merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=50")]
+                                     + [gl_item(m, "mine") for m in greenlight.gl(f"merge_requests?scope=all&state=opened&author_username={me}&per_page=50")]
+                                     + [gl_item(m, "issue") for m in greenlight.gl("issues?scope=assigned_to_me&state=opened&per_page=50")]),
+                            ("github", lambda: gh_q("is:pr review-requested:@me", "review") + gh_q("is:pr author:@me", "mine") + gh_q("is:issue assignee:@me", "issue"))):
+            try:
+                items += fetch()
+            except Exception as e:  # noqa: BLE001 - that CLI isn't installed or logged in: the other forge still answers
+                errs.append(f"{name}: {str(e)[:120]}")
+    heads = {"review": "Asked to review", "mine": "Your MRs/PRs", "issue": "Issues assigned to you", "open": f"Open in {repo}"}
+    out, now = [], time.time()
+    for role, head in heads.items():
+        group = sorted((i for i in items if i["role"] == role), key=lambda i: i["updated"], reverse=True)
+        if group:
+            out += [f"{head} ({len(group)}):"] + [forge_line(i, ws, now) for i in group[:40]]
+    return "\n".join(out + [f"(couldn't ask {e})" for e in errs]) or "Nothing open."
 
 
 def state_of(r, blk=None):
@@ -1361,6 +1441,8 @@ def main():
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
     elif a[:1] == ["board"]:
         print(board())
+    elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
+        print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
     elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:

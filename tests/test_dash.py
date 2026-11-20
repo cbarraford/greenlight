@@ -401,3 +401,15 @@ with tempfile.TemporaryDirectory() as _d:
     assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
     assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
 print("basement ok")
+
+# forge: Chief's list of open MRs/PRs and issues, one line each with its status, age and the workspace already on it
+now = 1_800_000_000
+mr = dash.gl_item({"iid": 7, "source_branch": "b", "draft": True, "has_conflicts": True, "detailed_merge_status": "draft_status",
+                   "references": {"full": "acme/widgets!7"}, "title": "Fix it", "web_url": "u", "updated_at": "2027-01-15T08:00:00.000Z"}, "mine")
+assert dash.forge_line(mr, {"acme/widgets!7": "fix-it"}, now) == "- [acme/widgets!7](u) Fix it · draft · conflicts · updated today · workspace: fix-it", dash.forge_line(mr, {"acme/widgets!7": "fix-it"}, now)
+iss = dash.gh_item({"number": 3, "title": "Bug", "url": "v", "updatedAt": "2027-01-10T08:00:00Z", "repository": {"nameWithOwner": "octo/app"},
+                    "labels": {"nodes": [{"name": "bug"}]}, "closedByPullRequestsReferences": {"totalCount": 0}}, "issue")
+assert dash.forge_line(iss, {}, now) == "- [octo/app#3](v) Bug · bug · no PR · updated 5d ago", dash.forge_line(iss, {}, now)
+pr = dash.gh_item({"number": 4, "title": "Feat", "url": "w", "isDraft": False, "updatedAt": "", "reviewDecision": "CHANGES_REQUESTED", "mergeable": "CONFLICTING",
+                   "repository": {"nameWithOwner": "octo/app"}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]}}, "review")
+assert dash.forge_line(pr, {}, now) == "- [octo/app#4](w) Feat · conflicts · CI failure · changes requested", dash.forge_line(pr, {}, now)

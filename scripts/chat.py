@@ -38,7 +38,13 @@ PROMPT = (
     "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
     "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
     "`python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS + "/dash.py board` rescans every workspace, "
-    "updates the user's dashboard and prints the fresh board."
+    "updates the user's dashboard and prints the fresh board. "
+    "To see the user's GitHub and GitLab work beyond the workspaces (asked what to pick up, what's waiting on them, about an issue "
+    "or MR, or when the board is thin): `python3 " + SCRIPTS + "/dash.py forge` lists the open MRs/PRs they're asked to review, "
+    "their own, and the issues assigned to them, each with its status (draft, conflicts, CI, approvals, threads), how stale it is, "
+    "and the workspace already on it; `dash.py forge <owner/repo>` lists everything open in one repo. Suggest from the statuses: "
+    "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
+    "MR yet; say why and the next action, and offer to start a workspace for one that has none."
 )
 
 
