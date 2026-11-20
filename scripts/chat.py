@@ -106,12 +106,20 @@ def step_title(name, inp):
     return name.split("__")[-1].replace("_", " "), first
 
 
+def call(name, inp):
+    """A tool call the way Claude Code prints it: Bash(git status), Read(scripts/chat.py)."""
+    a = inp.get("command") or inp.get("file_path") or inp.get("path") or inp.get("pattern") or inp.get("query") \
+        or inp.get("url") or inp.get("skill") or inp.get("description") or next((v for v in inp.values() if isinstance(v, str)), "")
+    return f"{name.split('__')[-1]}({short(a, 100)})"
+
+
 class Norm:
     """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
 
     def __init__(self):
         self.msg_t = None  # current API message start, for tok/s
         self.chars = 0
+        self.out, self.msg_out = 0, 0  # output tokens: finished messages, the current one
         self.last_tps = 0.0
         self.context = 0
         self.window = None
@@ -141,6 +149,7 @@ class Norm:
             ev = d["event"]
             if ev["type"] == "message_start":
                 self.msg_t, self.chars = time.time(), 0
+                self.out, self.msg_out = self.out + self.msg_out, 0
                 self.context = self.usage(ev["message"].get("usage", {})) or self.context
                 out.append({"e": "usage", "context": self.context})
             elif ev["type"] == "content_block_start" and ev["content_block"]["type"] == "text":
@@ -155,16 +164,17 @@ class Norm:
                     out.append({"e": "status", "text": "Thinking"})
                 if self.msg_t and time.time() - self.last_tps > 0.5:  # live estimate, ~4 chars a token
                     self.last_tps = time.time()
-                    out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1)})
+                    out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1),
+                                "out": self.out + max(self.msg_out, self.chars // 4)})
             elif ev["type"] == "message_delta" and self.msg_t:
-                n = ev.get("usage", {}).get("output_tokens", 0)
-                out.append({"e": "usage", "tps": round(n / max(time.time() - self.msg_t, 0.2), 1)})
+                n = self.msg_out = ev.get("usage", {}).get("output_tokens", 0)
+                out.append({"e": "usage", "tps": round(n / max(time.time() - self.msg_t, 0.2), 1), "out": self.out + n})
         elif t == "assistant":
             for c in d["message"].get("content", []):
                 if c.get("type") == "tool_use":
                     self.cmds[c["id"]] = c.get("input", {}).get("command", "")
                     title, detail = step_title(c["name"], c.get("input", {}))
-                    out.append({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail)})
+                    out.append({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))})
                 elif c.get("type") == "text":
                     self.text = c["text"]
         elif t == "user" and isinstance(d.get("message", {}).get("content"), list):
@@ -185,7 +195,7 @@ class Norm:
         t, it, out = d.get("type"), d.get("item", {}), []
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
-            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd)})
+            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"})
         elif t == "item.completed" and it.get("type") == "command_execution":
             out.append({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)})
         elif t == "item.completed" and it.get("type") == "agent_message":
