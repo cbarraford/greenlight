@@ -553,6 +553,14 @@ func staged(_ s: String) -> Staged {
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
+/// Chief's mood line (the reply's first line, only emoji) split off the rest, for the chat to show at the reply's top-right corner.
+func mood(_ s: String) -> (mood: String?, rest: String) {
+    let (first, rest) = s.firstIndex(of: "\n").map { (s[..<$0], String(s[s.index(after: $0)...])) } ?? (s[...], "")
+    let m = first.trimmingCharacters(in: .whitespaces)
+    let emoji = !m.isEmpty && m.allSatisfy { ch in ch.isWhitespace || (ch.unicodeScalars.first.map { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && ch.unicodeScalars.count > 1) } ?? false) }
+    return emoji ? (m, rest.drop { $0.isNewline }.description) : (nil, s)
+}
+
 func plain(_ s: String) -> String {
     var t = s.replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
     if let r = t.range(of: "```") { t = String(t[..<r.lowerBound]) }
@@ -902,7 +910,7 @@ func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
     pucks.compactMap { p in
         guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, ["working", "waiting"].contains(st), let path = p["path"] as? String else { return nil }
         return Agent(id: path, name: p["name"] as? String ?? path, state: st, type: a["type"] as? String ?? "")
-    }.sorted { ($0.state != "waiting", $0.name) < ($1.state != "waiting", $1.name) }
+    }.sorted { ($0.state == "waiting" ? 0 : 1, $0.name) < ($1.state == "waiting" ? 0 : 1, $1.name) }
 }
 
 enum Talk { case speaking, listening, thinking }
@@ -2436,21 +2444,25 @@ struct RunCard: View, Looked {
         let cur = Text(mono ? " █" : lk.id == "zen" ? "▏" : " ▍").foregroundColor(lk.id == "onair" ? hx("D1242F") : accent)
         // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
         let fs = ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1
-        let t = Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(staged(r.live).text)))\(cur)")
+        let (m, rest) = mood(staged(r.live).text)
+        let t = Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
             .font(chatFace(size: fs)).textSelection(.enabled)
-        switch lk.id {
-        case "conversation":
-            let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
-            t.foregroundColor(fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
-        case "onair":
-            VStack(alignment: .leading, spacing: 0) {
-                Text(c.name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
-                t.foregroundColor(page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)
+        VStack(alignment: .trailing, spacing: 2) {
+            if let m { Text(m).font(.system(size: fs)) }
+            switch lk.id {
+            case "conversation":
+                let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
+                t.foregroundColor(fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
+            case "onair":
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(c.name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
+                    t.foregroundColor(page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)
+                }
+            case "hud":
+                VStack(alignment: .leading, spacing: 6) { Text("\(c.name.uppercased()) ▸").font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent); t.foregroundColor(fg) }
+                    .padding(.leading, Theme.sp3).overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 1) }
+            default: t.foregroundColor(fg).shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)
             }
-        case "hud":
-            VStack(alignment: .leading, spacing: 6) { Text("\(c.name.uppercased()) ▸").font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent); t.foregroundColor(fg) }
-                .padding(.leading, Theme.sp3).overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 1) }
-        default: t.foregroundColor(fg).shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)
         }
     }
     var stats: String {
@@ -2560,6 +2572,13 @@ struct MsgView: View, Looked {
         }
     }
     @ViewBuilder func reply(_ said: String) -> some View {
+        let (m, rest) = mood(said)
+        VStack(alignment: .trailing, spacing: 2) {
+            if let m { Text(m).font(.system(size: fs)).accessibilityLabel("Mood \(m)") }  // outside the box, its top-right corner
+            box(rest)
+        }
+    }
+    @ViewBuilder func box(_ said: String) -> some View {
         let t = MDText(text: said).font(chatFace(size: fs)).textSelection(.enabled)
         switch lk.id {
         case "onair":  // inverted: page ink on a text-colored card
@@ -6309,6 +6328,7 @@ func selfTest() {
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
+    check("chat: the mood line sits apart, a reply without one doesn't", mood("😌🔍❤️\n\nAll green.") == ("😌🔍❤️", "All green.") && mood("#3 is up.\nok") == (nil, "#3 is up.\nok") && mood("👍 Done.") == (nil, "👍 Done."))
     check("voice: mood emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
