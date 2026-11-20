@@ -10,31 +10,15 @@ id=dev.greenlight.app
 dest=~/Applications/$name.app
 # Built and signed aside, then moved in: a failed build (or signing) leaves the installed app as it was, and a running one
 # keeps its binary. Staged in a hidden folder in your home, not ~/Applications: on the same volume, so the move is a rename, but
-# a build killed mid-way (dev.py's timeout) leaves no second signed copy where LaunchServices looks. Those are swept an hour on.
-find ~ -maxdepth 1 -name '.greenlight-stage.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-mkdir -p ~/Applications; stage=$(mktemp -d ~/.greenlight-stage.XXXXXX) app=$stage/$name.app
+# a build killed mid-way (dev.py's timeout) leaves no second signed copy where LaunchServices looks. Its folder is named for its
+# process, and swept once that's gone (not by age: a build can wait on codesign's prompt for as long as you leave it).
+for f in ~/.greenlight-stage.*.*; do p=${f#"$HOME"/.greenlight-stage.}; p=${p%%.*}
+  [ -d "$f" ] && [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null && rm -rf "$f" || true
+done
+mkdir -p ~/Applications; stage=$(mktemp -d ~/.greenlight-stage.$$.XXXXXX) app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
 trap 'rm -rf "$bin" "$stage"' EXIT
-# Command Line Tools swiftc: avoids needing the Xcode license accepted
-DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Greenlight.swift -o "$bin"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-mv "$bin" "$app/Contents/MacOS/$name"
-cat > "$app/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>$id</string>
-  <key>CFBundleName</key><string>$name</string>
-  <key>CFBundleExecutable</key><string>$name</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>Orb</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>NSMicrophoneUsageDescription</key><string>Speak to Greenlight: your voice is transcribed into the message box.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>Transcribes what you say to Greenlight, on this Mac.</string>
-  ${dev:+<key>GreenlightDev</key><string>$dev</string>}
-</dict></plist>
-EOF
-mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
+# The signer first: a cert that can't sign fails the build in a second, not after the compile.
 # Ad-hoc signing changes the app's identity every build, so macOS asks for the mic and speech again. Without an Apple
 # Development cert (below), a self-signed "Greenlight Dev" one keeps those, though not the Keychain keys. It lives in its own
 # keychain (password in a 0600 file), because codesign can't use a key in the login keychain over ssh (errSecInternalComponent).
@@ -52,7 +36,7 @@ security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
 # codesign only finds identities in keychains on the search list (--keychain alone says "no identity found"): add it once, keeping the rest
 kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
 case " ${kcs[*]} " in *" $kc "*) ;; *) security list-keychains -d user -s "${kcs[@]}" "$kc" ;; esac
-id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
+devid=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
 # The Keychain pins a key Greenlight saves to the build that saved it, unless the build has a Team ID: its partition list says
 # `cdhash:<this build>` (seen in a login keychain on macOS 26.5), so every rebuild of Greenlight or of a dev copy asked for your
 # password again, for each key it read. An Apple Development cert (free with an Apple ID: Xcode → Settings → Accounts → Manage
@@ -74,16 +58,36 @@ apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"'
 # for a dev copy's unattended build, which waits for it.
 team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-1 hash:/{on=($3==h)} on; /END CERTIFICATE/{on=0}' |
   openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
+# Command Line Tools swiftc: avoids needing the Xcode license accepted
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Greenlight.swift -o "$bin"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mv "$bin" "$app/Contents/MacOS/$name"
+cat > "$app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>$id</string>
+  <key>CFBundleName</key><string>$name</string>
+  <key>CFBundleExecutable</key><string>$name</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>Orb</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>NSMicrophoneUsageDescription</key><string>Speak to Greenlight: your voice is transcribed into the message box.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Transcribes what you say to Greenlight, on this Mac.</string>
+  ${dev:+<key>GreenlightDev</key><string>$dev</string>}
+</dict></plist>
+EOF
+mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then
   # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match
   if [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2
   else echo "build.sh: error: signing with \"$cn\" failed: unlock the login keychain (it is locked over ssh), or click Always Allow when codesign asks on the Mac's screen, then build again" >&2; fi
   exit 1
-elif [ -z "$id" ]; then
+elif [ -z "$devid" ]; then
   echo "build.sh: no signing cert; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"
 else
-  codesign -fs "$id" --keychain "$kc" "$app" ||
+  codesign -fs "$devid" --keychain "$kc" "$app" ||
     { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
 # The old one goes with the staging folder, or back if the new one can't go in (unless another build put its own there meanwhile)
