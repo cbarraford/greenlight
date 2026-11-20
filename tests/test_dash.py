@@ -178,6 +178,15 @@ with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName":
                                                                   "branch": "refs/heads/b"}, {})}):
     pk = dash.snapshot()["pucks"][0]
 assert (pk["mr"]["ref"], pk["mr"]["forge"], pk["state"], pk["steps"][0]) == ("#23", "github", "queued", "mr_open")
+# a workspace the scan hasn't seen yet (just created) is a puck at once, with its working agent; every puck carries the ADE's repo name,
+# which the dashboard matches against the picked projects (a window's paths are older than the workspace)
+with mock.patch.object(dash, "live_agents", return_value={
+        "w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20", "branch": "refs/heads/b", "repo": "greenlight"}, {}),
+        "w2": ({"displayName": "openai-live-voice", "worktreeId": "w2", "path": "/w/olv", "comment": "Switch voice", "branch": "refs/heads/olv", "repo": "greenlight",
+                "agents": [{"state": "working"}]}, {"state": "working", "agentType": "claude"})}):
+    _pk = {p["name"]: p for p in dash.snapshot()["pucks"]}
+assert (_pk["ws-gh"]["repo"], _pk["openai-live-voice"]["repo"]) == ("greenlight", "greenlight")
+assert (_pk["openai-live-voice"]["state"], _pk["openai-live-voice"]["agent"]["state"], _pk["openai-live-voice"]["agent"]["type"]) == ("working", "working", "claude")
 # lifestage.py's place for it rides on the puck (this row predates `life`, so it's worked out here), with the live agent's state on top
 assert (pk["life"]["at"], pk["life"]["pile"], pk["life"]["holder"], pk["life"]["suggestion"]["label"]) == ("4.1", "working", "Greenlight", "Mark it ready")
 with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20",
@@ -301,7 +310,7 @@ import json
 from pathlib import Path
 dash.MEMORY = Path(tempfile.mkdtemp())
 g = dash.settings("lifecycle-get", "greenlight", "")
-assert g["source"] == "bundled" and "solo" in g["options"], g
+assert g["source"] == "bundled" and "automerge" in g["options"], g
 dash.settings("lifecycle-set", "greenlight", json.dumps({**g, "rules": "Always add a test."}))
 g2 = dash.settings("lifecycle-get", "greenlight", "")
 assert (g2["source"], g2["rules"], g2["intro"]) == ("yours", "Always add a test.", g["intro"])
@@ -385,14 +394,35 @@ assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" 
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
 assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3 and dash.tree_signoff("/w/x")["error"]
 # the chat's board: unfinished workspaces, yours first, finished ones counted
-_b = lambda n, o, st="freeform": {"name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
+_b = lambda n, o, st="freeform": {"id": n, "name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
+_w = lambda n, repo="g", **k: {"worktreeId": n, "displayName": n, "path": "/w/" + n, "repo": repo, "branch": "refs/heads/" + n, **k}
+_live = lambda *ns: {n: (_w(n), {}) for n in ns}
 _lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))
-assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
-                                     "(1 more finished)"], dash.board()
-os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only
-assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
-assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]
-del os.environ["GREENLIGHT_ONLY"]
+with mock.patch.object(dash, "live_agents", return_value=_live("q", "m", "d")):
+    assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
+                                         "(1 more finished)"], dash.board()
+    os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only (an older app: a bare list of paths)
+    assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
+    assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]
+    del os.environ["GREENLIGHT_ONLY"]
+# `ade worktree create` started a workspace and its agent after the scan: it's on the board at once, as on the dashboard, with the live
+# agent; one deleted since the scan is gone; and the scan's stale agent state gives way to the live one
+_new = _w("openai-live-voice", comment="Switch voice", agents=[{"state": "working"}])
+_now = _live("q") | {"openai-live-voice": (_new, {"state": "working"}), "x": (_w("x", "other", comment="Elsewhere"), {"state": "working"})}
+_now["q"] = (_now["q"][0], {"state": "working"})
+with mock.patch.object(dash, "live_agents", return_value=_now):
+    b = dash.board().splitlines()
+    assert b == ["- q (no MR, o/g): freeform · on agent · q act · agent working",  # live: an agent is on it now, so no "start one"
+                 "- openai-live-voice (no MR, g): freeform · on parked · no lifecycle: goal only · agent working",
+                 "- x (no MR, other): freeform · on parked · no lifecycle: goal only · agent working"], b  # m and d were deleted
+    # the window's scope as the app sends it now: its worktrees' paths as listed before the create, and their repos
+    os.environ["GREENLIGHT_ONLY"] = json.dumps({"paths": ["/w/q"], "repos": ["g"]})
+    assert [l.split(" ")[1] for l in dash.board().splitlines()] == ["q", "openai-live-voice"], dash.board()  # x's repo is another window's
+    os.environ["GREENLIGHT_ONLY"] = json.dumps({"paths": ["/w/q"], "repos": []})
+    assert [l.split(" ")[1] for l in dash.board().splitlines()] == ["q"]
+    del os.environ["GREENLIGHT_ONLY"]
+with mock.patch.object(dash, "live_agents", side_effect=RuntimeError("orca: not running")):  # the ADE not answering: the scan alone, as before
+    assert dash.board().splitlines()[0] == "- m (no MR, o/g): freeform · on me · m act"
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")

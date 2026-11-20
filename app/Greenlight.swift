@@ -830,6 +830,14 @@ func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String
     return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
 }
 
+/// The window's scope for Chief's BOARD (`chat.py send --only`), from a page's focus(): its worktrees' paths and their repos, so a
+/// workspace created after the window listed them (`ade worktree create`) is on the board too. nil: the window shows every project.
+func focusScope(_ o: [String: Any]) -> String? {
+    guard let paths = o["paths"] as? [String] else { return nil }
+    let scope: [String: [String]] = ["paths": paths, "repos": o["repos"] as? [String] ?? []]
+    return (try? JSONSerialization.data(withJSONObject: scope, options: .sortedKeys)).flatMap { String(data: $0, encoding: .utf8) }
+}
+
 /// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
 func resolveHexes(_ said: [String], _ pucks: [[String: Any]]) -> [String] {
     let names = pucks.compactMap { $0["name"] as? String }
@@ -933,8 +941,8 @@ func level(_ b: AVAudioPCMBuffer) -> Float {
     return max(0, min(1, (20 * log10(max(sqrt(sum / Float(b.frameLength)), 1e-6)) + 50) / 45))
 }
 
-let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer in 1–3 short spoken sentences: "
-    + "no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
+let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer concisely, like a person talking: "
+    + "one or two short sentences, the answer first, no preamble or recap, more only if they ask; no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
@@ -2667,13 +2675,13 @@ final class Core: ObservableObject {
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
-    var focusPaths: [String]?  // its workspaces: Chief's BOARD has only these (nil: the window shows every project)
+    var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
     var chatSend: String {
-        let only = focusPaths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) }.map { " --only \(shellQuote($0))" } ?? ""
+        let only = focusScope.map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
-    @Published var agents: [Agent] = []  // the chat footer's agents button
+    @Published var agents: [Agent] = []  // the agents in your workspaces: the activity feed is live while one works
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
         let (now, new) = newNeeds(needs, pucks)
@@ -3218,7 +3226,7 @@ struct MsgView: View, Looked {
         let t = Text(m.text), f = chatFace(size: Theme.fs3 + 1)
         switch lk.id {
         case "phosphor":
-            (Text("you> ").foregroundColor(dim) + t).font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(Text("you> ").foregroundColor(dim))\(t)").font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         case "editorial":
             VStack(alignment: .leading, spacing: Theme.sp1) {
                 Text("LETTERS · YOU ASKED").font(sys(size: 10, weight: .bold)).tracking(1.4).foregroundColor(dim)
@@ -3506,7 +3514,7 @@ struct Inbox: View {
         let w = c.waiting
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                (Text("Questions waiting").fontWeight(.semibold) + Text(" · \(w.count)").foregroundColor(dim))
+                Text("\(Text("Questions waiting").fontWeight(.semibold))\(Text(" · \(w.count)").foregroundColor(dim))")
                 Spacer()
                 if let o = w.map(\.ts).min() { Text("oldest \(ago(o))").font(sys(size: Theme.fs1)).foregroundColor(dim) }
                 Button { c.inboxOpen = false } label: {
@@ -4606,6 +4614,7 @@ struct SettingsView: View {
         }
         box("Options") {
             toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
+            toggleRow("Merge by itself", "Once every step before the merge passes (an agent's reviews and try-out, say), Greenlight merges without waiting on an approval or asking you.", optBinding("automerge"))
             toggleRow("Merge into any branch", "Greenlight may merge an MR whose target isn't the default branch.", optBinding("merge_any_base"))
         }
         saveRow("Save", rs.save)
@@ -4891,7 +4900,7 @@ struct ChatView: View, Looked {
     /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
     @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
         let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
-        let text = lk.id == "phosphor" ? Text("you> ").foregroundColor(dim) + Text(q) : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
+        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
         VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
             if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
             text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(lk.id == "conversation" ? accent : lk.id == "zen" ? dim : lk.id == "phosphor" ? fg : sub)
@@ -5061,7 +5070,6 @@ struct ChatView: View, Looked {
                     .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
             }
             Spacer(minLength: 4)
-            if !c.agents.isEmpty { agentsButton }
             if !onair && model { modelButton.fixedSize() }
             ContextButton(c: c)
             newChat
@@ -5132,27 +5140,6 @@ struct ChatView: View, Looked {
                 .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
                 .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
         }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
-    }
-
-    /// The agents running in your workspaces: a dot for the busiest (amber asking you, blue working), a pick opens its terminal.
-    var agentsButton: some View {
-        let a = c.agents, onair = lk.id == "onair", n = a.count
-        let dot = a.contains { $0.state == "waiting" } ? needs : working
-        let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
-        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : "working")\(g.type.isEmpty ? "" : " · \(g.type)")" }
-        return Menu {
-            ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
-        } label: {
-            HStack(spacing: Theme.sp1) {
-                Circle().fill(onair ? accent : dot).frame(width: 7, height: 7)
-                tag(word, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1)
-            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
-                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
-                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
-                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
-        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .modifier(Tip(c: c, text: "Agents in your workspaces: pick one to open its terminal"))
-            .accessibilityLabel("\(n) agent\(n == 1 ? "" : "s")\(a.contains { $0.state == "waiting" } ? ", one asking you" : ""). Open an agent's terminal")
     }
 
     static let newTip = "New chat — forget this conversation and start fresh"
@@ -5813,11 +5800,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
-        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focus && term.focus())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
+        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
-            self.greenlight.focusPaths = o["paths"] as? [String]
+            self.greenlight.focusScope = focusScope(o)
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -6614,9 +6601,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
             let path = "/tmp/greenlight/\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
             // ponytail: stdin is written on the main thread, so a 10 MB drop over a slow ssh stalls the UI for its upload
-            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data) { [weak web] code in
+            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data, onExit: { [weak web] code in
                 web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 ? path : "")))")
-            }
+            })
         case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
             guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
                   let u = URL(string: "http://localhost:\(port)") else { return }
@@ -6724,7 +6711,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                         at(0, 0.3, Animation.easeOut) { s.to = Squash() }
                     }
                     // the backdrop lifts only once the level is in place, so what's behind the app never shows through mid-ride
-                    later(reduce ? 0.22 : 0.3) { [self] in to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
+                    later(reduce ? 0.22 : 0.3) { to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
                     later(reduce ? 0.22 : 0.5) { [self] in
                         rideWin?.orderOut(nil); rideWin = nil; riding = false
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
@@ -7082,9 +7069,6 @@ func selfTest() {
           && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
-    check("agents button: agents only, the one asking you first",
-          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
-                    ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
     let p0: [[String: Any]] = [["name": "a", "state": "working", "step": "ci", "owner": "agent", "action": "fix CI", "agent": ["state": "working", "type": "claude", "tool": "Bash", "input": "make", "last": "On it."]],
                                ["name": "z", "state": "done", "step": "merged", "owner": "nobody"]]
     let p1: [[String: Any]] = [["name": "a", "state": "needs", "step": "review", "owner": "me", "action": "approve it", "agent": ["state": "waiting", "type": "claude", "tool": "Bash", "input": "make", "last": "CI is green. Merge?"]],
@@ -7129,6 +7113,9 @@ func selfTest() {
     check("focus: the stage's card for the workspace you switched to",
           wsCard["title"] as? String == "mr-5339" && (wsCard["items"] as? [[String: String]])?.map { $0["label"]! } == ["!5339 receipts", "Needs you", "Next: review bot"]
           && (wsCard["items"] as? [[String: String]])?.first?["detail"] == "CI failed")
+    check("focus: Chief's BOARD is the window's worktrees and their repos, so a workspace made since is on it",
+          focusScope(["paths": ["/w/a"], "repos": ["greenlight"]]) == #"{"paths":["\/w\/a"],"repos":["greenlight"]}"#
+          && focusScope(["paths": ["/w/a"]]) == #"{"paths":["\/w\/a"],"repos":[]}"# && focusScope(["view": "overview"]) == nil)
     check("focus: Chief hears which window and workspace you were in",
           focusLine(terminal: 2, project: "Platform", ["name": "mr-5339", "path": "/w/mr-5339", "mr": "!5339"]) == "a Basement terminal window showing Platform, on the tab for workspace mr-5339 (/w/mr-5339, !5339)"
           && focusLine(terminal: nil, project: "", ["page": "acme/mr-5339", "view": "overview"]) == "the dashboard, with workspace acme/mr-5339 open"

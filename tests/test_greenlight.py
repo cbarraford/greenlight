@@ -170,7 +170,7 @@ def gh_raw(**kw):
     pr = {"number": 23, "url": "https://github.com/octo/greenlight/pull/23", "title": "Console button", "state": "OPEN",
           "isDraft": False, "updatedAt": "2026-11-04T21:09:04Z", "author": {"login": "octo"},
           "headRefName": "octo/plan-x", "headRefOid": "abc", "baseRefName": "main", "mergeable": "MERGEABLE",
-          "mergeStateStatus": "CLEAN", "reviewDecision": None, "labels": {"nodes": [{"name": "ui"}]}, "milestone": None,
+          "mergeStateStatus": "CLEAN", "reviewDecision": None, "labels": {"nodes": [{"name": n} for n in ("ui", "reviewed", "tried")]}, "milestone": None,
           "assignees": {"nodes": []}, "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "bob"}}]},
           "latestOpinionatedReviews": {"nodes": []}, "reviewThreads": {"nodes": []},
           "commits": {"nodes": [{"commit": {"statusCheckRollup": None}}]}} | kw
@@ -184,7 +184,7 @@ def gh_pr(**kw):
 p = gh_pr()
 assert p["author"] == {"username": greenlight.ME, "login": "octo", "avatar_url": None} and p["state"] == "opened" and p["iid"] == 23
 assert p["head_pipeline"] is None and p["detailed_merge_status"] == "mergeable" and not p["_can_approve"]
-assert p["target_branch"] == "main" and p["_default_branch"] == "main" and p["labels"] == ["ui"]
+assert p["target_branch"] == "main" and p["_default_branch"] == "main" and p["labels"] == ["ui", "reviewed", "tried"]
 assert p["reviewers"] == [{"username": "bob"}]
 assert gh_pr(isDraft=True)["detailed_merge_status"] == "draft_status"
 assert gh_pr(state="MERGED")["state"] == "merged" and gh_pr(state="CLOSED")["state"] == "closed"
@@ -223,7 +223,14 @@ assert (e["step"], e["owner"], e["cmd"]) == ("ready", "greenlight", ["gh", "pr",
 assert e["lifecycle"] == "greenlight.md"
 assert (ev(gh_pr(isDraft=True), gws("Merge MR for #20 (stay draft)"))["owner"]) == "me"
 e = ev(gh_pr())
-assert (e["step"], e["owner"], e["cmd"]) == ("merge", "me", ["gh", "pr", "merge", "23", "-R", "octo/greenlight", "--merge"])
+assert (e["step"], e["owner"], e["cmd"]) == ("merge", "greenlight", ["gh", "pr", "merge", "23", "-R", "octo/greenlight", "--merge"])  # automerge
+e = ev(gh_pr(labels={"nodes": [{"name": "tried"}]}))
+assert (e["step"], e["owner"]) == ("reviewed", "agent") and "`reviewed`" in e["action"]  # no merge before the three reviews
+assert ev(gh_pr(labels={"nodes": [{"name": "reviewed"}]}))["step"] == "tried"
+with mock.patch.object(greenlight, "lifecycle_opts", return_value={"solo"}):
+    assert ev(gh_pr())["owner"] == "me"  # solo without automerge: the user reviews, then merges
+with mock.patch.object(greenlight, "lifecycle_opts", return_value={"automerge"}):
+    assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # automerge with no checking steps (default.md) merges nothing
 assert ev(gh_pr(), gws("Merge MR for #20 (hold)"))["action"].endswith("merge now?")
 e = ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))
 assert (e["owner"], e["cmd"][:3], e["lifecycle"]) == ("greenlight", ["gh", "pr", "merge"], "default.md")  # default lifecycle: approved → greenlight merges
