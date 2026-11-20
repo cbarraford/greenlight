@@ -372,7 +372,7 @@ def run(cmd, engine, text, norm, check=False):
     open(PIDFILE, "w").write(str(p.pid))
     p.stdin.write(text)
     p.stdin.close()
-    sid, done = None, False
+    sid, done, private = None, False, set()
     for line in p.stdout:
         try:
             d = json.loads(line)
@@ -390,6 +390,11 @@ def run(cmd, engine, text, norm, check=False):
                 os.remove(PIDFILE)
             return sid, "retry"
         for e in evs:
+            if e["e"] == "step" and attach.mentions(DIR, e):
+                private.add(e["id"])
+            elif e["e"] == "step_done" and e.get("id") in private:  # what the agent read of an attached file: not shown, not kept in the transcript
+                e["out"] = "(attached file)"
+                e.pop("full", None)
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
                 json.dump(e["shells"], open(BGFILE, "w"))
                 continue
@@ -472,6 +477,8 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             stored = attach.store(DIR, attach.check(files))
         except attach.Rejected as e:
             return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+        except OSError as e:
+            return emit(e="done", ok=False, text=f"The attached files couldn't be saved where greenlight runs ({e.strerror or e}).", context=0, window=None, ms=None)
         attach.prune(DIR)
     prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
