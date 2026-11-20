@@ -1533,7 +1533,7 @@ function closeAnswer(){ ui.answering = null; render() }
    At the bottom it follows new output; scrolled up, it holds still and counts what arrived. Back, or Esc, closes it. */
 const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
 const OUT_IDLE = 5000, OUT_FOLLOW = 40;
-let OUT_WAIT = 20000;  // a reply later than this counts as lost (let: the tests shorten it)  // px from the bottom that still counts as "at the bottom"
+let OUT_WAIT = 20000, OUT_QUIET = 30000;  // a reply later than OUT_WAIT counts as lost; a main session quiet for OUT_QUIET hands over (let: the tests shorten them)  // px from the bottom that still counts as "at the bottom"
 function openOut(name){
   closeOut(false);
   ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
@@ -1609,7 +1609,8 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // more arrived than one page holds: what's between is skipped, and said so (no cursor: the page reaches the start)
     if (first) o.more = r.more || null;  // Load earlier continues from the top of what's shown
     const newest = page.length ? stemOf(page[page.length - 1]) : null;  // the page ends in the newest session's tail
-    if (newest && (first || !o.main || !add.some(e => stemOf(e) === o.main))) o.main = newest;  // main: the newest, once the old main has gone quiet
+    if (o.main && add.some(e => stemOf(e) === o.main)) o.mainAt = Date.now();
+    else if (newest && (first || !o.main || Date.now() - o.mainAt > OUT_QUIET)) { o.main = newest; o.mainAt = Date.now() }  // main: the newest, once the old main has been quiet a while (two busy sessions keep their labels)
     for (const e of add) e.other = !!o.main && stemOf(e) !== o.main && (rec.includes(e) || !first);  // the first page's older sessions are history, not "another"
     add.forEach(e => { o.ids.add(e.id); o.tip[stemOf(e)] = Math.max(o.tip[stemOf(e)] ?? -1, idxOf(e)) }); o.entries.push(...add); o.loaded = true;
     if (first) outPaint();  // outPaint lands at the bottom

@@ -816,10 +816,19 @@ test("All output: another session is labelled from the first paint; a new sessio
     recent: [R("rv", 5, "LGTM", "codex")]});
   assert.deepEqual(await page.$$eval("#aout-list .aow", es => es.map(e => e.textContent)), ["Codex", "Claude", "Codex · another session"],
     "a review running alongside is labelled at once; yesterday's session is just history");
-  // m stops; b's first lines came in through recent (no separator), then b is the newest and only one writing
-  await nextPoll(page, 2);
-  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [R("m", 0, "m0"), R("m", 1, "m1")], recent: [R("b", 0, "b0")]});
-  await nextPoll(page, 3);
+  // two sessions both busy, taking turns as newest: the labels hold
+  const turn = async (n, entries, recent) => { await nextPoll(page, n); await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries, recent}) };
+  await turn(2, [R("rv", 5, "LGTM", "codex"), R("rv", 6, "r6", "codex")], [R("m", 0, "m0")]);  // the review wrote last
+  await turn(3, [R("m", 0, "m0"), R("m", 1, "m1")], [R("rv", 6, "r6", "codex")]);
+  await turn(4, [R("rv", 6, "r6", "codex"), R("rv", 7, "r7", "codex")], [R("m", 1, "m1")]);
+  assert.deepEqual(await page.$$eval("#aout-list .aoe", es => es.map(e => e.textContent)),
+    ["Codexyesterday", "Claudem0", "Codex · another sessionLGTM", "Codex · another sessionr6", "Claudem1", "Codex · another sessionr7"],
+    "the review stays 'another session' and the main agent stays itself, whoever wrote last");
+  // m stops for good (quiet past OUT_QUIET); b's first lines came in through recent (no separator), then b is the newest and only one writing
+  await page.evaluate(() => { OUT_QUIET = 0 });
+  await nextPoll(page, 5);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [R("m", 0, "m0"), R("m", 1, "m1"), R("m", 2, "m2")], recent: [R("b", 0, "b0")]});
+  await nextPoll(page, 6);
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [{id: "b:start", role: "sep", text: "claude session"}, R("b", 0, "b0"), R("b", 1, "b1")], recent: []});
   const tail = await page.$$eval("#aout-list .aoe", es => es.slice(-2).map(e => e.textContent));
   assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
