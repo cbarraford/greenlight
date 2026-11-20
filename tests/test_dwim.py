@@ -265,6 +265,8 @@ c = dwim.stage({"text": "which CI status for auth-login?", "pucks": B2})
 assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-login"], c
 c = dwim.stage({"text": "which ones are red", "pucks": B2})
 assert c["kind"] == "table" and c["rows"] == [["auth-login", "#42", "failed", "CI failed on #42."]] and c["tones"] == ["bad"], c
+c = dwim.stage({"text": "What's the status of CI?", "pucks": B2})
+assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-login", "auth-tokens"], c
 c = dwim.stage({"text": "which ones are waiting?", "pucks": B2})
 assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-tokens"], c
 c = dwim.stage({"text": "Which workspaces are parked?", "pucks": parked})

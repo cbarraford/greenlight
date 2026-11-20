@@ -705,14 +705,16 @@ def stage(o):
     if not text or not pucks:
         return {"kind": None, "ms": 0}
     one = _named(text, pucks, focus)
-    words_pick = next((k for k, r in TEMPLATE_WORDS if r.search(text)), None)
+    matching = [k for k, r in TEMPLATE_WORDS if r.search(text)]
+    words_pick = matching[0] if matching else None
     state = {"board": [facts_of(p) for p in pucks[:30]], "focus": focus, "named": one and one["name"]}
     a, provider, dec_ms = ask(state, {"t": {"kind": "choice", "question": f"The user asked: “{text}”. Which card shows the answer best "
                                                                        "while the full answer is written?", "options": list(TEMPLATES)}},
                               deadline=STAGE_DEADLINE)
     pick = sure_choice(a["t"]) or words_pick
     spec = None
-    for k in ([pick] if pick in CARDS else []) + (["lifecycle"] if one and pick not in CARDS and pick != "none" else []):
+    candidates = [] if pick == "none" else list(dict.fromkeys(([pick] if pick in CARDS else []) + matching + (["lifecycle"] if one and not matching else [])))
+    for k in candidates:
         if spec := CARDS[k](text, pucks, one):
             break
     return (spec or {"kind": None}) | {"provider": provider, "ms": round((time.monotonic() - t0) * 1000), "decide_ms": dec_ms}
