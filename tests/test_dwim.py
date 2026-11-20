@@ -1,6 +1,6 @@
 """python3 tests/test_dwim.py: the DWIM fast path routes board commands direct only when they're safe and clear, and undoes them."""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-import json, tempfile, time, types; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # never the real ~/.greenlight
+import json, subprocess, tempfile, time, types; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # never the real ~/.greenlight
 import concurrent.futures as cf
 from pathlib import Path
 from unittest import mock
@@ -288,6 +288,11 @@ os.system(f"cd {d} && git init -q -b main && git commit -q --allow-empty -m init
           f"&& printf 'a\\nb\\n' > x.py && git add x.py && git -c user.email=t@t -c user.name=t commit -q -m x")
 c = dwim.stage({"text": "what changed in auth-login", "pucks": [puck("auth-login", 42, path=d)]})
 assert c["kind"] == "diff" and c["files"] == [{"path": "x.py", "add": 2, "del": 0}] and c["add"] == 2, c
+Path(d, "x.py").write_text("a\nb\nc\n")
+Path(d, "y.py").write_text("z\n")
+subprocess.run(["git", "-C", d, "add", "y.py"], check=True)
+c = dwim.stage({"text": "what changed in auth-login", "pucks": [puck("auth-login", 42, path=d)]})
+assert c["kind"] == "diff" and {f["path"]: f["add"] for f in c["files"]} == {"x.py": 3, "y.py": 1} and c["add"] == 4, c
 pick = lambda k, q: {"choice": "table", "confidence": 0.9, "provider": "jev"}
 with mock.patch.object(dwim, "decide", fake(pick)):
     assert dwim.stage({"text": "how are we doing", "pucks": B2})["kind"] == "table"  # no words for it: System One's pick
