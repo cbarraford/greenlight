@@ -3261,8 +3261,9 @@ final class Core: ObservableObject {
             let n = back.count - files.count
             files = back
             if input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { input = r.text }  // and what was said about them
-            fileSays(n == r.files.count ? "Your files are back above the field, to send again."
-                     : "\(n) of the \(r.files.count) files that didn't go are back; the rest don't fit beside the ones you added.")
+            let out = r.files.filter { f in !back.contains { $0.id == f.id } }.map(\.name)
+            fileSays(out.isEmpty ? "Your files are back above the field, to send again."
+                     : "Not sent and no room beside the files you added: \(out.joined(separator: ", ")). Attach them again to send them.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
