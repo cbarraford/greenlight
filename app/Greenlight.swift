@@ -399,6 +399,19 @@ struct Question: Codable, Identifiable {
     var answer: String? = nil
     var key: String? = nil  // the workspace a ping is about; greenlight sends {"resolve": key} when it goes stale
     var ws: [String]? = nil  // workspaces it names (`greenlight.py ping --ws`): the dashboard lifts their hexes while it waits. Optional so old questions.json decodes
+    var suggest: Suggest? = nil  // autonomy.py's tier 2: the option you'd likely pick, preselected with a badge
+    var auto: String? = nil  // autonomy.py's tier 1: greenlight answered it for you; the audit id Undo sends back
+}
+
+/// autonomy.py's guess at a ping's answer: the option, how likely, and how many past answers of its kind (agree: picked it).
+struct Suggest: Codable { let choice: String; let prob: Double; let count: Int; let agree: Int }
+
+/// `autonomy.py settings --json`: which kinds greenlight may answer for you, how its guesses did, and what it answered lately.
+struct AutonomyReport: Decodable {
+    struct Kind: Decodable { let kind: String; let eligible: Bool; let opted: Bool; let n: Int?; let right: Int?; let acc: Double? }
+    struct Candidate: Decodable { let kind: String; let n: Int; let right: Int }
+    struct Act: Decodable, Identifiable { let id: String; let ts: Double; let kind: String; let choice: String; let prob: Double; let text: String?; let undone: Double? }
+    let auto: [String], gate: Double, kinds: [Kind], candidates: [Candidate], recent: [Act]
 }
 
 /// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
@@ -3389,6 +3402,34 @@ final class Core: ObservableObject {
         })
     }
 
+    // Settings › Autonomy: autonomy.py on the host owns it (autonomy.json); this is the last report read
+    @Published var autonomy: AutonomyReport?
+    @Published var autonomyNote = ""
+    func loadAutonomy() {
+        var out = ""
+        ssh("\(py)/autonomy.py settings --json", onLine: { out += $0 }, onExit: { [weak self] code in
+            guard let self else { return }
+            if code == 0, let r = try? JSONDecoder().decode(AutonomyReport.self, from: Data(out.utf8)) { self.autonomy = r; self.autonomyNote = "" }
+            else { self.autonomyNote = "Couldn't read autonomy settings from \(host)." }
+        })
+    }
+    /// autonomy.py set's arguments (`--auto milestone on`, `--gate 0.35`), then the report again.
+    func setAutonomy(_ args: String) {
+        ssh("\(py)/autonomy.py set \(args)", onExit: { [weak self] code in
+            if code != 0 { self?.autonomyNote = "Couldn't save that on \(host)." }
+            self?.loadAutonomy()
+        })
+    }
+    func undoAudit(_ id: String) {
+        ssh("\(py)/autonomy.py undo \(shellQuote(id))", onExit: { [weak self] code in
+            if code != 0 { self?.autonomyNote = "Couldn't undo that on \(host)." }
+            self?.loadAutonomy()
+        })
+        for i in questions.indices where questions[i].auto == id {
+            questions[i].auto = nil; questions[i].answer = "Undone: " + (questions[i].answer ?? "").replacingOccurrences(of: "Auto: ", with: "")
+        }
+    }
+
     func setGreenlightEvery(_ m: Int) {
         greenlightEvery = m
         ud.set(m, forKey: "greenlightEvery")
@@ -3500,6 +3541,23 @@ final class Core: ObservableObject {
         }
         if replyingTo == q.id { replyingTo = nil; replyText = "" }
         if doSend { send(q.ping ? "(Replying to your question: \"\(q.text)\")\n\(text)" : text, shown: text) }
+        if !doSend && text == "(dismissed)" && !selftest, let d = try? JSONSerialization.data(withJSONObject: ["text": q.text, "key": q.key as Any? ?? NSNull(), "ping": q.ping]) {
+            ssh("\(py)/decisions.py dismiss", stdin: String(decoding: d, as: UTF8.self))  // the ✕: autonomy.py's gate counts it against its kind
+        }
+    }
+
+    /// Takes back an answer greenlight gave for you (autonomy.py undo): the question comes back to the inbox as a new ping.
+    func undoAuto(_ q: Question) { if let aid = q.auto { undoAudit(aid) } }
+
+    /// autonomy.py's anti-slop gate for a question nobody asked for (the idle check-in, the watch): may it interrupt now?
+    /// Only a clear "held" stops it: a host that can't say (ssh down, a checkout without autonomy.py) lets it through.
+    func gate(_ kind: String, _ go: @escaping (Bool) -> Void) {
+        var out = ""
+        ssh("\(py)/autonomy.py gate --kind \(kind)", onLine: { out += $0 }, onExit: { [weak self] code in
+            let held = code == 1 && out.contains("\"ok\": false")
+            if held, let self { self.log(.chief, self.name, .status, "\(kind) held by the ping gate: \(out)") }
+            go(!held)
+        })
     }
 
     /// An answer chip under a message in the chat.
@@ -3685,6 +3743,12 @@ final class Core: ObservableObject {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
         guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, queue.isEmpty, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
         checkedIn = true
+        gate("check-in") { [weak self] ok in  // you dismissed the last few check-ins: this one waits (autonomy.py)
+            guard let self, ok, self.run == nil, self.clearing == 0, self.queue.isEmpty else { return }
+            self.checkInTurn()
+        }
+    }
+    private func checkInTurn() {
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next"); r.checkIn = true
         start(r, chatSend, stdin:
@@ -3718,11 +3782,15 @@ final class Core: ObservableObject {
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
-        let r = Run("Watching the workspaces"); r.watch = true
-        start(r, chatSend, stdin:
-            "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
-            + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
-            + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
+        gate("watch") { [weak self] ok in  // held (its questions keep getting dismissed): these aren't news next time either
+            guard let self, ok else { return }
+            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = ask.merging(self.fresh) { $1 }; return }  // busy meanwhile
+            let r = Run("Watching the workspaces"); r.watch = true
+            self.start(r, self.chatSend, stdin:
+                "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
+                + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
+                + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
+        }
     }
 
     func compact() {
@@ -3911,15 +3979,26 @@ final class Core: ObservableObject {
         let (text, options) = splitOptions(raw)  // pings live in the bell inbox + banner only, not the chat
         let key = j["key"] as? String
         let ws = (j["ws"] as? [String])?.filter { !$0.isEmpty }
-        if questions.contains(where: { $0.answer == nil && $0.text == text }) { return }  // already in the inbox
+        let auto = j["auto"] as? [String: Any], aid = auto?["id"] as? String, chose = auto?["choice"] as? String
+        if aid == nil, questions.contains(where: { $0.answer == nil && $0.text == text }) { return }  // already in the inbox
         var fresh = true  // a newer ping about the same workspace replaces the open one
         for i in questions.indices where key != nil && questions[i].answer == nil && questions[i].key == key {
             questions[i].answer = "(superseded)"
             if replyingTo == questions[i].id { replyingTo = nil }
             fresh = false
         }
-        questions.append(Question(text: text, options: options, ping: true, ts: (j["ts"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date(), key: key,
-                                  ws: ws?.isEmpty == false ? ws : nil))
+        var q = Question(text: text, options: options, ping: true, ts: (j["ts"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date(), key: key,
+                         ws: ws?.isEmpty == false ? ws : nil)
+        if let aid, let chose {  // answered for you (an opted-in kind, sure and reversible): in Answered, with Undo
+            q.answer = "Auto: \(chose)"; q.auto = aid
+            questions.append(q)
+            return notify(title: name, body: "Answered for you: \(chose). Undo it under Answered in the bell.\n\(text)", subtitle: nil, reply: false, id: key)
+        }
+        if let s = j["suggest"] as? [String: Any], let ch = s["choice"] as? String, options.contains(ch) {
+            q.suggest = Suggest(choice: ch, prob: (s["prob"] as? NSNumber)?.doubleValue ?? 0, count: (s["count"] as? NSNumber)?.intValue ?? 0,
+                                agree: (s["agree"] as? NSNumber)?.intValue ?? 0)
+        }
+        questions.append(q)
         if !popoverShown() && fresh { unread += 1; missed += 1 }
         notify(title: name, body: text, subtitle: nil, reply: true, id: key)
     }
@@ -4800,7 +4879,9 @@ struct Inbox: View {
                 }
                 ViewThatFits(in: .vertical) { rows; ScrollView { rows } }
             }
-            let done = c.questions.filter { $0.answer != nil }.suffix(3).reversed()
+            // the last few answered, and every answer greenlight gave for you in the last day (each with its Undo)
+            let answered = c.questions.filter { $0.answer != nil }, last = Set(answered.suffix(3).map(\.id))
+            let done = answered.filter { last.contains($0.id) || ($0.auto != nil && $0.ts > Date().addingTimeInterval(-86400)) }.reversed()
             if !done.isEmpty {
                 Divider().overlay(line)
                 VStack(alignment: .leading, spacing: Theme.sp2) {
@@ -4810,6 +4891,10 @@ struct Inbox: View {
                             Text(q.text).foregroundColor(dim).lineLimit(1)
                             Spacer(minLength: 8)
                             Text(q.answer ?? "").lineLimit(1).layoutPriority(1)
+                            if q.auto != nil {
+                                Button("Undo") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
+                                    .help("Greenlight answered this for you. Undo asks you again, and what you answer is acted on.")
+                            }
                         }.font(sys(size: Theme.fs2))
                     }
                 }.padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3)
@@ -4852,8 +4937,8 @@ struct QuestionRow: View {
             }
             Text(md(said)).font(chatFace(size: Theme.fs3)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             if !q.options.isEmpty { Text("Choose to send").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-            let chips = Group {  // equal weight, as the chat's chips: greenlight's Options line carries no recommendation
-                ForEach(q.options, id: \.self) { o in AnswerChip(title: o) { c.answer(q, o) } }
+            let chips = Group {  // equal weight, unless autonomy.py's past answers make one likely (tier 2): that one is preselected
+                ForEach(q.options, id: \.self) { o in AnswerChip(title: o, likely: q.suggest?.choice == o) { c.answer(q, o) } }
                 if c.replyingTo != q.id {
                     Button(q.options.isEmpty ? "Reply" : "Other…") { c.replyText = ""; c.replyingTo = q.id }.buttonStyle(.plain).font(sys(size: Theme.fs2)).foregroundColor(sub)
                         .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
@@ -4862,6 +4947,10 @@ struct QuestionRow: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: Theme.sp2) { chips }
                 VStack(alignment: .leading, spacing: Theme.sp2) { chips }
+            }
+            if let s = q.suggest {
+                Label(likelyNote(s), systemImage: "sparkles").font(sys(size: Theme.fs1)).foregroundColor(dim)
+                    .help("Greenlight's guess from your past answers to this sort of question. Nothing is sent until you choose.")
             }
             if c.replyingTo == q.id {
                 HStack(spacing: Theme.sp2) {
@@ -4892,15 +4981,28 @@ struct QuestionRow: View {
     var about: String? { q.key.flatMap { $0.hasPrefix("@") ? nil : $0 } ?? (q.ws?.count == 1 ? q.ws?.first : nil) }
 }
 
-/// An inbox answer: a restrained amber outline, filled on hover; choosing sends it.
+/// The badge under a preselected chip: "Likely: keep · you picked it 6 of 7 times (86%)".
+func likelyNote(_ s: Suggest) -> String {
+    "Likely: \(s.choice) · you picked it \(s.agree) of \(s.count) time\(s.count == 1 ? "" : "s") (\(Int((s.prob * 100).rounded()))%)"
+}
+
+/// An inbox answer: a restrained amber outline, filled on hover; choosing sends it. likely: preselected (filled, a check).
 struct AnswerChip: View {
-    let title: String, action: () -> Void
+    let title: String
+    var likely = false
+    let action: () -> Void
     @StateObject private var hover = Flag()  // not @State: see the top of the file
     var body: some View {
-        Button(title, action: action).buttonStyle(.plain).font(sys(size: Theme.fs2))
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if likely { Image(systemName: "checkmark").font(sys(size: Theme.fs1, weight: .bold)) }
+                Text(title)
+            }
+        }.buttonStyle(.plain).font(sys(size: Theme.fs2, weight: likely ? .semibold : .regular))
             .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).frame(minHeight: 30)
-            .background(Capsule().fill(hover.on ? Theme.needs.opacity(0.14) : surface))
-            .overlay(Capsule().stroke(Theme.needs.opacity(hover.on ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
+            .background(Capsule().fill(Theme.needs.opacity(likely ? (hover.on ? 0.32 : 0.22) : hover.on ? 0.14 : 0)).background(Capsule().fill(surface)))
+            .overlay(Capsule().stroke(Theme.needs.opacity(hover.on || likely ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
+            .accessibilityLabel(likely ? "\(title), suggested" : title)
     }
 }
 final class Flag: ObservableObject { @Published var on = false }
@@ -4972,6 +5074,7 @@ struct SettingsView: View {
                       ("Terminal", "terminal", "tab names basement orbs floors sidebar slide ride animation up button"),
                       ("Hosts", "server.rack", "ssh host state code relaunch connection")]
     static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions system one jev haiku typesafe decisions"),
+                     ("Autonomy", "wand.and.stars", "confidence auto answer preselect likely calibration graduate ping gate check-in watch dismiss undo"),
                      ("Projects", "folder", "folders default folder new terminals open"),
                      ("Repositories", "arrow.triangle.branch", "repo lifecycle stages rules prompts auto-run project solo merge"),
                      ("Instructions", "doc.text", "standing rules"),
@@ -5096,6 +5199,7 @@ struct SettingsView: View {
         case "Terminal": terminal
         case "Hosts": hosts
         case "Automation": automation
+        case "Autonomy": autonomyPane
         case "Instructions": instructions
         default: general
         }
@@ -5699,6 +5803,62 @@ struct SettingsView: View {
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
+    }
+
+    // MARK: Autonomy (autonomy.py on the host)
+
+    static let kindTitle = ["delete-workspace": "Delete a finished workspace", "keep-draft": "Keep a PR as a draft", "merge-held": "Merge a held PR",
+                            "milestone": "Set a milestone", "agent-stuck": "Unstick an agent", "signoff": "Sign off a step"]
+    func kindStats(_ k: AutonomyReport.Kind) -> String {
+        let past = k.n.map { n in "\(k.right ?? 0) of \(n) guesses matched your answer." } ?? "No guesses checked yet."
+        return k.eligible ? past : past + " A human gate: Greenlight never answers these for you, nor preselects merge or sign-off."
+    }
+    @ViewBuilder var autonomyPane: some View {
+        heading("Autonomy", "Greenlight guesses your answer from what you answered before. 95% sure of a reversible answer, in a sort you turn on here: it answers itself, and you can undo it. 65% or more: it preselects that answer in the bell. Less, or anything risky: it asks.")
+        Group {
+            if let r = c.autonomy {
+                ForEach(r.candidates, id: \.kind) { cand in
+                    banner("graduationcap", "\(Self.kindTitle[cand.kind] ?? cand.kind): \(cand.right) of \(cand.n) sure guesses were right. Let Greenlight answer these itself?", tinted: true) {
+                        Button("Turn on") { c.setAutonomy("--auto \(cand.kind) on") }.buttonStyle(.borderedProminent)
+                    }
+                }
+                box("Answered for you", aside: "Only when 95%+ sure, and only an answer that can be taken back") {
+                    ForEach(r.kinds, id: \.kind) { k in
+                        row(Self.kindTitle[k.kind] ?? k.kind, kindStats(k)) {
+                            Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy("--auto \(k.kind) \($0 ? "on" : "off")") }))
+                                .labelsHidden().toggleStyle(.switch).disabled(!k.eligible)
+                        }
+                    }
+                }
+                box("Questions nobody asked for") {
+                    row("Ping gate", "Idle check-ins and the watch go out only while you act on them more often than you dismiss them (✕, or left unanswered a day).") {
+                        Picker("Ping gate", selection: Binding(get: { r.gate }, set: { c.setAutonomy("--gate \($0)") })) {
+                            Text("Off").tag(0.0); Text("Lenient").tag(0.25); Text("Balanced").tag(0.35); Text("Strict").tag(0.5)
+                        }.labelsHidden().pickerStyle(.segmented).fixedSize()
+                    }
+                }
+                if !r.recent.isEmpty {
+                    box("Answered for you lately") {
+                        ForEach(r.recent) { a in
+                            ruled(HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(a.choice) · \(Self.kindTitle[a.kind] ?? a.kind)").font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+                                    note("\(ago(Date(timeIntervalSince1970: a.ts))) · \(Int((a.prob * 100).rounded()))% sure · " + (a.text.map { String(splitOptions($0).0.prefix(120)) } ?? ""))
+                                }
+                                Spacer(minLength: Theme.sp3)
+                                if a.undone != nil { Text("Undone").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+                                else { Button("Undo") { c.undoAudit(a.id) }.help("Asks you again, and what you answer is acted on") }
+                            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+                        }
+                    }
+                }
+            } else if c.autonomyNote.isEmpty {
+                HStack(spacing: Theme.sp2) { ProgressView().controlSize(.small); note("Reading \(hostLabel)…") }
+            }
+            if !c.autonomyNote.isEmpty {
+                banner("exclamationmark.triangle", c.autonomyNote) { Button("Retry", action: c.loadAutonomy) }
+            }
+        }.onAppear(perform: c.loadAutonomy)
     }
 
     // Projects: the Basement's projects.json on this Mac ([{id, name, repos, dirs, dir?}]), saved as you change them.
