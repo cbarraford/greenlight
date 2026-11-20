@@ -232,3 +232,9 @@ def test_thinking_phrase_per_stretch():
 def test_thinking_phrases_fit():
     assert len(set(chat.THINKING)) == len(chat.THINKING) >= 40
     assert all(p.endswith("…") and len(p) <= 18 for p in chat.THINKING)
+
+
+def test_prompt_no_mood_emoji():
+    """Replies start naturally: no emoji opening line; the other reply rules stay."""
+    assert "three emoji" not in chat.PROMPT and "emotional state" not in chat.PROMPT
+    assert "[hexes: name, name]" in chat.PROMPT and "Options: first | second | third" in chat.PROMPT
