@@ -12,6 +12,8 @@ const assert = require("assert");
   assert.equal(await p.textContent(".eyebrow"), "<i>ship</i>");
   await p.evaluate(() => stage.spec({ title: "t", kind: "bogus", items: [] }));
   assert.equal(await p.locator(".items").count(), 0);
+  await p.evaluate(() => stage.spec({ title: "prototype fallback", kind: "constructor", items: [{ label: "safe" }] }));
+  assert.equal(await p.locator("ul.items.list li b").textContent(), "safe");
   await p.evaluate(() => stage.html('<h2 id="h">Hi</h2><script>parent.document.body.dataset.pwned=1</script><img src=x onerror="parent.document.body.dataset.pwned=2">'));
   await p.waitForTimeout(300);
   const f = p.frameLocator("iframe");

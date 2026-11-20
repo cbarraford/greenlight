@@ -3759,7 +3759,6 @@ final class Core: ObservableObject {
     var latestUndoableToast: DwimToast? { toasts.last(where: { $0.undoable }) }
     var focusName: String?  // the workspace of the window you were last in (noteFocus): what "park this" means
     var launchWorks: [UUID: DispatchWorkItem] = [:]  // each accepted launch keeps its own grace and Undo
-    var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
     var toastListeners: [UUID: (DwimToast?) -> Void] = [:]
     var toastExpiry = [UUID: UUID]()
     var plans = DwimPlans()
@@ -3772,9 +3771,8 @@ final class Core: ObservableObject {
     /// A board command: dwim.py plans it from the latest scoped snapshot (the grammar plus System One, under a deadline). Direct
     /// actions get an Undo toast and a short spoken line once applied. Anything else, or no answer within planDeadline, goes to Chief;
     /// `otherwise` gets a note for Chief when dwim.py read a board action it wouldn't do on its own (ambiguous, destructive).
-    func dwim(_ text: String, source: String, otherwise: @escaping (String) -> Void) {
+    func dwim(_ text: String, source: String, onToast: ((DwimToast?) -> Void)? = nil, otherwise: @escaping (String) -> Void) {
         active()
-        if source != "jump" { toasted = nil }  // the palette's window shows only the toasts it asked for
         let request = plans.begin(text)
         let t0 = Date(), body = dwimJSON(["text": text, "source": source, "focus": focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(pucks, scope()))])
         var out = "", answered = false
@@ -3796,11 +3794,11 @@ final class Core: ObservableObject {
                 let verb = o["verb"] as? String ?? ""  // a board action it read but won't do alone: Chief hears why, and asks or confirms
                 return otherwise(verb.isEmpty ? "" : "(Greenlight's fast path read this as \(verb) but didn't do it: \(why). Confirm with the user, or ask which, before acting.)\n")
             }
-            self.direct(o, text: text, ms: ms)
+            self.direct(o, text: text, ms: ms, onToast: onToast)
         })
     }
 
-    private func direct(_ o: [String: Any], text: String, ms: Int) {
+    private func direct(_ o: [String: Any], text: String, ms: Int, onToast: ((DwimToast?) -> Void)?) {
         let acts = o["actions"] as? [[String: Any]] ?? [], line = o["toast"] as? String ?? "", say = o["say"] as? String ?? line
         msgs.append(Msg(.you, text))  // the chat keeps the record: Chief reads the board, not this
         let pending = o["launch"] as? Bool == true
@@ -3811,10 +3809,10 @@ final class Core: ObservableObject {
             voice.say(notice)
             if acts.isEmpty && run == nil { voice.show(["kind": "list", "eyebrow": "nothing to do", "title": line, "stat": "", "items": []]) }
         }
-        if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor) }
+        if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor, onToast: onToast) }
         if pending {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
             let t = DwimToast(text: line + dwimSkipped(o), pending: true)
-            show(t, for: nil)
+            show(t, for: nil, onToast: onToast)
             let w = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.launchWorks.removeValue(forKey: t.id) != nil else { return }  // Undo may have cancelled its grace
@@ -3825,7 +3823,7 @@ final class Core: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + Core.launchGrace, execute: w)
         } else {
             let t = DwimToast(text: "Applying: \(text)", applying: true)
-            show(t, for: nil)
+            show(t, for: nil, onToast: onToast)
             apply(o, text: text, id: t.id)
         }
     }
@@ -3863,8 +3861,8 @@ final class Core: ObservableObject {
         })
     }
 
-    private func show(_ t: DwimToast, for secs: Double?) {
-        if !toasts.contains(where: { $0.id == t.id }), let toasted { toastListeners[t.id] = toasted }
+    func show(_ t: DwimToast, for secs: Double?, onToast: ((DwimToast?) -> Void)? = nil) {
+        if let onToast { toastListeners[t.id] = onToast }
         toasts = keepingToast(toasts, t)
         toastListeners[t.id]?(t)
         let expiry = UUID(); toastExpiry[t.id] = expiry  // an update without a timer invalidates the old one too
@@ -7853,18 +7851,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "dwim":  // ⌘J's palette, typed with nothing to jump to: a board command (dwim.py), else a question for Chief in the chat
             guard let t = (b["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return }
             let c = greenlight
-            c.toasted = { [weak web] t in  // the toast shows where you typed it, with its own Undo (the palette's window has no chat)
+            let onToast: (DwimToast?) -> Void = { [weak web] t in  // each palette command reports its own toast to its window
                 guard let t else { return }
                 let d = (try? JSONSerialization.data(withJSONObject: [t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text, t.undoable ? (t.pending ? "Cancel" : "Undo") : "", t.id.uuidString])).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
                 web?.evaluateJavaScript("window.term && term.dwimToast && term.dwimToast(...\(d))")
             }
             let ask = { [weak self, weak web] (note: String) in
-                c.toasted = nil
                 c.send(note + t, shown: t)
                 self?.setChat(hidden: false)
                 self?.toastTerm(web, "Asked \(c.name): the answer is in the chat")
             }
-            if dwimCandidate(t) { c.dwim(t, source: "jump", otherwise: ask) } else { ask("") }
+            if dwimCandidate(t) { c.dwim(t, source: "jump", onToast: onToast, otherwise: ask) } else { ask("") }
         case "dwimUndo": greenlight.undoToast((b["id"] as? String).flatMap(UUID.init(uuidString:)))
         case "url":  // a link in a terminal: web links only, the output isn't ours to trust
             if let u = URL(string: b["url"] as? String ?? ""), ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
@@ -8700,6 +8697,11 @@ func selfTest() {
     let firstToast = DwimToast(text: "Hold A", applying: true), secondToast = DwimToast(text: "Hold B", applying: true)
     var finishedFirst = firstToast; finishedFirst.applying = false; finishedFirst.undo = "undo-a"
     check("dwim: each quick action keeps its own Undo", keepingToast(keepingToast([firstToast], secondToast), finishedFirst) == [finishedFirst, secondToast])
+    let toastCore = Core(session: -9001); var firstSeen = 0, secondSeen = 0
+    toastCore.show(firstToast, for: nil, onToast: { _ in firstSeen += 1 })
+    toastCore.show(secondToast, for: nil, onToast: { _ in secondSeen += 1 })
+    toastCore.show(finishedFirst, for: nil)
+    check("dwim: concurrent palette actions keep separate toast listeners", firstSeen == 2 && secondSeen == 1)
     var planGate = DwimPlans(); let cancelledPlan = planGate.begin("hold #42"); let cancelledText = planGate.cancel(); let activePlan = planGate.begin("park #42")
     check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
     check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil

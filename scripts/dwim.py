@@ -222,6 +222,8 @@ def grammar(text, pucks, focus=None):
     g["here"] = bool(HERE_RE.search(rest)) and not g["names"] and not g["refs"] and bool(focus)
     if (g["names"] or g["refs"]) and re.search(r"\band\b", rest, re.I) and HERE_RE.search(rest):
         g["why"] = "it combines an explicit workspace with this one"
+    if (g["names"] or g["refs"]) and re.search(r"\band\s+(?:the\s+)?(?:\d{1,7}|" + "|".join(NUMS) + r")\b", rest, re.I):
+        g["why"] = "a number after an explicit workspace could be another target"
     bare = NOT_DESTRUCTIVE.sub(" ", rest)
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)

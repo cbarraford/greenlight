@@ -355,7 +355,7 @@ window.stage = {
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], "wait"); },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   spec(o){
-    if (TEMPLATES[o.kind]) return show(head(o).concat(TEMPLATES[o.kind](o) || []));
+    if (Object.prototype.hasOwnProperty.call(TEMPLATES, o.kind)) return show(head(o).concat(TEMPLATES[o.kind](o) || []));
     const kind = ["list", "steps", "stat", "flow", "compare", "quote"].includes(o.kind) ? o.kind : "list";
     const ul = $(kind === "steps" ? "ol" : "ul", "items " + kind);
     for (const it of (o.items || []).slice(0, 8)) { const li = $("li"); li.append($("b", null, it.label || "")); if (it.detail) li.append($("span", null, it.detail)); ul.append(li); }
