@@ -710,7 +710,14 @@ func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
 
 /// The decision model for the dashboard: which workspaces (hexes) Chief's reply is about. The ones it names outright, plus what
 /// Apple's on-device model picks (local, no key; only real names, an enum of them). Without Apple Intelligence: the named ones.
-func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([String]) -> Void) {
+/// The user asked to see workspaces ("highlight…", "show me…", "light up…", "point at…", "which ones…"): the picker assumes yes.
+func asksToShow(_ s: String) -> Bool {
+    s.range(of: #"\b(highlight|light (them |it |those |these )?up|show me|show (them|those|these|which)|point (me )?(at|to|out)|which (ones?|workspaces?|hex(es)?|mrs?|prs?)|where (is|are)|find)\b"#,
+            options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+/// `asked`: the user asked to see some (asksToShow), so skip the "about particular workspaces?" gate; grounding still applies.
+func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, done: @escaping ([String]) -> Void) {
     let named = namedHexes(reply, pucks)
     var seen = Set<String>()  // the same workspace twice (a stack's members, two hosts) would be a duplicate enum case
     let ws = pucks.compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
@@ -731,7 +738,7 @@ func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([Stri
                 + "Return an empty list when the reply is about none of them, or about all of them in general. Never guess.")
             let r = try await session.respond(to: "Workspaces (name | MR | title):\n" + ws.map(\.1).joined(separator: "\n") + "\n\nThe reply:\n" + String(reply.prefix(1500)),
                                               schema: try GenerationSchema(root: root, dependencies: []), options: GenerationOptions(temperature: 0))
-            picked = try r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
+            picked = try asked || r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
             if picked.count > 3 && picked.count >= ws.count { picked = [] }  // all of them is about none in particular
         } catch { NSLog("pick: %@", "\(error)") }
         let ok = Set(picked.filter { n in pucks.contains { $0["name"] as? String == n && grounded(reply, $0) } })
@@ -1586,7 +1593,7 @@ final class Core: ObservableObject {
             let n = picks
             delegate.pick([])
             if let h = st.hexes { delegate.pick(resolveHexes(h, pucks)) }  // Chief said which: no guessing
-            else { pickHexes(body, pucks) { [weak self] names in if n == self?.picks { delegate.pick(names) } } }
+            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names in if n == self?.picks { delegate.pick(names) } } }
         }
         run = nil
         tps = 0
@@ -5165,6 +5172,8 @@ func selfTest() {
           && voiceCommand("Show me.") == .full && voiceCommand("OK, step aside") == .normal && voiceCommand("show me the failing MRs") == nil
           && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full
           && voiceCommand("OK, start over.") == .reset && voiceCommand("reset the deploy") == nil
+          && asksToShow("highlight the failing ones") && asksToShow("Show me which MRs need me") && asksToShow("light them up")
+          && !asksToShow("merge it") && !asksToShow("what's the status of selkie")
           && staged("Fresh start.\n[chat: reset]").reset && staged("Fresh start.\n[chat: reset]").text == "Fresh start." && !staged("Hi").reset)
     let hexPucks: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339"]], ["name": "octo/lifecycle-advice", "mr": ["ref": "#18"]],
                                      ["name": "octo/dashboard"], ["name": "acme/mr-533"]]
@@ -5218,6 +5227,7 @@ func selfTest() {
         check("tapping a chip sends it", onMain { c.msgs[c.msgs.count - 2].text == "yes" && !c.msgs.last!.failed })
 
         onMain {  // pings: options parsed, inbox chips/dismiss
+            c.questions.removeAll { !$0.ping && $0.answer == nil }  // the live chat's own last question, if the model asked one, isn't under test
             let n = c.msgs.count
             c.ping(#"{"ts": 1792700000, "text": "ws-a: merge !1?\nOptions: merge | hold"}"#)
             c.ping(#"{"text": "ws-b: goal for this workspace?"}"#)
