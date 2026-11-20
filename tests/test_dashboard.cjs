@@ -1,4 +1,4 @@
-// Headless checks for dashboard.html: New task (sheet, files, start), the console opening only when asked, the hover card.
+// Headless checks for dashboard.html: New task (the empty page's sheet, files, start), the console opening only when asked, the hover card.
 //
 //   npm i playwright-core          (anywhere; point NODE_PATH at its node_modules)
 //   NODE_PATH=…/node_modules node tests/test_dashboard.cjs
@@ -44,15 +44,17 @@ async function boot(browser, store = {}){
   return page;
 }
 const posts = (page, cmd) => page.evaluate(c => window.__posts.filter(m => m.cmd === c), cmd);
-async function newTask(page){
-  await page.click("#bar button:has-text('New task')");
+async function newTask(page){  // the sheet's one way in: the empty page's button (the bar's is gone)
+  await page.evaluate(s => window.mc.update({...s, pucks: []}), SNAP);
+  await page.click("#main .empty button:has-text('New task')");
   await page.evaluate(r => window.mc.tasked(r), REPOS);
 }
 const sheet = page => page.$(".sheet[aria-label='New task']");
 
-test("the Plan view is gone: Build is the only view, and New task sits in its bar", async page => {
+test("the Plan view is gone: Build is the only view; the bar has no New task, the empty page's opens the sheet", async page => {
   assert.equal(await page.$(".mode"), null);
   assert.equal(await page.evaluate(() => document.getElementById("main").innerText.includes("Plan")), false);
+  assert.equal(await page.$("#bar button[aria-label='New task'], #bar button:has-text('New task')"), null, "the bar still has New task");
   await newTask(page);
   assert.ok(await sheet(page), "the sheet opened");
   assert.deepEqual((await posts(page, "task")).map(m => m.op), ["repos"]);
@@ -146,6 +148,7 @@ test("started: the sheet closes, the draft clears, a toast opens it in the Basem
   assert.equal(await page.evaluate(() => localStorage.getItem("taskDraft")), "");
   assert.match(await page.textContent(".toast"), /Task started\s*plan-b · widgets/);
   assert.equal((await posts(page, "basement")).length, 0, "it went to the Basement by itself");
+  await page.evaluate(s => window.mc.update(s), SNAP);  // the next scan brings the new workspace in
   await page.click(".toast button:has-text('Open in Basement')");
   assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-b"]);
   assert.equal(await page.$(".toast"), null);
