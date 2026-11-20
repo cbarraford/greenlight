@@ -1102,7 +1102,7 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     A kind autonomy.py knows gets its proposal (tier 1: answered for you and returned as {"auto": option, "id": audit id};
     tier 2: preselected in the app). proactive: only when autonomy.gate() lets it interrupt; held: returns {"held": gate}.
     ask: always ask, no proposal (an undo asking again)."""
-    if key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list
+    if not ask and key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list (an undo asks regardless)
         print(f"skipped: {key} was pinged in the last {FLAP // 3600}h")
         return
     mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name

@@ -149,6 +149,14 @@ assert "auto" not in again and "suggest" not in again and again["text"].startswi
 assert decisions.load()[-1]["answer"] is None and "feat-9" in greenlight.pinged()
 assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load())[0] == [0, 24]  # a vote against
 assert cli("undo", "nope").returncode != 0
+# a grouped (@) ping answered for you asks again on undo, though its key was pinged within the flap window
+assert autonomy.propose("keep-draft", "x?" + KD)["tier"] == 2  # the undo cost it: 25 of 27 now, under 0.95
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 20)
+with contextlib.redirect_stdout(io.StringIO()):
+    res = greenlight.ping("4 drafts still drafts. Ready?" + KD, "@drafts-2", kind="keep-draft")
+    assert res and res.get("auto"), res
+    autonomy.undo(res["id"])
+assert outbox()[-1]["key"] == "@drafts-2" and outbox()[-1]["text"].startswith("Undo:"), outbox()[-1]
 
 # tier 2: preselected in the app, with the numbers for its badge
 reset()
