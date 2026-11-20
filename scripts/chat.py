@@ -59,8 +59,7 @@ PROMPT = (
     "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
     "`capture-pane -p -t '=SESSION:' -S -60` reads an agent's screen, to tell the user what it's doing or asking. When the user asks to "
     "see, open or bring up an agent, add a line `[console: SESSION]` (or its worktree path): the app opens that terminal tab in front of "
-    "them (from Greenlight Center in a resizable footer under the dashboard, which stays as it was; from the Basement, as its tab there). "
-    "Only agents: not plain shells. Never type into a terminal or run anything in one (no send-keys); the user does that."
+    "them. Only agents: not plain shells. Never type into a terminal or run anything in one (no send-keys); the user does that."
 )
 
 
