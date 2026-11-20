@@ -47,7 +47,6 @@ DEADLINE = 0.6  # seconds decide.batch gets before the grammar answers alone: th
 STAGE_DEADLINE = 0.15  # the stage template pick: "One minute" is already up, so it only helps if it's quick
 SURE = 0.7  # decide's confidence (or prob) that counts as an opinion; below, the grammar decides
 MAX_BULK = 5  # more workspaces than this in one command goes to Chief, who confirms
-UNDO_KEEP = 30
 LAUNCH_RESERVE = 30  # seconds for Orca to surface a just-started agent before another DWIM launch is allowed
 
 # The verbs that may go direct, in the order they're tried: the un- forms first ("unpark" mustn't read as "park").
@@ -77,7 +76,7 @@ NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop|not)\b(?! merge)
 REQUEST_PREFIX = re.compile(r"^\s*(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you\b|please\b|go ahead and\b|let'?s\b)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
 HERE_RE = re.compile(r"\b(?:this(?: one)?|it|here|current(?: one)?|that one)\b", re.I)
-NUMS = {"one": 1, "single": 1, "two": 2, "both": 2, "pair": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+NUMS = {"zero": 0, "one": 1, "single": 1, "two": 2, "both": 2, "pair": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 COUNT_RE = re.compile(r"\b(?:the |those |these )?(" + "|".join(NUMS) + r"|\d{1,2})\b(?! *(?:min|minute|hour|day|sec)s?\b)", re.I)
 FILTERS = {  # status words → a fact on the puck
     "red": (re.compile(r"\b(?:red|failing|failed|broken|busted)\b", re.I), lambda p: (p.get("mr") or {}).get("pipeline") == "failed"),
@@ -192,13 +191,10 @@ def grammar(text, pucks, focus=None):
     g = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
     if raw.endswith("?") and not REQUEST_PREFIX.search(raw):
         g["why"] = "it's a question or has a condition"
-    for v, r in VERB_RES.items():
-        if r.search(t):
-            g["verbs"].append(v)
-    if "release" in g["verbs"]:
-        g["verbs"] = [v for v in g["verbs"] if v != "hold"]  # "release the hold" says hold too
-    if "unpark" in g["verbs"]:
-        g["verbs"] = [v for v in g["verbs"] if v != "park"]
+    matches = {v: list(r.finditer(t)) for v, r in VERB_RES.items()}
+    for inner, outer in (("hold", "release"), ("park", "unpark")):
+        matches[inner] = [m for m in matches[inner] if not any(o.start() <= m.start() and m.end() <= o.end() for o in matches[outer])]
+    g["verbs"] = [v for v in VERB_RES if matches[v]]
     # the workspaces named outright, longest first, cut out of the text so their words aren't read as anything else
     rest = t
     for p in sorted(pucks, key=lambda p: -len(p.get("name", ""))):
@@ -222,7 +218,7 @@ def grammar(text, pucks, focus=None):
             g["filters"].append(k)
     if m := COUNT_RE.search(rest):
         w = m[1].lower()
-        g["count"] = NUMS.get(w) or (int(w) if w.isdigit() else None)
+        g["count"] = NUMS[w] if w in NUMS else (int(w) if w.isdigit() else None)
     g["here"] = bool(HERE_RE.search(rest)) and not g["names"] and not g["refs"] and bool(focus)
     bare = NOT_DESTRUCTIVE.sub(" ", rest)
     for r in VERB_RES.values():
@@ -279,7 +275,7 @@ def pick_targets(g, pool, answers):
             pool = lex
     if not pool:
         return None, "nothing on the board matches"
-    if g["count"] and g["count"] != len(pool):
+    if g["count"] is not None and g["count"] != len(pool):
         return None, f"it says {g['count']} but {len(pool)} match: {', '.join(sorted(p['name'] for p in pool)[:8])}"
     if len(pool) > MAX_BULK:
         return None, f"{len(pool)} workspaces is more than the fast path does at once"
@@ -521,9 +517,6 @@ def apply(o):
     if journal and not record["edits"]:
         journal.unlink(missing_ok=True)
         undo = None
-    if undo:
-        for f in sorted((DWIM / "undo").glob("*.json"), key=lambda f: f.stat().st_mtime)[:-UNDO_KEEP]:
-            f.unlink(missing_ok=True)
     res = {"ok": not any(r.get("error") for r in out), "undo": undo, "done": [r["ws"] for r in done], "unchanged": unchanged,
            "errors": [f"{r['ws']}: {r['error']}" for r in out if r.get("error")], "ms": round((time.monotonic() - t0) * 1000)}
     log({"op": "apply", "text": said, "verb": acts[0]["verb"], "done": res["done"], "errors": res["errors"], "ms": res["ms"]})
