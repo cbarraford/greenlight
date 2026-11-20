@@ -427,9 +427,43 @@ final class Run: ObservableObject {
     @Published var live = ""
     @Published var stopping = false
     @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
+    @Published var thinking = false  // the status is a thinking phrase (Mulling…), not something the agent did
+    @Published var plan: Plan?  // the agent's own task list, when it keeps one (TodoWrite, codex's todo list)
     var gotDone = false, checkIn = false, watch = false
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     init(_ q: String) { question = q }
+}
+
+/// The agent's task list as chat.py's plan event has it: eta is seconds left at `at`, from this turn's own pace (nil without one).
+struct Plan: Equatable {
+    var done: Int, total: Int, title: String, eta: Double?, at: Date
+}
+
+/// Time left, coarse: never seconds (a pace from a few items isn't that precise), nothing once it's run out.
+func timeLeft(_ s: Double) -> String? {
+    guard s > 0 else { return nil }
+    return s < 45 ? "under a minute left" : s < 90 ? "about a minute left" : s < 1200 ? "about \(Int((s / 60).rounded())) min left" : "over 20 min left"
+}
+
+/// The live byline under a run's status: the plan's progress, its time left, and what just finished (✓ or ✗ and its title).
+/// lead (voice mode's stage, whose title is only a wait word): first what's happening now, the steps done when there's no plan,
+/// and no time left (the stage only redraws on events).
+/// Only what the agent's events say: no filler, no time left without a plan that's paced itself.
+func byline(_ r: Run, now: Date, lead: Bool) -> String {
+    let fin = r.steps.filter { $0.ok != nil }, failed = fin.filter { $0.ok == false }.count
+    var parts = [String]()
+    if lead {
+        let plan = r.plan.flatMap { $0.title.isEmpty || $0.done >= $0.total ? nil : $0.title }
+        parts.append(r.steps.last { $0.ok == nil }?.title ?? (r.thinking ? plan ?? "Thinking" : r.status))  // parallel calls: the newest still going
+    }
+    if let p = r.plan, p.total > 0 { parts.append("\(p.done) of \(p.total) tasks done") }
+    else if lead && !fin.isEmpty { parts.append("\(fin.count) step\(fin.count == 1 ? "" : "s") done" + (failed > 0 ? ", \(failed) failed" : "")) }
+    // the time left only where the clock redraws it (the card); the stage changes only on events, where it would go stale
+    if !lead, let p = r.plan, let e = p.eta, let left = timeLeft(e - now.timeIntervalSince(p.at)) { parts.append(left) }
+    if let l = fin.max(by: { ($0.end ?? $0.start) < ($1.end ?? $1.start) }), !(lead && parts.first == l.title) {
+        parts.append("\(l.ok == true ? "✓" : "✗") \(l.title.count > 40 ? l.title.prefix(39) + "…" : l.title)")
+    }
+    return parts.filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
 // MARK: verbose activity
@@ -1234,7 +1268,7 @@ struct Activity: View {
         let t = max(0, c.now.timeIntervalSince(r.start)), cur = r.steps.last.flatMap { $0.ok == nil ? $0 : nil }
         let w = r.stopping ? "Stopping…" : c.voice.waitWord.hasSuffix("…") ? c.voice.waitWord : c.voice.waitWord + "…"
         let bits = [fmt(t), c.outTok > 0 ? "↓ \(kfmt(c.outTok)) tokens" : nil, c.tps > 0 ? "\(Int(c.tps)) tok/s" : nil,
-                    r.status == "Thinking" ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
+                    r.thinking ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
         VStack(alignment: .leading, spacing: 2) {
             if let s = cur {
                 Text("\(Text("⏺ ").foregroundColor(accent))\(r.call.isEmpty ? s.title : r.call)").foregroundColor(fg).lineLimit(1).truncationMode(.middle)
@@ -3285,7 +3319,7 @@ final class Core: ObservableObject {
     func stop() {
         guard let r = run, !r.stopping else { return }
         r.stopping = true
-        r.status = "Stopping"
+        r.status = "Stopping"; r.thinking = false
         ssh("\(chief) stop")
     }
 
@@ -3309,22 +3343,27 @@ final class Core: ObservableObject {
             r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
             log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":
-            if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
+            if !r.stopping { r.status = j["text"] as? String ?? r.status; r.thinking = j["thinking"] as? Bool ?? false; voice.status(byline(r, now: Date(), lead: true)) }
             if let t = j["text"] as? String, t != r.steps.last?.title { log(.chief, name, .status, t) }  // a step's own title is its call line
         case "step":
             let s = Step(id: j["id"] as? String ?? UUID().uuidString, title: j["title"] as? String ?? "", detail: j["detail"] as? String ?? "")
             r.steps.append(s); r.call = j["call"] as? String ?? ""
-            if !r.stopping { r.status = s.title; voice.status(s.title) }
+            if !r.stopping { r.status = s.title; r.thinking = false; voice.status(byline(r, now: Date(), lead: true)) }
             log(.chief, name, .call, r.call.isEmpty ? [s.title, s.detail].filter { !$0.isEmpty }.joined(separator: ": ") : r.call)
             if let input = j["input"] as? String, !r.call.contains(input) { log(.chief, name, .input, input) }  // the whole call, when the line cut it short
         case "step_done":
-            if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
+            if let i = r.steps.lastIndex(where: { $0.id == j["id"] as? String }) {  // the newest: a rerun's codex reuses item ids
                 r.steps[i].ok = j["ok"] as? Bool ?? true
                 r.steps[i].out = j["out"] as? String ?? ""
                 r.steps[i].end = Date()
                 let out = j["full"] as? String ?? r.steps[i].out, ok = r.steps[i].ok == true
                 log(.chief, name, ok ? .output : .failed, "\(ok ? "" : "failed · ")\(fmt(Date().timeIntervalSince(r.steps[i].start)))" + (out.isEmpty ? " · no output" : "\n" + out))
             }
+        case "plan":
+            let n = j["total"] as? Int ?? 0, k = j["done"] as? Int ?? 0, t = j["title"] as? String ?? ""
+            r.plan = n > 0 ? Plan(done: k, total: n, title: t, eta: j["eta"] as? Double, at: Date()) : nil
+            if !r.stopping { voice.status(byline(r, now: Date(), lead: true)) }
+            if n > 0 { log(.chief, name, .status, "plan: \(k) of \(n) done" + (t.isEmpty ? "" : " · \(t)")) }
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
         case "text_reset": r.live = ""; voice.said = 0
         case "text":  // a whole message (codex, opencode) shows but isn't spoken yet: it may be a progress note the reply restates;
@@ -3652,7 +3691,7 @@ struct RunCard: View, Looked {
         if lk.id == "editorial" {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("IN PROGRESS").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
-                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(1)
+                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(2)
                 Spacer(minLength: 4)
                 stop
             }
@@ -3670,7 +3709,7 @@ struct RunCard: View, Looked {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(mono ? "> \(r.status.lowercased())" : r.status).lineLimit(1).foregroundColor(fg)
                         .font(lk.id == "onair" ? sys(size: Theme.fs5, weight: .heavy) : lk.id == "zen" ? sys(size: 20, weight: .light) : ui(lk.id == "conversation" ? 14 : mono ? Theme.fs3 : Theme.fs4, mono ? .bold : .semibold))
-                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(1) }
+                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(2) }
                 }
                 Spacer(minLength: 4)
                 stop
@@ -3760,9 +3799,13 @@ struct RunCard: View, Looked {
     }
     var stats: String {
         let n = r.steps.count, t = max(0, Int(c.now.timeIntervalSince(r.start))), tps = c.tps > 0 ? " · \(Int(c.tps)) tok/s" : ""
+        let b = byline(r, now: c.now, lead: false), by = b.isEmpty ? "" : " · " + b  // the plan, time left, what just finished
         // ponytail: HUD's step number isn't lit apart from the rest of the line
-        if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(tps.uppercased())" }
-        let s = "\(n == 0 ? "No steps yet" : "Step \(n)") · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)"
+        if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(by.uppercased())\(tps.uppercased())" }
+        // the byline before time and speed where the line may wrap (the card is narrow, and those two are on the live line under
+        // it too); last on On Air's one-line tag, so the clock isn't what's cut
+        let clock = " · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)", step = n == 0 ? "No steps yet" : "Step \(n)"
+        let s = lk.id == "onair" ? step + clock + by : step + by + clock
         return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
     }
 }
@@ -8031,6 +8074,27 @@ func selfTest() {
           fd.lines.count == Feed.cap && fd.lines.allSatisfy { $0.src == .agents } && { let g = Feed(); g.add(.chief, "C", .think, "Check "); g.add(.chief, "C", .think, "CI.")
               g.add(.chief, "C", .status, "Thinking"); g.add(.chief, "C", .status, "Thinking"); g.add(.chief, "C", .call, " "); g.only = .agents
               return g.lines.map(\.text) == ["Check CI.", "Thinking"] && g.shown.isEmpty }())
+    let t0 = Date(timeIntervalSince1970: 1_000_000), br = Run("q")
+    check("byline: nothing yet is nothing, not filler", byline(br, now: t0, lead: false) == "" && { br.status = "Mulling…"; br.thinking = true; return byline(br, now: t0, lead: true) == "Thinking" }())
+    br.steps = [Step(id: "a", title: "Read SKILL.md", detail: "", ok: true, start: t0, end: t0 + 2), Step(id: "b", title: "Ran gh pr list", detail: "", ok: false, start: t0 + 2, end: t0 + 5),
+                Step(id: "c", title: "Ran greenlight.py scan", detail: "", start: t0 + 5)]
+    check("byline: the running step, the steps done and failed, the latest finished (✗ when it failed): \(byline(br, now: t0 + 6, lead: true))",
+          byline(br, now: t0 + 6, lead: true) == "Ran greenlight.py scan · 2 steps done, 1 failed · ✗ Ran gh pr list"
+          && byline(br, now: t0 + 6, lead: false) == "✗ Ran gh pr list")
+    br.steps[2].ok = true; br.steps[2].end = t0 + 9; br.status = "Writing a reply"; br.thinking = false
+    check("byline: a finished step is what just completed, and the lead moves on: \(byline(br, now: t0 + 9, lead: true))",
+          byline(br, now: t0 + 9, lead: true) == "Writing a reply · 3 steps done, 1 failed · ✓ Ran greenlight.py scan")
+    br.plan = Plan(done: 2, total: 5, title: "Checking CI", eta: 150, at: t0 + 9); br.thinking = true
+    check("byline: the agent's plan and its item on now; its paced time left (coarse) on the card: \(byline(br, now: t0 + 10, lead: true))",
+          byline(br, now: t0 + 10, lead: true) == "Checking CI · 2 of 5 tasks done · ✓ Ran greenlight.py scan"  // the stage can't count it down
+          && byline(br, now: t0 + 10, lead: false) == "2 of 5 tasks done · about 2 min left · ✓ Ran greenlight.py scan"
+          && byline(br, now: t0 + 9 + 151, lead: false) == "2 of 5 tasks done · ✓ Ran greenlight.py scan")  // run past it: no estimate, never a negative one
+    br.plan?.eta = nil
+    check("byline: no pace, no time left", !byline(br, now: t0 + 10, lead: false).contains("left"))
+    br.steps[0].title = String(repeating: "x", count: 60); br.steps[1].end = nil; br.steps[1].ok = nil; br.steps[2].end = t0
+    check("byline: a long finished title is cut, so the line stays one glance", byline(br, now: t0 + 10, lead: false).hasSuffix("✓ " + String(repeating: "x", count: 39) + "…"))
+    check("byline: time left is never seconds", timeLeft(10) == "under a minute left" && timeLeft(70) == "about a minute left" && timeLeft(400) == "about 7 min left"
+          && timeLeft(3000) == "over 20 min left" && timeLeft(0) == nil && timeLeft(-5) == nil)
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
