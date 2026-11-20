@@ -5489,6 +5489,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var l1Only: [String]? { projList.isEmpty ? nil : sharedOnly }  // nil until a terminal page lists the projects
     var l1Picked: [[String: Any]] { (l1Only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
     var l1Paths: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["paths"] as? [String] ?? [] })).sorted() }  // sorted: the tick compares it
+    var l1Repos: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["repos"] as? [String] ?? [] })).sorted() }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
     func syncL1() {
         let ps = l1Picked, names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
         l1Floor.project = l1Only == nil ? "All projects" : names.isEmpty ? "No projects" : names
@@ -6061,7 +6062,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedBell != bell { pushedBell = bell; broadcast("window.mc && mc.bell(\(bell))") }
         let orb = greenlight.orbsHidden ? "0px" : "72px"  // the shelf keeps the orb's 56pt and some air clear at its right end
         if pushedOrb != orb { pushedOrb = orb; fluid.evaluateJavaScript("document.documentElement.style.setProperty('--orb-w', '\(orb)'); window.render && render()") }
-        let repos = l1Paths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
+        let repos = "\(json(l1Paths)), \(json(l1Repos))"
         if pushedRepos != repos { pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))") }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
