@@ -271,3 +271,129 @@ def test_verbose_through_run(tmp_path, monkeypatch):
     assert step["input"] == "ls" and done["full"] == "a b", events
     events, _ = turn(tmp_path, monkeypatch, "SHELL then answer")
     assert not any("input" in e or "full" in e for e in events), events
+
+
+# Files the user attaches in the chat (attach.py; the app's side is Greenlight.swift's chatFile)
+import base64
+import attach
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+PDF = b"%PDF-1.7\n" + b"\x01" * 32
+b64 = lambda b: base64.b64encode(b).decode()
+
+
+def rejected(files):
+    try:
+        attach.check(files)
+    except attach.Rejected as e:
+        return str(e)
+    raise AssertionError("not rejected")
+
+
+def test_attach_kinds_come_from_the_bytes():
+    ok = attach.check([{"name": "/Users/someone/Desktop/shot.png", "data": b64(PNG)}, {"name": "spec.pdf", "data": b64(PDF)},
+                       {"name": "notes.md", "data": b64("# héllo\n".encode())}])
+    assert [(n, k) for n, k, _ in ok] == [("shot.png", "image"), ("spec.pdf", "pdf"), ("notes.md", "text")]  # the Mac's folders never come over
+    assert attach.kind(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image" and attach.kind(b"\xff\xd8\xff\xe0") == "image"
+    assert rejected([{"name": "fake.png", "data": b64(b"\x00\x01binary")}]).startswith("fake.png isn't a file the chat can use")  # a name proves nothing
+    assert "isn't a file the chat can use" in rejected([{"name": "app.zip", "data": b64(b"PK\x03\x04\xff\xfe")}])  # not UTF-8
+
+
+def test_attach_limits_say_what_is_wrong():
+    assert rejected([{"name": "big.png", "data": b64(PNG + b"\x00" * (5 << 20))}]) == "big.png is 5.0 MB: images can be up to 5.0 MB."
+    assert rejected([{"name": "log.txt", "data": b64(b"x" * ((1 << 20) + 1))}]).startswith("log.txt is 1.0 MB: texts can be up to")
+    assert rejected([{"name": f"{i}.txt", "data": b64(b"x")} for i in range(6)]) == "Attach up to 5 files at a time."
+    assert rejected([{"name": "e.txt", "data": ""}]) == "e.txt is empty."
+    assert rejected([{"name": "x.txt", "data": "not base64!"}]) == "x.txt couldn't be read. Try attaching it again."
+    assert "more than 20.0 MB" in rejected([{"name": f"{i}.pdf", "data": b64(PDF + b"\x00" * (9 << 20))} for i in range(3)])
+    assert "form greenlight understands" in rejected({"name": "x"})
+
+
+def test_attach_safe_name():
+    assert attach.safe_name("..\\..\\evil\x07.txt") == "evil.txt"
+    assert attach.safe_name("../../.ssh/id_rsa") == "id_rsa" and attach.safe_name("...") == "file" and attach.safe_name(None) == "file"
+    long = attach.safe_name("a" * 200 + ".json")
+    assert len(long) == 80 and long.endswith(".json")
+
+
+def test_attach_store_is_private_and_pruned(tmp_path):
+    got = attach.store(str(tmp_path), [("a.txt", "text", b"1"), ("A.txt", "text", b"2"), ("a.txt", "text", b"3")])
+    assert [f["name"] for f in got] == ["a.txt", "A-2.txt", "a-3.txt"]  # case-insensitive filesystems (the Mac's) too
+    d = os.path.dirname(got[0]["path"])
+    assert stat.S_IMODE(os.stat(d).st_mode) == 0o700 and stat.S_IMODE(os.stat(attach.root(str(tmp_path))).st_mode) == 0o700
+    assert all(stat.S_IMODE(os.stat(f["path"]).st_mode) == 0o600 for f in got)
+    assert open(got[2]["path"], "rb").read() == b"3"
+    old = os.path.join(attach.root(str(tmp_path)), "old")
+    os.mkdir(old)
+    os.utime(old, (time.time() - 8 * 86400,) * 2)
+    attach.prune(str(tmp_path))
+    assert not os.path.exists(old) and os.path.exists(d)
+
+
+def test_attached_files_reach_the_agent(tmp_path, monkeypatch):
+    long_text = "line\n" * 20000  # 100 KB: read from its file, not pasted into the message
+    files = [{"name": "/Users/someone/private/shot.png", "data": b64(PNG)}, {"name": "notes.txt", "data": b64(b"deploy at 5pm\n")},
+             {"name": "big.log", "data": b64(long_text.encode())}]
+    heard = []
+    monkeypatch.setattr(chat.decisions, "heard", lambda text, **kw: heard.append(text))
+    monkeypatch.setattr(chat, "board_note", lambda: "")
+    fake = tmp_path / "claude"
+    fake.write_text(FAKE)
+    fake.chmod(0o755)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("what's in these?", "claude-haiku-5-5", None, files=files)
+    prompt = json.loads(open(str(fake) + ".log").readline())
+    assert prompt.startswith(chat.WRAP + "what's in these?\n\nATTACHED FILES"), prompt
+    shot = next(l for l in prompt.splitlines() if l.startswith("- shot.png (image, "))
+    path = shot.split(" at ", 1)[1].split(":")[0]
+    assert open(path, "rb").read() == PNG and path.startswith(str(tmp_path / "attachments")), shot  # a real file the agent can open
+    assert "/Users/someone" not in prompt
+    assert "<<<BEGIN notes.txt\ndeploy at 5pm\nEND notes.txt>>>" in prompt  # short text is in the message itself
+    assert "- big.log (text, 98 KB) at " in prompt and "line\nline" not in prompt and "too long to include here" in prompt
+    assert heard == ["what's in these?"]  # the decision record keeps what they typed, not the files
+    assert not any("deploy at 5pm" in json.dumps(e) or "attachments" in json.dumps(e) for e in events), events  # nothing about the files streams back
+    assert [e["text"] for e in events if e["e"] == "done"] == ["Deleted it."]
+
+
+def test_rejected_attachment_never_starts_the_agent(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    monkeypatch.setattr(chat.harness, "argv", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran the agent")))
+    chat.turn("look", "claude-haiku-5-5", None, files=[{"name": "tool.bin", "data": b64(b"\x7fELF\x00\x00")}])
+    assert events == [{"e": "done", "ok": False, "text": "tool.bin isn't a file the chat can use: attach images (PNG, JPEG, GIF, WebP), PDFs and text files.",
+                       "context": 0, "window": None, "ms": None}]
+    assert not os.path.exists(attach.root(str(tmp_path)))
+
+
+def test_send_attach_reads_json_and_clear_deletes_files(tmp_path):
+    fake = tmp_path / "claude"
+    fake.write_text(FAKE)
+    fake.chmod(0o755)
+    home = tmp_path / "home"
+    (home).mkdir()
+    (home / "config.json").write_text(json.dumps({"harnesses": {"claude": {"bin": str(fake)}}}))
+    env = dict(os.environ, GREENLIGHT_HOME=str(home), CHAT_DIR=str(tmp_path / "chat"))
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "chat.py")
+    body = json.dumps({"text": "see this", "files": [{"name": "n.txt", "data": b64(b"hello")}]})
+    out = subprocess.run([sys.executable, script, "send", "--model", "claude-haiku-5-5", "--attach"], input=body, env=env, capture_output=True, text=True)
+    assert json.loads(out.stdout.splitlines()[-1])["text"] == "Deleted it.", out
+    prompt = json.loads(open(str(fake) + ".log").readline())
+    assert "see this\n\nATTACHED FILES" in prompt and "<<<BEGIN n.txt\nhello\nEND n.txt>>>" in prompt
+    assert os.listdir(tmp_path / "chat" / "attachments")
+    bad = subprocess.run([sys.executable, script, "send", "--attach"], input="not json", env=env, capture_output=True, text=True)
+    assert json.loads(bad.stdout)["ok"] is False and "form greenlight understands" in bad.stdout
+    subprocess.run([sys.executable, script, "new"], env=env, check=True)  # Clear: the files go with the conversation
+    assert not os.path.exists(tmp_path / "chat" / "attachments")
+
+
+def test_codex_gets_images_as_images():
+    cmd, _ = chat.harness.argv("codex", "hi", images=["/x/a.png", "/x/b.png"])
+    assert cmd[-3:] == ["--image=/x/a.png", "--image=/x/b.png", "-"], cmd  # before stdin's "-", in a form that can't swallow it
+    cmd, _ = chat.harness.argv("codex", "hi", sid="s1", images=["/x/a.png"])
+    assert cmd[:4] == [cmd[0], "exec", "resume", "s1"] and "--image=/x/a.png" in cmd
+    assert not any(a.startswith("--image") for a in chat.harness.argv("claude", "hi", images=["/x/a.png"])[0])
