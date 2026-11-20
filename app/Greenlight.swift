@@ -553,12 +553,13 @@ func staged(_ s: String) -> Staged {
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
-/// Chief's mood line (the reply's first line, only emoji) split off the rest, for the chat to show at the reply's top-right corner.
-func mood(_ s: String) -> (mood: String?, rest: String) {
+/// The reply without a leading emoji-only line: Chief used to open with a three-emoji mood line, and older transcripts
+/// (and a resumed session imitating them) still carry one. A reply that just starts with an emoji keeps it.
+func unmood(_ s: String) -> String {
     let (first, rest) = s.firstIndex(of: "\n").map { (s[..<$0], String(s[s.index(after: $0)...])) } ?? (s[...], "")
     let m = first.trimmingCharacters(in: .whitespaces)
     let emoji = !m.isEmpty && m.allSatisfy { ch in ch.isWhitespace || (ch.unicodeScalars.first.map { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && ch.unicodeScalars.count > 1) } ?? false) }
-    return emoji ? (m, rest.drop { $0.isNewline }.description) : (nil, s)
+    return emoji ? rest.drop { $0.isNewline }.description : s
 }
 
 func plain(_ s: String) -> String {
@@ -567,7 +568,7 @@ func plain(_ s: String) -> String {
     for (p, w) in [("\\[([^\\]]*)\\]\\([^)]*\\)", "$1"), ("`([^`]*)`", "$1"), ("https?://\\S+", ""), ("(?m)^[ \\t]*(#+|>|[-*+]|\\d+\\.)[ \\t]+", ""), ("\\*+|~~", "")] {
         t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
     }
-    return t.filter { ch in  // Chief's mood emoji aren't spoken (Apple's voice reads their names); digits, # and * are "emoji" too, so keep those
+    return t.filter { ch in  // emoji aren't spoken (Apple's voice reads their names); digits, # and * are "emoji" too, so keep those
         guard let u = ch.unicodeScalars.first, u.properties.isEmoji else { return true }
         return !(u.properties.isEmojiPresentation || ch.unicodeScalars.count > 1)
     }
@@ -2444,11 +2445,10 @@ struct RunCard: View, Looked {
         let cur = Text(mono ? " █" : lk.id == "zen" ? "▏" : " ▍").foregroundColor(lk.id == "onair" ? hx("D1242F") : accent)
         // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
         let fs = ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1
-        let (m, rest) = mood(staged(r.live).text)
+        let rest = unmood(staged(r.live).text)
         let t = Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
             .font(chatFace(size: fs)).textSelection(.enabled)
-        VStack(alignment: .trailing, spacing: 2) {
-            if let m { Text(m).font(.system(size: fs)) }
+        Group {
             switch lk.id {
             case "conversation":
                 let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
@@ -2572,11 +2572,7 @@ struct MsgView: View, Looked {
         }
     }
     @ViewBuilder func reply(_ said: String) -> some View {
-        let (m, rest) = mood(said)
-        VStack(alignment: .trailing, spacing: 2) {
-            if let m { Text(m).font(.system(size: fs)).accessibilityLabel("Mood \(m)") }  // outside the box, its top-right corner
-            box(rest)
-        }
+        box(unmood(said))
     }
     @ViewBuilder func box(_ said: String) -> some View {
         let t = MDText(text: said).font(chatFace(size: fs)).textSelection(.enabled)
@@ -6328,8 +6324,8 @@ func selfTest() {
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
-    check("chat: the mood line sits apart, a reply without one doesn't", mood("😌🔍❤️\n\nAll green.") == ("😌🔍❤️", "All green.") && mood("#3 is up.\nok") == (nil, "#3 is up.\nok") && mood("👍 Done.") == (nil, "👍 Done."))
-    check("voice: mood emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
+    check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
+    check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
