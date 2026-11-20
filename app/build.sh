@@ -7,10 +7,12 @@ cd "$(dirname "$0")"
 name=${GREENLIGHT_APP:-Greenlight} dev=${GREENLIGHT_DEV:-}
 id=dev.greenlight.app
 [ "$name" = Greenlight ] || id=$id.$(printf %s "${name#greenlight-}" | tr -c 'A-Za-z0-9-' -)
-app=~/Applications/$name.app
-# Compiled aside and moved in: a failed build leaves the installed app as it was (and a running one keeps its binary).
+dest=~/Applications/$name.app
+# Built and signed aside, then moved in: a failed build (or signing) leaves the installed app as it was, and a running one
+# keeps its binary. The staging folder is on the same volume, so the move is a rename.
+mkdir -p ~/Applications; stage=$(mktemp -d ~/Applications/".$name.build.XXXXXX") app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
-trap 'rm -f "$bin"' EXIT
+trap 'rm -rf "$bin" "$stage"' EXIT
 # Command Line Tools swiftc: avoids needing the Xcode license accepted
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Greenlight.swift -o "$bin"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -53,27 +55,31 @@ id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print
 # `cdhash:<this build>` (seen in a login keychain on macOS 26.5), so every rebuild of Greenlight or of a dev copy asked for your
 # password again, for each key it read. An Apple Development cert (free with an Apple ID: Xcode → Settings → Accounts → Manage
 # Certificates) gives the build one, and the key is pinned to `teamid:` instead, so set one up and every build after it uses it.
-# Either way the requirement names the signer, not the bundle id: every workspace's dev copy has its own id (scripts/dev.py), and
-# Keychain entries trust apps by this requirement. Code that could sign with that cert could already claim Greenlight's id, so
-# this lets in nothing new. (`identifier` takes no wildcard, and the Keychain didn't match a copy on `info[CFBundleIdentifier]`.)
+# Its requirement names the cert, not the bundle id: every workspace's dev copy has its own id (scripts/dev.py), and Keychain
+# entries trust apps by this requirement. Only code signed with your cert matches, and that could already claim Greenlight's id.
+# (`identifier` takes no wildcard, and the Keychain didn't match a copy on `info[CFBundleIdentifier]`.) Greenlight Dev keeps
+# codesign's default: its builds are pinned to `cdhash:` whatever the requirement, and a new one would cost your mic and speech grants.
 # Yours by name too, not just the team's: on a shared team, a teammate's builds would match the team alone. A renewed cert
 # keeps both. Picked by name, not by the listing's order, so one with two teams doesn't switch between them.
 line=$(security find-identity -v -p codesigning | grep '"Apple Development: ' | sort -t'"' -k2 | head -1 || true)
 apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"' -f2)
 # Its team is the cert's OU. Signing asks for the key once ("codesign wants to sign using…": Always Allow), on screen even
 # for a dev copy's unattended build, which waits for it.
-team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-256 hash:/{on=0} /^SHA-1 hash:/{on=($3==h)} on' |
+team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-1 hash:/{on=($3==h)} on; /END CERTIFICATE/{on=0}' |
   openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then
   # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match
-  echo "build.sh: signing with \"$cn\" failed (a locked login keychain, as over ssh, or the key's prompt refused); build again" >&2; exit 1
+  if [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2
+  else echo "build.sh: error: signing with \"$cn\" failed: unlock the login keychain (it is locked over ssh), or click Always Allow when codesign asks on the Mac's screen, then build again" >&2; fi
+  exit 1
 elif [ -z "$id" ]; then
   echo "build.sh: no signing cert; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"
 else
-  codesign -fs "$id" --keychain "$kc" -r="designated => certificate leaf = H\"$id\"" "$app" ||
+  codesign -fs "$id" --keychain "$kc" "$app" ||
     { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
+[ ! -e "$dest" ] || mv "$dest" "$stage/old.app"; mv "$app" "$dest"; app=$dest  # the old one goes with the staging folder
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"
