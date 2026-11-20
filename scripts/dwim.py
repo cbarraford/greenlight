@@ -23,6 +23,8 @@ Stdlib only. `plan` and `stage` never call the forge or Orca: the app hands them
 through Orca and launch agents through dash.py.
 """
 import concurrent.futures as cf
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -68,7 +70,7 @@ DESTRUCTIVE = re.compile(r"\b(?:merge[sd]?|merging|close[sd]?|closing|delete[sd]
                          r"abandon(?:ed)?|force|reset|revert(?:ed)?|wipe|discard|deploy(?:ed)?|ship|approve[sd]?|undraft|ready|push|"
                          r"cancel(?:led)?|stop|restart|rename|retarget|squash|cherry-?pick)\b", re.I)
 REASONING = re.compile(r"\?\s*$|^\s*(?:why|what|how|which|who|when|where|should|could|would|can|is|are|does|do you|tell|explain|"
-                       r"show|summari[sz]e|compare|list)\b|\b(?:if|unless|until|after|before|once|then|instead|because|except|but)\b", re.I)
+                       r"show|summari[sz]e|compare|list)\b|\b(?:if|unless|until|after|before|once|then|instead|because|except|but|or)\b", re.I)
 NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop)\b(?! merge)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
 HERE_RE = re.compile(r"\b(?:this(?: one)?|it|here|current(?: one)?|that one)\b", re.I)
@@ -275,13 +277,9 @@ def applies(verb, p):
     hold = HOLD
     if verb == "park" and p.get("hidden"):
         return "already parked"
-    if verb == "unpark" and not p.get("hidden"):
-        return "isn't parked"
     if verb == "hold" and hold.search(goal):
         return "already on hold"
     if verb == "release":
-        if not hold.search(goal):
-            return "isn't on hold"
         if hold.search(re.sub(r"\(hold\)", "", goal, flags=re.I)):
             return "its goal says hold in its own words: edit the goal"
     if verb in LAUNCH:
@@ -347,6 +345,8 @@ def plan(o):
             skipped.append({"ws": p["name"], "why": w})
             continue
         a = {"verb": verb, "ws": p["name"], "ref": (p.get("mr") or {}).get("ref")}
+        if p.get("path"):
+            a["path"] = p["path"]
         if verb in LAUNCH:
             a["prompt"] = next(m["prompt"] for m in p["moves"] if m.get("kind") == LAUNCH[verb])
         acts.append(a)
@@ -381,6 +381,12 @@ def _note(name, text):
         h.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
+def _lock_for(wid):
+    locks = DWIM / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    return locks / hashlib.sha256(wid.encode()).hexdigest()
+
+
 def apply(o):
     """Run a direct plan's actions in parallel. Goal edits record what they replaced, for undo."""
     import dash
@@ -389,29 +395,40 @@ def apply(o):
     acts = [a for a in o.get("actions") or [] if isinstance(a, dict) and a.get("verb") in VERBS and isinstance(a.get("ws"), str)]
     if not acts:
         return {"ok": True, "done": [], "errors": []}
-    live = {w["displayName"]: w for w, _ in dash.live_agents().values()}
+    live = [w for w, _ in dash.live_agents().values()]
     said = " ".join((o.get("text") or "").split())[:200]
 
     def one(a):
-        w = live.get(a["ws"])
-        if not w:
-            return {"ws": a["ws"], "error": "no such workspace"}
+        matches = [w for w in live if w["displayName"] == a["ws"] and (not a.get("path") or w.get("path") == a["path"])]
+        if len(matches) != 1:
+            return {"ws": a["ws"], "error": "ambiguous workspace" if matches else "no such workspace"}
+        w = matches[0]
         if a["verb"] in LAUNCH:
-            r = dash.run(a["ws"], a.get("prompt") or "")
+            current = next((p for p in dash.snapshot()["pucks"] if p.get("path") == w.get("path")), None)
+            move = next((m for m in (current or {}).get("moves") or [] if m.get("kind") == LAUNCH[a["verb"]]), None)
+            if not move:
+                return {"ws": a["ws"], "error": "that move is no longer available"}
+            r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"])
             return {"ws": a["ws"], **({"error": r["error"]} if r.get("error") else {"agent": r.get("agent")})}
-        before = w.get("comment") or ""
-        after = _goal_after(a["verb"], before)
-        if after == before:
-            return {"ws": a["ws"], "unchanged": True}
-        greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
-        try:
-            _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
-        except OSError as e:
-            log({"op": "history_error", "ws": a["ws"], "error": str(e)[:200]})
-        return {"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after}
+        with _lock_for(w["worktreeId"]).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            fresh = dash.live_agents().get(w["worktreeId"])
+            if not fresh or fresh[0].get("displayName") != a["ws"] or (a.get("path") and fresh[0].get("path") != a["path"]):
+                return {"ws": a["ws"], "error": "no such workspace"}
+            before = fresh[0].get("comment") or ""
+            after = _goal_after(a["verb"], before)
+            if after == before:
+                return {"ws": a["ws"], "unchanged": True}
+            greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
+            try:
+                _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
+            except OSError as e:
+                log({"op": "history_error", "ws": a["ws"], "error": str(e)[:200]})
+            return {"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after}
 
     out = list(_pool.map(lambda a: _safe(one, a), acts))
-    done = [r for r in out if not r.get("error")]
+    done = [r for r in out if not r.get("error") and not r.get("unchanged")]
+    unchanged = [r["ws"] for r in out if r.get("unchanged")]
     undo = None
     edits = [r for r in done if "after" in r]
     if edits:
@@ -420,7 +437,7 @@ def apply(o):
         (DWIM / "undo" / f"{undo}.json").write_text(json.dumps({"at": time.time(), "text": said, "edits": edits}))
         for f in sorted((DWIM / "undo").glob("*.json"), key=lambda f: f.stat().st_mtime)[:-UNDO_KEEP]:
             f.unlink(missing_ok=True)
-    res = {"ok": not any(r.get("error") for r in out), "undo": undo, "done": [r["ws"] for r in done],
+    res = {"ok": not any(r.get("error") for r in out), "undo": undo, "done": [r["ws"] for r in done], "unchanged": unchanged,
            "errors": [f"{r['ws']}: {r['error']}" for r in out if r.get("error")], "ms": round((time.monotonic() - t0) * 1000)}
     log({"op": "apply", "text": said, "verb": acts[0]["verb"], "done": res["done"], "errors": res["errors"], "ms": res["ms"]})
     return res
@@ -443,16 +460,21 @@ def undo(uid):
     if not f.exists():
         return {"error": "nothing to undo"}
     rec = json.loads(f.read_text())
-    live = {w["worktreeId"]: w for w, _ in dash.live_agents().values()}
     back, kept = [], []
     for e in rec["edits"]:
-        w = live.get(e["id"])
-        if not w or (w.get("comment") or "") != e["after"]:
-            kept.append(e["ws"])
-            continue
-        greenlight.orca("worktree", "set", "--worktree", f"id:{e['id']}", "--comment", e["before"])
-        _note(e["ws"], f"undid: “{rec.get('text', '')}”")
-        back.append(e["ws"])
+        with _lock_for(e["id"]).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            fresh = dash.live_agents().get(e["id"])
+            w = fresh[0] if fresh else None
+            if not w or (w.get("comment") or "") != e["after"]:
+                kept.append(e["ws"])
+                continue
+            greenlight.orca("worktree", "set", "--worktree", f"id:{e['id']}", "--comment", e["before"])
+            back.append(e["ws"])
+            try:
+                _note(e["ws"], f"undid: “{rec.get('text', '')}”")
+            except OSError as err:
+                log({"op": "history_error", "ws": e["ws"], "error": str(err)[:200]})
     f.unlink(missing_ok=True)
     log({"op": "undo", "text": rec.get("text"), "back": back, "kept": kept})
     return {"ok": True, "undone": back, "kept": kept}

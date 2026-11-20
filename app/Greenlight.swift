@@ -992,6 +992,15 @@ func dwimPucks(_ pucks: [[String: Any]]) -> [[String: Any]] {
         return o
     }
 }
+func dwimScopedPucks(_ pucks: [[String: Any]], _ scope: String?) -> [[String: Any]] {
+    guard let scope else { return pucks }
+    guard let o = (try? JSONSerialization.jsonObject(with: Data(scope.utf8))) as? [String: Any] else { return [] }
+    let paths = o["paths"] as? [String] ?? [], repos = o["repos"] as? [String] ?? []
+    return pucks.filter { p in
+        (p["path"] as? String).map(paths.contains) == true ||
+            (p["repo"] as? String).map { !$0.isEmpty && repos.contains($0) } == true
+    }
+}
 /// The Undo toast: a direct board action just done (Undo puts the goals back), or an agent launch waiting out its grace (Undo cancels it).
 struct DwimToast: Identifiable, Equatable {
     let id = UUID()
@@ -1006,6 +1015,12 @@ func keepingToast(_ toasts: [DwimToast], _ t: DwimToast) -> [DwimToast] {
     var out = toasts
     if let i = out.firstIndex(where: { $0.id == t.id }) { out[i] = t } else { out.append(t) }
     return out
+}
+struct DwimPlans {
+    private var pending = Set<UUID>()
+    mutating func begin() -> UUID { let id = UUID(); pending.insert(id); return id }
+    mutating func finish(_ id: UUID) -> Bool { pending.remove(id) != nil }
+    mutating func cancel() { pending.removeAll() }
 }
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
@@ -2062,7 +2077,7 @@ final class Voice: NSObject, ObservableObject {
     func instant(_ heard: String) {
         guard on, let c = core, !c.pucks.isEmpty else { return }
         let seq = drawSeq, t0 = Date()
-        let body = (try? JSONSerialization.data(withJSONObject: ["text": heard, "focus": c.focusName ?? "", "pucks": dwimPucks(c.pucks)])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        let body = (try? JSONSerialization.data(withJSONObject: ["text": heard, "focus": c.focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(c.pucks, c.scope()))])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         var out = ""
         ssh("\(py)/dwim.py stage", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self, self.on, seq == self.drawSeq, !self.shown, !self.chiefDrew,
@@ -2075,8 +2090,8 @@ final class Voice: NSObject, ObservableObject {
     func run(_ cmd: VoiceCmd) {
         switch cmd {
         case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
-        case .undo: if core?.toast != nil { core?.undoToast() } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
-        case .stop: if core?.toast?.pending == true { return core!.undoToast() }  // "cancel" during a launch's grace: that launch
+        case .undo: if let t = core?.latestUndoableToast { core?.undoToast(t.id) } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
+        case .stop: core?.cancelPlans(); if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
@@ -3512,6 +3527,11 @@ final class Core: ObservableObject {
 
     var clearing = 0  // Clear's `chat.py new`s still running: a send waits for all of them
     func clear(keepQueue: Bool = false) {
+        cancelPlans()
+        for work in launchWorks.values { work.cancel() }
+        launchWorks.removeAll()
+        for t in toasts where t.pending { toastListeners.removeValue(forKey: t.id) }
+        toasts.removeAll { $0.pending }
         if run != nil { run?.files = []; stop() }  // a new conversation: its files don't come back
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
@@ -3532,6 +3552,7 @@ final class Core: ObservableObject {
     }
 
     func stop() {
+        cancelPlans()
         guard let r = run, !r.stopping else { return }
         r.stopping = true
         r.status = "Stopping"; r.thinking = false
@@ -3713,30 +3734,34 @@ final class Core: ObservableObject {
 
     @Published var toasts: [DwimToast] = []
     var toast: DwimToast? { toasts.last }
+    var latestUndoableToast: DwimToast? { toasts.last(where: { $0.undoable }) }
     var focusName: String?  // the workspace of the window you were last in (noteFocus): what "park this" means
     var launchWorks: [UUID: DispatchWorkItem] = [:]  // each accepted launch keeps its own grace and Undo
     var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
     var toastListeners: [UUID: (DwimToast?) -> Void] = [:]
+    var plans = DwimPlans()
+    func cancelPlans() { plans.cancel() }
     static let launchGrace = 5.0, toastFor = 8.0, planDeadline = 1.5
     var dwimJSON: (Any) -> String = { o in (try? JSONSerialization.data(withJSONObject: o)).map { String(decoding: $0, as: UTF8.self) } ?? "{}" }
 
-    /// A board command: dwim.py plans it from the latest snapshot (the grammar plus System One, under a deadline). Direct: done
-    /// now with an Undo toast and a short spoken line. Anything else, or no answer within planDeadline, is Chief's turn as usual;
+    /// A board command: dwim.py plans it from the latest scoped snapshot (the grammar plus System One, under a deadline). Direct
+    /// actions get an Undo toast and a short spoken line once applied. Anything else, or no answer within planDeadline, goes to Chief;
     /// `otherwise` gets a note for Chief when dwim.py read a board action it wouldn't do on its own (ambiguous, destructive).
     func dwim(_ text: String, source: String, otherwise: @escaping (String) -> Void) {
         active()
         if source != "jump" { toasted = nil }  // the palette's window shows only the toasts it asked for
-        let t0 = Date(), body = dwimJSON(["text": text, "source": source, "focus": focusName ?? "", "pucks": dwimPucks(pucks)])
+        let request = plans.begin()
+        let t0 = Date(), body = dwimJSON(["text": text, "source": source, "focus": focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(pucks, scope()))])
         var out = "", answered = false
         let late = DispatchWorkItem { [weak self] in
-            guard !answered else { return }
+            guard let self, self.plans.finish(request), !answered else { return }
             answered = true
-            self?.log(.greenlight, "dwim", .failed, "no plan in \(Int(Core.planDeadline * 1000)) ms: asked Chief")
+            self.log(.greenlight, "dwim", .failed, "no plan in \(Int(Core.planDeadline * 1000)) ms: asked Chief")
             otherwise("")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Core.planDeadline, execute: late)
         ssh("\(py)/dwim.py plan", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
-            guard let self, !answered else { return }
+            guard let self, self.plans.finish(request), !answered else { return }
             answered = true; late.cancel()
             let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:], ms = Int(Date().timeIntervalSince(t0) * 1000)
             NSLog("dwim: %@ in %d ms (dwim.py %@): %@", o["route"] as? String ?? "no answer", ms, "\(o["ms"] ?? "?")", o["why"] as? String ?? "")
@@ -3752,15 +3777,17 @@ final class Core: ObservableObject {
 
     private func direct(_ o: [String: Any], text: String, ms: Int) {
         let acts = o["actions"] as? [[String: Any]] ?? [], line = o["toast"] as? String ?? "", say = o["say"] as? String ?? line
-        msgs.append(Msg(.you, text)); msgs.append(Msg(.note, say))  // the chat keeps the record: Chief reads the board, not this
-        log(.greenlight, "dwim", .action, "\(o["verb"] as? String ?? "") in \(ms) ms: \(say)")
+        msgs.append(Msg(.you, text))  // the chat keeps the record: Chief reads the board, not this
+        let pending = o["launch"] as? Bool == true
+        let notice = acts.isEmpty ? say : pending ? "Starting after \(Int(Core.launchGrace)) seconds: \(line)" : "Applying: \(text)"
+        msgs.append(Msg(.note, notice))
+        log(.greenlight, "dwim", .status, "\(o["verb"] as? String ?? "") planned in \(ms) ms: \(notice)")
         if voice.on {
-            voice.say(say)
-            if run == nil { voice.show(["kind": "list", "eyebrow": acts.isEmpty ? "nothing to do" : "done", "title": line, "stat": "",
-                                        "items": acts.map { ["label": $0["ws"] as? String ?? "", "detail": $0["ref"] as? String ?? ""] }]) }
+            voice.say(notice)
+            if acts.isEmpty && run == nil { voice.show(["kind": "list", "eyebrow": "nothing to do", "title": line, "stat": "", "items": []]) }
         }
         if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor) }
-        if o["launch"] as? Bool == true {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
+        if pending {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
             let t = DwimToast(text: line, pending: true)
             show(t, for: nil)
             let w = DispatchWorkItem { [weak self] in
@@ -3772,7 +3799,7 @@ final class Core: ObservableObject {
             launchWorks[t.id] = w
             DispatchQueue.main.asyncAfter(deadline: .now() + Core.launchGrace, execute: w)
         } else {
-            let t = DwimToast(text: line, applying: true)
+            let t = DwimToast(text: "Applying: \(text)", applying: true)
             show(t, for: nil)
             apply(o, text: text, id: t.id)
         }
@@ -3783,7 +3810,17 @@ final class Core: ObservableObject {
         ssh("\(py)/dwim.py apply", stdin: dwimJSON(["text": text, "source": o["source"] ?? "chat", "actions": o["actions"] ?? []]), onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
             let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["errors": ["\(host) didn't answer (exit \(code))"]]
-            let errs = r["errors"] as? [String] ?? [], undo = r["undo"] as? String
+            let errs = r["errors"] as? [String] ?? [], done = r["done"] as? [String] ?? [], unchanged = r["unchanged"] as? [String] ?? [], undo = r["undo"] as? String
+            let line = done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))"
+            if !done.isEmpty && errs.isEmpty {
+                self.msgs.append(Msg(.note, line))
+                if self.voice.on {
+                    self.voice.say(line)
+                    if self.run == nil { self.voice.show(["kind": "list", "eyebrow": "done", "title": line, "stat": "",
+                                                        "items": done.map { ["label": $0, "detail": ""] }]) }
+                }
+            }
+            if done.isEmpty && errs.isEmpty { self.msgs.append(Msg(.note, line)); if self.voice.on { self.voice.say(line) } }
             if !errs.isEmpty {
                 self.msgs.append(Msg(.note, "Didn't finish: " + errs.joined(separator: "; ")))
                 if self.voice.on { self.voice.say("That didn't all work: \(errs.count == 1 ? errs[0] : "\(errs.count) failed").") }
@@ -3791,7 +3828,7 @@ final class Core: ObservableObject {
             self.log(.greenlight, "dwim", errs.isEmpty ? .action : .failed, "applied in \(r["ms"] ?? "?") ms" + (errs.isEmpty ? "" : ": " + errs.joined(separator: "; ")))
             guard var t = self.toasts.first(where: { $0.id == id }) else { return }
             t.undo = undo; t.failed = !errs.isEmpty; t.applying = false
-            if !errs.isEmpty { t.text += " · \(errs.count) failed" }
+            t.text = errs.isEmpty ? line : "Didn't finish: \(errs.joined(separator: "; "))"
             if t.undoing && undo != nil { t.undoing = false; self.show(t, for: nil); return self.undoToast(id) }  // Undo was pressed before the apply came back
             t.undoing = false
             self.show(t, for: Core.toastFor)
@@ -3810,7 +3847,7 @@ final class Core: ObservableObject {
 
     /// The toast's Undo (and "undo" said in voice mode): cancels a launch still in its grace, or puts the edited goals back.
     func undoToast(_ id: UUID? = nil) {
-        guard let target = id ?? toast?.id, var t = toasts.first(where: { $0.id == target }) else { return }
+        guard let target = id ?? latestUndoableToast?.id, var t = toasts.first(where: { $0.id == target }) else { return }
         if t.pending {
             launchWorks.removeValue(forKey: t.id)?.cancel()
             msgs.append(Msg(.note, "Cancelled: \(t.text)"))
@@ -3865,7 +3902,7 @@ struct DwimToastBar: View {
         let button = Button(t.undoing ? "Undoing…" : t.pending ? "Cancel" : "Undo") { c.undoToast(t.id) }.buttonStyle(.plain)
             .font(.system(size: 12, weight: .semibold)).foregroundColor(hx(l.accent)).disabled(t.undoing)
             .help(t.pending ? "Don't start it" : "Put it back (⇧⌘Z)")
-        if c.toast?.id == t.id { button.keyboardShortcut("z", modifiers: [.command, .shift]) }
+        if c.latestUndoableToast?.id == t.id { button.keyboardShortcut("z", modifiers: [.command, .shift]) }
         else { button }
     }
 }
@@ -8609,10 +8646,13 @@ func selfTest() {
           && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo #42") == nil && voiceCommand("cancel #42") == nil && voiceCommand("undo the deploy") == nil)
     check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
         $0["page"] == nil && ($0["agent"] as? [String: String]) == ["state": "working"] && $0["name"] as? String == "a" } == true)
+    check("dwim: scope excludes other projects", dwimScopedPucks([["name": "a", "path": "/a", "repo": "A"], ["name": "b", "path": "/b", "repo": "B"]], #"{"paths":["/a"],"repos":["A"]}"#).count == 1)
     check("dwim: queued fallback shows only the user's words", Core.Queued(text: "(routing note)\npark #42", shown: "park #42").display == "park #42")
     let firstToast = DwimToast(text: "Hold A", applying: true), secondToast = DwimToast(text: "Hold B", applying: true)
     var finishedFirst = firstToast; finishedFirst.applying = false; finishedFirst.undo = "undo-a"
     check("dwim: each quick action keeps its own Undo", keepingToast(keepingToast([firstToast], secondToast), finishedFirst) == [finishedFirst, secondToast])
+    var planGate = DwimPlans(); let cancelledPlan = planGate.begin(); planGate.cancel(); let activePlan = planGate.begin()
+    check("dwim: Stop and Clear invalidate an in-flight plan", !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil
