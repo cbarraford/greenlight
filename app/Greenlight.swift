@@ -1452,6 +1452,7 @@ final class Voice: NSObject, ObservableObject {
     @Published var speaking = 0  // speech buffers queued and not yet played
     @Published var fallback = ""  // why Apple's voice is standing in for the chosen one ("" when it isn't)
     var toldFallback = ""  // the reason the chat was last told, so each is said once
+    var claimedAt = 0.0  // when this app's voice mode started, for voiceYields (another Greenlight starting later takes over)
     var bargeIn: Bool { ud.object(forKey: "voiceBargeIn") as? Bool ?? true }
     var pause: Double { ud.object(forKey: "voicePause") as? Double ?? 1.1 }  // seconds of quiet that end your turn; hardware and rooms differ
     let engine = AVAudioEngine(), player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
@@ -1489,6 +1490,14 @@ final class Voice: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        // Another Greenlight (Greenlight.app beside a dev copy, which shares its shortcut) started voice mode: one listens and speaks,
+        // or each hears you, asks Chief on its own and says its own answer over the other's (one in Apple's voice when its Keychain says no)
+        DistributedNotificationCenter.default().addObserver(forName: voiceClaim, object: nil, queue: .main) { [weak self] n in
+            guard let self, self.on, let at = n.userInfo?["at"] as? Double, let pid = n.userInfo?["pid"] as? Int,
+                  voiceYields(mine: (self.claimedAt, Int(getpid())), theirs: (at, pid)) else { return }
+            self.stopAll()
+            self.core?.msgs.append(Msg(.note, "Voice mode moved to \(n.object as? String ?? "another Greenlight"), so this one stopped listening: two would both answer you, over each other."))
+        }
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             guard let self, self.on else { return }  // a headset in or out: the engine stopped itself
             do { try self.startEngine(); self.listen() } catch { self.stopAll() }
@@ -1512,6 +1521,9 @@ final class Voice: NSObject, ObservableObject {
             }
             self.on = true
             self.fallback = ""; self.toldFallback = ""
+            self.claimedAt = Date().timeIntervalSince1970
+            DistributedNotificationCenter.default().postNotificationName(voiceClaim, object: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName,
+                                                                         userInfo: ["at": self.claimedAt, "pid": Int(getpid())], deliverImmediately: true)
             Speech.shared.warm()  // a fresh try at a voice that failed last time
             self.listen()
             self.wait("Listening", "Say something, or “goodbye” to stop.")
@@ -1691,9 +1703,10 @@ final class Voice: NSObject, ObservableObject {
     func apple(_ t: String, _ g: Int) {
         let u = AVSpeechUtterance(string: t)
         u.voice = Voice.best
+        var over = false
         synth.write(u) { [weak self] buf in
-            guard let self, let b = buf as? AVAudioPCMBuffer else { return }
-            if b.frameLength == 0 { return self.play(nil, end: true, g) }  // the utterance is over
+            guard let self, let b = buf as? AVAudioPCMBuffer, !over else { return }
+            if b.frameLength == 0 { over = true; return self.play(nil, end: true, g) }  // the utterance is over (macOS 26 sends this twice: a second end would drop the next line's caption)
             if self.synthConv?.inputFormat != b.format { self.synthConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
             self.synthConv.flatMap { convert(b, $0, self.speechFormat) }.map { self.play($0, end: false, g) }
         }
@@ -1735,6 +1748,12 @@ final class Voice: NSObject, ObservableObject {
         meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
     }
 }
+
+/// Voice mode's claim on the mic, posted to every Greenlight on this Mac as it starts.
+let voiceClaim = Notification.Name("dev.greenlight.voice.claim")
+/// Whether this app's voice mode gives way to another's claim: the later start keeps it (the pid breaks a tie), so one shortcut press
+/// that starts two apps leaves exactly one on.
+func voiceYields(mine: (at: Double, pid: Int), theirs: (at: Double, pid: Int)) -> Bool { theirs.pid != mine.pid && (theirs.at, theirs.pid) > (mine.at, mine.pid) }
 
 /// A voice better than AVSpeechSynthesizer: Kokoro on this Mac (app/kokoro.py under uv) or ElevenLabs Flash.
 /// pcm() blocks, on q; nil means Apple's voice says that line (not ready yet, no key, a failure).
@@ -6690,6 +6709,9 @@ func selfTest() {
           focusLine(terminal: 2, project: "Platform", ["name": "mr-5339", "path": "/w/mr-5339", "mr": "!5339"]) == "a Basement terminal window showing Platform, on the tab for workspace mr-5339 (/w/mr-5339, !5339)"
           && focusLine(terminal: nil, project: "", ["page": "acme/mr-5339", "view": "overview"]) == "the dashboard, with workspace acme/mr-5339 open"
           && focusLine(terminal: nil, project: "", ["view": "list"]) == "the dashboard (list)")
+    check("voice: of two Greenlights in voice mode, exactly one keeps it (the later start; the pid breaks a tie)",
+          voiceYields(mine: (100, 7), theirs: (101, 3)) && !voiceYields(mine: (101, 3), theirs: (100, 7))
+          && voiceYields(mine: (100, 3), theirs: (100, 7)) != voiceYields(mine: (100, 7), theirs: (100, 3)) && !voiceYields(mine: (100, 7), theirs: (200, 7)))
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     var bufs = 0, ended = false, sc: AVAudioConverter?
