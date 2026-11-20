@@ -1,6 +1,7 @@
 """The coding-agent CLIs greenlight runs headless: automations, the menubar chat, the dashboard's LLM calls.
 
-  argv(name, text, model=, effort=, sid=, system=, stream=) -> (cmd, stdin text)
+  argv(name, text, model=, effort=, sid=, system=, stream=, images=) -> (cmd, stdin text)
+  images: files codex gets as images (--image); the others read them from the paths the message names
 
 Safe by default: claude only accepts edits, codex runs in its workspace-write sandbox, opencode
 auto-rejects whatever asks permission. config.json `harnesses.<name>.bypass: true` gives that one
@@ -32,7 +33,7 @@ def binary(name):
         (p for p in (os.path.expanduser(f"~/.local/bin/{name}"), os.path.expanduser(f"~/.{name}/bin/{name}")) if os.path.exists(p)), name)
 
 
-def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False):
+def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=()):
     if name not in H:
         raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
     h = H[name]
@@ -49,7 +50,8 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     elif name == "codex":
         eff = {"xhigh": "high", "max": "high"}.get(effort, effort)
         cmd = [b, "exec", *(["resume", sid] if sid else []), "--skip-git-repo-check", *perms, *(["--json"] if stream else []),
-               *opt("-m", model), *opt("-c", eff and f"model_reasoning_effort={eff}"), "-"]
+               *opt("-m", model), *opt("-c", eff and f"model_reasoning_effort={eff}"),
+               *[f"--image={p}" for p in images or ()], "-"]  # --image=: its bare form takes every argument after it
     elif name == "opencode":
         cmd = [b, "run", *perms, *(["--format", "json"] if stream else []), *opt("-m", model), *opt("--variant", effort), *opt("-s", sid)]
     else:

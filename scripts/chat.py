@@ -3,6 +3,7 @@
 
 Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
+  chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
                                      # M: a claude model, or a harness name (codex|opencode|pi) for its default model
   chat.py compact [--model M]       # claude only
@@ -14,6 +15,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
 import json, os, random, re, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import attach  # noqa: E402
 import decisions  # noqa: E402
 import harness  # noqa: E402
 
@@ -29,6 +31,8 @@ PROMPT = (
     "Never do work yourself (code, debugging, reviews, investigations, writing): dispatch it to an agent in the "
     "appropriate Orca workspace, creating one with a goal if none fits, then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
+    "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
+    "(that's not doing work yourself) and answer with them in mind; when you dispatch work about one, give the agent its path. "
     "Answer concisely: the answer first, only what was asked, no preamble, no restating the question, no closing offers. "
     "Replies render as markdown in a narrow popover: a few short lines at most, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
@@ -460,8 +464,15 @@ def stop_shell(task_id):
     return bool(hits)
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
     engine, model = (model, None) if model in harness.H else ("claude", model)
+    stored = []
+    if files:
+        try:
+            stored = attach.store(DIR, attach.check(files))
+        except attach.Rejected as e:
+            return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+        attach.prune(DIR)
     prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
     if os.path.exists(rules):  # the user's standing instructions (Settings → Model), read every turn
@@ -471,9 +482,10 @@ def turn(text, model, effort, compact=False, name=None, verbose=False):
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
-        text = board_note() + WRAP + text
+        text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
-    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
+    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
+                                   images=attach.images(stored))
     emit(e="start", engine=engine, model=model or "default")
     norm = Norm(verbose)
     try:
@@ -508,6 +520,7 @@ def main():
         for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
+        attach.clear(DIR)
         decisions.quiet("forget_chat", chat=CHAT)
     elif cmd == "stop":
         if os.path.exists(PIDFILE):
@@ -527,7 +540,14 @@ def main():
     else:
         if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
             os.environ["GREENLIGHT_ONLY"] = opt("--only")
-        turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args)
+        text, files = sys.stdin.read(), None
+        if "--attach" in args:
+            try:
+                j = json.loads(text)
+                text, files = str(j.get("text") or ""), j.get("files") or []
+            except (ValueError, AttributeError):
+                return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
+        turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
 
 
 if __name__ == "__main__":

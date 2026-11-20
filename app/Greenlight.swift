@@ -17,6 +17,7 @@ import Network
 import Security
 import Speech
 import SwiftUI
+import UniformTypeIdentifiers
 import UserNotifications
 import WebKit
 
@@ -25,7 +26,7 @@ let host = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"] ?? UserDefault
 let greenlightHome = UserDefaults.standard.string(forKey: "greenlightHome") ?? "~/.greenlight"
 let greenlightCode = UserDefaults.standard.string(forKey: "greenlightCode") ?? "~/.claude/skills/greenlight"
 let py = "GREENLIGHT_HOME=\(greenlightHome) python3 \(greenlightCode)/scripts"  // + "/greenlight.py ..."
-let selftest = CommandLine.arguments.contains("--selftest")  // scratch chat session + transcript, see selfTest()
+let selftest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--attachtest")  // scratch chat session + transcript, see selfTest()
 let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(py)/chat.py"
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
@@ -298,8 +299,9 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
         }
     }
     do { try p.run() } catch { DispatchQueue.main.async { onExit(-1) }; return p }
-    inPipe.fileHandleForWriting.write(stdin.data(using: .utf8)!)
-    try? inPipe.fileHandleForWriting.close()
+    let w = inPipe.fileHandleForWriting, d = Data(stdin.utf8)
+    // a big stdin (attached files) drains as fast as ssh sends it: off the main thread. The throwing write: a dead ssh's EPIPE isn't a crash
+    if d.count < 65536 { try? w.write(contentsOf: d); try? w.close() } else { DispatchQueue.global(qos: .userInitiated).async { try? w.write(contentsOf: d); try? w.close() } }
     return p
 }
 
@@ -645,6 +647,67 @@ func shortcutName(_ mods: Int, _ key: String) -> String {
 struct Attached: Identifiable {
     let id: String, label: String, color: Color, mrs: Int, text: String
     var sent = false
+}
+
+/// A file attached in the chat's composer (its +, a drop, ⌘V), checked as chat.py's attach.py checks it again where greenlight runs.
+/// Only its own name and its bytes go there: the folder it was in on this Mac is never sent, shown or logged.
+struct ChatFile: Identifiable {
+    let id = UUID()
+    let name: String, kind: String, data: Data, thumb: NSImage?
+    static let limits = ["image": 5 << 20, "pdf": 10 << 20, "text": 1 << 20], maxFiles = 5, maxTotal = 20 << 20
+    static let kinds = ["image": "image", "pdf": "PDF", "text": "text"]
+    static let supported = "images (PNG, JPEG, GIF, WebP), PDFs and text files"
+    var json: [String: String] { ["name": name, "data": data.base64EncodedString()] }
+}
+func byteSize(_ n: Int) -> String { n < 1024 ? "\(n) B" : n < 1 << 20 ? "\(Int((Double(n) / 1024).rounded())) KB" : String(format: "%.1f MB", Double(n) / Double(1 << 20)) }
+/// image | pdf | text, from the bytes (never the name), as attach.kind.
+func fileKind(_ d: Data) -> String? {
+    let b = [UInt8](d.prefix(12)), has = { (p: [UInt8]) in b.starts(with: p) }
+    if has([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) || has([0xFF, 0xD8, 0xFF]) || has(Array("GIF87a".utf8)) || has(Array("GIF89a".utf8))
+        || (has(Array("RIFF".utf8)) && b.count == 12 && Array(b[8..<12]) == Array("WEBP".utf8)) { return "image" }
+    if has(Array("%PDF-".utf8)) { return "pdf" }
+    return !d.contains(0) && String(data: d, encoding: .utf8) != nil ? "text" : nil
+}
+/// A file to attach, or why it can't be. Another image format (HEIC, TIFF, a too-big screenshot) goes as a PNG, else a JPEG, when that fits.
+func chatFile(_ data: Data, name raw: String) -> (file: ChatFile?, error: String?) {
+    let last = raw.split(separator: "/").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "", name = last.isEmpty ? "file" : last
+    if data.isEmpty { return (nil, "\(name) is empty.") }
+    var d = data, n = name, kind = fileKind(data)
+    let img = kind == "image" || kind == nil ? NSImage(data: data) : nil
+    if let img, kind == nil || d.count > ChatFile.limits["image"]!, let rep = img.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)) {
+        let stem = (name as NSString).deletingPathExtension
+        if let png = rep.representation(using: .png, properties: [:]), png.count <= ChatFile.limits["image"]! { (d, n, kind) = (png, stem + ".png", "image") }
+        else if let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) { (d, n, kind) = (jpg, stem + ".jpg", "image") }
+    }
+    guard let k = kind else { return (nil, "\(name) isn't a file the chat can use: attach \(ChatFile.supported).") }
+    if d.count > ChatFile.limits[k]! { return (nil, "\(name) is \(byteSize(d.count)): \(ChatFile.kinds[k]!)s can be up to \(byteSize(ChatFile.limits[k]!)).") }
+    return (ChatFile(name: n, kind: k, data: d, thumb: k == "image" ? (img ?? NSImage(data: d)) : nil), nil)
+}
+func chatFile(at url: URL) -> (file: ChatFile?, error: String?) {
+    let name = url.lastPathComponent, v = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+    if v?.isDirectory == true { return (nil, "\(name) is a folder: attach the files in it instead.") }
+    if let size = v?.fileSize, size > ChatFile.maxTotal { return (nil, "\(name) is \(byteSize(size)): too big to attach.") }
+    guard let d = try? Data(contentsOf: url) else { return (nil, "\(name) couldn't be read.") }
+    return chatFile(d, name: name)
+}
+/// The chat's drop target, over the whole pane: files and images dragged anywhere on it, the text field too, attach. It takes
+/// only those types, so dragged text still lands in the field, and clicks pass through it. (A SwiftUI onDrop can't: AppKit gives a
+/// file drag over the field to the field's editor first, which would type the file's path.)
+final class DropCatcher: NSView {
+    weak var c: Core?
+    static let types: [NSPasteboard.PasteboardType] = [.fileURL, .tiff, .png] + NSFilePromiseReceiver.readableDraggedTypes.map { .init($0) }
+    override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes(Self.types) }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ p: NSPoint) -> NSView? { nil }
+    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { c?.dropping = true; return .copy }
+    override func draggingExited(_ s: NSDraggingInfo?) { c?.dropping = false }
+    override func draggingEnded(_ s: NSDraggingInfo) { c?.dropping = false }
+    override func performDragOperation(_ s: NSDraggingInfo) -> Bool { c?.dropping = false; return c?.dropped(s.draggingPasteboard) ?? false }
+}
+struct DropArea: NSViewRepresentable {
+    let c: Core
+    func makeNSView(context: Context) -> DropCatcher { let v = DropCatcher(); v.c = c; return v }
+    func updateNSView(_ v: DropCatcher, context: Context) { v.c = c }
 }
 
 // MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
@@ -2594,7 +2657,57 @@ final class Core: ObservableObject {
         }
     }
     @Published var run: Run?
-    @Published var queue: [String] = []
+    @Published var queue: [Queued] = []
+    struct Queued { let text: String; var files: [ChatFile] = [] }
+    @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
+    @Published var fileNote = ""  // why the last file didn't attach; clears itself
+    @Published var dropping = false  // files dragged over the chat
+    func attach(_ urls: [URL]) { for u in urls { add(chatFile(at: u)) } }
+    func attach(_ data: Data, name: String) { add(chatFile(data, name: name)) }
+    private func add(_ r: (file: ChatFile?, error: String?)) {
+        guard let f = r.file else { return fileSays(r.error ?? "That file couldn't be attached.") }
+        if files.count >= ChatFile.maxFiles { return fileSays("Attach up to \(ChatFile.maxFiles) files at a time.") }
+        if files.reduce(f.data.count, { $0 + $1.data.count }) > ChatFile.maxTotal { return fileSays("These files come to more than \(byteSize(ChatFile.maxTotal)): send fewer at a time.") }
+        files.append(f)
+        fileNote = ""
+        log(.chief, name, .status, "attached a file (\(ChatFile.kinds[f.kind]!), \(byteSize(f.data.count)))")  // never its name's folder, never its contents
+    }
+    func fileSays(_ s: String) {
+        fileNote = s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in if self?.fileNote == s { self?.fileNote = "" } }
+    }
+    /// The composer's +: an open panel on the chat's window (a sheet), any file; the check says which can't go.
+    func pickFiles(_ win: NSWindow?) {
+        let p = NSOpenPanel()
+        p.allowsMultipleSelection = true; p.canChooseDirectories = false; p.canChooseFiles = true
+        p.message = "Attach files for \(name): \(ChatFile.supported)"
+        p.prompt = "Attach"
+        if let win { p.beginSheetModal(for: win) { [weak self] r in if r == .OK { self?.attach(p.urls) } } }
+        else { NSApp.activate(ignoringOtherApps: true); if p.runModal() == .OK { attach(p.urls) } }
+    }
+    /// Files or images dropped on the chat (or pasted): files by their URLs, else an image's data (a browser's), else files an app
+    /// promises (Photos, Mail), received into a temporary folder and deleted once read. False: nothing to attach.
+    func dropped(_ pb: NSPasteboard) -> Bool {
+        if let us = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !us.isEmpty { attach(us); return true }
+        if let t = pb.availableType(from: [.png, .tiff]), let d = pb.data(forType: t) { attach(d, name: t == .png ? "Image.png" : "Image.tiff"); return true }
+        guard let ps = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !ps.isEmpty else { return false }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-drop-" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for r in ps {
+            r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: OperationQueue()) { url, err in
+                let d = err == nil ? try? Data(contentsOf: url) : nil
+                try? FileManager.default.removeItem(at: url)
+                DispatchQueue.main.async { [weak self] in if let d { self?.attach(d, name: url.lastPathComponent) } else { self?.fileSays("That file couldn't be received.") } }
+            }
+        }
+        return true
+    }
+    /// ⌘V in the chat field with files or an image on the clipboard (and no text): attach them. True = taken.
+    func pasteFiles() -> Bool {
+        let pb = NSPasteboard.general
+        if pb.availableType(from: [.fileURL]) == nil && pb.string(forType: .string) != nil { return false }  // text pastes as text
+        return dropped(pb)
+    }
     @Published var input = "" { didSet { if !recalling { hp = -1 } } }  // typing over a recalled prompt makes it the draft
     // ponytail: newest first in UserDefaults, 500 kept; this Mac only
     @Published var sent = (try? JSONDecoder().decode([Sent].self, from: ud.data(forKey: "sent") ?? Data())) ?? [] {
@@ -2856,12 +2969,13 @@ final class Core: ObservableObject {
     }
 
     func submit() {
-        let t = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        if input.first?.isWhitespace != true { sent = [Sent(t: t, at: Date())] + sent.filter { $0.t != t }.prefix(499) }  // ignorespace
-        input = ""
+        let t = input.trimmingCharacters(in: .whitespacesAndNewlines), fs = files
+        guard !t.isEmpty || !fs.isEmpty else { return }  // files alone are a message
+        if !t.isEmpty && input.first?.isWhitespace != true { sent = [Sent(t: t, at: Date())] + sent.filter { $0.t != t }.prefix(499) }  // ignorespace
+        input = ""; files = []; fileNote = ""
         if vim { vimKeys.mode = vimStart }
-        if let q = waiting.last(where: { !$0.ping }) { answer(q, t) } else { send(t) }  // typing answers the open chat question
+        let q = t.isEmpty ? nil : waiting.last(where: { !$0.ping })  // typing answers the open chat question
+        if let q, fs.isEmpty { answer(q, t) } else { if let q { answer(q, t, send: false) }; send(t, files: fs) }
     }
 
     var hmatches: [(s: Sent, pos: [Int])] {
@@ -2923,10 +3037,11 @@ final class Core: ObservableObject {
         return false
     }
 
-    func send(_ text: String, shown: String? = nil) {
+    func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = []) {
         active()
-        if run != nil { queue.append(text); return }
-        msgs.append(Msg(.you, shown ?? text))
+        if run != nil { queue.append(Queued(text: text, files: fs)); return }
+        let you = [shown ?? text, fs.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n")
+        msgs.append(Msg(.you, you))
         var payload = voice.on ? voiceNote + text : text
         let new = attached.filter { !$0.sent }  // each docked hex goes over once; the chat session keeps it
         if !new.isEmpty {
@@ -2938,7 +3053,10 @@ final class Core: ObservableObject {
             payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
             focusSent = focus
         }
-        start(Run(shown ?? text), chatSend, stdin: payload)
+        if fs.isEmpty { return start(Run(shown ?? text), chatSend, stdin: payload) }
+        // chat.py send --attach: the message and the files as one JSON object (attach.py)
+        let body = (try? JSONSerialization.data(withJSONObject: ["text": payload, "files": fs.map(\.json)])).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        start(Run(you), chatSend + " --attach", stdin: body)
     }
 
     // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
@@ -3075,7 +3193,7 @@ final class Core: ObservableObject {
             + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace
             run = nil; tps = 0
-            if !queue.isEmpty { send(queue.removeFirst()) }
+            if !queue.isEmpty { let q = queue.removeFirst(); send(q.text, files: q.files) }
             return
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
@@ -3103,7 +3221,7 @@ final class Core: ObservableObject {
             missed += 1
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
         }
-        if !queue.isEmpty { send(queue.removeFirst()) }
+        if !queue.isEmpty { let q = queue.removeFirst(); send(q.text, files: q.files) }
     }
 
     // MARK: pings
@@ -5044,7 +5162,7 @@ struct ChatView: View, Looked {
                         ForEach(c.msgs.filter { !(started && $0.role == .note && $0.text.hasPrefix("Ask me anything")) }) { m in MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)) }
                         if let r = c.run { RunCard(r: r, c: c) }
                         ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in
-                            HStack { Spacer(minLength: 60); queued(q, i) }
+                            HStack { Spacer(minLength: 60); queued([q.text, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(Theme.sp4)
@@ -5059,6 +5177,8 @@ struct ChatView: View, Looked {
             rule(top: false)
             footer
             }.id(c.look)
+            .overlay { DropArea(c: c) }  // files dragged anywhere on the chat, the field too
+            .overlay { if c.dropping { dropHint } }
             }
             }
             }
@@ -5288,8 +5408,18 @@ struct ChatView: View, Looked {
                     }
                 }
             }
+            if !c.files.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.sp2) { ForEach(c.files) { fileChip($0) } }
+                }
+            }
+            if !c.fileNote.isEmpty {
+                Label(c.fileNote, systemImage: "exclamationmark.circle").font(sys(size: Theme.fs1)).foregroundColor(Theme.needsInk)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
+            }
             if c.hq != nil { histPanel }
             HStack(alignment: .bottom, spacing: Theme.sp2) {
+                if c.recording == nil { attachButton }
                 if let since = c.recording {
                     HStack(spacing: 2) {
                         ForEach(c.levels.indices, id: \.self) { i in
@@ -5327,7 +5457,7 @@ struct ChatView: View, Looked {
                 }.buttonStyle(.plain).disabled(c.transcribing)
                     .modifier(Tip(c: c, text: c.recording != nil ? "Stop and transcribe (\(c.shortcut))" : "Speak to \(c.name) (\(c.shortcut))"))
                     .accessibilityLabel(c.recording != nil ? "Stop recording" : "Speak")
-                let empty = c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty  // submit() ignores it anyway
+                let empty = c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && c.files.isEmpty  // submit() ignores it anyway
                 Button(action: c.submit) {
                     sendLabel(empty).frame(minWidth: pad).frame(height: pad)
                         .background(RoundedRectangle(cornerRadius: r).fill(sendFill(empty)))
@@ -5349,6 +5479,49 @@ struct ChatView: View, Looked {
             }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small)
                 .padding(.trailing, onair ? inset : 0).background(onair ? accent : .clear).padding(.horizontal, onair ? -inset : 0)  // full-bleed, the model flush left
         }.padding(.horizontal, inset).padding(.top, Theme.sp3).padding(.bottom, lk.id == "onair" ? 0 : Theme.sp4)
+    }
+
+    /// The composer's +: attach files (the open panel). Drops and ⌘V attach too.
+    var attachButton: some View {
+        let pad = padSize, r = corner(pad)
+        return Button { c.pickFiles(NSApp.keyWindow) } label: {
+            Group {
+                if lk.id == "phosphor" { Text("[+]").padding(.horizontal, 4) }
+                else { Image(systemName: "plus").font(sys(size: Theme.fs3, weight: .semibold)) }
+            }.frame(minWidth: pad).frame(height: pad)
+                .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "conversation" || lk.id == "onair" ? page : .clear))
+                .overlay(RoundedRectangle(cornerRadius: r).stroke(bare ? .clear : line))
+                .foregroundColor(lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+        }.buttonStyle(.plain)
+            .modifier(Tip(c: c, text: "Attach files: \(ChatFile.supported). Or drop them here, or paste."))
+            .accessibilityLabel("Attach files")
+    }
+    /// A file waiting to go with the next message: its thumbnail or icon, name and size, and × to take it off.
+    func fileChip(_ f: ChatFile) -> some View {
+        HStack(spacing: Theme.sp1) {
+            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 3)) }
+            else { Image(systemName: f.kind == "pdf" ? "doc.richtext" : "doc.text").font(sys(size: Theme.fs2)).foregroundColor(dim) }
+            tag(f.name, Theme.fs1, .semibold, caps: false).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
+            tag(byteSize(f.data.count), Theme.fs1, caps: false).foregroundColor(dim).lineLimit(1).fixedSize()
+            Button { c.files.removeAll { $0.id == f.id } } label: {
+                Image(systemName: "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(dim).frame(width: 16, height: 16)
+            }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
+        }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : 3).padding(.trailing, 3).frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
+            .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
+            .help("\(ChatFile.kinds[f.kind]!.capitalized), goes to \(c.name) with your next message")
+            .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
+    }
+    /// Files dragged over the chat: where they'll go.
+    var dropHint: some View {
+        RoundedRectangle(cornerRadius: corner(40) > 0 ? Theme.r3 : 0).fill(bg.opacity(0.82))
+            .overlay(RoundedRectangle(cornerRadius: corner(40) > 0 ? Theme.r3 : 0).stroke(accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+            .overlay(VStack(spacing: Theme.sp2) {
+                Image(systemName: "paperclip").font(sys(size: Theme.fs6)).foregroundColor(accent)
+                Text("Drop to attach").font(sys(size: Theme.fs4, weight: .semibold))
+                Text(ChatFile.supported.prefix(1).uppercased() + ChatFile.supported.dropFirst()).font(sys(size: Theme.fs1)).foregroundColor(dim)
+            })
+            .padding(Theme.sp3).allowsHitTesting(false).accessibilityHidden(true)
     }
 
     func footRow(hint: Bool, model: Bool) -> some View {
@@ -5962,6 +6135,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         vimMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, self.capture == nil, let tv = e.window?.firstResponder as? NSTextView,
                   let c = tv.isDescendant(of: self.chat) ? self.greenlight : self.l1s.values.first(where: { tv.isDescendant(of: $0.chat) })?.c else { return e }
+            if e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command, Int(e.keyCode) == kVK_ANSI_V, c.pasteFiles() { return nil }  // ⌘V of files or an image attaches them
             if c.historyKey(e, tv) {  // ↑↓ / ⌃R history and readline keys, ahead of vim (whose ⌃R would be redo)
                 guard c.toEnd else { return nil }
                 c.toEnd = false
@@ -7458,6 +7632,128 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
 // MARK: self-test
 
+/// The chat's attachments, as the selftest drives them (and `--attachtest`, alone, where no agent is logged in: a stand-in answers).
+/// The composer's checks, then a real message whose files the agent must use to answer. Runs off the main thread.
+func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double, () -> Bool) -> Void) {
+    func onMain<T>(_ f: () -> T) -> T { DispatchQueue.main.sync(execute: f) }
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-attach-\(getpid())")
+    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    let red = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    for x in 0..<64 { for y in 0..<64 { red.setColor(NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1), atX: x, y: y) } }
+    let png = red.representation(using: .png, properties: [:])!, tiff = red.tiffRepresentation!
+    try? png.write(to: tmp.appendingPathComponent("square.png"))
+    try? Data("The codeword is FENNEL-4821.\n".utf8).write(to: tmp.appendingPathComponent("notes.txt"))
+    try? Data([0x7F, 0x45, 0x4C, 0x46, 0, 0, 0xFF]).write(to: tmp.appendingPathComponent("tool.bin"))
+    onMain {
+        c.verbose = true  // so the log is on while files attach and go
+        let t = chatFile(tiff, name: "shot.tiff"), bin = chatFile(at: tmp.appendingPathComponent("tool.bin")), dir = chatFile(at: tmp)
+        let big = chatFile(Data(repeating: 0x61, count: (1 << 20) + 1), name: "big.log"), note = chatFile(at: tmp.appendingPathComponent("notes.txt"))
+        check("attach: kinds from the bytes; TIFF goes as PNG; the name has no folder",
+              fileKind(png) == "image" && fileKind(Data("%PDF-1.7".utf8)) == "pdf" && fileKind(Data("héllo".utf8)) == "text"
+              && t.file?.name == "shot.png" && t.file.map { fileKind($0.data) } == "image" && note.file?.name == "notes.txt" && note.file?.kind == "text")
+        check("attach: what can't go says why: \([bin.error, dir.error, big.error].compactMap { $0 })",
+              bin.error == "tool.bin isn't a file the chat can use: attach \(ChatFile.supported)." && dir.error?.hasSuffix("is a folder: attach the files in it instead.") == true
+              && big.error == "big.log is 1.0 MB: texts can be up to 1.0 MB." && chatFile(Data(), name: "e.txt").error == "e.txt is empty.")
+        let pb = NSPasteboard(name: .init("greenlight-attachtest-\(getpid())"))
+        c.files = []
+        pb.clearContents(); pb.writeObjects([tmp.appendingPathComponent("notes.txt") as NSURL, tmp.appendingPathComponent("square.png") as NSURL])
+        let byURL = c.dropped(pb), urlNames = c.files.map(\.name)
+        c.files = []; pb.clearContents(); pb.setData(tiff, forType: .tiff)
+        let byData = c.dropped(pb), dataNames = c.files.map(\.name)
+        c.files = []; pb.clearContents(); pb.setString("just text", forType: .string)
+        check("attach: a drop brings files by URL, a browser's image by its data, and leaves text alone: \(urlNames) \(dataNames)",
+              byURL && urlNames == ["notes.txt", "square.png"] && byData && dataNames == ["Image.png"] && !c.dropped(pb) && c.files.isEmpty)
+        pb.releaseGlobally()
+        c.files = []
+        c.attach((0..<6).map { _ in tmp.appendingPathComponent("notes.txt") })
+        check("attach: five at a time: \(c.fileNote)", c.files.count == 5 && c.fileNote == "Attach up to 5 files at a time.")
+        c.files.removeLast(4)
+        c.attach([tmp.appendingPathComponent("tool.bin"), tmp.appendingPathComponent("square.png")])
+        check("attach: a bad one doesn't stop the rest, and × removes one", c.files.map(\.name) == ["notes.txt", "square.png"] && c.files[1].thumb != nil)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
+        let h = NSHostingView(rootView: ChatView(c: c)); w.contentView = h
+        h.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date() + 0.5)
+        // Where AppKit sends a drag over the composer's field while you type in it: AppKit's own lookup (private, so only when it's there)
+        func all(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(all) }
+        let sel = NSSelectorFromString("_hitTest:dragTypes:")
+        if let field = all(h).compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }), let imp = class_getMethodImplementation(NSView.self, sel),
+           class_getInstanceMethod(NSView.self, sel).map({ String(cString: method_getTypeEncoding($0)!) == "@32@0:8^{CGPoint=dd}16@24" }) == true {
+            w.makeFirstResponder(field)
+            typealias Hit = @convention(c) (AnyObject, Selector, UnsafePointer<NSPoint>, AnyObject) -> AnyObject?
+            var at = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+            let to = { (types: [NSPasteboard.PasteboardType]) in withUnsafePointer(to: &at) { unsafeBitCast(imp, to: Hit.self)(h, sel, $0, NSSet(array: types.map(\.rawValue))) } }
+            let file = to([.fileURL, .init("NSFilenamesPboardType"), .init("Apple URL pasteboard type"), .string]), text = to([.string, .init("NSStringPboardType")])
+            check("attach: a file dragged onto the field you're typing in attaches (to \(file.map { "\(type(of: $0))" } ?? "nothing")), text still goes in the field (to \(text.map { "\(type(of: $0))" } ?? "nothing"))",
+                  file is DropCatcher && text is NSTextView && field.currentEditor() != nil)
+        } else { print("skip attach: AppKit's drag lookup isn't there to ask") }
+        if let dir = ProcessInfo.processInfo.environment["GREENLIGHT_SNAP"] {  // UX evidence: the composer with files, a refusal, a drag over it
+            c.fileSays("tool.bin isn't a file the chat can use: attach \(ChatFile.supported).")
+            for (n, drag) in [("composer", false), ("drop", true)] {
+                c.dropping = drag; h.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date() + 0.5)
+                if let rep = h.bitmapImageRepForCachingDisplay(in: h.bounds) { h.cacheDisplay(in: h.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/attach-\(n).png")) }
+            }
+            c.dropping = false; c.fileNote = ""
+        }
+        w.contentView = nil
+        c.input = "What's the codeword in notes.txt, and what color is square.png? One line."
+        c.submit()
+        check("attach: sending empties the composer", c.files.isEmpty && c.input.isEmpty)
+    }
+    wait("attachments reply", 180) { c.run == nil }
+    onMain {
+        let you = c.msgs[c.msgs.count - 2].text, r = c.msgs.last!.text
+        check("attach: the agent used both files: \(r)", r.contains("FENNEL-4821") && r.lowercased().contains("red") && !c.msgs.last!.failed)
+        check("attach: the transcript names the files, never where they were: \(you)", you.hasSuffix("📎 notes.txt  📎 square.png") && !you.contains(tmp.path))
+        let ours = c.feed.lines.filter { $0.kind == .status }  // greenlight's own lines; the model's thinking is its own
+        check("attach: greenlight's log says a file came, never its folder or contents: \(ours.map(\.text).filter { $0.contains("attach") })",
+              ours.contains { $0.text == "attached a file (text, 29 B)" } && !ours.contains { $0.text.contains(tmp.path) || $0.text.contains("The codeword is") })
+        c.verbose = false
+        c.input = ""; c.files = []
+        c.attach([tmp.appendingPathComponent("square.png")]); c.submit()  // files alone are a message
+    }
+    wait("files-only reply", 180) { c.run == nil }
+    check("attach: files with no text still send: \(onMain { c.msgs.last!.text })", onMain { c.msgs[c.msgs.count - 2].text == "📎 square.png" && !c.msgs.last!.failed })
+    let noise = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1100, pixelsHigh: 1000, bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    arc4random_buf(noise.bitmapData!, noise.bytesPerRow * 1000)
+    let bigPNG = noise.representation(using: .png, properties: [:])!
+    try? bigPNG.write(to: tmp.appendingPathComponent("noise.png"))
+    let took = onMain { () -> Double in
+        c.attach([tmp.appendingPathComponent("noise.png")]); c.input = "Reply with just: got it"
+        let t0 = Date(); c.submit(); return Date().timeIntervalSince(t0)
+    }
+    wait("big image reply", 240) { c.run == nil }
+    check("attach: a \(byteSize(bigPNG.count)) image goes without holding up the app (send took \(Int(took * 1000)) ms): \(onMain { c.msgs.last!.text })",
+          bigPNG.count > 3 << 20 && took < 0.5 && onMain { !c.msgs.last!.failed })
+    try? FileManager.default.removeItem(at: tmp)
+}
+
+/// `Greenlight --attachtest`: attachTest on a scratch chat (its CHAT_DIR, as --selftest), then exit.
+func attachOnly() {
+    var failed = false
+    func check(_ what: String, _ ok: Bool) { print(ok ? "ok  " : "FAIL", what); fflush(stdout); failed = failed || !ok }
+    func wait(_ what: String, _ secs: Double, _ ok: () -> Bool) {
+        let end = Date() + secs
+        while !DispatchQueue.main.sync(execute: ok) {
+            if Date() > end { check("timed out: \(what)", false); return }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+    let keep = ["model", "effort", "verboseActivity", "sent"].map { ($0, ud.object(forKey: $0)) }
+    let c = Core()
+    Thread.detachNewThread {
+        DispatchQueue.main.sync { c.clear(); c.model = "claude-haiku-5-5"; c.effort = "low" }
+        Thread.sleep(forTimeInterval: 2)
+        attachTest(c, check: check, wait: wait)
+        DispatchQueue.main.sync { c.clear() }
+        for (k, v) in keep { ud.set(v, forKey: k) }
+        try? FileManager.default.removeItem(at: transcript)
+        try? FileManager.default.removeItem(at: questionsFile)
+        print(failed ? "FAILED" : "all ok")
+        exit(failed ? 1 : 0)
+    }
+}
+
+
 /// `Greenlight.app/Contents/MacOS/Greenlight --selftest`: drives the actions the buttons call
 /// (send, Stop, answer buttons, Compact, Codex, Clear) on a scratch session where greenlight runs, plus the menubar width.
 func selfTest() {
@@ -7976,6 +8272,8 @@ func selfTest() {
             check("ws survives a save", round?[0].ws == ["a"])
         }
 
+        attachTest(c, check: check, wait: wait)
+
         let before = onMain { c.context }
         onMain { c.compact() }
         wait("compact", 120) { c.run == nil }
@@ -8057,7 +8355,7 @@ func selfTest() {
 let app = NSApplication.shared
 let delegate = App()
 if CommandLine.arguments.contains("--vimtest") { vimTest() }
-if selftest { selfTest(); app.setActivationPolicy(.accessory) } else { app.delegate = delegate; app.setActivationPolicy(.regular) }
+if selftest { CommandLine.arguments.contains("--attachtest") ? attachOnly() : selfTest(); app.setActivationPolicy(.accessory) } else { app.delegate = delegate; app.setActivationPolicy(.regular) }
 app.run()
 
 /// `Greenlight --vimtest`: the vim engine on a plain string, no window needed.
