@@ -7,7 +7,7 @@
     dash.py suggest <ws> [--model M] [--effort E]  one JSON line: the next prompt to give an agent there (the console drawer, the
                                                     hover card's button); cached per state, and snapshots carry it as `suggestion`
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
-    dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the console)
+    dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
@@ -1351,12 +1351,15 @@ def transcript_files(path):
     return sorted(fs, key=lambda x: x[0].stat().st_mtime, reverse=True)[:40]
 
 
+RECENT = 300  # seconds
+
+
 def transcript(name, before=None, limit=60):
     """A page of the conversation in the workspace, oldest first, ending just before `before` ("<file>:<index>").
     Older sessions continue where the newest one starts; `more` is the cursor for the page before this one."""
     w = next((w for w, _ in live_agents().values() if w["displayName"] == name), None)
     if not w:
-        return {"error": f"no workspace {name}"}
+        return {"error": f"no workspace {name}", "before": before}  # before: the page can tell a failed "Load earlier" from a failed refresh
     files = transcript_files(w["path"])
     f, i = 0, None
     if before:
@@ -1369,7 +1372,7 @@ def transcript(name, before=None, limit=60):
         es = (_claude_entries if kind == "claude" else _codex_entries)(path)
         i = len(es) if i is None else min(i, len(es))
         take = max(0, i - (limit - len(page)))
-        page[:0] = [{"id": f"{path.stem}:{n}", "role": r, "text": t[:8000]} for n, (r, t) in enumerate(es[take:i], take)]
+        page[:0] = [{"id": f"{path.stem}:{n}", "role": r, "text": t[:8000], "kind": kind} for n, (r, t) in enumerate(es[take:i], take)]
         if take == 0:
             page.insert(0, {"id": f"{path.stem}:start", "role": "sep",
                             "text": f"{kind} session · {time.strftime('%b %-d %H:%M', time.localtime(path.stat().st_ctime))}"})
@@ -1378,7 +1381,13 @@ def transcript(name, before=None, limit=60):
             i = take
             break
     more = f"{files[f][0].stem}:{999999999 if i is None else i}" if f < len(files) else None  # 999999999: from that session's end
-    return {"entries": page, "more": more, "before": before}
+    # the newest page: also the tails of other sessions written to in the last RECENT seconds (a Codex review the main agent
+    # started, say), so a busy newest session never starves them out of All output's refresh
+    recent = [] if before else [{"id": f"{path.stem}:{n}", "role": r, "text": t[:8000], "kind": kind}
+                                for path, kind in files[1:] if time.time() - path.stat().st_mtime < RECENT
+                                for es in [(_claude_entries if kind == "claude" else _codex_entries)(path)]
+                                for n, (r, t) in enumerate(es[-20:], max(0, len(es) - 20))]
+    return {"entries": page, "more": more, "before": before, "recent": recent}
 
 
 # ---------- New task: a request (+ files) becomes a workspace whose agent starts on it at once ----------

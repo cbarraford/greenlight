@@ -6147,6 +6147,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.evaluateJavaScript("mc.page(\(js))")
             })
         }
+        // The agent card's All output: a page of the workspace's agent conversation (newest, or the one before a cursor), polled while it's open.
+        if cmd == "transcript", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+            let before = b["before"] as? String ?? ""
+            if !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil { return }
+            var out = ""
+            let bj = before.isEmpty ? "null" : "\"\(before)\""  // echoed: the page tells a failed Load earlier from a failed refresh
+            ssh("\(py)/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","before":\#(bj),"error":"\#(host) didn't answer (exit \#(code))"}"#
+                from.evaluateJavaScript("mc.transcript(\(js))")
+            })
+        }
         // A waiting agent's question (ask) and your reply to it (answer), from the Answer button or the page.
         if cmd == "ask" || cmd == "answer", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             let text = b["text"] as? String ?? ""
