@@ -153,3 +153,26 @@ def test_session_saved_before_done(tmp_path, monkeypatch):
     os.path.exists(tmp_path / "session") or (tmp_path / "session").write_text("s0")
     chat.turn("status update", "claude-haiku-5-5", None)
     assert seen == [True] and not os.path.exists(tmp_path / "session")
+
+def test_thinking_phrase_per_stretch():
+    n = Norm()
+    think = {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hm"}}}
+    said = lambda d: [e["text"] for e in n.phrase(n.claude(d)) if e["e"] == "status"]
+    first = said(think)
+    assert len(first) == 1 and first[0] in chat.THINKING
+    assert all(said(think) == first for _ in range(20))  # held while the stretch lasts, not cycled
+    n.phrase(n.claude({"type": "stream_event", "event": {"type": "message_start", "message": {"usage": {}}}}))  # usage alone doesn't end it
+    assert said(think) == first
+    n.phrase(n.claude({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls"}}]}}))
+    second = said(think)  # a new stretch after a step: a fresh, different phrase
+    assert second[0] in chat.THINKING and second != first
+    n.phrase([{"e": "text", "delta": "x"}])
+    assert said(think) != second
+    assert n.phrase([{"e": "status", "text": "Compacting"}])[0]["text"] == "Compacting"  # other statuses pass through
+    c = Norm()  # codex's reasoning item, and a fresh turn's Norm, pick from the same pool
+    assert c.phrase(c.codex({"type": "item.started", "item": {"id": "r", "type": "reasoning"}}))[0]["text"] in chat.THINKING
+
+
+def test_thinking_phrases_fit():
+    assert len(set(chat.THINKING)) == len(chat.THINKING) >= 40
+    assert all(p.endswith("…") and len(p) <= 18 for p in chat.THINKING)
