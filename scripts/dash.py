@@ -44,6 +44,7 @@ import ade_common  # noqa: E402
 import blocking  # noqa: E402
 import greenlight  # noqa: E402
 import harness  # noqa: E402
+import lifestage  # noqa: E402
 
 DASH = greenlight.STATE / "dash"
 NAME_RE = re.compile(r"^[\w.@+/-]{1,200}$")
@@ -186,6 +187,7 @@ def tree_merge(path):
     post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
     r["mr"]["state"], r["next"] = "merged", {"step": post[0], "owner": "me", "action": f"merged from Greenlight; next: {post[0].replace('_', ' ')}"} \
         if post else {"step": "done", "owner": "done", "action": "merged from Greenlight"}
+    r["life"] = lifestage.place(r)
     snap = json.loads((greenlight.STATE / "last.json").read_text())
     snap["rows"] = [r if x["path"] == path else x for x in snap["rows"]]
     (greenlight.STATE / "last.json").write_text(json.dumps(snap))
@@ -462,6 +464,9 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
             "puck": page.get("layout", {}).get("puck"),
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
+            # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
+            # with the agent's state as of now rather than the scan's
+            "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk)),
         })
         pucks[-1]["moves"] = moves(r, blk)  # the hex card's smart button, the same as the Basement card's
         pucks[-1]["sig"] = sig(pucks[-1])
@@ -1004,7 +1009,9 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
     prompt = (
         f"You are {greenlight.CONFIG['name']}, a developer's agent manager. Write the ONE prompt the developer should send to a fresh coding agent "
         "working in this workspace so it does the next thing toward the workspace goal. Ground it on greenlight's next step "
-        "(puck.step, puck.owner, puck.action) and the lifecycle; be concrete (MR number, failing job, file, thread) using only the facts. "
+        "(puck.step, puck.owner, puck.action) and on the move the lifecycle calls for: puck.life says where the change is and who holds it, "
+        "and puck.life.do says in plain words what has to happen now, so the prompt must carry out or prepare exactly that move and "
+        "nothing else; be concrete (MR number, failing job, file, thread) using only the facts. "
         "If the next move is the developer's own (a review, an approval, an answer), the prompt prepares it for them "
         "(e.g. summarize the diff and open threads, draft a reply) and must not approve, comment or push. "
         "Rules: don't suggest merging (greenlight merges). " + "".join(f"{r.rstrip('.')}. " for r in greenlight.CONFIG["suggest_rules"]) +
