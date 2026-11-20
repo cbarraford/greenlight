@@ -684,6 +684,11 @@ def test_cmd_title_names_what_ran():
     assert t("ls -la") == "Ran ls"
     assert t("cd /w && python3 /a/scripts/greenlight.py scan >/dev/null; python3 /a/dash.py board") == "Ran greenlight.py scan"
     assert t("gh pr list --author @me -R a/b") == "Ran gh pr list"
+    assert t("gh pr --repo owner/repo list") == "Ran gh pr list"
+    assert t('echo "x | grep" | wc') == "Ran wc" and t('echo "a; rm -rf /"') == "Ran a shell command"  # quoted separators don't split
+    assert t("command -v jq") == "Ran a shell command" and t("npm --prefix app run test") == "Ran npm run test"
+    assert t('claude -p "fix the tests"') == "Ran claude" and t('codex "fix it"') == "Ran codex" and t("codex exec -") == "Ran codex exec"
+    assert t("npm run build") == "Ran npm run build" and t("docker compose up -d") == "Ran docker compose up" and t("git stash pop") == "Ran git stash pop"
     assert t("tmux -L greenlight capture-pane -p -t '=s:' -S -60") == "Ran tmux capture-pane"
     assert t("git -C /w status --short") == "Ran git status"
     assert t("FOO=1 uv run --with pytest python -m pytest -q") == "Ran pytest"
@@ -771,6 +776,8 @@ def test_plan_from_codex_and_opencode():
     out = o.opencode({"type": "tool_use", "part": {"id": "x", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [
         {"content": "Read", "status": "completed"}, {"content": "Write", "status": "in_progress"}]}}}})
     assert [e["e"] for e in out] == ["step", "step_done", "plan"] and out[-1]["title"] == "Write" and out[0]["title"] == "Updated the plan", out
+    p = o.todos([{"content": "a", "status": "completed"}, {"content": "b", "status": "cancelled"}])[0]
+    assert p["done"] == p["total"] == 1 and p["title"] == "", p  # a cancelled item isn't work left
 
 
 def test_codex_tools_are_steps():

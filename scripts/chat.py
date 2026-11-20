@@ -113,7 +113,9 @@ RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nic
 SHELLS = {"sh", "bash", "zsh"}
 SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude"}  # their subcommands name them
 NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
-VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace"}  # a subcommand tool's flags that take the next word
+WRAPPER_VERBS = {"run", "compose", "stash", "worktree", "remote"}  # …and after these: npm run build, git stash pop (not exec: a prompt)
+VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}
+AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt  # a subcommand tool's flags that take the next word
 RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
@@ -125,14 +127,17 @@ def cmd_title(cmd):
     m = re.match(r"^\s*(?:\S*/)?(?:ba|z)?sh\s+-l?c\s+(['\"]?)(.*)\1\s*$", str(cmd or ""), re.S)
     if m:  # bash -c 'cd /w && make test': what's inside, split on its own && and ;
         return cmd_title(m.group(2))
-    for seg in re.split(r"&&|\|\||;|\||\n", str(cmd or "")):
+    cmd = str(cmd or "")
+    masked = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", lambda m: "x" * len(m.group()), cmd)  # separators inside quotes don't split
+    cuts = [0] + [x for m in re.finditer(r"&&|\|\||;|\||\n", masked) for x in m.span()] + [len(cmd)]
+    for seg in (cmd[cuts[i]:cuts[i + 1]] for i in range(0, len(cuts), 2)):
         w = [x.strip("'\"()") for x in seg.split()]
         w = [x for x in w if x and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=|^\d?[<>]", x)]  # env assignments, redirections
         while w and w[0] in ("do", "then", "else", "!"):
             w = w[1:]
         if not w or w[0] in ("cd", "export", "set", "source", ".", "true", ":", "echo", "printf", "sleep", "[", "test", "if", "fi",
-                             "done", "for", "while", "until", "case", "esac", "EOF"):
-            continue
+                             "done", "for", "while", "until", "case", "esac", "EOF") or w[:2] in (["command", "-v"], ["command", "-V"]):
+            continue  # nothing ran (command -v only looks a program up)
         if os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
             return cmd_title(" ".join(w[2:]))
         while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
@@ -149,13 +154,13 @@ def cmd_title(cmd):
         prog, sub = os.path.basename(w[0]), []
         if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
             i = 1
-            while i < len(w) and len(sub) < (2 if prog in NOUN_VERB else 1):
+            while i < len(w) and len(sub) < (2 if prog in NOUN_VERB or sub[:1] and sub[0] in WRAPPER_VERBS else 1):
                 if w[i].startswith("-"):
-                    if sub:  # flags after the subcommand: its arguments start, and they stay out
+                    if sub and not (prog in NOUN_VERB and w[i] in VALUED):  # flags after the subcommand: its arguments, kept out
                         break
-                    i += 2 if w[i] in VALUED else 1  # git -C /w status: the flags before it
+                    i += 2 if w[i] in VALUED else 1  # git -C /w status, gh pr --repo a/b list: flags before the words
                     continue
-                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
+                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]) or (prog in ("claude", "codex") and not sub and w[i] not in AGENT_SUBS):
                     break
                 sub.append(w[i])
                 i += 1
@@ -257,7 +262,8 @@ class Norm:
 
     def todos(self, todos):
         """TodoWrite's (claude, opencode) todos: the active one by its present-tense form."""
-        return self.plan([(x.get("content") or "", x.get("status", ""), x.get("activeForm")) for x in todos or [] if isinstance(x, dict)])
+        return self.plan([(x.get("content") or "", x.get("status", ""), x.get("activeForm")) for x in todos or []
+                          if isinstance(x, dict) and x.get("status") != "cancelled"])  # opencode's: dropped work isn't left to do
 
     def think(self, s):
         return [{"e": "think", "delta": s}] if self.verbose and s else []

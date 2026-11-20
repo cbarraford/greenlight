@@ -453,7 +453,7 @@ func byline(_ r: Run, now: Date, lead: Bool) -> String {
     var parts = [String]()
     if lead {
         let plan = r.plan.flatMap { $0.title.isEmpty || $0.done >= $0.total ? nil : $0.title }
-        parts.append(r.steps.last { $0.ok == nil }?.title ?? (r.thinking ? plan ?? "Thinking" : r.status))
+        parts.append(r.steps.last.flatMap { $0.ok == nil ? $0.title : nil } ?? (r.thinking ? plan ?? "Thinking" : r.status))  // the newest step, as Activity: an older one left open (a run that died mid-call) isn't now
     }
     if let p = r.plan, p.total > 0 { parts.append("\(p.done) of \(p.total) tasks done") }
     else if lead && !fin.isEmpty { parts.append("\(fin.count) step\(fin.count == 1 ? "" : "s") done" + (failed > 0 ? ", \(failed) failed" : "")) }
