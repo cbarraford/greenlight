@@ -645,9 +645,15 @@ test("agent card: hovering (or tabbing to) the progress bar lists every stage: d
   await page.keyboard.press("Tab");
   assert.equal(await page.evaluate(() => document.activeElement.classList.contains("prog")), true, "Tab reaches the bar");
   await page.waitForSelector(pop, {state: "visible"});
+  await page.evaluate(s => mc.update(s), {...SNAP, pucks: [...SNAP.pucks, staged("a", 1), staged("z", 4)]});  // the 5s snapshot rebuilds the cards
+  assert.equal(await page.evaluate(() => document.activeElement.matches(".acard[data-name='stg-a'] .prog")), true, "focus on the bar survives a re-render");
+  await page.waitForSelector(pop, {state: "visible"});
   await page.keyboard.press("Escape");
   await page.waitForSelector(pop, {state: "hidden"});
   assert.equal(await page.evaluate(() => document.activeElement.classList.contains("prog")), true, "Esc hides the list and keeps focus on the bar");
+  await page.evaluate(s => mc.update(s), {...SNAP, pucks: [...SNAP.pucks, staged("a", 1), staged("z", 4)]});
+  assert.equal(await page.isVisible(pop), false, "and it stays put away through a re-render");
+  assert.notEqual(await page.evaluate(() => cssId("v1.2")), await page.evaluate(() => cssId("v1_2")), "two names never share a stage list's id");
   await page.hover(".acard[data-name='stg-z'] .prog");
   const z = ".acard[data-name='stg-z'] .stagepop";
   await page.waitForSelector(z, {state: "visible"});
@@ -675,16 +681,16 @@ test("agent card: clicking its output opens All output over the window, live: fo
   assert.deepEqual(await page.$$eval("#aout-list .aoe.you .aow, #aout-list .aoe.said .aow", es => [...new Set(es.map(e => e.textContent))]), ["Prompt", "Claude"]);
   assert.ok(await atBottom(page), "it opens at the newest output");
   const tool = "#aout-list .aoe.tool >> nth=0", tall = () => page.$eval("#aout-list .aoe.tool", e => e.getBoundingClientRect().height);
-  await page.evaluate(() => { const e = document.querySelector("#aout-list .aoe.tool"); e.textContent = "Bash " + "x ".repeat(2000) });
+  await page.evaluate(() => { const e = document.querySelector("#aout-list .aoe.tool"); e.replaceWith(outEntry({id: "s1:900", role: "tool", text: "Bash " + "x ".repeat(2000)})) });
   const folded = await tall();
-  await page.click(tool);
+  await page.focus(tool); await page.keyboard.press("Enter");
   assert.ok(folded < 60 && await tall() > folded * 3, `a long tool line folds to 3 lines and a click unfolds it (${folded} → ${await tall()})`);
   await page.evaluate(() => outBottom());
   await page.evaluate(s => mc.update(s), SNAP);  // the 5s snapshot re-renders the page under it
   assert.ok(await page.isVisible("#aout") && await atBottom(page), "a re-render leaves it open and where it was");
   assert.equal(await page.locator(".acard[data-name='plan-b'] .prog, .acard[data-name='plan-b'] button.aline").count(), 1, "the compact card is still there under it");
 
-  await nextPoll(page, 2);  // a working agent: refreshed every 2s
+  await nextPoll(page, 2);  // a working agent: refreshed every 3s
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "x:1", entries: [...many.slice(-5), E(41, "assistant", "new one")]});
   assert.equal(await page.locator("#aout-list > *").count(), 43, "only the new entry is added");
   assert.equal(await page.textContent("#aout-list > :last-child .aotx"), "new one");
@@ -711,8 +717,9 @@ test("agent card: clicking its output opens All output over the window, live: fo
   assert.ok(Math.abs(await page.$eval("#aout-list > [data-id='s1:start']", e => e.getBoundingClientRect().top) - was) < 2, "what you were reading stays put");
   assert.match(await page.textContent("#aout-more"), /Start of this workspace's agent sessions/);
 
-  await page.click("#aout-new");
+  await page.focus("#aout-new"); await page.keyboard.press("Enter");
   assert.ok(await atBottom(page) && await page.isHidden("#aout-new"), "Latest jumps back down and follows again");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "aout-log", "the hidden button hands the keyboard to the log, not to the page behind");
   await page.keyboard.press("Shift+Tab");
   assert.equal(await page.evaluate(() => document.getElementById("aout").contains(document.activeElement)), true, "Tab stays inside the dialog");
   await page.keyboard.press("Escape");
@@ -725,17 +732,21 @@ test("agent card: clicking its output opens All output over the window, live: fo
   assert.equal(await page.$("#aout"), null, "a late answer doesn't reopen it");
 });
 
-test("All output: Back closes it; more new output than a page holds starts over at the newest; an empty workspace says so", async page => {
+test("All output: Back closes it; more new output than a page holds is marked as a gap; an empty workspace says so until it isn't", async page => {
   await page.evaluate(() => { ui.agentsFolded = false; render() });
   await page.click(".acard[data-name='plan-b'] button.aline");
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: []});
   assert.match(await page.textContent("#aout-list"), /No output from this workspace's agents yet/);
   await nextPoll(page, 2);
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [E(1, "assistant", "a")]});
+  assert.equal(await page.$("#aout-list .aonote"), null, "the first output replaces No output yet");
+  await page.$eval("#aout-log", e => { e.style.flex = "none"; e.style.height = "60px"; e.scrollTop = 0; e.dispatchEvent(new Event("scroll")) });
+  await page.waitForFunction(() => !ui.out.follow);
   await nextPoll(page, 3);
-  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "s1:5", entries: [E(70, "assistant", "x"), E(71, "assistant", "y")]});
-  assert.deepEqual(await page.$$eval("#aout-list .aotx", es => es.map(e => e.textContent)), ["x", "y"], "no overlap: it restarts at the newest page, not with a gap");
-  assert.ok(await page.isVisible("#aout-older"), "and can page back from there");
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: "s1:5", entries: [E(70, "assistant", "x\n\n\n\nx"), E(71, "assistant", "y\n\n\n\ny")]});
+  assert.deepEqual(await page.$$eval("#aout-list .aotx", es => es.map(e => e.textContent[0])), ["a", "x", "y"], "no overlap: kept what was shown, then the newest");
+  assert.match(await page.textContent("#aout-list .aosep.gap"), /some is skipped here/, "and says output was skipped between them");
+  assert.equal(await page.$eval("#aout-log", e => e.scrollTop), 0, "a reader scrolled up stays where they were");
   await page.click("#aout-back");
   assert.equal(await page.$("#aout"), null);
 });

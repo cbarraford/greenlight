@@ -688,7 +688,7 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {ci: {days: [7, 14, 30].includes(+localGet("ciDays")) ? +localGet("ciDays") : 30, proj: localGet("ciProj") || null, data: null, loading: false, err: null},
-  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null};
+  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -1019,7 +1019,7 @@ function hl(name, on){ document.querySelectorAll(".cell,.acard,.lrow").forEach(e
 const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", review_bot:"Adding review bot", milestone:"Setting milestone",
   ready:"Undrafting", threads:"Answering threads", approved:"Awaiting approval", merge:"Merging", review:"Reviewing"};
 const CIWORD = {success:["passed", "--green"], failed:["failed", "--red"], running:["running", "--blue"], pending:["pending", "--blue"], canceled:["canceled", "--gray"]};
-const cssId = name => String(name).replace(/[^\w-]/g, "_");
+const cssId = name => String(name).replace(/[^A-Za-z0-9-]/g, c => `_${c.charCodeAt(0).toString(16)}_`);  // one-to-one: "v1.2" and "v1_2" stay apart
 function stageList(p, steps, i, n){  // every step by name: done ones ticked, the current one marked "Now", the one after it "Next"
   const cur = i < n && p.state !== "done" ? steps[i] : null;
   const name = k => STEP_GOALS[k] || STEP_NAMES[k] || String(k).replace(/_/g, " ").replace(/^./, x => x.toUpperCase());  // a lifecycle's own step: "pre_merge" reads "Pre merge"
@@ -1030,14 +1030,21 @@ function stageList(p, steps, i, n){  // every step by name: done ones ticked, th
         h("span", {class:"spm", "aria-hidden":"true"}, st === "done" ? icon("check", 9) : null), h("span", {}, name(k)),
         h("span", {class:"spt"}, st === "done" ? "Done" : st === "cur" ? "Now" : j === i + 1 ? "Next" : "")) })));
 }
-function placeStages(e){  // below the bar, or above it when the window's foot would cut it off
+function placeStages(e, name){  // below the bar, or above it when the window's foot would cut it off
   const pr = e.currentTarget, pop = pr.querySelector(".stagepop"); if (!pop) return;
-  pr.classList.remove("up");
+  const hush = !!(ui.stage && ui.stage.name === name && ui.stage.hush);  // focus put back after a re-render: an Esc still holds
+  pr.classList.remove("up"); pr.classList.toggle("hush", hush);
   const r = pr.getBoundingClientRect(), m = document.getElementById("main").getBoundingClientRect(), need = pop.offsetHeight + 8;
-  if (r.bottom + need > Math.min(innerHeight, m.bottom) && r.top - need > Math.max(0, m.top)) pr.classList.add("up");
+  const up = r.bottom + need > Math.min(innerHeight, m.bottom) && r.top - need > Math.max(0, m.top);
+  pr.classList.toggle("up", up);
+  ui.stage = {name, up, hush};  // the 5s re-render rebuilds the card under the pointer: it keeps where the list opened, and an Esc
+}
+function unStages(e){  // a real leave forgets it; the 5s re-render's removal blurs the bar too, and its rebuilt twin then has the focus or the pointer
+  const id = e.currentTarget.id; e.currentTarget.classList.remove("hush");
+  setTimeout(() => { const el = document.getElementById(id); if (!el || !(el === document.activeElement || el.matches(":hover"))) ui.stage = null }, 0);
 }
 // what the agent is doing, as a button: it opens All output over the whole window
-const outLine = (p, act, ...kids) => h("button", {class:"aline", type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
+const outLine = (p, act, ...kids) => h("button", {class:"aline", id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
   onclick: () => openOut(p.name)}, ...kids, h("span", {class:"aexp", "aria-hidden":"true"}, icon("expand", 12)));
 function agentCard(p){  // one size everywhere: who and the action, the steps as a bar, what it's doing now, then the MR's facts
   const a = p.agent, wait = a.state === "waiting", codex = /codex/i.test(a.type || ""), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
@@ -1055,9 +1062,9 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       h("span", {class:"pill" + (wait ? " wait" : crash ? " red" : "")}, wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || STEP_NAMES[p.step] || p.step),
       h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
-    steps.length ? h("div", {class:"prog", tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
-        onmouseenter: placeStages, onfocus: placeStages, onmouseleave: e => e.currentTarget.classList.remove("hush"), onblur: e => e.currentTarget.classList.remove("hush"),
-        onkeydown: e => { if (e.key === "Escape" && !e.currentTarget.classList.contains("hush")) { e.stopPropagation(); e.currentTarget.classList.add("hush") } }},  // Esc puts the list away; Esc again backs out as usual
+    steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
+        onmouseenter: e => placeStages(e, p.name), onfocus: e => placeStages(e, p.name), onmouseleave: unStages, onblur: unStages,
+        onkeydown: e => { if (e.key === "Escape" && !e.currentTarget.classList.contains("hush")) { e.stopPropagation(); e.currentTarget.classList.add("hush"); if (ui.stage) ui.stage.hush = true } }},  // Esc puts the list away; Esc again backs out as usual
       h("div", {class:"segs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {}, h("i", {class: k === i ? "cur" : null, style:`width:${k < i ? 100 : k === i ? 50 : 0}%`})))),
       h("div", {class:"lbls", "aria-hidden":"true"}, steps.map((s, k) => h("span", {class: k < i ? "done" : k === i ? "cur" : null}, HEXSUB[s] || STEP_NAMES[s] || s))),  // the stage list names them all: no title tips over it
       stageList(p, steps, i, n)) : null,
@@ -1523,7 +1530,7 @@ function closeAnswer(){ ui.answering = null; render() }
 /* ---------- All output: the agent's whole conversation (dash.py transcript) over the whole window, refreshed while it's open ----------
    It lives outside #main, so a snapshot's re-render never resets it: new entries are appended, the scroll stays where you left it.
    At the bottom it follows new output; scrolled up, it holds still and counts what arrived. Back, or Esc, closes it. */
-const OUT_EVERY = {working: 2000};  // ms between refreshes; any other agent state: OUT_IDLE
+const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
 const OUT_IDLE = 5000, OUT_FOLLOW = 40;  // px from the bottom that still counts as "at the bottom"
 function openOut(name){
   closeOut(false);
@@ -1553,7 +1560,7 @@ function closeOut(refocus){
 function outKeys(e){
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeOut(true); return }
   if (e.key !== "Tab") return;  // a modal: Tab cycles inside it
-  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout-log")], k = f.indexOf(document.activeElement);
+  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
   if (k < 0 || (e.shiftKey ? k === 0 : k === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus() }
 }
 function pollOut(){
@@ -1587,13 +1594,18 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
   if (!o.inflight) return;  // a stale answer (an earlier open's): the next poll is already set
   o.inflight = false; o.err = r.error || null;
   if (!r.error) {
-    const page = arr(r.entries), add = page.filter(e => !o.ids.has(e.id));
-    if (o.entries.length && add.length && add.length === page.length) { o.entries = []; o.ids.clear(); o.unseen = 0; o.reset = true }  // more arrived than a page holds: start again at the newest
-    if (!o.loaded || o.reset) o.more = r.more || null;
-    add.forEach(e => o.ids.add(e.id)); o.entries.push(...add);
-    const first = !o.loaded; o.loaded = true;
-    if (o.reset || first) { o.reset = false; outPaint() }  // outPaint lands at the bottom
-    else if (add.length) { document.getElementById("aout-list").append(...add.map(outEntry)); if (o.follow) outBottom(); else { o.unseen += add.length; outNew() } }
+    const page = arr(r.entries), add = page.filter(e => !o.ids.has(e.id)), first = !o.loaded;
+    const gap = !first && o.entries.length && add.length && add.length === page.length;  // more arrived than one page holds: what's between is skipped, and said so
+    if (first) o.more = r.more || null;  // Load earlier always continues from the top of what's shown
+    add.forEach(e => o.ids.add(e.id)); o.entries.push(...add); o.loaded = true;
+    if (first) outPaint();  // outPaint lands at the bottom
+    else if (add.length) {
+      const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
+      if (note) note.remove();  // "No output yet" was true until now
+      if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some is skipped here"));
+      list.append(...add.map(outEntry));
+      if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
+    }
     outMore();
   }
   outHead(); nextPoll();
@@ -1601,12 +1613,14 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
 function outEntry(e){
   const p = ui.out && puckOf(ui.out.name), who = p && /codex/i.test(p.agent.type || "") ? "Codex" : "Claude";
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
-  if (e.role === "tool") return h("div", {class:"aoe tool", "data-id": e.id, title: e.text.length > 240 ? "Click to show all of it" : null,
-    onclick: ev => { if (!String(getSelection())) ev.currentTarget.classList.add("open") }}, e.text);  // not while selecting text in it
+  if (e.role === "tool") { const long = e.text.length > 240, open = el => { el.classList.add("open"); ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)) };
+    return h("div", {class:"aoe tool", "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
+      onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
+      onkeydown: ev => { if (long && (ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }}, e.text) }
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
     h("div", {class:"aow"}, e.role === "user" ? "Prompt" : who), h("div", {class:"aotx"}, e.text));
 }
-function outPaint(){  // the whole list again: first open, or after starting over at the newest
+function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   list.replaceChildren(...o.entries.map(outEntry));
   if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
@@ -1614,6 +1628,9 @@ function outPaint(){  // the whole list again: first open, or after starting ove
 }
 function outMore(){  // the top of the log: Load earlier, or where the sessions start
   const o = ui.out, el = document.getElementById("aout-more"); if (!o || !el) return;
+  const key = [o.loaded, !!o.more, o.older, !!o.olderErr, !!o.entries.length].join();
+  if (key === o.moreKey) return;  // unchanged: the button stays the one under the pointer (and the screen reader's)
+  o.moreKey = key;
   const had = el.contains(document.activeElement);  // its button is rebuilt: keep the keyboard on it (or on the log), never behind the dialog
   el.replaceChildren(!o.loaded ? h("span", {}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "Loading output…")
     : o.more ? h("button", {class:"btn sm", id:"aout-older", disabled: o.older, onclick: olderOut}, o.older ? "Loading…" : o.olderErr ? "Couldn't load. Try again" : "Load earlier output")
@@ -1623,6 +1640,7 @@ function outMore(){  // the top of the log: Load earlier, or where the sessions 
 }
 function outBottom(){
   const o = ui.out, log = document.getElementById("aout-log"); if (!o || !log) return;
+  if (document.activeElement && document.activeElement.id === "aout-new") log.focus();  // it's about to hide: keep the keyboard in the dialog
   log.scrollTop = log.scrollHeight; o.follow = true; o.unseen = 0; outNew();
 }
 function outScrolled(e){
