@@ -565,45 +565,70 @@ func keychain(_ account: String, set value: String? = nil) -> String? {
     return nil
 }
 /// The OpenAI key Greenlight uses: the one set in Settings (Keychain) first, else OPENAI_API_KEY from the environment.
-func openAIKey() -> String? {
-    if let k = keychain("openai")?.trimmingCharacters(in: .whitespacesAndNewlines), !k.isEmpty { return k }
-    return environmentOpenAIKey()
-}
-/// Where openAIKey() found its key, for Settings.
+/// It may wait on the login shell (see environmentOpenAIKey); Settings' text doesn't (openAIKeySource).
+func openAIKey() -> String? { settingsOpenAIKey() ?? environmentOpenAIKey() }
+/// The key set in Settings, trimmed; nil if there's none (or only whitespace).
+func settingsOpenAIKey() -> String? { keychain("openai")?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
+/// Where openAIKey() finds its key, for Settings. Never waits: before the shell has answered, it says it's looking.
 func openAIKeySource() -> String {
-    if let k = keychain("openai"), !k.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Stored in your Keychain." }
-    return environmentOpenAIKey() == nil ? "Not set: set one, or export OPENAI_API_KEY in your shell." : "Using OPENAI_API_KEY from your shell; a key set here takes priority."
+    if settingsOpenAIKey() != nil { return "Stored in your Keychain." }
+    guard let env = peekEnvironmentOpenAIKey() else { return "Looking for OPENAI_API_KEY in your shell…" }
+    return env == nil ? "No key: set one here, or export OPENAI_API_KEY in your shell and relaunch Greenlight."
+        : "Using OPENAI_API_KEY from your shell; a key set here comes first."
 }
 /// OPENAI_API_KEY from this app's environment, else your login shell's: an app opened from the Finder or the Dock gets launchd's
-/// environment, without your shell's exports. Read once a launch (warmed at launch, off the main thread); the selftest sets envKeyRead.
+/// environment, without your shell's exports. Read once a launch, on envKeyQueue, so a caller that needs the key waits for the one
+/// read and Settings (peek) never does. The selftest sets envKeyRead.
 var envKeyRead: (done: Bool, key: String?) = (false, nil)
-private let envKeyLock = NSLock()
+private let envKeyLock = NSLock(), envKeyQueue = DispatchQueue(label: "env-key")
+private var envKeyAsked = false
 func environmentOpenAIKey(_ env: [String: String] = ProcessInfo.processInfo.environment) -> String? {
-    envKeyLock.lock(); defer { envKeyLock.unlock() }
-    if envKeyRead.done { return envKeyRead.key }
-    var k = env["OPENAI_API_KEY"]
-    if k?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true { k = shellVariable("OPENAI_API_KEY", shell: env["SHELL"] ?? "/bin/zsh") }
-    k = k?.trimmingCharacters(in: .whitespacesAndNewlines)
-    envKeyRead = (true, k?.isEmpty == false ? k : nil)
-    return envKeyRead.key
+    envKeyQueue.sync {
+        if let r = peekEnvironmentOpenAIKey(ask: false) { return r }
+        var k = env["OPENAI_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if k == nil { k = shellVariable("OPENAI_API_KEY", shell: env["SHELL"] ?? loginShell())?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
+        envKeyLock.lock(); envKeyRead = (true, k); envKeyLock.unlock()
+        return k
+    }
 }
+/// The read's result without waiting: .some(key or nil) once read, nil before. `ask` starts the read (once), and Settings redraws when it's in.
+func peekEnvironmentOpenAIKey(ask: Bool = true) -> String?? {
+    envKeyLock.lock()
+    let r = envKeyRead, start = ask && !r.done && !envKeyAsked
+    if start { envKeyAsked = true }
+    envKeyLock.unlock()
+    if start { DispatchQueue.global().async { _ = environmentOpenAIKey(); DispatchQueue.main.async { (NSApp.delegate as? App)?.greenlight.objectWillChange.send() } } }
+    return r.done ? .some(r.key) : nil
+}
+/// Your account's login shell (an app launched by launchd may have no SHELL).
+func loginShell() -> String { getpwuid(getuid())?.pointee.pw_shell.map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh" }
+extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
 /// A variable as your interactive login shell sets it (~/.zprofile and ~/.zshrc), or nil. Whatever the rc files print is skipped:
-/// the value sits between markers. A shell that hasn't answered in 5 s is stopped.
+/// the value sits between markers, and reading stops at the end marker (a prompt's background helper may hold the pipe open for good).
+/// A shell that hasn't answered in `timeout` s is killed (an interactive shell ignores SIGTERM).
 func shellVariable(_ name: String, shell: String, timeout: Double = 5) -> String? {
-    let p = Process(), out = Pipe()
+    let p = Process(), out = Pipe(), lock = NSLock(), got = DispatchSemaphore(value: 0)
     p.executableURL = URL(fileURLWithPath: shell)
     p.arguments = ["-ilc", "printf '\\n<<greenlight>>%s<</greenlight>>' \"$\(name)\""]
     p.standardInput = FileHandle.nullDevice; p.standardOutput = out; p.standardError = FileHandle.nullDevice
+    var data = Data(), over = false
+    out.fileHandleForReading.readabilityHandler = { h in
+        let d = h.availableData
+        lock.lock(); defer { lock.unlock() }
+        guard !over else { return }
+        data += d
+        if d.isEmpty || data.range(of: Data("<</greenlight>>".utf8)) != nil { over = true; got.signal() }  // EOF, or the value is in
+    }
+    defer { out.fileHandleForReading.readabilityHandler = nil; try? out.fileHandleForReading.close() }
     do { try p.run() } catch { return nil }
-    var data = Data()
-    let read = DispatchSemaphore(value: 0)
-    DispatchQueue.global().async { data = out.fileHandleForReading.readDataToEndOfFile(); read.signal() }
-    if read.wait(timeout: .now() + timeout) == .timedOut { p.terminate(); return nil }  // its children may hold the pipe: don't wait on them
-    let t = String(decoding: data, as: UTF8.self)
-    guard let a = t.range(of: "<<greenlight>>", options: .backwards), let b = t.range(of: "<</greenlight>>", range: a.upperBound..<t.endIndex) else { return nil }
-    let v = String(t[a.upperBound..<b.lowerBound])
-    return v.isEmpty ? nil : v
+    let answered = got.wait(timeout: .now() + timeout) == .success
+    if p.isRunning { kill(p.processIdentifier, SIGKILL) }  // done with it either way: the value is read, or it never came
+    lock.lock(); over = true; let t = String(decoding: data, as: UTF8.self); lock.unlock()
+    guard answered, let a = t.range(of: "<<greenlight>>", options: .backwards), let b = t.range(of: "<</greenlight>>", range: a.upperBound..<t.endIndex) else { return nil }
+    return String(t[a.upperBound..<b.lowerBound]).nilIfEmpty
 }
+/// Read OPENAI_API_KEY again on next use: you may have exported one since launch (Set key… does this).
+func forgetEnvironmentOpenAIKey() { envKeyQueue.async { envKeyLock.lock(); envKeyRead = (false, nil); envKeyAsked = false; envKeyLock.unlock() } }
 /// The Keychain calls `keychain` makes; the selftest swaps in fakes.
 struct KeychainOps {
     var copy: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemCopyMatching
@@ -635,7 +660,7 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
             done(text, p.terminationStatus == 0 ? nil : "whisper-cli exited \(p.terminationStatus)")
         }
     case "openai":
-        guard let key = openAIKey() else { return done(nil, "no OpenAI key: right-click the star → Voice → Set OpenAI key…, or export OPENAI_API_KEY") }
+        guard let key = openAIKey() else { return done(nil, "no OpenAI key: right-click the star → Voice → Set OpenAI key…, or export OPENAI_API_KEY and relaunch") }
         let b = UUID().uuidString
         var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
         req.httpMethod = "POST"
@@ -1889,7 +1914,7 @@ final class Voice: NSObject, ObservableObject {
     // GPT-Live
 
     func openLive() {
-        guard let key = openAIKey() else { return liveFailed("needs an OpenAI key: Settings → Chat & voice → OpenAI key, or export OPENAI_API_KEY") }
+        guard let key = openAIKey() else { return liveFailed("needs an OpenAI key: Settings → Chat & voice → OpenAI key, or export OPENAI_API_KEY and relaunch") }
         toldLive = []; newCaption = true; quietFor = 0
         wait("Connecting", "Starting a GPT-Live session…")
         live.open(key) { [weak self] e in self?.onLive(e) }
@@ -2240,12 +2265,13 @@ func liveRefusal(_ body: Data, _ h: [String: String] = [:]) -> String {
               let j = try? JSONSerialization.jsonObject(with: Data(t[a...b].utf8)) as? [String: Any] else { return nil }
         let e = j["error"] as? [String: Any], m = (e?["message"] as? String ?? j["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let m, !m.isEmpty { return m }
-        return (e?["code"] as? String ?? e?["type"] as? String).map { "error \($0)" }  // OpenAI's code when its message is blank
+        let code = [e?["code"], e?["type"]].compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespaces).nilIfEmpty }.first
+        return code.map { "error \($0)" }  // OpenAI's code when its message is blank
     }
     let t = String(decoding: body, as: UTF8.self)
     if let m = message(t) { return m }
     if let x = h["x-error-json"].flatMap({ Data(base64Encoded: $0) }), let m = message(String(decoding: x, as: UTF8.self)) { return m }
-    if let r = t.range(of: #"(?<=<title>)[^<]*"#, options: .regularExpression) { return t[r].trimmingCharacters(in: .whitespaces) }
+    if let r = t.range(of: #"(?<=<title>)[^<]*"#, options: .regularExpression), let title = t[r].trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty { return title }
     let plain = t.trimmingCharacters(in: .whitespacesAndNewlines)
     if !plain.isEmpty { return String(plain.prefix(120)) }
     let from = [h["server"], h["content-type"]].compactMap { $0 }.joined(separator: ", ")
@@ -2383,9 +2409,10 @@ final class LiveVoice {
     private func refused(_ s: Sock, _ status: Int, _ h: [String: String]) {
         guard !s.dead else { return }
         let m = liveRefusal(httpBody(h, s.body), h), ref = liveReplyRef(h)
-        // the whole head but its cookies, for Console: a refusal the message can't explain is told apart by its headers
+        // the headers that tell one server from another, for Console (not x-error-json or cookies: they can carry account details)
+        let shown = ["server", "content-type", "content-length", "transfer-encoding", "connection", "via", "cf-ray", "x-request-id"]
         NSLog("GPT-Live: upgrade refused, HTTP %d, %@: %@ [%@]", status, ref ?? "no request id", m,
-              h.filter { $0.key != "set-cookie" }.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "; "))
+              shown.compactMap { k in h[k].map { "\(k): \($0)" } }.joined(separator: "; "))
         end(s, LiveVoice.why(status, m, ref: ref))
     }
     private func frames(_ s: Sock, _ d: Data) {
@@ -2448,9 +2475,9 @@ final class LiveVoice {
     /// `ref` (a request id) goes on any refusal but a bad key's, so a screenshot of one is enough to look it up.
     static func why(_ code: Int, _ detail: String = "", _ err: Error? = nil, ref: String? = nil) -> String {
         let d = detail.hasPrefix("\(code) ") ? String(detail.dropFirst("\(code) ".count)) : detail  // Cloudflare's title has the code
-        let more = (d.isEmpty ? "" : ": \(d)") + (ref.map { "; \($0)" } ?? "")
+        let more = (d.isEmpty ? "" : ": \(d.hasSuffix(".") && ref != nil ? String(d.dropLast()) : d)") + (ref.map { "; \($0)" } ?? "")
         switch code {
-        case 401: return "refused the OpenAI key (401)"
+        case 401: return "refused the OpenAI key (401\(ref.map { "; \($0)" } ?? ""))"
         case 403, 404: return "isn't available to this OpenAI key's project (\(code)\(more)): it needs access to \(model)"
         case 429: return "is over its rate or concurrent-session limit (429\(more))"
         case 0: break
@@ -2552,7 +2579,7 @@ final class LivePreview: ObservableObject {
 
     private func begin(_ voice: String, _ key: () -> String?, _ g: Int) {
         guard g == gen else { return }
-        guard let k = key(), !k.isEmpty else { return fail(voice, "it needs an OpenAI key (Set key… above, or export OPENAI_API_KEY), or the Keychain didn’t let Greenlight read it") }
+        guard let k = key(), !k.isEmpty else { return fail(voice, "it needs an OpenAI key (Set key… above, or export OPENAI_API_KEY and relaunch), or the Keychain didn’t let Greenlight read it") }
         guard g == gen else { return }  // stopped while the Keychain asked
         let e = AVAudioEngine(), n = AVAudioPlayerNode()
         e.attach(n)
@@ -4582,7 +4609,9 @@ struct SettingsView: View {
             return FileManager.default.fileExists(atPath: m.path) ? "Ready · model \(m.lastPathComponent)" : "Not ready: model \(m.lastPathComponent) is missing. Choose a model below."
         case "openai":
             let m = UserDefaults.standard.string(forKey: "openaiModel") ?? "whisper-1"
-            return openAIKey() == nil ? "Not ready: no API key. Set one below, or export OPENAI_API_KEY." : "Ready · key \(keychain("openai") == nil ? "from OPENAI_API_KEY" : "set") · model \(m)"
+            if settingsOpenAIKey() != nil { return "Ready · key set · model \(m)" }
+            guard let env = peekEnvironmentOpenAIKey() else { return "Checking your shell for OPENAI_API_KEY…" }
+            return env == nil ? "Not ready: no API key. Set one below, or export OPENAI_API_KEY and relaunch." : "Ready · key from OPENAI_API_KEY · model \(m)"
         default:
             return appleOnDevice ? "Ready · transcribes on this Mac; audio never leaves it." : "Ready · on-device recognition isn't available here, so audio goes to Apple's servers."
         }
@@ -5994,7 +6023,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         greenlight.scope = { [weak self] in self?.pickScope }
         greenlight.showDockIcon()
-        DispatchQueue.global().async { _ = environmentOpenAIKey() }  // the login shell it may run, before Settings or voice mode wait on it
+        if greenlight.engine == "openai" { DispatchQueue.global().async { _ = openAIKey() } }  // the login shell it may run, before dictation waits on it (voice mode: Speech.warm)
         Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -7374,7 +7403,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func askKey(_ account: String, _ title: String, _ use: String) {
         let a = NSAlert()
         a.messageText = title
-        a.informativeText = "Stored in your login Keychain. Used only for \(use). Leave empty to remove it\(account == "openai" ? " (then OPENAI_API_KEY from your shell is used, if it’s set)" : "")."
+        a.informativeText = "Stored in your login Keychain. Used only for \(use). Leave empty to \(account == "openai" && peekEnvironmentOpenAIKey(ask: false)??.isEmpty == false ? "use OPENAI_API_KEY from your shell instead" : "remove it")."
         let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         a.accessoryView = f
         a.addButton(withTitle: "Save")
@@ -7388,6 +7417,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             greenlight.msgs.append(Msg(.note, "Couldn't \(action) the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
         } else { LivePreview.shared.keyChanged(account, to: v) }
         if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
+        if account == "openai" { forgetEnvironmentOpenAIKey() }
     }
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
@@ -7688,7 +7718,7 @@ func selfTest() {
     do {  // a refusal that says nothing in its body (seen on a MacBook 2026-11-20 as a bare "refused the connection (400)")
         let xe = Data(#"{"error":{"message":"Voice sessions are not enabled for this project.","code":"x"}}"#.utf8).base64EncodedString()
         let emptyRef = LiveVoice.why(400, liveRefusal(Data(), ["server": "cloudflare", "content-type": "text/plain"]), ref: liveReplyRef(["x-request-id": "req_1", "cf-ray": "r"]))
-        check("voice: a refusal's reason is never blank: OpenAI's x-error-json header, a blank message's code, an empty reply named by its server, with its request id (\(emptyRef))",
+        check("voice: a refusal's reason is never blank: OpenAI's x-error-json header, a blank message's code, an empty reply named by its server, with its request id, a bad key's too (\(emptyRef))",
               liveRefusal(Data(), ["x-error-json": xe]) == "Voice sessions are not enabled for this project."
               && liveRefusal(Data("\r\n".utf8), ["x-error-json": xe]) == "Voice sessions are not enabled for this project."
               && liveRefusal(Data(#"{"error":{"message":"  ","code":"session_rejected"}}"#.utf8)) == "error session_rejected"
@@ -7696,7 +7726,10 @@ func selfTest() {
               && liveRefusal(Data()) == "an empty reply" && liveRefusal(Data("Bad Request\n".utf8)) == "Bad Request"
               && emptyRef == "refused the connection (400: an empty reply from cloudflare, text/plain; request req_1)"
               && liveReplyRef(["cf-ray": "abc-EWR"]) == "cf-ray abc-EWR" && liveReplyRef(["cf-ray": "-"]) == nil
-              && LiveVoice.why(401, "Incorrect API key", ref: "request req_2") == "refused the OpenAI key (401)"
+              && LiveVoice.why(401, "Incorrect API key", ref: "request req_2") == "refused the OpenAI key (401; request req_2)"
+              && liveRefusal(Data(#"{"error":{"message":"","code":" ","type":""}}"#.utf8), ["x-error-json": xe]) == "Voice sessions are not enabled for this project."
+              && liveRefusal(Data("<html><title> </title></html>".utf8), ["server": "nginx"]) == "<html><title> </title></html>"
+              && liveRefusal(Data("<title>\n</title>".utf8)) == "<title>\n</title>"
               && LiveVoice.why(403, "", ref: "request req_3").contains("(403; request req_3)"))
     }
     do {
@@ -7771,7 +7804,7 @@ func selfTest() {
               refused == [.closed("refused the connection (400: Bad Request)")] && badKey == [.closed("refused the OpenAI key (401)")])
         check("voice: an empty 400 is named by its server and request id (\(empty400)), a header-only one by OpenAI's x-error-json (\(header400))",
               empty400 == [.closed("refused the connection (400: an empty reply from cloudflare; request req_empty)")]
-              && header400 == [.closed("refused the connection (400: Voice sessions are not enabled for this project.; request req_x)")])
+              && header400 == [.closed("refused the connection (400: Voice sessions are not enabled for this project; request req_x)")])
         check("voice: GPT-Live's socket upgrades over HTTP/1.1, sends session.start once it's up, reads split frames, answers a ping, ends on a close (\(opened), \(requests.count) requests, sent \(sent.compactMap { $0["type"] }), got \(frames.filter { if case .text = $0 { return false }; return true }))",
               requests.count == 5 && requests.allSatisfy { $0.hasPrefix("GET /v1/live/sessions HTTP/1.1\r\n") && $0.contains("\r\nAuthorization: Bearer sk-test\r\n") }
               && opened == [.started, .audio(Data([1, 0, 2, 0])), .closed("closed the connection")]
@@ -7782,12 +7815,17 @@ func selfTest() {
     do {  // the OpenAI key: Settings' (Keychain) first, else OPENAI_API_KEY from the app's environment, else the login shell's
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-shell-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let sh = dir.appendingPathComponent("sh"), slow = dir.appendingPathComponent("slow")
+        let sh = dir.appendingPathComponent("sh"), slow = dir.appendingPathComponent("slow"), held = dir.appendingPathComponent("held")
         try? "#!/bin/sh\necho 'rc noise <<greenlight>>x'\nOPENAI_API_KEY='sk-shell'\neval \"$2\"\necho trailing\n".write(to: sh, atomically: true, encoding: .utf8)
-        try? "#!/bin/sh\nsleep 30\n".write(to: slow, atomically: true, encoding: .utf8)
-        for f in [sh, slow] { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path) }
+        try? "#!/bin/sh\ntrap '' TERM\nsleep 30\n".write(to: slow, atomically: true, encoding: .utf8)  // ignores SIGTERM, as an interactive shell does
+        try? "#!/bin/sh\nsleep 30 &\nOPENAI_API_KEY='sk-held'\neval \"$2\"\nsleep 30\n".write(to: held, atomically: true, encoding: .utf8)  // a prompt helper holding stdout
+        for f in [sh, slow, held] { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path) }
         let fromShell = shellVariable("OPENAI_API_KEY", shell: sh.path), s0 = Date()
-        let hung = shellVariable("OPENAI_API_KEY", shell: slow.path, timeout: 0.5), hungFor = Date().timeIntervalSince(s0)
+        let hung = shellVariable("OPENAI_API_KEY", shell: slow.path, timeout: 0.5), hungFor = Date().timeIntervalSince(s0), h0 = Date()
+        let fromHeld = shellVariable("OPENAI_API_KEY", shell: held.path), heldFor = Date().timeIntervalSince(h0)
+        let leftover = { () -> String in let p = Process(), o = Pipe(); p.executableURL = URL(fileURLWithPath: "/bin/ps"); p.arguments = ["-axo", "args"]; p.standardOutput = o
+            try? p.run(); p.waitUntilExit(); return String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) }()
+        let killed = !leftover.contains(slow.path)
         let saved = envKeyRead
         keyLock.lock(); let savedChain = keys["openai"]; keys["openai"] = .some(nil); keyLock.unlock()
         envKeyRead = (false, nil); let fromEnv = environmentOpenAIKey(["OPENAI_API_KEY": " sk-env\n", "SHELL": slow.path]), viaEnv = openAIKey()
@@ -7800,9 +7838,9 @@ func selfTest() {
         let envSource = openAIKeySource()
         keyLock.lock(); keys["openai"] = savedChain; keyLock.unlock(); envKeyRead = saved
         try? FileManager.default.removeItem(at: dir)
-        check("voice: the OpenAI key is Settings' first, else OPENAI_API_KEY (the app's environment, else the login shell's, read once), trimmed (\(chainSource) / \(envSource) / \(noneSource))",
-              fromShell == "sk-shell" && hung == nil && hungFor < 3 && fromEnv == "sk-env" && viaEnv == "sk-env" && viaShell == "sk-shell" && cached == "sk-shell"
-              && none == nil && noKey == nil && noneSource.hasPrefix("Not set") && chainFirst == "sk-chain" && chainSource.contains("Keychain") && envSource.contains("OPENAI_API_KEY"))
+        check("voice: the OpenAI key is Settings' first, else OPENAI_API_KEY (the app's environment, else the login shell's, read once; a hung shell is killed at the timeout, a prompt helper holding the pipe doesn't hold up the read), trimmed (\(chainSource) / \(envSource) / \(noneSource))",
+              fromShell == "sk-shell" && hung == nil && hungFor < 3 && killed && fromHeld == "sk-held" && heldFor < 2 && fromEnv == "sk-env" && viaEnv == "sk-env" && viaShell == "sk-shell" && cached == "sk-shell"
+              && none == nil && noKey == nil && noneSource.hasPrefix("No key") && chainFirst == "sk-chain" && chainSource.contains("Keychain") && envSource.contains("OPENAI_API_KEY"))
     }
     // Settings' voice preview: a session of its own that speaks first, played from the first speech to the quiet after it
     let ps = liveStart(voice: "vesper", instructions: livePreviewRule)["session"] as? [String: Any]
