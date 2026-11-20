@@ -12,13 +12,15 @@
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
                                                     teardown to run); set the goal (stdin); write the main checkout's .greenlight.json
-                                                    (stdin); a new worktree of path's repo (stdin {name, base, goal, agent, setup});
+                                                    (stdin); a new worktree of path's repo (stdin {name, base, goal, agent, setup, answers, force}: as task new);
                                                     the diff (stdin: head | branch)
     dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
     dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
     dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
     dash.py task repos -                            one JSON line: the repos a task can go to (New task)
-    dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs
+    dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs.
+                                                    A goal lifestage.preflight finds ambiguous answers {paused, questions} instead;
+                                                    send it again with answers {id: text}, or force: true to start anyway
 
 Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
 with a live `orca worktree ps` (agent state, seconds old). Never calls GitLab for the overview.
@@ -686,6 +688,9 @@ def tree_new(path, o):
     if not BRANCH_RE.fullmatch(name) or ".." in name or base and (not BRANCH_RE.fullmatch(base) or ".." in base):
         return {"error": "a branch name is letters, digits, and . _ - /"}
     goal = " ".join(str(o.get("goal") or "").split())[:500]
+    gate = preflight(goal, "", o) if o.get("agent") and goal else None
+    if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
+        return paused(gate)
     call, w = tree(path)
     res = call("worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
                *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else []))
@@ -701,7 +706,10 @@ def tree_new(path, o):
         return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
     out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
     if o.get("agent") and wid:
-        r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}", *(["--prompt", goal] if goal else []))
+        r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}",
+                 *(["--prompt", goal + (gate or {}).get("brief", "")] if goal else []))
+        if gate:
+            lifestage.save("preflight", new, gate["record"])
         if s := (r.get("terminal") or {}).get("session"):
             out["session"] = s  # a Basement-made agent: the page opens a tab on its tmux session
     return out
@@ -1312,6 +1320,17 @@ def _files(files):
     return out
 
 
+def preflight(goal, context, o):
+    """lifestage.preflight on a New task / New workspace payload: its `answers` ({question id: text}) and `force` (start anyway)."""
+    answers = o.get("answers") if isinstance(o.get("answers"), dict) else None
+    return lifestage.preflight(goal, context, answers, o.get("force") is True)
+
+
+def paused(gate):
+    """The reply for a goal preflight wants to ask about first: the questions with their options, and the verdict behind them."""
+    return {"paused": True, **{k: gate.get(k) for k in ("questions", "p_ambiguous", "clarity", "provider", "why")}}
+
+
 def task_new(repo_name, payload):
     """Start a task: a workspace whose goal is the title (greenlight's freeform step) and whose agent gets the whole request and the files."""
     repo = next((r for r in repos() if r["name"] == repo_name), None)
@@ -1324,6 +1343,9 @@ def task_new(repo_name, payload):
     files = _files(payload.get("files"))
     if isinstance(files, str):
         return {"error": files}
+    gate = preflight(title, request, payload)
+    if gate["pause"]:  # 1.3: ask before the workspace and its agent exist
+        return paused(gate)
     name = _free(_slug(title), {w["displayName"] for w, _ in live_agents().values()} | {d.name for d in TASKS.glob("*")})
     d = TASKS / name
     (d / "files").mkdir(parents=True)
@@ -1335,7 +1357,9 @@ def task_new(repo_name, payload):
              + (f" I attached {len(files)} file{'s' * (len(files) > 1)}, in {d}/files: {', '.join(fn for fn, _ in files)}. Read them first."
                 if files else "")
              + " Implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the "
-               f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess.\n\nMy request:\n\n{quoted}")
+               f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess. Before you open the MR, run its tests with "
+               f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record."
+             + f"\n\nMy request:\n\n{quoted}{gate['brief']}")
     for a in greenlight.CONFIG["agents"]:
         try:
             res = greenlight.orca("worktree", "create", "--repo", f"id:{repo['id']}", "--name", name, "--setup", "skip",
@@ -1350,7 +1374,8 @@ def task_new(repo_name, payload):
             greenlight.orca("worktree", "set", "--worktree", f"id:{wid}", "--display-name", name)
         except RuntimeError:
             pass
-    _note(name, f"task started ({a}, {len(files)} file{'s' * (len(files) != 1)}): {title}")
+    lifestage.save("preflight", name, gate["record"])
+    _note(name, f"task started ({a}, {len(files)} file{'s' * (len(files) != 1)}): {title} [preflight: {gate['why']}]")
     return {"ok": True, "name": name, "repo": repo["name"]}
 
 
