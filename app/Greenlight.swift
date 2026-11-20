@@ -300,8 +300,9 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     }
     do { try p.run() } catch { DispatchQueue.main.async { onExit(-1) }; return p }
     let w = inPipe.fileHandleForWriting, d = Data(stdin.utf8)
-    // a big stdin (attached files) drains as fast as ssh sends it: off the main thread. The throwing write: a dead ssh's EPIPE isn't a crash
-    if d.count < 65536 { try? w.write(contentsOf: d); try? w.close() } else { DispatchQueue.global(qos: .userInitiated).async { try? w.write(contentsOf: d); try? w.close() } }
+    // off the main thread: a pipe holds 16 KB, and ssh reads stdin only once it's connected (attached files are MBs).
+    // The throwing write: a dead ssh's EPIPE isn't a crash
+    DispatchQueue.global(qos: .userInitiated).async { try? w.write(contentsOf: d); try? w.close() }
     return p
 }
 
@@ -426,6 +427,7 @@ final class Run: ObservableObject {
     @Published var stopping = false
     @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
     var gotDone = false, checkIn = false, watch = false
+    var files: [ChatFile] = []  // what it sent; a failed turn puts them back in the composer
     init(_ q: String) { question = q }
 }
 
@@ -668,26 +670,44 @@ func fileKind(_ d: Data) -> String? {
     if has(Array("%PDF-".utf8)) { return "pdf" }
     return !d.contains(0) && String(data: d, encoding: .utf8) != nil ? "text" : nil
 }
-/// A file to attach, or why it can't be. Another image format (HEIC, TIFF, a too-big screenshot) goes as a PNG, else a JPEG, when that fits.
+/// A file to attach, or why it can't be. Another image format (HEIC, TIFF), or an image over 5 MB (a phone photo, a big screenshot),
+/// goes as a PNG when that fits, else a JPEG at most 2576 px on its long side. Slow for big images: call it off the main thread.
 func chatFile(_ data: Data, name raw: String) -> (file: ChatFile?, error: String?) {
     let last = raw.split(separator: "/").last.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "", name = last.isEmpty ? "file" : last
     if data.isEmpty { return (nil, "\(name) is empty.") }
     var d = data, n = name, kind = fileKind(data)
-    let img = kind == "image" || kind == nil ? NSImage(data: data) : nil
-    if let img, kind == nil || d.count > ChatFile.limits["image"]!, let rep = img.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)) {
-        let stem = (name as NSString).deletingPathExtension
-        if let png = rep.representation(using: .png, properties: [:]), png.count <= ChatFile.limits["image"]! { (d, n, kind) = (png, stem + ".png", "image") }
-        else if let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) { (d, n, kind) = (jpg, stem + ".jpg", "image") }
+    let limit = ChatFile.limits["image"]!
+    if kind == nil || (kind == "image" && d.count > limit), let img = NSImage(data: data), let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+        let stem = (name as NSString).deletingPathExtension, full = NSBitmapImageRep(cgImage: cg)
+        if kind == nil, let png = full.representation(using: .png, properties: [:]), png.count <= limit { (d, n, kind) = (png, stem + ".png", "image") }
+        else {
+            let k = min(1, 2576 / CGFloat(max(cg.width, cg.height))), w = max(1, Int(CGFloat(cg.width) * k)), h = max(1, Int(CGFloat(cg.height) * k))
+            if let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                          colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0), let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+                NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+                ctx.cgContext.interpolationQuality = .high
+                ctx.cgContext.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+                NSGraphicsContext.restoreGraphicsState()
+                for q in [0.85, 0.7, 0.5] as [CGFloat] {
+                    if let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: q]), jpg.count <= limit { (d, n, kind) = (jpg, stem + ".jpg", "image"); break }
+                }
+            }
+        }
     }
     guard let k = kind else { return (nil, "\(name) isn't a file the chat can use: attach \(ChatFile.supported).") }
     if d.count > ChatFile.limits[k]! { return (nil, "\(name) is \(byteSize(d.count)): \(ChatFile.kinds[k]!)s can be up to \(byteSize(ChatFile.limits[k]!)).") }
-    return (ChatFile(name: n, kind: k, data: d, thumb: k == "image" ? (img ?? NSImage(data: d)) : nil), nil)
+    let thumb = k == "image" ? NSImage(data: d).map { t -> NSImage in t.size = NSSize(width: 36, height: 36 * t.size.height / max(t.size.width, 1)); return t } : nil
+    return (ChatFile(name: n, kind: k, data: d, thumb: thumb), nil)
 }
+/// A file on disk (a symlink's target), read only up to the biggest file the chat takes: a 3 GB video is refused unread.
 func chatFile(at url: URL) -> (file: ChatFile?, error: String?) {
-    let name = url.lastPathComponent, v = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+    let name = url.lastPathComponent, real = url.resolvingSymlinksInPath(), v = try? real.resourceValues(forKeys: [.isDirectoryKey])
     if v?.isDirectory == true { return (nil, "\(name) is a folder: attach the files in it instead.") }
-    if let size = v?.fileSize, size > ChatFile.maxTotal { return (nil, "\(name) is \(byteSize(size)): too big to attach.") }
-    guard let d = try? Data(contentsOf: url) else { return (nil, "\(name) couldn't be read.") }
+    let cap = ChatFile.limits["image"]! * 8  // a photo that big still shrinks to fit; a bigger file won't
+    guard let fh = try? FileHandle(forReadingFrom: real) else { return (nil, "\(name) couldn't be read.") }
+    defer { try? fh.close() }
+    guard let d = try? fh.read(upToCount: cap + 1) ?? Data() else { return (nil, "\(name) couldn't be read.") }
+    if d.count > cap { return (nil, "\(name) is over \(byteSize(cap)): too big to attach.") }
     return chatFile(d, name: name)
 }
 /// The chat's drop target, over the whole pane: files and images dragged anywhere on it, the text field too, attach. It takes
@@ -699,7 +719,10 @@ final class DropCatcher: NSView {
     override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes(Self.types) }
     required init?(coder: NSCoder) { nil }
     override func hitTest(_ p: NSPoint) -> NSView? { nil }
-    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { c?.dropping = true; return .copy }
+    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation {
+        guard Core.takes(s.draggingPasteboard) else { return [] }  // rich text's picture: not ours to take
+        c?.dropping = true; return .copy
+    }
     override func draggingExited(_ s: NSDraggingInfo?) { c?.dropping = false }
     override func draggingEnded(_ s: NSDraggingInfo) { c?.dropping = false }
     override func performDragOperation(_ s: NSDraggingInfo) -> Bool { c?.dropping = false; return c?.dropped(s.draggingPasteboard) ?? false }
@@ -2662,8 +2685,14 @@ final class Core: ObservableObject {
     @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
     @Published var fileNote = ""  // why the last file didn't attach; clears itself
     @Published var dropping = false  // files dragged over the chat
-    func attach(_ urls: [URL]) { for u in urls { add(chatFile(at: u)) } }
-    func attach(_ data: Data, name: String) { add(chatFile(data, name: name)) }
+    @Published var reading = 0  // files being read and checked off the main thread; Send waits for them
+    let reader = DispatchQueue(label: "greenlight.attach", qos: .userInitiated)  // one at a time: files land in the order they came
+    func attach(_ urls: [URL]) { read { urls.map(chatFile(at:)) } }
+    func attach(_ data: Data, name: String) { read { [chatFile(data, name: name)] } }
+    private func read(_ work: @escaping () -> [(file: ChatFile?, error: String?)]) {
+        reading += 1
+        reader.async { let rs = work(); DispatchQueue.main.async { [weak self] in self?.reading -= 1; rs.forEach { self?.add($0) } } }
+    }
     private func add(_ r: (file: ChatFile?, error: String?)) {
         guard let f = r.file else { return fileSays(r.error ?? "That file couldn't be attached.") }
         if files.count >= ChatFile.maxFiles { return fileSays("Attach up to \(ChatFile.maxFiles) files at a time.") }
@@ -2685,19 +2714,34 @@ final class Core: ObservableObject {
         if let win { p.beginSheetModal(for: win) { [weak self] r in if r == .OK { self?.attach(p.urls) } } }
         else { NSApp.activate(ignoringOtherApps: true); if p.runModal() == .OK { attach(p.urls) } }
     }
+    /// What a drop or paste would attach: files, an app's promised files, or an image that isn't rich text's picture
+    /// (a selection dragged from Pages or Word carries one: that's text, for the field).
+    static func takes(_ pb: NSPasteboard) -> Bool {
+        let t = Set(pb.types ?? [])
+        return t.contains(.fileURL) || !t.isDisjoint(with: NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) })
+            || (!t.isDisjoint(with: [.png, .tiff]) && t.isDisjoint(with: [.rtf, .rtfd]))
+    }
     /// Files or images dropped on the chat (or pasted): files by their URLs, else an image's data (a browser's), else files an app
-    /// promises (Photos, Mail), received into a temporary folder and deleted once read. False: nothing to attach.
+    /// promises (Photos, Mail), received into a temporary folder that goes once they're read. False: nothing to attach.
     func dropped(_ pb: NSPasteboard) -> Bool {
+        guard Core.takes(pb) else { return false }
         if let us = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !us.isEmpty { attach(us); return true }
-        if let t = pb.availableType(from: [.png, .tiff]), let d = pb.data(forType: t) { attach(d, name: t == .png ? "Image.png" : "Image.tiff"); return true }
+        if pb.availableType(from: [.rtf, .rtfd]) == nil, let t = pb.availableType(from: [.png, .tiff]), let d = pb.data(forType: t) {
+            attach(d, name: t == .png ? "Image.png" : "Image.tiff"); return true
+        }
         guard let ps = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !ps.isEmpty else { return false }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-drop-" + UUID().uuidString)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        final class Left { var n = 0 }
+        let left = Left(), q = OperationQueue()
+        q.maxConcurrentOperationCount = 1
+        left.n = ps.reduce(0) { $0 + max(1, $1.fileNames.count) }  // not counted in `reading`: a promise may never be kept
         for r in ps {
-            r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: OperationQueue()) { url, err in
-                let d = err == nil ? try? Data(contentsOf: url) : nil
-                try? FileManager.default.removeItem(at: url)
-                DispatchQueue.main.async { [weak self] in if let d { self?.attach(d, name: url.lastPathComponent) } else { self?.fileSays("That file couldn't be received.") } }
+            r.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: q) { url, err in
+                let got = err == nil ? chatFile(at: url) : (nil, "A dropped file couldn't be received.")
+                left.n -= 1
+                if left.n <= 0 { try? FileManager.default.removeItem(at: dir) } else { try? FileManager.default.removeItem(at: url) }
+                DispatchQueue.main.async { [weak self] in self?.add(got) }
             }
         }
         return true
@@ -2971,6 +3015,7 @@ final class Core: ObservableObject {
     func submit() {
         let t = input.trimmingCharacters(in: .whitespacesAndNewlines), fs = files
         guard !t.isEmpty || !fs.isEmpty else { return }  // files alone are a message
+        if reading > 0 { return fileSays("Still reading your files: send in a moment.") }
         if !t.isEmpty && input.first?.isWhitespace != true { sent = [Sent(t: t, at: Date())] + sent.filter { $0.t != t }.prefix(499) }  // ignorespace
         input = ""; files = []; fileNote = ""
         if vim { vimKeys.mode = vimStart }
@@ -3039,7 +3084,7 @@ final class Core: ObservableObject {
 
     func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = []) {
         active()
-        if run != nil { queue.append(Queued(text: text, files: fs)); return }
+        if run != nil || clearing != nil { queue.append(Queued(text: text, files: fs)); return }  // after Clear's `new`: it deletes attachments
         let you = [shown ?? text, fs.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n")
         msgs.append(Msg(.you, you))
         var payload = voice.on ? voiceNote + text : text
@@ -3056,7 +3101,8 @@ final class Core: ObservableObject {
         if fs.isEmpty { return start(Run(shown ?? text), chatSend, stdin: payload) }
         // chat.py send --attach: the message and the files as one JSON object (attach.py)
         let body = (try? JSONSerialization.data(withJSONObject: ["text": payload, "files": fs.map(\.json)])).map { String(decoding: $0, as: UTF8.self) } ?? ""
-        start(Run(you), chatSend + " --attach", stdin: body)
+        let r = Run(you); r.files = fs
+        start(r, chatSend + " --attach", stdin: body)
     }
 
     // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
@@ -3114,10 +3160,15 @@ final class Core: ObservableObject {
         start(Run("Compact context"), "\(chief) compact --model \(model)", stdin: "")
     }
 
-    func clear() {
+    var clearing: Process?  // Clear's `chat.py new`, until it's done: a send waits for it
+    func clear(keepQueue: Bool = false) {
         if run != nil { stop() }
-        queue = []
-        ssh("\(chief) new")
+        if !keepQueue { queue = [] }
+        clearing = ssh("\(chief) new", onExit: { [weak self] _ in
+            guard let self else { return }
+            self.clearing = nil
+            if self.run == nil, !self.queue.isEmpty { let q = self.queue.removeFirst(); self.send(q.text, files: q.files) }
+        })
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
         focusSent = ""  // the new conversation hasn't heard where you are
@@ -3196,6 +3247,10 @@ final class Core: ObservableObject {
             if !queue.isEmpty { let q = queue.removeFirst(); send(q.text, files: q.files) }
             return
         }
+        if !ok && !r.files.isEmpty && files.isEmpty {  // not sent, or sent and failed: the files come back to try again
+            files = r.files
+            fileSays("Your files are back above the field, to send again.")
+        }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
         if !r.stopping && ok { voice.finished(st, body) } else if !r.watch && !r.checkIn { voice.failed(body) }
@@ -3216,12 +3271,14 @@ final class Core: ObservableObject {
         run = nil
         tps = 0
         if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
-        if ok && st.reset { DispatchQueue.main.async { [weak self] in self?.clear() } }  // [chat: reset]: after this reply, which says so
+        if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
+            DispatchQueue.main.async { [weak self] in self?.clear(keepQueue: true) }
+        }
         if !popoverShown() && !r.stopping {
             missed += 1
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
         }
-        if !queue.isEmpty { let q = queue.removeFirst(); send(q.text, files: q.files) }
+        if !queue.isEmpty && !(ok && st.reset) { let q = queue.removeFirst(); send(q.text, files: q.files) }  // a reset sends it once clear
     }
 
     // MARK: pings
@@ -5457,7 +5514,7 @@ struct ChatView: View, Looked {
                 }.buttonStyle(.plain).disabled(c.transcribing)
                     .modifier(Tip(c: c, text: c.recording != nil ? "Stop and transcribe (\(c.shortcut))" : "Speak to \(c.name) (\(c.shortcut))"))
                     .accessibilityLabel(c.recording != nil ? "Stop recording" : "Speak")
-                let empty = c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && c.files.isEmpty  // submit() ignores it anyway
+                let empty = (c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && c.files.isEmpty) || c.reading > 0  // submit() ignores it anyway
                 Button(action: c.submit) {
                     sendLabel(empty).frame(minWidth: pad).frame(height: pad)
                         .background(RoundedRectangle(cornerRadius: r).fill(sendFill(empty)))
@@ -5609,7 +5666,7 @@ struct ChatView: View, Looked {
 
     var newChat: some View {
         let hot = c.hint == Self.newTip
-        return Button(action: c.clear) {
+        return Button(action: { c.clear() }) {
             Image(systemName: "square.and.pencil").font(sys(size: Theme.fs2, weight: .medium)).frame(width: 26, height: 26)
                 .foregroundColor(hot ? accent : lk.id == "phosphor" ? fg : sub)
                 .background(RoundedRectangle(cornerRadius: corner(26)).fill(lk.id == "onair" ? card : hot ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber: tile stays dark
@@ -6135,7 +6192,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         vimMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, self.capture == nil, let tv = e.window?.firstResponder as? NSTextView,
                   let c = tv.isDescendant(of: self.chat) ? self.greenlight : self.l1s.values.first(where: { tv.isDescendant(of: $0.chat) })?.c else { return e }
-            if e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command, Int(e.keyCode) == kVK_ANSI_V, c.pasteFiles() { return nil }  // ⌘V of files or an image attaches them
+            if e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command, e.charactersIgnoringModifiers?.lowercased() == "v",  // the V the layout types
+               !c.editingName && !c.inboxOpen && !c.settingsOpen && c.replyingTo == nil, c.pasteFiles() { return nil }  // in the composer only  // ⌘V of files or an image attaches them
             if c.historyKey(e, tv) {  // ↑↓ / ⌃R history and readline keys, ahead of vim (whose ⌃R would be redo)
                 guard c.toEnd else { return nil }
                 c.toEnd = false
@@ -7654,21 +7712,41 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
         check("attach: what can't go says why: \([bin.error, dir.error, big.error].compactMap { $0 })",
               bin.error == "tool.bin isn't a file the chat can use: attach \(ChatFile.supported)." && dir.error?.hasSuffix("is a folder: attach the files in it instead.") == true
               && big.error == "big.log is 1.0 MB: texts can be up to 1.0 MB." && chatFile(Data(), name: "e.txt").error == "e.txt is empty.")
-        let pb = NSPasteboard(name: .init("greenlight-attachtest-\(getpid())"))
         c.files = []
-        pb.clearContents(); pb.writeObjects([tmp.appendingPathComponent("notes.txt") as NSURL, tmp.appendingPathComponent("square.png") as NSURL])
-        let byURL = c.dropped(pb), urlNames = c.files.map(\.name)
-        c.files = []; pb.clearContents(); pb.setData(tiff, forType: .tiff)
-        let byData = c.dropped(pb), dataNames = c.files.map(\.name)
-        c.files = []; pb.clearContents(); pb.setString("just text", forType: .string)
-        check("attach: a drop brings files by URL, a browser's image by its data, and leaves text alone: \(urlNames) \(dataNames)",
-              byURL && urlNames == ["notes.txt", "square.png"] && byData && dataNames == ["Image.png"] && !c.dropped(pb) && c.files.isEmpty)
+    }
+    // files are read off the main thread: each step waits for them to land
+    func read() { wait("files read", 30) { c.reading == 0 } }
+    let pb = onMain { NSPasteboard(name: .init("greenlight-attachtest-\(getpid())")) }
+    var byURL = false, byData = false, urlNames = [String](), dataNames = [String]()
+    onMain { pb.clearContents(); pb.writeObjects([tmp.appendingPathComponent("notes.txt") as NSURL, tmp.appendingPathComponent("square.png") as NSURL]); byURL = c.dropped(pb) }
+    read()
+    onMain { urlNames = c.files.map(\.name); c.files = []; pb.clearContents(); pb.setData(tiff, forType: .tiff); byData = c.dropped(pb) }
+    read()
+    onMain {
+        dataNames = c.files.map(\.name); c.files = []
+        pb.clearContents(); pb.setString("just text", forType: .string)
+        let plain = c.dropped(pb)
+        pb.clearContents(); pb.setData(Data("{\\rtf1 hi}".utf8), forType: .rtf); pb.setData(tiff, forType: .tiff)
+        check("attach: a drop brings files by URL, a browser's image by its data, and leaves text (and rich text's picture) alone: \(urlNames) \(dataNames)",
+              byURL && urlNames == ["notes.txt", "square.png"] && byData && dataNames == ["Image.png"] && !plain && !c.dropped(pb) && !Core.takes(pb) && c.files.isEmpty)
         pb.releaseGlobally()
-        c.files = []
         c.attach((0..<6).map { _ in tmp.appendingPathComponent("notes.txt") })
+        check("attach: Send waits while files are read", c.reading == 1 && { c.input = "x"; c.submit(); return c.input == "x" && c.run == nil }())
+        c.input = ""
+    }
+    read()
+    onMain {
         check("attach: five at a time: \(c.fileNote)", c.files.count == 5 && c.fileNote == "Attach up to 5 files at a time.")
         c.files.removeLast(4)
         c.attach([tmp.appendingPathComponent("tool.bin"), tmp.appendingPathComponent("square.png")])
+    }
+    read()
+    let photo = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1500, pixelsHigh: 1200, bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    arc4random_buf(photo.bitmapData!, photo.bytesPerRow * 1200)
+    let photoPNG = photo.representation(using: .png, properties: [:])!, shrunk = chatFile(photoPNG, name: "IMG_0001.png")
+    check("attach: a \(byteSize(photoPNG.count)) photo shrinks to fit as JPEG (\(shrunk.file.map { "\($0.name), \(byteSize($0.data.count))" } ?? shrunk.error ?? "-"))",
+          photoPNG.count > 5 << 20 && shrunk.file?.name == "IMG_0001.jpg" && (shrunk.file?.data.count ?? .max) <= 5 << 20 && shrunk.file.map { fileKind($0.data) } == "image")
+    onMain {
         check("attach: a bad one doesn't stop the rest, and × removes one", c.files.map(\.name) == ["notes.txt", "square.png"] && c.files[1].thumb != nil)
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
         let h = NSHostingView(rootView: ChatView(c: c)); w.contentView = h
@@ -7709,21 +7787,33 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
               ours.contains { $0.text == "attached a file (text, 29 B)" } && !ours.contains { $0.text.contains(tmp.path) || $0.text.contains("The codeword is") })
         c.verbose = false
         c.input = ""; c.files = []
-        c.attach([tmp.appendingPathComponent("square.png")]); c.submit()  // files alone are a message
+        c.attach([tmp.appendingPathComponent("square.png")])
     }
+    wait("files read", 30) { c.reading == 0 }
+    onMain { c.submit() }  // files alone are a message
     wait("files-only reply", 180) { c.run == nil }
     check("attach: files with no text still send: \(onMain { c.msgs.last!.text })", onMain { c.msgs[c.msgs.count - 2].text == "📎 square.png" && !c.msgs.last!.failed })
     let noise = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1100, pixelsHigh: 1000, bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
     arc4random_buf(noise.bitmapData!, noise.bytesPerRow * 1000)
     let bigPNG = noise.representation(using: .png, properties: [:])!
     try? bigPNG.write(to: tmp.appendingPathComponent("noise.png"))
+    onMain { c.attach([tmp.appendingPathComponent("noise.png")]) }
+    wait("files read", 30) { c.reading == 0 }
     let took = onMain { () -> Double in
-        c.attach([tmp.appendingPathComponent("noise.png")]); c.input = "Reply with just: got it"
+        c.input = "Reply with just: got it"
         let t0 = Date(); c.submit(); return Date().timeIntervalSince(t0)
     }
     wait("big image reply", 240) { c.run == nil }
     check("attach: a \(byteSize(bigPNG.count)) image goes without holding up the app (send took \(Int(took * 1000)) ms): \(onMain { c.msgs.last!.text })",
           bigPNG.count > 3 << 20 && took < 0.5 && onMain { !c.msgs.last!.failed })
+    onMain {  // where greenlight runs refuses one (as if the app's check were older): the turn fails and the files come back
+        c.files = []; c.input = "look"
+        c.send("look", files: [ChatFile(name: "fake.txt", kind: "text", data: Data([0x7F, 0x45, 0, 0xFF]), thumb: nil)])
+    }
+    wait("refusal", 60) { c.run == nil }
+    check("attach: a send that fails puts its files back: \(onMain { c.msgs.last!.text })",
+          onMain { c.msgs.last!.failed && c.msgs.last!.text.hasPrefix("fake.txt isn't a file the chat can use") && c.files.map(\.name) == ["fake.txt"] })
+    onMain { c.files = []; c.input = "" }
     try? FileManager.default.removeItem(at: tmp)
 }
 
