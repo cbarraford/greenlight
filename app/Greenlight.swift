@@ -740,11 +740,13 @@ func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, d
 }
 
 /// One buffer in another format (rate, channels, sample type): the mic to 16 kHz mono for recognition, speech to the player's.
-func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat) -> AVAudioPCMBuffer? {
+/// whole: b is all there is (a line from Kokoro/ElevenLabs), so flush the resampler's tail instead of holding it for the next call.
+func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat, whole: Bool = false) -> AVAudioPCMBuffer? {
+    defer { if whole { c.reset() } }
     guard let out = AVAudioPCMBuffer(pcmFormat: to, frameCapacity: AVAudioFrameCount(Double(b.frameLength) * to.sampleRate / b.format.sampleRate) + 32) else { return nil }
     var fed = false, err: NSError?
     c.convert(to: out, error: &err) { _, status in
-        if fed { status.pointee = .noDataNow; return nil }
+        if fed { status.pointee = whole ? .endOfStream : .noDataNow; return nil }
         fed = true; status.pointee = .haveData; return b
     }
     return err == nil && out.frameLength > 0 ? out : nil
@@ -1266,7 +1268,7 @@ final class Voice: NSObject, ObservableObject {
     var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
     var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
-    var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?
+    var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     static let best: AVSpeechSynthesisVoice? = {
         let en = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
@@ -1459,34 +1461,47 @@ final class Voice: NSObject, ObservableObject {
 
     // speech
 
+    /// One line to the player: the voice's own audio if there is one, else Apple's.
     func say(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard on, !muted, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
         lastSpoken = String((lastSpoken + " " + t).suffix(600))
         lines.append(t)
         if lines.count == 1 { caption = t }
+        let g = gen
+        guard Speech.shared.kind != "apple" else { return apple(t, g) }
+        Speech.shared.q.async { [weak self] in  // serial: lines play in order
+            guard let self, self.gen == g else { return }
+            guard let b = Speech.shared.pcm(t) else { return DispatchQueue.main.async { self.apple(t, g) } }
+            if self.voiceConv?.inputFormat != b.format { self.voiceConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
+            guard let out = self.voiceConv.flatMap({ convert(b, $0, self.speechFormat, whole: true) }) else { return }
+            self.play(out, end: false, g); self.play(nil, end: true, g)
+        }
+    }
+    func apple(_ t: String, _ g: Int) {
         let u = AVSpeechUtterance(string: t)
         u.voice = Voice.best
-        let g = gen
         synth.write(u) { [weak self] buf in
-            guard let self, self.gen == g, self.on, let b = buf as? AVAudioPCMBuffer else { return }
-            let end = b.frameLength == 0  // the utterance is over: a silent frame marks it in the player
-            let out: AVAudioPCMBuffer?
-            if end { out = AVAudioPCMBuffer(pcmFormat: self.speechFormat, frameCapacity: 1); out?.frameLength = 1 }
-            else {
-                if self.synthConv?.inputFormat != b.format { self.synthConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
-                out = self.synthConv.flatMap { convert(b, $0, self.speechFormat) }
-            }
-            guard let out else { return }
-            DispatchQueue.main.async { if self.gen == g { self.speaking += 1 } }
-            self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
-                guard self.gen == g else { return }
-                self.speaking = max(0, self.speaking - 1)
-                if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
-                if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
-            }}
-            if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
+            guard let self, let b = buf as? AVAudioPCMBuffer else { return }
+            if b.frameLength == 0 { return self.play(nil, end: true, g) }  // the utterance is over
+            if self.synthConv?.inputFormat != b.format { self.synthConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
+            self.synthConv.flatMap { convert(b, $0, self.speechFormat) }.map { self.play($0, end: false, g) }
         }
+    }
+    /// end: a silent frame marks the line's end in the player.
+    func play(_ buf: AVAudioPCMBuffer?, end: Bool, _ g: Int) {
+        guard gen == g, on else { return }
+        var out = buf
+        if end { out = AVAudioPCMBuffer(pcmFormat: speechFormat, frameCapacity: 1); out?.frameLength = 1 }
+        guard let out else { return }
+        DispatchQueue.main.async { if self.gen == g { self.speaking += 1 } }
+        self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
+            guard self.gen == g else { return }
+            self.speaking = max(0, self.speaking - 1)
+            if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
+            if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
+        }}
+        if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
     }
     /// Stop talking (you cut in, or said stop); the turn itself goes on.
     func hush() {
@@ -1509,6 +1524,88 @@ final class Voice: NSObject, ObservableObject {
         heard = ""; caption = ""
         meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
     }
+}
+
+/// A voice better than AVSpeechSynthesizer: Kokoro on this Mac (app/kokoro.py under uv) or ElevenLabs Flash.
+/// pcm() blocks, on q; nil means Apple's voice says that line (not ready yet, no key, a failure).
+final class Speech {
+    static let shared = Speech()
+    static let kinds = [("apple", "Apple"), ("kokoro", "Kokoro (on this Mac)"), ("eleven", "ElevenLabs Flash")]
+    static let kokoroVoices = ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", "am_michael", "am_fenrir", "am_puck", "bf_emma", "bm_george", "bm_fable"]
+    let q = DispatchQueue(label: "speech"), fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true)!
+    var kind: String { ud.string(forKey: "speech") ?? "apple" }
+    var kokoroVoice: String { ud.string(forKey: "kokoroVoice") ?? "af_heart" }
+    var elevenVoice: String { ud.string(forKey: "elevenVoice").flatMap { $0.isEmpty ? nil : $0 } ?? "EXAVITQu4vr4xnSDxMaL" }  // "Sarah", a premade voice
+    var proc: Process?, kin: FileHandle?, kout: FileHandle?
+    var ready = false  // Kokoro has loaded (the first start installs ~1 GB through uv)
+    var status = ""
+
+    func pcm(_ text: String) -> AVAudioPCMBuffer? {
+        let d: Data?
+        switch kind {
+        case "kokoro": d = ready ? kokoro(text) : nil
+        case "eleven": d = eleven(text)
+        default: d = nil
+        }
+        return d.flatMap(buffer)
+    }
+    func buffer(_ d: Data) -> AVAudioPCMBuffer? {
+        guard d.count > 1, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(d.count / 2)) else { return nil }
+        b.frameLength = b.frameCapacity
+        d.withUnsafeBytes { _ = memcpy(b.int16ChannelData![0], $0.baseAddress!, Int(b.frameLength) * 2) }
+        return b
+    }
+
+    func eleven(_ text: String) -> Data? {
+        guard let key = keychain("elevenlabs"), var u = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenVoice)") else { status = "No ElevenLabs key"; return nil }
+        u.queryItems = [URLQueryItem(name: "output_format", value: "pcm_24000")]
+        var r = URLRequest(url: u.url!, timeoutInterval: 15)
+        r.httpMethod = "POST"
+        r.setValue(key, forHTTPHeaderField: "xi-api-key")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "model_id": "eleven_flash_v2_5"])
+        var got: Data?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: r) { d, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 { got = d; self.status = "" } else { self.status = "ElevenLabs: \(code) \(d.flatMap { String(data: $0, encoding: .utf8) }?.prefix(160) ?? "")" }
+            sem.signal()
+        }.resume()
+        sem.wait()
+        return got
+    }
+
+    func kokoro(_ text: String) -> Data? {
+        guard let kin, let kout, let line = try? JSONSerialization.data(withJSONObject: ["text": text, "voice": kokoroVoice]) else { return nil }
+        do {
+            try kin.write(contentsOf: line + Data("\n".utf8))
+            guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
+            let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
+            return len == 0 ? nil : try kout.read(upToCount: len)
+        } catch { ready = false; status = "Kokoro stopped"; proc?.terminate(); proc = nil; return nil }  // ponytail: no auto-restart; pick it again in Settings
+    }
+
+    /// Start Kokoro if it's the voice (at launch, and on picking it); a warm-up line loads the model before the first real one.
+    func warm() {
+        guard kind == "kokoro", proc == nil else { return }
+        let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let uv, let script = Bundle.main.path(forResource: "kokoro", ofType: "py") else { status = "Kokoro needs uv (brew install uv)"; return }
+        let p = Process(), i = Pipe(), o = Pipe()
+        p.executableURL = URL(fileURLWithPath: uv)
+        p.arguments = ["run", "-q", script]
+        p.standardInput = i; p.standardOutput = o
+        let log = NSHomeDirectory() + "/Library/Logs/Greenlight-kokoro.log"
+        FileManager.default.createFile(atPath: log, contents: nil)
+        p.standardError = FileHandle(forWritingAtPath: log)
+        status = "Kokoro is loading (the first time downloads about 1 GB)"
+        do { try p.run() } catch { status = "Kokoro: \(error.localizedDescription)"; return }
+        proc = p; kin = i.fileHandleForWriting; kout = o.fileHandleForReading
+        DispatchQueue.global().async {
+            let ok = self.kokoro("Ready.") != nil
+            self.q.async { self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
+        }
+    }
+    func stop() { proc?.terminate(); proc = nil; ready = false }
 }
 
 final class Core: ObservableObject {
@@ -3241,6 +3338,22 @@ struct SettingsView: View {
             row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
                 Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
             }
+            row("Speaking voice", Speech.shared.status.isEmpty ? "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice." : Speech.shared.status) {
+                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); Speech.shared.stop(); Speech.shared.warm(); c.objectWillChange.send() })) {
+                    ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().frame(width: menuWidth)
+            }
+            if Speech.shared.kind == "kokoro" { dependent(off: false) { row("Kokoro voice", "a = American, b = British; f/m = female/male.") {
+                Picker("Kokoro voice", selection: Binding(get: { Speech.shared.kokoroVoice }, set: { ud.set($0, forKey: "kokoroVoice"); c.objectWillChange.send() })) {
+                    ForEach(Speech.kokoroVoices, id: \.self) { Text($0).tag($0) }
+                }.labelsHidden().frame(width: menuWidth)
+            } } }
+            if Speech.shared.kind == "eleven" { dependent(off: false) {
+                row("ElevenLabs key", "Stored in your Keychain.") { Button("Set key…") { delegate.askKey("elevenlabs", "ElevenLabs API key", "voice mode's speaking voice") } }
+                row("ElevenLabs voice ID", "From elevenlabs.io → Voices. Empty: Sarah.") {
+                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice") })).frame(width: menuWidth)
+                }
+            } }
             row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
                 Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
             }
@@ -4661,6 +4774,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
         }
         greenlight.showDockIcon()
+        Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.imagePosition = .imageLeading
@@ -5966,7 +6080,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
-    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() } }  // port tunnels die with the app
+    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() }; Speech.shared.stop() }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
@@ -6097,6 +6211,9 @@ func selfTest() {
     let until = Date() + 15
     while !ended && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
     check("voice: speech converts for the player and ends with an empty buffer (\(bufs) buffers)", bufs > 0 && ended)
+    let tone = (0..<24000).map { Int16(10000 * sin(Double($0) / 10)) }.withUnsafeBytes { Data($0) }
+    let kb = Speech.shared.buffer(tone), kc = kb.flatMap { convert($0, AVAudioConverter(from: $0.format, to: pf)!, pf, whole: true) }
+    check("voice: a second of Kokoro/ElevenLabs PCM plays as about a second (\(kc?.frameLength ?? 0) frames)", kb?.frameLength == 24000 && abs(Int(kc?.frameLength ?? 0) - 22050) < 200 && (kc?.floatChannelData?[0][5] ?? 0) != 0)
     let c = Core()
     Thread.detachNewThread {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
