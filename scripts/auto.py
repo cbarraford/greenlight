@@ -3,7 +3,7 @@
 
   auto.py list
   auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
-              [--provider claude|codex|opencode|pi] [--model M] [--effort E] [--timeout MIN]
+              [--provider claude|codex|opencode|pi|gemini] [--model M] [--effort E] [--timeout MIN]
   auto.py edit <name> [any add option] [--enabled | --disabled]
   auto.py rm <name>
   auto.py show <name>       # its JSON
