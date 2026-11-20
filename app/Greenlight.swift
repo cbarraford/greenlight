@@ -527,7 +527,7 @@ struct Attached: Identifiable {
 // MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false }
+struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil }
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, end = false, hexes: [String]?
     if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
@@ -536,6 +536,11 @@ func staged(_ s: String) -> Staged {
         text.removeSubrange(r)
     }
     if let r = text.range(of: #"\[voice: ?off\]"#, options: [.regularExpression, .caseInsensitive]) { end = true; text.removeSubrange(r) }  // Chief ends voice mode
+    var console: String?
+    if let r = text.range(of: #"\[console:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief brings up a terminal tab
+        console = text[r].dropFirst(9).replacingOccurrences(of: "]", with: "").trimmingCharacters(in: .whitespaces)
+        text.removeSubrange(r)
+    }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
     if let open = text.range(of: "```stage") {
@@ -544,7 +549,7 @@ func staged(_ s: String) -> Staged {
             text.removeSubrange(open.lowerBound..<close.upperBound)
         } else { text = String(text[..<open.lowerBound]) }
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset)
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -2130,6 +2135,7 @@ final class Core: ObservableObject {
         }
         run = nil
         tps = 0
+        if ok && !r.stopping, let w = st.console { delegate.toConsole(w) }
         if ok && st.reset { DispatchQueue.main.async { [weak self] in self?.clear() } }  // [chat: reset]: after this reply, which says so
         if !popoverShown() && !r.stopping {
             missed += 1
@@ -5585,6 +5591,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if termWindow.isVisible && termWindow.isKeyWindow { termWindow.orderOut(nil); hideFloaters(); return }
         basement()
     }
+    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name → that worktree's terminal.
+    /// ponytail: opens the worktree's latest tab, not the exact session, when one worktree has several tabs.
+    func toConsole(_ w: String) {
+        let tabs = ((try? Data(contentsOf: termState(0))).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["tabs"] as? [[String: Any]] ?? []
+        func has(_ t: [String: Any]) -> Bool {
+            let ws = t["ws"] as? String ?? "", s = String(data: (try? JSONSerialization.data(withJSONObject: t)) ?? Data(), encoding: .utf8) ?? ""
+            return s.contains("\"\(w)\"") || ws == w || ws.hasSuffix("/" + w) || (t["name"] as? String ?? "").localizedCaseInsensitiveContains(w)
+        }
+        if let ws = tabs.first(where: has)?["ws"] as? String { toWorkspace(ws) } else if w.hasPrefix("/") { toWorkspace(w) }
+    }
     var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
     /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
     func toWorkspace(_ path: String) {
@@ -6236,6 +6252,7 @@ func selfTest() {
           && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
+    check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
