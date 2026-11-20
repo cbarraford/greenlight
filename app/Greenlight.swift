@@ -432,6 +432,7 @@ final class Run: ObservableObject {
     var gotDone = false, checkIn = false, watch = false
     var meterStale = false  // Clear or a harness change mid-turn: its usage is the old conversation's, not the meter's
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
+    var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
     init(_ q: String) { question = q }
 }
 
@@ -1392,7 +1393,7 @@ struct StageFiles: View {
             }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
         }.padding(.leading, 4).padding(.trailing, 3).frame(height: 24)
             .background(RoundedRectangle(cornerRadius: 6).fill(hx(l.stage))).overlay(RoundedRectangle(cornerRadius: 6).stroke(hx(l.line)))
-            .help("\(ChatFile.kinds[f.kind]!.capitalized), goes to \(c.name) with what you say next")
+            .help("\(ChatFile.kinds[f.kind]!.prefix(1).uppercased() + ChatFile.kinds[f.kind]!.dropFirst()), goes to \(c.name) with what you say next")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
 }
@@ -2018,7 +2019,7 @@ final class Voice: NSObject, ObservableObject {
     func run(_ cmd: VoiceCmd) {
         switch cmd {
         case .bye: stopAll()
-        case .stop: hush(); core?.stop()
+        case .stop: hush(); core?.queue.removeAll { $0.spoken }; core?.stop()
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
         }
@@ -2238,6 +2239,7 @@ final class Voice: NSObject, ObservableObject {
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
         hush()
+        core?.queue.removeAll { $0.spoken }  // turns said but still waiting on a file: voice mode is over, so they don't go
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
@@ -2936,26 +2938,30 @@ final class Core: ObservableObject {
     }
     @Published var run: Run?
     @Published var queue: [Queued] = []
-    struct Queued { let text: String; var files: [ChatFile] = [] }
+    /// spoken: a voice-mode turn. It takes the tray's files when it goes (not when it was said), and waits while any are still being read.
+    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false }
     @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
     @Published var fileNote = ""  // why the last file didn't attach; clears itself
     @Published var dropping = false  // files dragged over the chat
-    @Published var reading = 0  // files being read and checked off the main thread; Send waits for them
+    @Published var reading = 0 { didSet { if reading == 0 { next() } } }  // files being read and checked off the main thread; Send (and a spoken turn) waits for them
     let reader = DispatchQueue(label: "greenlight.attach", qos: .userInitiated)  // one at a time: files land in the order they came
     func attach(_ urls: [URL]) { read { urls.map(chatFile(at:)) } }
     func attach(_ data: Data, name: String) { read { [chatFile(data, name: name)] } }
     private func read(_ work: @escaping () -> [(file: ChatFile?, error: String?)]) {
         reading += 1
-        reader.async { [weak self] in let rs = work(); DispatchQueue.main.async { self?.reading -= 1; rs.forEach { self?.add($0) } } }
+        reader.async { [weak self] in let rs = work(); DispatchQueue.main.async { rs.forEach { self?.add($0) }; self?.reading -= 1 } }  // added before the count drops: a turn waiting on it goes then
     }
     private func add(_ r: (file: ChatFile?, error: String?)) {
-        guard let f = r.file else { return fileSays(r.error ?? "That file couldn't be attached.") }
-        if files.count >= ChatFile.maxFiles { return fileSays("Attach up to \(ChatFile.maxFiles) files at a time.") }
-        if files.reduce(f.data.count, { $0 + $1.data.count }) > ChatFile.maxTotal { return fileSays("These files come to more than \(byteSize(ChatFile.maxTotal)): send fewer at a time.") }
+        guard let f = r.file else { return refuse(r.error ?? "That file couldn't be attached.") }
+        if files.count >= ChatFile.maxFiles { return refuse("\(f.name) wasn't attached: attach up to \(ChatFile.maxFiles) files at a time.") }
+        if files.reduce(f.data.count, { $0 + $1.data.count }) > ChatFile.maxTotal { return refuse("\(f.name) wasn't attached: these files come to more than \(byteSize(ChatFile.maxTotal)).") }
         files.append(f)
         fileNote = ""
         log(.chief, name, .status, "attached a file (\(ChatFile.kinds[f.kind]!), \(byteSize(f.data.count)))")  // never its name's folder, never its contents
     }
+    /// Files that didn't attach since the last message: shown, and in voice mode told to Chief with the next spoken turn, so it says so out loud.
+    var refused: [String] = []
+    private func refuse(_ why: String) { refused.append(why); fileSays(why) }
     func fileSays(_ s: String) {
         fileNote = s
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in if self?.fileNote == s { self?.fileNote = "" } }
@@ -2999,7 +3005,7 @@ final class Core: ObservableObject {
                 let got = err == nil ? chatFile(at: url) : (nil, "A dropped file couldn't be received.")
                 left.n -= 1
                 if left.n <= 0 { try? FileManager.default.removeItem(at: dir) } else { try? FileManager.default.removeItem(at: url) }
-                DispatchQueue.main.async { release(1); self?.add(got) }
+                DispatchQueue.main.async { self?.add(got); release(1) }
             }
         }
         return true
@@ -3276,7 +3282,7 @@ final class Core: ObservableObject {
         guard !t.isEmpty || !fs.isEmpty else { return }  // files alone are a message
         if reading > 0 { return fileSays("Still reading your files: send in a moment.") }
         if !t.isEmpty && input.first?.isWhitespace != true { sent = [Sent(t: t, at: Date())] + sent.filter { $0.t != t }.prefix(499) }  // ignorespace
-        input = ""; files = []; fileNote = ""
+        input = ""; files = []; fileNote = ""; refused = []  // the composer showed them
         if vim { vimKeys.mode = vimStart }
         let q = t.isEmpty ? nil : waiting.last(where: { !$0.ping })  // typing answers the open chat question
         if let q, fs.isEmpty { answer(q, t) } else { if let q { answer(q, t, send: false) }; send(t, files: fs) }
@@ -3341,16 +3347,25 @@ final class Core: ObservableObject {
         return false
     }
 
-    /// A turn said out loud in voice mode: the files waiting in the composer (dropped, pasted or picked on the stage) go with it,
-    /// as a typed message's do. Files still being read hold it a moment (at most 15 s), so a file dropped just before you spoke isn't left behind.
-    func spoken(_ text: String, waited: Double = 0) {
-        if reading > 0 && waited < 15 { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.spoken(text, waited: waited + 0.25) } }
-        let fs = files
-        files = []; if !fs.isEmpty { fileNote = "" }
-        send(text, files: fs)  // send() adds voiceNote
+    /// A turn said out loud in voice mode. It goes through the queue, in the order said: when its turn comes, it takes the files waiting
+    /// in the composer (dropped, pasted or picked on the stage), as a typed message does, and files still being read hold it until
+    /// they land or fail (a promised file gives up after 30 s). So Clear, "stop" and the end of voice mode cancel it like any queued message.
+    func spoken(_ text: String) {
+        queue.append(Queued(text: text, spoken: true))
+        if reading > 0 && run == nil && clearing == 0 { voice.wait("Reading your file", "It goes with what you said, once it's read.") }
+        next()
+    }
+    /// The next queued message, when nothing is running: a spoken one waits for files still being read.
+    func next() {
+        guard run == nil, clearing == 0, let q = queue.first, !(q.spoken && reading > 0) else { return }
+        queue.removeFirst()
+        let fs = q.spoken ? files : q.files, no = q.spoken ? refused : []
+        if q.spoken { files = []; refused = [] }
+        let told = no.isEmpty ? "" : "(Greenlight, not said by the user: files they tried to attach weren't: \(no.joined(separator: " ")) Tell them briefly.)\n"
+        send(told + q.text, shown: q.text, files: fs, spoken: q.spoken)  // send() adds voiceNote
     }
 
-    func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = []) {
+    func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = [], spoken: Bool = false) {
         active()
         if run != nil || clearing > 0 { queue.append(Queued(text: text, files: fs)); return }  // after Clear's `new`: it deletes attachments
         let you = [shown ?? text, fs.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n")
@@ -3369,7 +3384,7 @@ final class Core: ObservableObject {
         if fs.isEmpty { return start(Run(shown ?? text), chatSend, stdin: payload) }
         // chat.py send --attach: the message and the files as one JSON object (attach.py)
         let body = (try? JSONSerialization.data(withJSONObject: ["text": payload, "files": fs.map(\.json)])).map { String(decoding: $0, as: UTF8.self) } ?? ""
-        let r = Run(you); r.files = fs; r.text = shown ?? text
+        let r = Run(you); r.files = fs; r.text = shown ?? text; r.spoken = spoken
         start(r, chatSend + " --attach", stdin: body)
     }
 
@@ -3437,7 +3452,7 @@ final class Core: ObservableObject {
             guard let self else { return }
             self.clearing -= 1
             guard self.clearing == 0 else { return }
-            if self.run == nil, !self.queue.isEmpty { let q = self.queue.removeFirst(); self.send(q.text, files: q.files) }
+            self.next()
         })
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
@@ -3522,10 +3537,12 @@ final class Core: ObservableObject {
             + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace
             run = nil; tps = 0
-            if !queue.isEmpty && clearing == 0 { let q = queue.removeFirst(); send(q.text, files: q.files) }  // after Clear: its own exit sends them
+            next()  // after Clear: its own exit sends them
             return
         }
-        if !ok && !r.files.isEmpty {  // not sent, or sent and failed: the files come back to try again, ahead of any added since, as many as fit
+        if !ok && r.spoken && !r.files.isEmpty {  // hands-free, the next thing said would send them again (and fail again, if refused): say so, don't resend
+            fileSays("Not sent: \(r.files.map(\.name).joined(separator: ", ")). Drop them again to send them with what you say next.")
+        } else if !ok && !r.files.isEmpty {  // not sent, or sent and failed: the files come back to try again, ahead of any added since, as many as fit
             var back = files  // files added since stay; the failed send's join them as far as they fit
             for f in r.files where back.count < ChatFile.maxFiles && back.reduce(f.data.count, { $0 + $1.data.count }) <= ChatFile.maxTotal && !back.contains(where: { $0.id == f.id }) { back.append(f) }
             files = back
@@ -3562,7 +3579,7 @@ final class Core: ObservableObject {
             missed += 1
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
         }
-        if !queue.isEmpty && clearing == 0 && !(ok && st.reset) { let q = queue.removeFirst(); send(q.text, files: q.files) }  // a reset sends it once clear
+        if !(ok && st.reset) { next() }  // a reset sends it once clear
     }
 
     // MARK: pings
@@ -5860,7 +5877,7 @@ struct ChatView: View, Looked {
         }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : 3).padding(.trailing, 3).frame(height: 24)
             .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
             .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
-            .help("\(ChatFile.kinds[f.kind]!.capitalized), goes to \(c.name) with your next message")
+            .help("\(ChatFile.kinds[f.kind]!.prefix(1).uppercased() + ChatFile.kinds[f.kind]!.dropFirst()), goes to \(c.name) with your next message")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
     /// Files dragged over the chat: where they'll go.
@@ -6605,16 +6622,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         pushMode()
     }
 
-    /// Closing a view's window hands the view back to the main window.
     /// The chat whose voice-mode stage has the keys in window w: the stage itself (its web view) or nothing in particular
-    /// (the window), never a text field or another pane (a terminal's ⌘V is its own). Its sheets (Settings, the inbox) aren't the stage.
+    /// (the window), never a text field or another pane (a terminal's ⌘V is its own), nor a pane that's hidden. Its sheets (Settings, the inbox) aren't the stage.
     func stageUnder(_ w: NSWindow) -> Core? {
         let r = w.firstResponder
         return ([(chat as NSView, greenlight)] + l1s.values.map { ($0.chat as NSView, $0.c) }).first { v, c in
-            c.voice.on && !c.voice.transcript && !c.settingsOpen && !c.inboxOpen && v.window === w
+            c.voice.on && !c.voice.transcript && !c.settingsOpen && !c.inboxOpen && v.window === w && !v.isHiddenOrHasHiddenAncestor && !v.visibleRect.isEmpty
                 && (r === w || ((r as? NSView).map { $0.isDescendant(of: v) && !($0 is NSTextView) } ?? false))
         }?.1
     }
+    /// Closing a view's window hands the view back to the main window.
     func attach(_ v: String) {
         guard let w = viewWindows.removeValue(forKey: v) else { return }
         (w.contentView as? WKWebView)?.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
@@ -8049,7 +8066,7 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
     }
     read()
     onMain {
-        check("attach: five at a time: \(c.fileNote)", c.files.count == 5 && c.fileNote == "Attach up to 5 files at a time.")
+        check("attach: five at a time: \(c.fileNote)", c.files.count == 5 && c.fileNote == "notes.txt wasn't attached: attach up to 5 files at a time.")
         c.files.removeLast(4)
         c.attach([tmp.appendingPathComponent("tool.bin"), tmp.appendingPathComponent("square.png")])
     }
@@ -8164,20 +8181,39 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
         }
         w.contentView = nil
         c.fileNote = ""; c.files.removeAll { $0.name == "square.png" }
-        c.attach([tmp.appendingPathComponent("square.png")])
+        c.refused = []
+        c.attach([tmp.appendingPathComponent("square.png"), tmp.appendingPathComponent("tool.bin")])
         c.spoken("What's the codeword in notes.txt, and what color is square.png? One line.")
-        check("voice attach: a spoken turn waits for a file still being read", c.run == nil && c.reading == 1 && c.files.count == 1)
+        check("voice attach: a spoken turn waits, queued, for a file still being read", c.run == nil && c.reading == 1 && c.files.count == 1 && c.queue.count == 1 && c.queue[0].spoken)
     }
     wait("spoken turn sent", 20) { c.reading == 0 && c.files.isEmpty }  // its reply can be in before a poll sees the run: the transcript says what went
     wait("spoken attachments reply", 180) { c.run == nil }
     onMain {
         let you = c.msgs[c.msgs.count - 2].text, r = c.msgs.last!.text
         check("voice attach: the agent used the files said about: \(r)", r.contains("FENNEL-4821") && r.lowercased().contains("red") && !c.msgs.last!.failed)
-        check("voice attach: the transcript names them: \(you)", you.hasSuffix("📎 notes.txt  📎 square.png"))
+        check("voice attach: the transcript names them (Greenlight's note to Chief about the refused one isn't shown): \(you)",
+              you == "What's the codeword in notes.txt, and what color is square.png? One line.\n📎 notes.txt  📎 square.png" && c.refused.isEmpty)
         c.spoken("Thanks, that's all I needed.")
         check("voice attach: the next turn goes without them", c.run?.files.isEmpty == true)
     }
     wait("plain spoken reply", 180) { c.run == nil }
+    onMain {  // Clear (or "reset") while a spoken turn waits on a file: the turn is gone, the file stays in the tray
+        c.attach([tmp.appendingPathComponent("notes.txt")])
+        c.spoken("Summarise this.")
+        c.clear()
+        check("voice attach: Clear cancels a spoken turn still waiting on its file", c.queue.isEmpty && c.run == nil)
+    }
+    wait("files read", 30) { c.reading == 0 }
+    wait("clear done", 30) { c.clearing == 0 }
+    check("voice attach: ...and the file stays for the next turn", onMain { c.run == nil && c.files.map(\.name) == ["notes.txt"] })
+    onMain {  // a file greenlight's host refuses, on a spoken turn: said, and not sent again with the next thing said
+        c.files = [ChatFile(name: "fake.txt", kind: "text", data: Data([0x7F, 0x45, 0, 0xFF]), thumb: nil)]
+        c.spoken("look")
+    }
+    wait("spoken refusal", 60) { c.run == nil && c.queue.isEmpty }
+    check("voice attach: a refused file on a spoken turn is named, not put back to go again: \(onMain { c.fileNote })",
+          onMain { c.msgs.last!.failed && c.files.isEmpty && c.input.isEmpty && c.fileNote.hasPrefix("Not sent: fake.txt.") })
+    onMain { c.fileNote = "" }
     try? FileManager.default.removeItem(at: tmp)
 }
 
