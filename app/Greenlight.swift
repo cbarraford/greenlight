@@ -3536,15 +3536,15 @@ final class Core: ObservableObject {
         if let id { return waiting.first { $0.id == id && $0.ping } }
         return waiting.first { $0.text == about }
     }
-    func expiredNotification(_ about: String) {
-        let message = "That question is no longer open. Check the bell for the latest one."
+    func expiredNotification(_ about: String, reply: String) {
+        let message = "That notification is no longer open. Your reply was saved here to resend:\n\(reply)"
         msgs.append(Msg(.note, message))
-        notify(title: name, body: message, subtitle: nil, reply: false, id: "expired:\(about)")
+        notify(title: name, body: "That notification is no longer open. Your reply is saved in chat.", subtitle: nil, reply: false, id: "expired:\(about)")
     }
     func reply(to about: String, _ text: String, questionID: UUID? = nil, freeform: Bool = false) {
         if let questionID {
             guard let q = notificationQuestion(about, id: questionID) else {
-                expiredNotification(about)
+                expiredNotification(about, reply: text)
                 return
             }
             unread = max(0, unread - 1)
@@ -3552,7 +3552,7 @@ final class Core: ObservableObject {
             return
         }
         guard freeform else {  // older banners have no reliable ping identity, so answer from the current bell instead
-            expiredNotification(about)
+            expiredNotification(about, reply: text)
             return
         }
         unread = max(0, unread - 1)
@@ -9709,10 +9709,10 @@ func selfTest() {
             let beforeExpired = c.msgs.count
             let unreadBeforeExpired = c.unread
             c.reply(to: "ws-f: choose?", "stale choice", questionID: UUID())
-            check("an expired banner reply never reaches the agent", c.run == nil && c.msgs.count == beforeExpired + 1
-                  && c.msgs.last?.text.contains("no longer open") == true && c.unread == unreadBeforeExpired)
+            check("an expired banner reply never reaches the agent and keeps the typed text", c.run == nil && c.msgs.count == beforeExpired + 1
+                  && c.msgs.last?.text.contains("stale choice") == true && c.unread == unreadBeforeExpired)
             c.reply(to: "ws-f: choose?", "legacy choice")
-            check("a legacy banner without an ID is rejected", c.run == nil && c.msgs.last?.text.contains("no longer open") == true)
+            check("a legacy banner without an ID keeps the reply for resending", c.run == nil && c.msgs.last?.text.contains("legacy choice") == true)
             c.answer(chatQuestion, "(dismissed)", send: false)
             c.answer(pingQuestion, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
