@@ -31,10 +31,22 @@ cat > "$app/Contents/Info.plist" <<EOF
 </dict></plist>
 EOF
 mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
-# Ad-hoc signing changes the app's identity every build, so macOS asks for the mic and speech again.
-# A self-signed "Greenlight Dev" code-signing cert (Keychain Access → Certificate Assistant) keeps it stable.
-id=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Greenlight Dev/{print $2; exit}')
-codesign -fs "${id:--}" "$app"
+# Ad-hoc signing changes the app's identity every build, so macOS asks for the mic, speech and Keychain keys again.
+# A self-signed "Greenlight Dev" cert keeps it stable. It lives in its own keychain (password in a 0600 file), because
+# codesign can't use a key in the login keychain without your login password (errSecInternalComponent).
+d=~/.config/greenlight kc=~/.config/greenlight/signing.keychain-db
+if [ ! -f "$kc" ]; then
+  (umask 077; mkdir -p "$d"; openssl rand -hex 16 > "$d/signing.pass"); t=$(mktemp -d)
+  security create-keychain -p "$(cat "$d/signing.pass")" "$kc" && security set-keychain-settings "$kc"
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$t/k" -out "$t/c" -days 3650 -subj "/CN=Greenlight Dev" -addext basicConstraints=critical,CA:false \
+    -addext keyUsage=critical,digitalSignature -addext extendedKeyUsage=critical,codeSigning 2>/dev/null
+  openssl pkcs12 -export -legacy -inkey "$t/k" -in "$t/c" -out "$t/p.p12" -passout pass:x 2>/dev/null || openssl pkcs12 -export -inkey "$t/k" -in "$t/c" -out "$t/p.p12" -passout pass:x
+  security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc" && security import "$t/p.p12" -k "$kc" -P x -T /usr/bin/codesign >/dev/null; rm -rf "$t"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$(cat "$d/signing.pass")" "$kc" >/dev/null
+fi
+security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
+id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
+codesign -fs "${id:--}" --keychain "$kc" "$app"
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"
