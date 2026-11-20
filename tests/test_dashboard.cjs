@@ -346,6 +346,19 @@ test("connecting: after 15s with no update it says so, and Retry says hello to t
   assert.equal(await page.evaluate(() => CONN.refocus), false, "the refocus flag outlived its retry");
 });
 
+test("Agents show by default; Hide sticks, and a window that was told to hide them stays hidden", async page => {
+  assert.deepEqual(await page.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["plan-b"], "a fresh window shows its working agent (plan-a's question is listed above it)");
+  assert.equal(await page.getAttribute(".agents button.fold", "aria-expanded"), "true");
+  await page.click(".agents button.fold");
+  assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
+  assert.equal(await page.evaluate(() => localStorage.getItem("agentsFolded")), "1");
+  const hid = await boot(page.context().browser(), {agentsFolded: "1"});
+  try {
+    assert.equal(await hid.locator(".agents .acard").count(), 0, "a stored Hide is kept");
+    assert.match(await hid.textContent(".agents button.fold"), /^Show 1 agent\b/);
+  } finally { await hid.close() }
+});
+
 test("Agent cards keep one size in a grid; the shelf folds back; no null in the bar", async page => {
   const run = k => ({...SNAP.pucks[1], name: "run-" + k, path: "/w/run-" + k, sig: "r" + k, steps: ["mr_open", "ci_green", "merge"], step_index: 1});
   const wait = k => ({...SNAP.pucks[1], name: "waiting-on-review-" + k, path: "/w/q" + k, sig: "q" + k, state: "quiet", agent: {...SNAP.pucks[1].agent, state: "idle"}});
@@ -471,7 +484,7 @@ test("a workspace `ade worktree create` just started is a puck at once, never in
   const snap = {...SNAP, pucks: [old, other, fresh], trees: [{path: "/w/main", project: "greenlight", main: true}]};
   await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[0].path, "/w/main"], ["greenlight"]) }, snap);  // the app's paths predate the new workspace
   assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-a", "openai-live-voice"], "in by its repo; widgets stays out");
-  assert.equal(await page.locator(`#main [data-name="openai-live-voice"]`).count(), 1, "its hex is drawn");
+  assert.equal(await page.locator(`#main .cell[data-name="openai-live-voice"]`).count(), 1, "its hex is drawn");
   await page.evaluate(() => { ui.agentsFolded = false; render() });
   const strip = await page.locator("#main section.agents").innerText();
   assert.ok(strip.includes("Switch voice"), "and its agent is in Agents: " + strip);
