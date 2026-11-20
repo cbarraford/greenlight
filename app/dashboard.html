@@ -145,7 +145,7 @@ main.ov{background:var(--canvas)}
 .stagepop{display:none;position:absolute;left:-6px;top:calc(100% + 6px);z-index:30;box-sizing:border-box;min-width:220px;max-width:min(320px,calc(100vw - 32px));padding:10px 10px 8px;
   border-radius:var(--r-2);background:var(--sheet);border:1px solid var(--line);box-shadow:var(--elev);pointer-events:none;animation:popin .12s ease-out .15s both}  /* pointer-events: it never covers the output line under it */
 .prog.up .stagepop{top:auto;bottom:calc(100% + 6px)}
-.prog:hover .stagepop,.prog:focus-visible .stagepop{display:block} .prog.hush .stagepop{display:none}  /* hush: Esc put it away */
+.prog:hover .stagepop,.prog:focus-visible .stagepop{display:block} .prog.hush .stagepop{display:none} .prog.steady .stagepop{animation:none}  /* steady: rebuilt while open, no fade again */  /* hush: Esc put it away */
 @keyframes popin{from{opacity:0;transform:translateY(-2px)}}
 .stagepop .sph{display:flex;align-items:baseline;gap:8px;padding:0 6px 6px;font-size:var(--fs-2);color:var(--text3)} .stagepop .sph b{color:var(--text);font-weight:600}
 .stagepop ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
@@ -1034,6 +1034,7 @@ function placeStages(e, name){  // below the bar, or above it when the window's 
   const pr = e.currentTarget, pop = pr.querySelector(".stagepop"); if (!pop) return;
   const hush = !!(ui.stage && ui.stage.name === name && ui.stage.hush);  // focus put back after a re-render: an Esc still holds
   pr.classList.remove("up"); pr.classList.toggle("hush", hush);
+  if (!ui.stage || ui.stage.name !== name) pr.classList.remove("steady");  // a fresh open fades in
   const r = pr.getBoundingClientRect(), m = document.getElementById("main").getBoundingClientRect(), need = pop.offsetHeight + 8;
   const up = r.bottom + need > Math.min(innerHeight, m.bottom) && r.top - need > Math.max(0, m.top);
   pr.classList.toggle("up", up);
@@ -1062,7 +1063,7 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       h("span", {class:"pill" + (wait ? " wait" : crash ? " red" : "")}, wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || STEP_NAMES[p.step] || p.step),
       h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
-    steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
+    steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? " steady" + (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
         onmouseenter: e => placeStages(e, p.name), onfocus: e => placeStages(e, p.name), onmouseleave: unStages, onblur: unStages,
         onkeydown: e => { if (e.key === "Escape" && !e.currentTarget.classList.contains("hush")) { e.stopPropagation(); e.currentTarget.classList.add("hush"); if (ui.stage) ui.stage.hush = true } }},  // Esc puts the list away; Esc again backs out as usual
       h("div", {class:"segs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {}, h("i", {class: k === i ? "cur" : null, style:`width:${k < i ? 100 : k === i ? 50 : 0}%`})))),
@@ -1531,7 +1532,8 @@ function closeAnswer(){ ui.answering = null; render() }
    It lives outside #main, so a snapshot's re-render never resets it: new entries are appended, the scroll stays where you left it.
    At the bottom it follows new output; scrolled up, it holds still and counts what arrived. Back, or Esc, closes it. */
 const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
-const OUT_IDLE = 5000, OUT_FOLLOW = 40;  // px from the bottom that still counts as "at the bottom"
+const OUT_IDLE = 5000, OUT_FOLLOW = 40;
+let OUT_WAIT = 20000;  // a reply later than this counts as lost (let: the tests shorten it)  // px from the bottom that still counts as "at the bottom"
 function openOut(name){
   closeOut(false);
   ui.out = {name, entries: [], ids: new Set(), more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
@@ -1554,7 +1556,9 @@ function closeOut(refocus){
   const o = ui.out; if (!o) return;
   clearTimeout(o.timer); ui.out = null;
   const el = document.getElementById("aout"); if (el) el.remove();
-  const back = refocus && document.querySelector(`.acard[data-name="${CSS.escape(o.name)}"] button.aline`);  // back where you clicked
+  const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
+  const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2, #main"));
+  if (back && !back.matches("button")) back.setAttribute("tabindex", "-1");
   if (back) back.focus();
 }
 function outKeys(e){
@@ -1568,6 +1572,7 @@ function pollOut(){
   clearTimeout(o.timer);
   if (document.hidden) { o.timer = setTimeout(pollOut, OUT_IDLE); return }  // a hidden window doesn't need it live
   o.inflight = true; post({cmd: "transcript", name: o.name});
+  o.timer = setTimeout(() => { if (ui.out === o && o.inflight) gotOut({name: o.name, before: null, error: "no answer from the host"}) }, OUT_WAIT);  // a lost reply never stops it for good
 }
 function nextPoll(){
   const o = ui.out; if (!o) return;
@@ -1577,6 +1582,7 @@ function nextPoll(){
 function olderOut(){
   const o = ui.out; if (!o || !o.more || o.older) return;
   o.older = true; o.olderErr = null; outMore(); post({cmd: "transcript", name: o.name, before: o.more});
+  const cur = o.more; setTimeout(() => { if (ui.out === o && o.older && o.more === cur) gotOut({name: o.name, before: cur, error: "no answer"}) }, OUT_WAIT);
 }
 function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page (before: the cursor asked with)
   const o = ui.out; if (!o || r.name !== o.name) return;
@@ -1594,16 +1600,17 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
   if (!o.inflight) return;  // a stale answer (an earlier open's): the next poll is already set
   o.inflight = false; o.err = r.error || null;
   if (!r.error) {
-    const page = arr(r.entries), add = page.filter(e => !o.ids.has(e.id)), first = !o.loaded;
-    const gap = !first && o.entries.length && add.length && add.length === page.length;  // more arrived than one page holds: what's between is skipped, and said so
+    const page = arr(r.entries), first = !o.loaded, seen = page.filter(e => !o.ids.has(e.id));
+    const add = seen.concat(arr(r.recent).filter(e => !o.ids.has(e.id) && !seen.some(x => x.id === e.id)));  // another session busy at the same time: its new lines too
+    const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // no cursor: the page reaches back to the start, nothing skipped  // more arrived than one page holds: what's between is skipped, and said so
     if (first) o.more = r.more || null;  // Load earlier always continues from the top of what's shown
     add.forEach(e => o.ids.add(e.id)); o.entries.push(...add); o.loaded = true;
     if (first) outPaint();  // outPaint lands at the bottom
     else if (add.length) {
       const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
       if (note) note.remove();  // "No output yet" was true until now
-      if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some is skipped here"));
-      list.append(...add.map(outEntry));
+      if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
+      list.append(...outRun(add));
       if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
@@ -1611,18 +1618,32 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
   outHead(); nextPoll();
 }
 function outEntry(e){
-  const p = ui.out && puckOf(ui.out.name), who = p && /codex/i.test(p.agent.type || "") ? "Codex" : "Claude";
+  const p = ui.out && puckOf(ui.out.name), who = (e.kind || (p && p.agent.type) || "") .match(/codex/i) ? "Codex" : "Claude";  // the session that wrote it
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
-  if (e.role === "tool") { const long = e.text.length > 240, open = el => { el.classList.add("open"); ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)) };
-    return h("div", {class:"aoe tool", "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
+  if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open"); 
+      ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
+      outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
+    const el = h("div", {class:"aoe tool", "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
       onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
-      onkeydown: ev => { if (long && (ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }}, e.text) }
+      onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }}, e.text);
+    if (!long) requestAnimationFrame(() => { if (el.isConnected && el.scrollHeight > el.clientHeight + 1)  // a narrow window folds a shorter one too
+      Object.entries({tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"}).forEach(([k, v]) => el.setAttribute(k, v)) });
+    return el }
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
     h("div", {class:"aow"}, e.role === "user" ? "Prompt" : who), h("div", {class:"aotx"}, e.text));
 }
+const stemOf = e => String(e.id).replace(/:[^:]*$/, "");
+function outRun(es){  // entries to append, with a marker where the output switches to another session (two agents at once)
+  const o = ui.out, out = [];
+  for (const e of es) {
+    if (o.lastStem && stemOf(e) !== o.lastStem && e.role !== "sep") out.push(h("div", {class:"aosep"}, `${/codex/i.test(e.kind || "") ? "Codex" : "Claude"} · another session`));
+    o.lastStem = stemOf(e); out.push(outEntry(e));
+  }
+  return out;
+}
 function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
-  list.replaceChildren(...o.entries.map(outEntry));
+  o.lastStem = null; list.replaceChildren(...outRun(o.entries));
   if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
   outMore(); outBottom();
 }
@@ -1640,16 +1661,17 @@ function outMore(){  // the top of the log: Load earlier, or where the sessions 
 }
 function outBottom(){
   const o = ui.out, log = document.getElementById("aout-log"); if (!o || !log) return;
-  if (document.activeElement && document.activeElement.id === "aout-new") log.focus();  // it's about to hide: keep the keyboard in the dialog
   log.scrollTop = log.scrollHeight; o.follow = true; o.unseen = 0; outNew();
 }
 function outScrolled(e){
   const o = ui.out, log = e.currentTarget; if (!o) return;
-  o.follow = log.scrollHeight - log.scrollTop - log.clientHeight <= OUT_FOLLOW;
-  if (o.follow && o.unseen) { o.unseen = 0; outNew() }
+  const was = o.follow; o.follow = log.scrollHeight - log.scrollTop - log.clientHeight <= OUT_FOLLOW;
+  if (o.follow) o.unseen = 0;
+  if (o.follow !== was) outNew();  // scrolled away: Latest offers the way back; at the bottom it goes
 }
 function outNew(){
   const o = ui.out, b = document.getElementById("aout-new"); if (!o || !b) return;
+  if (o.follow && document.activeElement === b) document.getElementById("aout-log").focus();  // it's about to hide (Latest, or a scroll to the bottom): keep the keyboard in the dialog
   b.hidden = o.follow;
   b.replaceChildren(o.unseen ? `${o.unseen} new` : "Latest", icon("chevron-down", 12));
   b.title = "Jump to the latest output";
@@ -1661,6 +1683,9 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
   const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", t0 = since(a.since);
   sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
     ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
+  const key = [o.err, a.state, a.tool, a.input].join("\u0000");
+  if (now.dataset.key === key) return;  // unchanged: a screen reader doesn't hear the same alert again
+  now.dataset.key = key;
   now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]
     : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: a.tool ? `${a.tool}: ${a.input || ""}` : ""}, a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : "Working")]
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
