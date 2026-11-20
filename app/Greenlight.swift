@@ -6477,6 +6477,13 @@ func floatPanel(_ size: NSSize) -> NSPanel {
 }
 
 
+/// The projects a window shows (ids, "" No Man's Land); nil is all of them, the default. Never empty: none ticked, or none of the ticked
+/// still among `known` (the projects listed; nil: not listed yet, keep them all), is all again. A gone one drops out of a pick that keeps others.
+func livePick(_ only: [String]?, known: [String]?) -> [String]? {
+    guard let only else { return nil }
+    let k = known.map { ids in only.filter(ids.contains) } ?? only
+    return k.isEmpty ? nil : k
+}
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var item: NSStatusItem!
     let greenlight = Core()
@@ -6851,7 +6858,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
-            if let l { l.only = only; saveL1s(); syncL1() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
+            if let l { l.only = livePick(only, known: nil); saveL1s(); syncL1() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
         }
         if cmd == "window" {  // L1's Open projects, New window: another Greenlight Center, with its own Chief
             let only = b["only"] as? [String]
@@ -7103,11 +7110,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var projList = [[String: Any]]()  // id ("" No Man's Land), name, color, repos, paths (its worktrees), busy
     var sharedOnly: [String]? { ud.array(forKey: "termOnly0") as? [String] }  // the one pick every floor and window shows; nil: all projects
     func setPick(_ only: [String]?, except: WKWebView? = nil) {
+        let only = livePick(only, known: nil)  // none ticked is all: never stored empty
         ud.set(only, forKey: "termOnly0"); syncL1()
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
     }
-    var l1Only: [String]? { projList.isEmpty ? nil : sharedOnly }  // nil until a terminal page lists the projects
+    var l1Only: [String]? { live(sharedOnly) }  // nil until a terminal page lists the projects
+    /// A pick as the windows show it, against the projects the terminal page listed: nil (all) until it has, and for a pick none of whose
+    /// projects is still there. The pick itself stays as saved, so a project that comes back (its host's trees) is shown again.
+    func live(_ only: [String]?) -> [String]? { projList.isEmpty ? nil : livePick(only, known: projList.compactMap { $0["id"] as? String }) }
     var l1Picked: [[String: Any]] { picked(l1Only) }
     func picked(_ only: [String]?) -> [[String: Any]] { (only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
     /// The picked projects' "paths" or "repos"; nil: every project. Sorted: the tick compares it.
@@ -7120,7 +7131,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
     }
     func syncL1() {
-        for (f, o) in [(l1Floor, l1Only)] + l1s.values.map({ ($0.floor, projList.isEmpty ? nil : $0.only) }) {
+        for (f, o) in [(l1Floor, l1Only)] + l1s.values.map({ ($0.floor, live($0.only)) }) {
             let ps = picked(o), names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
             f.project = o == nil ? "All projects" : names.isEmpty ? "No projects" : names
             f.colors = o == nil ? [] : ps.compactMap { $0["color"] as? String }
@@ -7128,7 +7139,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func l1Pick(here: Bool = true, in l: L1? = nil) {
         let list = (try? JSONSerialization.data(withJSONObject: projList)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
-        let o = l == nil ? l1Only : projList.isEmpty ? nil : l!.only
+        let o = l == nil ? l1Only : live(l!.only)
         let only = (o.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         (l?.web ?? fluid).evaluateJavaScript("window.mc && mc.pickProjects && mc.pickProjects(\(list), \(only), \(here))")
     }
@@ -7148,7 +7159,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func l1(_ web: WKWebView?) -> L1? { l1s.values.first { $0.web === web } }
     func saveL1s() { ud.set(l1s.values.sorted { $0.id < $1.id }.map { l in l.only.map { ["id": l.id, "only": $0] as [String: Any] } ?? ["id": l.id] }, forKey: "l1Windows") }
     /// Its Chief's scope: its projects, the whole time it's open (it's a window: it closes rather than hides).
-    func scope(_ l: L1) -> String? { let o = projList.isEmpty ? nil : l.only; return windowScope(paths: sel(o, "paths"), repos: sel(o, "repos"), shown: true) }
+    func scope(_ l: L1) -> String? { let o = live(l.only); return windowScope(paths: sel(o, "paths"), repos: sel(o, "repos"), shown: true) }
 
     @discardableResult
     func makeL1(_ id: Int, only: [String]?, from: NSWindow? = nil) -> L1 {
@@ -7204,7 +7215,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func reopenL1s() {
         guard !selftest else { return }  // not your windows and their chat-<n>
         let saved = ud.array(forKey: "l1Windows") as? [[String: Any]] ?? []
-        for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: d["only"] as? [String]).w.orderFront(nil) } }
+        for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: livePick(d["only"] as? [String], known: nil)).w.orderFront(nil) } }
         if !saved.isEmpty { _ = termWindow }  // its page lists the projects (hidden): until it has, a window shows All projects
     }
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
@@ -7785,7 +7796,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let repos = "\(json(l1Paths)), \(json(l1Repos))"
         if pushedRepos != repos { pushedRepos = repos; mainWebs.forEach { $0.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(repos))") } }
         for l in l1s.values {  // the other Greenlight Center windows: their own projects, their chat always in its pane
-            let o = projList.isEmpty ? nil : l.only, r = "\(json(sel(o, "paths"))), \(json(sel(o, "repos")))"
+            let o = live(l.only), r = "\(json(sel(o, "paths"))), \(json(sel(o, "repos")))"
             if l.pushedRepos != r { l.pushedRepos = r; l.web.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(r))") }
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.evaluateJavaScript("window.mc && mc.chat(true,0)") }
             if l.w.appearance?.name != look?.name { l.w.appearance = look; l.web.appearance = look }
@@ -8362,6 +8373,9 @@ func selfTest() {
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
+    check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
+          livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
+          && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
