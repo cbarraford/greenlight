@@ -152,9 +152,9 @@ def orca_cli(*args, timeout=120):
 # by a new workspace; a workspace is for a change. GREENLIGHT_REQUEST is the user's message (chat.py) or the
 # automation's prompt (auto.py); `ade worktree create` refuses while it's read-only. Wrongly refusing a change is
 # the worse mistake, so only a plain question or lookup counts: anything else (a request, an answer, unclear) is a change.
-LOOKUP = (r"how (much|many|long|often)|what|what's|whats|which|who|whose|when|where|why|is|are|was|were|did|has|have|"
-          r"does|status|check|look up|lookup|show me|tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
-ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)
+LOOKUP = (r"how (much|many|long|often)|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|have|"
+          r"does|status|check|look up|lookup|tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
+ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)  # a ping's answer opens "(Replying to …": never
 POLITE_RE = re.compile(r"\b(?:(?:can|could|would|will) (?:you|we)|please)\s+(?:please\s+)?(\w+(?: \w+)?)", re.I)
 CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
            r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
@@ -163,9 +163,10 @@ CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|ren
            r"archive|clean|turn (on|off)|hold|park|rotate|revoke|pay|buy|order|schedule|book|undo|apply|land|split|"
            r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
-           r"notify|email|message|get|port|hook|wire|file|sort|triage|translate|workspace|worktree|agent")
+           r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
+           r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
-NAME_RE = re.compile(r"[\w.!#/]+(?:-[\w.]+)+")  # workspace and branch names: "fix-001" names, it doesn't fix
+NAME_RE = re.compile(r"[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
                      "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
                      "glab / gh, the APIs and files on this host) instead of creating a workspace. Workspaces are for "
@@ -175,7 +176,7 @@ READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, resear
 
 def read_only(text):
     """True when the request is plainly a question or lookup: no change in it and no request for one."""
-    text = NAME_RE.sub(" ", text or "")  # an answer to a ping starts "(Replying to …": never a plain question
+    text = NAME_RE.sub(" ", text or "")
     return bool(ASKS_RE.search(text)) and not CHANGE_RE.search(text) and all(
         re.match(rf"({LOOKUP})\b", m.group(1), re.I) for m in POLITE_RE.finditer(text))  # "can you X": X must look up
 
@@ -183,14 +184,14 @@ def read_only(text):
 def create_refused(args):
     """READ_ONLY_REFUSAL when args create a workspace for a read-only request, else None. --change overrides."""
     a = [x for x in args if not x.startswith("-")][:2]
-    if a != ["worktree", "create"] or "--change" in args:
+    if a != ["worktree", "create"] or any(x.startswith("--change") for x in args):
         return None
     return READ_ONLY_REFUSAL if read_only(os.environ.get("GREENLIGHT_REQUEST", "")) else None
 
 
 def without_change(args):
     """args minus --change <why>, which is greenlight's own and not the ADE's."""
-    args = list(args)
+    args = [x for x in args if not x.startswith("--change=")]
     if "--change" in args:
         k = args.index("--change")
         del args[k:k + 2]

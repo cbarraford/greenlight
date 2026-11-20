@@ -393,7 +393,7 @@ print("custom stages ok")
 asks = ["How much has GPT-Live cost us in the last 24 hours?", "what's !101's status", "Is !42 merged?",
         "Check the 24h GPT-Live spend", "why is CI red on #12?", "what's running", "look up our OpenAI bill",
         "Does !42 have conflicts?", "What's the status of fix-001?", "Can you check the 24h spend?",
-        "Could you tell me why CI is red?", "Please check the 24h GPT-Live spend"]
+        "Could you tell me why CI is red?", "Please check the 24h GPT-Live spend", "What did gpt-live-24h-cost find?"]
 # wrongly refusing a change is the worse mistake: requests, answers and anything unclear may create
 changes = ["Add a 24h cost meter", "fix the failing CI on #12", "Can you rebase !42?", "Merge !42", "do it", "go ahead",
            "check the spend and then update the dashboard", "/greenlight (automation run: nobody is watching, don't ask questions)",
@@ -403,10 +403,10 @@ changes = ["Add a 24h cost meter", "fix the failing CI on #12", "Can you rebase 
            "Can you take over !88?", "Could you get !42 green?", "Can we get this merged?", "Can you finish !42?",
            "Can you address the review comments on !42?", "Could you respond to the review?", "Can you port auto.py to Swift?",
            "Should we wire the cost API into dash.py?", "Can you file an issue for it?", "Do the same for !43",
-           "Show the 24h cost on the dashboard", "Why is CI red on #12? Get an agent on it.", "Can you review !42?",
+           "Show the 24h cost on the dashboard", "Show me the 24h cost on the dashboard", "Why is CI red on #12? Get an agent on it.", "Can you review !42?",
            "Look into the keychain prompts and sort it out", "yes please, how long will it take?",
            "Check for flaky tests and get them fixed", "Check the security tracker and triage new issues",
-           "Can you grant a teammate access to the dashboard?", "Who should review !42? Spin up a workspace for it"]
+           "Can you grant a teammate access to the dashboard?", "Why did CI fail on !42? Re-run it.", "Is !42 merged? If so auto-merge !43", "What is the 24h cost? e-mail it to me", "Who should review !42? Spin up a workspace for it"]
 for t in asks:
     assert greenlight.read_only(t), t
 for t in changes:
@@ -414,6 +414,7 @@ for t in changes:
 os.environ["GREENLIGHT_REQUEST"] = "How much did GPT-Live cost in the last 24h?"
 assert greenlight.create_refused(["worktree", "create", "--name", "gpt-live-24h-cost"])
 assert not greenlight.create_refused(["worktree", "create", "--name", "x", "--change", "adds the cost meter"])  # the model's override
+assert not greenlight.create_refused(["worktree", "create", "--change=adds it"]) and greenlight.without_change(["--change=adds it", "--name", "x"]) == ["--name", "x"]
 assert greenlight.without_change(["worktree", "create", "--change", "why", "--name", "x"]) == ["worktree", "create", "--name", "x"]
 assert not greenlight.create_refused(["worktree", "ps"])  # reading state is the answer
 assert not greenlight.create_refused(["agent", "launch", "--worktree", "id:w1"])

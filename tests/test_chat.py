@@ -199,7 +199,6 @@ def test_stop_shell(tmp_path, monkeypatch):
 FAKE_DISPATCH = """#!/usr/bin/env python3
 import json, subprocess, sys
 sys.stdin.read()
-gl = sys.argv[0].rsplit("/", 1)[0] + "/greenlight.py"
 p = subprocess.run([sys.executable, %r, "ade", "worktree", "create", "--name", "gpt-live-24h-cost", "--repo", "greenlight",
                     "--comment", "Report GPT-Live's 24h spend", "--agent", "claude", "--prompt", "Query org costs for 24h"],
                    capture_output=True, text=True)
@@ -249,13 +248,13 @@ def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
 
 def test_answer_to_chat_question_not_judged_alone(tmp_path, monkeypatch):
     (tmp_path / "asked").write_text("")  # the last reply asked "which repo?": this answer carries the change it was about
-    done, calls = dispatch_turn(tmp_path, monkeypatch, "greenlight, is that ok?")
+    done, calls = dispatch_turn(tmp_path, monkeypatch, "what about the greenlight repo?")  # refused if judged alone
     assert [c[:2] for c in calls] == [["worktree", "create"]], calls
     assert not (tmp_path / "asked").exists()  # this reply asked nothing
 
 
 def test_prompt_answers_questions_directly():
-    assert "investigations" not in chat.PROMPT  # the old rule sent every investigation to a workspace
+    assert "never create a workspace to answer one" in chat.PROMPT and "investigations" not in chat.PROMPT  # the old rule dispatched them
 
 
 if __name__ == "__main__":
