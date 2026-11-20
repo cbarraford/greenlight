@@ -896,6 +896,15 @@ struct Activity: View {
     }
 }
 
+/// A workspace's agent (Claude Code, Codex…) from dash.py's snapshot; id is the worktree's path.
+struct Agent: Equatable, Identifiable { let id: String, name: String, state: String, type: String }
+func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
+    pucks.compactMap { p in
+        guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, st != "none", let path = p["path"] as? String else { return nil }
+        return Agent(id: path, name: p["name"] as? String ?? path, state: st, type: a["type"] as? String ?? "")
+    }.sorted { ($0.state == "waiting" ? 0 : $0.state == "working" ? 1 : 2, $0.name) < ($1.state == "waiting" ? 0 : $1.state == "working" ? 1 : 2, $1.name) }
+}
+
 enum Talk { case speaking, listening, thinking }
 /// What every look shows, from Voice and Core.
 struct Live {
@@ -1260,7 +1269,7 @@ struct ZenLook: View {
             s.stage(l, r: 0, pad: 0).padding(.horizontal, 32).padding(.top, 24)
             if !s.said.isEmpty { Text(s.said).font(.system(size: 24, weight: .light)).foregroundColor(hx(l.text)).multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 40).padding(.top, 20) }
             if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 8) }
-            s.activity(l).fixedSize().padding(.top, 10)
+            s.activity(l).padding(.horizontal, 40).padding(.top, 10)
             Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
             Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)
             HStack {
@@ -1487,7 +1496,7 @@ final class Voice: NSObject, ObservableObject {
         wait(waitWord, r.question)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
-            self.say(self.waitWord)
+            self.say(self.waitWord, filler: true)
         }
     }
     func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
@@ -1497,14 +1506,14 @@ final class Voice: NSObject, ObservableObject {
         if let h = st.stage { stage(h) }
         let (ss, to) = sentences(p, from: said)
         said = to
-        ss.forEach(say)
+        ss.forEach { say($0) }
         if !chiefDrew && !drawing && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }
     func finished(_ st: Staged, _ body: String) {
         guard on else { return }
         if let h = st.stage { stage(h) }
         let p = plain(body) + "\n"
-        sentences(p, from: min(said, p.count)).said.forEach(say)
+        sentences(p, from: min(said, p.count)).said.forEach { say($0) }
         said = 0
         if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
         if !chiefDrew { draw(plain(body), last: true) }
@@ -1541,7 +1550,8 @@ final class Voice: NSObject, ObservableObject {
     // speech
 
     /// One line to the player: the voice's own audio if there is one, else Apple's.
-    func say(_ text: String) {
+    /// A filler line (the wait word) is dropped rather than said in Apple's voice when the chosen voice can't make it: one voice per turn.
+    func say(_ text: String, filler: Bool = false) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard on, !muted, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
         lastSpoken = String((lastSpoken + " " + t).suffix(600))
@@ -1551,7 +1561,7 @@ final class Voice: NSObject, ObservableObject {
         guard Speech.shared.kind != "apple" else { return apple(t, g) }
         Speech.shared.q.async { [weak self] in  // serial: lines play in order
             guard let self, self.gen == g else { return }
-            guard let b = Speech.shared.pcm(t) else { return DispatchQueue.main.async { self.apple(t, g) } }
+            guard let b = Speech.shared.pcm(t) else { return DispatchQueue.main.async { filler ? self.play(nil, end: true, g) : self.apple(t, g) } }
             if self.voiceConv?.inputFormat != b.format { self.voiceConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
             guard let out = self.voiceConv.flatMap({ convert(b, $0, self.speechFormat, whole: true) }) else { return }
             self.play(out, end: false, g); self.play(nil, end: true, g)
@@ -1661,9 +1671,9 @@ final class Speech {
             guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
             let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
             return len == 0 ? nil : try kout.read(upToCount: len)
-        } catch {  // it died: restart it, so the lines after this one are Kokoro's again (this one falls back to Apple's)
-            ready = false; status = "Kokoro stopped, restarting"; proc?.terminate(); proc = nil
-            DispatchQueue.main.async { self.warm() }
+        } catch {  // it died: restart it once it had been working (a failed start stays failed, no respawn loop)
+            let was = ready; ready = false; status = was ? "Kokoro stopped, restarting" : "Kokoro didn't start"; proc?.terminate(); proc = nil
+            if was { DispatchQueue.main.async { self.warm() } }
             return nil
         }
     }
@@ -1683,9 +1693,10 @@ final class Speech {
         status = "Kokoro is loading (the first time downloads about 1 GB)"
         do { try p.run() } catch { status = "Kokoro: \(error.localizedDescription)"; return }
         proc = p; kin = i.fileHandleForWriting; kout = o.fileHandleForReading
-        // on the speech queue: a line said while it loads (the wait word, often) waits for Kokoro instead of going out in Apple's voice.
-        // ponytail: so the very first start (the ~1 GB download) is silent until it's done, not Apple's voice meanwhile
-        q.async { let ok = self.kokoro("Ready.") != nil; self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
+        DispatchQueue.global().async {
+            let ok = self.kokoro("Ready.") != nil
+            self.q.async { self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
+        }
     }
     func stop() { proc?.terminate(); proc = nil; ready = false }
 }
@@ -2057,6 +2068,7 @@ final class Core: ObservableObject {
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
+    @Published var agents: [Agent] = []  // the chat footer's agents button
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
         let (now, new) = newNeeds(needs, pucks)
@@ -4288,6 +4300,7 @@ struct ChatView: View, Looked {
                     EmptyView()
                 }.layoutPriority(-1)
                 Spacer(minLength: 4)
+                if !c.agents.isEmpty { agentsButton }
                 if !onair { modelButton }
                 ContextButton(c: c)
                 newChat
@@ -4360,6 +4373,27 @@ struct ChatView: View, Looked {
                 .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
                 .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
         }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
+    }
+
+    /// The agents running in your workspaces: a dot for the busiest (amber asking you, blue working), a pick opens its terminal.
+    var agentsButton: some View {
+        let a = c.agents, onair = lk.id == "onair", n = a.count
+        let dot = a.contains { $0.state == "waiting" } ? needs : a.contains { $0.state == "working" } ? working : dim
+        let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
+        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : g.state == "working" ? "working" : "idle")\(g.type.isEmpty ? "" : " · \(g.type)")" }
+        return Menu {
+            ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
+        } label: {
+            HStack(spacing: Theme.sp1) {
+                Circle().fill(onair ? accent : dot).frame(width: 7, height: 7)
+                tag(word, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1)
+            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
+                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
+                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .modifier(Tip(c: c, text: "Agents in your workspaces: pick one to open its terminal"))
+            .accessibilityLabel("\(n) agent\(n == 1 ? "" : "s")\(a.contains { $0.state == "waiting" } ? ", one asking you" : ""). Open an agent's terminal")
     }
 
     static let newTip = "New chat — forget this conversation and start fresh"
@@ -5128,6 +5162,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let d = l.data(using: .utf8), let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let pucks = snap["pucks"] as? [[String: Any]] else { return }
         greenlight.pucks = pucks
+        if case let a = agentsOf(pucks), a != greenlight.agents { greenlight.agents = a }
         greenlight.watched(pucks)
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,
@@ -6266,6 +6301,9 @@ func selfTest() {
           && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
+    check("agents button: agents only, the one asking you first",
+          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "none"]],
+                    ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })

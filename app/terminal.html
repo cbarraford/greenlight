@@ -1102,7 +1102,7 @@ const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !ONLY || ON
 function openWs(ws){
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
   const latest = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0], q = ws.toLowerCase();
-  const t = latest(t => JSON.stringify(t.tree || {}).includes(`"${ws}"`)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
+  const t = latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
     || latest(t => (t.name || "").toLowerCase().includes(q));
   t ? show(t) : ws.startsWith("/") && newTab(ws) }
 // status glyphs (16-unit grid, 1.5 stroke, as the design)
