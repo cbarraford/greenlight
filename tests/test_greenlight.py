@@ -395,7 +395,9 @@ asks = ["How much has GPT-Live cost us in the last 24 hours?", "what's !101's st
         "Does !42 have conflicts?", "What's the status of fix-001?", "Can you check the 24h spend?",
         "Could you tell me why CI is red?", "Please check the 24h GPT-Live spend", "What did gpt-live-24h-cost find?",
         "Can you check if the token expired?", "Why is it so slow?", "Is it also failing on main?", "Is CI ok?",
-        "Could you check the 24h spend, please?", "What are the cost and latency of GPT-Live?", "Compare GPT-Live and Realtime costs",
+        "Could you check the 24h spend, please?", "What are the cost and latency of GPT-Live?", "Compare GPT-Live and Realtime costs", "List my open MRs", "What docs cover the API?",
+        "How much has GPT-Live cost us in the last 24 hours?" + greenlight.ASKED + "Do you mean prod or staging?" + greenlight.ANSWER + "prod",
+        "How much did GPT-Live cost?" + greenlight.ASKED + "Which account should I use?\n`Options: prod | staging`" + greenlight.ANSWER + "prod",
         "How much did GPT-Live cost?" + greenlight.ASKED + "Prod or staging?" + greenlight.ANSWER + "prod" + greenlight.ASKED + "Which window?" + greenlight.ANSWER + "the last 24h"]
 # wrongly refusing a change is the worse mistake: requests, answers and anything unclear may create
 changes = ["Add a 24h cost meter", "fix the failing CI on #12", "Can you rebase !42?", "Merge !42", "do it", "go ahead",
@@ -414,7 +416,8 @@ changes = ["Add a 24h cost meter", "fix the failing CI on #12", "Can you rebase 
            "What about adding a cost meter to the dashboard?", "Is !42 on main? cherry-pick it onto release-1.2",
            "How much did GPT-Live cost?" + greenlight.ANSWER + "sure", "How much did GPT-Live cost?" + greenlight.ASKED + "Want me to add a cost meter to the dashboard?" + greenlight.ANSWER + "the dashboard",
            "How much did GPT-Live cost?" + greenlight.ASKED + "Anything else?" + greenlight.ANSWER + "put a cost meter on the dashboard",
-           "Check in the hotfix to main", "Check out a new branch for the cost meter", "Is it possible to put a meter on the dashboard?",
+           "Check in the hotfix to main", "Check the invoice and refund the customer", "How much did GPT-Live cost?" + greenlight.ASKED + "Should I add a meter for it?" + greenlight.ANSWER + "the dashboard", "What is the 24h cost, the dashboard needs a meter for it", "Why is CI red on #12, I want it green before lunch",
+           "How much did GPT-Live cost?" + greenlight.ASKED + "Want me to add a cost meter to the dashboard?\nOptions: Dashboard | Weekly report | No thanks" + greenlight.ANSWER + "Dashboard", "How much did GPT-Live cost?" + greenlight.ASKED + "I can add a cost meter.\nWhere should it go?" + greenlight.ANSWER + "dashboard", "Check out a new branch for the cost meter", "Is it possible to put a meter on the dashboard?",
            "Summarize the incident in a doc", "Explain the architecture in the README", "How much did GPT-Live cost?" + greenlight.ANSWER + "Have codex look into it", "Investigate the flake and put up an MR", "Who should review !42? Spin up a workspace for it"]
 for t in asks:
     assert greenlight.read_only(t), t

@@ -156,21 +156,26 @@ def orca_cli(*args, timeout=120):
 LOOKUP = (r"how|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|does|status|check|look up|lookup|"
           r"tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
 ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)
-CLAUSE_RE = re.compile(r"[?.;:\n]+|!(?=\s|$)|,?\s*\b(?:(?:and )?then|otherwise|if so|if not)\b", re.I)  # sentences, not "and"
+CLAUSE_RE = re.compile(r"[?.;:,\n]+|!(?=\s|$)|\b(?:(?:and )?then|otherwise|if so|if not|but)\b", re.I)  # clauses, not "and"
+COURTESY_RE = re.compile(r"\W*(please|thanks?|thank you)?\W*", re.I)  # "…, please?" is no clause
 CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
            r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
-           r"comment|open|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
+           r"comment|open (?:a|an|the|it|up|new)|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
            r"kill|stop|start|run|launch|dispatch|retry|re-?run|draft|publish|resolve|address|tag|release|save|record|"
            r"archive|clean|turn (on|off)|hold|park|rotate|revoke|pay|buy|order|schedule|book|undo|apply|land|split|"
            r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
            r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
-           r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our|my)|let|put|renew|roll|nudge|"
-           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible|docs?|readme|"
+           r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our \w+|my \w+) on|let|put|renew|roll|nudge|"
+           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible to|in (?:a|the) (?:doc|readme)|"
            r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
+DET = r"the|a|an|it|its|them|this|that|these|those|my|our|your|their|his|her|me|us|him|all|every"
+AND_DO_RE = re.compile(rf"\band (?:then )?(?!(?:{DET})\b)(\w+) (?:{DET})\b", re.I)  # "and refund the customer": a verb, its object
 NAME_RE = re.compile(r"[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # chat.py: request, (asked) the chat's question, (answer) the user's answer, …
+OFFER_RE = re.compile(rf"\b(want me to|shall i|should i|i can|i could|i'll|let me|do you want|would you like|^`?options:)\b.*\b(?!(?:use|do|get|keep|try|file|set)\b)({CHANGES})\b",
+                      re.I | re.M | re.S)  # the chat's question offered a change: "want me to add a meter?", not "should I use prod?"
 AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
                      "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
@@ -181,15 +186,18 @@ READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, resear
 
 
 def read_only(text):
-    """True when the request is plainly questions or lookups, and no answer to a clarifying question asks for a change."""
-    req, *turns = re.split(r"\n\((asked|answer)\) ", NAME_RE.sub(" ", text or ""))
-    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == "asked"]
-    answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == "answer"]
-    clauses = [c for c in CLAUSE_RE.split(req) if c and c.strip(" \t'\"()-*")]
+    """True when the request is plainly questions or lookups, no question the chat asked about it offered a change,
+    and no answer to one asks for a change."""
+    req, *turns = re.split("(" + "|".join(map(re.escape, (ASKED, ANSWER))) + ")", NAME_RE.sub(" ", text or ""))
+    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ASKED]
+    answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ANSWER]
+    clauses = [c for c in CLAUSE_RE.split(req) if c and not COURTESY_RE.fullmatch(c)]
     def answer_changes(a):  # "prod" narrows the question; "sure", or a sentence that doesn't ask, is its own request
         return CHANGE_RE.search(a) or AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
+    if any(not re.fullmatch(LOOKUP, m.group(1), re.I) for m in AND_DO_RE.finditer(req)):
+        return False
     return (bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not CHANGE_RE.search(req)
-            and not any(CHANGE_RE.search(q) for q in asked)  # "want me to add a meter?" offered a change
+            and not any(OFFER_RE.search(q) for q in asked)
             and not any(answer_changes(a) for a in answers))
 
 
