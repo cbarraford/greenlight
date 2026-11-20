@@ -398,7 +398,7 @@ const I = {
   host: w => svg16("M1.5 2.5h13V11h-13zM5.5 14h5M8 11v3", w),
   sidebar: w => svg16("M2.5 2.5h11v11h-11zM6 2.5v11", w),
   brush: w => svg16("M13.5 2.5 7 9M7 9c-2 0-3 1-3 2.5S3 13.5 2.5 13.5c3 0 5.5-1 5.5-3.5z", w),
-  win: w => svg16("M2.5 3.5h11v9h-11zM2.5 6h11", w), edit: w => svg16("M11 2.5l2.5 2.5-8 8H3v-2.5zM9.5 4l2.5 2.5", w),
+  edit: w => svg16("M11 2.5l2.5 2.5-8 8H3v-2.5zM9.5 4l2.5 2.5", w),
   refresh: w => svg16("M13 3v3.5H9.5M3 13V9.5h3.5M12.6 6.5A5 5 0 0 0 3.6 6M3.4 9.5a5 5 0 0 0 9 .5", w),
   bolt: w => `<svg width="${w}" height="${w}" viewBox="0 0 16 16" fill="#FFB340" aria-hidden="true"><path d="M9.2 1 3 9h4.2L6.6 15 13 7H8.8z"/></svg>`,  // an auto-run's tab
   merge: svg('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M6 7c0 4 4 5 10 5"/>', 18),
@@ -1176,7 +1176,7 @@ function toggleSide(){
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
 const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});
 waitB.onclick = () => { const p = [...panes.values()].find(p => p.bell && isClaude(p)); if (p) focusPane(p) };
-$("shead").append(waitB, iconBtn("ib acc", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.win(14), "New window  ⌘⇧N", newWindow, "New window"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
+$("shead").append(waitB, iconBtn("ib acc", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
   iconBtn("ib", I.refresh(14), "Refresh workspaces", () => post({cmd: "trees"})));
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
   t.textContent = ONLY ? ONLY.map(id => id ? allP.find(p => p.id === id)?.name ?? acctCfg.name : NML).filter(Boolean).join(", ") || "No projects" : "Workspaces";
@@ -1237,7 +1237,7 @@ function pickProjects(here){
   }, null, {cls: "big nw", head: [seg], left: [ed], right: [tot]});
   mode();
 }
-function newWindow(){ pickProjects(false) }
+function newWindow(){ pickProjects(false) }  // ⌘⇧N, or the picker's New window (the title opens it): the sidebar head has no button for it
 // Customize look: your words → Claude (the app runs claude -p) → CSS colors over this window's chrome; Undo walks back, one restyle at a time
 let restyling = false, toastT;
 // opt: true (an Undo for the look), or {sub: a second line, act: [button label, its fn]}
