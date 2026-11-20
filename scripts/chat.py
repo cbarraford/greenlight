@@ -373,6 +373,7 @@ def run(cmd, engine, text, norm, check=False):
     p.stdin.write(text)
     p.stdin.close()
     sid, done, private, needles = None, False, set(), attach.needles(DIR)
+    hiding = os.path.isdir(attach.root(DIR))  # decided at the start: a Clear mid-turn doesn't stop it; nothing attached, nothing hidden
     for line in p.stdout:
         try:
             d = json.loads(line)
@@ -386,7 +387,7 @@ def run(cmd, engine, text, norm, check=False):
             elif e["e"] == "step_done" and e.get("id") in private:
                 e["out"] = attach.HIDDEN
                 e.pop("full", None)
-            if e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+            if hiding and e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
                 attach.hide(DIR, e, needles)
         evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
         if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
@@ -400,6 +401,8 @@ def run(cmd, engine, text, norm, check=False):
             return sid, "retry"
         for e in evs:
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
+                for sh in e["shells"] if hiding else ():
+                    attach.hide(DIR, sh, needles)  # its title is the step's: hidden as the step's is
                 json.dump(e["shells"], open(BGFILE, "w"))
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice

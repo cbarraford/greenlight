@@ -200,16 +200,20 @@ def needles(chat_dir):
 
 
 def showing(line, needles):
-    """Does an output line hold a whole attached line, or (where the output was cut, marked …) the visible part of one?"""
+    """Does an output line hold an attached line: whole, or enough of its start to be it (2×KEY characters, or running to
+    where the output stops: a cut, marked … or not), or the end of one after a leading … (a tail clip)?"""
     starts, ends = needles
     for t in {" ".join(line.split()), line}:
-        cut_end, cut_start = t.endswith("…"), t.startswith("…")
+        stop = t.rfind("…")  # a cut: `out`'s …, `call`'s …), clip's leading …
         for i in range(len(t) - KEY + 1):
             w = t[i:i + KEY]
             for n in starts.get(w, ()):
-                if t.startswith(n, i) or (cut_end and len(t) - 1 - i >= KEY and n.startswith(t[i:-1])):
+                k = KEY
+                while i + k < len(t) and k < len(n) and t[i + k] == n[k]:
+                    k += 1
+                if k == len(n) or k >= 2 * KEY or i + k == len(t) or i + k == stop:
                     return True
-            if cut_start:
+            if t.startswith("…"):
                 seg = t[1:i + KEY]
                 if any(n.endswith(seg) for n in ends.get(w, ())):
                     return True
@@ -224,8 +228,6 @@ def hide(chat_dir, e, needles):
     or holds the start or end of a line of an attached text file (so a line an output cut short is caught from the side
     that shows). Other lines stay. True if anything was taken."""
     took = False
-    if not any(needles) and not os.path.isdir(root(chat_dir)):
-        return False  # nothing attached in this conversation (a Clear mid-turn still leaves this turn's needles)
     def clean(text, lines):
         nonlocal took
         out = []

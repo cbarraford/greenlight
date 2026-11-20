@@ -529,7 +529,6 @@ def test_hide_catches_json_cut_lines_and_is_fast(tmp_path):
 def test_hide_leaves_other_paths_alone(tmp_path):
     D = str(tmp_path)
     e = {"detail": "ls app/models/attachments/", "out": "https://cdn.example.com/attachments/1/x.png"}
-    assert not attach.hide(D, dict(e), ({}, {}))  # nothing attached: nothing to hide
     attach.store(D, [("n.txt", "text", b"hi\n")])
     assert not attach.hide(D, e, attach.needles(D)) and e["detail"] == "ls app/models/attachments/"
     assert not attach.mentions(D, {"detail": "ls app/models/attachments/"}) and attach.mentions(D, {"detail": "grep -R x ./attachments/"})
@@ -585,3 +584,71 @@ def test_a_hidden_title_stays_hidden_in_the_status(tmp_path, monkeypatch):
     assert not any("abcdefgh" in json.dumps(e) for e in events), events  # not the step, not the status after b ends
     assert next(e for e in events if e["e"] == "step_done" and e["id"] == "a")["out"] == attach.HIDDEN  # <attachments/ is a read
     assert not attach.mentions(str(tmp_path), {"detail": "ls app/attachments/ https://x.io/attachments/1"})
+
+
+PATHS = """#!/usr/bin/env python3
+import json, os, shutil, sys
+sys.stdin.read()
+def out(**d):
+    d["session_id"] = "s1"; print(json.dumps(d))
+shutil.rmtree(os.path.join(os.getcwd(), "attachments"))  # Clear lands mid-turn
+out(type="assistant", message={"content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "ls -R", "description": "List"}}]})
+out(type="user", message={"content": [{"type": "tool_result", "tool_use_id": "a", "content": "./attachments/x/shot.png"}]})
+out(type="result", result="ok", is_error=False, duration_ms=1)
+"""
+
+
+def test_hiding_lasts_the_turn_and_needs_an_attachment(tmp_path, monkeypatch):
+    fake = tmp_path / "claude"
+    fake.write_text(PATHS)
+    fake.chmod(0o755)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("list", "claude-haiku-5-5", None, files=[{"name": "shot.png", "data": b64(PNG)}])
+    assert next(e for e in events if e["e"] == "step_done")["out"] == attach.HIDDEN, events
+    events.clear()
+    (tmp_path / "attachments").exists() and attach.clear(str(tmp_path))
+    fake.write_text(PATHS.replace('shutil.rmtree(os.path.join(os.getcwd(), "attachments"))', "pass"))
+    chat.turn("list", "claude-haiku-5-5", None)  # nothing attached: a project's own attachments/ output shows
+    assert next(e for e in events if e["e"] == "step_done")["out"] == "./attachments/x/shot.png", events
+
+
+def test_hide_catches_cut_calls_and_unmarked_truncation(tmp_path):
+    D = str(tmp_path)
+    secret = "SECRET_TOKEN=" + "abcdefghij" * 12
+    attach.store(D, [("s.txt", "text", (secret + "\n").encode())])
+    ns = attach.needles(D)
+    call = chat.call("Bash", {"command": f"printf '%s\\n' '{secret}' > /tmp/out.txt"})
+    assert call.endswith("…)")
+    e = {"call": call, "full": "x\n" + secret[:90] + "\ny"}  # cut -c1-90: no … at all
+    assert attach.hide(D, e, ns) and e["call"] == attach.HIDDEN and e["full"] == f"x\n{attach.HIDDEN}\ny", e
+
+
+BG = """#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+def out(**d):
+    d["session_id"] = "s1"; print(json.dumps(d))
+out(type="assistant", message={"content": [{"type": "tool_use", "id": "u1", "name": "Bash", "input": {"command": "sleep 1", "description": "the deploy token for staging is abcdefgh", "run_in_background": True}}]})
+out(type="system", subtype="task_started", task_id="t1", tool_use_id="u1", description="the deploy token for staging is abcdefgh", is_backgrounded=True)
+out(type="result", result="ok", is_error=False, duration_ms=1)
+"""
+
+
+def test_background_shell_title_is_hidden(tmp_path, monkeypatch):
+    attach.store(str(tmp_path), [("n.txt", "text", b"the deploy token for staging is abcdefgh\n")])
+    fake = tmp_path / "claude"
+    fake.write_text(BG)
+    fake.chmod(0o755)
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "BGFILE", str(tmp_path / "bg.json"))
+    monkeypatch.setattr(chat, "emit", lambda **e: None)
+    dumped, real = [], json.dump
+    monkeypatch.setattr(chat.json, "dump", lambda o, f, **k: (dumped.append(json.dumps(o)), real(o, f, **k)))
+    chat.turn("go", "claude-haiku-5-5", None)
+    assert dumped and all("abcdefgh" not in d for d in dumped) and attach.HIDDEN in dumped[-1], dumped
