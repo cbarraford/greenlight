@@ -4175,6 +4175,7 @@ struct SettingsView: View {
         }
         box("Options") {
             toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
+            toggleRow("Merge by itself", "Once every step before the merge passes (an agent's reviews and try-out, say), Greenlight merges without waiting on an approval or asking you.", optBinding("automerge"))
             toggleRow("Merge into any branch", "Greenlight may merge an MR whose target isn't the default branch.", optBinding("merge_any_base"))
         }
         saveRow("Save", rs.save)
