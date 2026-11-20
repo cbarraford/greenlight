@@ -15,6 +15,7 @@ dest=~/Applications/$name.app
 for f in ~/.greenlight-stage.*.*; do p=${f#"$HOME"/.greenlight-stage.}; p=${p%%.*}
   [ -d "$f" ] && [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null && rm -rf "$f" || true
 done
+find ~ -maxdepth 1 -name '.greenlight-stage.??????' -mmin +60 -exec rm -rf {} + 2>/dev/null || true  # this PR's earlier naming, without the pid
 mkdir -p ~/Applications; stage=$(mktemp -d ~/.greenlight-stage.$$.XXXXXX) app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
 trap 'rm -rf "$bin" "$stage"' EXIT
@@ -58,6 +59,7 @@ apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"'
 # for a dev copy's unattended build, which waits for it.
 team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-1 hash:/{on=($3==h)} on; /END CERTIFICATE/{on=0}' |
   openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
+if [ -n "$apple" ] && [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2; exit 1; fi
 # Command Line Tools swiftc: avoids needing the Xcode license accepted
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Greenlight.swift -o "$bin"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -81,9 +83,7 @@ mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then
   # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match
-  if [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2
-  else echo "build.sh: error: signing with \"$cn\" failed: unlock the login keychain (it is locked over ssh), or click Always Allow when codesign asks on the Mac's screen, then build again" >&2; fi
-  exit 1
+  echo "build.sh: error: signing with \"$cn\" failed: unlock the login keychain (it is locked over ssh), or click Always Allow when codesign asks on the Mac's screen, then build again" >&2; exit 1
 elif [ -z "$devid" ]; then
   echo "build.sh: no signing cert; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"
 else
