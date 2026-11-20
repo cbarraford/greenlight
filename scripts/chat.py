@@ -35,7 +35,7 @@ PROMPT = (
     "Orca workspace, creating one with a goal if none fits; then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
     "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
-    "(that's not doing work yourself) and answer with them in mind; when you dispatch work about one, give the agent its path. "
+    "and answer with them in mind; when you dispatch work about one, give the agent its path. "
     "Answer concisely: the answer first, only what was asked, no preamble, no restating the question, no closing offers. "
     "Replies render as markdown in a narrow popover: a few short lines at most, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
@@ -665,7 +665,9 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
-        os.environ["GREENLIGHT_REQUEST"] = text  # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one
+        # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
+        # chat's own question ("which repo?" → "greenlight, ok?") isn't judged alone: it carries the request it answers.
+        os.environ["GREENLIGHT_REQUEST"] = "" if os.path.exists(os.path.join(DIR, "asked")) else text
         text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
@@ -691,6 +693,11 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         session(engine, new_sid)
     if not compact and not err:
         decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
+        asked = os.path.join(DIR, "asked")
+        if re.search(r"\?|^Options:", norm.reply or "", re.M):
+            open(asked, "w").close()
+        elif os.path.exists(asked):
+            os.remove(asked)
     if err:
         emit(e="done", ok=False, text=short(err, 500), context=norm.context, window=norm.window, ms=None)
 
@@ -701,7 +708,7 @@ def main():
     cmd = args[0] if args else "send"
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     if cmd == "new":
-        for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
+        for f in ["session", "board", "asked"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
         attach.clear(DIR)
