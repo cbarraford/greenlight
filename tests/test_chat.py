@@ -612,7 +612,8 @@ def test_hiding_lasts_the_turn_and_needs_an_attachment(tmp_path, monkeypatch):
     events.clear()
     (tmp_path / "attachments").exists() and attach.clear(str(tmp_path))
     fake.write_text(PATHS.replace('shutil.rmtree(os.path.join(os.getcwd(), "attachments"))', "pass"))
-    chat.turn("list", "claude-haiku-5-5", None)  # nothing attached: a project's own attachments/ output shows
+    fake.write_text(PATHS.replace('shutil.rmtree(os.path.join(os.getcwd(), "attachments"))', "pass").replace('"ls -R"', '"cat ./attachments/x/shot.png"'))
+    chat.turn("list", "claude-haiku-5-5", None)  # nothing attached: a project's own attachments/ output shows, a read of it too
     assert next(e for e in events if e["e"] == "step_done")["out"] == "./attachments/x/shot.png", events
 
 
@@ -652,3 +653,26 @@ def test_background_shell_title_is_hidden(tmp_path, monkeypatch):
     monkeypatch.setattr(chat.json, "dump", lambda o, f, **k: (dumped.append(json.dumps(o)), real(o, f, **k)))
     chat.turn("go", "claude-haiku-5-5", None)
     assert dumped and all("abcdefgh" not in d for d in dumped) and attach.HIDDEN in dumped[-1], dumped
+
+
+def test_unmarked_short_shared_start_is_not_hidden(tmp_path, monkeypatch):
+    D = str(tmp_path)
+    attach.store(D, [("a.py", "text", b"def __init__(self, token): self.token = token\n")])
+    e = {"full": "x\ndef __init__(self,\ny"}
+    assert not attach.hide(D, e, attach.needles(D)) and e["full"] == "x\ndef __init__(self,\ny"
+
+
+def test_hiding_is_decided_once_per_turn(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "run", lambda *a, **k: (seen.append(k.get("guard")), (None, "retry" if len(seen) == 1 else None))[1])
+    monkeypatch.setattr(chat, "emit", lambda **e: None)
+    chat.turn("x", "claude-haiku-5-5", None, files=[{"name": "n.txt", "data": b64(b"some attached text line here\n")}])
+    assert len(seen) == 2 and seen[0] is seen[1] and seen[0][0] is True  # the retry hides as the first run did
+
+
+def test_a_line_ending_in_an_attached_lines_start_shows(tmp_path):
+    D = str(tmp_path)
+    attach.store(D, [("urls.txt", "text", b"https://api.example.com/v1/orders?id=42&expand=items\n")])
+    e = {"full": "Base URL: https://api.example.com/v1"}
+    assert not attach.hide(D, e, attach.needles(D))

@@ -364,7 +364,7 @@ def session(engine, val=None):
     return open(f).read().strip() if os.path.exists(f) else None
 
 
-def run(cmd, engine, text, norm, check=False):
+def run(cmd, engine, text, norm, check=False, guard=None):
     """Run one turn, stream events. Returns (sid or None, error or None or "retry").
     check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -372,8 +372,8 @@ def run(cmd, engine, text, norm, check=False):
     open(PIDFILE, "w").write(str(p.pid))
     p.stdin.write(text)
     p.stdin.close()
-    sid, done, private, needles = None, False, set(), attach.needles(DIR)
-    hiding = os.path.isdir(attach.root(DIR))  # decided at the start: a Clear mid-turn doesn't stop it; nothing attached, nothing hidden
+    sid, done, private = None, False, set()
+    hiding, needles = guard or watch_for_attachments()
     for line in p.stdout:
         try:
             d = json.loads(line)
@@ -382,9 +382,9 @@ def run(cmd, engine, text, norm, check=False):
         sid = d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
         raw = getattr(norm, engine)(d)
         for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
-            if e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
+            if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
                 private.add(e["id"])
-            elif e["e"] == "step_done" and e.get("id") in private:
+            elif hiding and e["e"] == "step_done" and e.get("id") in private:
                 e["out"] = attach.HIDDEN
                 e.pop("full", None)
             if hiding and e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
@@ -426,6 +426,12 @@ def run(cmd, engine, text, norm, check=False):
             return sid, "Stopped"
         return sid, p.stderr.read().strip() or f"exit {p.returncode}"
     return (None if done else sid), None  # done: its session is saved already
+
+
+def watch_for_attachments():
+    """(hide?, needles) for a turn, decided at its start: a Clear during it (even between a retry's runs) doesn't stop it;
+    nothing attached, nothing hidden."""
+    return os.path.isdir(attach.root(DIR)), attach.needles(DIR)
 
 
 def agent_title(a):
@@ -501,22 +507,22 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
     emit(e="start", engine=engine, model=model or "default")
-    norm = Norm(verbose)
+    norm, guard = Norm(verbose), watch_for_attachments()
     try:
         cmd, t = mk(sid, text)
-        new_sid, err = run(cmd, engine, t, norm, check=not compact)
+        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard)
     except (ValueError, OSError) as e:  # unknown harness, pi without bypass, binary missing
         return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
         cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-        new_sid, err = run(cmd, engine, t, norm)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard)
         sid = None  # don't fall into the session-lost retry below
     if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
         emit(e="status", text="Session lost, starting a new one")
         cmd, t = mk(None, text)
-        new_sid, err = run(cmd, engine, t, norm)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard)
     if new_sid:
         session(engine, new_sid)
     if not compact and not err:
