@@ -517,7 +517,7 @@ def test_hide_catches_json_cut_lines_and_is_fast(tmp_path):
     ns = attach.needles(D)
     e = {"input": json.dumps({"file_path": "/tmp/out.env", "content": 'API_TOKEN="sk-live-abcdef0123456789"\n'}),
          "out": chat.short("x" * 100 + ' API_TOKEN="sk-live-abcdef0123456789"', 120),  # cut mid-line: its start shows
-         "full": 'live-abcdef0123456789"\nok'}  # a tail clip: its end shows
+         "full": '…live-abcdef0123456789"\nok'}  # a tail clip: its end shows
     assert attach.hide(D, e, ns) and e["input"] == e["out"] == attach.HIDDEN and e["full"] == attach.HIDDEN + "\nok", e
     for i in range(5):  # five 1 MB files kept: cleaning a big verbose event stays quick
         attach.store(D, [(f"big{i}.txt", "text", "".join(f"line {i} {k} of a long attached text file\n" for k in range(24000)).encode()[: 1 << 20])])
@@ -529,9 +529,59 @@ def test_hide_catches_json_cut_lines_and_is_fast(tmp_path):
 def test_hide_leaves_other_paths_alone(tmp_path):
     D = str(tmp_path)
     e = {"detail": "ls app/models/attachments/", "out": "https://cdn.example.com/attachments/1/x.png"}
-    assert not attach.hide(D, dict(e), set())  # nothing attached: nothing to hide
+    assert not attach.hide(D, dict(e), ({}, {}))  # nothing attached: nothing to hide
     attach.store(D, [("n.txt", "text", b"hi\n")])
     assert not attach.hide(D, e, attach.needles(D)) and e["detail"] == "ls app/models/attachments/"
     assert not attach.mentions(D, {"detail": "ls app/models/attachments/"}) and attach.mentions(D, {"detail": "grep -R x ./attachments/"})
     f = {"out": "./attachments/2026/n.txt:hi", "title": "Copy " + D + "/attachments/a/n.txt"}
-    assert attach.hide(D, f, set()) and f["out"] == f["title"] == attach.HIDDEN
+    assert attach.hide(D, f, ({}, {})) and f["out"] == f["title"] == attach.HIDDEN
+
+
+def test_hide_after_clear_and_shell_redirects(tmp_path):
+    D = str(tmp_path)
+    attach.store(D, [("p.txt", "text", b"private api key value 0123456789\n")])
+    ns = attach.needles(D)
+    attach.clear(D)  # Clear mid-turn: this turn's needles still apply
+    e = {"out": "key: private api key value 0123456789"}
+    assert attach.hide(D, e, ns) and e["out"] == attach.HIDDEN
+    assert all(attach.mentions(D, {"detail": c}) for c in ("cat <attachments/x/p.txt", "x|attachments/y", "a;attachments/b"))
+
+
+def test_hide_leaves_lines_that_only_look_alike(tmp_path):
+    D = str(tmp_path)
+    attach.store(D, [("notes.py", "text", b'def __init__(self, x):\n    return x\nif __name__ == "__main__":\n' + b"-" * 40 + b"\n2026-11-20 10:00:01 deploy started ok\n")])
+    ns = attach.needles(D)
+    other = 'def __init__(self, host, port):\n' + "=" * 40 + "\n" + "-" * 40 + "\n2026-11-20 10:00:59 tests passed fine\nif __name__ == \"__main__\":"
+    e = {"full": other}
+    attach.hide(D, e, ns)
+    assert e["full"].split("\n")[:4] == other.split("\n")[:4], e  # same start, same rule, same minute: not the attached lines
+    assert e["full"].endswith(attach.HIDDEN)  # the identical line is hidden: it's the attached text
+
+
+TITLED = """#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+def out(**d):
+    d["session_id"] = "s1"; print(json.dumps(d))
+out(type="assistant", message={"content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "wc -l <attachments/x/n.txt", "description": "Show the deploy token for staging is abcdefgh"}},
+                                           {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "ls", "description": "List"}}]})
+out(type="user", message={"content": [{"type": "tool_result", "tool_use_id": "b", "content": "x"}]})
+out(type="user", message={"content": [{"type": "tool_result", "tool_use_id": "a", "content": "1"}]})
+out(type="result", result="ok", is_error=False, duration_ms=1)
+"""
+
+
+def test_a_hidden_title_stays_hidden_in_the_status(tmp_path, monkeypatch):
+    attach.store(str(tmp_path), [("n.txt", "text", b"the deploy token for staging is abcdefgh\n")])
+    fake = tmp_path / "claude"
+    fake.write_text(TITLED)
+    fake.chmod(0o755)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("go", "claude-haiku-5-5", None)
+    assert not any("abcdefgh" in json.dumps(e) for e in events), events  # not the step, not the status after b ends
+    assert next(e for e in events if e["e"] == "step_done" and e["id"] == "a")["out"] == attach.HIDDEN  # <attachments/ is a read
+    assert not attach.mentions(str(tmp_path), {"detail": "ls app/attachments/ https://x.io/attachments/1"})

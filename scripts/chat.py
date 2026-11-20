@@ -379,7 +379,16 @@ def run(cmd, engine, text, norm, check=False):
         except ValueError:
             continue
         sid = d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
-        evs = norm.phrase(norm.track(getattr(norm, engine)(d)))  # track first, so its "Thinking" gets a phrase too
+        raw = getattr(norm, engine)(d)
+        for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
+            if e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
+                private.add(e["id"])
+            elif e["e"] == "step_done" and e.get("id") in private:
+                e["out"] = attach.HIDDEN
+                e.pop("full", None)
+            if e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+                attach.hide(DIR, e, needles)
+        evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
         if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
             try:
                 os.killpg(p.pid, signal.SIGTERM)
@@ -390,13 +399,6 @@ def run(cmd, engine, text, norm, check=False):
                 os.remove(PIDFILE)
             return sid, "retry"
         for e in evs:
-            if e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
-                private.add(e["id"])
-            elif e["e"] == "step_done" and e.get("id") in private:
-                e["out"] = attach.HIDDEN
-                e.pop("full", None)
-            if e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
-                attach.hide(DIR, e, needles)
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
                 json.dump(e["shells"], open(BGFILE, "w"))
                 continue

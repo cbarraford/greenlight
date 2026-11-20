@@ -3258,7 +3258,6 @@ final class Core: ObservableObject {
         if !ok && !r.files.isEmpty {  // not sent, or sent and failed: the files come back to try again, ahead of any added since, as many as fit
             var back = files  // files added since stay; the failed send's join them as far as they fit
             for f in r.files where back.count < ChatFile.maxFiles && back.reduce(f.data.count, { $0 + $1.data.count }) <= ChatFile.maxTotal && !back.contains(where: { $0.id == f.id }) { back.append(f) }
-            let n = back.count - files.count
             files = back
             if input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { input = r.text }  // and what was said about them
             let out = r.files.filter { f in !back.contains { $0.id == f.id } }.map(\.name)

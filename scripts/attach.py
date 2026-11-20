@@ -163,7 +163,7 @@ def note(stored):
     return "\n".join(lines)
 
 
-SEGMENT = re.compile(r"(^|[\s'\"=(:])(\./)?attachments/")  # a relative path into the folder at a token's start (grep -R prints ./attachments/…), not app/attachments/ or a URL  # a path into the attachments folder, not the word
+SEGMENT = re.compile(r"(?<![\w./-])(\./)?attachments/")  # a relative path into the folder (grep -R prints ./attachments/…; after a space, <, |, ;…), not app/attachments/ or a URL
 
 
 def mentions(chat_dir, step):
@@ -172,15 +172,16 @@ def mentions(chat_dir, step):
     return root(chat_dir) in s or SEGMENT.search(s) is not None
 
 
-KEY = 16  # characters: a line's start and end of this length are what's looked for
+KEY = 16  # characters: the shortest attached line looked for, and the length of the keys that index them
 
 
 def needles(chat_dir):
     """What attachment contents look like in a tool's output, however the agent got there (a grep -R, a Write that copies
-    a line, this turn or a later one): the first and last KEY characters of every 16+ character line of every text file
-    still kept, as the events show them (whitespace collapsed) and as JSON shows them (a tool's input). A set, so checking
-    an output costs one lookup per character. A heuristic: shorter lines, or text an agent rewrites, aren't recognised."""
-    out = set()
+    a line, this turn or a later one): every line of 16+ characters (and 4+ different ones: not a rule of dashes) of every
+    text file still kept, as the events show it (whitespace collapsed) and as JSON shows it (a tool's input), indexed by
+    its first and last KEY characters: (by start, by end). A heuristic: shorter lines, or text an agent rewrites, aren't
+    recognised; a line identical to an attached one is hidden wherever it shows."""
+    starts, ends = {}, {}
     for d, _, names in os.walk(root(chat_dir)):
         for n in names:
             try:
@@ -192,17 +193,30 @@ def needles(chat_dir):
                 continue
             for l in b.decode("utf-8").splitlines():
                 for x in {" ".join(l.split()), l.strip(), json.dumps(l.strip(), ensure_ascii=False)[1:-1]}:
-                    if len(x) >= KEY:
-                        out |= {x[:KEY], x[-KEY:]}
-    return out
-
-
-HIDDEN = "(from an attached file)"
+                    if len(x) >= KEY and len(set(x)) >= 4:
+                        starts.setdefault(x[:KEY], set()).add(x)
+                        ends.setdefault(x[-KEY:], set()).add(x)
+    return starts, ends
 
 
 def showing(line, needles):
-    flat = " ".join(line.split())
-    return any(t[i:i + KEY] in needles for t in {flat, line} for i in range(len(t) - KEY + 1))
+    """Does an output line hold a whole attached line, or (where the output was cut, marked …) the visible part of one?"""
+    starts, ends = needles
+    for t in {" ".join(line.split()), line}:
+        cut_end, cut_start = t.endswith("…"), t.startswith("…")
+        for i in range(len(t) - KEY + 1):
+            w = t[i:i + KEY]
+            for n in starts.get(w, ()):
+                if t.startswith(n, i) or (cut_end and len(t) - 1 - i >= KEY and n.startswith(t[i:-1])):
+                    return True
+            if cut_start:
+                seg = t[1:i + KEY]
+                if any(n.endswith(seg) for n in ends.get(w, ())):
+                    return True
+    return False
+
+
+HIDDEN = "(from an attached file)"
 
 
 def hide(chat_dir, e, needles):
@@ -210,8 +224,8 @@ def hide(chat_dir, e, needles):
     or holds the start or end of a line of an attached text file (so a line an output cut short is caught from the side
     that shows). Other lines stay. True if anything was taken."""
     took = False
-    if not os.path.isdir(root(chat_dir)):
-        return False  # nothing attached in this conversation
+    if not any(needles) and not os.path.isdir(root(chat_dir)):
+        return False  # nothing attached in this conversation (a Clear mid-turn still leaves this turn's needles)
     def clean(text, lines):
         nonlocal took
         out = []
