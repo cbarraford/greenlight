@@ -5652,18 +5652,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
     /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
+    var focusAskedAt = Date.distantPast
     weak var focusWin: NSWindow?  // the window noteFocus last asked: the one Chief's scope is about
     var focusAsked = 0  // the newest noteFocus: windows answer out of order, and the one you left mustn't win over the one you're in
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
-        focusAsked += 1; focusWin = w
+        focusAsked += 1; focusWin = w; focusAskedAt = Date()
         let asked = focusAsked
         greenlight.scopePending = true  // the watch waits for the answer rather than ask with the window you left
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
             guard let self, asked == self.focusAsked else { return }
+            guard let o = (r as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] else {
+                if !w.isVisible { self.greenlight.focusShown = { false }; self.greenlight.scopePending = false }  // gone: every project
+                return  // its page isn't up yet (or failed): no answer isn't "every project"; the scope holds and tick asks again
+            }
             self.greenlight.scopePending = false
-            let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
             self.greenlight.focusScope = focusScope(o)
             self.greenlight.focusShown = { [weak w] in w?.isVisible == true }
@@ -5847,7 +5851,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
             setPick(only)  // one pick for every floor and window
-            if let w = from.window { noteFocus(w) }  // the page set its pick before posting: Chief's scope follows it now, not a tick later
         }
         if cmd == "window" {  // L1's Open projects, New window
             let only = b["only"] as? [String]
@@ -6089,6 +6092,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         ud.set(only, forKey: "termOnly0"); syncL1()
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
+        syncPick()  // now, not a tick later: a snapshot's watch in between would ask with the old pick
     }
     var l1Only: [String]? { projList.isEmpty ? nil : sharedOnly }  // nil until a terminal page lists the projects
     var l1Picked: [[String: Any]] { (l1Only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
@@ -6360,6 +6364,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
+            // a terminal window asked before its trees came answered with none of them: ask again, queued after term.workspaces
+            if let w = self.focusWin, self.termWebs.contains(where: { $0.window === w }) { self.noteFocus(w) }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
@@ -6644,6 +6650,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func applicationDidBecomeActive(_ n: Notification) { if chatShown { greenlight.missed = 0 }; if window.isVisible { greenlight.unread = 0; tick(); raiseOrbs() } }
 
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
+    /// The projects picked changed: the pages hear it, then the window you were last in is asked again (queued after mc.paths and
+    /// setPick's term.only, so its focus() reads the new pick), and the watch waits for that answer rather than ask with the old one.
+    func syncPick() {
+        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
+        let repos = "\(json(l1Paths)), \(json(l1Repos))"
+        guard pushedRepos != repos else { return }
+        pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))")
+        if let w = focusWin ?? NSApp.keyWindow { noteFocus(w) }
+    }
     func tick() {
         if !window.isVisible, tab.isVisible { greenlight.hint = "" }  // window hidden mid-hover: drop the tab
         if window.title != greenlight.name { window.title = greenlight.name }
@@ -6659,6 +6674,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
+        syncPick()  // ahead of the watch: a pick that changed holds it until the window answers with the new scope
+        if greenlight.scopePending, Date().timeIntervalSince(focusAskedAt) > 2 {  // no answer yet (a page still loading): ask again
+            if let w = focusWin, w.isVisible { noteFocus(w) } else { greenlight.scopePending = false }
+        }
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
@@ -6666,12 +6685,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedBell != bell { pushedBell = bell; broadcast("window.mc && mc.bell(\(bell))") }
         let orb = greenlight.orbsHidden ? "0px" : "72px"  // the shelf keeps the orb's 56pt and some air clear at its right end
         if pushedOrb != orb { pushedOrb = orb; fluid.evaluateJavaScript("document.documentElement.style.setProperty('--orb-w', '\(orb)'); window.render && render()") }
-        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
-        let repos = "\(json(l1Paths)), \(json(l1Repos))"
-        if pushedRepos != repos {  // the projects picked changed: the window you're in now shows others, so Chief's scope follows
-            pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))")
-            if let w = focusWin ?? NSApp.keyWindow { noteFocus(w) }  // queued after mc.paths (and setPick's term.only): focus() reads the new pick
-        }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
