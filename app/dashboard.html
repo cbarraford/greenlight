@@ -178,7 +178,9 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .aoe{margin:0 0 14px} .aow{font-size:var(--fs-1);line-height:var(--lh-1);font-weight:600;color:var(--text3);margin-bottom:3px}
 .aotx{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-3);line-height:var(--lh-4)}
 .aoe.you .aotx{padding:8px 10px;border-radius:8px;background:var(--fill)}
-.aoe.tool{margin:-8px 0 12px;font:var(--fs-2)/var(--lh-2) var(--mono);color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere} .aoe.tool::before{content:"› "}
+.aoe.tool{margin:-8px 0 12px;font:var(--fs-2)/var(--lh-2) var(--mono);color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;cursor:pointer} .aoe.tool::before{content:"› "}
+.aoe.tool.open{display:block;cursor:auto}  /* a long command (a heredoc) folds to 3 lines; a click shows all of it */
 .aosep{display:flex;align-items:center;gap:10px;margin:18px 0 14px;font-size:var(--fs-1);color:var(--text3)} .aosep::before,.aosep::after{content:"";flex:1;height:1px;background:var(--line)}
 .aomore{display:flex;justify-content:center;min-height:28px;margin-bottom:12px;font-size:var(--fs-2);color:var(--text3)} .aonote{margin:40px 0;text-align:center;font-size:var(--fs-3);color:var(--text3)}
 #aout .aoft .aline{flex:1;min-width:0;background:none;padding:0} #aout .aerr{color:var(--red-ink);font-size:var(--fs-2)}
@@ -681,7 +683,7 @@ const STATE = {
 const ORDER = Object.keys(STATE);
 const TONE = {ok:"--green", warn:"--orange", bad:"--red", info:"--blue", idle:"--track"};
 const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No conflicts", review_bot:"Review bot", milestone:"Milestone",
-  ready:"Out of draft", threads:"Threads", approved:"Approval", merge:"Merge"};  // the page's step checklist: what each step achieves
+  ready:"Out of draft", threads:"Threads", approved:"Approval", merge:"Merge", reviewed:"Reviewed", tried:"Tried out", deploy:"Deployed"};  // the page's step checklist: what each step achieves
 // everywhere else: what the MR still needs, not the step's goal ("No conflicts" read as a status when it meant "has conflicts")
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
@@ -1019,7 +1021,8 @@ const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolvi
 const CIWORD = {success:["passed", "--green"], failed:["failed", "--red"], running:["running", "--blue"], pending:["pending", "--blue"], canceled:["canceled", "--gray"]};
 const cssId = name => String(name).replace(/[^\w-]/g, "_");
 function stageList(p, steps, i, n){  // every step by name: done ones ticked, the current one marked "Now", the one after it "Next"
-  const cur = i < n && p.state !== "done" ? steps[i] : null, name = k => STEP_GOALS[k] || STEP_NAMES[k] || k;
+  const cur = i < n && p.state !== "done" ? steps[i] : null;
+  const name = k => STEP_GOALS[k] || STEP_NAMES[k] || String(k).replace(/_/g, " ").replace(/^./, x => x.toUpperCase());  // a lifecycle's own step: "pre_merge" reads "Pre merge"
   return h("div", {class:"stagepop", id: `sp-${cssId(p.name)}`, role:"tooltip"},
     h("div", {class:"sph"}, h("b", {}, cur ? `Step ${i + 1} of ${n}` : `All ${n} steps done`), cur ? h("span", {}, name(cur)) : null),
     h("ol", {}, steps.map((k, j) => { const st = !cur || j < i ? "done" : j === i ? "cur" : "todo";
@@ -1598,7 +1601,8 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
 function outEntry(e){
   const p = ui.out && puckOf(ui.out.name), who = p && /codex/i.test(p.agent.type || "") ? "Codex" : "Claude";
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
-  if (e.role === "tool") return h("div", {class:"aoe tool", "data-id": e.id}, e.text);
+  if (e.role === "tool") return h("div", {class:"aoe tool", "data-id": e.id, title: e.text.length > 240 ? "Click to show all of it" : null,
+    onclick: ev => { if (!String(getSelection())) ev.currentTarget.classList.add("open") }}, e.text);  // not while selecting text in it
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
     h("div", {class:"aow"}, e.role === "user" ? "Prompt" : who), h("div", {class:"aotx"}, e.text));
 }
