@@ -371,8 +371,9 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
 func inScope(_ fresh: [String: String], _ pucks: [[String: Any]], _ scope: String?) -> (ask: [String: String], hold: [String: String]) {
     guard let scope, let o = (try? JSONSerialization.jsonObject(with: Data(scope.utf8))) as? [String: Any] else { return (fresh, [:]) }
     let paths = o["paths"] as? [String] ?? [], repos = o["repos"] as? [String] ?? []
-    let shown = Set(pucks.filter { p in
-        (p["path"] as? String).map(paths.contains) == true || (p["repo"] as? String).map { !$0.isEmpty && repos.contains($0) } == true
+    let shown = Set(pucks.filter { p in  // a needing one: a same-named workspace elsewhere that's fine doesn't let another project's in
+        p["state"] as? String == "needs"
+            && ((p["path"] as? String).map(paths.contains) == true || (p["repo"] as? String).map { !$0.isEmpty && repos.contains($0) } == true)
     }.compactMap { $0["name"] as? String })
     return (fresh.filter { shown.contains($0.key) }, fresh.filter { !shown.contains($0.key) })
 }
@@ -6927,12 +6928,14 @@ func selfTest() {
     let wp: [[String: Any]] = [["name": "octo/rsi-loop", "path": "/w/widgets/rsi-loop", "repo": "widgets", "state": "needs"],
                                ["name": "chat-scope", "path": "/w/greenlight/chat-scope", "repo": "greenlight", "state": "needs"],
                                ["name": "made-since", "path": "/w/greenlight/made-since", "repo": "greenlight", "state": "needs"],
-                               ["name": "no-repo", "path": "/w/x/no-repo", "repo": "", "state": "needs"]]
-    let wn = ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal"]
+                               ["name": "no-repo", "path": "/w/x/no-repo", "repo": "", "state": "needs"],
+                               ["name": "fix-ci", "path": "/w/widgets/fix-ci", "repo": "widgets", "state": "needs"],
+                               ["name": "fix-ci", "path": "/w/greenlight/fix-ci", "repo": "greenlight", "state": "working"]]
+    let wn = ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "no-repo": "goal", "fix-ci": "ci"]
     let gl = focusScope(["paths": ["/w/greenlight/chat-scope"], "repos": ["greenlight"]]), byPath = focusScope(["paths": ["/w/x/no-repo"], "repos": [""]])
     check("watch: in the greenlight window it asks about greenlight's workspaces only, and holds widgets's for a window that shows it",
-          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["octo/rsi-loop": "decide", "no-repo": "goal"])
-          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci"])
+          inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["octo/rsi-loop": "decide", "no-repo": "goal", "fix-ci": "ci"])
+          && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["octo/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "fix-ci": "ci"])
           && inScope(wn, wp, nil) == (wn, [:]) && inScope(wn, wp, focusScope(["paths": [], "repos": []])) == ([:], wn))
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
