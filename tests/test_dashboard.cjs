@@ -230,6 +230,26 @@ test("a completed earlier task preserves a newly edited draft and keeps its erro
   assert.equal(await page.isDisabled("#ps-go"), false);
 });
 
+test("a late reply preserves edited attachments, and Reopen keeps the current sheet", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.press("#ps-task", "Enter");
+  await page.setInputFiles(".tdrop input[type=file]", {name: "later.txt", mimeType: "text/plain", buffer: Buffer.from("later")});
+  await page.waitForSelector(".tfile");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page));
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task B");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "old task failed"}));
+  await page.locator(".toast button:has-text('Reopen')").focus();
+  await page.keyboard.press("Enter");
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task B");
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");
