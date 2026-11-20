@@ -444,11 +444,15 @@ func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperMod
 func keychain(_ account: String, set value: String? = nil) -> String? {
     keyLock.lock(); defer { keyLock.unlock() }
     let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "greenlight", kSecAttrAccount as String: account]
-    if let value {
-        SecItemDelete(q as CFDictionary)
-        if !value.isEmpty { SecItemAdd(q.merging([kSecValueData as String: Data(value.utf8)]) { $1 } as CFDictionary, nil) }
+    if let value {  // nil back: it isn't saved (this launch still uses it)
         keys[account] = .some(value.isEmpty ? nil : value)
-        return value
+        let gone = SecItemDelete(q as CFDictionary)
+        if value.isEmpty { return gone == errSecSuccess || gone == errSecItemNotFound ? value : nil }
+        let data = Data(value.utf8)
+        var st = SecItemAdd(q.merging([kSecValueData as String: data]) { $1 } as CFDictionary, nil)
+        if st == errSecDuplicateItem { st = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) }  // an older build's item it couldn't delete
+        if st != errSecSuccess { NSLog("keychain %@: %d", account, st) }
+        return st == errSecSuccess ? value : nil
     }
     if let k = keys[account] { return k }
     var out: AnyObject?
@@ -813,6 +817,16 @@ func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat, 
     return err == nil && out.frameLength > 0 ? out : nil
 }
 
+/// 16-bit mono PCM as a WAV file, for AVAudioPlayer (Settings' voice test).
+func wav(_ pcm: Data, rate: UInt32) -> Data {
+    var d = Data()
+    func put<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+    d += Data("RIFF".utf8); put(UInt32(36 + pcm.count)); d += Data("WAVEfmt ".utf8)
+    put(UInt32(16)); put(UInt16(1)); put(UInt16(1)); put(rate); put(rate * 2); put(UInt16(2)); put(UInt16(16))
+    d += Data("data".utf8); put(UInt32(pcm.count)); d += pcm
+    return d
+}
+
 /// A buffer's loudness, 0…1 (−50 dB…−5 dB), for the waveforms.
 func level(_ b: AVAudioPCMBuffer) -> Float {
     guard let ch = b.floatChannelData, b.frameLength > 0 else { return 0 }
@@ -927,7 +941,7 @@ struct Live {
     let v: Voice, c: Core
     var talk: Talk { v.speaking > 0 ? .speaking : c.run != nil ? .thinking : .listening }
     var label: String { talk == .speaking ? "Speaking" : talk == .thinking ? "Thinking" : "Listening" }
-    var hint: String { talk == .speaking ? (v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
+    var hint: String { talk == .speaking ? (!v.fallback.isEmpty ? "Apple's voice: \(v.fallback)" : v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
     var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
@@ -1361,6 +1375,8 @@ final class Voice: NSObject, ObservableObject {
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
     @Published var transcript = false  // the chat instead of the stage
     @Published var speaking = 0  // speech buffers queued and not yet played
+    @Published var fallback = ""  // why Apple's voice is standing in for the chosen one ("" when it isn't)
+    var toldFallback = ""  // the reason the chat was last told, so each is said once
     var bargeIn: Bool { ud.object(forKey: "voiceBargeIn") as? Bool ?? true }
     var pause: Double { ud.object(forKey: "voicePause") as? Double ?? 1.1 }  // seconds of quiet that end your turn; hardware and rooms differ
     let engine = AVAudioEngine(), player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
@@ -1420,6 +1436,8 @@ final class Voice: NSObject, ObservableObject {
                 return self.stopAll()
             }
             self.on = true
+            self.fallback = ""; self.toldFallback = ""
+            Speech.shared.warm()  // a fresh try at a voice that failed last time
             self.listen()
             self.wait("Listening", "Say something, or “goodbye” to stop.")
         }}}
@@ -1577,11 +1595,23 @@ final class Voice: NSObject, ObservableObject {
         guard Speech.shared.kind != "apple" else { return apple(t, g) }
         Speech.shared.q.async { [weak self] in  // serial: lines play in order
             guard let self, self.gen == g else { return }
-            guard let b = Speech.shared.pcm(t) else { return DispatchQueue.main.async { filler ? self.play(nil, end: true, g) : self.apple(t, g) } }
-            if self.voiceConv?.inputFormat != b.format { self.voiceConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
-            guard let out = self.voiceConv.flatMap({ convert(b, $0, self.speechFormat, whole: true) }) else { return }
+            let b = Speech.shared.pcm(t)
+            if self.voiceConv?.inputFormat != b?.format { self.voiceConv = b.flatMap { AVAudioConverter(from: $0.format, to: self.speechFormat) } }
+            guard let b, let out = self.voiceConv.flatMap({ convert(b, $0, self.speechFormat, whole: true) }) else {
+                let why = b == nil ? Speech.shared.status : "Couldn't convert the voice's audio"
+                return DispatchQueue.main.async { self.fellBack(why); filler ? self.play(nil, end: true, g) : self.apple(t, g) }
+            }
+            DispatchQueue.main.async { self.fallback = "" }
             self.play(out, end: false, g); self.play(nil, end: true, g)
         }
+    }
+    /// The chosen voice couldn't say a line, so Apple's says it: why, under the stage while it speaks, and once per reason in the chat (not every line).
+    func fellBack(_ why: String) {
+        let name = Speech.kinds.first { $0.0 == Speech.shared.kind }?.1 ?? "The chosen voice"
+        fallback = why.isEmpty ? "\(name) failed" : why
+        guard fallback != toldFallback else { return }
+        toldFallback = fallback
+        core?.msgs.append(Msg(.note, "Speaking in Apple's voice instead of \(name): \(fallback). Settings → Chat & voice → Test checks it."))
     }
     func apple(_ t: String, _ g: Int) {
         let u = AVSpeechUtterance(string: t)
@@ -1643,16 +1673,18 @@ final class Speech {
     var elevenVoice: String { ud.string(forKey: "elevenVoice").flatMap { $0.isEmpty ? nil : $0 } ?? "EXAVITQu4vr4xnSDxMaL" }  // "Sarah", a premade voice
     var proc: Process?, kin: FileHandle?, kout: FileHandle?
     var ready = false  // Kokoro has loaded (the first start installs ~1 GB through uv)
-    var status = ""
+    var status = ""  // why the last line wasn't in the chosen voice, "" when it was; set on q
+    /// A failure that won't fix itself (no key, the key refused, no such voice, no credits): later lines skip ElevenLabs,
+    /// instead of each waiting on the same error, until warm() (voice mode starting, a new key, voice or engine).
+    var stuck: String?
 
-    func pcm(_ text: String) -> AVAudioPCMBuffer? {
-        let d: Data?
+    func pcm(_ text: String) -> AVAudioPCMBuffer? { data(text).flatMap(buffer) }
+    func data(_ text: String) -> Data? {
         switch kind {
-        case "kokoro": d = ready ? kokoro(text) : nil
-        case "eleven": d = eleven(text)
-        default: d = nil
+        case "kokoro": if ready { return kokoro(text) }; if status.isEmpty { status = "Kokoro is still loading" }; return nil
+        case "eleven": return eleven(text)
+        default: return nil
         }
-        return d.flatMap(buffer)
     }
     func buffer(_ d: Data) -> AVAudioPCMBuffer? {
         guard d.count > 1, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(d.count / 2)) else { return nil }
@@ -1662,22 +1694,68 @@ final class Speech {
     }
 
     func eleven(_ text: String) -> Data? {
-        guard let key = keychain("elevenlabs"), var u = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenVoice)") else { status = "No ElevenLabs key"; return nil }
+        if let stuck { status = stuck; return nil }
+        let fail = { (why: String, hard: Bool) -> Data? in
+            NSLog("ElevenLabs: %@", why)
+            self.status = why; if hard { self.stuck = why }
+            return nil
+        }
+        guard let key = keychain("elevenlabs"), !key.isEmpty else {
+            return fail("No ElevenLabs key, or the Keychain didn't let Greenlight read it: Set key… again", true)
+        }
+        let id = elevenVoice.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        guard var u = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(id)") else { return fail("ElevenLabs voice ID “\(elevenVoice)” isn't valid", true) }
         u.queryItems = [URLQueryItem(name: "output_format", value: "pcm_24000")]
-        var r = URLRequest(url: u.url!, timeoutInterval: 15)
+        var r = URLRequest(url: u.url!, timeoutInterval: 10)
         r.httpMethod = "POST"
         r.setValue(key, forHTTPHeaderField: "xi-api-key")
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "model_id": "eleven_flash_v2_5"])
-        var got: Data?
+        var got: Data?, code = 0, body: Data?, err: Error?
         let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: r) { d, resp, _ in
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if code == 200 { got = d; self.status = "" } else { self.status = "ElevenLabs: \(code) \(d.flatMap { String(data: $0, encoding: .utf8) }?.prefix(160) ?? "")" }
+        URLSession.shared.dataTask(with: r) { d, resp, e in
+            code = (resp as? HTTPURLResponse)?.statusCode ?? 0; body = d; err = e
+            if code == 200, let d, d.count > 1 { got = d }
             sem.signal()
         }.resume()
         sem.wait()
-        return got
+        if got != nil { status = ""; return got }
+        let (why, hard) = Speech.elevenWhy(code, body, err, voice: elevenVoice)
+        return fail(why, hard)
+    }
+    /// ElevenLabs' failure in words, and whether it is hard (retrying the next line would only fail again).
+    static func elevenWhy(_ code: Int, _ body: Data?, _ err: Error?, voice: String) -> (String, Bool) {
+        if let e = err as? URLError {
+            return (e.code == .timedOut ? "ElevenLabs didn't answer in time" : "Can't reach ElevenLabs (\(e.localizedDescription)); a firewall like Little Snitch may be blocking api.elevenlabs.io", false)
+        }
+        let j = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let detail = j?["detail"] as? [String: Any]
+        let said = ((detail?["message"] as? String) ?? (j?["detail"] as? String) ?? body.flatMap { String(data: $0, encoding: .utf8) } ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).prefix(160)
+        let tail = said.isEmpty ? "" : ": \(said)"
+        switch code {
+        case 401: return ("ElevenLabs refused the key (401\(tail))", true)
+        case 402: return ("ElevenLabs needs a paid plan or more credits (402\(tail))", true)
+        case 404: return ("ElevenLabs has no voice “\(voice)” (404\(tail))", true)
+        case 429: return ("ElevenLabs is busy or over its rate limit (429\(tail))", false)
+        case 200: return ("ElevenLabs sent no audio", false)
+        case 0: return ("ElevenLabs didn't answer", false)
+        default: return ("ElevenLabs failed (\(code)\(tail))", code >= 400 && code < 500)
+        }
+    }
+
+    /// Settings' Test: one line in the chosen voice, played now (voice mode needn't be on). done(nil) when it played, else why.
+    var tester: AVAudioPlayer?
+    func test(_ line: String, _ done: @escaping (String?) -> Void) {
+        q.async {
+            self.stuck = nil; self.status = ""
+            let d = self.data(line)
+            DispatchQueue.main.async {
+                guard let d else { return done(self.status.isEmpty ? "No audio" : self.status) }
+                self.tester = try? AVAudioPlayer(data: wav(d, rate: 24000))
+                done(self.tester?.play() == true ? nil : "Got audio but couldn't play it")
+            }
+        }
     }
 
     func kokoro(_ text: String) -> Data? {
@@ -1694,8 +1772,10 @@ final class Speech {
         }
     }
 
-    /// Start Kokoro if it's the voice (at launch, and on picking it); a warm-up line loads the model before the first real one.
+    /// Start Kokoro if it's the voice (at launch, on picking it, and as voice mode starts); a warm-up line loads the model before the first real one.
+    /// It also clears a stuck ElevenLabs failure: you may have fixed it (a new key, voice ID or plan).
     func warm() {
+        q.async { if self.stuck != nil { self.stuck = nil; self.status = "" } }
         if kind == "eleven" { q.async { _ = keychain("elevenlabs") } }  // any Keychain prompt at launch, not with the first line (which would go to Apple's voice)
         guard kind == "kokoro", proc == nil else { return }
         let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
@@ -1771,6 +1851,7 @@ final class Core: ObservableObject {
     @Published var name = UserDefaults.standard.string(forKey: "name") ?? "Greenlight" { didSet { UserDefaults.standard.set(name, forKey: "name") } }
     @Published var editingName = false
     @Published var hint = ""  // hover text for the footer buttons; native tooltips are slow
+    @Published var voiceTest = ""  // Settings' Test of the speaking voice: what happened
     @Published var keying = false  // the next chord becomes the voice shortcut: Settings shows the recorder in place
     @Published var questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsFile))) ?? [] {
         didSet {  // all waiting ones plus the last 20 answered
@@ -3468,7 +3549,7 @@ struct SettingsView: View {
                 Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
             }
             row("Speaking voice", Speech.shared.status.isEmpty ? "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice." : Speech.shared.status) {
-                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); Speech.shared.stop(); Speech.shared.warm(); c.objectWillChange.send() })) {
+                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {
                     ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
                 }.labelsHidden().frame(width: menuWidth)
             }
@@ -3480,7 +3561,16 @@ struct SettingsView: View {
             if Speech.shared.kind == "eleven" { dependent(off: false) {
                 row("ElevenLabs key", "Stored in your Keychain.") { Button("Set key…") { delegate.askKey("elevenlabs", "ElevenLabs API key", "voice mode's speaking voice") } }
                 row("ElevenLabs voice ID", "From elevenlabs.io → Voices. Empty: Sarah.") {
-                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice") })).frame(width: menuWidth)
+                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice"); Speech.shared.warm() })).frame(width: menuWidth)
+                }
+            } }
+            if Speech.shared.kind != "apple" { dependent(off: false) {
+                row("Test the voice", c.voiceTest.isEmpty ? "Says one line now, in this voice, and shows why if it can't." : c.voiceTest) {
+                    Button("Test") {
+                        let name = Speech.kinds.first { $0.0 == Speech.shared.kind }?.1 ?? "this voice"
+                        c.voiceTest = "Asking \(name)…"
+                        Speech.shared.test("Hi, this is how \(c.name) sounds.") { why in c.voiceTest = why.map { "Failed: \($0)" } ?? "Played by \(name). Voice mode will use it." }
+                    }
                 }
             } }
             row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
@@ -6168,7 +6258,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         a.addButton(withTitle: "Cancel")
         a.window.initialFirstResponder = f
         NSApp.activate(ignoringOtherApps: true)
-        if a.runModal() == .alertFirstButtonReturn { keychain(account, set: f.stringValue.trimmingCharacters(in: .whitespaces)) }
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let v = f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if keychain(account, set: v) == nil && !v.isEmpty {
+            greenlight.msgs.append(Msg(.note, "Couldn't save the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
+        }
+        if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
     }
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
