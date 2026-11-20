@@ -181,21 +181,21 @@ assert not greenlight.upstream_gone({"path": "/nonexistent", "branch": "feature"
 
 # 1.3 Done condition: preflight asks decide.py before a new workspace's agent starts (a fake decide here: never a network call)
 class Decide:
-    def __init__(self, p, clarity=0.8, value=None, fail=None):
-        self.p, self.clarity, self.value, self.fail, self.calls = p, clarity, value, fail, []
+    def __init__(self, p, clarity=0.8, value=None, fail=None, provider="fake"):
+        self.p, self.clarity, self.value, self.fail, self.provider, self.calls = p, clarity, value, fail, provider, []
     def bool(self, state, question, *, context=""):
         self.calls.append(("bool", state, context))
         if self.fail:
             raise self.fail
-        return {"value": self.p > 0.5 if self.value is None else self.value, "prob": self.p, "provider": "fake"}
+        return {"value": self.p > 0.5 if self.value is None else self.value, "prob": self.p, "provider": self.provider}
     def score(self, state, rubric, *, context=""):
         self.calls.append(("score", state, context))
-        return {"score": self.clarity, "provider": "fake"}
+        return {"score": self.clarity, "provider": self.provider}
 
 pf = lifestage.preflight
 clear = pf("Add exponential retry backoff to the outbound queue; done when test_queue passes", decide=(d := Decide(0.1)))
 assert not clear["pause"] and clear["questions"] == [] and clear["record"]["ok"] is True and clear["brief"] == ""
-assert d.calls[0][1] == lifestage.STATE and "Goal: Add exponential" in d.calls[0][2] and [c[0] for c in d.calls] == ["bool", "score"]
+assert isinstance(d.calls[0][1], str) and "Goal: Add exponential" in d.calls[0][1] and [c[0] for c in d.calls] == ["bool", "score"]
 assert not pf("x", decide=Decide(0.70))["pause"]  # the line itself is clear: only over 0.70 pauses
 amb = pf("make it better", decide=Decide(0.9, clarity=0.2))
 assert amb["pause"] and amb["record"] is None and amb["p_ambiguous"] == 0.9 and amb["clarity"] == 0.2
@@ -209,12 +209,14 @@ assert not pf("make it better", decide=Decide(0.9, value=False))["pause"]
 ans = pf("make it better", answers={"done": "A draft PR with tests", "scope": "  ", "evil": "x"}, decide=(d := Decide(0.95, clarity=0.1)))
 assert not ans["pause"] and ans["brief"] == "\n\nBefore you started I answered these:\n- What does done look like? A draft PR with tests"
 assert ans["record"]["answers"] == {"What does done look like?": "A draft PR with tests"} and ans["record"]["ok"] is True
-assert "Answers to clarifying questions:\nWhat does done look like? A draft PR with tests" in d.calls[0][2]
+assert "Answers to clarifying questions:\nWhat does done look like? A draft PR with tests" in d.calls[0][1]
 forced = pf("make it better", force=True, decide=(d := Decide(0.95)))
 assert not forced["pause"] and forced["record"]["forced"] and forced["record"]["ok"] is False and not d.calls
 # decide.py missing (until system-one-decide lands) or failing never blocks a start, and says why
 down = pf("make it better", decide=Decide(0.9, fail=TimeoutError("jev timed out")))
 assert not down["pause"] and down["record"]["ok"] is None and "TimeoutError: jev timed out" in down["why"]
+local = pf("make it better", decide=Decide(0.5, clarity=0.5, provider="local"))
+assert not local["pause"] and local["record"]["ok"] is None and "no System One provider" in local["why"]
 if not (greenlight.ROOT / "scripts/decide.py").exists():
     assert "ModuleNotFoundError" in pf("make it better")["why"]
 
@@ -271,7 +273,7 @@ def task(payload, decide):
     calls = []
     def orca(*a):
         calls.append(a)
-        return {"worktree": {"id": "w9"}} if a[:2] == ("worktree", "create") else {}
+        return {"worktree": {"id": "w9", "path": "/w/" + a[a.index("--name") + 1]}} if a[:2] == ("worktree", "create") else {}
     with mock.patch.object(dash, "repos", return_value=REPO), mock.patch.object(dash, "live_agents", return_value={}), \
             mock.patch.object(dash.greenlight, "orca", side_effect=orca), mock.patch.dict(sys.modules, {"decide": decide}):
         return dash.task("new", "widgets", json.dumps(payload)), calls
@@ -285,9 +287,15 @@ brief = next(a for a in calls if a[:2] == ("worktree", "create"))
 brief = brief[brief.index("--prompt") + 1]
 assert brief.endswith("- What does done look like? A working prototype I can try\n- How far should it go? The smallest change that works")
 assert "lifestage.py selftest -- <the test command>" in brief
+assert "Follow my request and clarifying answers" in brief
 rec = lifestage.record("preflight", {"name": "make-it-better"})
 assert rec["ok"] and rec["goal"] == "make it better" and len(rec["answers"]) == 2
+assert lifestage.checks({"name": "renamed", "path": "/w/make-it-better", "goal": "make it better"})["done_condition"]["ok"]
 assert "[preflight: answered]" in greenlight.history_file("make-it-better").read_text()
+out, calls = task({"text": "make a plan", "answers": {"done": "A written plan first, no code"}}, Decide(0.9, clarity=0.2))
+brief = next(a for a in calls if a[:2] == ("worktree", "create"))
+brief = brief[brief.index("--prompt") + 1]
+assert "If they ask for a plan or investigation first, stop at that deliverable" in brief and brief.endswith("- What does done look like? A written plan first, no code")
 out, calls = task({"text": "Add retry backoff to the outbound queue, done when test_queue passes"}, Decide(0.05))
 assert out["ok"] and any(a[:2] == ("worktree", "create") for a in calls)  # clear: launched at once
 out, calls = task({"text": "make it worse", "force": True}, Decide(0.99))
@@ -305,7 +313,8 @@ with mock.patch.object(dash, "tree", return_value=(tree_call, {"repoId": "r"})),
     tcalls.clear()
     assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True, "answers": {"scope": "Investigate and report back first"}})["ok"]
     launch = next(a for a in tcalls if a[:2] == ("agent", "launch"))
-    assert launch[launch.index("--prompt") + 1] == "make it better\n\nBefore you started I answered these:\n- How far should it go? Investigate and report back first"
+    assert launch[launch.index("--prompt") + 1].startswith("make it better\n\nBefore you started I answered these:\n- How far should it go? Investigate and report back first")
+    assert "lifestage.py selftest -- <the test command>" in launch[launch.index("--prompt") + 1]
     assert lifestage.record("preflight", {"path": "/w/new"})["answers"]
 
 # lifestage.py: the piles, from the snapshot; rows from before this file get placed on the way out

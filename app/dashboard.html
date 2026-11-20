@@ -2089,7 +2089,7 @@ function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
 document.addEventListener("click", e => { const el = e.metaKey && e.target.closest && e.target.closest("[data-dock]"), it = el && ui.dk[el.dataset.dock]; if (it) { e.preventDefault(); e.stopPropagation(); dockToggle(it) } }, true);
 
 /* ---------- New task: describe it, attach files, pick the project; a fresh workspace and its agent start on it at once ---------- */
-ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0, ask: null};  // ask: preflight's questions on the goal ({qs, ans, p}), before it starts
+ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0, ask: null, pending: null};  // ask: preflight's questions on the goal ({qs, ans, p}), before it starts
 const TASK_CAP = 15 << 20;  // all files together; dash.py task new refuses more
 const PLUS = s("svg", {width:13, height:13, viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", "stroke-width":"2.4", "stroke-linecap":"round", "aria-hidden":"true"}, s("path", {d:"M12 5v14M5 12h14"}));
 function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // dash.py _slug
@@ -2119,7 +2119,7 @@ function taskSheetEl(){
   const unerr = () => { ui.task.err = ""; ui.task.errAt = null; document.getElementById("ps-err")?.remove(); document.getElementById("ps-task")?.removeAttribute("aria-invalid"); const hp = document.getElementById("ps-help"); if (hp) hp.textContent = HELP; document.getElementById("ps-task")?.setAttribute("aria-describedby", "ps-help") };  // a changed title or project is a fresh try
   const go = (force = false) => {  // force: Start anyway, past preflight's questions
     if (!ok(force)) return;
-    ui.task.busy = true; ui.task.err = "";
+    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name};
     const more = force === true ? {force: true} : ui.task.ask ? {answers: ui.task.ask.ans} : {};
     post({cmd: "task", op: "new", arg: repo.name, text: JSON.stringify({text: sh.text.trim(), files: sh.files.map(({name, data}) => ({name, data})), ...more})}); render();
   };
@@ -2208,8 +2208,10 @@ function tasked(r){
     return;
   }
   ui.task.busy = false;
+  const pending = ui.task.pending; ui.task.pending = null;
   if (r.paused) {  // preflight wants answers first: nothing was made yet
     if (!ui.task.sheet) { ui.task.done = {error: "It has a question about the goal first. Reopen it to answer."}; toastTimer(); return render() }
+    if (pending && (ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo)) return render();
     ui.task.ask = {qs: r.questions || [], ans: {}, p: r.p_ambiguous}; render();
     return document.querySelector("#ps-ask .pchips button")?.focus();
   }

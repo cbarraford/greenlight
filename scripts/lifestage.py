@@ -157,8 +157,13 @@ def preflight(goal, context="", answers=None, force=False, decide=None):
                                      "Answers to clarifying questions:\n" + "\n".join(f"{q} {a}" for q, a in said) if said else "") if x)
     try:
         decide = decide or importlib.import_module("decide")
-        amb = decide.bool(STATE, AMBIGUITY_Q, context=ctx)
-        clear = decide.score(STATE, CLARITY_RUBRIC, context=ctx)
+        # decide.py's state is the text being judged, and must be JSON serializable for its cache key.
+        amb = decide.bool(ctx, AMBIGUITY_Q)
+        clear = decide.score(ctx, CLARITY_RUBRIC)
+        if amb.get("provider") == "local" or clear.get("provider") == "local":
+            why = "no preflight: " + str(amb.get("error") or clear.get("error") or "no System One provider configured")[:160]
+            return {"pause": False, "questions": [], "brief": brief, "why": why,
+                    "record": base | {"ok": None, "why": why}}
         p, clarity = _p_true(amb), min(1.0, max(0.0, float(clear.get("score", 0.5))))
     except Exception as e:  # ImportError until decide.py lands, a backend down, a malformed answer
         why = f"no preflight: {type(e).__name__}: {str(e)[:160]}"

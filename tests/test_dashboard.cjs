@@ -193,6 +193,23 @@ test("an ambiguous goal pauses: chips answer preflight's questions, then the sam
   assert.deepEqual(page._errs, []);
 });
 
+test("a preflight reply for an edited task cannot clear the new goal", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "make it better");
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "build something different");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", paused: true, questions: [
+    {id: "done", q: "What does done look like?", options: ["A draft PR with tests"]}]}));
+  assert.equal(await page.$("#ps-ask"), null);
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  await page.click("#ps-go");
+  const started = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(started.length, 2);
+  assert.equal(JSON.parse(started[1].text).text, "build something different");
+  assert.equal(JSON.parse(started[1].text).answers, undefined);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");
