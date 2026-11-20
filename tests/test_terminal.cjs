@@ -242,6 +242,31 @@ test("the title changes this window's projects in place", async page => {
   assert.equal(await strip(page), 1, "its shells stay");
 });
 
+test("clearing the last project selects All projects", async page => {
+  await page.evaluate(p => term.projects(p), PROJ);
+  await page.click("#shead .ttl");
+  assert.equal(await page.isChecked("#dlg .tile input >> nth=0"), true, "All starts checked");
+  await page.click("#dlg .tile input >> nth=1");
+  await page.click("#dlg .tile input >> nth=1");
+  assert.equal(await page.isChecked("#dlg .tile input >> nth=0"), true, "no empty selection");
+  await page.click("#dlg button.pri");
+  assert.deepEqual((await posts(page, "only")).pop(), {cmd: "only", only: null});
+  await page.close();
+});
+
+test("a vanished selected project shows All without losing the saved pick", async page => {
+  const b = page.context().browser();
+  page = await boot(b, null, "?only=" + encodeURIComponent('["gone"]'));
+  await page.evaluate(p => term.projects(p), PROJ);
+  assert.equal(await page.evaluate(() => term.focusInfo().repos), null, "Chief has all repos in scope");
+  assert.ok((await names(page)).includes("sidebar"), "terminal still lists workspaces");
+  await page.click("#shead .ttl");
+  assert.equal(await page.isChecked("#dlg .tile input >> nth=0"), true, "picker shows All");
+  await page.click("#dlg button.pri");
+  assert.deepEqual((await posts(page, "only")).pop(), {cmd: "only", only: null});
+  await page.close();
+});
+
 test("L1's project list: each project's paths are the trees this window shows under it, a no-repo or folder-only one too", async page => {
   await page.evaluate(p => term.projects(p), PROJ);
   await page.evaluate(t => term.workspaces({trees: [...t.trees, {ade: "orca", project: "", name: "scratch", path: "/x/scratch", branch: "", main: false, agent: "none"}]}), TREES);

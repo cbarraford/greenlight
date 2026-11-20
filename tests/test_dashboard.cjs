@@ -524,6 +524,14 @@ test("L1's Open projects: the terminal page's tiles; ticking a project posts it,
   assert.deepEqual(await page.evaluate(() => __posts.filter(m => m.cmd === "project").pop()), {cmd: "project", only: ["a"]});
   assert.equal(await page.isHidden("#pp"), true);
 });
+test("L1's Open projects returns to All when the last project is unticked", async page => {
+  const L = [{id: "a", name: "Alpha", color: "#FF9F0A", repos: ["x/a"], busy: 0}];
+  await page.evaluate(L => mc.pickProjects(L, ["a"]), L);
+  await page.click("#pp .tile input >> nth=1");
+  assert.equal(await page.isChecked("#pp .tile input >> nth=0"), true);
+  await page.click("#pp button.pri");
+  assert.deepEqual(await page.evaluate(() => __posts.filter(m => m.cmd === "project").pop()), {cmd: "project", only: null});
+});
 test("terminal: arrows move between tabs, Enter opens the focused one", async page => {
   const tp = await page.context().browser().newPage({viewport: {width: 760, height: 460}});
   await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
