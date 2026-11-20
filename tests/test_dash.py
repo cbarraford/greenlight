@@ -85,6 +85,35 @@ with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as t:
                                                             {"type": "tool_use", "name": "Bash", "input": {"command": "ls\n -la"}}]}}):
         t.write(json.dumps(d) + "\n")
 assert dash._claude_entries(Path(t.name)) == [("user", "/some-skill"), ("assistant", "hi"), ("tool", "Bash ls -la")]
+import os, time
+# All output's refresh: an entry keeps its id as the session grows (the page appends only unseen ids), and Load earlier pages back
+d = Path(tempfile.mkdtemp())
+say = lambda n: json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": f"m{n}"}]}}) + "\n"
+(d / "s1.jsonl").write_text("".join(say(n) for n in range(70)))
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws", "path": "/w"}, {})}), \
+        mock.patch.object(dash, "transcript_files", side_effect=lambda _: [(d / "s1.jsonl", "claude")]):
+    a = dash.transcript("ws")
+    assert [e["text"] for e in a["entries"]] == [f"m{n}" for n in range(10, 70)] and a["more"] == "s1:10"
+    with (d / "s1.jsonl").open("a") as f:
+        f.write(say(70))
+    b = dash.transcript("ws")
+    old = {e["id"]: e["text"] for e in a["entries"]}
+    assert all(old.get(e["id"], e["text"]) == e["text"] for e in b["entries"]), "an entry's id changed meaning as the session grew"
+    assert [e["text"] for e in b["entries"] if e["id"] not in old] == ["m70"]
+    c = dash.transcript("ws", a["more"])
+    assert c["before"] == "s1:10" and [e["text"] for e in c["entries"]][-1] == "m9" and c["entries"][0]["role"] == "sep" and c["more"] is None
+    assert all(e["kind"] == "claude" for e in a["entries"]) and a["recent"] == []  # whose words each is; one session: nothing else recent
+    # a second session written to just now (a review the agent started) rides along with the newest page, never starved out
+    (d / "s0.jsonl").write_text("".join(say(100 + n) for n in range(25)))
+    os.utime(d / "s0.jsonl", (time.time() - 5, time.time() - 5))
+    with mock.patch.object(dash, "transcript_files", side_effect=lambda _: [(d / "s1.jsonl", "claude"), (d / "s0.jsonl", "codex")]), \
+            mock.patch.object(dash, "_codex_entries", dash._claude_entries):
+        r = dash.transcript("ws")
+        assert [e["text"] for e in r["recent"]] == [f"m{100 + n}" for n in range(5, 25)] and r["recent"][0]["id"] == "s0:5" and r["recent"][0]["kind"] == "codex"
+        os.utime(d / "s0.jsonl", (time.time() - 3600, time.time() - 3600))
+        assert dash.transcript("ws")["recent"] == [] and dash.transcript("ws", "s1:10")["recent"] == []  # quiet for a while, or Load earlier: none
+with mock.patch.object(dash, "live_agents", return_value={}):
+    assert dash.transcript("gone", "s1:10") == {"error": "no workspace gone", "before": "s1:10"}  # a failed Load earlier is told from a failed refresh
 # park adds or drops "(parked)" on the live goal, and only once
 import tempfile
 dash.greenlight.STATE = Path(tempfile.mkdtemp())

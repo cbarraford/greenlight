@@ -131,6 +131,7 @@ main.ov{background:var(--canvas)}
   display:flex;flex-direction:column;gap:10px;container-type:inline-size}
 .acard.crashed{border-color:color-mix(in srgb,var(--red) 40%,var(--card-line))}
 .acard:hover,.acard.hl{border-color:var(--blue)}
+.acard{position:relative} .acard:hover,.acard:focus-within{z-index:2}  /* its stage list floats over the next card, not under it */
 .atop{display:flex;align-items:center;gap:10px;min-width:0}
 .av{width:30px;height:30px;flex-shrink:0;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff}
 .at{display:flex;flex-direction:column;min-width:0;flex-grow:1}
@@ -139,7 +140,22 @@ main.ov{background:var(--canvas)}
 .atop .pill{flex-shrink:0;background:var(--blue-tint);color:var(--blue-ink)}.atop .pill::before{background:var(--blue)}
 .atop .pill.wait{background:var(--orange-tint);color:var(--orange-ink)}.atop .pill.wait::before{background:var(--orange)}
 .atop .pill.red{background:var(--red-tint);color:var(--red-ink)}.atop .pill.red::before{background:var(--red)}
-.prog{display:flex;flex-direction:column;gap:5px}
+.prog{display:flex;flex-direction:column;gap:5px;position:relative;border-radius:4px;outline-offset:3px}
+/* the bar's stage list: hover or focus the bar for every step by name, where it is now, and what comes next */
+.stagepop{display:none;position:absolute;left:-6px;top:calc(100% + 6px);z-index:30;box-sizing:border-box;min-width:220px;max-width:min(320px,calc(100vw - 32px));padding:10px 10px 8px;
+  border-radius:var(--r-2);background:var(--sheet);border:1px solid var(--line);box-shadow:var(--elev);pointer-events:none;animation:popin .12s ease-out .15s both}  /* pointer-events: it never covers the output line under it */
+.prog.up .stagepop{top:auto;bottom:calc(100% + 6px)}
+.prog:hover .stagepop,.prog:focus-visible .stagepop{display:block} .prog.hush .stagepop{display:none} .prog.steady .stagepop{animation:none}  /* steady: rebuilt while open, no fade again */  /* hush: Esc put it away */
+@keyframes popin{from{opacity:0;transform:translateY(-2px)}}
+.stagepop .sph{display:flex;align-items:baseline;gap:8px;padding:0 6px 6px;font-size:var(--fs-2);color:var(--text3)} .stagepop .sph b{color:var(--text);font-weight:600}
+.stagepop ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.stagepop li{display:grid;grid-template-columns:12px minmax(0,1fr) auto;align-items:center;gap:8px;padding:3px 6px;border-radius:6px;font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
+.stagepop .spm{width:12px;height:12px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--track);display:flex;align-items:center;justify-content:center;color:#fff}
+.stagepop .spt{font-size:var(--fs-1);font-weight:500}
+.stagepop li.done{color:var(--text2)} .stagepop li.done .spm{border:0;background:var(--green)}
+.stagepop li.cur{background:var(--blue-tint);color:var(--blue-ink);font-weight:600} .stagepop li.cur .spm{border:3px solid var(--blue)}
+.acard.wait .stagepop li.cur{background:var(--orange-tint);color:var(--orange-ink)} .acard.wait .stagepop li.cur .spm{border-color:var(--orange)}
+.acard.crashed .stagepop li.cur{background:var(--red-tint);color:var(--red-ink)} .acard.crashed .stagepop li.cur .spm{border-color:var(--red)}
 .lbls{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:3px;font-size:var(--fs-1);line-height:var(--lh-1);color:var(--text3)}
 .lbls span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .lbls .done{color:var(--text2)} .lbls .cur{color:var(--blue-ink);font-weight:600;overflow:visible}
 .acard.wait .lbls .cur{color:var(--orange-ink)} .acard.crashed .lbls .cur{color:var(--red-ink)}
@@ -149,6 +165,25 @@ main.ov{background:var(--canvas)}
 .el{font-size:var(--fs-2);color:var(--text3);font-variant-numeric:tabular-nums}
 .aline{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border-radius:7px;background:var(--fill)}
 .aline .mono{font-size:var(--fs-2);color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button.aline{width:100%;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer} button.aline:hover{background:color-mix(in srgb,var(--fill) 100%,var(--blue) 10%)}
+button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3);opacity:0} button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
+/* All output: the agent's whole conversation over the whole window, following new output until you scroll up */
+#aout{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:var(--bg);color:var(--text)} #aout [hidden]{display:none}  /* .btn's display:flex would show a hidden one */
+#aout .aohd,#aout .aoft{display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--bar);flex-shrink:0}
+#aout .aohd{border-bottom:1px solid var(--line)} #aout .aoft{border-top:1px solid var(--line);min-height:44px;box-sizing:border-box}
+#aout .aot{display:flex;flex-direction:column;min-width:0;flex-grow:1} #aout .aot b{font-size:14px;line-height:19px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#aout .aot span{font-size:var(--fs-1);line-height:15px;color:var(--text3)}
+#aout .aolog{flex:1;overflow:auto;overscroll-behavior:contain;padding:16px max(16px,calc((100% - 880px) / 2));outline:0;-webkit-user-select:text;user-select:text}
+#aout .aolog:focus-visible{box-shadow:inset 0 0 0 2px var(--blue)}
+.aoe{margin:0 0 14px} .aow{font-size:var(--fs-1);line-height:var(--lh-1);font-weight:600;color:var(--text3);margin-bottom:3px}
+.aotx{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-3);line-height:var(--lh-4)}
+.aoe.you .aotx{padding:8px 10px;border-radius:8px;background:var(--fill)}
+.aoe.tool{margin:-8px 0 12px;font:var(--fs-2)/var(--lh-2) var(--mono);color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;cursor:pointer} .aoe.tool::before{content:"› "}
+.aoe.tool.open{display:block;cursor:auto}  /* a long command (a heredoc) folds to 3 lines; a click shows all of it */
+.aosep{display:flex;align-items:center;gap:10px;margin:18px 0 14px;font-size:var(--fs-1);color:var(--text3)} .aosep::before,.aosep::after{content:"";flex:1;height:1px;background:var(--line)}
+.aomore{display:flex;justify-content:center;min-height:28px;margin-bottom:12px;font-size:var(--fs-2);color:var(--text3)} .aonote{margin:40px 0;text-align:center;font-size:var(--fs-3);color:var(--text3)}
+#aout .aoft .aline{flex:1;min-width:0;background:none;padding:0} #aout .aerr{color:var(--red-ink);font-size:var(--fs-2)}
 .adot{width:12px;height:12px;flex-shrink:0;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center}
 .adot::after{content:"";width:36%;height:36%;border-radius:50%;background:#fff;animation:breathe 1.8s ease-in-out infinite}  /* same as the hex .abadge */
 .segs{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:3px}
@@ -218,7 +253,7 @@ main.ov{background:var(--canvas)}
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}  /* shrinks into the centre cell */
 .badge{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);min-width:30px;height:22px;padding:0 7px;border-radius:11px;background:var(--text);color:var(--canvas);
   font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--canvas)}
-@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub{transition:none}.hx .pulse,.adot::after,.segs i.cur,.abadge::after,.spin{animation:none}}
+@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub{transition:none}.hx .pulse,.adot::after,.segs i.cur,.stagepop,.abadge::after,.spin{animation:none}}
 /* dock: the chat's left edge. Drop a hex or stack there and its MRs join the chat's context */
 #dock,#park{position:fixed;top:var(--bar-h);bottom:var(--foot-h);width:var(--dock-w);z-index:20;box-sizing:border-box;background:var(--bar);
   display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);padding:var(--sp-3) 0;overflow:hidden auto}
@@ -648,12 +683,12 @@ const STATE = {
 const ORDER = Object.keys(STATE);
 const TONE = {ok:"--green", warn:"--orange", bad:"--red", info:"--blue", idle:"--track"};
 const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No conflicts", review_bot:"Review bot", milestone:"Milestone",
-  ready:"Out of draft", threads:"Threads", approved:"Approval", merge:"Merge"};  // the page's step checklist: what each step achieves
+  ready:"Out of draft", threads:"Threads", approved:"Approval", merge:"Merge", reviewed:"Reviewed", tried:"Tried out", deploy:"Deployed"};  // the page's step checklist: what each step achieves
 // everywhere else: what the MR still needs, not the step's goal ("No conflicts" read as a status when it meant "has conflicts")
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {ci: {days: [7, 14, 30].includes(+localGet("ciDays")) ? +localGet("ciDays") : 30, proj: localGet("ciProj") || null, data: null, loading: false, err: null},
-  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set()};
+  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -984,6 +1019,34 @@ function hl(name, on){ document.querySelectorAll(".cell,.acard,.lrow").forEach(e
 const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", review_bot:"Adding review bot", milestone:"Setting milestone",
   ready:"Undrafting", threads:"Answering threads", approved:"Awaiting approval", merge:"Merging", review:"Reviewing"};
 const CIWORD = {success:["passed", "--green"], failed:["failed", "--red"], running:["running", "--blue"], pending:["pending", "--blue"], canceled:["canceled", "--gray"]};
+const cssId = name => String(name).replace(/[^A-Za-z0-9-]/g, c => `_${c.charCodeAt(0).toString(16)}_`);  // one-to-one: "v1.2" and "v1_2" stay apart
+function stageList(p, steps, i, n){  // every step by name: done ones ticked, the current one marked "Now", the one after it "Next"
+  const cur = i < n && p.state !== "done" ? steps[i] : null;
+  const name = k => STEP_GOALS[k] || STEP_NAMES[k] || String(k).replace(/_/g, " ").replace(/^./, x => x.toUpperCase());  // a lifecycle's own step: "pre_merge" reads "Pre merge"
+  return h("div", {class:"stagepop", id: `sp-${cssId(p.name)}`, role:"tooltip"},
+    h("div", {class:"sph"}, h("b", {}, cur ? `Step ${i + 1} of ${n}` : `All ${n} steps done`), cur ? h("span", {}, name(cur)) : null),
+    h("ol", {}, steps.map((k, j) => { const st = !cur || j < i ? "done" : j === i ? "cur" : "todo";
+      return h("li", {class: st, "aria-current": st === "cur" ? "step" : null},
+        h("span", {class:"spm", "aria-hidden":"true"}, st === "done" ? icon("check", 9) : null), h("span", {}, name(k)),
+        h("span", {class:"spt"}, st === "done" ? "Done" : st === "cur" ? "Now" : j === i + 1 ? "Next" : "")) })));
+}
+function placeStages(e, name){  // below the bar, or above it when the window's foot would cut it off
+  const pr = e.currentTarget, pop = pr.querySelector(".stagepop"); if (!pop) return;
+  const hush = !!(ui.stage && ui.stage.name === name && ui.stage.hush);  // focus put back after a re-render: an Esc still holds
+  pr.classList.remove("up"); pr.classList.toggle("hush", hush);
+  if (!ui.stage || ui.stage.name !== name) pr.classList.remove("steady");  // a fresh open fades in
+  const r = pr.getBoundingClientRect(), m = document.getElementById("main").getBoundingClientRect(), need = pop.offsetHeight + 8;
+  const up = r.bottom + need > Math.min(innerHeight, m.bottom) && r.top - need > Math.max(0, m.top);
+  pr.classList.toggle("up", up);
+  ui.stage = {name, up, hush};  // the 5s re-render rebuilds the card under the pointer: it keeps where the list opened, and an Esc
+}
+function unStages(e){  // a real leave forgets it; the 5s re-render's removal blurs the bar too, and its rebuilt twin then has the focus or the pointer
+  const id = e.currentTarget.id; e.currentTarget.classList.remove("hush");
+  setTimeout(() => { const el = document.getElementById(id); if (!el || !(el === document.activeElement || el.matches(":hover"))) ui.stage = null }, 0);
+}
+// what the agent is doing, as a button: it opens All output over the whole window
+const outLine = (p, act, ...kids) => h("button", {class:"aline", id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
+  onclick: () => openOut(p.name)}, ...kids, h("span", {class:"aexp", "aria-hidden":"true"}, icon("expand", 12)));
 function agentCard(p){  // one size everywhere: who and the action, the steps as a bar, what it's doing now, then the MR's facts
   const a = p.agent, wait = a.state === "waiting", codex = /codex/i.test(a.type || ""), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
   const said = String(a.last || "").split("\n").filter(Boolean).pop() || "";
@@ -1000,12 +1063,15 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       h("span", {class:"pill" + (wait ? " wait" : crash ? " red" : "")}, wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || STEP_NAMES[p.step] || p.step),
       h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
-    steps.length ? h("div", {class:"prog", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`},
+    steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? " steady" + (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
+        onmouseenter: e => placeStages(e, p.name), onfocus: e => placeStages(e, p.name), onmouseleave: unStages, onblur: unStages,
+        onkeydown: e => { if (e.key === "Escape" && !e.currentTarget.classList.contains("hush")) { e.stopPropagation(); e.currentTarget.classList.add("hush"); if (ui.stage) ui.stage.hush = true } }},  // Esc puts the list away; Esc again backs out as usual
       h("div", {class:"segs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {}, h("i", {class: k === i ? "cur" : null, style:`width:${k < i ? 100 : k === i ? 50 : 0}%`})))),
-      h("div", {class:"lbls", "aria-hidden":"true"}, steps.map((s, k) => h("span", {class: k < i ? "done" : k === i ? "cur" : null, title: STEP_NAMES[s] || s}, HEXSUB[s] || STEP_NAMES[s] || s)))) : null,
+      h("div", {class:"lbls", "aria-hidden":"true"}, steps.map((s, k) => h("span", {class: k < i ? "done" : k === i ? "cur" : null}, HEXSUB[s] || STEP_NAMES[s] || s))),  // the stage list names them all: no title tips over it
+      stageList(p, steps, i, n)) : null,
     wait ? h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240))  // two lines of the question, or all of it
-      : crash ? (said ? h("div", {class:"aline", role:"status"}, h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
-      : h("div", {class:"aline", role:"status"}, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)),
+      : crash ? (said ? outLine(p, said, h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
+      : outLine(p, act, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)),
     h("div", {class:"ameta"},
       steps.length ? fact("Step", `${Math.min(i + 1, n)} of ${n}`) : null,
       ci ? fact("CI", ci[0], ci[1]) : null,
@@ -1461,6 +1527,171 @@ function answerSheet(){
       answerBox(p)));
 }
 function closeAnswer(){ ui.answering = null; render() }
+
+/* ---------- All output: the agent's whole conversation (dash.py transcript) over the whole window, refreshed while it's open ----------
+   It lives outside #main, so a snapshot's re-render never resets it: new entries are appended, the scroll stays where you left it.
+   At the bottom it follows new output; scrolled up, it holds still and counts what arrived. Back, or Esc, closes it. */
+const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
+const OUT_IDLE = 5000, OUT_FOLLOW = 40;
+let OUT_WAIT = 20000, OUT_QUIET = 30000;  // a reply later than OUT_WAIT counts as lost; a main session quiet for OUT_QUIET hands over (let: the tests shorten them)  // px from the bottom that still counts as "at the bottom"
+function openOut(name){
+  closeOut(false);
+  ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
+  const p = puckOf(name) || {name, agent: {}}, codex = /codex/i.test(p.agent.type || "");
+  const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
+    h("header", {class:"aohd"},
+      h("button", {class:"btn back", id:"aout-back", title:"Back to the agents (Esc)", onclick: () => closeOut(true)}, icon("back"), "Back"),
+      h("span", {class:"av sm", "aria-hidden":"true", style:`background:${codex ? c("--codex") : c("--claude")}`}, codex ? icon("target", 12) : "C"),
+      h("div", {class:"aot"}, h("b", {id:"aout-t", title: mrTitle(p)}, `All output · ${mrTitle(p)}`), h("span", {id:"aout-sub"})),
+      h("button", {class:"btn sm", onclick: () => { closeOut(false); openPage(name) }}, "Open workspace")),
+    h("div", {class:"aolog", id:"aout-log", tabindex:"0", role:"log", "aria-label":"Agent output", onscroll: outScrolled},
+      h("div", {class:"aomore", id:"aout-more"}), h("div", {id:"aout-list"})),
+    h("footer", {class:"aoft"}, h("div", {class:"aline", id:"aout-now"}),
+      h("button", {class:"btn sm", id:"aout-new", hidden: true, onclick: () => outBottom()})));
+  document.body.append(el);
+  outHead(); outPaint(); pollOut();
+  document.getElementById("aout-log").focus();  // the keys scroll it at once: arrows, Page Up/Down, Home, End
+}
+function closeOut(refocus){
+  const o = ui.out; if (!o) return;
+  clearTimeout(o.timer); ui.out = null;
+  const el = document.getElementById("aout"); if (el) el.remove();
+  const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
+  const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2") || document.getElementById("main"));
+  if (back && !back.matches("button")) back.setAttribute("tabindex", "-1");
+  if (back) back.focus();
+}
+function outKeys(e){
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeOut(true); return }
+  if (e.key !== "Tab") return;  // a modal: Tab cycles inside it
+  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
+  if (k < 0 || (e.shiftKey ? k === 0 : k === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus() }
+}
+function pollOut(){
+  const o = ui.out; if (!o) return;
+  clearTimeout(o.timer);
+  if (document.hidden) { o.timer = setTimeout(pollOut, OUT_IDLE); return }  // a hidden window doesn't need it live
+  o.inflight = true; post({cmd: "transcript", name: o.name});
+  o.timer = setTimeout(() => { if (ui.out === o && o.inflight) gotOut({name: o.name, before: null, error: "no answer from the host"}) }, OUT_WAIT);  // a lost reply never stops it for good
+}
+function nextPoll(){
+  const o = ui.out; if (!o) return;
+  const p = puckOf(o.name); clearTimeout(o.timer);
+  o.timer = setTimeout(pollOut, o.err ? OUT_IDLE : OUT_EVERY[p && p.agent.state] || OUT_IDLE);
+}
+function olderOut(){
+  const o = ui.out; if (!o || !o.more || o.older) return;
+  o.older = true; o.olderErr = null; outMore(); post({cmd: "transcript", name: o.name, before: o.more});
+  const cur = o.more, req = o.olderReq = (o.olderReq || 0) + 1;  // a retry gets its own 20s
+  setTimeout(() => { if (ui.out === o && o.older && o.olderReq === req) gotOut({name: o.name, before: cur, error: "no answer"}) }, OUT_WAIT);
+}
+function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page (before: the cursor asked with)
+  const o = ui.out; if (!o || r.name !== o.name) return;
+  if (r.before) {
+    if (!o.older || r.before !== o.more) return;  // an answer for a page it no longer wants
+    o.older = false;
+    if (r.error) { o.olderErr = r.error; outMore(); return }
+    const log = document.getElementById("aout-log"), h0 = log.scrollHeight, t0 = log.scrollTop;
+    const add = arr(r.entries).filter(e => !o.ids.has(e.id));
+    add.forEach(e => { o.ids.add(e.id); if (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]) o.tip[stemOf(e)] = idxOf(e) }); o.entries = add.concat(o.entries); o.more = r.more || null;
+    document.getElementById("aout-list").prepend(...add.map(e => outEntry(e)));
+    log.scrollTop = t0 + log.scrollHeight - h0;  // what you were reading stays put
+    outMore(); return;
+  }
+  if (!o.inflight) return;  // a stale answer (an earlier open's): the next poll is already set
+  o.inflight = false; o.err = r.error || null;
+  if (!r.error) {
+    const page = arr(r.entries), first = !o.loaded;
+    // new to it: a line past the last one shown for its session (a session that flips between newest and recent never
+    // brings its older, unseen lines in at the bottom), or any line of a session not shown yet
+    const fresh = e => !o.ids.has(e.id) && (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]);
+    const seen = page.filter(fresh), rec = arr(r.recent).filter(e => fresh(e) && !seen.some(x => x.id === e.id)), add = seen.concat(rec);  // another session busy at the same time: its new lines too
+    const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // more arrived than one page holds: what's between is skipped, and said so (no cursor: the page reaches the start)
+    if (first) o.more = r.more || null;  // Load earlier continues from the top of what's shown
+    const newest = page.length ? stemOf(page[page.length - 1]) : null;  // the page ends in the newest session's tail
+    if (o.main && add.some(e => stemOf(e) === o.main)) o.mainAt = Date.now();
+    else if (newest && (first || !o.main || Date.now() - o.mainAt > OUT_QUIET)) { o.main = newest; o.mainAt = Date.now() }  // main: the newest, once the old main has been quiet a while (two busy sessions keep their labels)
+    for (const e of add) e.other = !!o.main && stemOf(e) !== o.main && (rec.includes(e) || !first);  // the first page's older sessions are history, not "another"
+    add.forEach(e => { o.ids.add(e.id); o.tip[stemOf(e)] = Math.max(o.tip[stemOf(e)] ?? -1, idxOf(e)) }); o.entries.push(...add); o.loaded = true;
+    if (first) outPaint();  // outPaint lands at the bottom
+    else if (add.length) {
+      const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
+      if (note) note.remove();  // "No output yet" was true until now
+      if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
+      list.append(...add.map(e => outEntry(e, e.other)));
+      if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
+    }
+    outMore();
+  }
+  outHead(); nextPoll();
+}
+function outEntry(e, other){  // other: a line of another session running alongside the main one
+  const p = ui.out && puckOf(ui.out.name), who = (e.kind || (p && p.agent.type) || "") .match(/codex/i) ? "Codex" : "Claude";  // the session that wrote it
+  if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
+  if (e.role === "tool" && other) e = {...e, text: e.text + "  (another session)"};
+  if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open"); 
+      ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
+      outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
+    const el = h("div", {class:"aoe tool", "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
+      onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
+      onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }}, e.text);
+    if (!long) requestAnimationFrame(() => { if (el.isConnected && el.scrollHeight > el.clientHeight + 1)  // a narrow window folds a shorter one too
+      Object.entries({tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"}).forEach(([k, v]) => el.setAttribute(k, v)) });
+    return el }
+  return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
+    h("div", {class:"aow"}, (e.role === "user" ? "Prompt" : who) + (other ? " · another session" : "")), h("div", {class:"aotx"}, e.text));
+}
+const stemOf = e => String(e.id).replace(/:[^:]*$/, "");
+const idxOf = e => { const n = Number(String(e.id).replace(/^.*:/, "")); return isFinite(n) ? n : -1 };  // "<session>:start" is before its first line
+function outPaint(){  // the first page
+  const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
+  list.replaceChildren(...o.entries.map(e => outEntry(e, e.other)));
+  if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
+  outMore(); outBottom();
+}
+function outMore(){  // the top of the log: Load earlier, or where the sessions start
+  const o = ui.out, el = document.getElementById("aout-more"); if (!o || !el) return;
+  const key = [o.loaded, !!o.more, o.older, !!o.olderErr, !!o.entries.length].join();
+  if (key === o.moreKey) return;  // unchanged: the button stays the one under the pointer (and the screen reader's)
+  o.moreKey = key;
+  const had = el.contains(document.activeElement);  // its button is rebuilt: keep the keyboard on it (or on the log), never behind the dialog
+  el.replaceChildren(!o.loaded ? h("span", {}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "Loading output…")
+    : o.more ? h("button", {class:"btn sm", id:"aout-older", disabled: o.older, onclick: olderOut}, o.older ? "Loading…" : o.olderErr ? "Couldn't load. Try again" : "Load earlier output")
+    : o.entries.length ? h("span", {}, "Start of this workspace's agent sessions") : null);
+  const b = document.getElementById("aout-older");
+  if (had) (b && !b.disabled ? b : document.getElementById("aout-log")).focus();  // a disabled one can't hold focus
+}
+function outBottom(){
+  const o = ui.out, log = document.getElementById("aout-log"); if (!o || !log) return;
+  log.scrollTop = log.scrollHeight; o.follow = true; o.unseen = 0; outNew();
+}
+function outScrolled(e){
+  const o = ui.out, log = e.currentTarget; if (!o) return;
+  const was = o.follow; o.follow = log.scrollHeight - log.scrollTop - log.clientHeight <= OUT_FOLLOW;
+  if (o.follow) o.unseen = 0;
+  if (o.follow !== was) outNew();  // scrolled away: Latest offers the way back; at the bottom it goes
+}
+function outNew(){
+  const o = ui.out, b = document.getElementById("aout-new"); if (!o || !b) return;
+  if (o.follow && document.activeElement === b) document.getElementById("aout-log").focus();  // it's about to hide (Latest, or a scroll to the bottom): keep the keyboard in the dialog
+  b.hidden = o.follow;
+  b.replaceChildren(o.unseen ? `${o.unseen} new` : "Latest", icon("chevron-down", 12));
+  b.title = "Jump to the latest output";
+}
+function outHead(){  // who and what it's doing now, from the 5s snapshot; any refresh error
+  const o = ui.out; if (!o) return;
+  const p = puckOf(o.name), a = p ? p.agent : {}, sub = document.getElementById("aout-sub"), now = document.getElementById("aout-now");
+  if (!sub || !now) return;
+  const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", t0 = since(a.since);
+  sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
+    ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
+  const key = o.err ? "err\u0000" + o.err : [a.state, a.tool, a.input].join("\u0000");  // failing: only the error shows, so only it counts
+  if (now.dataset.key === key) return;  // unchanged: a screen reader doesn't hear the same alert again
+  now.dataset.key = key;
+  now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]
+    : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: a.tool ? `${a.tool}: ${a.input || ""}` : ""}, a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : "Working")]
+    : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
+}
 function renderNone(main){  // no workspaces at all: start one; all hidden by the project or parked filter: clear them
   const none = !ui.snap.pucks.length;
   main.classList.add("ov");
@@ -2165,9 +2396,9 @@ window.mc = {
     if (ui.rescan && snap.scanned !== ui.rescan) ui.rescan = 0;  // the new scan landed
     if (ui.page) {
       const sg = sigOf(snap.pucks.find(x => x.name === ui.page.name));
-      if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); return }  // it moved: refresh facts + layout
+      if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); outHead(); return }  // it moved: refresh facts + layout
     }
-    render();
+    render(); outHead();
   },
   asked(r){
     const st = ui.ask[r.name]; if (!st) return;
@@ -2180,6 +2411,7 @@ window.mc = {
     else { st.sent = true; st.draft = ""; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
     render();
   },
+  transcript(r){ gotOut(r) },  // All output's pages
   page(resp){
     if (!ui.page || resp.name !== ui.page.name) return;
     ui.page.loading = false;
@@ -2190,6 +2422,7 @@ window.mc = {
 };
 document.addEventListener("keydown", e => {
   if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "c") { e.preventDefault(); post({cmd: "toggleChat"}); return }  // if the menu's ⌘⇧C doesn't reach us
+  if (ui.out) { if (e.key === "Escape") closeOut(true); return }  // All output covers everything: its keys are its own
   if (e.key === "Escape" && document.getElementById("hcard")) hideCard();  // the card first: Esc again backs out
   else if (e.key === "Escape" && ui.answering) closeAnswer();
   else if (e.key === "Escape" && ui.task.sheet) { ui.task.sheet = null; render() }
