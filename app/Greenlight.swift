@@ -6421,7 +6421,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return c.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
-            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on,  // Esc leaves live chat (sheets keep theirs)
+            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on || self.greenlight.voice.starting,  // Esc leaves live chat, or stops it starting (sheets keep theirs)
                !self.greenlight.settingsOpen, !self.greenlight.inboxOpen { self.greenlight.voice.stopAll(); return nil }
             guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
                   e.keyCode == kVK_UpArrow || e.keyCode == kVK_DownArrow,
