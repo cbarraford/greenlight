@@ -5650,20 +5650,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         webs.forEach(pushPicks)
     }
-    // Windows answer out of order: only the one Chief's scope is about (the last asked) is heard, so the window you left can't win
-    // over the one you're in. One window answers in order, so asking it again never loses the answer on its way.
-    weak var focusWin: NSWindow?
-    var focusAskedAt = Date.distantPast, pendingSince = Date.distantPast
+    // Windows answer out of order: only the newest ask is heard, so the window you left can't win over the one you're in. tick asks
+    // again only once an answer came back empty (a page still loading), never over one on its way, so a slow page isn't starved.
+    weak var focusWin: NSWindow?  // the window noteFocus last asked: the one Chief's scope is about
+    var focusAsked = 0, focusInFlight = false, focusAskedAt = Date.distantPast, pendingSince = Date.distantPast
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
     /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
         if !greenlight.scopePending { pendingSince = Date() }
-        focusWin = w; focusAskedAt = Date()
+        focusAsked += 1; focusWin = w; focusAskedAt = Date(); focusInFlight = true
+        let asked = focusAsked
         greenlight.scopePending = true  // the watch waits for the answer rather than ask with the window you left
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
-            guard let self, w === self.focusWin else { return }
+            guard let self, asked == self.focusAsked else { return }
+            self.focusInFlight = false
             guard let o = (r as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] else {
                 if !w.isVisible { self.greenlight.focusShown = { false }; self.greenlight.scopePending = false }  // gone: every project
                 return  // its page isn't up yet (or failed): no answer isn't "every project"; the scope holds and tick asks again
@@ -6676,9 +6678,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
         syncPick()  // ahead of the watch: a pick that changed holds it until the window answers with the new scope
-        if greenlight.scopePending, Date().timeIntervalSince(focusAskedAt) > 2 {  // no answer yet (a page still loading): ask again
-            // gone, or 10s without an answer (a crashed or broken page): stop waiting, with the last scope it had
-            if let w = focusWin, w.isVisible, Date().timeIntervalSince(pendingSince) < 10 { noteFocus(w) } else { greenlight.scopePending = false }
+        if greenlight.scopePending {  // gone, or 10s without an answer (a hung or crashed page): stop waiting, with the last scope it had
+            if focusWin?.isVisible != true || Date().timeIntervalSince(pendingSince) > 10 { greenlight.scopePending = false }
+            else if !focusInFlight, Date().timeIntervalSince(focusAskedAt) > 2, let w = focusWin { noteFocus(w) }  // it answered empty: ask again
         }
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
