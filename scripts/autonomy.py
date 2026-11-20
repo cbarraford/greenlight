@@ -366,7 +366,7 @@ def undo(aid):
     import greenlight  # lazily: its import reads config
     q, opts = decisions.split_options(e["text"])
     asked = greenlight.ping(f"Undo: greenlight answered {e['choice']!r} for you; it's yours now.\n{q}\nOptions: {' | '.join(opts)}",
-                            e.get("key"), e.get("ws") or (), e["kind"], ask=True)
+                            f"@undo:{aid}", e.get("ws") or (), e["kind"], ask=True)
     if not asked or not asked.get("asked"):
         raise RuntimeError("re-ask was not recorded")
     return amend_audit(aid, undone=int(time.time()), reasked_record=asked["asked"])

@@ -3795,7 +3795,8 @@ final class Core: ObservableObject {
         gate("watch", text: list) { [weak self] ok in  // score the new workspaces before the watch interrupts
             guard let self, ok, self.watch else { return }
             let current = Dictionary(uniqueKeysWithValues: ask.keys.compactMap { name in self.needs?[name].map { (name, $0) } })
-            let (visible, _) = inScope(current, self.pucks, self.scope())
+            let (visible, deferred) = inScope(current, self.pucks, self.scope())
+            self.fresh = deferred.merging(self.fresh) { $1 }  // a scope change must not consume another project's news
             guard !visible.isEmpty else { return }
             guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = visible.merging(self.fresh) { $1 }; return }
             let liveList = visible.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")

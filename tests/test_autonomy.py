@@ -186,7 +186,7 @@ assert autonomy.audit_log()[-1]["act"] == "held"  # Undo preserved a concurrent 
 assert "keep-draft" not in decisions.calibrate()  # re-asking alone says nothing about whether the guess was right
 again = outbox()[-1]
 assert "auto" not in again and "suggest" not in again and again["text"].startswith("Undo: greenlight answered 'keep draft'") and again["text"].endswith(KD), again
-assert decisions.load()[-1]["answer"] is None and "feat-9" in greenlight.pinged()
+assert decisions.load()[-1]["answer"] is None and f"@undo:{res['id']}" in greenlight.pinged()
 assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load())[0] == [0, 25]  # Undo cannot change human history
 question = decisions.split_options(again["text"])[0]
 decisions.heard(f'(Replying to your question: "{question}")\nkeep draft')
@@ -199,7 +199,17 @@ with contextlib.redirect_stdout(io.StringIO()):
     res = greenlight.ping("4 drafts still drafts. Ready?" + KD, "@drafts-2", kind="keep-draft")
     assert res and res.get("auto"), res
     autonomy.undo(res["id"])
-assert outbox()[-1]["key"] == "@drafts-2" and outbox()[-1]["text"].startswith("Undo:"), outbox()[-1]
+assert outbox()[-1]["key"] == f"@undo:{res['id']}" and outbox()[-1]["text"].startswith("Undo:"), outbox()[-1]
+# Re-asking an old auto answer must not supersede a newer question about that workspace.
+reset()
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
+autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
+with contextlib.redirect_stdout(io.StringIO()):
+    old_auto = greenlight.ping("Original draft question?" + KD, "feat-9", kind="keep-draft")
+    greenlight.ping("A newer review question?\nOptions: review | later", "feat-9", kind="review-request")
+    autonomy.undo(old_auto["id"])
+assert any(r["question"] == "A newer review question?" and decisions.is_open(r) for r in decisions.load())
+assert outbox()[-1]["key"] == f"@undo:{old_auto['id']}"
 
 # failed writes must not invent an auto answer or duplicate one on retry
 reset()

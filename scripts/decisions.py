@@ -141,7 +141,7 @@ def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None
         for r in recs:
             if not is_open(r) or r["via"] != via:
                 continue
-            if via == "ping" and r["question"] == rec["question"] and r["key"] == key:
+            if via == "ping" and r["question"] == rec["question"] and r["key"] == key and r["options"] == rec["options"]:
                 r["kind"] = rec["kind"]
                 if proposal:
                     r["proposal"] = proposal
