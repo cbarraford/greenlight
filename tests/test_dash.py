@@ -427,6 +427,8 @@ _stale = {**_dep, "project": "cbarraford/greenlight", "next": {**_dep["next"], "
 assert dash.moves(_stale) == []
 _lj.write_text(json.dumps({"ts": 1, "rows": [_stale]}))
 assert "doesn't say" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3
+(dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "deploy", "done": "signoff"}, {"key": "merge"}]}))
+assert dash.moves(_dep) == []  # a step moved before the merge isn't asked after it either
 # the chat's board: unfinished workspaces, yours first, finished ones counted
 _b = lambda n, o, st="freeform": {"id": n, "name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
 _w = lambda n, repo="g", **k: {"worktreeId": n, "displayName": n, "path": "/w/" + n, "repo": repo, "branch": "refs/heads/" + n, **k}
