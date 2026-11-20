@@ -635,6 +635,7 @@ function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Dat
 function localGet(k){ try { return localStorage.getItem(k) } catch { return null } }
 function localSet(k, v){ try { localStorage.setItem(k, v) } catch {} }
 function post(m){ try { webkit.messageHandlers.mc.postMessage(m) } catch {} }
+const unpick = () => { mc.pick([]); post({cmd: "unpick"}) };  // the app clears them in every window
 window.onerror = (m, src, line) => post({cmd: "error", m: `${m} @${line}`});  // into the app's log
 function c(v){ return `var(${v})` }
 function ink(v){ return /^--(orange|yellow|blue|red|green|gray|purple|teal)$/.test(v) ? `var(${v}-ink)` : c(v) }  // state text: the readable shade of the fill
@@ -924,7 +925,7 @@ function stackFan(st, hx, hy, R, WW, HH){
   st.members.forEach((p, i) => {
     const [q, r] = cells[i], x = ext + rs * SQ3 * (q + r / 2) - mr, y = ext + rs * 1.5 * r - mr;
     fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
-      "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) mc.pick([]); openPage(p.name) }, role:"button", tabindex:"0",
+      "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
       onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true})));
   });
   fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
@@ -1113,7 +1114,7 @@ function renderOverview(main){
       if (p.members) { wrap.append(stackFan(p, x, y, R, WW, HH)); return }
       wrap.append(h("div", {class:`cell${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}`, "data-name": p.name,
  "data-dock": dockable(p), style:`left:${x - R}px;top:${y - R}px`,
-        "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) mc.pick([]); openPage(p.name) }, role:"button", tabindex:"0",
+        "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
         onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
         onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, R)));
     });
@@ -1976,6 +1977,7 @@ function pickProjects(list, only, here = true){
 }
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
+  focus: () => ({page: ui.page?.name || "", view: ui.view}),  // for Chief: what this window shows
   pick(names){ ui.picked = new Set(arr(names)); render() },  // the hexes Chief's last reply is about; [] clears
   paths(r){ ui.paths = r; render() },  // the projects picked: their worktrees' paths, or null for all
   pickProjects,  // L1's project chip
