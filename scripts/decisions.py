@@ -129,17 +129,18 @@ def is_open(r):
     return r["answer"] is None and not r["closed"]
 
 
-def asked(text, via="ping", key=None, ws=(), kind=None):
+def asked(text, via="ping", key=None, ws=(), kind=None, chat=None):
     """Greenlight asked something. Returns the record's id. A newer question on the same key (or a newer chat
-    question) supersedes the open one, as in the app's inbox; the same open ping asked again isn't recorded twice."""
-    rec = record(text, via, key, ws, kind)
+    question, in the same chat) supersedes the open one, as in the app's inbox; the same open ping asked again isn't recorded twice.
+    chat: which chat asked (chat.py's CHAT_DIR name, a second L1 window's); None: the main one."""
+    rec = record(text, via, key, ws, kind) | ({"chat": chat} if chat else {})
     with book() as recs:
         for r in recs:
             if not is_open(r) or r["via"] != via:
                 continue
             if via == "ping" and r["question"] == rec["question"] and r["key"] == key:
                 return r["id"]
-            if (via == "ping" and key and r["key"] == key) or via == "chat":
+            if (via == "ping" and key and r["key"] == key) or (via == "chat" and r.get("chat") == chat):
                 r["closed"] = "superseded"
         recs.append(rec)
     return rec["id"]
@@ -149,7 +150,7 @@ def settle(r, text, via):
     r.update(answer=text, answered=int(time.time()), answer_via=via, choice=choice(r["options"], text), closed=None)
 
 
-def heard(message):
+def heard(message, chat=None):
     """A message from the user arrived in the menubar chat. If it answers a question, write the answer into that
     question's record and return it. Otherwise (plain chat, nothing open) return None."""
     message = message.strip()
@@ -172,16 +173,16 @@ def heard(message):
             recs.append(r)
             return r
     with book() as recs:  # typing (or a chip) answers the open chat question, as in the app's submit()
-        waiting = [r for r in recs if r["via"] == "chat" and is_open(r)]
+        waiting = [r for r in recs if r["via"] == "chat" and is_open(r) and r.get("chat") == chat]  # this chat's: another window's Chief asked its own
         if not waiting or not message:
             return None
         settle(waiting[-1], message, "chat")
         return waiting[-1]
 
 
-def said(reply):
+def said(reply, chat=None):
     """Greenlight's reply in the menubar chat: a question when it ends with an Options line (the app puts it in the inbox)."""
-    return asked(reply, via="chat") if reply and split_options(reply)[1] else None
+    return asked(reply, via="chat", chat=chat) if reply and split_options(reply)[1] else None
 
 
 def resolve(key, why):
@@ -192,11 +193,11 @@ def resolve(key, why):
                 r["closed"] = f"resolved: {why}"
 
 
-def forget_chat():
+def forget_chat(chat=None):
     """The chat was cleared (`chat.py new`): its open questions went with it."""
     with book() as recs:
         for r in recs:
-            if is_open(r) and r["via"] == "chat":
+            if is_open(r) and r["via"] == "chat" and r.get("chat") == chat:
                 r["closed"] = "resolved: chat cleared"
 
 
