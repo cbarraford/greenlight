@@ -215,6 +215,13 @@ class Norm:
                 self.running = []
         return out
 
+    @staticmethod
+    def whole(text):
+        """A whole message (codex, opencode) as text events. whole=True: voice mode doesn't speak it as it comes, since it can't tell a
+        progress note ("I'll check the board.") from the reply yet; at done it speaks the reply, the message the turn ended on.
+        It used to speak every note, then the reply, which restates them: the user heard the same phrase two or three times."""
+        return [{"e": "text_reset"}, {"e": "text", "delta": text, "whole": True}]
+
     def usage(self, u):
         return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
 
@@ -293,7 +300,7 @@ class Norm:
             out += self.think(it.get("text", ""))
         elif t == "item.completed" and it.get("type") == "agent_message":
             self.text = it["text"]
-            out += [{"e": "text_reset"}, {"e": "text", "delta": it["text"]}]
+            out += self.whole(it["text"])
         elif t == "item.started":
             out.append({"e": "status", "text": it.get("type", "working").replace("_", " ").capitalize()})
         elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
@@ -317,7 +324,7 @@ class Norm:
                     self.more({"e": "step_done", "id": pt.get("id"), "ok": st.get("status") == "completed", "out": short(res, 120)}, full=clip(res, tail=True))]
         elif t == "text":
             self.text = pt.get("text", "")
-            out += [{"e": "text_reset"}, {"e": "text", "delta": self.text}]
+            out += self.whole(self.text)
         elif t == "reasoning":
             out.append({"e": "status", "text": "Thinking"})
             out += self.think(pt.get("text", ""))
