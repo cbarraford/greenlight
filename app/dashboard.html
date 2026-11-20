@@ -94,7 +94,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .qwrap{position:relative;display:flex;flex:0 4 180px;min-width:110px}.qwrap .search{width:100%;min-width:0}.qwrap .ic{position:absolute;left:8px;top:6px;color:var(--text3);pointer-events:none}.qwrap .search{padding-left:28px}
 .seg.wait{background:none;box-shadow:inset 0 0 0 1px var(--line)}
 .seg.wait button,.seg.wait button[aria-pressed=true]{background:none;box-shadow:none;color:var(--text3);cursor:default}
-@media (max-width:640px){.bar{gap:8px} .qwrap{min-width:32px} .bar .ntl{display:none}}  /* the dashboard at its 480px floor: New task keeps its +, the search its glass */
+@media (max-width:640px){.bar{gap:8px} .qwrap{min-width:32px}}  /* the dashboard at its 480px floor: the search keeps its glass */
 .qwrap.wait .search{background:none;border-color:var(--hair);cursor:default} .qwrap.wait .search::placeholder{color:var(--text3);opacity:1}
 .btn.ico{width:30px;padding:0;justify-content:center;position:relative;color:var(--text2)}
 .btn.ico.on{color:var(--blue);background:color-mix(in srgb,var(--blue) 18%,transparent)}
@@ -1100,7 +1100,7 @@ function topBar(){
     if (mr.web_url) bar.append(h("a", {class:"btn pri", href: mr.web_url}, `Open ${mrRef(mr)} in ${forgeName(mr)}`));
     return;
   }
-  const n = ui.snap ? counts() : {}, none = ui.snap && !ui.snap.pucks.length, live = ui.snap && !none;  // none: nothing to switch or search; the page's own button starts the first task
+  const n = ui.snap ? counts() : {}, live = !!ui.snap && ui.snap.pucks.length > 0;  // not live: nothing to switch or search; the page's own button starts the first task
   const att = (n.needs || 0) + (n.raised || 0) + (n.crashed || 0);
   const bits = [att && h("span", {style:`color:${ink(n.crashed && !n.needs ? "--red" : "--orange")}`}, `${att} need${att > 1 ? "" : "s"} attention`), !att && n.working && `${n.working} working`].filter(Boolean);
   bar.append(h("div", {class:"title"}, h("b", {}, "Spaces"),
@@ -1108,8 +1108,7 @@ function topBar(){
     h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
       onclick: () => { ui.view = v; localSet("view", v); render() }}, v === "overview" ? "Overview" : "List"))),
     h("span", {class:"qwrap" + (live ? "" : " wait")}, icon("search"), h("input", {class:"search", id:"q", type:"search", readonly: !live, "aria-disabled": live ? null : "true", placeholder:"Search", value: ui.q, "aria-label":"Search workspaces",
-      oninput: e => { ui.q = e.target.value; renderMain() }})),
-    h("button", {class:"btn" + (live ? " go" : none ? "" : " ghost"), title:"Describe a task; it starts in a new workspace", "aria-label":"New task", onclick: taskSheet}, PLUS, h("span", {class:"ntl"}, "New task")), ...barTail().filter(Boolean));  // not connected yet: the status leads, not this
+      oninput: e => { ui.q = e.target.value; renderMain() }})), ...barTail().filter(Boolean));
 
 }
 function barTail(){  // the bell and the chat toggle, the same in both modes; Settings is ⌘, and the app menu
