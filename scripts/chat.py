@@ -2,7 +2,8 @@
 """Menubar chat backend: one greenlight session on the greenlight host, resumed per message.
 
 Every command streams JSON lines (events, see Norm) for the Greenlight app:
-  chat.py send [--model M] [--effort E] [--name N] < message
+  chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
+                                     # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
                                      # M: a claude model, or a harness name (codex|opencode|pi) for its default model
   chat.py compact [--model M]       # claude only
   chat.py new                        # forget every harness's session (Clear)
@@ -123,6 +124,21 @@ def step_title(name, inp):
     return name.split("__")[-1].replace("_", " "), first
 
 
+def clip(s, n=4000, tail=False):
+    """Verbose activity's text: newlines kept, capped to the head (an input) or the tail (an output, where errors land)."""
+    s = str(s or "").strip("\n")
+    if len(s) <= n:
+        return s
+    return "…" + s[-(n - 1):] if tail else s[: n - 1] + "…"
+
+
+def full_input(name, inp):
+    """A tool call's whole input for verbose activity: a shell command as is, anything else as its JSON."""
+    if name in ("Bash", "bash") and isinstance(inp.get("command"), str):
+        return clip(inp["command"])
+    return clip(json.dumps(inp, ensure_ascii=False)) if inp else ""
+
+
 def call(name, inp):
     """A tool call the way Claude Code prints it: Bash(git status), Read(scripts/chat.py)."""
     a = inp.get("command") or inp.get("file_path") or inp.get("path") or inp.get("pattern") or inp.get("query") \
@@ -133,7 +149,8 @@ def call(name, inp):
 class Norm:
     """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
 
-    def __init__(self):
+    def __init__(self, verbose=False):
+        self.verbose = verbose  # chat.py send --verbose: whole inputs/outputs on steps, and think events
         self.msg_t = None  # current API message start, for tok/s
         self.chars = 0
         self.out, self.msg_out = 0, 0  # output tokens: finished messages, the current one
@@ -147,6 +164,15 @@ class Norm:
         self.running = []  # (id, title) of steps started and not yet done, oldest first
         self.musing = None  # the phrase for the current stretch of thinking; None once anything else shows
         self.mused = None  # the last one, so the next stretch picks a different phrase
+
+    def more(self, e, **kw):
+        """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
+        if self.verbose:
+            e.update({k: v for k, v in kw.items() if v})
+        return e
+
+    def think(self, s):
+        return [{"e": "think", "delta": s}] if self.verbose and s else []
 
     def phrase(self, evs):
         """Show thinking as one playful phrase per stretch: the same phrase while it lasts, a fresh one the next time."""
@@ -212,6 +238,7 @@ class Norm:
                     out.append({"e": "text", "delta": s})
                 elif dl.get("type") == "thinking_delta":
                     out.append({"e": "status", "text": "Thinking"})
+                    out += self.think(s)
                 if self.msg_t and time.time() - self.last_tps > 0.5:  # live estimate, ~4 chars a token
                     self.last_tps = time.time()
                     out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1),
@@ -224,7 +251,8 @@ class Norm:
                 if c.get("type") == "tool_use":
                     self.cmds[c["id"]] = c.get("input", {}).get("command", "")
                     title, detail = step_title(c["name"], c.get("input", {}))
-                    out.append({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))})
+                    out.append(self.more({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))},
+                                         input=full_input(c["name"], c.get("input", {}))))
                 elif c.get("type") == "text":
                     self.text = c["text"]
         elif t == "user" and isinstance(d.get("message", {}).get("content"), list):
@@ -233,7 +261,7 @@ class Norm:
                     res = c.get("content")
                     if isinstance(res, list):
                         res = " ".join(x.get("text", "") for x in res if isinstance(x, dict))
-                    out.append({"e": "step_done", "id": c["tool_use_id"], "ok": not c.get("is_error"), "out": short(res or "", 120)})
+                    out.append(self.more({"e": "step_done", "id": c["tool_use_id"], "ok": not c.get("is_error"), "out": short(res or "", 120)}, full=clip(res, tail=True)))
         elif t == "result":
             mu = next(iter((d.get("modelUsage") or {}).values()), {})
             self.window = mu.get("contextWindow") or self.window
@@ -245,9 +273,12 @@ class Norm:
         t, it, out = d.get("type"), d.get("item", {}), []
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
-            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"})
+            out.append(self.more({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
         elif t == "item.completed" and it.get("type") == "command_execution":
-            out.append({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)})
+            out.append(self.more({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)},
+                                 full=clip(it.get("aggregated_output"), tail=True)))
+        elif t == "item.completed" and it.get("type") == "reasoning":
+            out += self.think(it.get("text", ""))
         elif t == "item.completed" and it.get("type") == "agent_message":
             self.text = it["text"]
             out += [{"e": "text_reset"}, {"e": "text", "delta": it["text"]}]
@@ -268,13 +299,16 @@ class Norm:
         if t == "tool_use":
             st = pt.get("state") or {}
             title, detail = step_title(pt.get("tool", "tool").capitalize(), st.get("input") or {})
-            out += [{"e": "step", "id": pt.get("id"), "title": short(st.get("title") or title, 80), "detail": short(detail)},
-                    {"e": "step_done", "id": pt.get("id"), "ok": st.get("status") == "completed", "out": short(str(st.get("output") or st.get("error") or ""), 120)}]
+            res = str(st.get("output") or st.get("error") or "")
+            out += [self.more({"e": "step", "id": pt.get("id"), "title": short(st.get("title") or title, 80), "detail": short(detail)},
+                              input=full_input(pt.get("tool", ""), st.get("input") or {})),
+                    self.more({"e": "step_done", "id": pt.get("id"), "ok": st.get("status") == "completed", "out": short(res, 120)}, full=clip(res, tail=True))]
         elif t == "text":
             self.text = pt.get("text", "")
             out += [{"e": "text_reset"}, {"e": "text", "delta": self.text}]
         elif t == "reasoning":
             out.append({"e": "status", "text": "Thinking"})
+            out += self.think(pt.get("text", ""))
         elif t == "step_finish":
             tk = pt.get("tokens") or {}
             self.context = tk.get("input", 0) + (tk.get("cache") or {}).get("read", 0) + (tk.get("cache") or {}).get("write", 0) or self.context
@@ -295,6 +329,7 @@ class Norm:
             out.append({"e": "text", "delta": ev.get("delta", "")})
         elif t == "message_update" and ev.get("type") == "thinking_delta":
             out.append({"e": "status", "text": "Thinking"})
+            out += self.think(ev.get("delta", ""))
         elif t == "message_end" and m.get("role") == "assistant":
             u = m.get("usage") or {}
             self.context = u.get("input", 0) + u.get("cacheRead", 0) + u.get("cacheWrite", 0) or self.context
@@ -304,11 +339,12 @@ class Norm:
             out.append({"e": "usage", "context": self.context})
         elif t == "tool_execution_start":
             title, detail = step_title(d.get("toolName", "tool").capitalize(), d.get("args") or {})
-            out.append({"e": "step", "id": d.get("toolCallId"), "title": short(title, 80), "detail": short(detail)})
+            out.append(self.more({"e": "step", "id": d.get("toolCallId"), "title": short(title, 80), "detail": short(detail)},
+                                 input=full_input(d.get("toolName", ""), d.get("args") or {})))
         elif t == "tool_execution_end":
             r = d.get("result")
             r = " ".join(c.get("text", "") for c in r.get("content", []) if isinstance(c, dict)) if isinstance(r, dict) else str(r or "")
-            out.append({"e": "step_done", "id": d.get("toolCallId"), "ok": not d.get("isError"), "out": short(r, 120)})
+            out.append(self.more({"e": "step_done", "id": d.get("toolCallId"), "ok": not d.get("isError"), "out": short(r, 120)}, full=clip(r, tail=True)))
         elif t == "agent_end":
             err = getattr(self, "error", None)
             out.append({"e": "done", "ok": not err, "text": err or self.text, "context": self.context, "window": None, "ms": None})
@@ -422,7 +458,7 @@ def stop_shell(task_id):
     return bool(hits)
 
 
-def turn(text, model, effort, compact=False, name=None):
+def turn(text, model, effort, compact=False, name=None, verbose=False):
     engine, model = (model, None) if model in harness.H else ("claude", model)
     prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
@@ -437,7 +473,7 @@ def turn(text, model, effort, compact=False, name=None):
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
     emit(e="start", engine=engine, model=model or "default")
-    norm = Norm()
+    norm = Norm(verbose)
     try:
         cmd, t = mk(sid, text)
         new_sid, err = run(cmd, engine, t, norm, check=not compact)
@@ -489,7 +525,7 @@ def main():
     else:
         if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
             os.environ["GREENLIGHT_ONLY"] = opt("--only")
-        turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"))
+        turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args)
 
 
 if __name__ == "__main__":
