@@ -5,7 +5,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
-                                     # M: a claude model, or a harness name (codex|opencode|pi) for its default model
+                                     # M: a claude or gemini model, or a harness name (codex|opencode|pi|gemini) for its default model
   chat.py compact [--model M]       # claude only
   chat.py new                        # forget every harness's session (Clear)
   chat.py stop                       # kill the running turn
@@ -59,7 +59,7 @@ PROMPT = (
     "and the workspace already on it; `dash.py forge <owner/repo>` lists everything open in one repo. Suggest from the statuses: "
     "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
     "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
-    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi) each run in a Greenlight terminal tab, a tmux "
+    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
     "session on `tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: you can open those, not read them). "
     "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
     "`capture-pane -p -t '=SESSION:' -S -60` reads an agent's screen, to tell the user what it's doing or asking. When the user asks to "
@@ -107,6 +107,11 @@ def emit(**e):
 def short(s, n=160):
     s = " ".join(str(s).split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# Gemini CLI's built-in tools as the Claude Code names step_title and call know (same file_path/command/pattern params)
+GEMINI_TOOLS = {"run_shell_command": "Bash", "read_file": "Read", "read_many_files": "Read", "write_file": "Write", "replace": "Edit",
+                "glob": "Glob", "grep_search": "Grep", "web_fetch": "WebFetch", "google_web_search": "WebSearch", "invoke_agent": "Agent"}
 
 
 RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nice", "nohup", "exec", "timeout", "command"}  # name what they run
@@ -216,7 +221,7 @@ def call(name, inp):
 
 
 class Norm:
-    """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
+    """Each harness's JSON lines (claude/gemini stream-json, codex/opencode/pi json) → the app's events."""
 
     def __init__(self, verbose=False):
         self.verbose = verbose  # chat.py send --verbose: whole inputs/outputs on steps, and think events
@@ -236,6 +241,7 @@ class Norm:
         self.plan_t0 = self.plan_last = None  # the plan's first sight, and when an item last got done (this run's evidence of pace)
         self.plan_k = self.plan_base = self.plan_obs = 0  # items done now, done when first seen (untimed), updates that finished some
         self.plan_keys = None  # its items, so a replaced list starts its pace over
+        self.gem_open = False  # gemini: an assistant reply block is streaming (its deltas append to self.text)
 
     def more(self, e, **kw):
         """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
@@ -296,6 +302,13 @@ class Norm:
             elif e["e"] == "done":
                 self.running = []
         return out
+
+    @staticmethod
+    def whole(text):
+        """A whole message (codex, opencode) as text events. whole=True: voice mode doesn't speak it as it comes, since it can't tell a
+        progress note ("I'll check the board.") from the reply yet; at done it speaks the reply, the message the turn ended on.
+        It used to speak every note, then the reply, which restates them: the user heard the same phrase two or three times."""
+        return [{"e": "text_reset"}, {"e": "text", "delta": text, "whole": True}]
 
     def usage(self, u):
         return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
@@ -377,7 +390,7 @@ class Norm:
             out += self.think(it.get("text", ""))
         elif t == "item.completed" and it.get("type") == "agent_message":
             self.text = it["text"]
-            out += [{"e": "text_reset"}, {"e": "text", "delta": it["text"]}]
+            out += self.whole(it["text"])
         elif it.get("type") == "todo_list" and t in ("item.started", "item.updated", "item.completed"):
             out += self.plan([(x.get("text", ""), "completed" if x.get("completed") else "", None) for x in it.get("items") or [] if isinstance(x, dict)])
         elif it.get("type") in ("mcp_tool_call", "web_search") and t in ("item.started", "item.completed"):
@@ -418,7 +431,7 @@ class Norm:
                 out += self.todos((st.get("input") or {}).get("todos"))
         elif t == "text":
             self.text = pt.get("text", "")
-            out += [{"e": "text_reset"}, {"e": "text", "delta": self.text}]
+            out += self.whole(self.text)
         elif t == "reasoning":
             out.append({"e": "status", "text": "Thinking"})
             out += self.think(pt.get("text", ""))
@@ -430,6 +443,41 @@ class Norm:
             e = d.get("error") or {}
             out.append({"e": "done", "ok": False, "text": str((e.get("data") or {}).get("message") or e.get("name") or e),
                         "context": self.context, "window": None, "ms": None})
+        return out
+
+    def gemini(self, d):
+        """`gemini --output-format stream-json`: init, message (assistant deltas), tool_use, tool_result, error, result."""
+        t, out = d.get("type"), []
+        if t == "init":  # a new run (turn()'s retries reuse this Norm): its first delta starts a fresh reply
+            self.gem_open = False
+        elif t == "message" and d.get("role") == "assistant":
+            s = d.get("content") or ""
+            if not d.get("delta") or not self.gem_open:  # a new reply, or a whole one
+                self.text, self.gem_open = "", True
+                out.append({"e": "text_reset"})
+            self.text += s
+            out.append({"e": "text", "delta": s})
+        elif t == "tool_use":
+            self.gem_open = False  # text after a tool is the next reply block
+            name, inp = d.get("tool_name") or "tool", d.get("parameters") or {}
+            if isinstance(inp.get("include"), list):  # read_many_files: its paths, where attach.mentions and the step can see them
+                inp = {**inp, "path": " ".join(map(str, inp["include"]))}
+            name = GEMINI_TOOLS.get(name, name)
+            title, detail = step_title(name, inp)
+            out.append(self.more({"e": "step", "id": d.get("tool_id"), "title": short(title, 80), "detail": short(detail), "call": call(name, inp)},
+                                 input=full_input(name, inp)))
+        elif t == "tool_result":
+            r = str(d.get("output") or (d.get("error") or {}).get("message") or "")
+            out.append(self.more({"e": "step_done", "id": d.get("tool_id"), "ok": d.get("status") == "success", "out": short(r, 120)}, full=clip(r, tail=True)))
+        elif t == "error" and d.get("severity") != "error":  # a warning: the turn goes on
+            out.append({"e": "status", "text": short(d.get("message", ""), 80)})
+        elif t == "error":
+            self.error = d.get("message")
+        elif t == "result":
+            st = d.get("stats") or {}  # its input_tokens sum every request of the run, so they aren't the context size: none shown
+            ok = d.get("status") == "success"
+            text = self.text if ok else (d.get("error") or {}).get("message") or getattr(self, "error", None) or self.text or "Gemini CLI failed"
+            out.append({"e": "done", "ok": ok, "text": text, "context": self.context, "window": None, "ms": st.get("duration_ms")})
         return out
 
     def pi(self, d):
@@ -595,7 +643,7 @@ def stop_shell(task_id):
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
-    engine, model = (model, None) if model in harness.H else ("claude", model)
+    engine, model = harness.route(model)
     stored = []
     if files:
         try:

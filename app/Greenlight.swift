@@ -149,9 +149,10 @@ func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .d
 /// The chosen chat font: for the conversation's own text (messages, the composer, questions), not the chrome around it.
 func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font { sys(size: size, weight: weight, face: chatFont) }
 let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Haiku 5.5", "claude-haiku-5-5"),
-              ("Fable 5.1", "claude-fable-5-1"), ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi")]
-/// A model id is a Claude model, or another harness's name (it runs that harness's default model).
-func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model }
+              ("Fable 5.1", "claude-fable-5-1"), ("Gemini 4 Neon", "gemini-4-neon"),
+              ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
+/// A model id is a Claude model, a Gemini model (Gemini CLI runs it), or another harness's name (it runs that harness's default model).
+func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "gemini" : model }
 let efforts = ["low", "medium", "high", "xhigh", "max"]
 func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capitalized }  // display only; the stored value stays
 
@@ -2905,7 +2906,7 @@ final class Core: ObservableObject {
         }
     }
     @Published var effort = UserDefaults.standard.string(forKey: "effort") ?? "medium" { didSet { UserDefaults.standard.set(effort, forKey: "effort") } }
-    // The agent that designs dashboard pages and puck widgets (claude only).
+    // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one on Gemini CLI.
     @Published var designModel = UserDefaults.standard.string(forKey: "designModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(designModel, forKey: "designModel") } }
     @Published var designEffort = UserDefaults.standard.string(forKey: "designEffort") ?? "low" { didSet { UserDefaults.standard.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
@@ -3365,7 +3366,9 @@ final class Core: ObservableObject {
             if n > 0 { log(.chief, name, .status, "plan: \(k) of \(n) done" + (t.isEmpty ? "" : " · \(t)")) }
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
         case "text_reset": r.live = ""; voice.said = 0
-        case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
+        case "text":  // a whole message (codex, opencode) shows but isn't spoken yet: it may be a progress note the reply restates;
+            r.live += j["delta"] as? String ?? ""  // finished() speaks the reply (from said = 0) at done
+            if !r.watch && !r.checkIn && j["whole"] as? Bool != true { voice.live(r) }
         case "usage":
             if let c = j["context"] as? Int, c > 0 { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }
@@ -4637,6 +4640,10 @@ struct SettingsView: View {
     func claudeModelPicker(_ label: String, _ v: Binding<String>) -> some View {
         Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
     }
+    /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one (it runs on Gemini CLI there).
+    func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
+        Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+    }
 
     // MARK: This Mac
 
@@ -5004,9 +5011,9 @@ struct SettingsView: View {
             }
         }
         box("Background agents") {
-            row("Workspace pages", "Builds each workspace's page on the dashboard.") { claudeModelPicker("Workspace pages model", $c.designModel) }
+            row("Workspace pages", "Builds each workspace's page on the dashboard.") { writerModelPicker("Workspace pages model", $c.designModel) }
             dependent(off: false) {
-                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort) }
+                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: harnessOf(c.designModel) == "gemini") }
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
                     if c.designParallel > 0 {
                         Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
@@ -5016,14 +5023,14 @@ struct SettingsView: View {
                     }.labelsHidden().pickerStyle(.segmented).fixedSize()
                 }
             }
-            row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { claudeModelPicker("Suggestions model", $c.nextModel) }
+            row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { writerModelPicker("Suggestions model", $c.nextModel) }
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
             }
             row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
                 Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "gemini") } }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
