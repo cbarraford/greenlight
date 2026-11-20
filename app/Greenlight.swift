@@ -1795,21 +1795,21 @@ final class Voice: NSObject, ObservableObject {
             self.restart()
         }
     }
-    /// The engine stopped itself (a headset in or out): start it again, on a new engine if the old one won't (see start(attempt:)).
+    /// The engine stopped itself (a headset in or out): start it again. If it won't, voice mode stops and says so, and the next start
+    /// gets a new engine. Not a new one now: play() reads the engine off the main thread while voice mode is on.
     func restart() {
         do { try startEngine(); listen() }  // listen() is a no-op on GPT-Live, whose socket stays up
         catch {
             NSLog("voice: audio restart failed: %@", "\(error)")
-            freshEngine()
-            do { try startEngine(); listen() } catch {
-                core?.msgs.append(Msg(.note, "Voice mode stopped: the audio didn't restart after the devices changed (\(error.localizedDescription))."))
-                stopAll()
-            }
+            core?.msgs.append(Msg(.note, "Voice mode stopped: the audio didn't restart after the devices changed (\(error.localizedDescription)). Start it again to pick it up."))
+            stopAll()
+            staleEngine = true
         }
     }
 
     func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
     var starting = false, startGen = 0  // a start (and its retries) under way; stopAll() bumps startGen, which ends it
+    var staleEngine = false  // its restart failed: the next start begins on a new engine
     func start() {
         guard !on, !starting else { return }
         starting = true; startGen += 1
@@ -1830,6 +1830,7 @@ final class Voice: NSObject, ObservableObject {
             }
             self.isLive = live
             LivePreview.shared.stop()  // a voice preview would talk over voice mode
+            if self.staleEngine { self.freshEngine(); self.staleEngine = false }
             do { try self.startEngine() } catch {
                 // The first start often fails with AVAudio -10875 (kAudioUnitErr_FailedInitialization): the voice-processing unit
                 // didn't initialize. Retrying the same engine fails the same way, because enabling voice processing again does nothing
@@ -1858,6 +1859,7 @@ final class Voice: NSObject, ObservableObject {
     }
 
     /// Drops an engine whose start failed, voice processing and all, for a new one. The player moves to the new engine.
+    /// Only while voice mode is off: play() reads `engine` off the main thread, and bails out first when it's off.
     func freshEngine() {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
@@ -3150,7 +3152,7 @@ final class Core: ObservableObject {
 
     /// Mic button / voice shortcut: start recording, or stop and transcribe into the input box (not sent).
     func toggleVoice() {
-        if voice.on { return }  // voice mode has the mic
+        if voice.on || voice.starting { return }  // voice mode has the mic, or is about to
         if recording != nil { stopVoice() } else if !transcribing { startVoice() }
     }
 
