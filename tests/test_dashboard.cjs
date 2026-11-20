@@ -154,6 +154,45 @@ test("started: the sheet closes, the draft clears, a toast opens it in the Basem
   assert.equal(await page.$(".toast"), null);
 });
 
+test("an ambiguous goal pauses: chips answer preflight's questions, then the same task goes again with them; Start anyway forces it; an edit re-asks", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "make it better");
+  await page.press("#ps-task", "Enter");
+  const Q = {op: "new", arg: "widgets", paused: true, p_ambiguous: 0.9, questions: [
+    {id: "done", q: "What does done look like?", options: ["A draft PR with tests", "A working prototype I can try"]},
+    {id: "scope", q: "How far should it go?", options: ["The smallest change that works", "Investigate and report back first"]}]};
+  await page.evaluate(q => window.mc.tasked(q), Q);
+  assert.ok(await sheet(page), "the sheet closed on a pause");
+  assert.match(await page.textContent("#ps-ask"), /Two questions before it starts.*90% sure/);
+  assert.equal(await page.isDisabled("#ps-go"), true, "Start was live with nothing answered");
+  assert.match(await page.textContent("#ps-go"), /Start with answers/);
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), "A draft PR with tests", "the first chip doesn't have the focus");
+  await page.click("#ps-ask button:has-text('A working prototype I can try')");
+  assert.equal(await page.getAttribute("#ps-ask button:has-text('A working prototype I can try')", "aria-pressed"), "true");
+  assert.equal(await page.isDisabled("#ps-go"), true, "one of two answered is enough");
+  await page.fill("#ps-ask input[aria-label^='How far']", "Only the retry path");
+  await page.click("#ps-go");
+  const n = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(n.length, 2);
+  assert.deepEqual(JSON.parse(n[1].text).answers, {done: "A working prototype I can try", scope: "Only the retry path"});
+  await page.evaluate(q => window.mc.tasked(q), Q);  // asked again (say the other window sent it): Start anyway
+  await page.click("#ps-anyway");
+  const f = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(JSON.parse(f[2].text).force, true); assert.equal(JSON.parse(f[2].text).answers, undefined);
+  await page.evaluate(q => window.mc.tasked(q), Q);
+  await page.type("#ps-task", " now");  // a changed goal: its questions go, and it's judged afresh
+  assert.equal(await page.$("#ps-ask"), null); assert.equal(await page.$("#ps-anyway"), null);
+  assert.match(await page.textContent("#ps-go"), /^Start task/);
+  await page.press("#ps-task", "Enter");
+  const g = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(g.length, 4); assert.equal(JSON.parse(g[3].text).answers, undefined);
+  await page.keyboard.press("Escape");
+  await page.evaluate(q => window.mc.tasked(q), Q);  // the sheet closed before the pause came back: the toast says so
+  assert.match(await page.textContent(".toast"), /question about the goal first/);
+  assert.deepEqual(page._errs, []);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");
