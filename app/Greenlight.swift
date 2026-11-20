@@ -801,6 +801,14 @@ func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String
     return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
 }
 
+/// The window's scope for Chief's BOARD (`chat.py send --only`), from a page's focus(): its worktrees' paths and their repos, so a
+/// workspace created after the window listed them (`ade worktree create`) is on the board too. nil: the window shows every project.
+func focusScope(_ o: [String: Any]) -> String? {
+    guard let paths = o["paths"] as? [String] else { return nil }
+    let scope: [String: [String]] = ["paths": paths, "repos": o["repos"] as? [String] ?? []]
+    return (try? JSONSerialization.data(withJSONObject: scope, options: .sortedKeys)).flatMap { String(data: $0, encoding: .utf8) }
+}
+
 /// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
 func resolveHexes(_ said: [String], _ pucks: [[String: Any]]) -> [String] {
     let names = pucks.compactMap { $0["name"] as? String }
@@ -2253,9 +2261,9 @@ final class Core: ObservableObject {
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
-    var focusPaths: [String]?  // its workspaces: Chief's BOARD has only these (nil: the window shows every project)
+    var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
     var chatSend: String {
-        let only = focusPaths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) }.map { " --only \(shellQuote($0))" } ?? ""
+        let only = focusScope.map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
@@ -5382,11 +5390,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
-        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focus && term.focus())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
+        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
-            self.greenlight.focusPaths = o["paths"] as? [String]
+            self.greenlight.focusScope = focusScope(o)
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -6697,6 +6705,9 @@ func selfTest() {
     check("focus: the stage's card for the workspace you switched to",
           wsCard["title"] as? String == "mr-5339" && (wsCard["items"] as? [[String: String]])?.map { $0["label"]! } == ["!5339 receipts", "Needs you", "Next: review bot"]
           && (wsCard["items"] as? [[String: String]])?.first?["detail"] == "CI failed")
+    check("focus: Chief's BOARD is the window's worktrees and their repos, so a workspace made since is on it",
+          focusScope(["paths": ["/w/a"], "repos": ["greenlight"]]) == #"{"paths":["\/w\/a"],"repos":["greenlight"]}"#
+          && focusScope(["paths": ["/w/a"]]) == #"{"paths":["\/w\/a"],"repos":[]}"# && focusScope(["view": "overview"]) == nil)
     check("focus: Chief hears which window and workspace you were in",
           focusLine(terminal: 2, project: "Platform", ["name": "mr-5339", "path": "/w/mr-5339", "mr": "!5339"]) == "a Basement terminal window showing Platform, on the tab for workspace mr-5339 (/w/mr-5339, !5339)"
           && focusLine(terminal: nil, project: "", ["page": "acme/mr-5339", "view": "overview"]) == "the dashboard, with workspace acme/mr-5339 open"
