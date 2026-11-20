@@ -9,9 +9,10 @@ id=dev.greenlight.app
 [ "$name" = Greenlight ] || id=$id.$(printf %s "${name#greenlight-}" | tr -c 'A-Za-z0-9-' -)
 dest=~/Applications/$name.app
 # Built and signed aside, then moved in: a failed build (or signing) leaves the installed app as it was, and a running one
-# keeps its binary. Staged in the temp folder, not ~/Applications: a build killed mid-way (dev.py's timeout) leaves no
-# second signed copy where LaunchServices would find it.
-mkdir -p ~/Applications; stage=$(mktemp -d -t greenlight-stage) app=$stage/$name.app
+# keeps its binary. Staged in a hidden folder in your home, not ~/Applications: on the same volume, so the move is a rename, but
+# a build killed mid-way (dev.py's timeout) leaves no second signed copy where LaunchServices looks. Those are swept an hour on.
+find ~ -maxdepth 1 -name '.greenlight-stage.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+mkdir -p ~/Applications; stage=$(mktemp -d ~/.greenlight-stage.XXXXXX) app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
 trap 'rm -rf "$bin" "$stage"' EXIT
 # Command Line Tools swiftc: avoids needing the Xcode license accepted
@@ -65,8 +66,8 @@ id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print
 # keeps both. Picked by name, not by the listing's order, so one with two teams doesn't switch between them.
 line=$(security find-identity -v -p codesigning | grep '"Apple Development: ' | sort -t'"' -k2 | head -1 || true)
 # An expired one (or one that no longer validates) isn't listed with -v: fail, not Greenlight Dev, which your grants don't match
-if [ -z "$line" ] && security find-identity -p codesigning | grep -q '"Apple Development: '; then
-  echo "build.sh: error: your Apple Development cert isn't valid (expired?): renew it in Xcode → Settings → Accounts → Manage Certificates" >&2; exit 1
+if [ -z "$line" ] && security find-identity -p codesigning | grep '"Apple Development: ' >/dev/null; then
+  echo "build.sh: error: your Apple Development cert isn't valid: renew it if it expired (Xcode → Settings → Accounts → Manage Certificates), install Apple's WWDR intermediate if it's missing, or delete the cert to sign with Greenlight Dev again" >&2; exit 1
 fi
 apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"' -f2)
 # Its team is the cert's OU. Signing asks for the key once ("codesign wants to sign using…": Always Allow), on screen even
@@ -85,11 +86,13 @@ else
   codesign -fs "$id" --keychain "$kc" "$app" ||
     { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 fi
-# The old one goes with the staging folder, or back if the new one can't go in (or another build put one there meanwhile)
+# The old one goes with the staging folder, or back if the new one can't go in (unless another build put its own there meanwhile)
 [ ! -e "$dest" ] || mv "$dest" "$stage/old.app"
 if [ -e "$dest" ] || ! mv "$app" "$dest"; then
-  [ -e "$dest" ] || [ ! -e "$stage/old.app" ] || mv "$stage/old.app" "$dest"; echo "build.sh: error: couldn't move the new $name.app into ~/Applications" >&2; exit 1
+  [ -e "$dest" ] || [ ! -e "$stage/old.app" ] || mv "$stage/old.app" "$dest" || true; echo "build.sh: error: couldn't move the new $name.app into ~/Applications" >&2; exit 1
 fi
+# mv puts it inside a folder that turned up after the check (a build racing this one): take it out, leaving theirs
+if [ -e "$dest/$name.app" ]; then rm -rf "$dest/$name.app"; echo "build.sh: error: another build installed $name.app meanwhile" >&2; exit 1; fi
 app=$dest
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
