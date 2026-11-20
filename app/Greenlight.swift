@@ -6120,7 +6120,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path) }
         if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
-        if cmd == "inbox" { if l != nil { show() }; greenlight.settingsOpen = false; greenlight.inboxOpen.toggle() }  // one inbox, the main window's
+        if cmd == "inbox" { greenlight.settingsOpen = false; if l != nil { show(); greenlight.inboxOpen = true } else { greenlight.inboxOpen.toggle() } }  // one inbox, the main window's
         // An answer from a lifted workspace's page: the same as answering that question in the bell.
         if cmd == "answerPing", let id = b["id"] as? String, let text = b["text"] as? String,
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -6433,23 +6433,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return l
     }
     func newL1(_ only: [String]?, from: NSWindow?) {
-        let l = makeL1((l1s.keys.max() ?? 0) + 1, only: only, from: from)
+        // never a closed window's id: its chat-<n> cleanup is one ssh that may not have landed (host asleep) or may land late
+        let id = max(ud.integer(forKey: "l1Next"), (l1s.keys.max() ?? 0) + 1)
+        ud.set(id + 1, forKey: "l1Next")
+        let l = makeL1(id, only: only, from: from)
         saveL1s()
         l.w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func reopenL1s() {
+        guard !selftest else { return }  // not your windows and their chat-<n>
         let saved = ud.array(forKey: "l1Windows") as? [[String: Any]] ?? []
         for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: d["only"] as? [String]).w.orderFront(nil) } }
         if !saved.isEmpty { _ = termWindow }  // its page lists the projects (hidden): until it has, a window shows All projects
     }
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
     func closeL1(_ l: L1) {
-        ssh("\(l.c.chief) stop; \(l.c.chief) new; rm -rf \(greenlightHome)/chat-\(l.id)")
+        l.c.queue = []; l.c.proc?.terminate(); l.c.run = nil  // its turn's late result writes nothing (onExit checks run)
+        ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(greenlightHome) && rm -rf chat-\(l.id)")  // cd: a home with a space fails, not rm's word split
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
-        l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")  // the next one may reuse this id
-        ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
+        l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
+        l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
     }
 
     // MARK: the T orb and its terminal: login shells in tabs in their own window; the close button keeps them
