@@ -574,6 +574,42 @@ func sentences(_ s: String, from: Int) -> (said: [String], to: Int) {
     return (out, start)
 }
 
+/// What voice mode shows and says while Chief works, one per turn (it used to always be "One minute").
+let waitWords = """
+Pondering Mulling Musing Ruminating Cogitating Deliberating Contemplating Considering Reflecting Brooding Chewing Noodling
+Puzzling Figuring Reckoning Calculating Computing Crunching Tallying Weighing Sifting Sorting Combing Rummaging Digging
+Excavating Unearthing Spelunking Delving Probing Scouting Exploring Surveying Investigating Sleuthing Snooping Detecting Tracking
+Tracing Hunting Foraging Fishing Angling Trawling Dredging Mining Prospecting Panning Scavenging Gathering Collecting Harvesting
+Gleaning Brewing Steeping Simmering Stewing Marinating Percolating Fermenting Distilling Infusing Whisking Stirring Kneading
+Baking Roasting Toasting Sautéing Braising Caramelizing Seasoning Garnishing Plating Cooking Concocting Mixing Blending Churning
+Folding Proofing Tinkering Fiddling Twiddling Jiggling Wiggling Wrangling Juggling Shuffling Rearranging Untangling Unraveling
+Unknotting Unpacking Unscrambling Decoding Deciphering Decrypting Translating Parsing Reading Skimming Scanning Studying Cramming
+Researching Reviewing Assembling Building Constructing Crafting Forging Smithing Welding Soldering Wiring Rigging Engineering
+Architecting Drafting Sketching Doodling Drawing Painting Sculpting Whittling Carving Chiseling Polishing Buffing Sanding Honing
+Sharpening Tuning Calibrating Adjusting Tweaking Finessing Massaging Smoothing Ironing Tidying Arranging Organizing Filing
+Indexing Cataloging Labeling Stacking Packing Loading Booting Spinning Revving Warming Charging Powering Humming Buzzing Whirring
+Clicking Ticking Beeping Booping Bleeping Blipping Pinging Polling Querying Fetching Retrieving Summoning Conjuring Divining
+Scrying Channeling Manifesting Enchanting Spellcasting Alchemizing Transmuting Hatching Incubating Germinating Sprouting
+Blossoming Cultivating Gardening Pruning Weeding Watering Composting Nesting Burrowing Tunneling Navigating Charting Mapping
+Plotting Scheming Strategizing Planning Orchestrating Conducting Composing Harmonizing Improvising Riffing Jamming Drumming
+Strumming Whistling Daydreaming Wondering Imagining Envisioning Visualizing Dreaming Hypothesizing Theorizing Philosophizing
+Speculating Extrapolating Synthesizing Analyzing Diagnosing Triangulating Deducing Inferring Concluding Resolving Untwisting
+Clarifying Condensing Summarizing Paraphrasing Editing Proofreading Revising Rewriting Wordsmithing Scribbling Jotting Noting
+Annotating Highlighting Cross-referencing Double-checking Fact-checking Verifying Validating Testing Debugging Refactoring
+Optimizing Compiling Linting Diffing Merging Rebasing Committing Shipping Deploying Herding Shepherding Corralling Lassoing
+Wrestling Taming Coaxing Nudging Cajoling Persuading Negotiating Haggling Bartering Bargaining Galloping Trotting Moseying
+Sauntering Meandering Wandering Pacing Tiptoeing Scurrying Scampering Hustling Bustling Zooming Whooshing Zipping Accelerating
+Gearing Caffeinating Stretching Limbering Meditating Breathing Centering Focusing Concentrating Zeroing Homing Locking Aligning
+Syncing Buffering Rendering Pixelating Vectorizing Quantizing Tokenizing Embedding Inferencing Reasoning Thinking Processing
+Working Grinding Plugging Chugging Trundling Puttering Pottering Dawdling Lollygagging Dillydallying Shilly-shallying
+Flibbertigibbeting Bamboozling Befuddling Discombobulating Recombobulating Kerfuffling Hullabalooing Gallivanting Frolicking
+Cavorting Moonwalking Breakdancing Boogieing Shimmying Twirling Pirouetting Somersaulting Cartwheeling Snorkeling Scuba-diving
+Sailing Rowing Paddling Surfing Skating Gliding Soaring Hovering Orbiting Launching Rocketing Teleporting Time-traveling Warping
+Beaming Abacusing Slide-ruling Hmm-ing Umm-ing Head-scratching Chin-stroking Pipe-puffing Monocle-polishing Tea-sipping
+Coffee-brewing Lightbulbing Eureka-ing Aha-ing Puzzle-solving Rubik's-cubing Sudoku-ing Crosswording Chess-playing Checkmating
+Domino-toppling Jigsawing
+""".split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
+
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
 enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
@@ -1269,6 +1305,7 @@ final class Voice: NSObject, ObservableObject {
     let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
     var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
     var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var waitWord = "One minute"
     var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
@@ -1407,14 +1444,15 @@ final class Voice: NSObject, ObservableObject {
 
     func began(_ r: Run) {
         said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
+        waitWord = waitWords.randomElement()!
         guard on else { return }
-        wait("One minute", r.question)
+        wait(waitWord, r.question)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
-            self.say("One minute.")
+            self.say(self.waitWord)
         }
     }
-    func status(_ s: String) { if on && !shown { wait("One minute", s) } }
+    func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
     func live(_ r: Run) {
         guard on else { return }
         let st = staged(r.live), p = plain(st.text)
@@ -6180,6 +6218,7 @@ func selfTest() {
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
+    check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("voice: mood emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
