@@ -114,7 +114,7 @@ SHELLS = {"sh", "bash", "zsh"}
 SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude"}  # their subcommands name them
 NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
 WRAPPER_VERBS = {"run", "compose", "stash", "worktree", "remote"}  # …and after these: npm run build, git stash pop (not exec: a prompt)
-VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}
+VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}  # a subcommand tool's flags that take the next word
 AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt  # a subcommand tool's flags that take the next word
 RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
@@ -124,9 +124,6 @@ def cmd_title(cmd):
     """A shell command as what it ran, not "Ran a shell command": the first real program (the script, for an interpreter), with
     its subcommand (`cd x && python3 /a/greenlight.py scan | tail` → "Ran greenlight.py scan", `gh pr list -R a/b` → "Ran gh pr
     list"). Arguments stay out: the step's detail has the whole command. The generic line when nothing's left (echo, cd)."""
-    m = re.match(r"^\s*(?:\S*/)?(?:ba|z)?sh\s+-l?c\s+(['\"]?)(.*)\1\s*$", str(cmd or ""), re.S)
-    if m:  # bash -c 'cd /w && make test': what's inside, split on its own && and ;
-        return cmd_title(m.group(2))
     cmd = str(cmd or "")
     masked = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", lambda m: "x" * len(m.group()), cmd)  # separators inside quotes don't split
     cuts = [0] + [x for m in re.finditer(r"&&|\|\||;|\||\n", masked) for x in m.span()] + [len(cmd)]
@@ -152,6 +149,9 @@ def cmd_title(cmd):
                 i += 2 if w[i] in valued else 1
             w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
         prog, sub = os.path.basename(w[0]), []
+        if prog in ("claude", "codex"):  # a subcommand only right after it, unquoted: any other word is the prompt
+            m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", seg)
+            return "Ran " + prog + (" " + m.group(1) if m else "")
         if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
             i = 1
             while i < len(w) and len(sub) < (2 if prog in NOUN_VERB or sub[:1] and sub[0] in WRAPPER_VERBS else 1):
@@ -160,7 +160,7 @@ def cmd_title(cmd):
                         break
                     i += 2 if w[i] in VALUED else 1  # git -C /w status, gh pr --repo a/b list: flags before the words
                     continue
-                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]) or (prog in ("claude", "codex") and not sub and w[i] not in AGENT_SUBS):
+                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
                     break
                 sub.append(w[i])
                 i += 1
@@ -480,7 +480,9 @@ def run(cmd, engine, text, norm, check=False, guard=None):
     p.stdin.write(text)
     p.stdin.close()
     sid, done, private = None, False, set()
-    if norm.plan_keys is not None:  # a retry is a new process: the last run's plan, pace and steps aren't this one's
+    for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
+        emit(e="step_done", id=sid_, ok=False, out="")
+    if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
         emit(e="plan", done=0, total=0, title="", eta=None)
     norm.plan_t0, norm.plan_keys, norm.running = None, None, []
     hiding, needles = guard or watch_for_attachments()

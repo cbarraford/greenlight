@@ -453,7 +453,7 @@ func byline(_ r: Run, now: Date, lead: Bool) -> String {
     var parts = [String]()
     if lead {
         let plan = r.plan.flatMap { $0.title.isEmpty || $0.done >= $0.total ? nil : $0.title }
-        parts.append(r.steps.last.flatMap { $0.ok == nil ? $0.title : nil } ?? (r.thinking ? plan ?? "Thinking" : r.status))  // the newest step, as Activity: an older one left open (a run that died mid-call) isn't now
+        parts.append(r.steps.last { $0.ok == nil }?.title ?? (r.thinking ? plan ?? "Thinking" : r.status))  // parallel calls: the newest still going
     }
     if let p = r.plan, p.total > 0 { parts.append("\(p.done) of \(p.total) tasks done") }
     else if lead && !fin.isEmpty { parts.append("\(fin.count) step\(fin.count == 1 ? "" : "s") done" + (failed > 0 ? ", \(failed) failed" : "")) }
@@ -3318,7 +3318,7 @@ final class Core: ObservableObject {
     func stop() {
         guard let r = run, !r.stopping else { return }
         r.stopping = true
-        r.status = "Stopping"
+        r.status = "Stopping"; r.thinking = false
         ssh("\(chief) stop")
     }
 
@@ -3799,8 +3799,10 @@ struct RunCard: View, Looked {
         let b = byline(r, now: c.now, lead: false), by = b.isEmpty ? "" : " · " + b  // the plan, time left, what just finished
         // ponytail: HUD's step number isn't lit apart from the rest of the line
         if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(by.uppercased())\(tps.uppercased())" }
-        // the byline before time and speed: the card is narrow, and those two are on the live line under it too
-        let s = "\(n == 0 ? "No steps yet" : "Step \(n)")\(by) · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)"
+        // the byline before time and speed where the line may wrap (the card is narrow, and those two are on the live line under
+        // it too); last on one-line stats (Editorial's beside Stop, On Air's tag), so the clock isn't what's cut
+        let clock = " · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)", step = n == 0 ? "No steps yet" : "Step \(n)"
+        let s = lk.id == "editorial" || lk.id == "onair" ? step + clock + by : step + by + clock
         return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
     }
 }
