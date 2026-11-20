@@ -347,3 +347,39 @@ with tempfile.TemporaryDirectory() as _d:
     assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
     assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
 print("basement ok")
+
+# CI view: runs bucketed per UTC day (empty days kept), canceled apart, durations of finished runs only, a shared MR once
+_run = lambda id, ts, st, dur, ws="a", project="acme/widgets", ref="!7": {"id": id, "ts": ts, "status": st, "dur": dur, "ws": ws,
+                                                                        "project": project, "ref": ref, "web_url": "u", "url": "p" + id}
+_runs = [_run("1", "2026-11-01T23:59:00Z", "success", 20.0), _run("2", "2026-11-01T01:00:00Z", "failed", 4.0),
+         _run("3", "2026-11-03T10:00:00Z", "success", 30.0), _run("3", "2026-11-03T10:00:00Z", "success", 30.0, ws="b"),  # two workspaces, one MR
+         _run("4", "2026-11-03T11:00:00Z", "canceled", 9.0), _run("5", "2026-11-03T12:00:00Z", "running", None),
+         _run("6", "2026-11-03T13:00:00Z", "success", 10.0, project="acme/other", ref="!7"),  # same ref, another project: its own MR
+         _run("7", "2026-10-31T13:00:00Z", "failed", 1.0)]  # before the window
+_ag = dash.ci_aggregate(_runs, "2026-11-01", "2026-11-03")
+assert [d["day"] for d in _ag["days"]] == ["2026-11-01", "2026-11-02", "2026-11-03"]
+assert [(d["success"], d["failed"], d["canceled"], d["running"]) for d in _ag["days"]] == [(1, 1, 0, 0), (0, 0, 0, 0), (2, 0, 1, 1)]
+assert _ag["days"][2]["median_success"] == 20.0 and _ag["days"][1]["median_success"] is None and _ag["days"][0]["median_failed"] == 4.0
+assert _ag["totals"] == {"success": 3, "failed": 1, "canceled": 1, "running": 1, "runs": 6,
+                         "median_success": 20.0, "p90_success": 30.0, "median_failed": 4.0}, _ag["totals"]
+_w = {(m["project"], m["ref"]): m for m in _ag["mrs"]}
+assert len(_w) == 2 and [m["project"] for m in _ag["mrs"]] == ["acme/other", "acme/widgets"]  # newest run first
+_m = _w[("acme/widgets", "!7")]
+assert (_m["success"], _m["failed"], _m["canceled"], _m["running"]) == (2, 1, 1, 1) and _m["median"] == 20.0
+assert _m["statuses"] == ["failed", "success", "success", "canceled", "running"] and _m["last"]["status"] == "running"
+# fetching: a finished pipeline's duration is asked once, then served from `seen`; a running one is asked again next time
+_rows = [{"name": "a", "project": "acme/widgets", "forge": "gitlab", "mr": {"iid": 7, "ref": "!7", "web_url": "u"}},
+         {"name": "gone", "project": "acme/widgets", "mr": None}]
+_pls = [{"id": 1, "status": "success", "created_at": "2026-11-02T00:00:00Z", "web_url": "p1"},
+        {"id": 2, "status": "running", "created_at": "2026-11-02T01:00:00Z", "web_url": "p2"},
+        {"id": 3, "status": "failed", "created_at": "2026-10-01T00:00:00Z", "web_url": "p3"}]
+with mock.patch.object(dash.greenlight, "gl_all", return_value=_pls), mock.patch.object(dash.greenlight, "gl", return_value={"duration": 90}) as _gl:
+    _seen = {}
+    _rs, _er = dash.ci_runs(_rows, "2026-11-01T00:00:00Z", _seen)
+    assert not _er and [(x["id"], x["status"], x["dur"]) for x in _rs] == [("gl1", "success", 1.5), ("gl2", "running", None)]
+    assert _gl.call_count == 1 and list(_seen) == ["gl1"]
+    _rs, _ = dash.ci_runs(_rows, "2026-11-01T00:00:00Z", _seen)
+    assert _gl.call_count == 1 and _rs[0]["ws"] == "a" and _rs[0]["dur"] == 1.5
+with mock.patch.object(dash.greenlight, "gl_all", side_effect=RuntimeError("403")):
+    assert dash.ci_runs(_rows, "2026-11-01T00:00:00Z") == ([], ["a: 403"])  # one MR's error is reported, not raised
+print("ci ok")
