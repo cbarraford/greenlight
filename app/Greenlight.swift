@@ -896,13 +896,13 @@ struct Activity: View {
     }
 }
 
-/// A workspace's agent (Claude Code, Codex…) from dash.py's snapshot; id is the worktree's path.
+/// A workspace's agent (Claude Code, Codex…) that's working or asking you, from dash.py's snapshot (finished ones aren't counted); id is the worktree's path.
 struct Agent: Equatable, Identifiable { let id: String, name: String, state: String, type: String }
 func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
     pucks.compactMap { p in
-        guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, st != "none", let path = p["path"] as? String else { return nil }
+        guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, ["working", "waiting"].contains(st), let path = p["path"] as? String else { return nil }
         return Agent(id: path, name: p["name"] as? String ?? path, state: st, type: a["type"] as? String ?? "")
-    }.sorted { ($0.state == "waiting" ? 0 : $0.state == "working" ? 1 : 2, $0.name) < ($1.state == "waiting" ? 0 : $1.state == "working" ? 1 : 2, $1.name) }
+    }.sorted { ($0.state != "waiting", $0.name) < ($1.state != "waiting", $1.name) }
 }
 
 enum Talk { case speaking, listening, thinking }
@@ -4378,9 +4378,9 @@ struct ChatView: View, Looked {
     /// The agents running in your workspaces: a dot for the busiest (amber asking you, blue working), a pick opens its terminal.
     var agentsButton: some View {
         let a = c.agents, onair = lk.id == "onair", n = a.count
-        let dot = a.contains { $0.state == "waiting" } ? needs : a.contains { $0.state == "working" } ? working : dim
+        let dot = a.contains { $0.state == "waiting" } ? needs : working
         let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
-        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : g.state == "working" ? "working" : "idle")\(g.type.isEmpty ? "" : " · \(g.type)")" }
+        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : "working")\(g.type.isEmpty ? "" : " · \(g.type)")" }
         return Menu {
             ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
         } label: {
@@ -6302,7 +6302,7 @@ func selfTest() {
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
     check("agents button: agents only, the one asking you first",
-          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "none"]],
+          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
                     ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
