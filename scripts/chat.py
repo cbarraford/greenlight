@@ -115,7 +115,7 @@ SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", 
 NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
 WRAPPER_VERBS = {"run", "compose", "stash", "worktree", "remote"}  # …and after these: npm run build, git stash pop (not exec: a prompt)
 VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}  # a subcommand tool's flags that take the next word
-AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt  # a subcommand tool's flags that take the next word
+AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt
 RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
@@ -127,7 +127,7 @@ def cmd_title(cmd):
     cmd = str(cmd or "")
     masked = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", lambda m: "x" * len(m.group()), cmd)  # separators inside quotes don't split
     cuts = [0] + [x for m in re.finditer(r"&&|\|\||;|\||\n", masked) for x in m.span()] + [len(cmd)]
-    for seg in (cmd[cuts[i]:cuts[i + 1]] for i in range(0, len(cuts), 2)):
+    for seg, bare in ((cmd[cuts[i]:cuts[i + 1]], masked[cuts[i]:cuts[i + 1]]) for i in range(0, len(cuts), 2)):
         w = [x.strip("'\"()") for x in seg.split()]
         w = [x for x in w if x and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=|^\d?[<>]", x)]  # env assignments, redirections
         while w and w[0] in ("do", "then", "else", "!"):
@@ -150,7 +150,7 @@ def cmd_title(cmd):
             w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
         prog, sub = os.path.basename(w[0]), []
         if prog in ("claude", "codex"):  # a subcommand only right after it, unquoted: any other word is the prompt
-            m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", seg)
+            m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", bare)  # quotes blanked
             return "Ran " + prog + (" " + m.group(1) if m else "")
         if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
             i = 1
@@ -481,7 +481,7 @@ def run(cmd, engine, text, norm, check=False, guard=None):
     p.stdin.close()
     sid, done, private = None, False, set()
     for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
-        emit(e="step_done", id=sid_, ok=False, out="")
+        emit(e="step_done", id=sid_, ok=False, out="interrupted")
     if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
         emit(e="plan", done=0, total=0, title="", eta=None)
     norm.plan_t0, norm.plan_keys, norm.running = None, None, []

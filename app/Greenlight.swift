@@ -3351,7 +3351,7 @@ final class Core: ObservableObject {
             log(.chief, name, .call, r.call.isEmpty ? [s.title, s.detail].filter { !$0.isEmpty }.joined(separator: ": ") : r.call)
             if let input = j["input"] as? String, !r.call.contains(input) { log(.chief, name, .input, input) }  // the whole call, when the line cut it short
         case "step_done":
-            if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
+            if let i = r.steps.lastIndex(where: { $0.id == j["id"] as? String }) {  // the newest: a rerun's codex reuses item ids
                 r.steps[i].ok = j["ok"] as? Bool ?? true
                 r.steps[i].out = j["out"] as? String ?? ""
                 r.steps[i].end = Date()
@@ -3688,7 +3688,7 @@ struct RunCard: View, Looked {
         if lk.id == "editorial" {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("IN PROGRESS").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
-                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(1)
+                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(2)
                 Spacer(minLength: 4)
                 stop
             }
@@ -3800,9 +3800,9 @@ struct RunCard: View, Looked {
         // ponytail: HUD's step number isn't lit apart from the rest of the line
         if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(by.uppercased())\(tps.uppercased())" }
         // the byline before time and speed where the line may wrap (the card is narrow, and those two are on the live line under
-        // it too); last on one-line stats (Editorial's beside Stop, On Air's tag), so the clock isn't what's cut
+        // it too); last on On Air's one-line tag, so the clock isn't what's cut
         let clock = " · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)", step = n == 0 ? "No steps yet" : "Step \(n)"
-        let s = lk.id == "editorial" || lk.id == "onair" ? step + clock + by : step + by + clock
+        let s = lk.id == "onair" ? step + clock + by : step + by + clock
         return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
     }
 }
