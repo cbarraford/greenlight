@@ -115,6 +115,9 @@ new = {"choice": "fix-002", "index": 0, "prob": 0.96, "tier": 1}
 rid = decisions.asked("Work next?\nOptions: fix-002 | later", key="fix-002", kind="agent-stuck", proposal=old)
 assert decisions.asked("Work next?\nOptions: fix-002 | later", key="fix-002", kind="agent-stuck", proposal=new) == rid
 assert next(r for r in recs() if r["id"] == rid)["proposal"] == new
+changed = decisions.asked("Work next?\nOptions: later | fix-002", key="fix-002", kind="agent-stuck", proposal=new | {"index": 1})
+assert changed != rid and next(r for r in recs() if r["id"] == rid)["closed"] == "superseded"
+assert next(r for r in recs() if r["id"] == changed)["options"] == ["later", "fix-002"]
 
 # AskUserQuestion (an on-demand run): the PostToolUse hook gets the questions and the answers at once
 ask = {"questions": [
