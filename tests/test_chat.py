@@ -61,7 +61,7 @@ out(type="result", result=reply, is_error=False, duration_ms=10)
 """
 
 
-def turn(tmp_path, monkeypatch, msg):
+def turn(tmp_path, monkeypatch, msg, verbose=False):
     fake = tmp_path / "claude"
     fake.write_text(FAKE)
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -70,7 +70,7 @@ def turn(tmp_path, monkeypatch, msg):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
-    chat.turn(msg, "claude-haiku-5-5", None)
+    chat.turn(msg, "claude-haiku-5-5", None, verbose=verbose)
     prompts = [json.loads(l) for l in open(str(fake) + ".log")]
     return events, prompts
 
@@ -238,3 +238,36 @@ def test_prompt_no_mood_emoji():
     """Replies start naturally: no emoji opening line; the other reply rules stay."""
     assert "three emoji" not in chat.PROMPT and "emotional state" not in chat.PROMPT
     assert "[hexes: name, name]" in chat.PROMPT and "Options: first | second | third" in chat.PROMPT
+
+
+def test_verbose_adds_whole_input_output_and_thinking():
+    """Settings › Verbose activity: the same events plus the whole call and its output, and thinking as think events."""
+    long_out = "\n".join(f"line {i}" for i in range(2000))
+    use = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                                                         "input": {"command": "git status\ngit log -3", "description": "Look"}}]}}
+    res = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": long_out}]}]}}
+    think = {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "Check CI first."}}}
+    v, c = Norm(verbose=True), Norm()
+    step = v.claude(use)[0]
+    assert step["input"] == "git status\ngit log -3" and step["call"] == c.claude(use)[0]["call"]
+    done = v.claude(res)[0]
+    assert done["full"].endswith("line 1999") and done["full"].startswith("…") and len(done["full"]) == 4000  # the tail, newlines kept
+    assert done["out"] == c.claude(res)[0]["out"]
+    assert {"e": "think", "delta": "Check CI first."} in v.claude(think)
+    assert [e["e"] for e in c.claude(think)] == ["status"]  # concise: no think, no extra keys
+    assert "input" not in c.claude(use)[0] and "full" not in c.claude(res)[0]
+    other = v.claude({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/a/b.py"}}]}})[0]
+    assert other["input"] == '{"file_path": "/a/b.py"}', other
+    x = Norm(verbose=True)  # codex: the whole command, its output, its reasoning
+    assert x.codex({"type": "item.started", "item": {"id": "i", "type": "command_execution", "command": "bash -lc 'make test'"}})[0]["input"] == "make test"
+    assert x.codex({"type": "item.completed", "item": {"id": "i", "type": "command_execution", "exit_code": 1, "aggregated_output": "FAIL x\n"}})[0]["full"] == "FAIL x"
+    assert x.codex({"type": "item.completed", "item": {"id": "r", "type": "reasoning", "text": "**Plan**"}}) == [{"e": "think", "delta": "**Plan**"}]
+    assert Norm().codex({"type": "item.completed", "item": {"id": "r", "type": "reasoning", "text": "**Plan**"}}) == []
+
+
+def test_verbose_through_run(tmp_path, monkeypatch):
+    events, _ = turn(tmp_path, monkeypatch, "SHELL then answer", verbose=True)
+    step, done = next(e for e in events if e["e"] == "step"), next(e for e in events if e["e"] == "step_done")
+    assert step["input"] == "ls" and done["full"] == "a b", events
+    events, _ = turn(tmp_path, monkeypatch, "SHELL then answer")
+    assert not any("input" in e or "full" in e for e in events), events
