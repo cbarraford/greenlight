@@ -591,6 +591,23 @@ body:has(>main.ov){background:var(--canvas)}  /* the toast's row reads as part o
 #pp .tile input:checked{box-shadow:none;background:var(--amb) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231C1C1F' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E") center/11px no-repeat}
 #pp .tile>span,#pp .pn button>span{flex:1;min-width:0} #pp .tile b,#pp .tile small,#pp .pn b,#pp .pn small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #pp .tile b,#pp .pn b{font-weight:600}
 #pp .tile small,#pp .pn small{color:var(--dim);font-size:11.5px;font-weight:400}
+/* CI view: runs per day across the tracked MRs/PRs (dash.py ci) */
+.ci{padding:16px 20px 28px;display:flex;flex-direction:column;gap:14px;max-width:1200px}
+.ci-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.ci-top .sp{flex-grow:1} .ci-top .muted{font-size:var(--fs-2)}
+.ci-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.ci-tile{background:var(--card);border:1px solid var(--card-line);border-radius:var(--r-2);padding:10px 12px}
+.ci-tile b{display:block;font-size:var(--fs-6);line-height:var(--lh-6);font-weight:700;font-variant-numeric:tabular-nums}
+.ci-tile span{font-size:var(--fs-2);color:var(--text3)}
+.ci-card{background:var(--card);border:1px solid var(--card-line);border-radius:var(--r-2);padding:12px 14px}
+.ci-card h3{margin:0 0 8px;font-size:var(--fs-3);font-weight:600;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.ci-card h3 .lg{font-weight:400}
+.ci-card svg{display:block;width:100%;height:auto;overflow:visible}
+.ci-card svg text{fill:var(--text3);font-size:10px;font-family:var(--font);font-variant-numeric:tabular-nums}
+.ci-card svg .grid{stroke:var(--hair)} .ci-card svg rect.hit{fill:transparent} .ci-card svg rect.hit:hover{fill:var(--glass)}
+.ci-runs{display:inline-flex;gap:1px;align-items:flex-end;height:18px;vertical-align:middle}
+.ci-runs i{width:4px;border-radius:1px;min-height:2px}
+.ci-err{color:var(--red-ink);font-size:var(--fs-2)}
 </style>
 </head>
 <body>
@@ -616,7 +633,8 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 // everywhere else: what the MR still needs, not the step's goal ("No conflicts" read as a status when it meant "has conflicts")
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
-const ui = {view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}};
+const ui = {ci: {days: [7, 14, 30].includes(+localGet("ciDays")) ? +localGet("ciDays") : 30, proj: localGet("ciProj") || null, data: null, loading: false, err: null},
+  view: localGet("view") || "overview", listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: (localGet("agentsFolded") ?? "1") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -1013,8 +1031,8 @@ function topBar(){
   const bits = [att && h("span", {style:`color:${ink(n.crashed && !n.needs ? "--red" : "--orange")}`}, `${att} need${att > 1 ? "" : "s"} attention`), !att && n.working && `${n.working} working`].filter(Boolean);
   bar.append(h("div", {class:"title"}, h("b", {}, ui.snap ? `${total} workspaces` : "Workspaces"),
       h("span", {}, bits.flatMap((b, i) => i ? [" · ", b] : [b]))),
-    h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
-      onclick: () => { ui.view = v; localSet("view", v); render() }}, v === "overview" ? "Overview" : "List"))),
+    h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list", "ci"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
+      onclick: () => { ui.view = v; localSet("view", v); render() }}, {overview: "Overview", list: "List", ci: "CI"}[v]))),
     h("span", {class:"qwrap" + (live ? "" : " wait")}, icon("search"), h("input", {class:"search", id:"q", type:"search", readonly: !live, "aria-disabled": live ? null : "true", placeholder:"Search", value: ui.q, "aria-label":"Search workspaces",
       oninput: e => { ui.q = e.target.value; renderMain() }})),
     h("button", {class:"btn" + (live ? " go" : none ? "" : " ghost"), title:"Describe a task; it starts in a new workspace", onclick: taskSheet}, PLUS, "New task"), ...barTail().filter(Boolean));  // not connected yet: the status leads, not this
@@ -1423,6 +1441,91 @@ function renderNone(main){  // no workspaces at all: start one; all hidden by th
     none ? h("button", {class:"btn primary", onclick: taskSheet}, PLUS.cloneNode(true), "New task")
       : h("button", {class:"btn primary", onclick: () => { ui.paths = null; post({cmd: "project", only: null}); ui.showParked = true; render() }}, "Clear filters")));
 }
+/* ---------- CI view (dash.py ci) ---------- */
+const CI_TONE = {success: "--green", failed: "--red", canceled: "--gray", running: "--blue"};
+function requestCI(fresh){
+  ui.ci.loading = true; ui.ci.err = null;
+  post({cmd: "ci", days: ui.ci.days, fresh: !!fresh});
+}
+function ciPart(){ const d = ui.ci.data; if (!d || d.error) return null;
+  return ui.ci.proj && d.projects && d.projects[ui.ci.proj] ? d.projects[ui.ci.proj] : d.all }
+function ciTick(i, n){ const k = Math.ceil(n / 8); return i === n - 1 || (i % k === 0 && n - 1 - i >= k / 2) }  // the last day always, never crowded by the one before
+function ciMin(v){ return v == null ? "—" : v < 10 ? `${v.toFixed(1)}m` : `${Math.round(v)}m` }
+function ciBars(days){  // stacked success / failed / canceled per day
+  const W = 720, H = 150, L = 28, B = 18, n = days.length || 1, bw = (W - L) / n;
+  const tot = d => d.success + d.failed + d.canceled + d.running, max = Math.max(1, ...days.map(tot));
+  const top = Math.max(1, Math.ceil(max / 5) * 5), y = v => (H - B) * (1 - v / top);
+  const g = s("svg", {viewBox:`0 0 ${W} ${H}`, role:"img", "aria-label":`CI runs per day: ${days.map(d => `${d.day} ${d.success} passed ${d.failed} failed ${d.canceled} canceled`).join("; ")}`});
+  for (const v of [0, top / 2, top]) g.append(s("line", {class:"grid", x1:L, x2:W, y1:y(v), y2:y(v)}), s("text", {x:L - 4, y:y(v) + 3, "text-anchor":"end"}, String(Math.round(v))));
+  days.forEach((d, i) => {
+    const x = L + i * bw + bw * .15, w = Math.max(1, bw * .7); let acc = 0;
+    for (const k of ["success", "failed", "canceled", "running"]) if (d[k]) {
+      g.append(s("rect", {x, width:w, y:y(acc + d[k]), height:y(acc) - y(acc + d[k]), rx:1.5, fill:c(CI_TONE[k])})); acc += d[k] }
+    g.append(s("rect", {class:"hit", x:L + i * bw, width:bw, y:0, height:H - B},
+      s("title", {}, `${d.day}: ${d.success} passed · ${d.failed} failed · ${d.canceled} canceled${d.running ? ` · ${d.running} running` : ""}`)));
+    if (ciTick(i, n)) g.append(s("text", {x:L + i * bw + bw / 2, y:H - 4, "text-anchor":"middle"}, d.day.slice(5)));
+  });
+  return g;
+}
+function ciDurations(days){  // median and p90 minutes of passing runs, median of failing ones, per day
+  const W = 720, H = 130, L = 28, B = 18, n = days.length || 1, bw = (W - L) / n, X = i => L + i * bw + bw / 2;
+  const max = Math.max(1, ...days.flatMap(d => [d.p90_success, d.median_success, d.median_failed].filter(v => v != null)));
+  const top = Math.ceil(max / 10) * 10, y = v => (H - B) * (1 - v / top);
+  const g = s("svg", {viewBox:`0 0 ${W} ${H}`, role:"img", "aria-label":"Minutes per run, per day"});
+  for (const v of [0, top / 2, top]) g.append(s("line", {class:"grid", x1:L, x2:W, y1:y(v), y2:y(v)}), s("text", {x:L - 4, y:y(v) + 3, "text-anchor":"end"}, `${Math.round(v)}`));
+  const line = (k, attrs) => { let dd = "", up = false;
+    days.forEach((d, i) => { if (d[k] == null) { up = false; return } dd += `${up ? "L" : "M"}${X(i).toFixed(1)} ${y(d[k]).toFixed(1)}`; up = true });
+    if (dd) g.append(s("path", {d: dd, fill:"none", "stroke-width":2, "stroke-linejoin":"round", ...attrs})) };
+  line("p90_success", {stroke:c("--green"), "stroke-dasharray":"3 3", opacity:.55});
+  line("median_success", {stroke:c("--green")});
+  days.forEach((d, i) => {
+    if (d.median_success != null) g.append(s("circle", {cx:X(i), cy:y(d.median_success), r:2.5, fill:c("--green")}));
+    if (d.median_failed != null) g.append(s("circle", {cx:X(i), cy:y(d.median_failed), r:3, fill:c("--red")}));
+    g.append(s("rect", {class:"hit", x:L + i * bw, width:bw, y:0, height:H - B},
+      s("title", {}, `${d.day}: passing median ${ciMin(d.median_success)}, p90 ${ciMin(d.p90_success)} · failing median ${ciMin(d.median_failed)}`)));
+    if (ciTick(i, n)) g.append(s("text", {x:X(i), y:H - 4, "text-anchor":"middle"}, d.day.slice(5)));
+  });
+  return g;
+}
+function renderCI(main){
+  const st = ui.ci, d = st.data, part = ciPart(), wrap = h("div", {class:"ci"});
+  if (!d && !st.loading && !st.err) requestCI(false);
+  const projs = d && d.projects ? Object.keys(d.projects) : [];
+  wrap.append(h("div", {class:"ci-top"},
+    h("div", {class:"seg", role:"group", "aria-label":"Project"}, [null, ...projs].map(p => h("button", {"aria-pressed": String((st.proj || null) === p),
+      onclick: () => { st.proj = p; localSet("ciProj", p || ""); renderMain() }}, p ? p.split("/").pop() : "All projects"))),
+    h("span", {class:"sp"}),
+    h("div", {class:"seg", role:"group", "aria-label":"Days"}, [7, 14, 30].map(n => h("button", {"aria-pressed": String(st.days === n),
+      onclick: () => { if (st.days === n) return; st.days = n; localSet("ciDays", String(n)); st.data = null; requestCI(false); renderMain() }}, `${n} days`))),
+    h("span", {class:"muted"}, st.loading ? "Loading CI…" : d && d.ts ? (a => a === "now" ? "Updated just now" : `Updated ${a} ago`)(ago((Date.now() / 1000 - d.ts) / 3600)) : ""),
+    h("button", {class:"btn", disabled: st.loading, title:"Fetch the pipelines again (else answered from a 15-minute cache)", onclick: () => { requestCI(true); renderMain() }}, icon("rescan", 13), "Refresh")));
+  if (st.err || (d && d.error)) wrap.append(h("p", {class:"ci-err", role:"alert"}, st.err || d.error));
+  if (!part) { if (!st.err) wrap.append(h("p", {class:"muted"}, "Fetching pipelines for every tracked MR and PR. The first load takes about a minute.")); main.append(wrap); return }
+  const t = part.totals, done = t.success + t.failed, pct = done ? Math.round(100 * t.success / done) : null;
+  wrap.append(h("div", {class:"ci-tiles"},
+    [[t.success, "passed", "--green"], [t.failed, "failed", "--red"], [t.canceled, "canceled", "--gray"]].map(([v, l, k]) =>
+      h("div", {class:"ci-tile"}, h("b", {style:`color:${ink(k)}`}, String(v)), h("span", {}, `${l}${l === "passed" && pct != null ? ` · ${pct}% of finished` : ""}`))),
+    h("div", {class:"ci-tile"}, h("b", {}, ciMin(t.median_success)), h("span", {}, `median passing run · p90 ${ciMin(t.p90_success)} · failing ${ciMin(t.median_failed)}`))));
+  const lg = (k, l) => h("span", {class:"lg"}, h("i", {style:`background:${c(k)}`}), l);
+  wrap.append(h("div", {class:"ci-card"}, h("h3", {}, `Runs per day (UTC) · ${part.start} → ${part.end}`, lg("--green", "passed"), lg("--red", "failed"), lg("--gray", "canceled"), t.running ? lg("--blue", "running") : null), ciBars(part.days)));
+  wrap.append(h("div", {class:"ci-card"}, h("h3", {}, "Minutes per run", lg("--green", "passing median (dashed: p90)"), lg("--red", "failing median")), ciDurations(part.days)));
+  const mrs = arr(d.all.mrs).filter(m => !st.proj || m.project === st.proj);
+  wrap.append(h("div", {class:"ci-card"}, h("h3", {}, `By workspace · ${mrs.length} MR${mrs.length === 1 ? "" : "s"}`),
+    h("table", {class:"w-table"}, h("tr", {}, ["Workspace", "MR", "Passed", "Failed", "Canceled", "Median", "Runs (oldest → newest)", "Latest"].map(x => h("th", {}, x))),
+      mrs.map(m => { const mx = Math.max(1, ...arr(m.durs).map(num));
+        return h("tr", {},
+          h("td", {}, puckOf(m.ws) ? h("a", {href:"#", onclick: e => { e.preventDefault(); openPage(m.ws) }}, short(m.ws, 40)) : short(m.ws, 40),
+            h("div", {class:"muted", style:"font-size:var(--fs-1)"}, m.project.split("/").pop())),
+          h("td", {}, m.web_url ? h("a", {href: m.web_url}, m.ref) : m.ref),
+          h("td", {}, String(m.success)), h("td", {style: m.failed ? `color:${ink("--red")}` : null}, String(m.failed)), h("td", {}, String(m.canceled)),
+          h("td", {}, ciMin(m.median)),
+          h("td", {}, h("span", {class:"ci-runs", "aria-label": arr(m.statuses).join(", ")}, arr(m.statuses).map((x, i) =>
+            h("i", {style:`height:${Math.max(2, Math.round(18 * num(m.durs[i]) / mx))}px;background:${c(CI_TONE[x] || "--gray")}`, title:`${x} · ${ciMin(m.durs[i])}`})))),
+          h("td", {}, h("a", {href: m.last.url, style:`color:${ink(CI_TONE[m.last.status] || "--gray")}`}, m.last.status), ` ${ciMin(m.last.dur)} · ${m.last.ts.slice(5, 16).replace("T", " ")}`));
+      }))));
+  if (arr(d.errors).length) wrap.append(h("p", {class:"ci-err"}, `Couldn't read ${d.errors.length} MR${d.errors.length > 1 ? "s" : ""}: ${d.errors.slice(0, 3).join("; ")}`));
+  main.append(wrap);
+}
 function renderMain(){
   const main = document.getElementById("main");
   const keep = main.scrollTop, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
@@ -1441,6 +1544,7 @@ function renderMain(){
   if (ui.page) renderPage(main);
   else if (!shows("hex")) { if (shows("agents")) main.append(agentsStrip()) }  // a view's own window; the hive stays in the main one
   else if (!shown().length) renderNone(main);  // one empty state for every view
+  else if (ui.view === "ci") renderCI(main);
   else if (ui.view === "list" || main.clientWidth < 560) renderList(main);
   else renderOverview(main);
   main.scrollTop = keep;
@@ -1943,6 +2047,9 @@ window.mc = {
     if (r.error) { delete ui.parking[r.name]; console.log("dash: park failed:", r.error); render() }
   },
   tasked(r){ tasked(r) },
+  ci(r){ ui.ci.loading = false; if (r.error && !r.all) ui.ci.err = r.error; else { ui.ci.data = r; ui.ci.err = null }
+    if (ui.ci.proj && r.projects && !r.projects[ui.ci.proj]) ui.ci.proj = null;
+    if (ui.view === "ci" && !ui.page) renderMain() },
   rescanned(code){ if (code) { ui.rescan = 0; console.log("dash: rescan failed, exit " + code) } footer() },
   update(snap){
     if (snap.error) { console.log("dash:", snap.error); return }
