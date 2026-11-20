@@ -38,6 +38,46 @@ def test_norm():
     assert step_title("mcp__x__do_thing", {"q": "z"}) == ("do thing", "z")
 
 
+def test_codex_meter_is_the_latest_request_not_the_running_total(tmp_path, monkeypatch):
+    """turn.completed's input_tokens is the thread's cumulative total (34,738 → 69,831 for two ~35k turns): the meter
+    reads the rollout's last token_count instead (when its running total says it's this turn's), and with no rollout,
+    or only the previous turn's, sends context 0 and no window: the app keeps its last reading, never a wrong % or the total."""
+    monkeypatch.setattr(chat, "CODEX_SESSIONS", str(tmp_path))
+    monkeypatch.setattr(chat.time, "sleep", lambda s: None)
+    tid = "01a1fa73-aaaa-7bbb-8ccc-0123456789ab"
+    day = tmp_path / "2026" / "11" / "20"
+    day.mkdir(parents=True)
+    rollout = day / f"rollout-2026-11-20T14-34-00-{tid}.jsonl"
+
+    def tc(last, total, window=258400):  # the shape of a real rollout's token_count
+        return json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": total, "total_tokens": total + 9},
+            "last_token_usage": {"input_tokens": last, "total_tokens": last + 9}, "model_context_window": window}}}) + "\n"
+
+    def turn(total):
+        n = Norm()
+        n.codex({"type": "thread.started", "thread_id": tid})
+        n.codex({"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": "ok"}})
+        return n.codex({"type": "turn.completed", "usage": {"input_tokens": total, "output_tokens": 5}})[0]
+
+    rollout.write_text('{"type": "session_meta", "payload": {"id": "%s"}}\n' % tid + tc(34738, 34738)
+                       + '{"type": "event_msg", "payload": {"type": "token_count", "info": null}}\n')
+    d = turn(34738)
+    assert (d["context"], d["window"]) == (34747, 258400), d
+    d = turn(69831)  # the resumed turn's token_count isn't written yet: not the previous turn's 13%
+    assert d["ok"] and d["window"] is None and d["context"] == 0, d
+    with open(rollout, "a") as f:  # now it is: Codex appends to the same rollout
+        f.write(tc(35093, 69831) + '{"type": "event_msg", "payload": {"type": "task_complete"}}\n')
+    d = turn(69831)
+    assert (d["context"], d["window"]) == (35102, 258400), d  # not 69,831 (27%), and not / 272,000
+
+    rollout.unlink()  # unreadable: no window, and not the running total either
+    d = turn(105235)
+    assert d["e"] == "done" and d["ok"] and d["window"] is None and d["context"] == 0, d
+    n = Norm()  # no thread.started at all
+    assert n.codex({"type": "turn.completed", "usage": {"input_tokens": 9}})[0]["window"] is None
+
+
 # A fake `claude -p`: logs each prompt it gets, and answers a first (un-retried) message the way the real
 # bug did: a task-notification queued into the turn, then "No response requested."
 FAKE = """#!/usr/bin/env python3
