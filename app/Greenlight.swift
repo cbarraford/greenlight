@@ -385,7 +385,7 @@ func ago(_ d: Date) -> String {
 }
 
 /// A prompt you sent: ↑↓ walk them, ⌃R fuzzy-searches them.
-struct Sent: Codable { let t: String; let at: Date }
+struct Sent: Codable, Equatable { let t: String; let at: Date }
 
 /// ⌃R matching: the query's letters in order, spaces ignored; runs and word starts score higher. Tries each start, keeps the best.
 func fuzzy(_ q: String, _ t: String) -> (pos: [Int], score: Int)? {
@@ -2369,14 +2369,39 @@ final class LivePreview: ObservableObject {
 }
 
 final class Core: ObservableObject {
+    /// 0: the main chat. n > 0: a second Greenlight Center window's own Chief (chat.py's CHAT_DIR chat-<n>, its own transcript and questions).
+    let session: Int
+    let transcriptFile: URL, questionsURL: URL
+    init(session: Int = 0) {
+        self.session = session
+        transcriptFile = session == 0 ? transcript : support.appendingPathComponent("transcript-\(session).json")
+        questionsURL = session == 0 ? questionsFile : support.appendingPathComponent("questions-\(session).json")
+        msgs = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcriptFile)))?.map(Msg.init)) ?? msgs
+        questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
+    }
+    var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(greenlightHome)/chat-\(session) \(py)/chat.py" }
+    var light: ([String]) -> Void = { delegate.pick($0) }  // the hexes a reply is about, lit in this chat's dashboard
+    var subs = Set<AnyCancellable>(), mirroring = false
+    /// A second window's chat keeps the main one's settings, both ways: Settings (the main chat's) and this chat's own name agree.
+    func follow(_ m: Core) {
+        func both<T: Equatable>(_ k: ReferenceWritableKeyPath<Core, T>, _ p: KeyPath<Core, Published<T>.Publisher>) {
+            self[keyPath: k] = m[keyPath: k]
+            // @Published sends before the value lands: the flag, not an equality check, stops the echo
+            m[keyPath: p].dropFirst().sink { [weak self] v in guard let self, !self.mirroring else { return }; self.mirroring = true; self[keyPath: k] = v; self.mirroring = false }.store(in: &subs)
+            self[keyPath: p].dropFirst().sink { [weak self, weak m] v in guard let self, !self.mirroring else { return }; self.mirroring = true; m?[keyPath: k] = v; self.mirroring = false }.store(in: &subs)
+        }
+        both(\.model, \.$model); both(\.effort, \.$effort); both(\.name, \.$name); both(\.verbose, \.$verbose)
+        both(\.liveLine, \.$liveLine); both(\.vim, \.$vim); both(\.vimStart, \.$vimStart); both(\.look, \.$look); both(\.sent, \.$sent)
+        // ponytail: context and window are UserDefaults too, so the last chat to reply sets the meter the main one starts with; per-session keys if that misleads
+        $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
+    }
     lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
     @Published var attached: [Attached] = []
     var unattach: ((String) -> Void)?  // tells the dashboard to empty that dock slot
-    @Published var msgs: [Msg] = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcript)))?.map(Msg.init))
-        ?? [Msg(.note, "Ask me anything about your workspaces.")] {
+    @Published var msgs: [Msg] = [Msg(.note, "Ask me anything about your workspaces.")] {  // init reads the transcript
         didSet {  // ponytail: rewrites the whole file per message; capped at 300 so that stays cheap
-            try? FileManager.default.createDirectory(at: transcript.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcript, options: .atomic)
+            try? FileManager.default.createDirectory(at: transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcriptFile, options: .atomic)
         }
     }
     @Published var run: Run?
@@ -2441,11 +2466,11 @@ final class Core: ObservableObject {
     @Published var hint = ""  // hover text for the footer buttons; native tooltips are slow
     @Published var voiceTest = ""  // Settings' Test of the speaking voice: what happened
     @Published var keying = false  // the next chord becomes the voice shortcut: Settings shows the recorder in place
-    @Published var questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsFile))) ?? [] {
+    @Published var questions: [Question] = [] {  // init reads questionsURL
         didSet {  // all waiting ones plus the last 20 answered
             let keep = questions.filter { $0.answer == nil } + questions.filter { $0.answer != nil }.suffix(20)
             try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-            try? JSONEncoder().encode(keep.sorted { $0.ts < $1.ts }).write(to: questionsFile, options: .atomic)
+            try? JSONEncoder().encode(keep.sorted { $0.ts < $1.ts }).write(to: questionsURL, options: .atomic)
         }
     }
     @Published var inboxOpen = false
@@ -2732,7 +2757,7 @@ final class Core: ObservableObject {
     // ponytail: work outside Greenlight (an editor, a browser) doesn't count; count pushes from the scan if it nags then
     @Published var checkInMins = UserDefaults.standard.object(forKey: "checkInMins") as? Int ?? 30 { didSet { UserDefaults.standard.set(checkInMins, forKey: "checkInMins") } }
     var lastActive = Date(), checkedIn = false
-    func active() { lastActive = Date(); checkedIn = false }
+    func active() { lastActive = Date(); checkedIn = false; if session > 0 { delegate.greenlight.active() } }  // the check-in is the main chat's
     func checkIn() {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
         guard checkInMins > 0, !checkedIn, run == nil, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
@@ -2753,7 +2778,7 @@ final class Core: ObservableObject {
     var scope: () -> String? = { nil }
     var chatSend: String {
         let only = scope().map { " --only \(shellQuote($0))" } ?? ""
-        return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
+        return "\(chief) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     @Published var agents: [Agent] = []  // the agents in your workspaces: the activity feed is live while one works
@@ -2779,17 +2804,17 @@ final class Core: ObservableObject {
 
     func compact() {
         guard run == nil, isClaude else { return }
-        start(Run("Compact context"), "\(chatCmd) compact --model \(model)", stdin: "")
+        start(Run("Compact context"), "\(chief) compact --model \(model)", stdin: "")
     }
 
     func clear() {
         if run != nil { stop() }
         queue = []
-        ssh("\(chatCmd) new")
+        ssh("\(chief) new")
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
         focusSent = ""  // the new conversation hasn't heard where you are
-        picks += 1; delegate.pick([])  // nor lit anything
+        picks += 1; light([])  // nor lit anything
         if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
         context = 0
@@ -2799,7 +2824,7 @@ final class Core: ObservableObject {
         guard let r = run, !r.stopping else { return }
         r.stopping = true
         r.status = "Stopping"
-        ssh("\(chatCmd) stop")
+        ssh("\(chief) stop")
     }
 
     private func start(_ r: Run, _ remote: String, stdin: String) {
@@ -2877,9 +2902,9 @@ final class Core: ObservableObject {
         if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
             picks += 1
             let n = picks
-            delegate.pick([])
-            if let h = st.hexes { delegate.pick(resolveHexes(h, pucks)) }  // Chief said which: no guessing
-            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names in if n == self?.picks { delegate.pick(names) } } }
+            light([])
+            if let h = st.hexes { light(resolveHexes(h, pucks)) }  // Chief said which: no guessing
+            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names in if n == self?.picks { self?.light(names) } } }
         }
         run = nil
         tps = 0
@@ -2946,7 +2971,7 @@ final class Core: ObservableObject {
         if let subtitle { c.subtitle = subtitle }
         c.body = body
         c.sound = .default
-        c.categoryIdentifier = "greenlight"
+        if session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
         c.userInfo = ["text": body]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id ?? UUID().uuidString, content: c, trigger: nil))
     }
@@ -4878,7 +4903,7 @@ struct ChatView: View, Looked {
                 title
                 Spacer(minLength: Theme.sp2)
                 ViewThatFits { HStack(spacing: Theme.sp2) { meta }.fixedSize(); EmptyView() }.layoutPriority(-1)  // a narrow pane drops the host, never clips
-                VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) })
+                if c.session == 0 { VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) }) }  // voice and its own window: the main chat's
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
             if lk.id == "editorial" { masthead }
@@ -5739,23 +5764,24 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.reloadFluid = { [weak self] in self?.loadFluid() }
         greenlight.unattach = { [weak self] key in
             let k = (try? JSONSerialization.data(withJSONObject: [key])).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
-            self?.broadcast("window.mc && mc.undock(\(k)[0])")
+            self?.mainWebs.forEach { $0.evaluateJavaScript("window.mc && mc.undock(\(k)[0])") }
         }
         orbMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] e in  // a click brings its window up: put the orbs back on top
             if let self, e.window != nil, e.window !== self.termOrb { self.raiseOrbs() }
             return e
         }
         vimMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, self.capture == nil, let tv = e.window?.firstResponder as? NSTextView, tv.isDescendant(of: self.chat) else { return e }
-            if self.greenlight.historyKey(e, tv) {  // ↑↓ / ⌃R history and readline keys, ahead of vim (whose ⌃R would be redo)
-                guard self.greenlight.toEnd else { return nil }
-                self.greenlight.toEnd = false
+            guard let self, self.capture == nil, let tv = e.window?.firstResponder as? NSTextView,
+                  let c = tv.isDescendant(of: self.chat) ? self.greenlight : self.l1s.values.first(where: { tv.isDescendant(of: $0.chat) })?.c else { return e }
+            if c.historyKey(e, tv) {  // ↑↓ / ⌃R history and readline keys, ahead of vim (whose ⌃R would be redo)
+                guard c.toEnd else { return nil }
+                c.toEnd = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak w = e.window] in  // caret to the end once the text lands
                     if let tv = w?.firstResponder as? NSTextView { tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0)) }
                 }
                 return nil
             }
-            guard self.greenlight.vim else { return e }
+            guard c.vim else { return e }
             let m = e.modifierFlags.intersection([.command, .control, .option])
             if m.contains(.command) || m.contains(.option) { return e }  // ⌘A, ⌘V… still work
             let esc = e.keyCode == kVK_Escape || (m == .control && e.charactersIgnoringModifiers == "[")
@@ -5763,7 +5789,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End]
             if !esc && passthrough.contains(Int(e.keyCode)) { return e }  // Enter still sends
             let k = esc ? "\u{1b}" : m == .control ? "^" + (e.charactersIgnoringModifiers ?? "") : e.characters ?? ""
-            return self.greenlight.vimKeys.key(k, tv) ? nil : e
+            return c.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
             if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on,  // Esc leaves live chat (sheets keep theirs)
@@ -5792,6 +5818,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         mainMenu()
         detached.forEach(detach)  // views the user gave their own windows last time
         reopenTermWindows()
+        reopenL1s()
         greenlight.termOpens == "greenlight" ? show() : basement()  // Settings → Terminal → App opens to
         un.getNotificationSettings { s in NSLog("greenlight notifications: authorization %d, alert %d", s.authorizationStatus.rawValue, s.alertSetting.rawValue) }
     }
@@ -5827,7 +5854,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     static let viewTitles = ["agents": "Agents"]
     var detached = ud.stringArray(forKey: "detached")?.filter { viewTitles[$0] != nil } ?? [] { didSet { ud.set(detached, forKey: "detached") } }
     var viewWindows = [String: NSWindow]()
-    var webs: [WKWebView] { [fluid] + viewWindows.values.compactMap { $0.contentView as? WKWebView } }
+    var mainWebs: [WKWebView] { [fluid] + viewWindows.values.compactMap { $0.contentView as? WKWebView } }  // the main window's pick, chat and lit hexes
+    var webs: [WKWebView] { mainWebs + l1s.values.map(\.web) }
     func broadcast(_ js: String) { webs.forEach { $0.evaluateJavaScript(js) } }
     /// The webview that shows a view: its own window if it has one, else the main window.
     func web(showing v: String) -> WKWebView { viewWindows[v]?.contentView as? WKWebView ?? fluid }
@@ -5877,18 +5905,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
+        // a second Greenlight Center window tells only its own Chief; a terminal (every project) tells them all
+        let cores = l1s.values.first { $0.w === w }.map { [$0.c] } ?? (id != nil ? [greenlight] + l1s.values.map(\.c) : [greenlight])
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
-            guard line != self.greenlight.focus else { return }
-            self.greenlight.focus = line
+            guard cores.contains(where: { $0.focus != line }) else { return }
+            cores.forEach { $0.focus = line }
+            guard cores[0] === self.greenlight else { return }
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
             if let k = key.1, let p = self.greenlight.pucks.first(where: { $0[key.0] as? String == k }) { self.greenlight.voice.show(workspaceSpec(p)) }
         }
     }
     func pushPicks(_ web: WKWebView) {
-        guard let d = try? JSONSerialization.data(withJSONObject: picked), let j = String(data: d, encoding: .utf8) else { return }
+        guard let d = try? JSONSerialization.data(withJSONObject: l1(web)?.picked ?? picked), let j = String(data: d, encoding: .utf8) else { return }
         web.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))")
     }
     func pushMode() { webs.forEach { $0.evaluateJavaScript("window.mc && mc.mode(\(modeJSON(for: $0)))") } }
@@ -5944,8 +5975,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return w
     }()
 
-    func loadFluid() {
-        let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
+    func loadFluid(_ into: WKWebView? = nil) {
+        let fluid = into ?? fluid, s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
         if s.isEmpty, let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") {
             fluid.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent())
         } else if s.hasPrefix("http://") || s.hasPrefix("https://"), let u = URL(string: s) {
@@ -5992,6 +6023,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if case let a = agentsOf(pucks), a != greenlight.agents { greenlight.agents = a }
         greenlight.watched(pucks)
         greenlight.fed(pucks)
+        for l in l1s.values { l.c.pucks = pucks; l.c.agents = greenlight.agents; l.c.fed(pucks) }  // the watch is the main chat's
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
@@ -6046,6 +6078,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
         if m.name == "term" { if let b = m.body as? [String: Any] { termMessage(b, from: m.webView) }; return }
         guard let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let from = m.webView else { return }
+        let l = l1(from)  // a second Greenlight Center window: its own projects and chat
+        if cmd == "ready", let l { l.pushedRepos = ""; l.pushedChat = ""; l.c.attached = [] }
         if cmd == "ready" {
             from.evaluateJavaScript("mc.mode(\(modeJSON(for: from)))")
             if !dashSnap.isEmpty { from.evaluateJavaScript("mc.update(\(dashSnap))") }
@@ -6056,18 +6090,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
-        if cmd == "unpick" { pick([]) }  // a click on a lit hex clears them in every window
+        if cmd == "unpick" { if let l { l.c.light([]) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
-            setPick(only)  // one pick for every floor and window
+            if let l { l.only = only; saveL1s(); syncL1() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
         }
-        if cmd == "window" {  // L1's Open projects, New window
+        if cmd == "window" {  // L1's Open projects, New window: another Greenlight Center, with its own Chief
             let only = b["only"] as? [String]
-            if b["only"] != nil, !(b["only"] is NSNull), only == nil { return }
-            newTermWindow(only, from: from.window)
+            if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
+            newL1(only, from: from.window)
         }
-        if cmd == "pickNew" { l1Pick(here: false) }  // ⌘⇧N on L1
+        if cmd == "pickNew" { l1Pick(here: false, in: l) }  // ⌘⇧N on L1
         if cmd == "editProjects" {  // L1's Edit projects…: down to the Basement, where the editor lives
             wantFloor = "basement"; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('basement'); window.editProjects && editProjects()"); ride(up: false)
         }
@@ -6077,19 +6111,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         // A workspace's Basement button: down to B1, on that worktree.
         if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path) }
-        if cmd == "showChat" { setChat(hidden: false) }
+        if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
-        if cmd == "inbox" { greenlight.settingsOpen = false; greenlight.inboxOpen.toggle() }
+        if cmd == "inbox" { if l != nil { show() }; greenlight.settingsOpen = false; greenlight.inboxOpen.toggle() }  // one inbox, the main window's
         // An answer from a lifted workspace's page: the same as answering that question in the bell.
         if cmd == "answerPing", let id = b["id"] as? String, let text = b["text"] as? String,
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let q = greenlight.waiting.first(where: { $0.id.uuidString == id }) { b["dismiss"] as? Bool == true ? greenlight.answer(q, "(dismissed)", send: false) : greenlight.answer(q, text) }
             pushedBell = ""; tick()  // re-push even when it was already answered elsewhere, so the page drops its "Sending…"
         }
-        if cmd == "toggleChat" { appToggleChat() }
+        if cmd == "toggleChat", l == nil { appToggleChat() }
         if cmd == "context", let items = b["items"] as? [[String: Any]] {
-            let was = Dictionary(greenlight.attached.map { ($0.id, $0.sent) }, uniquingKeysWith: { a, _ in a })
-            greenlight.attached = items.compactMap { i in
+            let c = l?.c ?? greenlight
+            let was = Dictionary(c.attached.map { ($0.id, $0.sent) }, uniquingKeysWith: { a, _ in a })
+            c.attached = items.compactMap { i in
                 guard let k = i["key"] as? String, let l = i["label"] as? String, let t = i["text"] as? String else { return nil }
                 return Attached(id: k, label: l, color: hexColor(i["color"] as? String ?? ""), mrs: i["mrs"] as? Int ?? 1, text: String(t.prefix(20000)), sent: was[k] ?? false)
             }
@@ -6190,7 +6225,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         _ = menu("Greenlight", [("Settings…", "appSettings", ","), ("-", "", ""),
                                  ("Hide Greenlight", "hide:", "h"), ("Quit Greenlight", "terminate:", "q")], target: self)
-        _ = menu("File", [("New Window", "appNewWindow", "n")], target: self)
+        _ = menu("File", [("New Window", "appNewWindow", "n"), ("New Greenlight Center Window", "appNewL1", "")], target: self)
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
@@ -6200,8 +6235,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         NSApp.mainMenu = bar
     }
     @objc func appNewWindow() { newTermWindow(sharedOnly, from: NSApp.keyWindow.flatMap { termWins.values.contains($0) ? $0 : nil }) }  // the shared pick
+    @objc func appNewL1() { newL1(l1s.values.first { $0.w.isKeyWindow }?.only ?? sharedOnly, from: NSApp.keyWindow) }  // the projects of the one you're in
     @objc func appSettings() { greenlight.settingsOpen = true; greenlight.inboxOpen = false }
-    @objc func appReload() { loadFluid() }
+    @objc func appReload() { loadFluid(l1s.values.first { $0.w.isKeyWindow }?.web) }
     @objc func appToggleTerm() { toggleTerm() }
     @objc func appJumpTerm() {  // ⌘J from any window: the terminal with its jump palette open (the page catches ⌘J itself when it has focus)
         if !(termWindow.isVisible && termWindow.isKeyWindow) { toggleTerm() }
@@ -6304,23 +6340,109 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
     }
     var l1Only: [String]? { projList.isEmpty ? nil : sharedOnly }  // nil until a terminal page lists the projects
-    var l1Picked: [[String: Any]] { (l1Only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
-    var l1Paths: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["paths"] as? [String] ?? [] })).sorted() }  // sorted: the tick compares it
-    var l1Repos: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["repos"] as? [String] ?? [] })).sorted() }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
+    var l1Picked: [[String: Any]] { picked(l1Only) }
+    func picked(_ only: [String]?) -> [[String: Any]] { (only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
+    /// The picked projects' "paths" or "repos"; nil: every project. Sorted: the tick compares it.
+    func sel(_ only: [String]?, _ k: String) -> [String]? { only == nil ? nil : Array(Set(picked(only).flatMap { $0[k] as? [String] ?? [] })).sorted() }
+    var l1Paths: [String]? { sel(l1Only, "paths") }
+    var l1Repos: [String]? { sel(l1Only, "repos") }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
     /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
     /// them is up. Read straight from the pick, not asked of a page: nothing to wait on, and no answer from a window you've left.
     var pickScope: String? {
         windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
     }
     func syncL1() {
-        let ps = l1Picked, names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
-        l1Floor.project = l1Only == nil ? "All projects" : names.isEmpty ? "No projects" : names
-        l1Floor.colors = l1Only == nil ? [] : ps.compactMap { $0["color"] as? String }
+        for (f, o) in [(l1Floor, l1Only)] + l1s.values.map({ ($0.floor, projList.isEmpty ? nil : $0.only) }) {
+            let ps = picked(o), names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
+            f.project = o == nil ? "All projects" : names.isEmpty ? "No projects" : names
+            f.colors = o == nil ? [] : ps.compactMap { $0["color"] as? String }
+        }
     }
-    func l1Pick(here: Bool = true) {
+    func l1Pick(here: Bool = true, in l: L1? = nil) {
         let list = (try? JSONSerialization.data(withJSONObject: projList)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
-        let only = (l1Only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
-        fluid.evaluateJavaScript("window.mc && mc.pickProjects && mc.pickProjects(\(list), \(only), \(here))")
+        let o = l == nil ? l1Only : projList.isEmpty ? nil : l!.only
+        let only = (o.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        (l?.web ?? fluid).evaluateJavaScript("window.mc && mc.pickProjects && mc.pickProjects(\(list), \(only), \(here))")
+    }
+
+    // MARK: more Greenlight Center windows (L1's Open projects → New window): each with its own projects and its own Chief (Core(session:)),
+    // remembered in l1Windows. Its close button ends that conversation, as a terminal New window's kills its shells. The main one is `window`.
+
+    final class L1 {
+        let id: Int, w: NSWindow, web: WKWebView, c: Core, chat: NSHostingView<ChatView>, split = Split(), floor = FloorState()
+        var only: [String]?, picked = [String](), pushedRepos = "", pushedChat = ""
+        init(_ id: Int, _ w: NSWindow, _ web: WKWebView, _ c: Core, _ only: [String]?) {
+            self.id = id; self.w = w; self.web = web; self.c = c; self.only = only
+            chat = NSHostingView(rootView: ChatView(c: c)); chat.sizingOptions = []
+        }
+    }
+    var l1s = [Int: L1]()
+    func l1(_ web: WKWebView?) -> L1? { l1s.values.first { $0.web === web } }
+    func saveL1s() { ud.set(l1s.values.sorted { $0.id < $1.id }.map { l in l.only.map { ["id": l.id, "only": $0] as [String: Any] } ?? ["id": l.id] }, forKey: "l1Windows") }
+    /// Its Chief's scope: its projects, the whole time it's open (it's a window: it closes rather than hides).
+    func scope(_ l: L1) -> String? { let o = projList.isEmpty ? nil : l.only; return windowScope(paths: sel(o, "paths"), repos: sel(o, "repos"), shown: true) }
+
+    @discardableResult
+    func makeL1(_ id: Int, only: [String]?, from: NSWindow? = nil) -> L1 {
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         backing: .buffered, defer: false)
+        w.backgroundColor = .black; w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
+        w.minSize = NSSize(width: 480, height: 520); w.delegate = self; w.appearance = window.appearance
+        let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
+        c.follow(greenlight)
+        c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
+        c.popoverShown = { [weak w] in NSApp.isActive && w?.isKeyWindow == true }
+        c.light = { [weak self, weak l] names in
+            guard let self, let l else { return }
+            l.picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+            self.pushPicks(l.web)
+        }
+        c.unattach = { [weak l] key in
+            let k = (try? JSONSerialization.data(withJSONObject: [key])).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            l?.web.evaluateJavaScript("window.mc && mc.undock(\(k)[0])")
+        }
+        l.floor.at = "greenlight"
+        let go: (String) -> Void = { [unowned self] f in  // ponytail: down to the Basement or the Pipe is a cut; the ride is the main window's
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('\(f)')"); basement() }
+        floorGo[ObjectIdentifier(w)] = (l.floor, go)
+        floorBar(w, Floors(s: l.floor, c: greenlight, pick: { [weak self, weak l] in if let l { self?.l1Pick(in: l) } }, go: go))
+        l1s[id] = l; syncL1()
+        let sp = l.split
+        sp.isVertical = true; sp.dividerStyle = .thin; sp.delegate = self
+        sp.addArrangedSubview(l.web); sp.addArrangedSubview(l.chat)
+        sp.setHoldingPriority(.defaultLow, forSubviewAt: 0); sp.setHoldingPriority(.defaultLow + 1, forSubviewAt: 1)
+        for (v, wd, pr) in [(l.web, 480, NSLayoutConstraint.Priority.defaultHigh + 1), (l.chat, 320, .defaultHigh)] as [(NSView, CGFloat, NSLayoutConstraint.Priority)] {
+            let k = v.widthAnchor.constraint(greaterThanOrEqualToConstant: wd); k.priority = pr; k.isActive = true
+        }
+        w.contentView = sp
+        if !w.setFrameUsingName("main-\(id)") {
+            if let f = (from ?? (window.isVisible ? window : nil))?.frame { w.setFrame(f, display: false); w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)) } else { w.center() }
+        }
+        w.setFrameAutosaveName("main-\(id)")
+        sp.layoutSubtreeIfNeeded()
+        sp.setPosition(sp.bounds.width - 440, ofDividerAt: 0)
+        sp.autosaveName = "chatSplit-\(id)"
+        loadFluid(l.web)
+        return l
+    }
+    func newL1(_ only: [String]?, from: NSWindow?) {
+        let l = makeL1((l1s.keys.max() ?? 0) + 1, only: only, from: from)
+        saveL1s()
+        l.w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    func reopenL1s() {
+        let saved = ud.array(forKey: "l1Windows") as? [[String: Any]] ?? []
+        for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: d["only"] as? [String]).w.orderFront(nil) } }
+        if !saved.isEmpty { _ = termWindow }  // its page lists the projects (hidden): until it has, a window shows All projects
+    }
+    /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
+    func closeL1(_ l: L1) {
+        ssh("\(l.c.chief) stop; \(l.c.chief) new; rm -rf \(greenlightHome)/chat-\(l.id)")
+        [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
+        l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
+        floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
+        l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")  // the next one may reuse this id
+        ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
     }
 
     // MARK: the T orb and its terminal: login shells in tabs in their own window; the close button keeps them
@@ -6856,6 +6978,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return false
         }
         if let v = viewWindows.first(where: { $0.value === w })?.key { attach(v); return false }
+        if let l = l1s.values.first(where: { $0.w === w }) { closeL1(l) }
         if w === window { hideFloaters() }
         return true
     }
@@ -6886,7 +7009,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedOrb != orb { pushedOrb = orb; fluid.evaluateJavaScript("document.documentElement.style.setProperty('--orb-w', '\(orb)'); window.render && render()") }
         let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
         let repos = "\(json(l1Paths)), \(json(l1Repos))"
-        if pushedRepos != repos { pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))") }
+        if pushedRepos != repos { pushedRepos = repos; mainWebs.forEach { $0.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(repos))") } }
+        for l in l1s.values {  // the other Greenlight Center windows: their own projects, their chat always in its pane
+            let o = projList.isEmpty ? nil : l.only, r = "\(json(sel(o, "paths"))), \(json(sel(o, "repos")))"
+            if l.pushedRepos != r { l.pushedRepos = r; l.web.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(r))") }
+            if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.evaluateJavaScript("window.mc && mc.chat(true,0)") }
+            if l.w.appearance?.name != look?.name { l.w.appearance = look; l.web.appearance = look }
+            if case let t = "\(greenlight.name) · \(l.floor.project)", l.w.title != t { l.w.title = t }  // the Window menu tells them apart
+            if l.c.run != nil { l.c.now = Date() }
+            if l.c.run == nil, l.c.connected != greenlight.connected { l.c.connected = greenlight.connected }  // ponytail: same host, so the main chat's online light stands in until this one runs a turn
+        }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
@@ -6894,7 +7026,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedMotion != greenlight.rideTime { pushedMotion = greenlight.rideTime
             (Array(termWins.values) + [window]).forEach { $0.animationBehavior = greenlight.rideTime > 0 ? .default : .none } }  // Animations off: no zoom in or out as a level comes or goes
         let chat = "\(!chatHidden),\(greenlight.missed)"
-        if pushedChat != chat { pushedChat = chat; broadcast("window.mc && mc.chat(\(chat))") }
+        if pushedChat != chat { pushedChat = chat; mainWebs.forEach { $0.evaluateJavaScript("window.mc && mc.chat(\(chat))") } }
         let colors = themeVars()
         if pushedMono != codeFont + colors {  // the dashboard's logs: Settings' code font, Nerd Font icons full-size like the terminal's
             pushedMono = codeFont + colors

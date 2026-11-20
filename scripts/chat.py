@@ -18,6 +18,7 @@ import decisions  # noqa: E402
 import harness  # noqa: E402
 
 DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "chat"))  # CHAT_DIR: tests use a scratch session
+CHAT = os.path.basename(DIR.rstrip("/")) if os.environ.get("CHAT_DIR") else None  # a second L1 window's Chief (CHAT_DIR=chat-<n>): its questions are its own in the decision record
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_WINDOW = 272000  # ponytail: codex doesn't report its window; fixed guess for the meter
@@ -469,7 +470,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False):
     if not compact:
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
-        decisions.quiet("heard", text)  # an answer to a ping or to the chat's open question goes into that question's record
+        decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
         text = board_note() + WRAP + text
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
@@ -493,7 +494,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False):
     if new_sid:
         session(engine, new_sid)
     if not compact and not err:
-        decisions.quiet("said", norm.reply)  # a reply ending in an Options line is a question: record it
+        decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
     if err:
         emit(e="done", ok=False, text=short(err, 500), context=norm.context, window=norm.window, ms=None)
 
@@ -507,7 +508,7 @@ def main():
         for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
-        decisions.quiet("forget_chat")
+        decisions.quiet("forget_chat", chat=CHAT)
     elif cmd == "stop":
         if os.path.exists(PIDFILE):
             try:
