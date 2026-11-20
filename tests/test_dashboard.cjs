@@ -807,6 +807,24 @@ test("All output: another busy session's lines ride along, a lost reply doesn't 
   assert.equal(await page.evaluate(() => document.activeElement.matches(".acard[data-name='plan-b'] button.open")), true, "focus goes to the card's Answer");
 });
 
+test("All output: another session is labelled from the first paint; a new session takes over as main once the old one goes quiet", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  const R = (st, n, text, kind = "claude") => ({id: `${st}:${n}`, role: "assistant", text, kind});
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null,
+    entries: [{id: "old:start", role: "sep", text: "codex session"}, R("old", 0, "yesterday", "codex"), {id: "m:start", role: "sep", text: "claude session"}, R("m", 0, "m0")],
+    recent: [R("rv", 5, "LGTM", "codex")]});
+  assert.deepEqual(await page.$$eval("#aout-list .aow", es => es.map(e => e.textContent)), ["Codex", "Claude", "Codex · another session"],
+    "a review running alongside is labelled at once; yesterday's session is just history");
+  // m stops; b's first lines came in through recent (no separator), then b is the newest and only one writing
+  await nextPoll(page, 2);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [R("m", 0, "m0"), R("m", 1, "m1")], recent: [R("b", 0, "b0")]});
+  await nextPoll(page, 3);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [{id: "b:start", role: "sep", text: "claude session"}, R("b", 0, "b0"), R("b", 1, "b1")], recent: []});
+  const tail = await page.$$eval("#aout-list .aoe", es => es.slice(-2).map(e => e.textContent));
+  assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
+});
+
 (async () => {
   const browser = await chromium.launch({executablePath: browserPath()});
   let failed = 0;
