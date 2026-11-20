@@ -202,6 +202,19 @@ assert evaluate(W, {"path": "/nl/gone", "comment": "Review !9999: elsewhere"}, n
 W.tree("/nl/wip", tip="wip", merge="wip")
 assert evaluate(W, {"path": "/nl/wip", "branch": "refs/heads/wip"}, nl) == ("keep", "no MR/PR, branch not merged")
 assert evaluate(W, {"path": "/nl/dev", "branch": "refs/heads/develop"}, nl) == ("keep", "default branch")
+
+# steps after the merge: a lifecycle with `deploy` keeps a merged workspace until it's signed off; greenlight.md
+# has none, so a PR merged while it still had deploy (last scan's row still says deploy, no sign-off) goes
+W = World([mr(31, "merged", "old-deploy", sha="h31")])
+W.tree("/w/old-deploy", tip="h31", merge="old-deploy")
+od = {"path": "/w/old-deploy", "branch": "refs/heads/old-deploy"}
+(cleanup.greenlight.STATE / "last.json").write_text(json.dumps({"rows": [
+    {"path": "/w/old-deploy", "next": {"step": "deploy", "owner": "me", "action": "deploy: x Sign it off?"}}]}))
+assert cleanup.greenlight.post_merge("cbarraford/greenlight") == []
+assert evaluate(W, od, repo("cbarraford/greenlight")) == ("candidate", "MR !31 merged")
+(cleanup.greenlight.STATE / "lifecycles").mkdir(exist_ok=True)
+(cleanup.greenlight.STATE / "lifecycles/gizmos.md").write_text("# gizmos\n\n1. `merge` — x\n2. `deploy` — Prod runs it. Done: `signoff`\n")
+assert evaluate(W, od, repo("acme/gizmos")) == ("keep", "MR !31 merged, still to do: deploy")
 print("cleanup ok")
 
 # GitHub: someone else's open PR I approved counts as done for my review checkout; my own stays open
