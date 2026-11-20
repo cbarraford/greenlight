@@ -148,6 +148,84 @@ def orca_cli(*args, timeout=120):
     return out["result"]
 
 
+# A request that only asks (status, research, billing lookups, inspections) is answered where it's asked, never
+# by a new workspace; a workspace is for a change. GREENLIGHT_REQUEST is the user's message (chat.py) or the
+# automation's prompt (auto.py); `ade worktree create` refuses while it's read-only. Wrongly refusing a change is
+# the worse mistake, so only plain questions and lookups count: every clause has to open with one ("Who's on call?
+# Page them." asks for a change), and anything else (a request, unclear) is a change.
+LOOKUP = (r"how|what|whats|which|who|whose|when|where|why|is|are|was|were|did|has|does|status|check|look up|lookup|"
+          r"tell me|list|summari[sz]e|explain|compare|research|investigate|inspect")
+ASKS_RE = re.compile(rf"^\W*(?:(?:can|could|would|will) (?:you|we) |please )?(?:please )?({LOOKUP})\b", re.I)
+CLAUSE_RE = re.compile(r"[?.;:,\n]+|!(?=\s|$)|\b(?:(?:and )?then|otherwise|if so|if not|but)\b", re.I)  # clauses, not "and"
+COURTESY_RE = re.compile(r"\W*(please|thanks?|thank you)?\W*", re.I)  # "…, please?" is no clause
+CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
+           r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
+           r"comment|open (?:a|an|the|it|up|new)|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
+           r"kill|stop|start|run|launch|dispatch|retry|re-?run|draft|publish|resolve|address|tag|release|save|record|"
+           r"archive|clean|turn (on|off)|hold|park|rotate|revoke|pay|buy|order|schedule|book|undo|apply|land|split|"
+           r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
+           r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
+           r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
+           r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our \w+|my \w+) on|let|put|renew|roll|nudge|"
+           r"reassign|cherry-pick|sign[ -]?off|check in|check out|generate|is it possible to|in(?:to)? (?:a|the|our|my|its|this) (?:[\w-]+ )?(?:docs?|readme|wiki|changelog|description|report|notes?)|"
+           r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
+CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
+DET = r"the|a|an|it|its|them|this|that|these|those|my|our|your|their|his|her|me|us|him|all|every"
+AND_DO_RE = re.compile(rf"\band (?:then )?(?!(?:{DET})\b)(\w+) (?:(?:{DET})\b|(?-i:[A-Z])|[\s$€£]|(?:prs?|mrs?|issues?|tickets?)\b)", re.I)  # "and refund the customer / Alice / !42"
+NAME_RE = re.compile(r"(?!\d+[.)]\s)[\w.!#/-]*\d[\w.!#/-]*|\w+(?:-\w+){2,}")  # names, not verbs: "fix-001", "gpt-live-24h-cost" (but "re-run" runs)
+ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # chat.py: request, (asked) the chat's question, (answer) the user's answer, …
+OFFER_VERB = rf"\b(?!(?:use|do|get|keep|try|set(?! ?up))\b)({CHANGES})\b"  # not "should I use prod?"
+S = r"(?:[^.?!\n]|[.!](?=\S))"  # within one sentence ("greenlight.py" doesn't end it)
+OFFER_RE = re.compile(  # the chat's question offered a change, not an answer that mentions one ("since the deploy")
+    rf"\b(?:i|me|we|us)\b{S}*?{OFFER_VERB}{S}*\?|\bwant (?:a|an|me to|us to|it|this|that|one)\b{S}*\?"  # "can I add a meter?"
+    rf"|\b(?:i can|i could|i'll|i will|let me|happy to)\s+(?:\S+\s+){{0,2}}?{OFFER_VERB}"  # "I can add a meter."
+    rf"|^[ \t]*(?:[-*•]|\d+[.)])\s+(?:\*\*|__)?{OFFER_VERB}"  # "1. **Add a cost meter**: $2/mo", not a breakdown row:
+    rf"(?!(?:[ \t]+(?!(?:{DET})\b)\w+)?(?:\*\*|__)?[ \t]*:)(?!(?:[ \t]+(?!(?:{DET})\b)\w+){{0,2}}(?:\*\*|__)?[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
+    rf"|^`?options:[^\n]*{OFFER_VERB}|{OFFER_VERB}[^\n]*\n`?options:", re.I | re.M)  # "Add a meter?\nOptions: …"
+AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do|go for it|sounds good)\b", re.I)  # in an answer: "sure" agrees to a change
+READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
+                     "answer it here from the sources you can read (greenlight.py, ade worktree ps / terminal read, "
+                     "glab / gh, the APIs and files on this host) instead of creating a workspace. Workspaces are for "
+                     "requests that change something (code, docs, settings, an external system). Only if the request "
+                     "(the user's message, or the automation's prompt) does ask for a change, run the same command with "
+                     "--change \"<what it changes>\".")
+
+
+def read_only(text):
+    """True when the request is plainly questions or lookups, no question the chat asked about it offered a change,
+    and no answer to one asks for a change."""
+    req, *turns = re.split("(" + "|".join(map(re.escape, (ASKED, ANSWER))) + ")", NAME_RE.sub(" ", text or ""))
+    asked = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ASKED]
+    answers = [t for k, t in zip(turns[0::2], turns[1::2]) if k == ANSWER]
+    clauses = [c for c in CLAUSE_RE.split(req) if c and not COURTESY_RE.fullmatch(c)]
+    proposed = not asked or any(CHANGE_RE.search(q) or not ASKS_RE.search(re.sub(r"^.*?\b(?:me|us) to (?:also )?", "", q, flags=re.S))
+                                for q in asked)  # "yes" agrees to a change, unless only a lookup was offered ("would you like me to check staging?")
+    def answer_changes(a):  # "prod" narrows the question; "sure" to a proposed change, or a sentence that doesn't ask, is a request
+        return CHANGE_RE.search(a) or proposed and AGREE_RE.search(a) or (len(a.split()) > 3 and not ASKS_RE.match(a))
+    if any(not ASKS_RE.match(req[m.start(1):]) for m in AND_DO_RE.finditer(req)):  # "and tell me why" still asks
+        return False
+    return (bool(clauses) and all(ASKS_RE.match(c) for c in clauses) and not CHANGE_RE.search(req)
+            and not any(OFFER_RE.search(q) for q in asked)  # "want me to add a meter?", or Options offering one
+            and not any(answer_changes(a) for a in answers))
+
+
+def create_refused(args):
+    """READ_ONLY_REFUSAL when args create a workspace for a read-only request, else None. --change overrides."""
+    a = [x for x in args if not x.startswith("-")][:2]
+    if a != ["worktree", "create"] or any(x.startswith("--change") for x in args):
+        return None
+    return READ_ONLY_REFUSAL if read_only(os.environ.get("GREENLIGHT_REQUEST", "")) else None
+
+
+def without_change(args):
+    """args minus --change <why>, which is greenlight's own and not the ADE's."""
+    args = [x for x in args if not x.startswith("--change=")]
+    if "--change" in args:
+        k = args.index("--change")
+        del args[k:k + 2]
+    return args
+
+
 def gl(path):
     return json.loads(run(["glab", "api", path], timeout=45, tries=3))  # worst case ~2.4 min
 
@@ -925,7 +1003,11 @@ def main():
         resolve(sys.argv[2], " ".join(sys.argv[3:]) or "no longer needed")
         return
     if cmd == "ade":  # greenlight.py ade worktree set --worktree id:<id> --comment "<goal>"
-        print(json.dumps(orca(*[a for a in sys.argv[2:] if a != "--json"]), indent=1))
+        if why := create_refused(sys.argv[2:]):
+            print(why, file=sys.stderr)
+            sys.exit(3)
+        os.environ.pop("GREENLIGHT_REQUEST", None)  # not for the ADE: a tmux server started here would hand it to every pane
+        print(json.dumps(orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"]), indent=1))
         return
     if cmd == "signoff":  # greenlight.py signoff <project> <iid> <stage>: the user signed off a custom stage on this MR
         so, k = signoffs(), f"{sys.argv[2]}#{sys.argv[3]}"
