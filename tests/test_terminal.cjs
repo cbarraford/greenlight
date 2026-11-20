@@ -525,6 +525,32 @@ test("links: hovering one offers Open / Copy through the app; a click or ⌘-cli
   assert.equal((await posts(page, "copy")).pop().text, long);
 });
 
+test("workspace card: the recommendation when it's on you, and the lifecycle bar opens a checklist with what's after merge", async page => {
+  const row = n => page.locator(".ws", {hasText: n}).first();
+  const tree = (k) => page.evaluate(k => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "sidebar", path: "/w/sidebar", branch: "b", main: false,
+    agent: "done", goal: "x", puck: "sidebar", state: "raised", steps: ["mr_open", "merge", "deploy"], step_index: 2, step: "deploy", owner: "me", ...k}]}), k);
+  await tree({advice: "Once it's true, sign off deploy in the chat."});
+  await row("sidebar").click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.equal(await page.$eval("#card .rec", d => d.textContent), "RecommendedOnce it's true, sign off deploy in the chat.");
+  assert.match(await page.$eval("#card .sbar", d => d.textContent), /Step 3 of 3 · Deploy/);
+  assert.equal(await page.$eval("#card .chk", d => d.hidden), true);
+  await page.click("#card .sbar");
+  assert.equal(await page.getAttribute("#card .sbar", "aria-expanded"), "true");
+  assert.deepEqual(await page.$$eval("#card .chk li", l => l.map(e => e.className + ":" + e.textContent)),
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+  await page.keyboard.press("Escape");
+  // no rule for the step: the suggestion's advice line, asked for on open; none when it's not on you
+  await tree({advice: null, step: "qa", steps: ["mr_open", "qa", "merge"], step_index: 1});
+  await row("sidebar").click({button: "right"});
+  assert.match(await page.$eval("#card .rec", d => d.textContent), /Working one out/);
+  await page.evaluate(() => term.suggest({name: "sidebar", label: "QA", prompt: "Run QA.", advice: "Ask QA to test the build, then sign off."}));
+  assert.equal(await page.$eval("#card .rec", d => d.textContent), "RecommendedAsk QA to test the build, then sign off.");
+  await page.keyboard.press("Escape");
+  await tree({advice: "", steps: []});
+  await row("sidebar").click({button: "right"});
+  assert.equal(await page.$("#card .rec"), null); assert.equal(await page.$("#card .sbar"), null);
+});
+
 test("workspace card: facts, agent actions, inline goal, delete asks once (or never) and a refusal always asks", async page => {
   const row = n => page.locator(".ws", {hasText: n}).first();
   await page.evaluate(() => { const t = {trees: [{ade: "cmux", project: "octo/greenlight", name: "sidebar", path: "/w/sidebar", branch: "term-sidebar", main: false,
@@ -712,6 +738,27 @@ test("workspace card: Merge asks once more, then merges; the forge's refusal sho
   await page.locator(".ws", {hasText: "mg"}).first().click({button: "right"}); await page.click("#card .mg .go"); await page.click("#card .mg .go");
   await page.evaluate(() => term.tree({op: "merge", path: "/w/mg", ok: true, ref: "!61", target: "main", how: "Squash"}));
   assert.match(await page.$eval("#card .mg.ok", b => b.textContent), /Merged !61 into main/);
+});
+test("workspace card: Mark ready takes a kept draft out of draft in one click", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "dr", path: "/w/dr", branch: "dr", main: false, agent: "done", state: "raised", puck: "dr",
+    mr: {ref: "!62", state: "opened"}, moves: [{kind: "ready"}]}]}));
+  await page.locator(".ws", {hasText: "dr"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.match(await page.$eval("#card .mg .go", b => b.textContent), /Mark !62 ready for review/);
+  assert.equal(await page.$("#card .nx"), null, "the button replaces the next step");
+  await page.click("#card .mg .go");
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "ready", path: "/w/dr"});
+  await page.evaluate(() => term.tree({op: "ready", path: "/w/dr", ok: true, ref: "!62"}));
+  assert.match(await page.$eval("#card .mg.ok", b => b.textContent), /!62 is ready for review/);
+});
+test("workspace card: Deploy runs a merged MR's step after the merge, then signs it off", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "dp", path: "/w/dp", branch: "dp", main: false, agent: "done", state: "raised", puck: "dp",
+    mr: {ref: "#7", state: "merged"}, moves: [{kind: "signoff", step: "deploy", run: "git pull"}]}]}));
+  await page.locator(".ws", {hasText: "dp"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  assert.match(await page.$eval("#card .mg .go", b => b.textContent), /Deploy #7.*Runs git pull, then signs it off/);
+  await page.click("#card .mg .go");
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "signoff", path: "/w/dp"});
+  await page.evaluate(() => term.tree({op: "signoff", path: "/w/dp", step: "deploy", error: "`git pull` exited 1: no"}));
+  assert.match(await page.$eval("#card .mg.no", b => b.textContent), /Deploy didn't finish.*exited 1: no/);
 });
 test("workspace card: the main checkout can't be deleted; a busy agent disables the agent actions", async page => {
   await page.locator(".ws", {hasText: "widgets"}).first().click({button: "right"});

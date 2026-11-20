@@ -28,6 +28,7 @@ Page layouts come from Claude Haiku picking widgets out of CATALOG; the page ren
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
 import base64
+import calendar
 import hashlib
 import importlib
 import json
@@ -130,15 +131,19 @@ def merge_how(cmd):
 
 
 def moves(r, blk=None):
-    """Both hover cards' buttons for this row's open MR, most urgent first: conflicts › ci › threads (your MR's fixes) ›
-    review (your review is the next move) › merge (greenlight can merge now; only when nothing else applies). None → the card
+    """Both hover cards' (and the page's) buttons for this row's open MR, most urgent first: conflicts › ci › threads (the MR's fixes) ›
+    review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
+    draft, when that waits on you). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
+    if mr.get("state") == "merged" and nxt.get("owner") == "me" and "signoff" in (nxt.get("cmd") or []):  # your step after the merge: deploy, verify
+        st = next((s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == nxt["step"]), {})
+        return [{"kind": "signoff", "step": nxt["step"], "run": st.get("run", "")}]
     if mr.get("state") != "opened":
         return []
     mine = mr.get("role") == "author"
     review = nxt.get("owner") == "me" and (nxt.get("step") == "review" or "signoff" in (nxt.get("cmd") or []) or "review it" in nxt.get("action", ""))
-    on = {"conflicts": mine and mr.get("conflicts"), "ci": mine and mr.get("pipeline") == "failed", "threads": mine and mr.get("todo_threads"),
+    on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]
@@ -154,10 +159,14 @@ def moves(r, blk=None):
             ok = set(COMMON + KINDS[kind])
             text = re.sub(r"\{(\w+)\}", lambda m: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
-    if not out and nxt.get("step") == "merge" and cmd[:1] in (["gh"], ["glab"]):
+    fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
+    if not fix and nxt.get("step") == "merge" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
-    for m in out:  # auto: what the terminal runs unattended (merge: True), once per head commit
-        g = on_auto.get(m["kind"])
+    if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
+        out.append({"kind": "ready"})
+    for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
+        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) \
+            and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
         if isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1])):
             m["sha"], m["auto"] = mr.get("sha"), True if m["kind"] == "merge" else f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]}\n\n{m['prompt']}"
     return out
@@ -174,11 +183,144 @@ def tree_merge(path):
     gh = r["next"]["cmd"][0] == "gh"
     greenlight.run(r["next"]["cmd"] + ["--match-head-commit" if gh else "--sha", r["mr"]["sha"]], timeout=90)
     # ponytail: mark it merged in the snapshot so the card stops offering it; greenlight's next scan rewrites the row anyway
-    r["mr"]["state"], r["next"] = "merged", {"step": "done", "owner": "done", "action": "merged from Greenlight"}
+    post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
+    r["mr"]["state"], r["next"] = "merged", {"step": post[0], "owner": "me", "action": f"merged from Greenlight; next: {post[0].replace('_', ' ')}"} \
+        if post else {"step": "done", "owner": "done", "action": "merged from Greenlight"}
     snap = json.loads((greenlight.STATE / "last.json").read_text())
     snap["rows"] = [r if x["path"] == path else x for x in snap["rows"]]
     (greenlight.STATE / "last.json").write_text(json.dumps(snap))
     return {"ok": True, "ref": r["mr"].get("ref"), "target": r["mr"].get("target_branch"), "how": m["how"]}
+
+
+def tree_ready(path):
+    """The card's Mark ready: greenlight's own ready cmd (gh pr ready / glab mr update --ready) for this workspace's draft."""
+    r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
+    if not r or not any(x["kind"] == "ready" for x in moves(r)):
+        return {"op": "ready", "path": path, "error": "greenlight doesn't say this is waiting to come out of draft"}
+    greenlight.run(r["next"]["cmd"], timeout=90)
+    return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref")}  # ponytail: the next scan shows it out of draft
+
+
+def tree_signoff(path):
+    """The card's Deploy (any step after merge): runs the step's `Run:` command from your lifecycle on this host, in the
+    worktree, then signs the step off. No Run: just signs it off. A failed command signs nothing off; its output comes back."""
+    r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
+    m = next((x for x in moves(r) if x["kind"] == "signoff"), None) if r else None
+    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref"), "step": m and m["step"]}
+    if not m:
+        return {**base, "error": "greenlight doesn't say a step after the merge waits on you"}
+    if m["run"]:
+        try:
+            p = subprocess.run(["bash", "-lc", m["run"]], cwd=path if os.path.isdir(path) else None, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return {**base, "error": f"`{m['run']}` ran past 10 minutes"}
+        if p.returncode:
+            return {**base, "error": f"`{m['run']}` exited {p.returncode}: " + (p.stderr or p.stdout).strip()[-600:]}
+    greenlight.run(r["next"]["cmd"], timeout=30)
+    return {**base, "ok": True, "ran": m["run"]}
+
+
+def board(only=None):
+    """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
+    what to do. Blocks on you first, then your moves, then the rest; finished ones only counted. `only` (else $GREENLIGHT_ONLY,
+    a JSON list the chat sets): just these worktree paths, the window the user is in."""
+    if only is None and os.environ.get("GREENLIGHT_ONLY"):
+        only = json.loads(os.environ["GREENLIGHT_ONLY"])
+    rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
+    rows = rows if only is None else [r for r in rows if r.get("path") in only]
+    lines, done = [], 0
+    for r in rows:
+        st, why = state_of(r, blk)
+        if st == "done":
+            done += 1
+            continue
+        _, steps, i = progress(r)
+        mr, nxt, ad = r.get("mr") or {}, r["next"], advice(r)
+        ref = f"[{mr['ref']}]({mr['web_url']})" if mr.get("ref") and mr.get("web_url") else mr.get("ref") or "no MR"
+        where = f"step {i + 1}/{len(steps)} {nxt['step']}" if steps and i is not None else nxt["step"]
+        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}): {where} · on {nxt['owner']} · {(nxt.get('action') or why)[:110]}"
+                      + (f" · do: {ad}" if ad else "") + (" · agent working" if (r.get("agent") or {}).get("state") == "working" else "")))
+    lines.sort(key=lambda x: x[0])
+    return "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
+
+
+GH_WORK = """query($q: String!) { search(type: ISSUE, first: 50, query: $q) { nodes {
+  ... on PullRequest { number title url isDraft updatedAt reviewDecision mergeable repository { nameWithOwner }
+    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }
+  ... on Issue { number title url updatedAt repository { nameWithOwner } labels(first: 5) { nodes { name } }
+    closedByPullRequestsReferences(first: 1) { totalCount } } } } }"""
+
+
+def gl_item(m, role):
+    """A GitLab MR or issue in forge_line's shape."""
+    if "iid" in m and "source_branch" in m:
+        st = ["draft"] * bool(m.get("draft")) + ["conflicts"] * bool(m.get("has_conflicts")) + [(m.get("detailed_merge_status") or "").replace("draft_status", "").replace("_", " ")]
+    else:
+        st = [", ".join(m.get("labels") or []), f"due {m['due_date']}" if m.get("due_date") else "", "has an MR" if m.get("merge_requests_count") else "no MR"]
+    return {"role": role, "ref": m["references"]["full"], "title": m["title"], "url": m["web_url"], "updated": m.get("updated_at") or "", "status": st}
+
+
+def gh_item(n, role):
+    """A GitHub PR or issue (GH_WORK's nodes) in forge_line's shape."""
+    ref = f"{n['repository']['nameWithOwner']}#{n['number']}"
+    if "isDraft" in n:
+        ci = ((((n.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}).get("state")
+        st = ["draft"] * n["isDraft"] + ["conflicts"] * (n.get("mergeable") == "CONFLICTING") + [f"CI {ci.lower()}" if ci else "", (n.get("reviewDecision") or "").lower().replace("_", " ")]
+    else:
+        st = [", ".join(l["name"] for l in n["labels"]["nodes"]), "has a PR" if n["closedByPullRequestsReferences"]["totalCount"] else "no PR"]
+    return {"role": role, "ref": ref, "title": n["title"], "url": n["url"], "updated": n.get("updatedAt") or "", "status": st}
+
+
+def forge_line(it, ws, now):
+    """One line for the chat: what it is, its status, how stale, and the workspace already on it."""
+    days = (now - calendar.timegm(time.strptime(it["updated"][:19], "%Y-%m-%dT%H:%M:%S"))) / 86400 if it["updated"] else None
+    age = "" if days is None else "updated today" if days < 1 else f"updated {int(days)}d ago"
+    return (f"- [{it['ref']}]({it['url']}) {it['title'][:90]} · " + " · ".join(x for x in it["status"] + [age] if x)
+            + (f" · workspace: {ws[it['ref']]}" if it["ref"] in ws else ""))
+
+
+def forge(repo=None):
+    """Open issues and MRs/PRs with their statuses, for the chat to suggest what to pick up: mine (to review, authored,
+    assigned issues) on both forges, or with repo every open one in that repo. Workspaces already on one are named."""
+    try:
+        rows = json.loads((greenlight.STATE / "last.json").read_text())["rows"]
+    except (OSError, ValueError, KeyError):
+        rows = []
+    ws = {f"{r['project']}{'#' if (r.get('mr') or {}).get('forge', r.get('forge')) == 'github' else '!'}{r['mr']['iid']}": r["name"]
+          for r in rows if (r.get("mr") or {}).get("iid")}
+    items, errs, me = [], [], greenlight.ME
+    gh_q = lambda q, role: [gh_item(n, role) for n in greenlight.gh("api", "graphql", "-f", f"q={q} is:open archived:false", "-f", f"query={GH_WORK}")["data"]["search"]["nodes"] if n]
+    if repo:
+        forge_of = next((r.get("forge") or (r.get("mr") or {}).get("forge") for r in rows if r["project"] == repo), None)
+        try:
+            if forge_of != "gitlab":
+                items = gh_q(f"repo:{repo} is:pr", "open") + gh_q(f"repo:{repo} is:issue", "open")
+        except Exception as e:  # noqa: BLE001 - not a GitHub repo (or gh is out): try GitLab
+            errs.append(f"github: {str(e)[:120]}")
+        if not items and forge_of != "github":
+            try:
+                pp = f"projects/{greenlight.pid(repo)}"
+                items = [gl_item(m, "open") for m in greenlight.gl(f"{pp}/merge_requests?state=opened&per_page=50")] + \
+                        [gl_item(m, "open") for m in greenlight.gl(f"{pp}/issues?state=opened&per_page=50")]
+                errs = []
+            except Exception as e:  # noqa: BLE001
+                errs.append(f"gitlab: {str(e)[:120]}")
+    else:
+        for name, fetch in (("gitlab", lambda: [gl_item(m, "review") for m in greenlight.gl(f"merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=50")]
+                                     + [gl_item(m, "mine") for m in greenlight.gl(f"merge_requests?scope=all&state=opened&author_username={me}&per_page=50")]
+                                     + [gl_item(m, "issue") for m in greenlight.gl("issues?scope=assigned_to_me&state=opened&per_page=50")]),
+                            ("github", lambda: gh_q("is:pr review-requested:@me", "review") + gh_q("is:pr author:@me", "mine") + gh_q("is:issue assignee:@me", "issue"))):
+            try:
+                items += fetch()
+            except Exception as e:  # noqa: BLE001 - that CLI isn't installed or logged in: the other forge still answers
+                errs.append(f"{name}: {str(e)[:120]}")
+    heads = {"review": "Asked to review", "mine": "Your MRs/PRs", "issue": "Issues assigned to you", "open": f"Open in {repo}"}
+    out, now = [], time.time()
+    for role, head in heads.items():
+        group = sorted((i for i in items if i["role"] == role), key=lambda i: i["updated"], reverse=True)
+        if group:
+            out += [f"{head} ({len(group)}):"] + [forge_line(i, ws, now) for i in group[:40]]
+    return "\n".join(out + [f"(couldn't ask {e})" for e in errs]) or "Nothing open."
 
 
 def state_of(r, blk=None):
@@ -202,13 +344,73 @@ def state_of(r, blk=None):
 
 
 def progress(r):
-    name, steps = greenlight.lifecycle(r["project"]) if r.get("project") else ("", [])
+    """(fraction, steps, index). No MR yet sits on step 0 (`mr_open` is implement, push, open the MR); someone else's MR
+    has one step, your review; steps after `merge` are the lifecycle's own post-merge ones."""
+    name, steps = greenlight.lifecycle(r["project"]) if r.get("forge") else ("", [])  # no forge: a goal-only tree
     step = r["next"]["step"]
+    if (r.get("mr") or {}).get("role") == "review" or step == "review":
+        steps = ["review"]
     if r["next"]["owner"] == "done" or step == "done":
         return 1.0, steps, len(steps)
     if step in steps:
         return steps.index(step) / len(steps), steps, steps.index(step)
+    if steps and not r.get("mr") and step in ("freeform", "goal", "automation"):
+        return 0.0, steps, 0
     return None, steps, None
+
+
+def _advice_me(r):
+    nxt, mr, a = r["next"], r.get("mr") or {}, r["next"].get("action", "")
+    step, cmd = nxt["step"], nxt.get("cmd") or []
+    if "logged out" in a:
+        return "Log the agent back in in its terminal; greenlight re-dispatches once it's back."
+    if step == "error":
+        return "Usually a forge auth or network blip; the next scan retries. Open the workspace if it sticks."
+    if step == "goal":
+        return "Give it a goal (the workspace comment), or delete the workspace if it's stale."
+    if step == "automation":
+        return "Look over what the run left behind, then delete the workspace."
+    if step == "review":
+        if "re-review" in a:
+            return "Read the author's replies, then resolve your threads or follow up."
+        return f"CI {mr['pipeline']}, so read the diff, then approve or leave threads for what has to change." \
+            if mr.get("pipeline") not in (None, "success") else "Read the diff, then approve or leave threads for what has to change."
+    if "signoff" in cmd:
+        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this MR."
+    if step == "ready":
+        return "If the reason to keep it a draft is gone, take it out of draft; otherwise leave it."
+    if step == "milestone":
+        return "Pick the release milestone on the MR yourself: two share the latest due date."
+    if step == "merge":
+        if "goal says hold" in a:
+            return "Merge from here when the hold is over, or take the hold out of the goal."
+        if "nobody else reviews" in a:
+            return "Read the diff yourself, then merge from here."
+        if "rebase" in a:
+            return "There's no real conflict: say yes to a rebase in the chat and greenlight runs it."
+        if "branch protection" in a:
+            return "Open the PR and find which protection rule isn't met (a required check or review)."
+        if a.startswith("mergeable into"):
+            return f"Merge it into {mr.get('target_branch') or 'its base'} yourself, or retarget it at the default branch."
+        return "Open the MR to see why the forge won't merge it."
+    return None
+
+
+AGENT_ADVICE = {"ci_green": "No agent is on it: run Fix CI.", "no_conflicts": "No agent is on it: run Fix conflicts.",
+                "threads": "No agent is on it: run Resolve threads.", "freeform": "No agent is running: start one on the goal."}
+
+
+def advice(r):
+    """One sentence on what to do, when you're the blocker or the step is an agent's and none is on it. None: no rule
+    covers it (your own steps, mostly), so `suggest` writes one; "" for pucks that don't get advice at all."""
+    nxt, ag = r["next"], r.get("agent") or {}
+    if ag.get("state") == "waiting":
+        return "Answer it from here, or open the workspace if it needs more than a reply."
+    if nxt["owner"] == "me":
+        return _advice_me(r)
+    if nxt["owner"] == "agent" and ag.get("state") != "working":  # owner is the scan's; the agent state is live
+        return AGENT_ADVICE.get(nxt["step"])
+    return ""
 
 
 def live_agents():
@@ -265,9 +467,10 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         pucks[-1]["sig"] = sig(pucks[-1])
         pucks[-1]["built"] = page.get("sig") == pucks[-1]["sig"] and page.get("v") == PAGE_V  # its page layout is current; else the app queues a build
         # the hover card's button, written ahead (the app runs `suggest` for a puck whose state moved); None until then
+        pucks[-1]["advice"] = advice(r)  # None: the suggestion's advice line stands in
         sg = cached_suggest(r["name"])
-        pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"]} \
-            if sg.get("sig") == pucks[-1]["sig"] and "label" in sg and sg.get("prompt") else None
+        pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
+            if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -311,6 +514,8 @@ def trees():
                 out[-1]["puck"] = r["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
                 r["agent"] = {**r["agent"], "state": out[-1]["agent"]}  # the live agent, not the scan's
                 out[-1]["state"], out[-1]["why"] = state_of(r, blk)
+                _, out[-1]["steps"], out[-1]["step_index"] = progress(r)  # the card's lifecycle checklist
+                out[-1]["step"], out[-1]["owner"], out[-1]["advice"] = r["next"]["step"], r["next"]["owner"], advice(r)  # and what to do, when it's on you
                 if mv := moves(r, blk):
                     out[-1]["moves"] = mv
                     if any("auto" in m for m in mv):  # auto-run: has greenlight's scan caught up with what's pushed? (the tab's "needs you")
@@ -793,8 +998,9 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
         return {"name": name, "error": f"no workspace {name}"}
     cache, s = DASH / "suggest" / f"{safe(name)}.json", p["sig"]
     cached = cached_suggest(name)
-    if cached.get("sig") == s and "label" in cached:  # older cached suggestions have no button label
+    if fresh_suggest(cached, p):
         return cached
+    want = p.get("advice") is None  # no rule covers this step: the reply carries the advice line too
     prompt = (
         f"You are {greenlight.CONFIG['name']}, a developer's agent manager. Write the ONE prompt the developer should send to a fresh coding agent "
         "working in this workspace so it does the next thing toward the workspace goal. Ground it on greenlight's next step "
@@ -802,10 +1008,13 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
         "If the next move is the developer's own (a review, an approval, an answer), the prompt prepares it for them "
         "(e.g. summarize the diff and open threads, draft a reply) and must not approve, comment or push. "
         "Rules: don't suggest merging (greenlight merges). " + "".join(f"{r.rstrip('.')}. " for r in greenlight.CONFIG["suggest_rules"]) +
-        "Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), "
+        "Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), " +
+        ("then a line starting `Advice:` with one sentence telling the developer what to do next themselves (don't restate "
+         "puck.action, they see it), " if want else "") +
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
-    out = {"name": name, "sig": s, "prompt": text[:1000], "label": label}
+    tip, text = split_advice(text)
+    out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     if text:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(out))
@@ -817,6 +1026,19 @@ def cached_suggest(name):
         return json.loads((DASH / "suggest" / f"{safe(name)}.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def fresh_suggest(sg, p):
+    """The cached suggestion is for this state, and has an advice line if this puck needs one (older ones have neither)."""
+    return sg.get("sig") == p["sig"] and "label" in sg and (p.get("advice") is not None or "advice" in sg)  # "" is the model's answer: don't ask again
+
+
+def split_advice(text):
+    """An optional `Advice: ...` line ahead of the prompt -> (advice, prompt)."""
+    head, _, rest = text.strip().partition("\n")
+    if re.match(r"\W*advice:", head, re.I) and rest.strip():
+        return re.sub(r"^\W*advice:\W*", "", head, flags=re.I).strip().rstrip("*").strip(), rest.strip()
+    return "", text
 
 
 def split_label(text):
@@ -1368,6 +1590,10 @@ def main():
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+    elif a[:1] == ["board"]:
+        print(board())
+    elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
+        print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["ci"]:
         n = a[a.index("--days") + 1] if "--days" in a[:-1] else "30"
         if not re.fullmatch(r"[1-9]\d?", n):
@@ -1378,10 +1604,10 @@ def main():
             print(json.dumps({"error": str(e)[:300]}))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]
-            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
+            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_ready(arg) if op == "ready" else tree_signoff(arg) if op == "signoff" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
                 else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:

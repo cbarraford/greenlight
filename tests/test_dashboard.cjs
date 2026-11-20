@@ -204,6 +204,19 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.deepEqual((await posts(page, "merge")).pop(), {cmd: "merge", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({path: "/w/plan-a", error: "405: Branch cannot be merged"}));
   assert.equal(await page.textContent("#hcard .mg code"), "405: Branch cannot be merged");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "review", prompt: "rv", own: true, repo: "widgets"}, {kind: "merge", how: "Squash", target: "main"}]; hideCard(); document.body.append(hoverCard(p)) });
+  assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "ready"}]; hideCard(); document.body.append(hoverCard(p)) });
+  await page.click("#hcard .mg .go");  // one click: undrafting is undone by drafting again
+  assert.deepEqual((await posts(page, "undraft")).pop(), {cmd: "undraft", path: "/w/plan-a"});
+  await page.evaluate(() => window.mc.merged({op: "ready", path: "/w/plan-a", ok: true, ref: "!12"}));
+  assert.equal(await page.textContent("#hcard .mg.ok b"), "!12 is ready for review");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.mr = {...p.mr, state: "merged"}; p.moves = [{kind: "signoff", step: "deploy", run: "git pull"}]; hideCard(); document.body.append(hoverCard(p)) });
+  assert.equal(await page.textContent("#hcard .mg .go b"), "Deploy !12", "a merged MR's step after the merge gets its button");
+  await page.click("#hcard .mg .go");
+  assert.deepEqual((await posts(page, "signoff")).pop(), {cmd: "signoff", path: "/w/plan-a"});
+  await page.evaluate(() => window.mc.merged({op: "signoff", path: "/w/plan-a", ok: true, step: "deploy", ran: "git pull"}));
+  assert.equal(await page.textContent("#hcard .mg.ok b"), "Deploy signed off");
 });
 
 test("hover card button: a step written ahead (the snapshot's suggestion) is ready the moment the card opens", async page => {
@@ -223,6 +236,31 @@ test("hover card button: a step written ahead (the snapshot's suggestion) is rea
   snap.pucks[0].suggestion = {label: "Fix lint job", prompt: "Fix the lint job."};
   await page.evaluate(s => window.mc.update(s), snap);
   assert.equal(await page.textContent("#hcard .btn.nx"), "Fix lint job");
+});
+
+test("hover card: the recommendation shows when it's on you; the steps bar opens a checklist with what's after merge", async page => {
+  await page.evaluate(() => { const p = puckOf("plan-a"); Object.assign(p, {agent: {...p.agent, state: "idle"}, owner: "me", step: "deploy", step_index: 2,
+    steps: ["mr_open", "merge", "deploy"], advice: "Once it's true, sign off deploy in the chat."}); hideCard(); document.body.append(hoverCard(p)) });
+  assert.match(await page.textContent("#hcard .rec"), /sign off deploy/);
+  assert.equal(await page.$("#hcard .chk"), null, "checklist open before asked");
+  await page.click("#hcard .sbar");
+  assert.equal(await page.getAttribute("#hcard .sbar", "aria-expanded"), "true");
+  assert.deepEqual(await page.$$eval("#hcard .chk li", l => l.map(e => e.className + ":" + e.textContent)),
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+  assert.equal(await page.evaluate(() => localStorage.getItem("stepsOpen")), "1");
+  await page.focus("#hcard .sbar"); await page.keyboard.press("Enter"); await page.waitForTimeout(300);
+  assert.ok(await page.$("#hcard") && !(await page.$("#hcard .chk")), "Enter closes the checklist and the card stays");
+  await page.keyboard.press("Enter");
+  // a step with no rule (advice null): the model's line, from the snapshot's suggestion or when it lands; none from an older step
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.advice = null; ui.sug["plan-a"] = {sig: "old", prompt: "x", advice: "Stale."}; hideCard(); document.body.append(hoverCard(p)) });
+  assert.equal(await page.textContent("#hcard .rec"), "RecommendedWorking one out…");
+  await page.evaluate(() => window.mc.suggest({name: "plan-a", sig: puckOf("plan-a").sig, prompt: "Deploy it.", label: "Deploy", advice: "Run the deploy job, then sign off."}));
+  assert.equal(await page.textContent("#hcard .rec"), "RecommendedRun the deploy job, then sign off.");
+  await page.evaluate(() => { window.mc.suggest({name: "plan-a", sig: puckOf("plan-a").sig, prompt: "Deploy it.", label: "Deploy", advice: ""}); hideCard(); document.body.append(hoverCard(puckOf("plan-a"))) });
+  assert.equal(await page.$("#hcard .rec"), null, "the model had nothing to add: no block");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.advice = ""; p.steps = []; hideCard(); document.body.append(hoverCard(p)) });
+  assert.equal(await page.$("#hcard .rec"), null, "a recommendation when it isn't on you");
+  assert.equal(await page.$("#hcard .sbar"), null, "a lifecycle bar for a tree with no lifecycle");
 });
 
 test("hover card button: a failed step leaves a button that asks again", async page => {
@@ -517,6 +555,19 @@ test("terminal: keys send what Ghostty sends, and ⌘K / ⌘A / ⌘F / ⌘V / pa
   await tp.keyboard.press("Meta+Shift+Enter");
   assert.equal(await tp.evaluate(id => panes.get(id).box.getBoundingClientRect().width, b), 0, "⌘⇧↵ zooms the focused pane");
   await tp.close();
+});
+
+test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [] or a click on one clears", async page => {
+  const name = await page.evaluate(() => document.querySelector(".cell").dataset.name);
+  await page.evaluate(n => window.mc.pick([n, "not-a-workspace"]), name);
+  assert.ok(await page.$(".fieldwrap.picking"), "the hive steps back");
+  assert.deepEqual(await page.$$eval(".cell.picked", e => e.map(c => c.dataset.name)), [name]);
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), name, "one picked hex on screen: its card opens");
+  await page.evaluate(() => window.mc.pick([]));
+  assert.ok(!(await page.$(".fieldwrap.picking")) && !(await page.$(".cell.picked")) && !(await page.$("#hcard")), "[] clears, card too");
+  await page.evaluate(n => window.mc.pick([n]), name);
+  await page.click(`.cell.picked`);
+  assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");
 });
 
 (async () => {

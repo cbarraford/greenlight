@@ -121,5 +121,5 @@ ssh <host> cat <repo>/scripts/dev.py | python3 - install <host> <repo>
 
 ```bash
 for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done   # test_chat.py needs pytest: uv run --with pytest python -m pytest tests/test_chat.py
-node tests/test_dashboard.cjs; node tests/test_terminal.cjs          # need playwright-core and Chrome
+node tests/test_dashboard.cjs; node tests/test_terminal.cjs; node tests/test_stage.cjs       # need playwright-core and Chrome
 ```
