@@ -600,7 +600,7 @@ func isBargeIn(_ heard: String, _ spoken: String) -> Bool {
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
 func fallbackSpec(_ text: String) -> [String: Any] {
     let ss = sentences(plain(text) + "\n", from: 0).said
-    return ["title": ss.first ?? "", "kind": "list", "icon": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
+    return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 
 /// One Claude Haiku 5.5 call (no thinking, low effort, structured output), for the quick decisions around Chief's replies.
@@ -631,14 +631,15 @@ func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @esc
 func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
     let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
                                "required": ["label", "detail"], "additionalProperties": false]
-    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["title", "kind", "icon", "stat", "items"], "properties": [
+    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["eyebrow", "title", "kind", "stat", "items"], "properties": [
         "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
-        "icon": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
+        "eyebrow": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
     haiku("You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
             + "title: the point in a few words. kind: list (facts), steps (an order), stat (one number matters: put it in stat, e.g. \"3 MRs\"), "
             + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
-            + "icon: one emoji or empty. items: at most 6, label a few words, detail one short line or empty. Use names, numbers and MR refs "
-            + "from the reply; never invent any. stat is empty unless kind is stat.",
+            + "eyebrow: 1–4 lowercase words of context above the title (a workspace name, \"needs you · 2\", \"this week\") or empty; no emoji. "
+            + "items: at most 6, label a few words, detail one short line or empty (for stat, items are facts: label the name, detail the value). "
+            + "Use names, numbers and MR refs from the reply; never invent any. stat is empty unless kind is stat.",
           "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
 }
 
@@ -646,7 +647,6 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
 func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
     let s = { (k: String) in p[k] as? String ?? "" }, mr = p["mr"] as? [String: Any] ?? [:]
     let label = ["needs": "Needs you", "crashed": "Crashed", "raised": "Your move", "working": "Working", "queued": "Queued", "quiet": "Waiting on others", "done": "Done"]
-    let icon = ["needs": "🟠", "crashed": "🔴", "raised": "🟡", "working": "🔵", "queued": "⚪️", "quiet": "🟣", "done": "✅"]
     let items: [[String: String]] = [
         ["label": [mr["ref"] as? String, mr["title"] as? String].compactMap { $0 }.joined(separator: " "),
          "detail": [mr["draft"] as? Bool == true ? "draft" : nil, (mr["pipeline"] as? String).map { "CI \($0)" }, mr["conflicts"] as? Bool == true ? "conflicts" : nil].compactMap { $0 }.joined(separator: " · ")],
@@ -654,7 +654,7 @@ func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
         ["label": "Next: " + s("step").replacingOccurrences(of: "_", with: " "), "detail": s("action")],
         ["label": "Goal", "detail": s("goal")],
     ].filter { !($0["label"]!.isEmpty || $0["label"] == "Goal" && $0["detail"]!.isEmpty) }
-    return ["title": s("name"), "kind": "list", "icon": icon[s("state")] ?? "", "stat": "", "items": items]
+    return ["title": s("name"), "kind": "list", "eyebrow": (label[s("state")] ?? s("state")).lowercased(), "stat": "", "items": items]
 }
 
 /// The window you were last in, in words for Chief: a terminal's project and tab, or the dashboard's open workspace.
@@ -790,7 +790,7 @@ extension Look {
     /// The stage page's CSS variables (stage.html reads --mc-*), set on document.documentElement.style as `s`.
     var vars: String {
         [("bg", "#" + stage), ("surface", "#" + card), ("text", "#" + text), ("text2", "#" + text2), ("dim", "#" + dim), ("line", "#" + line), ("accent", "#" + accent), ("font", font)]
-            .map { "s.setProperty('--mc-\($0.0)', \"\($0.1)\");" }.joined(separator: " ")
+            .map { "s.setProperty('--mc-\($0.0)', \"\($0.1)\");" }.joined(separator: " ") + " document.documentElement.dataset.look = '\(id)';"
     }
 }
 func hx(_ h: String, _ o: Double = 1) -> Color { Color(nsColor: hex(h)).opacity(o) }
