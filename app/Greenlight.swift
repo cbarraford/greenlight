@@ -850,6 +850,13 @@ func focusScope(_ o: [String: Any]) -> String? {
     return (try? JSONSerialization.data(withJSONObject: scope, options: .sortedKeys)).flatMap { String(data: $0, encoding: .utf8) }
 }
 
+/// Chief's scope from the projects picked: their worktrees and repos while a window showing them is up. nil: every project (none
+/// picked, or no window up: you're in the menubar alone).
+func windowScope(paths: [String]?, repos: [String]?, shown: Bool) -> String? {
+    guard shown, let paths else { return nil }
+    return focusScope(["paths": paths, "repos": repos ?? []])
+}
+
 /// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
 func resolveHexes(_ said: [String], _ pucks: [[String: Any]]) -> [String] {
     let names = pucks.compactMap { $0["name"] as? String }
@@ -2741,12 +2748,11 @@ final class Core: ObservableObject {
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
-    var focusScope: String?  // its workspaces and repos (JSON): Chief's BOARD has only these (nil: the window shows every project)
-    var focusShown: () -> Bool = { true }  // that window is still up; closed or hidden, you're in the menubar alone and hear every project
-    var scope: String? { focusShown() ? focusScope : nil }
-    var scopePending = false  // a window's focus() is on its way: the scope is about to change
+    // The projects every window shows (one pick for all of them) as JSON, while one is up: Chief's BOARD and the watch have only
+    // these. nil: every project (none picked, or no window up: you're in the menubar alone). App.pickScope.
+    var scope: () -> String? = { nil }
     var chatSend: String {
-        let only = scope.map { " --only \(shellQuote($0))" } ?? ""
+        let only = scope().map { " --only \(shellQuote($0))" } ?? ""
         return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
@@ -2759,8 +2765,8 @@ final class Core: ObservableObject {
         watchTurn()
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
-        let (ask, hold) = inScope(fresh, pucks, scope)  // another project's waits: the chat speaks for the window you're in
-        guard watch, !ask.isEmpty, !scopePending, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        let (ask, hold) = inScope(fresh, pucks, scope())  // another project's waits: the chat speaks for the windows you're in
+        guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
@@ -5712,6 +5718,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
         }
+        greenlight.scope = { [weak self] in self?.pickScope }
         greenlight.showDockIcon()
         Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
@@ -5865,29 +5872,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         webs.forEach(pushPicks)
     }
-    // Windows answer out of order: only the newest ask is heard, so the window you left can't win over the one you're in. tick asks
-    // again only once an answer came back empty (a page still loading), never over one on its way, so a slow page isn't starved.
-    weak var focusWin: NSWindow?  // the window noteFocus last asked: the one Chief's scope is about
-    var focusAsked = 0, focusInFlight = false, focusAskedAt = Date.distantPast
     /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
     /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
     func noteFocus(_ w: NSWindow) {
         guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
         let id = termWins.first { $0.value === w }?.key
-        focusAsked += 1; focusWin = w; focusAskedAt = Date(); focusInFlight = true
-        let asked = focusAsked
-        greenlight.scopePending = true  // the watch waits for the answer rather than ask with the window you left
         web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focusInfo && term.focusInfo())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
-            guard let self, asked == self.focusAsked else { return }
-            self.focusInFlight = false
-            guard let o = (r as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] else {
-                if !w.isVisible { self.greenlight.focusShown = { false }; self.greenlight.scopePending = false }  // gone: every project
-                return  // its page isn't up yet (or failed): no answer isn't "every project"; the scope holds and tick asks again
-            }
-            self.greenlight.scopePending = false
+            guard let self else { return }
+            let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
-            self.greenlight.focusScope = focusScope(o)
-            self.greenlight.focusShown = { [weak w] in w?.isVisible == true }
             guard line != self.greenlight.focus else { return }
             self.greenlight.focus = line
             let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
@@ -6309,12 +6302,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         ud.set(only, forKey: "termOnly0"); syncL1()
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
-        syncPick()  // now, not a tick later: a snapshot's watch in between would ask with the old pick
     }
     var l1Only: [String]? { projList.isEmpty ? nil : sharedOnly }  // nil until a terminal page lists the projects
     var l1Picked: [[String: Any]] { (l1Only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
     var l1Paths: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["paths"] as? [String] ?? [] })).sorted() }  // sorted: the tick compares it
     var l1Repos: [String]? { l1Only == nil ? nil : Array(Set(l1Picked.flatMap { $0["repos"] as? [String] ?? [] })).sorted() }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
+    /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
+    /// them is up. Read straight from the pick, not asked of a page: nothing to wait on, and no answer from a window you've left.
+    var pickScope: String? {
+        windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
+    }
     func syncL1() {
         let ps = l1Picked, names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
         l1Floor.project = l1Only == nil ? "All projects" : names.isEmpty ? "No projects" : names
@@ -6581,8 +6578,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
-            // a terminal window asked before its trees came answered with none of them: ask again, queued after term.workspaces
-            if let w = self.focusWin, self.termWebs.contains(where: { $0.window === w }) { self.noteFocus(w) }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
@@ -6866,15 +6861,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func applicationDidBecomeActive(_ n: Notification) { if chatShown { greenlight.missed = 0 }; if window.isVisible { greenlight.unread = 0; tick(); raiseOrbs() } }
 
-    /// The projects picked changed: the pages hear it, then the window you were last in is asked again (queued after mc.paths and
-    /// setPick's term.only, so its focus() reads the new pick), and the watch waits for that answer rather than ask with the old one.
-    func syncPick() {
-        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
-        let repos = "\(json(l1Paths)), \(json(l1Repos))"
-        guard pushedRepos != repos else { return }
-        pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))")
-        if let w = focusWin ?? NSApp.keyWindow { noteFocus(w) }
-    }
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
         if !window.isVisible, tab.isVisible { greenlight.hint = "" }  // window hidden mid-hover: drop the tab
@@ -6891,15 +6877,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
-        syncPick()  // ahead of the watch: a pick that changed holds it until the window answers with the new scope
-        // The window you're in hasn't said what it shows: ask again 2s after an empty answer (a page still loading), or 10s into one
-        // that hangs. The watch holds meanwhile: no other scope is the window you're in (the last one may be another project's).
-        // Gone: every project. ponytail: a crashed page holds it until you switch windows; reload it (no terminal webview has a
-        // navigationDelegate for webViewWebContentProcessDidTerminate yet) if that turns up
-        if greenlight.scopePending {
-            if focusWin?.isVisible != true { greenlight.scopePending = false }
-            else if Date().timeIntervalSince(focusAskedAt) > (focusInFlight ? 10 : 2), let w = focusWin { noteFocus(w) }
-        }
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
@@ -6907,6 +6884,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if pushedBell != bell { pushedBell = bell; broadcast("window.mc && mc.bell(\(bell))") }
         let orb = greenlight.orbsHidden ? "0px" : "72px"  // the shelf keeps the orb's 56pt and some air clear at its right end
         if pushedOrb != orb { pushedOrb = orb; fluid.evaluateJavaScript("document.documentElement.style.setProperty('--orb-w', '\(orb)'); window.render && render()") }
+        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
+        let repos = "\(json(l1Paths)), \(json(l1Repos))"
+        if pushedRepos != repos { pushedRepos = repos; broadcast("window.mc && mc.paths && mc.paths(\(repos))") }
         if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
@@ -7173,6 +7153,10 @@ func selfTest() {
           inScope(wn, wp, gl) == (["chat-scope": "approve", "made-since": "ci"], ["odin/rsi-loop": "decide", "no-repo": "goal", "fix-ci": "ci"])
           && inScope(wn, wp, byPath) == (["no-repo": "goal"], ["odin/rsi-loop": "decide", "chat-scope": "approve", "made-since": "ci", "fix-ci": "ci"])
           && inScope(wn, wp, nil) == (wn, [:]) && inScope(wn, wp, focusScope(["paths": [], "repos": []])) == ([:], wn))
+    check("watch: the scope is the projects picked while a window shows them; none picked or no window up hears every project",
+          windowScope(paths: ["/w/greenlight/chat-scope"], repos: ["greenlight"], shown: true) == gl
+          && windowScope(paths: ["/w/greenlight/chat-scope"], repos: ["greenlight"], shown: false) == nil
+          && windowScope(paths: nil, repos: nil, shown: true) == nil && windowScope(paths: [], repos: nil, shown: true) == focusScope(["paths": [], "repos": []]))
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
     check("hexes: Chief's [hexes: …] line, stripped and resolved; the model's picks only when the reply points at them",
