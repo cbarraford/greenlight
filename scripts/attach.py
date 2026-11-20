@@ -163,28 +163,54 @@ def note(stored):
     return "\n".join(lines)
 
 
+SEGMENT = re.compile(r"(^|[^\w.-])(\.?/)?attachments/")  # a path into the attachments folder, not the word
+
+
 def mentions(chat_dir, step):
-    """Does a step event (a tool call) touch the attachments? By its absolute path, or relative to the chat dir (the agent's cwd)."""
+    """Does a step event (a tool call) touch the attachments? By its absolute path, or a relative one (the chat dir is the agent's cwd)."""
     s = " ".join(str(step.get(k) or "") for k in ("detail", "input", "call"))
-    return root(chat_dir) in s or re.search(r"(^|[^\w-])attachments\b", s) is not None
+    return root(chat_dir) in s or SEGMENT.search(s) is not None
 
 
-def needles(chat_dir, message):
-    """Lines of this turn's attached text files, to spot their contents in a tool's output however the agent got there
-    (a `grep -R` names no attachment). From the files the message names: [str]."""
-    out = []
-    for path in re.findall(r"^- .+? \(text, [^)]*\) at (.+?)(?:, its contents:|: too long to include here)", message, re.M):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                out += [l.strip() for l in fh.read(INLINE * 4).splitlines() if len(l.strip()) >= 12][:400]
-        except OSError:
-            pass
+def needles(chat_dir):
+    """Lines (16+ characters, whitespace collapsed as the events show it) of every text file still kept: to spot attachment
+    contents in a tool's output however the agent got there, this turn or a later one. A heuristic: shorter lines, or text an
+    agent rewrites, aren't recognised."""
+    out = set()
+    for d, _, names in os.walk(root(chat_dir)):
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                with open(p, "rb") as fh:
+                    b = fh.read(LIMITS["text"] + 1)
+            except OSError:
+                continue
+            if kind(b) == "text":
+                out |= {x for x in (" ".join(l.split()) for l in b.decode("utf-8").splitlines()) if len(x) >= 16}
     return out
 
 
-def shows(step_done, needles):
-    s = " ".join(str(step_done.get(k) or "") for k in ("out", "full"))
-    return any(n in s for n in needles)
+HIDDEN = "(from an attached file)"
+
+
+def hide(chat_dir, e, needles):
+    """A step event with what it shows of an attachment taken out, line by line: a line that names a path into the folder
+    (grep -R prints them) or holds a line of an attached text file. Other lines stay. True if anything was taken."""
+    took = False
+    def clean(text, lines):
+        nonlocal took
+        out = []
+        for l in (text.split("\n") if lines else [text]):
+            flat = " ".join(l.split())
+            if flat and (root(chat_dir) in flat or SEGMENT.search(flat) or any(n in flat for n in needles)):
+                took = True
+                l = HIDDEN
+            out.append(l)
+        return "\n".join(out)
+    for k, lines in (("out", False), ("detail", False), ("full", True), ("input", True)):
+        if isinstance(e.get(k), str) and e[k]:
+            e[k] = clean(e[k], lines)
+    return took
 
 
 def images(stored):

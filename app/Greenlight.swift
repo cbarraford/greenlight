@@ -704,7 +704,8 @@ func chatFile(_ data: Data, name raw: String) -> (file: ChatFile?, error: String
 func chatFile(at url: URL) -> (file: ChatFile?, error: String?) {
     let name = url.lastPathComponent, real = url.resolvingSymlinksInPath(), v = try? real.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
     if v?.isDirectory == true { return (nil, "\(name) is a folder: attach the files in it instead.") }
-    if v?.isRegularFile != true { return (nil, "\(name) isn't a file the chat can use: attach \(ChatFile.supported).") }  // a pipe or a device would never finish reading
+    guard let v else { return (nil, "\(name) couldn't be read.") }
+    if v.isRegularFile != true { return (nil, "\(name) isn't a file the chat can use: attach \(ChatFile.supported).") }  // a pipe or a device would never finish reading
     let cap = ChatFile.limits["image"]! * 8  // a photo that big still shrinks to fit; a bigger file won't
     guard let fh = try? FileHandle(forReadingFrom: real) else { return (nil, "\(name) couldn't be read.") }
     defer { try? fh.close() }
@@ -3118,7 +3119,7 @@ final class Core: ObservableObject {
     func active() { lastActive = Date(); checkedIn = false; if session > 0 { delegate.greenlight.active() } }  // the check-in is the main chat's
     func checkIn() {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
-        guard checkInMins > 0, !checkedIn, run == nil, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
+        guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
         checkedIn = true
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next"); r.checkIn = true
@@ -3149,7 +3150,7 @@ final class Core: ObservableObject {
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
         let (ask, hold) = inScope(fresh, pucks, scope())  // another project's waits: the chat speaks for the windows you're in
-        guard watch, !ask.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        guard watch, !ask.isEmpty, run == nil, clearing == 0, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
@@ -3161,7 +3162,7 @@ final class Core: ObservableObject {
     }
 
     func compact() {
-        guard run == nil, isClaude else { return }
+        guard run == nil, clearing == 0, isClaude else { return }
         start(Run("Compact context"), "\(chief) compact --model \(model)", stdin: "")
     }
 
@@ -3255,11 +3256,13 @@ final class Core: ObservableObject {
             return
         }
         if !ok && !r.files.isEmpty {  // not sent, or sent and failed: the files come back to try again, ahead of any added since, as many as fit
-            var back = [ChatFile]()
-            for f in r.files + files where back.count < ChatFile.maxFiles && back.reduce(f.data.count, { $0 + $1.data.count }) <= ChatFile.maxTotal && !back.contains(where: { $0.id == f.id }) { back.append(f) }
+            var back = files  // files added since stay; the failed send's join them as far as they fit
+            for f in r.files where back.count < ChatFile.maxFiles && back.reduce(f.data.count, { $0 + $1.data.count }) <= ChatFile.maxTotal && !back.contains(where: { $0.id == f.id }) { back.append(f) }
+            let n = back.count - files.count
             files = back
             if input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { input = r.text }  // and what was said about them
-            fileSays("Your files are back above the field, to send again.")
+            fileSays(n == r.files.count ? "Your files are back above the field, to send again."
+                     : "\(n) of the \(r.files.count) files that didn't go are back; the rest don't fit beside the ones you added.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
@@ -3282,7 +3285,8 @@ final class Core: ObservableObject {
         tps = 0
         if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
         if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
-            DispatchQueue.main.async { [weak self] in self?.clear(keepQueue: true) }
+            clearing += 1  // now, so nothing sent before the clear goes to the old conversation
+            DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }
         }
         if !popoverShown() && !r.stopping {
             missed += 1

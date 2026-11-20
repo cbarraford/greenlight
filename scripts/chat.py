@@ -372,7 +372,7 @@ def run(cmd, engine, text, norm, check=False):
     open(PIDFILE, "w").write(str(p.pid))
     p.stdin.write(text)
     p.stdin.close()
-    sid, done, private, needles = None, False, set(), attach.needles(DIR, text)
+    sid, done, private, needles = None, False, set(), attach.needles(DIR)
     for line in p.stdout:
         try:
             d = json.loads(line)
@@ -390,11 +390,13 @@ def run(cmd, engine, text, norm, check=False):
                 os.remove(PIDFILE)
             return sid, "retry"
         for e in evs:
-            if e["e"] == "step" and attach.mentions(DIR, e):
+            if e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
                 private.add(e["id"])
-            elif e["e"] == "step_done" and (e.get("id") in private or attach.shows(e, needles)):  # what the agent read of an attached file: not shown, not kept in the transcript
-                e["out"] = "(attached file)"
+            elif e["e"] == "step_done" and e.get("id") in private:
+                e["out"] = attach.HIDDEN
                 e.pop("full", None)
+            if e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+                attach.hide(DIR, e, needles)
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
                 json.dump(e["shells"], open(BGFILE, "w"))
                 continue
