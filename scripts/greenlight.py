@@ -167,7 +167,7 @@ CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|ren
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
            r"notify|e-?mail|message|get|port|hook|wire|file|sort|triage|translate|retrigger|kick off|page|auto-?merge|"
            r"what about|how about|what if|why not|check off|tick off|list (?:it|us|our \w+|my \w+) on|let|put|renew|roll|nudge|"
-           r"reassign|cherry-pick|force-push|re-review|check in|check out|generate|is it possible to|in(?:to)? (?:a|the|our|my|its|this) (?:[\w-]+ )?(?:docs?|readme|wiki|changelog|description|report|notes?)|"
+           r"reassign|cherry-pick|force-push|re-review|sign ?off|sign-off|check in|check out|generate|is it possible to|in(?:to)? (?:a|the|our|my|its|this) (?:[\w-]+ )?(?:docs?|readme|wiki|changelog|description|report|notes?)|"
            r"workspace|worktree|agent")  # never complete: a missed verb is why --change exists
 CHANGE_RE = re.compile(rf"\b({CHANGES})\b", re.I)  # base forms only: "is !42 merged?" asks about a state
 DET = r"the|a|an|it|its|them|this|that|these|those|my|our|your|their|his|her|me|us|him|all|every"
@@ -180,7 +180,7 @@ OFFER_RE = re.compile(  # the chat's question offered a change, not an answer th
     rf"\b(?:i|me|we|us)\b{S}*?{OFFER_VERB}{S}*\?|\bwant (?:a|an|me to|us to|it|this|that|one)\b{S}*\?"  # "can I add a meter?"
     rf"|\b(?:i can|i could|i'll|i will|let me|happy to)\s+(?:\S+\s+){{0,2}}?{OFFER_VERB}"  # "I can add a meter."
     rf"|^[ \t]*(?:[-*•]|\d+[.)])\s+(?:\*\*|__)?{OFFER_VERB}"  # "1. **Add a cost meter**: $2/mo", not a breakdown row:
-    rf"(?!(?:[ \t]+\w+)?(?:\*\*|__)?[ \t]*:)(?!(?:[ \t]+(?!(?:{DET})\b)\w+){{0,2}}(?:\*\*|__)?[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
+    rf"(?!(?:[ \t]+(?!(?:{DET})\b)\w+)?(?:\*\*|__)?[ \t]*:)(?!(?:[ \t]+(?!(?:{DET})\b)\w+){{0,2}}(?:\*\*|__)?[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
     rf"|^`?options:[^\n]*{OFFER_VERB}|{OFFER_VERB}[^\n]*\n`?options:", re.I | re.M)  # "Add a meter?\nOptions: …"
 AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do|go for it|sounds good)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
