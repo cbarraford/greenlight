@@ -136,10 +136,10 @@ def moves(r, blk=None):
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
     if mr.get("state") == "merged" and nxt.get("owner") == "me" and "signoff" in (nxt.get("cmd") or []):  # your step after the merge: deploy, verify
-        doc = greenlight.lifecycle_doc(r["project"])["stages"]
-        st = next((s for s in doc if s["key"] == nxt["step"]), None)
-        # a row from before the lifecycle dropped the step (greenlight.md's old deploy) asks nothing: the next scan says done
-        return [{"kind": "signoff", "step": nxt["step"], "run": st.get("run", "")}] if st and nxt["step"] in greenlight.split_merge([s["key"] for s in doc])[1] else []
+        if nxt["step"] not in greenlight.post_merge(r["project"]):
+            return []  # a row from before the lifecycle dropped the step (greenlight.md's old deploy): the next scan says done
+        st = next(s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == nxt["step"])
+        return [{"kind": "signoff", "step": nxt["step"], "run": st["run"]}]
     if mr.get("state") != "opened":
         return []
     mine = mr.get("role") == "author"
