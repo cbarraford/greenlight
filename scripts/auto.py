@@ -116,7 +116,7 @@ def execute(name):
         fh.write(json.dumps(rec) + "\n")
     (DIR / f"{name}.pid").unlink(missing_ok=True)
     if rec["status"] == "failed":
-        ping(f"Automation {name} failed: {rec['summary'][-150:]}\nLog: {logf}\nOptions: look into it | ignore")
+        ping(f"Automation {name} failed: {rec['summary'][-150:]}\nLog: {logf}\nOptions: look into it | ignore", kind="automation-failed")
 
 
 def spawn(name):
