@@ -1932,7 +1932,7 @@ final class Voice: NSObject, ObservableObject {
         on = false; transcript = false; ending = false
         heard = ""; caption = ""
         meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
-        DispatchQueue.main.async { LivePreview.shared.dismissNote() }
+        LivePreview.shared.voiceModeEnded()
     }
 }
 
@@ -2286,21 +2286,27 @@ final class LivePreview: ObservableObject {
     func play(_ voice: String, voiceOn: Bool, muted: Bool = outputMuted(), settle: Double = 0.35, key: @escaping () -> String? = { keychain("openai") }) {
         stop()
         Speech.shared.tester?.stop()  // an earlier Test line in another voice
-        if voiceOn { return phase = .skipped("Voice mode is on, so no preview (it would talk over it). \(voice.capitalized) takes over next time voice mode starts.") }
+        if voiceOn { return phase = .skipped("\(LivePreview.voiceOnNote), so no preview (it would talk over it). \(voice.capitalized) takes over next time voice mode starts.") }
         if muted { return phase = .skipped("This Mac’s sound is muted: unmute it, then press ▶ to hear \(voice.capitalized).") }
         let g = gen
         phase = .loading(voice)
         DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in self?.begin(voice, key, g) }
     }
     func stop() {
-        gen += 1
-        teardown()
+        teardown()  // bumps gen: its timers and callbacks are void
         phase = .idle
     }
-    /// Voice mode ended or a key was saved: a "voice mode is on" or failure note no longer applies.
-    func dismissNote() {
-        switch phase { case .skipped, .failed: phase = .idle; default: break }
+    /// Voice mode ended: its "voice mode is on" note no longer applies (a muted one still does).
+    func voiceModeEnded() {
+        if case .skipped(let why) = phase, why.hasPrefix(LivePreview.voiceOnNote) { phase = .idle }
     }
+    /// A key was saved or removed. A new OpenAI key may fix a failure, so ▶ is worth another try, and a preview still
+    /// starting on the old key is stopped (its refusal would land after the save). Removing a key fixes nothing.
+    func keyChanged(_ account: String, to v: String) {
+        guard account == "openai", !v.isEmpty else { return }
+        switch phase { case .loading: stop(); case .failed: phase = .idle; default: break }
+    }
+    static let voiceOnNote = "Voice mode is on"
 
     private func begin(_ voice: String, _ key: () -> String?, _ g: Int) {
         guard g == gen else { return }
@@ -2319,9 +2325,9 @@ final class LivePreview: ObservableObject {
         RunLoop.main.add(t, forMode: .common)  // and while the voice menu is open
         feed = t
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
-            if let self, self.gen == g, self.busy, !self.track.spoke { self.fail(voice, "GPT-Live didn’t speak within 12 s") }  // not over an earlier failure
+            if let self, self.gen == g, !self.track.spoke { self.fail(voice, "GPT-Live didn’t speak within 12 s") }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.gen == g, self.busy { self.finish(voice) } }  // a lost playback callback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.gen == g { self.finish(voice) } }  // a lost playback callback, or audio that stopped without the quiet
     }
     private func on(_ e: LiveEvent, _ voice: String, _ g: Int) {
         guard g == gen else { return }
@@ -2361,6 +2367,7 @@ final class LivePreview: ObservableObject {
     private func finish(_ voice: String) { teardown(); phase = .played(voice) }
     private func fail(_ voice: String, _ why: String) { NSLog("GPT-Live preview: %@", why); teardown(); phase = .failed(voice, why) }
     private func teardown() {
+        gen += 1  // its timers and late callbacks are void, so they can't replace how it ended
         feed?.invalidate(); feed = nil
         live?.close(); live = nil
         node?.stop(); engine?.stop(); node = nil; engine = nil; conv = nil
@@ -6988,7 +6995,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if keychain(account, set: v) == nil {
             let action = v.isEmpty ? "remove" : "save"
             greenlight.msgs.append(Msg(.note, "Couldn't \(action) the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
-        } else if account == "openai" { LivePreview.shared.dismissNote() }
+        } else { LivePreview.shared.keyChanged(account, to: v) }
         if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
     }
 
@@ -7298,16 +7305,30 @@ func selfTest() {
     pv.play("juni", voiceOn: false, muted: false, settle: 0.1, key: readKey); pv.stop()
     RunLoop.main.run(until: Date() + 0.3)
     check("voice: Stop before the preview starts reads no key and leaves nothing playing", keyReads == ["vesper"] && pv.phase == .idle && !pv.busy)
-    pv.play("cedar", voiceOn: true, muted: false, settle: 0, key: readKey); pv.dismissNote()
-    let skipCleared = pv.phase == .idle
-    pv.play("cedar", voiceOn: false, muted: false, settle: 0, key: readKey); RunLoop.main.run(until: Date() + 0.1)
-    let failedNote = pv.hint ?? ""; pv.dismissNote()
-    let failCleared = pv.phase == .idle
-    check("voice: voice mode ending or a saved key clears a preview's skip or failure note (\(failedNote))",
-          skipCleared && failedNote.contains("didn’t let Greenlight read it") && failCleared)
+    do {  // stale notes: voice mode ending clears only its own, a saved key only a failure
+        let sp = LivePreview.shared, vm = Voice()
+        sp.play("cedar", voiceOn: true, muted: false, settle: 0, key: readKey); vm.stopAll()
+        let voiceOnCleared = sp.phase == .idle
+        sp.play("cedar", voiceOn: false, muted: true, settle: 0, key: readKey); vm.stopAll(); sp.keyChanged("openai", to: "sk-new")
+        let mutedKept = { if case .skipped(let w) = sp.phase { return w.contains("muted") }; return false }()
+        sp.play("cedar", voiceOn: false, muted: false, settle: 0, key: readKey); RunLoop.main.run(until: Date() + 0.1)
+        let failedNote = sp.hint ?? ""; vm.stopAll()
+        sp.keyChanged("openai", to: ""); sp.keyChanged("elevenlabs", to: "xi-new")
+        let failKept = sp.hint == failedNote
+        sp.keyChanged("openai", to: "sk-new")
+        let failCleared = sp.phase == .idle
+        let reads0 = keyReads.count
+        sp.play("juni", voiceOn: false, muted: false, settle: 0.2, key: readKey); sp.keyChanged("openai", to: ""); sp.keyChanged("elevenlabs", to: "xi-new")
+        let loadingKept = sp.phase == .loading("juni")
+        sp.keyChanged("openai", to: "sk-new")  // before it reads a key; the live check below covers one already asking
+        RunLoop.main.run(until: Date() + 0.4)
+        let loadingStopped = sp.phase == .idle && keyReads.count == reads0
+        check("voice: voice mode ending clears only its own preview note; saving an OpenAI key a failure or a preview still starting, removing it or another key nothing (\(failedNote))",
+              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingKept && loadingStopped)
+    }
     do {  // the Keychain cache, on a fake Keychain: what a launch reads again, and what a failed save keeps
         let real = keychainOps, acct = "greenlight-selftest"
-        var item: String?, reads = 0, adds = 0, readFails: OSStatus?, saveFails: OSStatus?
+        var item: String?, reads = 0, adds = 0, readFails: OSStatus?, updateFails: OSStatus?, addFails: OSStatus?, deleteFails: OSStatus?
         func mine(_ q: CFDictionary) -> Bool { (q as NSDictionary)[kSecAttrAccount as String] as? String == acct }  // other accounts go to the real Keychain
         func value(_ d: CFDictionary) -> String? { ((d as NSDictionary)[kSecValueData as String] as? Data).map { String(decoding: $0, as: UTF8.self) } }
         var fake = real
@@ -7321,46 +7342,53 @@ func selfTest() {
         }
         fake.update = { q, v in
             guard mine(q) else { return real.update(q, v) }
-            if let st = saveFails { return st }
+            if let st = updateFails { return st }
             guard item != nil else { return errSecItemNotFound }
             item = value(v); return errSecSuccess
         }
         fake.add = { q, out in
             guard mine(q) else { return real.add(q, out) }
-            if let st = saveFails { return st }
+            if let st = addFails { return st }
             guard item == nil else { return errSecDuplicateItem }
             item = value(q); adds += 1; return errSecSuccess
         }
         fake.delete = { q in
             guard mine(q) else { return real.delete(q) }
-            if let st = saveFails { return st }
+            if let st = deleteFails { return st }
             guard item != nil else { return errSecItemNotFound }
             item = nil; return errSecSuccess
         }
         func relaunch() { keyLock.lock(); keys[acct] = nil; keyLock.unlock() }
         keyLock.lock(); keychainOps = fake; keyLock.unlock(); relaunch()
         let missing = [keychain(acct), keychain(acct)], missingReads = reads
+        addFails = errSecInteractionNotAllowed
+        let refusedFirst = keychain(acct, set: "sk-0"), afterRefusedFirst = keychain(acct), refusedFirstItem = item, refusedFirstReads = reads
+        addFails = nil
         let first = keychain(acct, set: "sk-1"), firstItem = item
-        relaunch(); readFails = errSecUserCanceled
-        let denied = [keychain(acct), keychain(acct)], deniedReads = reads - missingReads
-        relaunch(); readFails = errSecAuthFailed; reads = missingReads
-        let refused = [keychain(acct), keychain(acct)], refusedReads = reads - missingReads
-        let second = keychain(acct, set: "sk-2"), afterSet = keychain(acct), setReads = reads - missingReads
+        relaunch(); readFails = errSecUserCanceled; reads = 0
+        let denied = [keychain(acct), keychain(acct)], deniedReads = reads
+        relaunch(); readFails = errSecAuthFailed; reads = 0
+        let refused = [keychain(acct), keychain(acct)]
+        let second = keychain(acct, set: "sk-2"), afterSet = keychain(acct), setReads = reads  // the refused read only: the set is cached
         relaunch(); readFails = errSecInteractionNotAllowed; reads = 0
         let locked = [keychain(acct), keychain(acct)], lockedReads = reads
         readFails = nil
         let unlocked = [keychain(acct), keychain(acct)], unlockedReads = reads
-        saveFails = errSecInteractionNotAllowed
-        let badSave = keychain(acct, set: "sk-rejected"), badRemove = keychain(acct, set: ""), kept = keychain(acct), keptItem = item
-        saveFails = nil
+        updateFails = errSecInteractionNotAllowed; reads = 0  // add and delete would work: a refused update mustn't fall back to them
+        let badSave = keychain(acct, set: "sk-rejected"), afterBadSave = item
+        updateFails = nil; deleteFails = errSecInteractionNotAllowed
+        let badRemove = keychain(acct, set: ""), afterBadRemove = item, kept = keychain(acct), keptReads = reads  // still cached: no read
+        deleteFails = nil; reads = 0
         let removed = keychain(acct, set: ""), afterRemove = keychain(acct), removeReads = reads
         keyLock.lock(); keys[acct] = nil; keychainOps = real; keyLock.unlock()
-        check("keychain: a first key is added, a denied read isn't asked again until the key is set, a locked one is read again, then cached",
-              missing == [nil, nil] && missingReads == 1 && first == "sk-1" && firstItem == "sk-1" && adds == 1
-              && denied == [nil, nil] && deniedReads == 1 && refused == [nil, nil] && refusedReads == 1 && second == "sk-2" && afterSet == "sk-2" && setReads == 1 && adds == 1
+        check("keychain: a first key is added (a refused add saves and caches nothing), a denied read isn't asked again until the key is set, a locked one is read again, then cached",
+              missing == [nil, nil] && missingReads == 1 && refusedFirst == nil && afterRefusedFirst == nil && refusedFirstItem == nil && refusedFirstReads == 1
+              && first == "sk-1" && firstItem == "sk-1" && adds == 1
+              && denied == [nil, nil] && deniedReads == 1 && refused == [nil, nil] && second == "sk-2" && afterSet == "sk-2" && setReads == 1 && adds == 1
               && locked == [nil, nil] && lockedReads == 2 && unlocked == ["sk-2", "sk-2"] && unlockedReads == 3)
-        check("keychain: a failed save or remove keeps the saved key and the cached one; a removal sticks",
-              badSave == nil && badRemove == nil && kept == "sk-2" && keptItem == "sk-2" && removed == "" && afterRemove == nil && item == nil && removeReads == 3)
+        check("keychain: a refused save or remove keeps the saved and the cached key; a removal sticks",
+              badSave == nil && afterBadSave == "sk-2" && badRemove == nil && afterBadRemove == "sk-2" && kept == "sk-2" && keptReads == 0
+              && removed == "" && afterRemove == nil && item == nil && removeReads == 0)
     }
     if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
         // a real preview session (a fraction of a cent): it must speak the line, and its audio must play back through the output
@@ -7379,9 +7407,18 @@ func selfTest() {
         bad.play("vesper", voiceOn: false, muted: false, key: { "sk-not-a-key" })
         while Date() < b0 + 15 && bad.busy { RunLoop.main.run(until: Date() + 0.05) }
         let early = bad.hint ?? "-", failedIn = Date().timeIntervalSince(b0)
-        RunLoop.main.run(until: b0 + 13)
-        check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 13 s (\(bad.hint ?? "-"))",
+        RunLoop.main.run(until: b0 + 14.5)  // past the 12 s timer with its leeway
+        check("voice: a preview with a bad key says why (\(early), after \(String(format: "%.1f", failedIn)) s), and still does after 14.5 s (\(bad.hint ?? "-"))",
               { if case .failed(_, let w) = bad.phase { return w.contains("key") || w.contains("401") }; return false }() && failedIn < 12 && bad.hint == early)
+        // saving a key while a preview's session is already opening on the old one: the session closes (so its 401 never
+        // lands) and the preview's 12 s timer is void, so the note stays clear past both
+        let mid = LivePreview(), m0 = Date()
+        mid.play("vesper", voiceOn: false, muted: false, settle: 0, key: { "sk-not-a-key" })
+        while mid.opened == 0 && Date() < m0 + 2 { RunLoop.main.run(mode: .default, before: Date() + 0.01) }  // back as soon as begin() ran
+        let asking = mid.opened == 1 && mid.phase == .loading("vesper")
+        mid.keyChanged("openai", to: "sk-new")
+        RunLoop.main.run(until: m0 + 14.5)
+        check("voice: saving a key while a preview's session opens on the old one stops it; neither its 401 nor its 12 s timer shows (\(mid.hint ?? "-"))", asking && mid.phase == .idle)
     }
     // GREENLIGHT_LIVE_TEST=1 with OPENAI_API_KEY: a real gpt-live-1.1 session (a few cents). Apple's voice asks a question into it, as the mic
     // would; it must hand the turn off, then read a line exactly under that hand-off, as audible audio, which plays through a player node.
