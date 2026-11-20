@@ -928,7 +928,8 @@ async function treeDone(o){
   if (o.op === "new") {
     if (o.error) return ask({icon: "warn", title: "Couldn't make the workspace", text: esc(o.error), cancel: false});
     if (o.warn) toast(o.warn);
-    return newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
+    newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
+    made.set(o.path, wsInfo(o.repo)?.project || ""); reveal(o.path); save(); return render();
   }
   if (o.op === "cfg") {  // Save to repo: the file is the look now, so yours goes (Undo brings it back)
     if (o.error) return ask({icon: "warn", title: "Couldn't save to the repo", text: esc(o.error), cancel: false});
@@ -1017,7 +1018,9 @@ function merge(){
 }
 let ONLY = (() => { try { const o = JSON.parse(q.get("only") || "null"); return Array.isArray(o) ? o : null } catch { return null } })();
 const under = (path, d) => path === d || path?.startsWith(d + "/");
-const projOf = w => allP.find(p => p.repos.includes(w.project) || p.dirs.some(d => under(w.path, d)));
+// a workspace's project is its repo's (repoIn: the project that names the repo, else the one holding its main checkout), wherever the ADE
+// put the worktree; only a tree whose repo is in none goes by its own folder
+const projOf = w => (w.project ? repoIn(allP, w.project) : undefined) ?? allP.find(p => p.dirs.some(d => under(w.path, d)));
 const inView = w => !ONLY || ONLY.includes(projOf(w)?.id ?? "");
 const fullDir = d => (HOME && /^~(\/|$)/.test(d) ? HOME + d.slice(1) : d).replace(/(.)\/+$/, "$1");
 const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as the app's paneWhere
@@ -1064,13 +1067,21 @@ const isShut = k => k === "§done" ? !shut.has(k) : shut.has(k);  // ponytail: D
 function sideGroups(){
   // a workspace that's gone from every ADE stays while it has open terminals
   const vis = visTrees();
-  const all = [...vis, ...[...new Set(tabs.map(x => x.ws))].filter(ws => ws && ws[0] !== "@" && !vis.some(w => w.path === ws)).map(ws => ({project: "", name: ws.split("/").pop(), path: ws}))];
+  const all = [...vis, ...[...new Set(tabs.map(x => x.ws))].filter(ws => ws && ws[0] !== "@" && !vis.some(w => w.path === ws)).map(ws => ({project: made.get(ws) || "", name: ws.split("/").pop(), path: ws}))];
   const mine = w => ["needs", "raised"].includes(w.state) ? 0 : 1;
   all.sort((a, b) => mine(a) - mine(b));
   const label = w => projOf(w)?.name || w.project || NML;  // a repo in no project keeps its own header
   return SECS.map(([k, name]) => [k, name, all.filter(w => (["quiet", "done"].includes(w.state) ? w.state : "ws") === k)
     .reduce((m, w) => m.set(label(w), [...(m.get(label(w)) || []), w]), new Map())]).filter(x => x[2].size);
 }
+// open the section and project a workspace is listed under (a new one must not land in a collapsed group)
+function reveal(ws){
+  const g = sideGroups().find(([, , m]) => [...m.values()].some(l => l.some(w => w.path === ws)));
+  if (!g) return false;
+  const p = [...g[2]].find(([, l]) => l.some(w => w.path === ws))[0], flip = k => { if (isShut(k)) shut.has(k) ? shut.delete(k) : shut.add(k) };
+  flip("§" + g[0]); flip(g[0] + "/" + p); return true;
+}
+const made = new Map();  // workspaces New workspace just made → their repo: a bare row (by its tab) in the repo's project until the ADE lists it; revealed both times
 const sideOrder = () => sideGroups().flatMap(([k, , m]) => isShut("§" + k) ? [] : [...m].flatMap(([p, ws]) => isShut(k + "/" + p) ? [] : ws.map(w => w.path)));
 const esc = s => String(s).replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
 function renderSide(){
@@ -1113,8 +1124,23 @@ function renderSide(){
     g.onclick = () => { shut.has(k) ? shut.delete(k) : shut.add(k); render() };
     into.push(g);
   };
-  const out = [];  // a box per section holding its rows: Needs you, Working, Hosts, then the workspaces by status
-  // on top: Claude panes waiting on you (a bell), then the ones working; a row per workspace, a click goes to that pane
+  const out = [];  // a box per section holding its rows: Hosts (always first), Needs you, Working, then the workspaces by status
+  rows.length = 0; grp("§host", "Hosts", homes().length, "sec");
+  if (!isShut("§host")) {
+    const idle = el("div", "hchips");
+    for (const h of homes()) {
+      const n = wsTabs(h).length;
+      if (!n) { const c = el("button", "hchip" + (h === curWs ? " on" : "")); c.type = "button"; c.title = `New shell on ${wsName(h)}`;
+        c.append(el("span", "dot")); c.append(wsName(h)); c.onclick = () => openWs(h); c.oncontextmenu = e => { e.preventDefault(); wsMenu(e, h) }; idle.append(c); continue }
+      const at = rows.length; wsRow(h);
+      const l1 = rows[at].querySelector(".l1"); l1.querySelector(".dot").classList.add("live");
+      l1.lastChild.before(iconBtn("ca", "Close all", `Close ${n} terminal${n > 1 ? "s" : ""} on ${wsName(h)}`, () => wsTabs(h).forEach(closeTab)));
+      const card = el("div", "hc"); card.append(...rows.splice(at)); rows.push(card);
+    }
+    if (idle.children.length) rows.push(idle);
+  }
+  const hb = el("div", "box s-host" + (isShut("§host") ? " shut" : "")); hb.setAttribute("role", "group"); hb.append(...rows); out.push(hb);
+  // under Hosts: Claude panes waiting on you (a bell), then the ones working; a row per workspace, a click goes to that pane
   const alerts = (k, label, ps, tail) => {
     const by = new Map(); ps.forEach(p => by.has(p.tab.ws) || by.set(p.tab.ws, p));
     if (!by.size) return;
@@ -1132,21 +1158,6 @@ function renderSide(){
   const cl = [...panes.values()].filter(isClaude);
   alerts("need", "Needs you", cl.filter(p => p.bell), p => el("span", "badge k-o", esc(p.why || "Asking")));
   alerts("work", "Working", cl.filter(p => p.st === "work" && !p.bell), p => el("span", "why", p.workAt ? dur(p.workAt) : ""));
-  rows.length = 0; grp("§host", "Hosts", homes().length, "sec");
-  if (!isShut("§host")) {
-    const idle = el("div", "hchips");
-    for (const h of homes()) {
-      const n = wsTabs(h).length;
-      if (!n) { const c = el("button", "hchip" + (h === curWs ? " on" : "")); c.type = "button"; c.title = `New shell on ${wsName(h)}`;
-        c.append(el("span", "dot")); c.append(wsName(h)); c.onclick = () => openWs(h); c.oncontextmenu = e => { e.preventDefault(); wsMenu(e, h) }; idle.append(c); continue }
-      const at = rows.length; wsRow(h);
-      const l1 = rows[at].querySelector(".l1"); l1.querySelector(".dot").classList.add("live");
-      l1.lastChild.before(iconBtn("ca", "Close all", `Close ${n} terminal${n > 1 ? "s" : ""} on ${wsName(h)}`, () => wsTabs(h).forEach(closeTab)));
-      const card = el("div", "hc"); card.append(...rows.splice(at)); rows.push(card);
-    }
-    if (idle.children.length) rows.push(idle);
-  }
-  const hb = el("div", "box s-host" + (isShut("§host") ? " shut" : "")); hb.setAttribute("role", "group"); hb.append(...rows); out.push(hb);
   for (const [sk, label, byProj] of sideGroups()) {
     rows.length = 0;
     grp("§" + sk, label, [...byProj.values()].flat().length, "sec");
@@ -1778,7 +1789,7 @@ function toAgent(ws, text){
 // a branch name from the goal: its first five words, lowercase, dashed
 const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 5).join("-").slice(0, 40).replace(/-+$/, "");
 function newWsDialog(){
-  const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs);
+  const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (ONLY && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
   if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
@@ -1803,7 +1814,7 @@ function newWsDialog(){
     sl.hidden = typeof c !== "string" || !c; none.hidden = !sl.hidden; sc.textContent = c || "";
     name.placeholder = slug(goal.value) || "feat/short-name"; sb.textContent = b;
     where.hidden = w?.ade !== "basement" || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
-    foot.innerHTML = b ? `Creates <code>${esc(b)}</code> from ${esc(base.value.trim() || "the default branch")}` : "Write a goal, or name the branch";
+    foot.innerHTML = b ? `Creates <code>${esc(b)}</code> in <b>${esc(w?.project || "the repo")}</b> from ${esc(base.value.trim() || "the default branch")}` : "Write a goal, or name the branch";
   };
   sel.onchange = goal.oninput = name.oninput = base.oninput = sync; sync();
   const host = HOST === "local" ? "this Mac" : HOST;
@@ -1815,7 +1826,7 @@ function newWsDialog(){
     if (trees.some(w => w.project === repo()?.project && w.branch === n)) return bad(`${repo().project} already has a workspace on ${n}`);
     if (b && !ok(b)) { err.textContent = "From: a branch name, or empty for the default branch"; base.focus(); return false }
     post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify({name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""})});
-    toast(`Making ${n}…`); return true;
+    toast(`Making ${n} in ${repo()?.project || "the repo"}…`); return true;
   }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `A worktree on a new branch, on ${host}`, left: [foot]});
   $("dlg").querySelector("button.pri").innerHTML = "Create workspace<kbd>↩</kbd>";
   goal.focus();
@@ -1959,6 +1970,7 @@ window.term = {
     panes.forEach(p => p.t.dispose?.()); panes.clear(); tabs.forEach(t => t.r.remove()); tabs.length = 0; cur = null; return out },
   workspaces: o => { trees = o?.trees || []; treesIn = true; const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
+    for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
   palette: open => restored && palette(open),
 };
