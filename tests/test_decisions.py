@@ -118,6 +118,9 @@ assert next(r for r in recs() if r["id"] == rid)["proposal"] == new
 changed = decisions.asked("Work next?\nOptions: later | fix-002", key="fix-002", kind="agent-stuck", proposal=new | {"index": 1})
 assert changed != rid and next(r for r in recs() if r["id"] == rid)["closed"] == "superseded"
 assert next(r for r in recs() if r["id"] == changed)["options"] == ["later", "fix-002"]
+plain = decisions.asked("Unkeyed choice?\nOptions: old | later")
+plain_changed = decisions.asked("Unkeyed choice?\nOptions: new | later")
+assert plain_changed != plain and next(r for r in recs() if r["id"] == plain)["closed"] == "superseded"
 
 # AskUserQuestion (an on-demand run): the PostToolUse hook gets the questions and the answers at once
 ask = {"questions": [

@@ -3997,7 +3997,8 @@ final class Core: ObservableObject {
         let auto = j["auto"] as? [String: Any], aid = auto?["id"] as? String, chose = auto?["choice"] as? String
         if aid == nil, questions.contains(where: { $0.answer == nil && $0.text == text && $0.options == options && $0.key == key }) { return }
         var fresh = true  // a newer ping about the same workspace replaces the open one
-        for i in questions.indices where key != nil && questions[i].answer == nil && questions[i].key == key {
+        for i in questions.indices where questions[i].answer == nil &&
+            ((key != nil && questions[i].key == key) || (key == nil && questions[i].key == nil && questions[i].text == text)) {
             questions[i].answer = "(superseded)"
             if replyingTo == questions[i].id { replyingTo = nil }
             fresh = false
@@ -9656,16 +9657,20 @@ func selfTest() {
         onMain {  // pings: options parsed, inbox chips/dismiss
             c.questions.removeAll { !$0.ping && $0.answer == nil }  // the live chat's own last question, if the model asked one, isn't under test
             let n = c.msgs.count
-            c.ping(#"{"ts": 1792700000, "text": "ws-a: merge !1?\nOptions: merge | hold"}"#)
+            c.ping(#"{"ts": 1792700000, "text": "ws-a: merge !1?\nOptions: merge | hold", "key": "ws-a"}"#)
             c.ping(#"{"text": "ws-b: goal for this workspace?"}"#)
             let w = c.waiting
             check("pings land in the inbox with options: \(w.map(\.options))", w.count == 2 && w[0].options == ["merge", "hold"] && w[0].text == "ws-a: merge !1?" && w[1].options.isEmpty)
             check("pings stay out of the chat", c.msgs.count == n)
-            c.ping(#"{"text": "ws-a: merge !1?\nOptions: hold | merge"}"#)
+            c.ping(#"{"text": "ws-a: merge !1?\nOptions: hold | merge", "key": "ws-a"}"#)
             check("changed options replace old inbox chips", c.waiting.first { $0.text == "ws-a: merge !1?" }?.options == ["hold", "merge"])
             c.answer(c.waiting.first { $0.text == "ws-a: merge !1?" }!, "dismissed", send: false)
             c.answer(w[1], "(dismissed)", send: false)
             check("dismissing clears the bell without sending", c.waiting.isEmpty && c.run == nil)
+            c.ping(#"{"text": "ws-e: choose?\nOptions: old | later"}"#)
+            c.ping(#"{"text": "ws-e: choose?\nOptions: new | later"}"#)
+            check("unkeyed changed options replace old chips", c.waiting.filter { $0.text == "ws-e: choose?" }.map(\.options) == [["new", "later"]])
+            c.answer(c.waiting.first { $0.text == "ws-e: choose?" }!, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
             c.ping(#"{"text": "ws-d: goal?", "key": "ws-d"}"#)
             c.ping(#"{"resolve": "ws-c", "why": "workspace removed"}"#)

@@ -148,7 +148,7 @@ def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None
                 else:
                     r.pop("proposal", None)
                 return r["id"]
-            if (via == "ping" and key and r["key"] == key) or (via == "chat" and r.get("chat") == chat):
+            if (via == "ping" and ((key and r["key"] == key) or (key is None and r["key"] is None and r["question"] == rec["question"]))) or (via == "chat" and r.get("chat") == chat):
                 r["closed"] = "superseded"
         recs.append(rec)
     return rec["id"]
