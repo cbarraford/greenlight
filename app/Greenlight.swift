@@ -597,35 +597,62 @@ func fallbackSpec(_ text: String) -> [String: Any] {
     return ["title": ss.first ?? "", "kind": "list", "icon": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 
-/// Haiku 5.5 (no thinking, low effort, structured output) draws what Chief is saying as a card for stage.spec.
+/// One Claude Haiku 5.5 call (no thinking, low effort, structured output), for the quick decisions around Chief's replies.
 /// nil when there's no key, or on an error, a refusal or a cut-off reply: the caller keeps what's on screen.
-func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
+func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @escaping ([String: Any]?) -> Void) {
     guard let key = keychain("anthropic"), !key.isEmpty else { return done(nil) }
     var q = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
     q.httpMethod = "POST"
     q.timeoutInterval = 20
     for (k, v) in ["x-api-key": key, "anthropic-version": "2026-10-21", "content-type": "application/json"] { q.setValue(v, forHTTPHeaderField: k) }
+    let body: [String: Any] = [
+        "model": "claude-haiku-5-5", "max_tokens": 600, "thinking": ["type": "disabled"],
+        "output_config": ["effort": "low", "format": ["type": "json_schema", "schema": schema]],
+        "system": system, "messages": [["role": "user", "content": user]]]
+    q.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    URLSession.shared.dataTask(with: q) { d, resp, err in
+        let j = d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let text = (j?["content"] as? [[String: Any]])?.first { $0["type"] as? String == "text" }?["text"] as? String
+        if j?["stop_reason"] as? String != "end_turn" {  // a 400 shouldn't look like "no key": Console.app, process Greenlight
+            NSLog("haiku: %@ %@", "\((resp as? HTTPURLResponse)?.statusCode ?? 0)", err?.localizedDescription ?? d.flatMap { String(data: $0.prefix(400), encoding: .utf8) } ?? "")
+        }
+        let out = j?["stop_reason"] as? String == "end_turn" ? text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } : nil
+        DispatchQueue.main.async { done(out) }
+    }.resume()
+}
+
+/// Haiku draws what Chief is saying as a card for stage.spec.
+func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
     let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
                                "required": ["label", "detail"], "additionalProperties": false]
     let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["title", "kind", "icon", "stat", "items"], "properties": [
         "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
         "icon": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
-    let body: [String: Any] = [
-        "model": "claude-haiku-5-5", "max_tokens": 600, "thinking": ["type": "disabled"],
-        "output_config": ["effort": "low", "format": ["type": "json_schema", "schema": schema]],
-        "system": "You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
+    haiku("You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
             + "title: the point in a few words. kind: list (facts), steps (an order), stat (one number matters: put it in stat, e.g. \"3 MRs\"), "
             + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
             + "icon: one emoji or empty. items: at most 6, label a few words, detail one short line or empty. Use names, numbers and MR refs "
             + "from the reply; never invent any. stat is empty unless kind is stat.",
-        "messages": [["role": "user", "content": "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)"]]]
-    q.httpBody = try? JSONSerialization.data(withJSONObject: body)
-    URLSession.shared.dataTask(with: q) { d, _, _ in
-        let j = d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        let text = (j?["content"] as? [[String: Any]])?.first { $0["type"] as? String == "text" }?["text"] as? String
-        let spec = j?["stop_reason"] as? String == "end_turn" ? text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } : nil
-        DispatchQueue.main.async { done(spec) }
-    }.resume()
+          "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
+}
+
+/// The decision model for the dashboard: which workspaces (hexes) Chief's reply is about. Picks only real names (an enum of them);
+/// none when the reply isn't about any. nil: no key or a failed call, so the hive is left as it is.
+func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([String]?) -> Void) {
+    let ws = pucks.prefix(150).compactMap { p -> (String, String)? in
+        guard let n = p["name"] as? String else { return nil }
+        let mr = p["mr"] as? [String: Any]
+        return (n, [n, mr?["ref"] as? String, mr?["title"] as? String, p["state"] as? String, p["why"] as? String].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
+    }
+    guard !ws.isEmpty else { return done([]) }
+    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["hexes"],
+                                 "properties": ["hexes": ["type": "array", "items": ["type": "string", "enum": ws.map(\.0)]]]]
+    haiku("You decide which of the user's workspaces an assistant's reply is about, to highlight them on the user's dashboard. "
+            + "hexes: the names of the workspaces the reply names, recommends, asks about or acts on (by name, branch, MR/PR number or title). "
+            + "Empty when it's about none of them or only about all of them in general. Never guess.",
+          "Workspaces (name | MR | title | state | why):\n" + ws.map(\.1).joined(separator: "\n") + "\n\nThe reply:\n" + reply, schema) { out in
+        done(out.map { ($0["hexes"] as? [String] ?? []).filter { n in ws.contains { $0.0 == n } } })
+    }
 }
 
 /// One buffer in another format (rate, channels, sample type): the mic to 16 kHz mono for recognition, speech to the player's.
@@ -1337,6 +1364,7 @@ final class Core: ObservableObject {
 
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
     @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
+    var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
     func watched(_ pucks: [[String: Any]]) {
         let (now, new) = newNeeds(needs, pucks)
@@ -1437,6 +1465,12 @@ final class Core: ObservableObject {
         m.failed = !ok
         msgs.append(m)
         if ok && !options.isEmpty { questions.append(Question(text: body, options: options, ping: false)) }
+        if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
+            picks += 1
+            let n = picks
+            delegate.pick([])
+            pickHexes(body, pucks) { [weak self] names in if let names, n == self?.picks { delegate.pick(names) } }
+        }
         run = nil
         tps = 0
         if !popoverShown() && !r.stopping {
@@ -2372,8 +2406,8 @@ struct SettingsView: View {
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
         }
         box("Voice mode") {
-            row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
-                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
+            row("Anthropic key", "Claude Haiku 5.5 draws what \(c.name) says on the stage, and lights up the workspaces each reply is about. Stored in your Keychain; without it the stage shows a plain list and nothing lights up.") {
+                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "Claude Haiku 5.5: voice mode's stage and the highlighted workspaces") }
             }
             row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
                 Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
@@ -3726,6 +3760,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if let v = viewWindows.first(where: { $0.value.contentView === web })?.key { return #"{"only":"\#(v)"}"# }
         return #"{"away":[\#(viewWindows.keys.map { "\"\($0)\"" }.joined(separator: ","))]}"#
     }
+    func pick(_ names: [String]) {
+        guard let d = try? JSONSerialization.data(withJSONObject: names), let j = String(data: d, encoding: .utf8) else { return }
+        webs.forEach { $0.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))") }
+    }
     func pushMode() { webs.forEach { $0.evaluateJavaScript("window.mc && mc.mode(\(modeJSON(for: $0)))") } }
     lazy var window: NSWindow = {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -3818,6 +3856,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func queueBuilds(_ l: String) {
         guard let d = l.data(using: .utf8), let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let pucks = snap["pucks"] as? [[String: Any]] else { return }
+        greenlight.pucks = pucks
         greenlight.watched(pucks)
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,

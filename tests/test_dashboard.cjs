@@ -526,6 +526,18 @@ test("terminal: keys send what Ghostty sends, and ⌘K / ⌘A / ⌘F / ⌘V / pa
   await tp.close();
 });
 
+test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [] or a click on one clears", async page => {
+  const name = await page.evaluate(() => document.querySelector(".cell").dataset.name);
+  await page.evaluate(n => window.mc.pick([n, "not-a-workspace"]), name);
+  assert.ok(await page.$(".fieldwrap.picking"), "the hive steps back");
+  assert.deepEqual(await page.$$eval(".cell.picked", e => e.map(c => c.dataset.name)), [name]);
+  await page.evaluate(() => window.mc.pick([]));
+  assert.ok(!(await page.$(".fieldwrap.picking")) && !(await page.$(".cell.picked")), "[] clears");
+  await page.evaluate(n => window.mc.pick([n]), name);
+  await page.click(`.cell.picked`);
+  assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");
+});
+
 (async () => {
   const browser = await chromium.launch({executablePath: browserPath()});
   let failed = 0;
