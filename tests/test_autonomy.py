@@ -41,8 +41,8 @@ def cli(*args, stdin=""):
 KD = "\nOptions: mark ready | keep draft"
 
 # risk: only inert answers are low; actions need confirmation; human gates are high
-assert [autonomy.risk(o) for o in ("keep draft", "not yet", "keep holding")] == ["low"] * 3
-assert [autonomy.risk(o) for o in ("mark ready", "set 3.22", "nudge it", "keep the branch and delete workspace")] == ["medium"] * 4
+assert [autonomy.risk(o) for o in ("keep draft", "keep holding", "keep workspace")] == ["low"] * 3
+assert [autonomy.risk(o) for o in ("no", "not yet", "mark ready", "set 3.22", "nudge it", "keep the branch and delete workspace")] == ["medium"] * 6
 assert autonomy.risk("keep draft and merge") == "high"
 assert [autonomy.risk(o) for o in ("merge", "merge anyway", "deployed, sign off all", "approve")] == ["high"] * 4
 assert [autonomy.risk(o) for o in ("delete", "delete all 3", "close it")] == ["medium"] * 3
@@ -158,14 +158,24 @@ try:
 finally:
     greenlight.ping = original_ping
 assert not autonomy.audit_log()[0].get("undone")  # retry must still be possible
+def ping_with_concurrent_audit(*args, **kw):
+    result = original_ping(*args, **kw)
+    autonomy.audit({"act": "held", "kind": "watch", "text": "another process wrote this while Undo reasked"})
+    return result
+greenlight.ping = ping_with_concurrent_audit
 with contextlib.redirect_stdout(io.StringIO()):
     autonomy.undo(res["id"])
+greenlight.ping = original_ping
 assert autonomy.audit_log()[0]["undone"]
-assert decisions.calibrate()["keep-draft"]["bands"]["auto"] == {"n": 1, "right": 0, "acc": 0.0}
+assert autonomy.audit_log()[-1]["act"] == "held"  # Undo preserved a concurrent audit append
+assert "keep-draft" not in decisions.calibrate()  # re-asking alone says nothing about whether the guess was right
 again = outbox()[-1]
 assert "auto" not in again and "suggest" not in again and again["text"].startswith("Undo: greenlight answered 'keep draft'") and again["text"].endswith(KD), again
 assert decisions.load()[-1]["answer"] is None and "feat-9" in greenlight.pinged()
 assert autonomy.tally("keep-draft", ["mark ready", "keep draft"], decisions.load())[0] == [0, 25]  # Undo cannot change human history
+question = decisions.split_options(again["text"])[0]
+decisions.heard(f'(Replying to your question: "{question}")\nkeep draft')
+assert decisions.calibrate()["keep-draft"]["bands"]["auto"] == {"n": 1, "right": 1, "acc": 1.0}
 assert cli("undo", "nope").returncode != 0
 # a grouped (@) ping answered for you asks again on undo, though its key was pinged within the flap window
 assert autonomy.propose("keep-draft", "x?" + KD)["tier"] == 1  # one correction is not enough to cap the band
@@ -175,6 +185,48 @@ with contextlib.redirect_stdout(io.StringIO()):
     assert res and res.get("auto"), res
     autonomy.undo(res["id"])
 assert outbox()[-1]["key"] == "@drafts-2" and outbox()[-1]["text"].startswith("Undo:"), outbox()[-1]
+
+# failed writes must not invent an auto answer or duplicate one on retry
+reset()
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
+autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
+original_quiet = decisions.quiet
+decisions.quiet = lambda *a, **kw: None
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        greenlight.ping("write failed?" + KD, "@write-failed", kind="keep-draft")
+finally:
+    decisions.quiet = original_quiet
+assert "auto" not in outbox()[-1] and not autonomy.audit_log()
+reset()
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
+autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
+original_audit = autonomy.audit
+autonomy.audit = lambda *a, **kw: (_ for _ in ()).throw(OSError("audit unavailable"))
+try:
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        greenlight.ping("audit failed?" + KD, "@audit-failed", kind="keep-draft")
+finally:
+    autonomy.audit = original_audit
+assert "auto" not in outbox()[-1] and decisions.load()[-1]["answer"] is None
+reset()
+past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
+autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
+original_outbox = greenlight.outbox
+greenlight.outbox = lambda *a, **kw: (_ for _ in ()).throw(OSError("outbox unavailable"))
+try:
+    try:
+        greenlight.ping("outbox failed?" + KD, "@outbox-failed", kind="keep-draft")
+        assert False, "failed outbox must surface"
+    except OSError:
+        pass
+finally:
+    greenlight.outbox = original_outbox
+saved = autonomy.audit_log()[0]
+assert decisions.load()[-1]["answer_via"] == "auto" and outbox() == []
+with contextlib.redirect_stdout(io.StringIO()):
+    recovered = greenlight.ping("outbox failed?" + KD, "@outbox-failed", kind="keep-draft")
+assert recovered["id"] == saved["id"] and len(autonomy.audit_log()) == 1 and len(outbox()) == 1
 
 # tier 2: preselected in the app, with the numbers for its badge
 reset()

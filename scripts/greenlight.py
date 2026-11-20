@@ -1102,6 +1102,19 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     A kind autonomy.py knows gets its proposal (tier 1: answered for you and returned as {"auto": option, "id": audit id};
     tier 2: preselected in the app). proactive: only when autonomy.gate() lets it interrupt; held: returns {"held": gate}.
     ask: always ask, no proposal (an undo asking again)."""
+    if not ask and key:
+        # Recover a committed auto answer whose outbox append failed, without making another decision.
+        records = {r["id"]: r for r in decisions.load()}
+        for a in reversed(autonomy.audit_log()):
+            r = records.get(a.get("record"))
+            if (a.get("act") == "auto" and not a.get("undone") and a.get("key") == key and a.get("text") == text
+                    and a.get("ts", 0) > time.time() - FLAP and r and r.get("answer_via") == "auto"):
+                if not any(e.get("auto", {}).get("id") == a["id"] for e in outbox_events()):
+                    outbox({"text": text, "key": key, "ws": a.get("ws") or [],
+                            "auto": {"id": a["id"], "choice": a["choice"], "prob": a["prob"]}})
+                    print(f"auto: {a['choice']}  (recovered; undo: autonomy.py undo {a['id']}). Act on it now as the user's answer.")
+                    return {"auto": a["choice"], "id": a["id"]}
+                break
     if not ask and key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list (an undo asks regardless)
         print(f"skipped: {key} was pinged in the last {FLAP // 3600}h")
         return
@@ -1140,9 +1153,10 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     if prop and prop["tier"] == 2:
         ev["suggest"] = {f: prop[f] for f in ("choice", "index", "prob", "count", "agree")}
     outbox(ev)
-    decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
+    rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
     if key:
         pinged(pinged() | {key: int(time.time())})
+    return {"asked": rid} if rid else None
 
 
 FLAP = 24 * 3600

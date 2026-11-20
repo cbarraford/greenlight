@@ -3555,9 +3555,9 @@ final class Core: ObservableObject {
 
     /// autonomy.py's anti-slop gate for a question nobody asked for (the idle check-in, the watch): may it interrupt now?
     /// Only a clear "held" stops it: a host that can't say (ssh down, a checkout without autonomy.py) lets it through.
-    func gate(_ kind: String, _ go: @escaping (Bool) -> Void) {
+    func gate(_ kind: String, text: String, _ go: @escaping (Bool) -> Void) {
         var out = ""
-        ssh("\(py)/autonomy.py gate --kind \(kind)", onLine: { out += $0 }, onExit: { [weak self] code in
+        ssh("\(py)/autonomy.py gate --kind \(shellQuote(kind)) \(shellQuote(text))", onLine: { out += $0 }, onExit: { [weak self] code in
             let held = code == 1 && out.contains("\"ok\": false")
             if held, let self { self.log(.chief, self.name, .status, "\(kind) held by the ping gate: \(out)") }
             go(!held)
@@ -3747,7 +3747,7 @@ final class Core: ObservableObject {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
         guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, queue.isEmpty, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
         checkedIn = true
-        gate("check-in") { [weak self] ok in  // you dismissed the last few check-ins: this one waits (autonomy.py)
+        gate("check-in", text: "Idle check-in after \(checkInMins) minutes without Greenlight activity; ask what workspace to work on next") { [weak self] ok in
             guard let self, ok, self.run == nil, self.clearing == 0, self.queue.isEmpty else { return }
             self.checkInTurn()
         }
@@ -3786,7 +3786,7 @@ final class Core: ObservableObject {
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
-        gate("watch") { [weak self] ok in  // held (its questions keep getting dismissed): these aren't news next time either
+        gate("watch", text: list) { [weak self] ok in  // score the new workspaces before the watch interrupts
             guard let self, ok else { return }
             guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = ask.merging(self.fresh) { $1 }; return }  // busy meanwhile
             let r = Run("Watching the workspaces"); r.watch = true
@@ -3993,10 +3993,10 @@ final class Core: ObservableObject {
         }
         var q = Question(text: text, options: options, ping: true, ts: (j["ts"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date(), key: key,
                          ws: ws?.isEmpty == false ? ws : nil)
-        if let aid, let chose {  // answered for you (an opted-in kind, sure and reversible): in Answered, with Undo
+        if let aid, let chose {  // answered for you (an opted-in kind, sure and inert): in Answered
             q.answer = "Auto: \(chose)"; q.auto = aid
             questions.append(q)
-            return notify(title: name, body: "Answered for you: \(chose). Undo it under Answered in the bell.\n\(text)", subtitle: nil, reply: false, id: key)
+            return notify(title: name, body: "Answered for you: \(chose). Ask again under Answered in the bell.\n\(text)", subtitle: nil, reply: false, id: key)
         }
         if let s = j["suggest"] as? [String: Any], let ch = s["choice"] as? String, options.contains(ch) {
             q.suggest = Suggest(choice: ch, prob: (s["prob"] as? NSNumber)?.doubleValue ?? 0, count: (s["count"] as? NSNumber)?.intValue ?? 0,
@@ -4015,7 +4015,7 @@ final class Core: ObservableObject {
         if let subtitle { c.subtitle = subtitle }
         c.body = body
         c.sound = .default
-        if session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
+        if reply && session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
         c.userInfo = ["text": body]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id ?? UUID().uuidString, content: c, trigger: nil))
     }

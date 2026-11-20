@@ -219,16 +219,21 @@ def band(p):
 
 def calibrate(recs=None):
     """Empirical accuracy of autonomy.py's proposals, per kind: {kind: {n, right, acc, bands: {auto|suggest|ask: {n, right, acc}}}}.
-    Right: you picked the proposed option. An undone auto answer is a miss; an unchallenged auto answer isn't evidence."""
+    Right: you picked the proposed option. An auto answer is measured only when the user answers its re-ask."""
     recs = load() if recs is None else recs
     f = STATE / "autonomy.jsonl"
-    undone = {e.get("record") for e in map(json.loads, f.read_text().splitlines() if f.exists() else []) if e.get("undone")}
+    reasked = {e.get("record"): e.get("reasked_record") for e in map(json.loads, f.read_text().splitlines() if f.exists() else [])
+               if e.get("undone")}
+    by_id = {r["id"]: r for r in recs}
     out = {}
     for r in recs:
         prop = r.get("proposal")
-        if not prop or (r["answer"] is None and r["id"] not in undone) or (r["answer_via"] == "auto" and r["id"] not in undone):
+        if not prop or r["answer"] is None:
             continue
-        right = r["id"] not in undone and r["choice"] == prop["index"]
+        verdict = by_id.get(reasked.get(r["id"])) if r["answer_via"] == "auto" else r
+        if verdict is None or verdict["answer"] is None:
+            continue
+        right = verdict["choice"] == prop["index"]
         k = out.setdefault(r["kind"], {"n": 0, "right": 0, "bands": {b: {"n": 0, "right": 0} for b in ("auto", "suggest", "ask")}})
         for s in (k, k["bands"][band(prop["prob"])]):
             s["n"] += 1

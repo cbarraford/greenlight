@@ -28,6 +28,8 @@ State in $GREENLIGHT_HOME: autonomy.json (settings), autonomy.jsonl (audit). Std
 at load (undo does, lazily, to ask again). scripts/decide.py (system one) is optional: without it, or when it fails,
 proposals rest on past answers alone.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -61,7 +63,7 @@ RUBRIC = ("Is this message worth interrupting the user for right now? 1 when it 
           "filler, a status recap, a repeat, or something greenlight could do or wait out by itself.")
 
 # Only these complete answers are inert enough to answer without the user. Other actions still get a suggestion.
-NOOP_RE = re.compile(r"^\s*(?:no|not yet|keep(?: draft| it a draft| holding)?|wait|hold|skip|later|leave it|ignore|stay)\s*[.!]?\s*$", re.I)
+NOOP_RE = re.compile(r"^\s*(?:keep(?: draft| it a draft| workspace| the workspace| holding)?|wait|hold|skip|later|leave it|ignore|stay)\s*[.!]?\s*$", re.I)
 HIGH_RE = re.compile(r"\b(?:merge[sd]?|deploy(?:ed)?|sign(?:ed)?[ -]?off|approve[sd]?|release[sd]?|publish(?:ed)?|force|ship)\b", re.I)
 GONE_RE = re.compile(r"\b(?:delete[sd]?|remove[sd]?|close[sd]?|discard(?:ed)?|drop(?:ped)?|kill(?:ed)?|abandon(?:ed)?|wipe[sd]?|reset|stop)\b", re.I)
 
@@ -90,11 +92,20 @@ def save_settings(s):
     os.replace(tmp, STATE / "autonomy.json")
 
 
+@contextlib.contextmanager
+def audit_lock():
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "autonomy.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def audit(ev):
     STATE.mkdir(parents=True, exist_ok=True)
     ev = {"id": f"{int(time.time() * 1000):x}-{os.getpid():x}", "ts": int(time.time())} | ev
-    with (STATE / "autonomy.jsonl").open("a") as fh:
-        fh.write(json.dumps(ev) + "\n")
+    with audit_lock():
+        with (STATE / "autonomy.jsonl").open("a") as fh:
+            fh.write(json.dumps(ev) + "\n")
     return ev
 
 
@@ -298,18 +309,21 @@ def gate(kind, text="", recs=None, s=None, now=None):
 
 def act(rec_id, prop, text, key=None, ws=()):
     """Tier 1: answer the record for the user, and log it with what undo needs. Returns the audit entry."""
+    if not rec_id:
+        raise ValueError("auto answer has no saved decision record")
+    entry = audit({"act": "auto", "record": rec_id, "kind": prop["kind"], "choice": prop["choice"], "prob": prop["prob"],
+                   "provider": prop["provider"], "text": text, "key": key, "ws": list(ws)})
     with decisions.book() as recs:
         for r in recs:
             if r["id"] == rec_id:
                 decisions.settle(r, prop["choice"], "auto")
-    return audit({"act": "auto", "record": rec_id, "kind": prop["kind"], "choice": prop["choice"], "prob": prop["prob"],
-                  "provider": prop["provider"], "text": text, "key": key, "ws": list(ws)})
+                return entry
+    raise ValueError(f"auto answer record {rec_id} vanished")
 
 
 def undo(aid):
     """Reask an auto answer, then record the user's correction for calibration."""
-    log = audit_log()
-    hit = [e for e in log if e.get("id") == aid and e.get("act") == "auto"]
+    hit = [e for e in audit_log() if e.get("id") == aid and e.get("act") == "auto"]
     if not hit:
         sys.exit(f"autonomy.py undo: no auto answer {aid}")
     e = hit[0]
@@ -317,13 +331,19 @@ def undo(aid):
         return e
     import greenlight  # lazily: its import reads config
     q, opts = decisions.split_options(e["text"])
-    greenlight.ping(f"Undo: greenlight answered {e['choice']!r} for you; it's yours now.\n{q}\nOptions: {' | '.join(opts)}",
-                    e.get("key"), e.get("ws") or (), e["kind"], ask=True)
-    e["undone"] = int(time.time())
-    tmp = STATE / "autonomy.jsonl.tmp"
-    tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
-    os.replace(tmp, STATE / "autonomy.jsonl")
-    return e
+    asked = greenlight.ping(f"Undo: greenlight answered {e['choice']!r} for you; it's yours now.\n{q}\nOptions: {' | '.join(opts)}",
+                            e.get("key"), e.get("ws") or (), e["kind"], ask=True)
+    if not asked or not asked.get("asked"):
+        raise RuntimeError("re-ask was not recorded")
+    with audit_lock():
+        log = audit_log()  # read again under the same lock used by audit() so concurrent events survive
+        e = next(x for x in log if x.get("id") == aid)
+        e["undone"] = int(time.time())
+        e["reasked_record"] = asked["asked"]
+        tmp = STATE / "autonomy.jsonl.tmp"
+        tmp.write_text("".join(json.dumps(x) + "\n" for x in log))
+        os.replace(tmp, STATE / "autonomy.jsonl")
+        return e
 
 
 def report(s=None):
