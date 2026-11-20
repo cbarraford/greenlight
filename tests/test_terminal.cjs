@@ -180,6 +180,8 @@ test("a window of some projects shows only theirs (Hosts stay); No Man's Land is
   let n = await names(page);
   assert.ok(n.includes("Local") && n.includes("fix-login") && n.includes("notes") && !n.includes("sidebar") && !n.includes("review"), n.join(","));
   assert.equal(await page.textContent("#shead .ttl"), "Platform");
+  // Chief's BOARD scope: the window's worktrees and their repos, so a workspace `ade worktree create` makes before the next trees is in it
+  assert.deepEqual(await page.evaluate(() => { const f = term.focusInfo(); return [f.paths.sort(), f.repos] }), [["/w/fix-login", "/w/widgets"], ["acme/widgets"]]);
   await page.close();
   page = await boot(b, null, "?only=" + encodeURIComponent('[""]')); await page.evaluate(p => term.projects(p), PROJ);
   n = await names(page);

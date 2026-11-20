@@ -827,10 +827,13 @@ function sayOf(p){ return p.asked ? p.why : p.action || p.why }
 const BELL_D = ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9", "M13.7 21a2 2 0 0 1-3.4 0"];  // the top bar's inbox bell
 function bellSvg(px, fill){ return s("svg", {width: px, height: px, viewBox:"0 0 24 24", fill: fill ? "currentColor" : "none", stroke:"currentColor", "stroke-width":"1.8", "aria-hidden":"true"},
   ...BELL_D.map(d => s("path", {d}))) }
-// the worktrees of the projects picked: the paths the app sent, plus the snapshot's own trees in the picked repos (a puck's project is its forge path,
-// a tree's an Orca repo name). The app's paths are only as new as the terminal page's last trees, which a hidden terminal never refreshes; null: all
-const viewPaths = () => ui.paths && [...new Set([...ui.paths, ...arr(ui.snap?.trees).filter(w => ui.repos?.includes(w.project)).map(w => w.path)])];
-const inView = p => !ui.paths || ui.paths.includes(p.path) || !!ui.repos && arr(ui.snap?.trees).some(w => w.path === p.path && ui.repos.includes(w.project));
+// the worktrees of the projects picked: the paths the app sent, plus the snapshot's own pucks and trees in the picked repos (a puck's project is its
+// forge path, its repo and a tree's project the ADE's repo name). The app's paths are only as new as the terminal page's last trees, which a hidden
+// terminal never refreshes, so a workspace created since (`ade worktree create`) is matched by its repo; null: all
+const inRepos = w => !!ui.repos && !!w.repo && ui.repos.includes(w.repo);
+const viewPaths = () => ui.paths && [...new Set([...ui.paths, ...arr(ui.snap?.pucks).filter(inRepos).map(p => p.path),
+  ...arr(ui.snap?.trees).filter(w => inRepos({repo: w.project})).map(w => w.path)])];
+const inView = p => !ui.paths || ui.paths.includes(p.path) || inRepos(p) || arr(ui.snap?.trees).some(w => w.path === p.path && inRepos({repo: w.project}));
 function shown(){  // the workspaces in the picked project (all of them when none is picked), minus "(parked)" ones unless shown
   return ui.snap.pucks.filter(p => inView(p) && (ui.showParked || !isParked(p)));
 }
@@ -2110,7 +2113,7 @@ function pickProjects(list, only, here = true){
 }
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
-  focus: () => ({page: ui.page?.name || "", view: ui.view, paths: viewPaths()}),  // for Chief: what this window shows (paths: its projects' workspaces, null for all)
+  focus: () => ({page: ui.page?.name || "", view: ui.view, paths: viewPaths(), repos: ui.paths && arr(ui.repos)}),  // for Chief: what this window shows (paths: its projects' workspaces, repos: their repos, so a workspace made after this is in it too; null for all)
   pick(names){  // the hexes Chief's last reply is about; [] clears. Just one on screen: its card opens too
     const was = ui.picked; ui.picked = new Set(arr(names)); render();
     const on = [...ui.picked].map(n => [document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`), ui.dk[n]]).filter(([e, p]) => e && p && !p.members);

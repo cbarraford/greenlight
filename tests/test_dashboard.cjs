@@ -464,6 +464,23 @@ test("L1's pick takes in a workspace made after the terminal page's last trees: 
   await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[1].path]) }, snap);  // an app without repos: paths only, as before
   assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-b"]);
 });
+test("a workspace `ade worktree create` just started is a puck at once, never in the snapshot's trees: its repo puts it in the picked window", async page => {
+  // dash.py snapshot lists a workspace once: as a puck (here, a goal-only one with a working agent), so trees never carry its path
+  const fresh = {...puck("openai-live-voice", "Switch voice", "working"), repo: "greenlight", project: "octo/greenlight"};
+  const old = {...SNAP.pucks[0], repo: "greenlight"}, other = {...SNAP.pucks[1], repo: "widgets"};
+  const snap = {...SNAP, pucks: [old, other, fresh], trees: [{path: "/w/main", project: "greenlight", main: true}]};
+  await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[0].path, "/w/main"], ["greenlight"]) }, snap);  // the app's paths predate the new workspace
+  assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-a", "openai-live-voice"], "in by its repo; widgets stays out");
+  assert.equal(await page.locator(`#main [data-name="openai-live-voice"]`).count(), 1, "its hex is drawn");
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  const strip = await page.locator("#main section.agents").innerText();
+  assert.ok(strip.includes("Switch voice"), "and its agent is in Agents: " + strip);
+  const f = await page.evaluate(() => mc.focus());
+  assert.ok(f.paths.includes(fresh.path) && !f.paths.includes(other.path), "Chief's window scope has its path");
+  assert.deepEqual(f.repos, ["greenlight"], "and the repos, so the BOARD takes in one made after this focus");
+  await page.evaluate(() => mc.paths(null, null));
+  assert.equal(await page.evaluate(() => mc.focus().repos), null, "all projects: no scope");
+});
 test("L1's Open projects: the terminal page's tiles; ticking a project posts it, All projects unticks", async page => {
   const L = [{id: "a", name: "Alpha", color: "#FF9F0A", repos: ["x/a"], busy: 1}, {id: "", name: "No Man's Land", color: "#8E8E93", repos: [], busy: 0}];
   await page.evaluate(L => mc.pickProjects(L, null), L);
