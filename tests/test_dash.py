@@ -486,4 +486,3 @@ assert dash.forge_line(iss, {}, now) == "- [octo/app#3](v) Bug · bug · no PR �
 pr = dash.gh_item({"number": 4, "title": "Feat", "url": "w", "isDraft": False, "updatedAt": "", "reviewDecision": "CHANGES_REQUESTED", "mergeable": "CONFLICTING",
                    "repository": {"nameWithOwner": "octo/app"}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]}}, "review")
 assert dash.forge_line(pr, {}, now) == "- [octo/app#4](w) Feat · conflicts · CI failure · changes requested", dash.forge_line(pr, {}, now)
-
