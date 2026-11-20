@@ -101,6 +101,12 @@ decisions.said("Park it?\nOptions: park | keep")
 decisions.forget_chat()  # Clear in the app
 assert recs()[-1]["closed"] == "resolved: chat cleared" and decisions.heard("park") is None
 
+# a second L1 window's Chief (chat="chat-1"): its question and the main chat's never settle, supersede or clear each other
+main, other = decisions.said("Merge fix-001?" + O), decisions.said("Merge fix-002?" + O, chat="chat-1")
+assert decisions.heard("hold", chat="chat-1")["id"] == other and decisions.said("Merge fix-001 now?" + O, chat="chat-1")
+decisions.forget_chat(chat="chat-1")
+assert [r for r in recs() if r["id"] == main][0]["closed"] is None and decisions.heard("merge")["id"] == main
+
 # AskUserQuestion (an on-demand run): the PostToolUse hook gets the questions and the answers at once
 ask = {"questions": [
     {"question": "feat-9 is green but its goal says stay draft. Take it out of draft?", "header": "Keep draft", "multiSelect": False,
