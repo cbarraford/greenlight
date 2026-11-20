@@ -947,7 +947,7 @@ Domino-toppling Jigsawing
 """.split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
 
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
-enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset }
+enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset, undo }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
@@ -959,6 +959,7 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
     case "stop", "never mind", "nevermind", "cancel", "stop that": return .stop
     case "reset", "reset context", "reset the context", "reset the chat", "clear", "clear context", "clear the context", "clear the chat",
          "start over", "start fresh", "fresh start", "new chat", "new conversation", "forget everything", "wipe it": return .reset
+    case "undo", "undo that", "undo it", "take that back", "put it back", "put them back": return .undo
     case "captions on", "turn on captions", "show captions": return .captions(true)
     case "captions off", "turn off captions", "hide captions": return .captions(false)
     default: return nil
@@ -970,6 +971,36 @@ func isBargeIn(_ heard: String, _ spoken: String) -> Bool {
     let w = { (s: String) in s.lowercased().split { !$0.isLetter && $0 != "'" }.map(String.init) }
     let h = w(heard).suffix(6), said = Set(w(spoken))
     return h.count >= 3 && Double(h.filter { !said.contains($0) }.count) / Double(h.count) > 0.5
+}
+
+/// DWIM (scripts/dwim.py): a board command said, typed in the chat or typed in ⌘J's palette ("park the two auth ones", "hold #42",
+/// "kick off CI fixes on the red ones") is done in well under a second, without a Chief turn. This is only the cheap gate on the
+/// words: a verb dwim.py knows. dwim.py decides the rest (the route, the workspaces, the guards) and anything it won't do goes to Chief.
+let dwimVerbs = try! NSRegularExpression(pattern: #"\b(?:un-?park|park|shelve|snooze|un-?shelve|unsnooze|un-?hold|hold|freeze|do ?n[o'’]?t merge|do not merge|"#
+    + #"release (?:the )?hold|lift (?:the )?hold|remove (?:the )?hold|clear (?:the )?hold|ok to merge|rebase|put (?:\w+ ){0,4}aside|bring (?:\w+ ){0,4}back|"#
+    + #"fix(?:es|ing)? (?:the |its |their )?(?:ci|build|builds|pipelines?|tests?|red|(?:merge )?conflicts?)|ci fix(?:es)?|get (?:\w+ ){0,3}green|"#
+    + #"(?:address|answer|fix|resolve|handle)(?:es)? (?:the |its |their )?(?:review |open )?(?:threads|comments|feedback|review))\b"#, options: [.caseInsensitive])
+func dwimCandidate(_ t: String) -> Bool {
+    let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !s.isEmpty && s.count <= 300 && !s.contains("\n") && dwimVerbs.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+}
+/// The snapshot facts dwim.py reads, trimmed: the stage card and the router want names, goals, MRs, moves and lifecycle, not pages.
+func dwimPucks(_ pucks: [[String: Any]]) -> [[String: Any]] {
+    pucks.map { p in
+        var o = p.filter { ["name", "path", "project", "repo", "goal", "state", "step", "owner", "hidden", "action", "agent", "mr", "life", "moves", "branch"].contains($0.key) }
+        if let ag = p["agent"] as? [String: Any] { o["agent"] = ["state": ag["state"] ?? ""] }
+        return o
+    }
+}
+/// The Undo toast: a direct board action just done (Undo puts the goals back), or an agent launch waiting out its grace (Undo cancels it).
+struct DwimToast: Identifiable, Equatable {
+    let id = UUID()
+    var text: String
+    var undo: String?  // dwim.py's undo id, once applied
+    var pending = false  // a launch that hasn't started: Undo cancels it
+    var applying = false  // goal edits on their way: Undo waits for their undo id
+    var undoing = false, failed = false
+    var undoable: Bool { pending || applying || undo != nil }
 }
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
@@ -1349,7 +1380,10 @@ struct StageView: View {
             default: OrbLook(s: s, l: l)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .bottom, spacing: 0) { StageFiles(c: c, l: l) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) { DwimToastBar(c: c, l: l).padding(.horizontal, 12).padding(.bottom, 8); StageFiles(c: c, l: l) }
+                .animation(.easeOut(duration: 0.15), value: c.toast)
+        }
         .background(hx(l.page))
         .overlay { DropArea(c: c) }  // files dragged anywhere on the stage go with what you say next, as on the chat
         .overlay { if c.dropping { StageDropHint(l: l) } }
@@ -2015,13 +2049,30 @@ final class Voice: NSObject, ObservableObject {
         if let cmd = voiceCommand(t) { return run(cmd) }
         lastHeard = t
         caption = ""
+        if c.files.isEmpty && c.reading == 0 && dwimCandidate(t) { return c.dwim(t, source: "voice") { note in c.spoken(t, note: note) } }  // files go to Chief
         c.spoken(t)
+    }
+    /// The instant card (dwim.py stage): a table, timeline, diff or lifecycle drawn from the snapshot while Chief thinks. It only
+    /// replaces the wait card: anything drawn since it was asked for (Chief's own, Haiku's) wins, and it never cancels Haiku's drawing.
+    func instant(_ heard: String) {
+        guard on, let c = core, !c.pucks.isEmpty else { return }
+        let seq = drawSeq, t0 = Date()
+        let body = (try? JSONSerialization.data(withJSONObject: ["text": heard, "focus": c.focusName ?? "", "pucks": dwimPucks(c.pucks)])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        var out = ""
+        ssh("\(py)/dwim.py stage", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
+            guard let self, self.on, seq == self.drawSeq, !self.shown, !self.chiefDrew,
+                  let o = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any], o["kind"] is String else { return }
+            self.shown = true; self.js("stage.spec", [o])
+            NSLog("dwim: stage %@ in %d ms (dwim.py %@ ms)", o["kind"] as? String ?? "", Int(Date().timeIntervalSince(t0) * 1000), "\(o["ms"] ?? "?")")
+        })
     }
 
     func run(_ cmd: VoiceCmd) {
         switch cmd {
         case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
-        case .stop: hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
+        case .undo: if core?.toast != nil { core?.undoToast() } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
+        case .stop: if core?.toast?.pending == true { return core!.undoToast() }  // "cancel" during a launch's grace: that launch
+            hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
         }
@@ -2034,6 +2085,7 @@ final class Voice: NSObject, ObservableObject {
         waitWord = waitWords.randomElement()!
         guard on else { return }
         wait(waitWord, r.question)
+        if r.spoken { instant(r.question) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
             self.say(self.waitWord, filler: true)
@@ -2941,7 +2993,7 @@ final class Core: ObservableObject {
     @Published var queue: [Queued] = []
     /// spoken: a voice-mode turn. It takes the tray's files (and refusals) when said; waits: files were still being read then, so it takes
     /// the tray's files when it goes, and holds until they're read.
-    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false, waits = false; var refused: [String] = [] }
+    struct Queued { let text: String; var files: [ChatFile] = []; var spoken = false, waits = false; var refused: [String] = []; var note = "" }  // note: for Chief, not shown
     @Published var files: [ChatFile] = []  // attached in the composer, sent with the next message
     @Published var fileNote = ""  // why the last file didn't attach; clears itself
     @Published var dropping = false  // files dragged over the chat
@@ -3290,6 +3342,9 @@ final class Core: ObservableObject {
         input = ""; files = []; fileNote = ""; refused = []  // the composer showed them
         if vim { vimKeys.mode = vimStart }
         let q = t.isEmpty ? nil : waiting.last(where: { !$0.ping })  // typing answers the open chat question
+        if q == nil && fs.isEmpty && attached.allSatisfy(\.sent) && dwimCandidate(t) {  // a board command: done now, or Chief's if dwim.py won't
+            return dwim(t, source: "chat") { [weak self] note in self?.send(note + t, shown: t) }
+        }
         if let q, fs.isEmpty { answer(q, t) } else { if let q { answer(q, t, send: false) }; send(t, files: fs) }
     }
 
@@ -3356,9 +3411,9 @@ final class Core: ObservableObject {
     /// (dropped, pasted or picked on the stage) as a typed message does. Files still being read hold it until they land or fail
     /// (a promised file gives up after 30 s); then it takes the tray as it goes. Clear cancels it like any queued message, and so do
     /// "stop" and "bye" while it waits on a file (during an answer, "stop" stops the answer and what was said after still goes).
-    func spoken(_ text: String) {
-        if reading > 0 { queue.append(Queued(text: text, spoken: true, waits: true)) }
-        else { queue.append(Queued(text: text, files: files, spoken: true, refused: refused)); files = []; refused = [] }  // a later drop is for a later turn
+    func spoken(_ text: String, note: String = "") {
+        if reading > 0 { queue.append(Queued(text: text, spoken: true, waits: true, note: note)) }
+        else { queue.append(Queued(text: text, files: files, spoken: true, refused: refused, note: note)); files = []; refused = [] }  // a later drop is for a later turn
         if reading > 0 && run == nil && clearing == 0 { voice.wait("Reading your file", "It goes with what you said, once it's read.") }
         next()
     }
@@ -3369,7 +3424,7 @@ final class Core: ObservableObject {
         let fs = q.waits ? files : q.files, no = q.waits ? refused : q.refused
         if q.waits { files = []; refused = [] }
         let told = no.isEmpty ? "" : "(Greenlight, not said by the user: files they tried to attach weren't: \(no.joined(separator: " ")) Tell them briefly.)\n"
-        send(told + q.text, shown: q.text, files: fs, spoken: q.spoken)  // send() adds voiceNote
+        send(told + q.note + q.text, shown: q.text, files: fs, spoken: q.spoken)  // send() adds voiceNote
     }
 
     func send(_ text: String, shown: String? = nil, files fs: [ChatFile] = [], spoken: Bool = false) {
@@ -3388,7 +3443,7 @@ final class Core: ObservableObject {
             payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
             focusSent = focus
         }
-        if fs.isEmpty { return start(Run(shown ?? text), chatSend, stdin: payload) }
+        if fs.isEmpty { let r = Run(shown ?? text); r.spoken = spoken; return start(r, chatSend, stdin: payload) }  // spoken: began() draws its instant card
         // chat.py send --attach: the message and the files as one JSON object (attach.py)
         let body = (try? JSONSerialization.data(withJSONObject: ["text": payload, "files": fs.map(\.json)])).map { String(decoding: $0, as: UTF8.self) } ?? ""
         let r = Run(you); r.files = fs; r.text = shown ?? text; r.spoken = spoken
@@ -3647,6 +3702,152 @@ final class Core: ObservableObject {
         if session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
         c.userInfo = ["text": body]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id ?? UUID().uuidString, content: c, trigger: nil))
+    }
+
+    // MARK: DWIM: board commands without a Chief turn (scripts/dwim.py)
+
+    @Published var toast: DwimToast?
+    var focusName: String?  // the workspace of the window you were last in (noteFocus): what "park this" means
+    var launchWork: DispatchWorkItem?  // an agent launch waiting out its grace
+    var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
+    static let launchGrace = 5.0, toastFor = 8.0, planDeadline = 1.5
+    var dwimJSON: (Any) -> String = { o in (try? JSONSerialization.data(withJSONObject: o)).map { String(decoding: $0, as: UTF8.self) } ?? "{}" }
+
+    /// A board command: dwim.py plans it from the latest snapshot (the grammar plus System One, under a deadline). Direct: done
+    /// now with an Undo toast and a short spoken line. Anything else, or no answer within planDeadline, is Chief's turn as usual;
+    /// `otherwise` gets a note for Chief when dwim.py read a board action it wouldn't do on its own (ambiguous, destructive).
+    func dwim(_ text: String, source: String, otherwise: @escaping (String) -> Void) {
+        active()
+        if source != "jump" { toasted = nil }  // the palette's window shows only the toasts it asked for
+        let t0 = Date(), body = dwimJSON(["text": text, "source": source, "focus": focusName ?? "", "pucks": dwimPucks(pucks)])
+        var out = "", answered = false
+        let late = DispatchWorkItem { [weak self] in
+            guard !answered else { return }
+            answered = true
+            self?.log(.greenlight, "dwim", .failed, "no plan in \(Int(Core.planDeadline * 1000)) ms: asked Chief")
+            otherwise("")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Core.planDeadline, execute: late)
+        ssh("\(py)/dwim.py plan", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
+            guard let self, !answered else { return }
+            answered = true; late.cancel()
+            let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:], ms = Int(Date().timeIntervalSince(t0) * 1000)
+            NSLog("dwim: %@ in %d ms (dwim.py %@): %@", o["route"] as? String ?? "no answer", ms, "\(o["ms"] ?? "?")", o["why"] as? String ?? "")
+            guard o["route"] as? String == "direct" else {
+                let why = o["why"] as? String ?? "no answer"
+                self.log(.greenlight, "dwim", .status, "to Chief in \(ms) ms: \(why)")
+                let verb = o["verb"] as? String ?? ""  // a board action it read but won't do alone: Chief hears why, and asks or confirms
+                return otherwise(verb.isEmpty ? "" : "(Greenlight's fast path read this as \(verb) but didn't do it: \(why). Confirm with the user, or ask which, before acting.)\n")
+            }
+            self.direct(o, text: text, ms: ms)
+        })
+    }
+
+    private func direct(_ o: [String: Any], text: String, ms: Int) {
+        let acts = o["actions"] as? [[String: Any]] ?? [], line = o["toast"] as? String ?? "", say = o["say"] as? String ?? line
+        msgs.append(Msg(.you, text)); msgs.append(Msg(.note, say))  // the chat keeps the record: Chief reads the board, not this
+        log(.greenlight, "dwim", .action, "\(o["verb"] as? String ?? "") in \(ms) ms: \(say)")
+        if voice.on {
+            voice.say(say)
+            if run == nil { voice.show(["kind": "list", "eyebrow": acts.isEmpty ? "nothing to do" : "done", "title": line, "stat": "",
+                                        "items": acts.map { ["label": $0["ws"] as? String ?? "", "detail": $0["ref"] as? String ?? ""] }]) }
+        }
+        launchWork?.cancel(); launchWork = nil  // a newer command: the older grace ends with its toast (it's cancelled, and said so below)
+        if toast?.pending == true { msgs.append(Msg(.note, "Cancelled: \(toast!.text)")) }
+        if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor) }
+        if o["launch"] as? Bool == true {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
+            let t = DwimToast(text: line, pending: true)
+            show(t, for: nil)
+            let w = DispatchWorkItem { [weak self] in
+                guard let self, self.toast?.id == t.id else { return }
+                self.launchWork = nil
+                var now = t; now.pending = false; self.show(now, for: nil)
+                self.apply(o, text: text, id: t.id)
+            }
+            launchWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + Core.launchGrace, execute: w)
+        } else {
+            let t = DwimToast(text: line, applying: true)
+            show(t, for: nil)
+            apply(o, text: text, id: t.id)
+        }
+    }
+
+    private func apply(_ o: [String: Any], text: String, id: UUID) {
+        var out = ""
+        ssh("\(py)/dwim.py apply", stdin: dwimJSON(["text": text, "source": o["source"] ?? "chat", "actions": o["actions"] ?? []]), onLine: { out += $0 }, onExit: { [weak self] code in
+            guard let self else { return }
+            let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["errors": ["\(host) didn't answer (exit \(code))"]]
+            let errs = r["errors"] as? [String] ?? [], undo = r["undo"] as? String
+            if !errs.isEmpty {
+                self.msgs.append(Msg(.note, "Didn't finish: " + errs.joined(separator: "; ")))
+                if self.voice.on { self.voice.say("That didn't all work: \(errs.count == 1 ? errs[0] : "\(errs.count) failed").") }
+            }
+            self.log(.greenlight, "dwim", errs.isEmpty ? .action : .failed, "applied in \(r["ms"] ?? "?") ms" + (errs.isEmpty ? "" : ": " + errs.joined(separator: "; ")))
+            guard var t = self.toast, t.id == id else { return }  // a newer toast is up: this one's Undo went with it
+            t.undo = undo; t.failed = !errs.isEmpty; t.applying = false
+            if !errs.isEmpty { t.text += " · \(errs.count) failed" }
+            if t.undoing && undo != nil { t.undoing = false; self.toast = t; return self.undoToast() }  // Undo was pressed before the apply came back
+            t.undoing = false
+            self.show(t, for: Core.toastFor)
+        })
+    }
+
+    private func show(_ t: DwimToast, for secs: Double?) {
+        toast = t; toasted?(t)
+        guard let secs else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in if self?.toast?.id == t.id { self?.toast = nil; self?.toasted?(nil) } }
+    }
+
+    /// The toast's Undo (and "undo" said in voice mode): cancels a launch still in its grace, or puts the edited goals back.
+    func undoToast() {
+        guard var t = toast else { return }
+        if t.pending {
+            launchWork?.cancel(); launchWork = nil
+            msgs.append(Msg(.note, "Cancelled: \(t.text)"))
+            if voice.on { voice.say("Cancelled.") }
+            return show(DwimToast(text: "Cancelled"), for: 3)
+        }
+        guard let u = t.undo else { if t.applying { t.undoing = true; toast = t }; return }  // still applying: undone as soon as it's in
+        show(DwimToast(text: "Undoing…"), for: nil)
+        var out = ""
+        ssh("\(py)/dwim.py undo \(shellQuote(u))", onLine: { out += $0 }, onExit: { [weak self] _ in
+            guard let self else { return }
+            let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+            let back = r["undone"] as? [String] ?? [], kept = r["kept"] as? [String] ?? []
+            let said = r["error"] as? String ?? (back.isEmpty ? "Nothing to undo" : "Undid \(t.text.prefix(1).lowercased() + t.text.dropFirst())")
+                + (kept.isEmpty ? "" : ". Left \(kept.joined(separator: ", ")): edited since")
+            self.msgs.append(Msg(.note, said))
+            if self.voice.on { self.voice.say(back.isEmpty ? said : "Undone.") }
+            self.log(.greenlight, "dwim", r["error"] == nil ? .action : .failed, said)
+            self.show(DwimToast(text: said), for: 4)
+        })
+    }
+}
+
+/// The Undo toast, over the chat's composer and the voice stage, in the look it sits in.
+struct DwimToastBar: View {
+    @ObservedObject var c: Core
+    let l: Look
+    var body: some View {
+        if let t = c.toast {
+            HStack(spacing: 10) {
+                if t.pending { ProgressView().controlSize(.mini) }
+                else { Image(systemName: t.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").font(.system(size: 12))
+                    .foregroundColor(t.failed ? hx(l.dark ? "FF9F0A" : "9A6700") : hx(l.accent)) }
+                Text(t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text).font(.system(size: 12, weight: .medium)).foregroundColor(hx(l.text))
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if t.undoable {
+                    Button(t.undoing ? "Undoing…" : t.pending ? "Cancel" : "Undo") { c.undoToast() }.buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold)).foregroundColor(hx(l.accent)).disabled(t.undoing)
+                        .keyboardShortcut("z", modifiers: [.command, .shift]).help(t.pending ? "Don't start it" : "Put it back (⇧⌘Z)")
+                }
+            }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(hx(l.card))).overlay(RoundedRectangle(cornerRadius: 8).stroke(hx(l.line)))
+                .accessibilityElement(children: .contain).accessibilityLabel(t.text)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }
 
@@ -5789,6 +5990,7 @@ struct ChatView: View, Looked {
                     HStack(spacing: Theme.sp2) { ForEach(c.files) { fileChip($0) } }
                 }
             }
+            DwimToastBar(c: c, l: lk).animation(.easeOut(duration: 0.15), value: c.toast)
             if !c.fileNote.isEmpty {
                 Label(c.fileNote, systemImage: "exclamationmark.circle").font(sys(size: Theme.fs1)).foregroundColor(Theme.needsInk)
                     .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
@@ -6668,6 +6870,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
             let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
+            let at = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // DWIM's "this": that window's workspace
+            let name = at.1.flatMap { k in self.greenlight.pucks.first { $0[at.0] as? String == k }?["name"] as? String }
+            cores.forEach { $0.focusName = name }
             guard cores.contains(where: { $0.focus != line }) else { return }
             cores.forEach { $0.focus = line }
             guard cores[0] === self.greenlight else { return }
@@ -7545,6 +7750,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
             })
+        case "dwim":  // ⌘J's palette, typed with nothing to jump to: a board command (dwim.py), else a question for Chief in the chat
+            guard let t = (b["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return }
+            let c = greenlight
+            c.toasted = { [weak web] t in  // the toast shows where you typed it, with its own Undo (the palette's window has no chat)
+                guard let t else { return }
+                let d = (try? JSONSerialization.data(withJSONObject: [t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text, t.undoable ? (t.pending ? "Cancel" : "Undo") : ""])).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+                web?.evaluateJavaScript("window.term && term.dwimToast && term.dwimToast(...\(d))")
+            }
+            let ask = { [weak self, weak web] (note: String) in
+                c.toasted = nil
+                c.send(note + t, shown: t)
+                self?.setChat(hidden: false)
+                self?.toastTerm(web, "Asked \(c.name): the answer is in the chat")
+            }
+            if dwimCandidate(t) { c.dwim(t, source: "jump", otherwise: ask) } else { ask("") }
+        case "dwimUndo": greenlight.undoToast()
         case "url":  // a link in a terminal: web links only, the output isn't ours to trust
             if let u = URL(string: b["url"] as? String ?? ""), ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
         case "settings":  // the hover card's "Edit <repo>'s prompt…"
@@ -8363,6 +8584,12 @@ func selfTest() {
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
+    check("dwim: only words dwim.py knows leave the Chief path", dwimCandidate("park the two auth ones") && dwimCandidate("Kick off CI fixes on the red ones")
+          && dwimCandidate("hold #42") && dwimCandidate("don't merge #42") && dwimCandidate("unpark billing") && dwimCandidate("fix the merge conflicts on search")
+          && !dwimCandidate("what's on fire?") && !dwimCandidate("merge #42") && !dwimCandidate("parking lot ideas") && !dwimCandidate("")
+          && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo the deploy") == nil)
+    check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
+        $0["page"] == nil && ($0["agent"] as? [String: String]) == ["state": "working"] && $0["name"] as? String == "a" } == true)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil
