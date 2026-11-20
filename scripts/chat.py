@@ -54,10 +54,10 @@ PROMPT = (
     "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
     "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
     "Consoles: every terminal tab in Greenlight (Claude Code, Codex, opencode, pi or a plain shell) is a tmux session on "
-    "`tmux -L greenlight` here. `tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them "
-    "(the path is the worktree); `capture-pane -p -t =SESSION -S -60` reads one's screen. When the user asks to see, open or bring up "
+    "`tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: open those with the tag, but you can't read or type into them). `tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them "
+    "(the path is the worktree); `capture-pane -p -t '=SESSION:' -S -60` reads one's screen. When the user asks to see, open or bring up "
     "a console, add a line `[console: SESSION]` (or the worktree path): the app opens that terminal tab in front of them. "
-    "Type into one only when the user asks you to: `send-keys -t =SESSION -l 'text'`, then `send-keys -t =SESSION Enter` to submit "
+    "Type into one only when the user asks you to: `send-keys -t '=SESSION:' -l 'text'`, then `send-keys -t '=SESSION:' Enter` to submit "
     "(C-c to interrupt); then read the screen back and tell them what you sent and what it shows."
 )
 
