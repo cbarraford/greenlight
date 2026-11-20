@@ -186,13 +186,42 @@ def suggestion(cached):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps(cached))
     with mock.patch.object(dash, "live_agents", return_value=LIVE):
         return dash.snapshot()["pucks"][0]["suggestion"]
-assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready."}
+assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready.", "advice": ""}
 assert suggestion({"sig": "stale", "label": "Mark ready", "prompt": "Mark #23 ready."}) is None  # the state moved on since
 assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an old entry without a label gets rewritten
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
 print("ok")
+# advice: a rule when you're the blocker or an agent step has no agent; None -> suggest writes it; "" -> no advice at all
+_r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"step": step, "owner": owner, "action": action, "cmd": cmd},
+                                                                 "agent": {"state": ag}, "mr": mr}
+assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "failed"})).startswith("CI failed, so read the diff")
+assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "success"})).startswith("Read the diff")
+assert "replies" in dash.advice(_r("review", "me", "author replied on your threads: re-review"))
+assert "sign off deploy" in dash.advice(_r("deploy", "me", "deploy: x Sign it off?", ["python3", "g.py", "signoff", "p", "1", "deploy"]))
+assert "rebase" in dash.advice(_r("merge", "me", "GitLab needs a rebase to merge (no conflict): rebase it?"))
+assert dash.advice(_r("ci_green", "agent")) == "No agent is on it: run Fix CI."
+assert dash.advice(_r("ci_green", "agent", ag="working")) == ""
+assert dash.advice(_r("qa", "agent", "qa: x (add the label `qa-ok` when it's met)")) is None  # your own step: the model writes it
+assert dash.advice(_r("approved", "reviewers")) == "" and dash.advice(_r("x", "greenlight", ag="waiting")).startswith("Answer")
+# a needed advice line makes an old cached suggestion stale; a rule-covered puck doesn't ask for one
+assert not dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": None})
+assert dash.fresh_suggest({"sig": "s", "label": "L", "advice": "Do x."}, {"sig": "s", "advice": None})
+assert dash.fresh_suggest({"sig": "s", "label": "L", "advice": ""}, {"sig": "s", "advice": None})  # the model had none: final for this sig
+assert dash.fresh_suggest({"sig": "s", "label": "L"}, {"sig": "s", "advice": "rule"})
+assert dash.split_advice("Advice: Ask QA to sign it off.\nCheck the QA board for !5.") == ("Ask QA to sign it off.", "Check the QA board for !5.")
+assert dash.split_advice("**Advice:** Do x.\nPrompt.") == ("Do x.", "Prompt.") and dash.split_advice("Just a prompt.") == ("", "Just a prompt.")
+# progress: no MR is step 0 (mr_open is the implement step); a review checkout is one step; a goal-only tree has none
+_p = lambda **k: dash.progress({"project": "o/r", "forge": "gitlab", "mr": None, "next": {"step": "freeform", "owner": "agent"}, **k})
+assert _p()[2] == 0 and _p()[1][0] == "mr_open"
+assert _p(mr={"role": "review"}, next={"step": "review", "owner": "me"})[1:] == (["review"], 0)
+assert _p(forge=None)[1:] == ([], None)
+# a merged MR with a step after merge: still your move, on that step, not done
+_m = {"project": "o/r", "forge": "gitlab", "mr": {"state": "merged"}, "agent": {"state": "none"}, "next": {"step": "deploy", "owner": "me", "action": "deploy: x Sign it off?"}}
+with mock.patch.object(dash.greenlight, "lifecycle", return_value=("o.md", ["mr_open", "merge", "deploy"])):
+    assert dash.state_of(_m)[0] == "raised" and dash.progress(_m)[1:] == (["mr_open", "merge", "deploy"], 2)
+print("advice ok")
 # suggest: the button's short label, then the prompt
 assert dash.split_label("Fix failing lint job\nFix the gofmt error in x.go and push.") == ("Fix failing lint job", "Fix the gofmt error in x.go and push.")
 assert dash.split_label("Summarize the open review threads now please\nDo it.") == ("Summarize the open review", "Do it.")
@@ -216,11 +245,13 @@ _t = dash.trees()
 dash.greenlight.orca_cli = _orca
 assert [(t["ade"], t["path"]) for t in _t] == [("cmux", "/cmux"), ("herdr", "/herdr"), ("t3", "/t3"), ("cmux", "/r/a")], _t
 _mr = _t[-1].pop("mr")
+assert [m["kind"] for m in _t[-1].pop("moves")] == ["ci"]  # its pipeline failed: Fix CI, though the MR isn't yours
 assert _mr["ref"] == "!7" and _mr["threads"] == 2 and _mr["rebase"] and "author" not in _mr and _mr["by"] == {"name": "x", "avatar": "u"}, _mr  # the card byline
 # the live agent (working) wins over the scan's (waiting): not "needs you"
 assert _t[-1] == {"ade": "cmux", "project": "r", "name": "a", "path": "/r/a", "branch": "x", "main": False, "agent": "working",
                   "goal": "", "pinned": False, "active": None, "since": None, "created": None,
-                  "puck": "r-a", "state": "working", "why": "agent working"}, _t[-1]
+                  "puck": "r-a", "state": "working", "why": "agent working",
+                  "steps": [], "step_index": None, "step": "ci_green", "owner": "agent", "advice": ""}, _t[-1]
 
 # the workspace menu's Delete: by path, the worktree only; a dirty or unpushed tree (or a pinned one) needs --force, main never goes
 import subprocess as _sp
@@ -294,16 +325,23 @@ g = dash.settings("prompt-get", "greenlight/review", "")
 assert g["own"] and g["text"].startswith("Mine") and "{last_review_sha}" in g["default"] and "last_review_sha" in g["vars"], g
 assert not dash.settings("prompt-set", "greenlight/review", "  ")["own"] and not dash.settings("prompt-get", "greenlight/review", "")["own"]
 assert dash.settings("prompt-get", "../x/review", "")["error"] and dash.settings("prompt-get", "greenlight/nope", "")["error"]
-# your own MR: conflicts › ci › threads › review; merge only when none of those apply; a reviewer's MR gets none of the fixes
+# conflicts › ci › threads › review, on your MR or one you review; merge only when none of those apply
 mine = {**r, "next": {"owner": "greenlight", "step": "merge", "action": "merge", "cmd": ["glab", "mr", "merge", "58", "-R", "octo/greenlight", "--yes", "--squash"]},
         "mr": {**r["mr"], "role": "author", "conflicts": True, "pipeline": "failed", "pipeline_url": "https://ci/1",
                "failed_jobs": [{"name": "unit", "stage": "test", "url": "https://ci/1/j"}], "todo_threads": ['sam, a.py:3: "why?"', "sam"]}}
 mv = dash.moves(mine)
 assert [m["kind"] for m in mv] == ["conflicts", "ci", "threads"] and mv[2]["n"] == 2, mv
 assert "- unit (test): https://ci/1/j" in mv[1]["prompt"] and "https://ci/1" in mv[1]["prompt"] and '- sam, a.py:3: "why?"\n- sam' in mv[2]["prompt"]
-mv = dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})
+_clean = {"conflicts": False, "pipeline": "success", "todo_threads": []}
+assert [m["kind"] for m in dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})] == ["conflicts", "ci", "threads"]  # a review's fixes too
+mv = dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}})
 assert [m["kind"] for m in mv] == ["merge"] and mv[0]["how"] == "Squash", mv
-assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}, "next": {**mine["next"], "cmd": None}}) == []  # no cmd: greenlight won't merge it now
+assert dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}, "next": {**mine["next"], "cmd": None}}) == []  # no cmd: greenlight won't merge it now
+_rv = {**mine, "next": {**mine["next"], "owner": "me", "action": "mergeable, and nobody else reviews this repo: review it, then merge?"},
+       "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}
+assert [m["kind"] for m in dash.moves(_rv)] == ["review", "merge"]  # a review doesn't hide Merge (a fix does)
+_dr = {**_rv, "next": {"owner": "me", "step": "ready", "action": "goal says keep draft…", "cmd": ["gh", "pr", "ready", "58", "-R", "o/g"]}}
+assert [m["kind"] for m in dash.moves(_dr)] == ["ready"] and dash.moves({**_dr, "next": {**_dr["next"], "owner": "greenlight"}}) == []  # greenlight undrafts it itself
 # auto-run: per repo, per kind, with a gate; never on a held/parked goal; merge gets True
 assert dash.settings("autorun-set", "../x", "{}")["error"]
 a = dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "threads": 9, "nope": 0, "merge": 0}))
@@ -312,7 +350,9 @@ mv = {m["kind"]: m for m in dash.moves(mine)}
 assert mv["ci"]["auto"].startswith(dash.AUTO_HEAD + "You have my OK to push") and mv["ci"]["prompt"] in mv["ci"]["auto"] and mv["ci"]["sha"] == "abc123"
 assert "auto" not in mv["conflicts"] and "auto" not in mv["threads"]
 assert not any("auto" in m for m in dash.moves({**mine, "goal": "fix it (hold)"}))
-assert dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}})[0]["auto"] is True
+assert dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}})[0]["auto"] is True
+assert not any("auto" in m for m in dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}}))  # never pushes unattended to someone else's branch
+assert not any("auto" in m for m in dash.moves(_rv))  # auto-merge never jumps a pending review
 dash.settings("autorun-set", "greenlight", "{}")
 assert not any("auto" in m for m in dash.moves(mine))
 # Merge: greenlight's own cmd, pinned to the head it saw; then the snapshot says merged so the card stops offering it
@@ -325,6 +365,28 @@ _lj.write_text(json.dumps({"ts": 1, "rows": [{**mine, "mr": {**mine["mr"], "conf
 assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "target": "main", "how": "Squash"}
 assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
+_lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
+assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 2
+# Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off
+import tempfile
+_wt = tempfile.mkdtemp()
+(dash.greenlight.STATE / "lifecycles").mkdir(exist_ok=True)
+(dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "req": "Out.", "done": "signoff", "run": "echo hi > ran.txt"}]}))
+_dep = {"path": _wt, "project": "acme/dep", "mr": {"state": "merged", "ref": "!9"}, "next": {"step": "deploy", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/dep", "9", "deploy"]}}
+assert dash.moves(_dep) == [{"kind": "signoff", "step": "deploy", "run": "echo hi > ran.txt"}]
+_lj.write_text(json.dumps({"ts": 1, "rows": [_dep]}))
+assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 3
+(dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
+assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3 and dash.tree_signoff("/w/x")["error"]
+# the chat's board: unfinished workspaces, yours first, finished ones counted
+_b = lambda n, o, st="freeform": {"name": n, "project": "o/g", "path": "/w/" + n, "agent": {"state": "idle"}, "next": {"step": st, "owner": o, "action": n + " act"}}
+_lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))
+assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
+                                     "(1 more finished)"], dash.board()
+os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only
+assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
+assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]
+del os.environ["GREENLIGHT_ONLY"]
 dash.greenlight.run = _run
 _lj.write_text(_old) if _old is not None else _lj.unlink()
 print("moves ok")
@@ -347,6 +409,18 @@ with tempfile.TemporaryDirectory() as _d:
     assert dash.tree_diff(_d, "branch")["error"]  # no origin to compare with
     assert dash.hook("exit 3", _d).startswith("exit 3") and dash.hook("true", _d) is None
 print("basement ok")
+
+# forge: Chief's list of open MRs/PRs and issues, one line each with its status, age and the workspace already on it
+now = 1_800_000_000
+mr = dash.gl_item({"iid": 7, "source_branch": "b", "draft": True, "has_conflicts": True, "detailed_merge_status": "draft_status",
+                   "references": {"full": "acme/widgets!7"}, "title": "Fix it", "web_url": "u", "updated_at": "2027-01-15T08:00:00.000Z"}, "mine")
+assert dash.forge_line(mr, {"acme/widgets!7": "fix-it"}, now) == "- [acme/widgets!7](u) Fix it · draft · conflicts · updated today · workspace: fix-it", dash.forge_line(mr, {"acme/widgets!7": "fix-it"}, now)
+iss = dash.gh_item({"number": 3, "title": "Bug", "url": "v", "updatedAt": "2027-01-10T08:00:00Z", "repository": {"nameWithOwner": "octo/app"},
+                    "labels": {"nodes": [{"name": "bug"}]}, "closedByPullRequestsReferences": {"totalCount": 0}}, "issue")
+assert dash.forge_line(iss, {}, now) == "- [octo/app#3](v) Bug · bug · no PR · updated 5d ago", dash.forge_line(iss, {}, now)
+pr = dash.gh_item({"number": 4, "title": "Feat", "url": "w", "isDraft": False, "updatedAt": "", "reviewDecision": "CHANGES_REQUESTED", "mergeable": "CONFLICTING",
+                   "repository": {"nameWithOwner": "octo/app"}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]}}, "review")
+assert dash.forge_line(pr, {}, now) == "- [octo/app#4](w) Feat · conflicts · CI failure · changes requested", dash.forge_line(pr, {}, now)
 
 # CI view: runs bucketed per UTC day (empty days kept), canceled apart, durations of finished runs only, a shared MR once
 _run = lambda id, ts, st, dur, ws="a", project="acme/widgets", ref="!7": {"id": id, "ts": ts, "status": st, "dur": dur, "ws": ws,

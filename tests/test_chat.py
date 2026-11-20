@@ -12,8 +12,13 @@ def test_norm():
     ev = lambda d: [e["e"] for e in n.claude(d)]
     assert ev({"type": "stream_event", "event": {"type": "message_start", "message": {"usage": {"input_tokens": 2, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50}}}}) == ["usage"]
     assert n.context == 152
+    n.claude({"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 40}}})
+    n.claude({"type": "stream_event", "event": {"type": "message_start", "message": {}}})
+    n.last_tps = 0
+    u = n.claude({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "x" * 80}}})[-1]
+    assert u["out"] == 60, u  # 40 from the last message + ~20 streaming
     out = n.claude({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls", "description": "List"}}]}})
-    assert out == [{"e": "step", "id": "t1", "title": "List", "detail": "ls"}], out
+    assert out == [{"e": "step", "id": "t1", "title": "List", "detail": "ls", "call": "Bash(ls)"}], out
     out = n.claude({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "12", "is_error": False}]}})
     assert out == [{"e": "step_done", "id": "t1", "ok": True, "out": "12"}], out
     assert ev({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}}) == ["text_reset"]
@@ -90,6 +95,15 @@ def test_normal_turn_no_retry(tmp_path, monkeypatch):
     events, prompts = turn(tmp_path, monkeypatch, "status update")
     assert prompts == [chat.WRAP + "status update"]
     assert [e["text"] for e in events if e["e"] == "done"] == ["Deleted it."]
+
+
+def test_board_goes_ahead_of_the_message_once(tmp_path, monkeypatch):
+    import dash
+    monkeypatch.setattr(dash, "board", lambda: "- faster-qa (#16): step 4/7 ready · on me")
+    _, prompts = turn(tmp_path, monkeypatch, "what next?")
+    assert prompts[0].startswith("BOARD (") and "faster-qa (#16): step 4/7 ready" in prompts[0] and prompts[0].endswith(chat.WRAP + "what next?"), prompts
+    _, prompts = turn(tmp_path, monkeypatch, "and then?")  # the session has it: not again until it changes
+    assert prompts[-1] == chat.WRAP + "and then?", prompts
 
 
 def shown(events):
@@ -182,6 +196,19 @@ if __name__ == "__main__":
     test_norm()
     print("ok")
 
+
+def test_session_saved_before_done(tmp_path, monkeypatch):
+    """The app may Clear (`chat.py new`) the moment it hears done: the session must already be saved, never written after."""
+    seen = []
+    def on(**e):
+        if e["e"] == "done":
+            seen.append(os.path.exists(tmp_path / "session"))
+            os.remove(tmp_path / "session")  # Clear
+    turn(tmp_path, monkeypatch, "status update")
+    monkeypatch.setattr(chat, "emit", on)
+    os.path.exists(tmp_path / "session") or (tmp_path / "session").write_text("s0")
+    chat.turn("status update", "claude-haiku-5-5", None)
+    assert seen == [True] and not os.path.exists(tmp_path / "session")
 
 def test_thinking_phrase_per_stretch():
     n = Norm()

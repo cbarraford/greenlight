@@ -5,12 +5,12 @@
 //   host       "local" (default) runs greenlight's Python here; anything else is an ssh host (GREENLIGHT_HOST overrides)
 //   greenlightHome  greenlight's state dir on that host (default ~/.greenlight)
 //   greenlightCode  where greenlight's *.py live there (default ~/.claude/skills/greenlight)
-// A dev copy (greenlight-<workspace>, scripts/dev.py) is this app under another name with settings of its own: see devDir.
 // No @State/@Observable: those are macros, and the Command Line Tools swiftc has no SwiftUI macro plugin.
 import AppKit
 import Combine
 import AVFoundation
 import Carbon
+import FoundationModels
 import Security
 import Speech
 import SwiftUI
@@ -24,30 +24,11 @@ let greenlightCode = UserDefaults.standard.string(forKey: "greenlightCode") ?? "
 let py = "GREENLIGHT_HOME=\(greenlightHome) python3 \(greenlightCode)/scripts"  // + "/greenlight.py ..."
 let selftest = CommandLine.arguments.contains("--selftest")  // scratch chat session + transcript, see selfTest()
 let chatCmd = (selftest ? "CHAT_DIR=\(greenlightHome)/chat-test " : "") + "\(py)/chat.py"
-let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
-/// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
-/// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
-let devDir = Bundle.main.object(forInfoDictionaryKey: "GreenlightDev") as? String
-/// A dev copy's workspace ("faster-qa"): on its menubar item and in its window bar, so you can tell the copies and Greenlight apart.
-let devName = devDir.map { URL(fileURLWithPath: $0).lastPathComponent }
-let devTagWidth: CGFloat = devName.map { min(190, ceil(($0 as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 9.5, weight: .bold)]).width) + 44) } ?? 0  // the window bar's tag: 0 in Greenlight
-/// A dev copy's extra ssh options to a host dev.py has a tunnel to: the tunnel's socket, so nothing connects in the copy's
-/// name and a firewall (Little Snitch) has no new app to ask about, however many copies there are. Empty otherwise.
-func devSsh(_ h: String) -> [String] {
-    guard let devDir else { return [] }
-    let sock = URL(fileURLWithPath: devDir).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("ssh/\(h).sock").path
-    return FileManager.default.fileExists(atPath: sock) ? ["-o", "ProxyCommand=/usr/bin/nc -U '\(sock)'"] : []
-}
-/// A bundled page (dashboard, terminal): in a dev copy, the workspace's live one.
-func page(_ name: String) -> URL? {
-    if let devDir, FileManager.default.fileExists(atPath: "\(devDir)/web/\(name).html") { return URL(fileURLWithPath: "\(devDir)/web/\(name).html") }
-    return Bundle.main.url(forResource: name, withExtension: "html")
-}
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
     if host.isEmpty || host == "local" { return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote]) }
-    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + [host, remote])
+    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", host, remote])
 }
 
 /// The terminal sidebar's Hosts: ~/.ssh/config's Host names, minus wildcards, git hosts and the -ts (Tailscale) twin of a listed host.
@@ -173,7 +154,7 @@ func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capital
 // MARK: Settings: repo lifecycles, instructions, memory
 
 /// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
-struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String }
+struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "" }  // ponytail: run (a sign-off step's Run: command) is kept, not editable here: edit the .md
 
 /// Settings → Repositories / Memory and the chat's instructions: each read and saved with `dash.py task <op> <arg>` where greenlight runs.
 final class RulesStore: ObservableObject {
@@ -259,13 +240,13 @@ final class RulesStore: ObservableObject {
         call("prompt-set", "\(repo)/\(kind)", own ? review : "") { self.gotReview($0); self.status = own ? "Saved the prompt." : "Using the default prompt." }
     }
     func got(_ j: [String: Any]) {
-        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "") }
+        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "") }
         options = j["options"] as? [String: String] ?? [:]
         rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
         builtins = j["builtins"] as? [String: String] ?? [:]
     }
     func save() {
-        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done] }, "options": options, "rules": rules, "intro": intro]
+        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run] }, "options": options, "rules": rules, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
         call("lifecycle-set", repo, s) { self.got($0); self.status = "Saved." }
     }
@@ -363,7 +344,7 @@ struct Question: Codable, Identifiable {
 }
 
 /// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
-let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(appName)")  // a copy's own: its tabs' tmux sessions die with its tabs
+let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Greenlight")
 let transcript = support.appendingPathComponent(selftest ? "transcript-test.json" : "transcript.json")
 let questionsFile = support.appendingPathComponent(selftest ? "questions-test.json" : "questions.json")
 
@@ -375,6 +356,14 @@ func splitOptions(_ text: String) -> (String, [String]) {
     lines.removeLast()
     return (lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
             last.dropFirst(8).split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+}
+
+/// The watch's diff: workspaces (name -> why) needing the user in this snapshot, and those that weren't in the last one.
+/// No last snapshot (launch) = nothing new: what already needed you isn't news.
+func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [String: String], new: [String: String]) {
+    var now = [String: String]()
+    for p in pucks where p["state"] as? String == "needs" { if let n = p["name"] as? String { now[n] = p["why"] as? String ?? "" } }
+    return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
 }
 
 func ago(_ d: Date) -> String {
@@ -418,7 +407,8 @@ final class Run: ObservableObject {
     @Published var steps: [Step] = []
     @Published var live = ""
     @Published var stopping = false
-    var gotDone = false
+    @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
+    var gotDone = false, checkIn = false, watch = false
     init(_ q: String) { question = q }
 }
 
@@ -445,7 +435,7 @@ let engines = [("apple", appleOnDevice ? "Apple (on-device)" : "Apple (Apple ser
 let voiceFile = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-voice.wav")
 var recognizer: SFSpeechRecognizer?  // must outlive its task
 func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin") ?? "/opt/homebrew/bin/whisper-cli" }
-func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.deletingLastPathComponent().appendingPathComponent("Greenlight/ggml-large-v3-turbo-q5_0.bin").path }  // one model, copies included
+func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.appendingPathComponent("ggml-large-v3-turbo-q5_0.bin").path }
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
 @discardableResult
@@ -534,7 +524,1193 @@ struct Attached: Identifiable {
     var sent = false
 }
 
+// MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
+
+/// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), and the rest. An unclosed fence (still streaming) hides everything from it on.
+struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil }
+func staged(_ s: String) -> Staged {
+    var text = s, stage: String?, end = false, hexes: [String]?
+    if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
+        let inner = text[r].dropFirst().drop { $0 != ":" }.dropFirst().replacingOccurrences(of: "]", with: "")
+        hexes = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0.lowercased() != "none" }
+        text.removeSubrange(r)
+    }
+    if let r = text.range(of: #"\[voice: ?off\]"#, options: [.regularExpression, .caseInsensitive]) { end = true; text.removeSubrange(r) }  // Chief ends voice mode
+    var console: String?
+    if let r = text.range(of: #"\[console:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief brings up a terminal tab
+        console = text[r].dropFirst(9).replacingOccurrences(of: "]", with: "").trimmingCharacters(in: .whitespaces)
+        text.removeSubrange(r)
+    }
+    let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
+    if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
+    if let open = text.range(of: "```stage") {
+        if let close = text[open.upperBound...].range(of: "```") {
+            stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            text.removeSubrange(open.lowerBound..<close.upperBound)
+        } else { text = String(text[..<open.lowerBound]) }
+    }
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil)
+}
+
+/// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
+/// Chief's mood line (the reply's first line, only emoji) split off the rest, for the chat to show at the reply's top-right corner.
+func mood(_ s: String) -> (mood: String?, rest: String) {
+    let (first, rest) = s.firstIndex(of: "\n").map { (s[..<$0], String(s[s.index(after: $0)...])) } ?? (s[...], "")
+    let m = first.trimmingCharacters(in: .whitespaces)
+    let emoji = !m.isEmpty && m.allSatisfy { ch in ch.isWhitespace || (ch.unicodeScalars.first.map { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && ch.unicodeScalars.count > 1) } ?? false) }
+    return emoji ? (m, rest.drop { $0.isNewline }.description) : (nil, s)
+}
+
+func plain(_ s: String) -> String {
+    var t = s.replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+    if let r = t.range(of: "```") { t = String(t[..<r.lowerBound]) }
+    for (p, w) in [("\\[([^\\]]*)\\]\\([^)]*\\)", "$1"), ("`([^`]*)`", "$1"), ("https?://\\S+", ""), ("(?m)^[ \\t]*(#+|>|[-*+]|\\d+\\.)[ \\t]+", ""), ("\\*+|~~", "")] {
+        t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
+    }
+    return t.filter { ch in  // Chief's mood emoji aren't spoken (Apple's voice reads their names); digits, # and * are "emoji" too, so keep those
+        guard let u = ch.unicodeScalars.first, u.properties.isEmoji else { return true }
+        return !(u.properties.isEmojiPresentation || ch.unicodeScalars.count > 1)
+    }
+}
+
+/// The complete sentences in s past `from` (a character offset): ended by . ! ? and a space, or by a line break.
+func sentences(_ s: String, from: Int) -> (said: [String], to: Int) {
+    let cs = Array(s)
+    var out = [String](), start = min(max(from, 0), cs.count), i = start
+    while i < cs.count {
+        if cs[i] == "\n" || (".!?".contains(cs[i]) && i + 1 < cs.count && cs[i + 1].isWhitespace) {
+            let t = String(cs[start...i]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { out.append(t) }
+            start = i + 1
+        }
+        i += 1
+    }
+    return (out, start)
+}
+
+/// What voice mode shows and says while Chief works, one per turn (it used to always be "One minute").
+let waitWords = """
+Pondering Mulling Musing Ruminating Cogitating Deliberating Contemplating Considering Reflecting Brooding Chewing Noodling
+Puzzling Figuring Reckoning Calculating Computing Crunching Tallying Weighing Sifting Sorting Combing Rummaging Digging
+Excavating Unearthing Spelunking Delving Probing Scouting Exploring Surveying Investigating Sleuthing Snooping Detecting Tracking
+Tracing Hunting Foraging Fishing Angling Trawling Dredging Mining Prospecting Panning Scavenging Gathering Collecting Harvesting
+Gleaning Brewing Steeping Simmering Stewing Marinating Percolating Fermenting Distilling Infusing Whisking Stirring Kneading
+Baking Roasting Toasting Sautéing Braising Caramelizing Seasoning Garnishing Plating Cooking Concocting Mixing Blending Churning
+Folding Proofing Tinkering Fiddling Twiddling Jiggling Wiggling Wrangling Juggling Shuffling Rearranging Untangling Unraveling
+Unknotting Unpacking Unscrambling Decoding Deciphering Decrypting Translating Parsing Reading Skimming Scanning Studying Cramming
+Researching Reviewing Assembling Building Constructing Crafting Forging Smithing Welding Soldering Wiring Rigging Engineering
+Architecting Drafting Sketching Doodling Drawing Painting Sculpting Whittling Carving Chiseling Polishing Buffing Sanding Honing
+Sharpening Tuning Calibrating Adjusting Tweaking Finessing Massaging Smoothing Ironing Tidying Arranging Organizing Filing
+Indexing Cataloging Labeling Stacking Packing Loading Booting Spinning Revving Warming Charging Powering Humming Buzzing Whirring
+Clicking Ticking Beeping Booping Bleeping Blipping Pinging Polling Querying Fetching Retrieving Summoning Conjuring Divining
+Scrying Channeling Manifesting Enchanting Spellcasting Alchemizing Transmuting Hatching Incubating Germinating Sprouting
+Blossoming Cultivating Gardening Pruning Weeding Watering Composting Nesting Burrowing Tunneling Navigating Charting Mapping
+Plotting Scheming Strategizing Planning Orchestrating Conducting Composing Harmonizing Improvising Riffing Jamming Drumming
+Strumming Whistling Daydreaming Wondering Imagining Envisioning Visualizing Dreaming Hypothesizing Theorizing Philosophizing
+Speculating Extrapolating Synthesizing Analyzing Diagnosing Triangulating Deducing Inferring Concluding Resolving Untwisting
+Clarifying Condensing Summarizing Paraphrasing Editing Proofreading Revising Rewriting Wordsmithing Scribbling Jotting Noting
+Annotating Highlighting Cross-referencing Double-checking Fact-checking Verifying Validating Testing Debugging Refactoring
+Optimizing Compiling Linting Diffing Merging Rebasing Committing Shipping Deploying Herding Shepherding Corralling Lassoing
+Wrestling Taming Coaxing Nudging Cajoling Persuading Negotiating Haggling Bartering Bargaining Galloping Trotting Moseying
+Sauntering Meandering Wandering Pacing Tiptoeing Scurrying Scampering Hustling Bustling Zooming Whooshing Zipping Accelerating
+Gearing Caffeinating Stretching Limbering Meditating Breathing Centering Focusing Concentrating Zeroing Homing Locking Aligning
+Syncing Buffering Rendering Pixelating Vectorizing Quantizing Tokenizing Embedding Inferencing Reasoning Thinking Processing
+Working Grinding Plugging Chugging Trundling Puttering Pottering Dawdling Lollygagging Dillydallying Shilly-shallying
+Flibbertigibbeting Bamboozling Befuddling Discombobulating Recombobulating Kerfuffling Hullabalooing Gallivanting Frolicking
+Cavorting Moonwalking Breakdancing Boogieing Shimmying Twirling Pirouetting Somersaulting Cartwheeling Snorkeling Scuba-diving
+Sailing Rowing Paddling Surfing Skating Gliding Soaring Hovering Orbiting Launching Rocketing Teleporting Time-traveling Warping
+Beaming Abacusing Slide-ruling Hmm-ing Umm-ing Head-scratching Chin-stroking Pipe-puffing Monocle-polishing Tea-sipping
+Coffee-brewing Lightbulbing Eureka-ing Aha-ing Puzzle-solving Rubik's-cubing Sudoku-ing Crosswording Chess-playing Checkmating
+Domino-toppling Jigsawing
+""".split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
+
+/// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
+enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset }
+func voiceCommand(_ heard: String) -> VoiceCmd? {
+    let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
+        .split(separator: " ").joined(separator: " ")
+    switch t {
+    case "that's all", "thats all", "that is all", "that's it", "thats it", "i'm done", "im done", "we're done", "were done", "stop listening",
+         "goodbye", "good bye", "bye", "bye bye", "see you", "see ya", "see you later", "later", "talk to you later", "talk later", "catch you later",
+         "good night", "goodnight", "end voice mode", "exit voice mode", "turn off voice mode", "voice off": return .bye
+    case "stop", "never mind", "nevermind", "cancel", "stop that": return .stop
+    case "reset", "reset context", "reset the context", "reset the chat", "clear", "clear context", "clear the context", "clear the chat",
+         "start over", "start fresh", "fresh start", "new chat", "new conversation", "forget everything", "wipe it": return .reset
+    case "captions on", "turn on captions", "show captions": return .captions(true)
+    case "captions off", "turn off captions", "hide captions": return .captions(false)
+    default: return nil
+    }
+}
+
+/// While Chief speaks: you cutting in, not its own voice leaking back? 3+ of your latest words, mostly not ones it just said.
+func isBargeIn(_ heard: String, _ spoken: String) -> Bool {
+    let w = { (s: String) in s.lowercased().split { !$0.isLetter && $0 != "'" }.map(String.init) }
+    let h = w(heard).suffix(6), said = Set(w(spoken))
+    return h.count >= 3 && Double(h.filter { !said.contains($0) }.count) / Double(h.count) > 0.5
+}
+
+/// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
+func fallbackSpec(_ text: String) -> [String: Any] {
+    let ss = sentences(plain(text) + "\n", from: 0).said
+    return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
+}
+
+/// One Claude Haiku 5.5 call (no thinking, low effort, structured output), for the quick decisions around Chief's replies.
+/// nil when there's no key, or on an error, a refusal or a cut-off reply: the caller keeps what's on screen.
+func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @escaping ([String: Any]?) -> Void) {
+    guard let key = keychain("anthropic"), !key.isEmpty else { return done(nil) }
+    var q = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+    q.httpMethod = "POST"
+    q.timeoutInterval = 20
+    for (k, v) in ["x-api-key": key, "anthropic-version": "2026-10-21", "content-type": "application/json"] { q.setValue(v, forHTTPHeaderField: k) }
+    let body: [String: Any] = [
+        "model": "claude-haiku-5-5", "max_tokens": 600, "thinking": ["type": "disabled"],
+        "output_config": ["effort": "low", "format": ["type": "json_schema", "schema": schema]],
+        "system": system, "messages": [["role": "user", "content": user]]]
+    q.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    URLSession.shared.dataTask(with: q) { d, resp, err in
+        let j = d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let text = (j?["content"] as? [[String: Any]])?.first { $0["type"] as? String == "text" }?["text"] as? String
+        if j?["stop_reason"] as? String != "end_turn" {  // a 400 shouldn't look like "no key": Console.app, process Greenlight
+            NSLog("haiku: %@ %@", "\((resp as? HTTPURLResponse)?.statusCode ?? 0)", err?.localizedDescription ?? d.flatMap { String(data: $0.prefix(400), encoding: .utf8) } ?? "")
+        }
+        let out = j?["stop_reason"] as? String == "end_turn" ? text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } : nil
+        DispatchQueue.main.async { done(out) }
+    }.resume()
+}
+
+/// Haiku draws what Chief is saying as a card for stage.spec.
+func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
+    let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
+                               "required": ["label", "detail"], "additionalProperties": false]
+    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["eyebrow", "title", "kind", "stat", "items"], "properties": [
+        "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
+        "eyebrow": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
+    haiku("You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
+            + "title: the point in a few words. kind: list (facts), steps (an order), stat (one number matters: put it in stat, e.g. \"3 MRs\"), "
+            + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
+            + "eyebrow: 1–4 lowercase words of context above the title (a workspace name, \"needs you · 2\", \"this week\") or empty; no emoji. "
+            + "items: at most 6, label a few words, detail one short line or empty (for stat, items are facts: label the name, detail the value). "
+            + "Use names, numbers and MR refs from the reply; never invent any. stat is empty unless kind is stat.",
+          "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
+}
+
+/// The stage's card for one workspace: its MR, where it is and what's next, from the dashboard's snapshot.
+func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
+    let s = { (k: String) in p[k] as? String ?? "" }, mr = p["mr"] as? [String: Any] ?? [:]
+    let label = ["needs": "Needs you", "crashed": "Crashed", "raised": "Your move", "working": "Working", "queued": "Queued", "quiet": "Waiting on others", "done": "Done"]
+    let items: [[String: String]] = [
+        ["label": [mr["ref"] as? String, mr["title"] as? String].compactMap { $0 }.joined(separator: " "),
+         "detail": [mr["draft"] as? Bool == true ? "draft" : nil, (mr["pipeline"] as? String).map { "CI \($0)" }, mr["conflicts"] as? Bool == true ? "conflicts" : nil].compactMap { $0 }.joined(separator: " · ")],
+        ["label": label[s("state")] ?? s("state"), "detail": s("why")],
+        ["label": "Next: " + s("step").replacingOccurrences(of: "_", with: " "), "detail": s("action")],
+        ["label": "Goal", "detail": s("goal")],
+    ].filter { !($0["label"]!.isEmpty || $0["label"] == "Goal" && $0["detail"]!.isEmpty) }
+    return ["title": s("name"), "kind": "list", "eyebrow": (label[s("state")] ?? s("state")).lowercased(), "stat": "", "items": items]
+}
+
+/// The window you were last in, in words for Chief: a terminal's project and tab, or the dashboard's open workspace.
+func focusLine(terminal id: Int?, project: String, _ o: [String: Any]) -> String {
+    let s = { (k: String) in (o[k] as? String).map { String($0.prefix(200)) } ?? "" }
+    if id != nil {
+        let tab = s("name").isEmpty ? "" : ", on the tab for workspace \(s("name")) (\(s("path"))\(s("mr").isEmpty ? "" : ", \(s("mr"))"))"
+        return "a Basement terminal window" + (project.isEmpty ? "" : " showing \(project)") + tab
+    }
+    return s("page").isEmpty ? "the dashboard (\(s("view")))" : "the dashboard, with workspace \(s("page")) open"
+}
+
+/// Chief's [hexes: …] names to the board's: exact, the short name (after a "/"), or an MR/PR ref; unknown ones dropped.
+func resolveHexes(_ said: [String], _ pucks: [[String: Any]]) -> [String] {
+    let names = pucks.compactMap { $0["name"] as? String }
+    return said.compactMap { w in
+        let k = w.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "`*\"' "))
+        return names.first { $0.lowercased() == k } ?? names.first { $0.lowercased().split(separator: "/").last.map(String.init) == k }
+            ?? pucks.first { ((($0["mr"] as? [String: Any])?["ref"] as? String)?.lowercased()) == k }?["name"] as? String
+    }.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+}
+
+/// The model's pick counts only when the reply points at it: its name, its MR number, or two of its title's longer words.
+/// ponytail: without this the small model lights the top of the list for small talk
+func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
+    let low = reply.lowercased(), mr = p["mr"] as? [String: Any] ?? [:]
+    let name = String((p["name"] as? String ?? "").lowercased().split(separator: "/").last ?? "")
+    let num = (mr["ref"] as? String).map { String($0.drop { !$0.isNumber }) } ?? ""
+    let has = { (k: String) in low.range(of: "(?<![\\w])" + NSRegularExpression.escapedPattern(for: k) + "(?![\\w])", options: .regularExpression) != nil }
+    let words = (mr["title"] as? String ?? "").lowercased().split { !$0.isLetter }.map(String.init).filter { $0.count >= 5 }
+    return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
+}
+
+/// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
+func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
+    let low = reply.lowercased()
+    let has = { (k: String) in low.range(of: "(?<![\\w!#-])" + NSRegularExpression.escapedPattern(for: k.lowercased()) + "(?![\\w-])", options: .regularExpression) != nil }
+    return pucks.compactMap { p in
+        guard let n = p["name"] as? String else { return nil }
+        let short = String(n.split(separator: "/").last ?? Substring(n))
+        let ref = (p["mr"] as? [String: Any])?["ref"] as? String
+        return (ref.map(has) ?? false) || (short.count >= 5 && short.contains { !$0.isLetter } && has(short)) ? n : nil
+    }
+}
+
+/// The decision model for the dashboard: which workspaces (hexes) Chief's reply is about. The ones it names outright, plus what
+/// Apple's on-device model picks (local, no key; only real names, an enum of them). Without Apple Intelligence: the named ones.
+/// The user asked to see workspaces ("highlight…", "show me…", "light up…", "point at…", "which ones…"): the picker assumes yes.
+func asksToShow(_ s: String) -> Bool {
+    s.range(of: #"\b(highlight|light (them |it |those |these )?up|show me|show (them|those|these|which)|point (me )?(at|to|out)|which (ones?|workspaces?|hex(es)?|mrs?|prs?)|where (is|are)|find)\b"#,
+            options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+/// `asked`: the user asked to see some (asksToShow), so skip the "about particular workspaces?" gate; grounding still applies.
+func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, done: @escaping ([String]) -> Void) {
+    let named = namedHexes(reply, pucks)
+    var seen = Set<String>()  // the same workspace twice (a stack's members, two hosts) would be a duplicate enum case
+    let ws = pucks.compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
+        guard let n = p["name"] as? String, seen.insert(n).inserted else { return nil }
+        let mr = p["mr"] as? [String: Any]
+        return (n, [n, mr?["ref"] as? String, (mr?["title"] as? String).map { String($0.prefix(60)) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
+    }.prefix(60)
+    guard !ws.isEmpty, SystemLanguageModel.default.isAvailable else { return done(named) }
+    Task {
+        var picked: [String] = []
+        do {
+            let root = DynamicGenerationSchema(name: "Pick", properties: [  // "specific" first: without it the small model picks every one for small talk
+                .init(name: "specific", description: "does the reply name or point at particular workspaces?", schema: DynamicGenerationSchema(type: Bool.self)),
+                .init(name: "hexes", description: "workspaces the reply is about; empty when none",
+                schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Workspace", anyOf: ws.map(\.0)), maximumElements: 8))])
+            let session = LanguageModelSession(instructions: "You decide which of the user's workspaces an assistant's reply is about, to highlight them "
+                + "on the user's dashboard: the ones it names, recommends, asks about or acts on (by name, branch, MR/PR number or title). "
+                + "Return an empty list when the reply is about none of them, or about all of them in general. Never guess.")
+            let r = try await session.respond(to: "Workspaces (name | MR | title):\n" + ws.map(\.1).joined(separator: "\n") + "\n\nThe reply:\n" + String(reply.prefix(1500)),
+                                              schema: try GenerationSchema(root: root, dependencies: []), options: GenerationOptions(temperature: 0))
+            picked = try asked || r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
+            if picked.count > 3 && picked.count >= ws.count { picked = [] }  // all of them is about none in particular
+        } catch { NSLog("pick: %@", "\(error)") }
+        let ok = Set(picked.filter { n in pucks.contains { $0["name"] as? String == n && grounded(reply, $0) } })
+        let out = (named + picked.filter(ok.contains)).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        await MainActor.run { done(out) }
+    }
+}
+
+/// One buffer in another format (rate, channels, sample type): the mic to 16 kHz mono for recognition, speech to the player's.
+/// whole: b is all there is (a line from Kokoro/ElevenLabs), so flush the resampler's tail instead of holding it for the next call.
+func convert(_ b: AVAudioPCMBuffer, _ c: AVAudioConverter, _ to: AVAudioFormat, whole: Bool = false) -> AVAudioPCMBuffer? {
+    defer { if whole { c.reset() } }
+    guard let out = AVAudioPCMBuffer(pcmFormat: to, frameCapacity: AVAudioFrameCount(Double(b.frameLength) * to.sampleRate / b.format.sampleRate) + 32) else { return nil }
+    var fed = false, err: NSError?
+    c.convert(to: out, error: &err) { _, status in
+        if fed { status.pointee = whole ? .endOfStream : .noDataNow; return nil }
+        fed = true; status.pointee = .haveData; return b
+    }
+    return err == nil && out.frameLength > 0 ? out : nil
+}
+
+/// A buffer's loudness, 0…1 (−50 dB…−5 dB), for the waveforms.
+func level(_ b: AVAudioPCMBuffer) -> Float {
+    guard let ch = b.floatChannelData, b.frameLength > 0 else { return 0 }
+    var sum: Float = 0
+    for i in 0..<Int(b.frameLength) { sum += ch[0][i] * ch[0][i] }
+    return max(0, min(1, (20 * log10(max(sqrt(sum / Float(b.frameLength)), 1e-6)) + 50) / 45))
+}
+
+let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer in 1–3 short spoken sentences: "
+    + "no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
+    + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
+    + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
+    + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
+    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
+    + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
+
+/// The waveforms' levels, apart from Voice so 40 updates a second redraw only the bars.
+final class Meter: ObservableObject {
+    @Published var you = [Float](repeating: 0, count: 48)
+    @Published var chief = [Float](repeating: 0, count: 48)
+}
+
+/// Voice mode's looks, switched by the header's style button: each frames the same parts (the stage, captions, who's talking,
+/// context and Clear) its own way, and the stage takes its colors and type.
+struct Look { let id, name, page, stage, card, text, text2, dim, line, accent, font: String; let dark: Bool }
+let sansCSS = "-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif", monoCSS = "ui-monospace,'SF Mono',Menlo,monospace", serifCSS = "ui-serif,'New York',Georgia,serif"
+let looks = [
+    Look(id: "conversation", name: "Conversation", page: "FFFFFF", stage: "FFFFFF", card: "F6F8FA", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D1D9E0", accent: "0969DA", font: sansCSS, dark: false),
+    Look(id: "orb", name: "Orb", page: "111113", stage: "1C1C1F", card: "26262A", text: "ECECEE", text2: "C9C9CF", dim: "9A9AA1", line: "34343A", accent: "F5A524", font: sansCSS, dark: true),
+    Look(id: "onair", name: "On Air", page: "0B0B0C", stage: "0B0B0C", card: "1A1A1D", text: "F4F4F5", text2: "C9C9CF", dim: "A1A1AA", line: "26262A", accent: "F5A524", font: sansCSS, dark: true),
+    Look(id: "phosphor", name: "Phosphor", page: "000000", stage: "000000", card: "061A04", text: "28FE14", text2: "28FE14", dim: "1DA80F", line: "1DA80F", accent: "28FE14", font: monoCSS, dark: true),
+    Look(id: "editorial", name: "Editorial", page: "F7F5F0", stage: "F7F5F0", card: "EFEBE3", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D5D1C7", accent: "B42318", font: serifCSS, dark: false),
+    Look(id: "hud", name: "HUD", page: "0A0F14", stage: "0D151C", card: "14212B", text: "D7E3EA", text2: "B4C4CE", dim: "7F95A3", line: "1B2C36", accent: "39C5CF", font: sansCSS, dark: true),
+    Look(id: "zen", name: "Zen", page: "121214", stage: "121214", card: "1C1C1F", text: "ECECEE", text2: "C9C9CF", dim: "8E8E96", line: "26262A", accent: "F5A524", font: sansCSS, dark: true),
+]
+extension Look {
+    /// The stage page's CSS variables (stage.html reads --mc-*), set on document.documentElement.style as `s`.
+    var vars: String {
+        [("bg", "#" + stage), ("surface", "#" + card), ("text", "#" + text), ("text2", "#" + text2), ("dim", "#" + dim), ("line", "#" + line), ("accent", "#" + accent), ("font", font)]
+            .map { "s.setProperty('--mc-\($0.0)', \"\($0.1)\");" }.joined(separator: " ") + " document.documentElement.dataset.look = '\(id)';"
+    }
+}
+func hx(_ h: String, _ o: Double = 1) -> Color { Color(nsColor: hex(h)).opacity(o) }
+/// The chat window (standard and live) wears the same look. Chat views adopt Looked: its members shadow the app-wide color
+/// globals (bg, fg, accent, card…, theme) and chatFace, so their bodies read the look's tokens unchanged.
+var chatLook = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1]
+protocol Looked {}
+extension Looked {
+    var lk: Look { chatLook }
+    var theme: Theme { Theme(lk.name, lk.stage, lk.text, lk.accent, lk.card) }
+    var bg: Color { hx(lk.stage) }
+    var page: Color { hx(lk.page) }
+    var fg: Color { hx(lk.text) }
+    var accent: Color { hx(lk.accent) }
+    var card: Color { hx(lk.card) }
+    var surface: Color { hx(lk.card) }
+    var line: Color { hx(lk.line) }
+    var edge: Color { hx(lk.line) }
+    var dim: Color { hx(lk.dim) }
+    var sub: Color { hx(lk.text2) }
+    var bubble: Color { hx(lk.card) }
+    var mono: Bool { lk.id == "phosphor" }
+    /// State colors for the look's lightness (Theme.needs… follow the app theme, not the look).
+    func state(_ d: String, _ l: String) -> Color { hx(lk.dark ? d : l) }
+    var needs: Color { state("FF9F0A", "F08A00") }
+    var needsInk: Color { state("FF9F0A", "A85A00") }
+    var done: Color { state("30D158", "2BA84A") }
+    var crashed: Color { state("FF453A", "E5392F") }
+    var crashedInk: Color { state("FF6B61", "C62828") }
+    var working: Color { state("0A84FF", "0A7AFF") }
+    /// The conversation's text in the look's face: mono for Phosphor, serif for Editorial, else the chosen chat font.
+    func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        lk.font == monoCSS ? sys(size: size, weight: weight, design: .monospaced) : lk.font == serifCSS ? sys(size: size, weight: weight, design: .serif)
+            : sys(size: size, weight: weight, face: chatFont)
+    }
+}
+
+/// Claude Code's live line, under the reply in the chat and in every voice look: the running call, then the spinner with time, tokens and speed.
+/// ponytail: no live shell output; claude's stream only sends a tool's elapsed seconds while it runs.
+struct Activity: View {
+    @ObservedObject var c: Core
+    @ObservedObject var r: Run
+    let fg: Color, dim: Color, accent: Color, size: CGFloat
+    var body: some View {
+        let t = max(0, c.now.timeIntervalSince(r.start)), cur = r.steps.last.flatMap { $0.ok == nil ? $0 : nil }
+        let w = r.stopping ? "Stopping…" : c.voice.waitWord.hasSuffix("…") ? c.voice.waitWord : c.voice.waitWord + "…"
+        let bits = [fmt(t), c.outTok > 0 ? "↓ \(kfmt(c.outTok)) tokens" : nil, c.tps > 0 ? "\(Int(c.tps)) tok/s" : nil,
+                    r.status == "Thinking" ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
+        VStack(alignment: .leading, spacing: 2) {
+            if let s = cur {
+                Text("\(Text("⏺ ").foregroundColor(accent))\(r.call.isEmpty ? s.title : r.call)").foregroundColor(fg).lineLimit(1).truncationMode(.middle)
+                Text("  ⎿  Running… \(fmt(c.now.timeIntervalSince(s.start)))").foregroundColor(dim)
+            }
+            Text("\(Text(["·", "✢", "✳", "✶", "✻", "✽"][Int(t) % 6] + " ").foregroundColor(accent))\(Text(w).foregroundColor(fg)) \(Text("(\(bits))").foregroundColor(dim))").lineLimit(1)
+        }.font(sys(size: size, design: .monospaced)).textSelection(.enabled).accessibilityElement(children: .combine)
+    }
+}
+
+/// A workspace's agent (Claude Code, Codex…) that's working or asking you, from dash.py's snapshot (finished ones aren't counted); id is the worktree's path.
+struct Agent: Equatable, Identifiable { let id: String, name: String, state: String, type: String }
+func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
+    pucks.compactMap { p in
+        guard let a = p["agent"] as? [String: Any], let st = a["state"] as? String, ["working", "waiting"].contains(st), let path = p["path"] as? String else { return nil }
+        return Agent(id: path, name: p["name"] as? String ?? path, state: st, type: a["type"] as? String ?? "")
+    }.sorted { ($0.state == "waiting" ? 0 : 1, $0.name) < ($1.state == "waiting" ? 0 : 1, $1.name) }
+}
+
+enum Talk { case speaking, listening, thinking }
+/// What every look shows, from Voice and Core.
+struct Live {
+    let v: Voice, c: Core
+    var talk: Talk { v.speaking > 0 ? .speaking : c.run != nil ? .thinking : .listening }
+    var label: String { talk == .speaking ? "Speaking" : talk == .thinking ? "Thinking" : "Listening" }
+    var hint: String { talk == .speaking ? (v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
+    var said: String { v.captions ? v.caption : "" }
+    var heard: String { v.captions ? v.heard : "" }
+    var frac: Double { c.ctxFull }
+    var pct: Int { Int((frac * 100).rounded()) }
+    var high: Bool { frac > 0.75 }
+    var tokens: String { c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window))" : kfmt(c.context) }
+    var name: String { c.name }
+    /// The live line, in the look's colors, while Chief works (off in Settings → Chat & voice).
+    @ViewBuilder func activity(_ l: Look, ink: Color? = nil, accent: Color? = nil, size: CGFloat = 12) -> some View {
+        if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size).frame(maxWidth: .infinity, alignment: .leading) }
+    }
+    func clear() { v.run(.reset) }
+    /// The stage, inset in its card so the card's rounded corners show (the web view itself is square).
+    func stage(_ l: Look, r: CGFloat = 12, pad: CGFloat = 8, border: Color? = nil) -> some View {
+        StageWeb(web: v.stageWeb).padding(pad).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: r).fill(hx(l.stage)))
+            .overlay(RoundedRectangle(cornerRadius: r).stroke(border ?? .clear))
+    }
+    /// The context readout as a button: its popover has the totals and Compact.
+    func ctx<L: View>(@ViewBuilder _ label: () -> L) -> some View {
+        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).accessibilityLabel("Context, \(pct) percent used").modifier(CtxPop(c: c))
+    }
+    func clearButton<L: View>(@ViewBuilder _ label: () -> L) -> some View {
+        Button(action: clear) { label() }.buttonStyle(.plain).help("Clear the context and start a new conversation (or say “reset”)").accessibilityLabel("Clear the context")
+    }
+}
+
+/// Voice mode's screen, in place of the chat, in the look the header's style button last picked.
+struct StageView: View {
+    @ObservedObject var v: Voice
+    @ObservedObject var c: Core
+    var body: some View {
+        let s = Live(v: v, c: c), l = v.look
+        Group {
+            switch l.id {
+            case "conversation": ConversationLook(s: s, l: l)
+            case "onair": OnAirLook(s: s, l: l)
+            case "phosphor": PhosphorLook(s: s, l: l)
+            case "editorial": EditorialLook(s: s, l: l)
+            case "hud": HUDLook(s: s, l: l)
+            case "zen": ZenLook(s: s, l: l)
+            default: OrbLook(s: s, l: l)
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(hx(l.page)).environment(\.colorScheme, l.dark ? .dark : .light)
+    }
+}
+
+/// The last n levels, Chief's where it's louder (it's speaking), yours otherwise.
+func levels(_ m: Meter, _ n: Int) -> [(Float, Bool)] { zip(m.chief, m.you).suffix(n).map { a, b in (max(a, b), a >= b && a > 0) } }
+
+/// Waveform bars: Chief's in `on`, yours in `off`; flipped for a reflection.
+struct Bars: View {
+    @ObservedObject var m: Meter
+    var n = 44, w: CGFloat = 3, gap: CGFloat = 2, h: CGFloat = 28, round = true, on: Color, off: Color
+    var body: some View {
+        HStack(alignment: .bottom, spacing: gap) {
+            ForEach(Array(levels(m, n).enumerated()), id: \.offset) { _, x in
+                RoundedRectangle(cornerRadius: round ? w / 2 : 0).fill(x.1 ? on : off).frame(width: w, height: 2 + CGFloat(x.0) * (h - 2))
+            }
+        }.frame(height: h, alignment: .bottom).animation(.linear(duration: 0.06), value: m.you).accessibilityHidden(true)
+    }
+}
+
+struct HLine: Shape { func path(in r: CGRect) -> Path { Path { $0.move(to: CGPoint(x: 0, y: r.midY)); $0.addLine(to: CGPoint(x: r.maxX, y: r.midY)) } } }
+
+// MARK: Conversation: GitHub Light, the turn as chat bubbles, a pill with the wave, context and Clear
+
+struct ConversationLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Text(String(s.name.prefix(1))).font(.system(size: 14, weight: .bold)).foregroundColor(.white).frame(width: 32, height: 32).background(Circle().fill(hx(l.accent)))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(s.name).font(.system(size: 14, weight: .semibold)).foregroundColor(hx(l.text))
+                    Text("\(s.label) · \(s.hint)").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)
+                }
+                Spacer()
+            }
+            s.stage(l, border: hx(l.line))
+            VStack(spacing: 8) {
+                if !s.heard.isEmpty { HStack { Spacer(minLength: 40); bubble(s.heard, fill: hx(l.accent), ink: .white) } }
+                if !s.said.isEmpty { HStack { bubble(s.said, fill: hx(l.card), ink: hx(l.text)); Spacer(minLength: 40) } }
+                s.activity(l).padding(.horizontal, 4)
+            }
+            HStack(spacing: 10) {
+                Bars(m: s.v.meter, n: 36, on: hx(l.accent), off: hx("8C959F"))
+                Spacer(minLength: 4)
+                s.ctx { Text("\(s.pct)% context").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(s.high ? hx("9A6700") : hx(l.dim)) }
+                s.clearButton {
+                    Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .semibold)).foregroundColor(.white).frame(width: 34, height: 34).background(Circle().fill(hx(l.text)))
+                }
+            }.padding(.leading, 16).padding(.trailing, 5).padding(.vertical, 5)
+                .background(Capsule().fill(hx(l.card))).overlay(Capsule().stroke(hx(l.line)))
+            GeometryReader { g in
+                ZStack(alignment: .leading) { Capsule().fill(hx(l.line)); Capsule().fill(s.high ? hx("BF8700") : hx(l.accent)).frame(width: g.size.width * s.frac) }
+            }.frame(height: 3).accessibilityHidden(true)
+        }.padding(16)
+    }
+    func bubble(_ t: String, fill: Color, ink: Color) -> some View {
+        Text(t).font(.system(size: 14)).foregroundColor(ink).lineLimit(4).padding(.horizontal, 14).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 16).fill(fill))
+    }
+}
+
+// MARK: Orb: rings that swell with the voice, the outer one the context meter
+
+struct OrbLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("\(s.name) · \(s.label)".uppercased()).font(.system(size: 12, weight: .semibold)).tracking(1.6).foregroundColor(hx(l.dim))
+            s.stage(l, r: 20, pad: 10, border: hx("FFFFFF", 0.08))
+            Orb(m: s.v.meter, s: s, l: l).frame(width: 200, height: 200)
+            if !s.said.isEmpty || !s.heard.isEmpty {
+                VStack(spacing: 8) {
+                    if !s.said.isEmpty { Text(s.said).font(.system(size: 20, weight: .medium)).foregroundColor(hx(l.text)) }
+                    if !s.heard.isEmpty { Text("“\(s.heard)”").font(.system(size: 13)).foregroundColor(hx(l.dim)) }
+                }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 20)
+            }
+            s.activity(l).padding(.horizontal, 20)
+            HStack(spacing: 12) {
+                s.ctx { Text("\(s.pct)% · \(s.tokens)").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
+                s.clearButton {
+                    Label("Start over", systemImage: "arrow.counterclockwise").font(.system(size: 13, weight: .semibold)).foregroundColor(hx(l.text))
+                        .padding(.horizontal, 16).frame(height: 36).background(Capsule().fill(hx(l.stage))).overlay(Capsule().stroke(hx("FFFFFF", 0.14)))
+                }
+            }
+        }.padding(.horizontal, 20).padding(.vertical, 16)
+    }
+}
+struct Orb: View {
+    @ObservedObject var m: Meter
+    let s: Live, l: Look
+    var body: some View {
+        let lv = CGFloat(levels(m, 1).first?.0 ?? 0), k = (s.talk == .speaking ? 1 : s.talk == .listening ? 0.8 : 0.62) * (1 + lv * 0.18)
+        let core = s.talk == .speaking ? hx(l.accent) : s.talk == .listening ? hx(l.text) : hx("3A3A40")
+        ZStack {
+            Circle().stroke(hx("FFFFFF", 0.07), lineWidth: 3)
+            Circle().trim(from: 0, to: max(s.frac, 0.005)).stroke(s.high ? hx("FF9F0A") : hx(l.accent), style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+            Circle().stroke(hx(l.accent, 0.18)).frame(width: 174 * k, height: 174 * k)
+            Circle().stroke(hx(l.accent, 0.32)).frame(width: 144 * k, height: 144 * k)
+            Circle().fill(hx(l.accent, 0.16)).frame(width: 113 * k, height: 113 * k)
+            Circle().fill(core).frame(width: 79 * k, height: 79 * k).shadow(color: s.talk == .thinking ? .clear : core.opacity(0.5), radius: 30)
+        }.animation(.easeOut(duration: 0.12), value: lv).accessibilityElement().accessibilityLabel("\(s.label), context \(s.pct) percent")
+    }
+}
+
+// MARK: On Air: a broadcast, tally light and LED meter up top, an amber lower third, a ticker with Clear
+
+struct OnAirLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : "STANDBY") }
+                    .font(.system(size: 12, weight: .heavy)).tracking(1.4).foregroundColor(.white).padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(s.talk == .speaking ? hx("D1242F") : s.talk == .listening ? hx("1A7F37") : hx("3A3A40"))
+                Leds(m: s.v.meter)
+                Spacer()
+            }.padding(.horizontal, 16).padding(.vertical, 12)
+            Rectangle().fill(hx(l.line)).frame(height: 2)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("LIVE · \(s.name.uppercased())").font(.system(size: 11, weight: .heavy)).tracking(1.5).foregroundColor(hx(l.page)).padding(.horizontal, 8).padding(.vertical, 4).background(hx(l.accent))
+                s.stage(l, r: 0, pad: 0)
+            }.padding(16)
+            VStack(spacing: 0) {
+                if !s.said.isEmpty { third("CHIEF", s.said, tag: hx(l.accent), tagInk: hx(l.page), fill: hx(l.text), ink: hx(l.page), size: 15) }
+                if !s.heard.isEmpty { third("YOU", s.heard, tag: hx(l.line), tagInk: hx(l.text), fill: hx(l.card), ink: hx(l.text2), size: 13) }
+                s.activity(l).padding(.horizontal, 16).padding(.top, 8)
+            }.padding(.bottom, 12)
+            HStack(spacing: 12) {
+                s.ctx {
+                    HStack(spacing: 10) {
+                        Text("CONTEXT \(s.pct)%").font(.system(size: 11, weight: .heavy).monospacedDigit()).tracking(1.2)
+                        HStack(spacing: 2) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(i < Int((s.frac * 10).rounded()) ? hx(l.page) : hx(l.page, 0.22)).frame(width: 8, height: 16) } }
+                        Text("· \(s.tokens.uppercased()) · SAY “RESET”").font(.system(size: 11, weight: .bold)).lineLimit(1)
+                    }.foregroundColor(hx(l.page))
+                }
+                Spacer(minLength: 0)
+                s.clearButton { Text("CLEAR").font(.system(size: 12, weight: .heavy)).tracking(1.6).foregroundColor(hx(l.accent)).padding(.horizontal, 18).frame(maxHeight: .infinity).background(hx(l.page)) }
+            }.padding(.leading, 16).frame(height: 48).background(s.high ? hx("FF9F0A") : hx(l.accent))
+        }
+    }
+    func third(_ who: String, _ t: String, tag: Color, tagInk: Color, fill: Color, ink: Color, size: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            Text(who).font(.system(size: 12, weight: .heavy)).tracking(1).foregroundColor(tagInk).frame(width: 62).frame(maxHeight: .infinity).background(tag)
+            Text(t).font(.system(size: size, weight: who == "CHIEF" ? .semibold : .regular)).foregroundColor(ink).lineLimit(3)
+                .padding(.horizontal, 14).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading).background(fill)
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+}
+struct Leds: View {
+    @ObservedObject var m: Meter
+    var body: some View {
+        let lit = Int(CGFloat(levels(m, 1).first?.0 ?? 0) * 16 + 0.5)
+        HStack(spacing: 2) {
+            ForEach(0..<16, id: \.self) { i in Rectangle().fill(i >= lit ? hx("26262A") : i >= 13 ? hx("F85149") : i >= 9 ? hx("F5A524") : hx("3FB950")).frame(width: 6, height: 14) }
+        }.accessibilityHidden(true)
+    }
+}
+
+// MARK: Phosphor: a green-screen terminal, scanlines and all
+
+struct PhosphorLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        let ink = hx(l.text), faint = hx(l.dim), f = Int((s.frac * 10).rounded())
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("\(s.name.lowercased())@greenlight"); Text("~/voice").foregroundColor(faint)
+                Spacer(); Text("[\(s.label.uppercased())]").foregroundColor(faint)
+            }.padding(.horizontal, 14).padding(.vertical, 11)
+            HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("$ stage --live").foregroundColor(faint)
+                s.stage(l, r: 0, pad: 0)
+                if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(s.heard)") }
+                if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
+                s.activity(l, accent: ink, size: 13)
+            }.lineLimit(4).padding(14)
+            HStack(spacing: 10) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
+                .padding(.horizontal, 14).padding(.bottom, 10)
+            HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
+            HStack(spacing: 10) {
+                s.ctx { Text("ctx [\(String(repeating: "#", count: f) + String(repeating: ".", count: 10 - f))] \(s.pct)%").foregroundColor(s.high ? hx("FFB000") : ink) }
+                Text(s.tokens).foregroundColor(faint).lineLimit(1)
+                Spacer()
+                s.clearButton { Text("[ clear ]").fontWeight(.bold).foregroundColor(hx(l.page)).padding(.horizontal, 10).frame(height: 30).background(ink) }
+            }.padding(.horizontal, 14).padding(.vertical, 10)
+        }.font(.system(size: 13, design: .monospaced)).foregroundColor(ink).shadow(color: ink.opacity(0.45), radius: 3)
+            .overlay(Canvas { g, size in
+                for y in stride(from: 2.0, to: size.height, by: 3) { g.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(.black.opacity(0.28))) }
+            }.allowsHitTesting(false).accessibilityHidden(true))
+    }
+}
+struct Glyphs: View {
+    @ObservedObject var m: Meter
+    let talk: Talk
+    var body: some View {
+        let g = Array("▁▂▃▄▅▆▇█")
+        Text(talk == .thinking ? "·   ·   ·   ·   ·   ·" : String(levels(m, 36).map { g[min(7, Int($0.0 * 7 + 0.5))] })).lineLimit(1).accessibilityHidden(true)
+    }
+}
+
+// MARK: Editorial: a front page, serif type, an ink-line wave
+
+struct EditorialLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        let ink = hx(l.text), red = hx(l.accent)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("The \(s.name)").font(.system(size: 22, weight: .bold, design: .serif).italic())
+                Spacer()
+                Text(s.label.uppercased()).font(.system(size: 10, weight: .bold)).tracking(1.8).foregroundColor(hx(l.dim))
+            }.padding(.top, 16).padding(.bottom, 10)
+            VStack(spacing: 2) { Rectangle().fill(ink).frame(height: 1); Rectangle().fill(ink).frame(height: 1) }
+            HStack { Text("\(Date().formatted(.dateTime.weekday(.wide))) edition"); Spacer(); Text("voice") }
+                .font(.system(size: 10, weight: .semibold)).tracking(1.4).textCase(.uppercase).foregroundColor(hx(l.dim)).padding(.vertical, 6)
+            Rectangle().fill(ink).frame(height: 1)
+            Text("ON YOUR DESK").font(.system(size: 11, weight: .bold)).tracking(1.8).foregroundColor(red).padding(.top, 18).padding(.bottom, 6)
+            s.stage(l, r: 0, pad: 0)
+            if !s.said.isEmpty {
+                Text("“\(s.said)”").font(.system(size: 19, design: .serif).italic()).lineSpacing(3).lineLimit(4).padding(.top, 16)
+            }
+            if !s.heard.isEmpty { Text("In reply to “\(s.heard)”").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 6) }
+            s.activity(l).padding(.top, 8)
+            Scope(m: s.v.meter, ink: s.talk == .speaking ? red : ink, rule: hx(l.line)).frame(height: 44).padding(.top, 12)
+            Rectangle().fill(ink).frame(height: 1)
+            HStack(spacing: 14) {
+                s.ctx { Text("Context \(Text("\(s.pct)").bold()) percent used · \(s.tokens)").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? red : hx(l.text2)) }
+                Spacer()
+                s.clearButton { Text("Clear the page").font(.system(size: 13, weight: .bold)).foregroundColor(red).padding(.bottom, 2).overlay(Rectangle().fill(red).frame(height: 2), alignment: .bottom) }
+            }.padding(.top, 12).padding(.bottom, 18)
+        }.foregroundColor(ink).padding(.horizontal, 28)
+    }
+}
+/// An oscilloscope line through the levels, tapered at both ends.
+struct Scope: View {
+    @ObservedObject var m: Meter
+    let ink: Color, rule: Color
+    var body: some View {
+        let lv = levels(m, 48).map { CGFloat($0.0) }
+        Canvas { g, size in
+            let mid = size.height / 2, n = max(lv.count - 1, 1)
+            g.stroke(Path { $0.move(to: CGPoint(x: 0, y: mid)); $0.addLine(to: CGPoint(x: size.width, y: mid)) }, with: .color(rule))
+            g.stroke(Path { p in
+                for (i, v) in lv.enumerated() {
+                    let x = size.width * CGFloat(i) / CGFloat(n), y = mid + sin(CGFloat(i) * 0.9) * v * mid * sin(.pi * CGFloat(i) / CGFloat(n))
+                    i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
+                }
+            }, with: .color(ink), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+        }.accessibilityHidden(true)
+    }
+}
+
+// MARK: HUD: a heads-up display, corner brackets, mirrored bars, a dial for context
+
+struct HUDLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        let cyan = hx(l.accent), faint = hx(l.dim), mono = Font.system(size: 11, design: .monospaced)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text("\(s.name.uppercased())//VOICE").foregroundColor(cyan)
+                Text(s.talk == .speaking ? "▶ TX" : s.talk == .listening ? "● RX" : "◌ PROC").foregroundColor(faint)
+                Spacer()
+                Text(s.hint.uppercased()).foregroundColor(faint).lineLimit(1)
+            }.font(mono).tracking(1.2)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack { Text("STAGE"); Spacer(); Text("LIVE").foregroundColor(cyan) }.font(mono).tracking(1.2).foregroundColor(faint)
+                s.stage(l, r: 0, pad: 0)
+            }.padding(14).background(hx(l.stage)).overlay(Rectangle().stroke(hx(l.line)))
+            if !s.said.isEmpty { Text("\(Text("\(s.name.uppercased()) ▸ ").font(mono).foregroundColor(cyan))\(Text(s.said).font(.system(size: 16)))").lineLimit(3) }
+            if !s.heard.isEmpty { Text("\(Text("YOU ▸ ").font(mono))\(Text(s.heard).font(.system(size: 13)))").foregroundColor(faint).lineLimit(2) }
+            s.activity(l)
+            VStack(spacing: 1) {
+                Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573"))
+                Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573")).scaleEffect(x: 1, y: -1).opacity(0.35)
+            }.frame(maxWidth: .infinity)
+            HStack(spacing: 14) {
+                s.ctx {
+                    ZStack {
+                        Circle().trim(from: 0, to: 0.75).stroke(hx(l.line), lineWidth: 5).rotationEffect(.degrees(135))
+                        Circle().trim(from: 0, to: 0.75 * max(s.frac, 0.005)).stroke(s.high ? hx("FF9F0A") : cyan, lineWidth: 5).rotationEffect(.degrees(135))
+                        VStack(spacing: 0) { Text("\(s.pct)").font(.system(size: 17, weight: .bold, design: .monospaced)); Text("CTX%").font(.system(size: 9, design: .monospaced)).foregroundColor(faint) }
+                    }.frame(width: 64, height: 64)
+                }
+                Text("\(s.tokens.uppercased()) TOKENS\nSAY “RESET” TO CLEAR").font(mono).tracking(0.8).foregroundColor(faint).lineSpacing(3)
+                Spacer()
+                s.clearButton { Text("[ CLEAR ]").font(.system(size: 12, weight: .bold, design: .monospaced)).tracking(1.6).foregroundColor(cyan).padding(.horizontal, 16).frame(height: 40).background(cyan.opacity(0.1)).overlay(Rectangle().stroke(cyan)) }
+            }
+        }.foregroundColor(hx(l.text)).padding(22).overlay(Brackets().stroke(cyan, lineWidth: 2).padding(8).allowsHitTesting(false))
+    }
+}
+struct Brackets: Shape {
+    func path(in r: CGRect) -> Path {
+        let a: CGFloat = 16
+        return Path { p in
+            for (x, y, dx, dy) in [(r.minX, r.minY, a, a), (r.maxX, r.minY, -a, a), (r.minX, r.maxY, a, -a), (r.maxX, r.maxY, -a, -a)] {
+                p.move(to: CGPoint(x: x, y: y + dy)); p.addLine(to: CGPoint(x: x, y: y)); p.addLine(to: CGPoint(x: x + dx, y: y))
+            }
+        }
+    }
+}
+
+// MARK: Zen: almost nothing, one breathing dot and a hairline of context
+
+struct ZenLook: View {
+    let s: Live, l: Look
+    var body: some View {
+        VStack(spacing: 0) {
+            GeometryReader { g in Rectangle().fill(s.high ? hx("FF9F0A") : hx(l.accent)).frame(width: g.size.width * s.frac) }.frame(height: 2).accessibilityHidden(true)
+            s.stage(l, r: 0, pad: 0).padding(.horizontal, 32).padding(.top, 24)
+            if !s.said.isEmpty { Text(s.said).font(.system(size: 24, weight: .light)).foregroundColor(hx(l.text)).multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 40).padding(.top, 20) }
+            if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 8) }
+            s.activity(l).padding(.horizontal, 40).padding(.top, 10)
+            Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
+            Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)
+            HStack {
+                s.ctx { Text("\(s.pct)%").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
+                Spacer()
+                s.clearButton { Text("Clear").font(.system(size: 13)).foregroundColor(hx(l.text2)) }
+            }.padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 18)
+        }
+    }
+}
+struct Breath: View {
+    @ObservedObject var m: Meter
+    let talk: Talk, l: Look
+    var body: some View {
+        let lv = CGFloat(levels(m, 1).first?.0 ?? 0)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: talk == .thinking)) { t in
+            let b = talk == .thinking ? 1 : 1.3 + 0.3 * sin(t.date.timeIntervalSinceReferenceDate * 2)
+            Circle().fill(talk == .speaking ? hx(l.accent) : talk == .listening ? hx(l.text) : hx("4A4A52")).frame(width: 10, height: 10).scaleEffect(b + lv * 1.4)
+        }.accessibilityHidden(true)
+    }
+}
+
+struct StageWeb: NSViewRepresentable {
+    let web: WKWebView
+    func makeNSView(context: Context) -> WKWebView { web }
+    func updateNSView(_ v: WKWebView, context: Context) {}
+}
+
+/// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions.
+struct VoiceButtons: View, Looked {
+    @ObservedObject var v: Voice
+    var out = false  // the chat is in its own window
+    var pop: (() -> Void)? = nil  // the chat header's pop-out (or put back), drawn as one more knob
+    var body: some View {
+        HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
+            if v.on {
+                knob(v.transcript ? "waveform" : "text.bubble", v.transcript ? "Show the stage" : "Show the transcript") { v.transcript.toggle() }
+                knob(v.captions ? "captions.bubble.fill" : "captions.bubble", v.captions ? "Captions off" : "Captions on") { v.captions.toggle() }
+            }
+            // one style for live and standard chat
+            knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
+            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on) }
+                .buttonStyle(.plain).help(v.on ? "End voice mode (or say “goodbye”)" : "Voice mode: talk with it hands-free")
+                .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
+            if let pop { out ? knob("rectangle.righthalf.inset.filled", "Put back in the main window's right pane", label: "Put back in the main window", pop)
+                : knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
+        }
+    }
+    func knob(_ icon: String, _ help: String, label: String? = nil, _ act: @escaping () -> Void) -> some View {
+        Button(action: act) { shell(Image(systemName: icon)) }.buttonStyle(.plain).help(help).accessibilityLabel(label ?? help)
+    }
+    /// The knob in the look: a ring (Orb), a 6pt tile (Conversation), a square (On Air, HUD), a green box (Phosphor), bare (Editorial, Zen).
+    func shell<V: View>(_ icon: V, on: Bool = false) -> some View {
+        let s: CGFloat = lk.id == "zen" ? 28 : lk.id == "phosphor" ? 26 : 30, r: CGFloat = lk.id == "orb" ? s / 2 : lk.id == "conversation" ? Theme.r1 : 0
+        let tile = lk.id == "conversation" || lk.id == "onair", bare = lk.id == "zen" || lk.id == "editorial"
+        return icon.font(sys(size: Theme.fs3)).frame(width: s, height: s).foregroundColor(on ? bg : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+            .background(RoundedRectangle(cornerRadius: r).fill(on ? accent : tile ? card : .clear))
+            .overlay(RoundedRectangle(cornerRadius: r).stroke(on || bare ? .clear : line)).contentShape(Rectangle())
+    }
+}
+
+/// Voice mode. One audio engine: the mic, voice-processed so Chief's own voice is cancelled out of it, into on-device speech
+/// recognition; Chief's speech out through a player node whose mix draws its waveform. The mic is on only while `on`.
+final class Voice: NSObject, ObservableObject {
+    weak var core: Core?
+    @Published var on = false
+    @Published var heard = ""  // your turn so far
+    let meter = Meter()
+    @Published var caption = ""  // the sentence Chief is saying
+    @Published var look = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1] {  // default Orb
+        didSet { ud.set(look.id, forKey: "stageStyle"); chatLook = look; core?.look += 1; stageWeb.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua); stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)") }
+    }
+    @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
+    @Published var transcript = false  // the chat instead of the stage
+    @Published var speaking = 0  // speech buffers queued and not yet played
+    var bargeIn: Bool { ud.object(forKey: "voiceBargeIn") as? Bool ?? true }
+    var pause: Double { ud.object(forKey: "voicePause") as? Double ?? 1.1 }  // seconds of quiet that end your turn; hardware and rooms differ
+    let engine = AVAudioEngine(), player = AVAudioPlayerNode(), synth = AVSpeechSynthesizer()
+    let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!, micFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+    let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
+    var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
+    var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var waitWord = "One minute"
+    var ending = false  // Chief said [voice: off]: stop once it's done speaking
+    var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
+    var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
+    var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
+    static let best: AVSpeechSynthesisVoice? = {
+        let en = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let rank = { (v: AVSpeechSynthesisVoice) in (v.quality.rawValue, v.language == "en-US" ? 1 : 0) }
+        return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
+    }()
+
+    lazy var stageWeb: WKWebView = {  // no message handlers: nothing on the stage can reach the app
+        let v = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        v.setValue(false, forKey: "drawsBackground")
+        v.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)  // the look's, not the system's
+        if let u = Bundle.main.url(forResource: "stage", withExtension: "html") { v.loadFileURL(u, allowingReadAccessTo: u) }
+        return v
+    }()
+    func js(_ f: String, _ args: [Any]) {
+        guard let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
+        stageWeb.evaluateJavaScript("(s => { \(delegate.themeVars()) \(look.vars) })(document.documentElement.style); \(f)(...\(a))")
+    }
+    func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
+    func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
+        guard on else { return }
+        drawSeq += 1; shown = true; js("stage.spec", [spec])
+    }
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            guard let self, self.on else { return }  // a headset in or out: the engine stopped itself
+            do { try self.startEngine(); self.listen() } catch { self.stopAll() }
+        }
+    }
+
+    func toggle() { on ? stopAll() : start() }
+    func start() { start(tries: 3) }
+    func start(tries: Int) {
+        guard !on, core?.recording == nil else { return }  // dictation has the mic
+        AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
+            guard ok, st == .authorized else {
+                self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
+                return
+            }
+            do { try self.startEngine() } catch {
+                // Right after the permission prompts the input isn't ready yet (AVAudio -10875): try again shortly, so one click is enough
+                if tries > 1 { self.engine.stop(); return DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.start(tries: tries - 1) } }
+                self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
+                return self.stopAll()
+            }
+            self.on = true
+            self.listen()
+            self.wait("Listening", "Say something, or “goodbye” to stop.")
+        }}}
+    }
+
+    func startEngine() throws {
+        engine.stop()
+        let input = engine.inputNode
+        vp = (try? input.setVoiceProcessingEnabled(true)) != nil
+        if !engine.attachedNodes.contains(player) { engine.attach(player) }
+        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+        let inFormat = input.outputFormat(forBus: 0)  // after voice processing, which can change it
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {  // no input device: installTap would raise, not throw
+            throw NSError(domain: "Voice", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone is connected."])
+        }
+        let conv = AVAudioConverter(from: inFormat, to: micFormat)
+        if inFormat.channelCount > 1 { conv?.channelMap = [0] }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
+            guard let self, let conv, let m = convert(b, conv, self.micFormat) else { return }
+            self.lock.lock(); let r = self.request; self.lock.unlock()
+            r?.append(m)
+            let l = level(m)
+            DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
+        }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
+            let l = level(b)
+            DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
+        }
+        engine.prepare()
+        try engine.start()
+    }
+
+    /// A fresh recognition request: after each of your turns, after Chief speaks (its echo is in the old one), after an error.
+    func listen() {
+        task?.cancel()
+        let r = SFSpeechAudioBufferRecognitionRequest()
+        r.shouldReportPartialResults = true
+        if rec?.supportsOnDeviceRecognition == true { r.requiresOnDeviceRecognition = true }
+        lock.lock(); request = r; lock.unlock()
+        heard = ""
+        task = rec?.recognitionTask(with: r) { [weak self] res, err in DispatchQueue.main.async {
+            guard let self, self.on, self.request === r else { return }
+            if let res { self.partial(res.bestTranscription.formattedString) }
+            guard err != nil || res?.isFinal == true else { return }
+            if !self.heard.isEmpty { self.turn() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { if self.on && self.request === r { self.listen() } } }  // e.g. no speech yet
+        }}
+    }
+
+    func partial(_ t: String) {
+        if speaking > 0 {  // Chief is talking: its echo, or you cutting in
+            guard vp && bargeIn && (isBargeIn(t, lastSpoken) || voiceCommand(t) != nil) else { return }
+            hush()
+        }
+        heard = t
+        endTurn?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.turn() }
+        endTurn = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + pause, execute: w)  // ponytail: silence ends your turn; a turn-taking model if it cuts you off
+    }
+
+    func turn() {
+        endTurn?.cancel()
+        let t = heard.trimmingCharacters(in: .whitespacesAndNewlines)
+        listen()
+        guard !t.isEmpty, let c = core else { return }
+        if let cmd = voiceCommand(t) { return run(cmd) }
+        lastHeard = t
+        caption = ""
+        c.send(t)  // send() adds voiceNote
+    }
+
+    func run(_ cmd: VoiceCmd) {
+        switch cmd {
+        case .bye: stopAll()
+        case .stop: hush(); core?.stop()
+        case .captions(let b): captions = b
+        case .reset: hush(); core?.clear()
+        }
+    }
+
+    // Core's turn, from start to finish
+
+    func began(_ r: Run) {
+        said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
+        waitWord = waitWords.randomElement()!
+        guard on else { return }
+        wait(waitWord, r.question)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
+            self.say(self.waitWord, filler: true)
+        }
+    }
+    func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
+    func live(_ r: Run) {
+        guard on else { return }
+        let st = staged(r.live), p = plain(st.text)
+        if let h = st.stage { stage(h) }
+        let (ss, to) = sentences(p, from: said)
+        said = to
+        ss.forEach { say($0) }
+        if !chiefDrew && !drawing && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
+    }
+    func finished(_ st: Staged, _ body: String) {
+        guard on else { return }
+        if let h = st.stage { stage(h) }
+        let p = plain(body) + "\n"
+        sentences(p, from: min(said, p.count)).said.forEach { say($0) }
+        said = 0
+        if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
+        if !chiefDrew { draw(plain(body), last: true) }
+    }
+    /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
+    func failed(_ text: String) {
+        guard on else { return }
+        said = 0
+        wait("Listening", plain(text))
+        say(text)
+    }
+    /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
+    func stage(_ h: String) {
+        guard !chiefDrew else { return }
+        chiefDrew = true; shown = true
+        drawSeq += 1
+        let j = h.replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)  // ```stage json
+        if j.hasPrefix("{"), let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any], o["chart"] != nil { js("stage.chart", [o]) }
+        else if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
+    }
+    func draw(_ text: String, last: Bool, force: Bool = false) {
+        drawSeq += 1
+        let n = drawSeq
+        drawing = true
+        drawSpec(lastHeard, text) { [weak self] spec in
+            guard let self, n == self.drawSeq else { return }  // a newer drawing was asked for
+            self.drawing = false
+            guard self.on, force || !self.chiefDrew else { return }
+            if let spec { self.shown = true; self.js("stage.spec", [spec]) }
+            else if last { self.shown = true; self.js("stage.spec", [fallbackSpec(text)]) }  // mid-reply, a failure leaves the card up
+        }
+    }
+
+    // speech
+
+    /// One line to the player: the voice's own audio if there is one, else Apple's.
+    /// A filler line (the wait word) is dropped rather than said in Apple's voice when the chosen voice can't make it: one voice per turn.
+    func say(_ text: String, filler: Bool = false) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard on, !muted, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        lastSpoken = String((lastSpoken + " " + t).suffix(600))
+        lines.append(t)
+        if lines.count == 1 { caption = t }
+        let g = gen
+        guard Speech.shared.kind != "apple" else { return apple(t, g) }
+        Speech.shared.q.async { [weak self] in  // serial: lines play in order
+            guard let self, self.gen == g else { return }
+            guard let b = Speech.shared.pcm(t) else { return DispatchQueue.main.async { filler ? self.play(nil, end: true, g) : self.apple(t, g) } }
+            if self.voiceConv?.inputFormat != b.format { self.voiceConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
+            guard let out = self.voiceConv.flatMap({ convert(b, $0, self.speechFormat, whole: true) }) else { return }
+            self.play(out, end: false, g); self.play(nil, end: true, g)
+        }
+    }
+    func apple(_ t: String, _ g: Int) {
+        let u = AVSpeechUtterance(string: t)
+        u.voice = Voice.best
+        synth.write(u) { [weak self] buf in
+            guard let self, let b = buf as? AVAudioPCMBuffer else { return }
+            if b.frameLength == 0 { return self.play(nil, end: true, g) }  // the utterance is over
+            if self.synthConv?.inputFormat != b.format { self.synthConv = AVAudioConverter(from: b.format, to: self.speechFormat) }
+            self.synthConv.flatMap { convert(b, $0, self.speechFormat) }.map { self.play($0, end: false, g) }
+        }
+    }
+    /// end: a silent frame marks the line's end in the player.
+    func play(_ buf: AVAudioPCMBuffer?, end: Bool, _ g: Int) {
+        guard gen == g, on else { return }
+        var out = buf
+        if end { out = AVAudioPCMBuffer(pcmFormat: speechFormat, frameCapacity: 1); out?.frameLength = 1 }
+        guard let out else { return }
+        DispatchQueue.main.async { if self.gen == g { self.speaking += 1 } }
+        self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
+            guard self.gen == g else { return }
+            self.speaking = max(0, self.speaking - 1)
+            if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
+            if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
+        }}
+        if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
+    }
+    /// Stop talking (you cut in, or said stop); the turn itself goes on.
+    func hush() {
+        gen += 1; muted = true
+        synth.stopSpeaking(at: .immediate)
+        player.stop()
+        speaking = 0; lines = []
+    }
+
+    func stopAll() {
+        hush()
+        endTurn?.cancel()
+        task?.cancel(); task = nil
+        lock.lock(); request = nil; lock.unlock()
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        engine.mainMixerNode.removeTap(onBus: 0)
+        if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
+        on = false; transcript = false; ending = false
+        heard = ""; caption = ""
+        meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
+    }
+}
+
+/// A voice better than AVSpeechSynthesizer: Kokoro on this Mac (app/kokoro.py under uv) or ElevenLabs Flash.
+/// pcm() blocks, on q; nil means Apple's voice says that line (not ready yet, no key, a failure).
+final class Speech {
+    static let shared = Speech()
+    static let kinds = [("apple", "Apple"), ("kokoro", "Kokoro (on this Mac)"), ("eleven", "ElevenLabs Flash")]
+    static let kokoroVoices = ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", "am_michael", "am_fenrir", "am_puck", "bf_emma", "bm_george", "bm_fable"]
+    let q = DispatchQueue(label: "speech"), fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true)!
+    var kind: String { ud.string(forKey: "speech") ?? "apple" }
+    var kokoroVoice: String { ud.string(forKey: "kokoroVoice") ?? "af_heart" }
+    var elevenVoice: String { ud.string(forKey: "elevenVoice").flatMap { $0.isEmpty ? nil : $0 } ?? "EXAVITQu4vr4xnSDxMaL" }  // "Sarah", a premade voice
+    var proc: Process?, kin: FileHandle?, kout: FileHandle?
+    var ready = false  // Kokoro has loaded (the first start installs ~1 GB through uv)
+    var status = ""
+
+    func pcm(_ text: String) -> AVAudioPCMBuffer? {
+        let d: Data?
+        switch kind {
+        case "kokoro": d = ready ? kokoro(text) : nil
+        case "eleven": d = eleven(text)
+        default: d = nil
+        }
+        return d.flatMap(buffer)
+    }
+    func buffer(_ d: Data) -> AVAudioPCMBuffer? {
+        guard d.count > 1, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(d.count / 2)) else { return nil }
+        b.frameLength = b.frameCapacity
+        d.withUnsafeBytes { _ = memcpy(b.int16ChannelData![0], $0.baseAddress!, Int(b.frameLength) * 2) }
+        return b
+    }
+
+    func eleven(_ text: String) -> Data? {
+        guard let key = keychain("elevenlabs"), var u = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenVoice)") else { status = "No ElevenLabs key"; return nil }
+        u.queryItems = [URLQueryItem(name: "output_format", value: "pcm_24000")]
+        var r = URLRequest(url: u.url!, timeoutInterval: 15)
+        r.httpMethod = "POST"
+        r.setValue(key, forHTTPHeaderField: "xi-api-key")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "model_id": "eleven_flash_v2_5"])
+        var got: Data?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: r) { d, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 { got = d; self.status = "" } else { self.status = "ElevenLabs: \(code) \(d.flatMap { String(data: $0, encoding: .utf8) }?.prefix(160) ?? "")" }
+            sem.signal()
+        }.resume()
+        sem.wait()
+        return got
+    }
+
+    func kokoro(_ text: String) -> Data? {
+        guard let kin, let kout, let line = try? JSONSerialization.data(withJSONObject: ["text": text, "voice": kokoroVoice]) else { return nil }
+        do {
+            try kin.write(contentsOf: line + Data("\n".utf8))
+            guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
+            let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
+            return len == 0 ? nil : try kout.read(upToCount: len)
+        } catch {  // it died: restart it once it had been working (a failed start stays failed, no respawn loop)
+            let was = ready; ready = false; status = was ? "Kokoro stopped, restarting" : "Kokoro didn't start"; proc?.terminate(); proc = nil
+            if was { DispatchQueue.main.async { self.warm() } }
+            return nil
+        }
+    }
+
+    /// Start Kokoro if it's the voice (at launch, and on picking it); a warm-up line loads the model before the first real one.
+    func warm() {
+        guard kind == "kokoro", proc == nil else { return }
+        let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let uv, let script = Bundle.main.path(forResource: "kokoro", ofType: "py") else { status = "Kokoro needs uv (brew install uv)"; return }
+        let p = Process(), i = Pipe(), o = Pipe()
+        p.executableURL = URL(fileURLWithPath: uv)
+        p.arguments = ["run", "-q", script]
+        p.standardInput = i; p.standardOutput = o
+        let log = NSHomeDirectory() + "/Library/Logs/Greenlight-kokoro.log"
+        FileManager.default.createFile(atPath: log, contents: nil)
+        p.standardError = FileHandle(forWritingAtPath: log)
+        status = "Kokoro is loading (the first time downloads about 1 GB)"
+        do { try p.run() } catch { status = "Kokoro: \(error.localizedDescription)"; return }
+        proc = p; kin = i.fileHandleForWriting; kout = o.fileHandleForReading
+        DispatchQueue.global().async {
+            let ok = self.kokoro("Ready.") != nil
+            self.q.async { self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
+        }
+    }
+    func stop() { proc?.terminate(); proc = nil; ready = false }
+}
+
 final class Core: ObservableObject {
+    lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
     @Published var attached: [Attached] = []
     var unattach: ((String) -> Void)?  // tells the dashboard to empty that dock slot
     @Published var msgs: [Msg] = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcript)))?.map(Msg.init))
@@ -577,6 +1753,8 @@ final class Core: ObservableObject {
     @Published var context = UserDefaults.standard.integer(forKey: "context") { didSet { UserDefaults.standard.set(context, forKey: "context") } }
     @Published var window = UserDefaults.standard.integer(forKey: "window") { didSet { UserDefaults.standard.set(window, forKey: "window") } }
     @Published var tps = 0.0
+    @Published var outTok = 0  // this run's output tokens, for the live line
+    @Published var liveLine = ud.object(forKey: "liveLine") as? Bool ?? true { didSet { ud.set(liveLine, forKey: "liveLine") } }
     @Published var lastTps = 0.0
     @Published var connected = false
     @Published var unread = 0
@@ -661,7 +1839,7 @@ final class Core: ObservableObject {
     var shortcut: String { shortcutName(voiceMods, voiceKey) }
     var popoverShown: () -> Bool = { false }  // the chat visible and in front
     @Published var chatOut = ud.bool(forKey: "chatOut") { didSet { ud.set(chatOut, forKey: "chatOut") } }  // in its own window, not the right pane
-    var popChat: () -> Void = {}
+    var popChat: (Bool) -> Void = { _ in }  // true: its own window; false: back in the right pane
     var openPage: (String) -> Void = { _ in }  // show a workspace's page in the dashboard (the inbox's Open workspace)
     @Published var missed = 0  // replies and pings that landed while the chat was hidden: the dashboard toggle's badge
     @Published var greenlightEveryLoading = false  // the schedule is being read; greenlightEveryNote says why the last read or save failed
@@ -743,6 +1921,7 @@ final class Core: ObservableObject {
 
     /// Mic button / voice shortcut: start recording, or stop and transcribe into the input box (not sent).
     func toggleVoice() {
+        if voice.on { return }  // voice mode has the mic
         if recording != nil { stopVoice() } else if !transcribing { startVoice() }
     }
 
@@ -853,16 +2032,68 @@ final class Core: ObservableObject {
     }
 
     func send(_ text: String, shown: String? = nil) {
+        active()
         if run != nil { queue.append(text); return }
         msgs.append(Msg(.you, shown ?? text))
-        var payload = text
+        var payload = voice.on ? voiceNote + text : text
         let new = attached.filter { !$0.sent }  // each docked hex goes over once; the chat session keeps it
         if !new.isEmpty {
             payload = "The user dragged these workspaces from the dashboard into the chat; this message is about them:\n"
                 + new.map(\.text).joined(separator: "\n") + "\n\n" + text
             for i in attached.indices { attached[i].sent = true }
         }
-        start(Run(shown ?? text), "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))", stdin: payload)
+        if !focus.isEmpty && focus != focusSent {  // only when it changed: the chat session remembers the last one
+            payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
+            focusSent = focus
+        }
+        start(Run(shown ?? text), chatSend, stdin: payload)
+    }
+
+    // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
+    // checkInMins, greenlight asks the chat what to work on next, once per quiet stretch.
+    // ponytail: work outside Greenlight (an editor, a browser) doesn't count; count pushes from the scan if it nags then
+    @Published var checkInMins = UserDefaults.standard.object(forKey: "checkInMins") as? Int ?? 30 { didSet { UserDefaults.standard.set(checkInMins, forKey: "checkInMins") } }
+    var lastActive = Date(), checkedIn = false
+    func active() { lastActive = Date(); checkedIn = false }
+    func checkIn() {
+        let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
+        guard checkInMins > 0, !checkedIn, run == nil, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
+        checkedIn = true
+        msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
+        let r = Run("What to work on next"); r.checkIn = true
+        start(r, chatSend, stdin:
+            "(Greenlight's idle check-in, not typed by the user: they're at their Mac but haven't done anything in Greenlight for \(checkInMins) minutes.) "
+            + "From the board, suggest which 1–3 workspaces they should work on next, most valuable first: for each, where it is in its lifecycle, "
+            + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
+    }
+
+    // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
+    @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
+    var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
+    var focusPaths: [String]?  // its workspaces: Chief's BOARD has only these (nil: the window shows every project)
+    var chatSend: String {
+        let only = focusPaths.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) }.map { " --only \(shellQuote($0))" } ?? ""
+        return "\(chatCmd) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only
+    }
+    var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
+    @Published var agents: [Agent] = []  // the chat footer's agents button
+    var needs: [String: String]?, fresh = [String: String](), watchedAt = Date.distantPast
+    func watched(_ pucks: [[String: Any]]) {
+        let (now, new) = newNeeds(needs, pucks)
+        needs = now
+        fresh = fresh.merging(new) { $1 }.filter { now[$0.key] != nil }  // one that stopped needing you before the turn is dropped
+        watchTurn()
+    }
+    func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
+        guard watch, !fresh.isEmpty, run == nil, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        watchedAt = Date()
+        let list = fresh.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
+        fresh = [:]
+        let r = Run("Watching the workspaces"); r.watch = true
+        start(r, chatSend, stdin:
+            "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(list)\n"
+            + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
+            + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
     }
 
     func compact() {
@@ -876,6 +2107,9 @@ final class Core: ObservableObject {
         ssh("\(chatCmd) new")
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
+        focusSent = ""  // the new conversation hasn't heard where you are
+        picks += 1; delegate.pick([])  // nor lit anything
+        if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
         context = 0
     }
@@ -889,7 +2123,8 @@ final class Core: ObservableObject {
 
     private func start(_ r: Run, _ remote: String, stdin: String) {
         run = r
-        tps = 0
+        tps = 0; outTok = 0
+        if !r.watch && !r.checkIn { voice.began(r) }
         proc = ssh(remote, stdin: stdin, onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
             self.finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
@@ -902,22 +2137,23 @@ final class Core: ObservableObject {
         connected = true
         switch e {
         case "start": r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
-        case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status }
+        case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
         case "step":
             let s = Step(id: j["id"] as? String ?? UUID().uuidString, title: j["title"] as? String ?? "", detail: j["detail"] as? String ?? "")
-            r.steps.append(s)
-            if !r.stopping { r.status = s.title }
+            r.steps.append(s); r.call = j["call"] as? String ?? ""
+            if !r.stopping { r.status = s.title; voice.status(s.title) }
         case "step_done":
             if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
                 r.steps[i].ok = j["ok"] as? Bool ?? true
                 r.steps[i].out = j["out"] as? String ?? ""
                 r.steps[i].end = Date()
             }
-        case "text_reset": r.live = ""
-        case "text": r.live += j["delta"] as? String ?? ""
+        case "text_reset": r.live = ""; voice.said = 0
+        case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
         case "usage":
             if let c = j["context"] as? Int, c > 0 { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }
+            if let o = j["out"] as? Int { outTok = o }
         case "done":
             r.gotDone = true
             if let c = j["context"] as? Int, c > 0 { context = c }
@@ -930,7 +2166,14 @@ final class Core: ObservableObject {
     }
 
     private func finish(_ r: Run, ok: Bool, text: String) {
-        let (body, options) = splitOptions(text.isEmpty ? "(no reply)" : text)
+        if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace
+            run = nil; tps = 0
+            if !queue.isEmpty { send(queue.removeFirst()) }
+            return
+        }
+        let st = staged(text)  // a ```stage block is for the stage, never the transcript
+        let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
+        if !r.stopping && ok { voice.finished(st, body) } else if !r.watch && !r.checkIn { voice.failed(body) }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
@@ -938,11 +2181,20 @@ final class Core: ObservableObject {
         m.failed = !ok
         msgs.append(m)
         if ok && !options.isEmpty { questions.append(Question(text: body, options: options, ping: false)) }
+        if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
+            picks += 1
+            let n = picks
+            delegate.pick([])
+            if let h = st.hexes { delegate.pick(resolveHexes(h, pucks)) }  // Chief said which: no guessing
+            else { pickHexes(body, pucks, asked: asksToShow(r.question)) { [weak self] names in if n == self?.picks { delegate.pick(names) } } }
+        }
         run = nil
         tps = 0
+        if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
+        if ok && st.reset { DispatchQueue.main.async { [weak self] in self?.clear() } }  // [chat: reset]: after this reply, which says so
         if !popoverShown() && !r.stopping {
             missed += 1
-            notify(title: "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: fmt(m.duration))
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
         }
         if !queue.isEmpty { send(queue.removeFirst()) }
     }
@@ -995,7 +2247,7 @@ final class Core: ObservableObject {
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
     func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil) {
-        if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
+        if selftest { return }  // fake pings shouldn't pop banners on the real Mac
         let c = UNMutableNotificationContent()
         c.title = title
         if let subtitle { c.subtitle = subtitle }
@@ -1009,131 +2261,417 @@ final class Core: ObservableObject {
 
 // MARK: views
 
-struct StepRow: View {
+struct StepRow: View, Looked {
     let s: Step
     let now: Date
     let current: Bool
+    var n = 0  // 1-based, for HUD's 01… and Editorial's 1…; ponytail: 0 (MsgView's list doesn't pass it) falls back to a mark
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.sp3) {
-            Group {
-                if let ok = s.ok {
-                    Image(systemName: ok ? "checkmark" : "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(ok ? Theme.done : Theme.crashed)
-                } else {
-                    ProgressView().controlSize(.mini)
-                }
-            }.frame(width: 14, height: 14).padding(.top, 1)
+        let (glyph, ink, face, w) = mark, live = s.ok == nil
+        HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
+            Text(glyph).font(face).foregroundColor(ink).frame(minWidth: w, alignment: .leading)
+                .shadow(color: live && (lk.id == "orb" || lk.id == "hud") ? ink.opacity(0.7) : .clear, radius: 4).accessibilityLabel(s.ok == true ? "Done" : s.ok == false ? "Failed" : "Running")
             VStack(alignment: .leading, spacing: 3) {
-                Text(s.title).fontWeight(current ? .semibold : .regular)
+                Text(s.title).font(lk.id == "editorial" ? sys(size: Theme.fs4, design: .serif) : ui(lk.id == "zen" ? 14 : Theme.fs3, mono && current ? .bold : .regular))
+                    .italic(lk.id == "editorial" && current).foregroundColor(current ? fg : lk.id == "zen" ? dim : sub)
                 if !s.detail.isEmpty {
                     Text(s.detail).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(sub)
                         .lineLimit(2).padding(.horizontal, Theme.sp2).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: Theme.r1).fill(card))
+                        .background(RoundedRectangle(cornerRadius: mono || lk.id == "hud" ? 0 : Theme.r1).fill(fg.opacity(0.06)))  // reads on the card or off it
                 }
-                if !s.out.isEmpty { Text(s.out).font(sys(size: Theme.fs1)).foregroundColor(dim).lineLimit(2) }
+                if !s.out.isEmpty { Text(s.out).font(ui(Theme.fs1)).foregroundColor(dim).lineLimit(2) }
             }
             Spacer(minLength: 4)
-            Text(fmt((s.end ?? now).timeIntervalSince(s.start))).font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(current ? fg : dim)
+            if lk.id == "hud" { Text(s.ok == true ? "OK" : s.ok == false ? "ERR" : "RUN").font(sys(size: 10, design: .monospaced)).tracking(1.2).foregroundColor(ink) }
+            Text(fmt((s.end ?? now).timeIntervalSince(s.start))).font((lk.id == "hud" ? sys(size: Theme.fs1, design: .monospaced) : ui(Theme.fs1)).monospacedDigit()).foregroundColor(current ? fg : dim)
         }
-        .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-        .background(current ? fg.opacity(0.05) : Color.clear)
+        .padding(.horizontal, Theme.sp3).padding(.vertical, lk.id == "zen" ? 6 : Theme.sp1)
         .textSelection(.enabled)
+    }
+    /// Chrome in the look's face: mono for Phosphor.
+    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: mono ? .monospaced : .default) }
+    /// The look's leading mark: glyph, ink, font, width. ponytail: steps arrive as they start, so the designs' pending row
+    /// (○, NEXT, [  ]) never happens here; an unfinished step is running, a failed one gets `crashed`.
+    var mark: (String, Color, Font, CGFloat) {
+        let st = s.ok == true ? 0 : s.ok == nil ? 1 : 2  // done, running, failed
+        switch lk.id {
+        case "conversation": return (["✓", "●", "✕"][st], [done, accent, crashed][st], ui(Theme.fs3, .semibold), 14)
+        case "onair": return (["DONE", "LIVE", "FAIL"][st], [accent, hx("FF6B73"), crashed][st], sys(size: 10, weight: .heavy), 34)
+        case "phosphor": return (["[ok]", "[..]", "[!!]"][st], st == 2 ? crashed : fg, ui(Theme.fs3, st == 1 ? .bold : .regular), 32)
+        case "editorial": return (n > 0 ? "\(n)" : ["✓", "•", "✕"][st], st == 2 ? crashed : current ? accent : fg, sys(size: Theme.fs5, weight: .semibold, design: .serif), 18)
+        case "hud": return (n > 0 ? String(format: "%02d", n) : "▸", st == 2 ? crashed : accent, sys(size: Theme.fs1, design: .monospaced), 18)
+        case "zen": return ("●", [dim.opacity(0.45), accent, crashed][st], sys(size: 7), 6)
+        default: return ("●", st == 2 ? crashed : accent, sys(size: 10), 8)  // Orb: amber dots, the running one glowing
+        }
     }
 }
 
-struct RunCard: View {
+struct RunCard: View, Looked {
     @ObservedObject var r: Run
     @ObservedObject var c: Core
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.sp2) {
-            HStack(spacing: Theme.sp2) {
-                Text(c.name.uppercased()).foregroundColor(accent)
-                Text("· \(r.stopping ? "stopping" : "working")").foregroundColor(dim)
-            }.font(sys(size: Theme.fs1, weight: .semibold))
-            VStack(spacing: 0) {
-                HStack(spacing: Theme.sp3) {
-                    ProgressView().controlSize(.small)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(r.status).fontWeight(.semibold).lineLimit(1)
-                        Text(stats).font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim)
-                    }
-                    Spacer()
-                    Button(action: c.stop) { Label("Stop", systemImage: "stop.fill") }.disabled(r.stopping)
-                }.padding(Theme.sp3)
-                ProgressView().progressViewStyle(.linear).tint(accent).frame(height: 3).clipped()
+        VStack(alignment: .leading, spacing: lk.id == "onair" ? 0 : Theme.sp2) {
+            label
+            framed(VStack(alignment: .leading, spacing: Theme.sp3) {
+                head
+                bar
                 if !r.steps.isEmpty {
                     VStack(spacing: 0) {
                         ForEach(Array(r.steps.enumerated()), id: \.element.id) { i, s in
-                            StepRow(s: s, now: c.now, current: i == r.steps.count - 1 && s.ok == nil)
+                            StepRow(s: s, now: c.now, current: i == r.steps.count - 1 && s.ok == nil, n: i + 1)
                         }
-                    }.padding(.vertical, Theme.sp2)
+                    }.padding(.horizontal, -Theme.sp3)  // the rows carry their own inset (for MsgView's list); line them up with the head
+                        .padding(.top, mono ? Theme.sp2 : 0)
+                        .overlay(alignment: .top) { if mono { HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) } }
                 }
+            })
+            if !r.live.isEmpty { liveText.padding(.top, lk.id == "onair" ? Theme.sp4 : 0) }
+            if c.liveLine { activity }
+        }
+    }
+    var activity: some View { Activity(c: c, r: r, fg: fg, dim: dim, accent: accent, size: Theme.fs2) }
+    var state: String { r.stopping ? "stopping" : "working" }
+    /// Chrome in the look's face: mono for Phosphor.
+    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: mono ? .monospaced : .default) }
+    func code(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: .monospaced) }
+    func tag(_ s: String, _ fill: Color, _ ink: Color) -> some View {
+        Text(s).font(sys(size: 10, weight: .heavy).monospacedDigit()).tracking(1.6).foregroundColor(ink).padding(.horizontal, 10).padding(.vertical, 4).background(fill)
+    }
+    /// "NAME · working" above the card.
+    @ViewBuilder var label: some View {
+        switch lk.id {
+        case "onair": HStack(spacing: 0) { tag("\(c.name) · \(state)".uppercased(), accent, page); tag(stats, line, fg) }  // On Air's stats ride the tag
+        case "phosphor": Text("\(Text("\(c.name.lowercased())@greenlight ").foregroundColor(dim))[\(state.uppercased())]").font(ui(Theme.fs3, .bold)).foregroundColor(fg)
+        case "editorial": Text("\(c.name) · \(r.stopping ? "Stopping the press" : "Going to press")".uppercased()).font(sys(size: 10, weight: .semibold)).tracking(1.4).foregroundColor(accent)
+        case "hud":
+            HStack(spacing: Theme.sp3) { Text("\(c.name.uppercased())//RUN"); Text("▶ \(state.uppercased())").shadow(color: accent.opacity(0.55), radius: 5) }
+                .font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent)
+        case "zen": Text("\(Text(c.name.lowercased()).foregroundColor(fg)) \(Text("· \(state)").foregroundColor(accent))").font(sys(size: Theme.fs3))
+        case "conversation":
+            HStack(spacing: 6) { Circle().fill(accent).frame(width: 7, height: 7).accessibilityHidden(true); Text("\(Text(c.name).fontWeight(.semibold).foregroundColor(fg)) · \(state)") }
+                .font(sys(size: Theme.fs2)).foregroundColor(dim)
+        default: Text("\(Text(c.name.uppercased()).foregroundColor(fg)) \(Text("· \(state.uppercased())").foregroundColor(accent))").font(sys(size: Theme.fs2, weight: .semibold)).tracking(1.7)
+        }
+    }
+    /// The status line: a lead mark, the status and stats, Stop.
+    @ViewBuilder var head: some View {
+        if lk.id == "editorial" {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("IN PROGRESS").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
+                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(1)
+                Spacer(minLength: 4)
+                stop
             }
-            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
-            if !r.live.isEmpty {
-                (Text(md(r.live)) + Text(" ▍").foregroundColor(accent)).foregroundColor(sub).textSelection(.enabled)
+            Text("\(r.status)\(Text("…").foregroundColor(accent))").font(sys(size: 24, weight: .semibold, design: .serif)).foregroundColor(fg).lineLimit(2)
+        } else {
+            if lk.id == "hud" { HStack { Text("RUN"); Spacer(); Text("LIVE").foregroundColor(accent) }.font(code(Theme.fs1)).tracking(1.5).foregroundColor(dim) }
+            HStack(spacing: lk.id == "orb" ? 20 : Theme.sp3) {
+                switch lk.id {
+                case "orb": orbMark
+                case "conversation": ProgressView().controlSize(.small)
+                // ponytail: a still amber dot, not Breath: the chat shows in voice mode too (transcript), where Breath's live meter would swell it past the row
+                case "zen": Circle().fill(accent).frame(width: 6, height: 6).shadow(color: accent.opacity(0.5), radius: 4).accessibilityHidden(true)
+                default: EmptyView()
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(mono ? "> \(r.status.lowercased())" : r.status).lineLimit(1).foregroundColor(fg)
+                        .font(lk.id == "onair" ? sys(size: Theme.fs5, weight: .heavy) : lk.id == "zen" ? sys(size: 20, weight: .light) : ui(lk.id == "conversation" ? 14 : mono ? Theme.fs3 : Theme.fs4, mono ? .bold : .semibold))
+                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(1) }
+                }
+                Spacer(minLength: 4)
+                stop
+            }
+        }
+    }
+    /// Orb's lead: the amber orb with two soft rings. ponytail: static; the live stage's orb is the one that moves.
+    var orbMark: some View {
+        ZStack {
+            Circle().fill(accent.opacity(0.07)).frame(width: 60, height: 60)
+            Circle().fill(accent.opacity(0.16)).frame(width: 46, height: 46)
+            Circle().fill(RadialGradient(colors: [hx("FFD27A"), hx("F5A524"), hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 22))
+        }.frame(width: 34, height: 34).accessibilityHidden(true)
+    }
+    var stop: some View {
+        let (t, ink, fill, edge, r0): (String, Color, Color, Color, CGFloat) = switch lk.id {
+        case "conversation": ("Stop", crashedInk, bg, line, Theme.r1)
+        case "onair": ("STOP", .white, hx("D1242F"), .clear, 0)
+        case "phosphor": ("[ stop ]", fg, .clear, fg, 0)
+        case "editorial": ("Stop the press", accent, .clear, .clear, 0)
+        case "hud": ("[ STOP ]", fg, .clear, line, 0)
+        case "zen": ("Stop", sub, .clear, .clear, 0)
+        default: ("Stop", fg, .clear, line, 15)
+        }
+        let bare = lk.id == "editorial" || lk.id == "zen"
+        return Button(action: c.stop) {
+            Text(t).font(lk.id == "onair" ? sys(size: Theme.fs1, weight: .heavy) : lk.id == "hud" ? code(Theme.fs1, .bold) : lk.id == "editorial" ? sys(size: Theme.fs3, weight: .bold) : ui(Theme.fs2, lk.id == "conversation" ? .semibold : .regular))
+                .tracking(lk.id == "onair" || lk.id == "hud" ? 1.5 : 0).foregroundColor(ink)
+                .padding(.horizontal, bare ? 0 : mono ? Theme.sp2 : 14).padding(.vertical, bare ? 2 : 0).frame(minHeight: bare ? 24 : mono ? 26 : 30)
+                .background(RoundedRectangle(cornerRadius: r0).fill(fill)).overlay(RoundedRectangle(cornerRadius: r0).stroke(edge))
+                .overlay(alignment: .bottom) { if lk.id == "editorial" { Rectangle().fill(accent).frame(height: 1) } }
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(r.stopping).opacity(r.stopping ? 0.5 : 1).accessibilityLabel("Stop").help("Stop this run")
+    }
+    /// ponytail: no percentage is known, so progress stays indeterminate: the native linear bar tinted to the look, or for the
+    /// block looks (On Air, Phosphor, HUD) a 3-cell window stepping along once a second off c.now (no extra timer).
+    /// The designs' 62% isn't shown.
+    func lit(_ i: Int) -> Bool { (i - Int(c.now.timeIntervalSince(r.start)) % 10 + 10) % 10 < 3 }
+    @ViewBuilder var bar: some View {
+        switch lk.id {
+        case "onair": HStack(spacing: 3) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(lit(i) ? accent : line).frame(height: 10) } }.accessibilityHidden(true)
+        case "phosphor": Text("[" + String((0..<10).map { lit($0) ? "#" : "." }) + "]").font(ui(Theme.fs3)).foregroundColor(fg).accessibilityHidden(true)
+        case "hud":
+            HStack(spacing: 2) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(lit(i) ? accent : accent.opacity(0.08)).frame(height: 8) } }
+                .padding(2).overlay(Rectangle().stroke(line)).shadow(color: accent.opacity(0.35), radius: 4).accessibilityHidden(true)
+        default:
+            ProgressView().progressViewStyle(.linear).tint(lk.id == "zen" ? dim : accent).frame(height: lk.id == "zen" ? 2 : 4).clipped()
+                .overlay(alignment: .bottom) { if lk.id == "editorial" { Rectangle().fill(line).frame(height: 1).offset(y: 2) } }
+                .accessibilityLabel("Working")
+        }
+    }
+    /// The card around head, bar and steps. ponytail: Conversation's is one flat card (no grey header strip, the bar inset).
+    func framed<V: View>(_ v: V) -> some View {
+        let open = lk.id == "editorial" || lk.id == "zen", r0: CGFloat = lk.id == "orb" ? Theme.r4 : lk.id == "conversation" ? 12 : 0
+        let fill = open ? Color.clear : lk.id == "conversation" ? bg : card, edge = ["conversation", "phosphor", "hud"].contains(lk.id) ? line : .clear
+        return v.shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)  // Phosphor's glow, on the type not the box
+            .padding(open ? 0 : mono ? Theme.sp3 : Theme.sp4).padding(.top, lk.id == "editorial" ? Theme.sp3 : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: r0).fill(fill)).overlay(RoundedRectangle(cornerRadius: r0).stroke(edge))
+            .overlay(alignment: .top) { if lk.id == "onair" || lk.id == "editorial" { Rectangle().fill(lk.id == "onair" ? accent : fg).frame(height: lk.id == "onair" ? 2 : 3) } }
+            .overlay(Brackets().stroke(lk.id == "hud" ? accent : .clear, lineWidth: 2).allowsHitTesting(false).accessibilityHidden(true))
+    }
+    /// The reply as it streams, with the look's cursor.
+    @ViewBuilder var liveText: some View {
+        let cur = Text(mono ? " █" : lk.id == "zen" ? "▏" : " ▍").foregroundColor(lk.id == "onair" ? hx("D1242F") : accent)
+        // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
+        let fs = ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1
+        let (m, rest) = mood(staged(r.live).text)
+        let t = Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
+            .font(chatFace(size: fs)).textSelection(.enabled)
+        VStack(alignment: .trailing, spacing: 2) {
+            if let m { Text(m).font(.system(size: fs)) }
+            switch lk.id {
+            case "conversation":
+                let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
+                t.foregroundColor(fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
+            case "onair":
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(c.name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
+                    t.foregroundColor(page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)
+                }
+            case "hud":
+                VStack(alignment: .leading, spacing: 6) { Text("\(c.name.uppercased()) ▸").font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent); t.foregroundColor(fg) }
+                    .padding(.leading, Theme.sp3).overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 1) }
+            default: t.foregroundColor(fg).shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)
             }
         }
     }
     var stats: String {
-        var s = "\(r.steps.isEmpty ? "No steps yet" : "Step \(r.steps.count)") · \(fmt(c.now.timeIntervalSince(r.start))) elapsed"
-        if c.tps > 0 { s += " · \(Int(c.tps)) tok/s" }
-        return s
+        let n = r.steps.count, t = max(0, Int(c.now.timeIntervalSince(r.start))), tps = c.tps > 0 ? " · \(Int(c.tps)) tok/s" : ""
+        // ponytail: HUD's step number isn't lit apart from the rest of the line
+        if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(tps.uppercased())" }
+        let s = "\(n == 0 ? "No steps yet" : "Step \(n)") · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)"
+        return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
     }
 }
 
-struct MsgView: View {
+struct MsgView: View, Looked {
     @ObservedObject var m: Msg
     let c: Core
     let name: String  // passed in: MsgView doesn't observe Greenlight, which changes every second while working
     var ask: Question? = nil  // the inbox question this message asked, if any: open, or answered with which choice
     var body: some View {
         switch m.role {
-        case .you:
-            HStack {
-                Spacer(minLength: 60)
-                Text(m.text).font(chatFace(size: Theme.fs3)).textSelection(.enabled).foregroundColor(.white).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                    .background(RoundedRectangle(cornerRadius: Theme.r3).fill(bubble))
-            }
+        case .you: you
         case .note:
-            Text(m.text).font(sys(size: Theme.fs1)).foregroundColor(dim).frame(maxWidth: .infinity)
+            Text(m.text).font(ui(Theme.fs1)).foregroundColor(dim).frame(maxWidth: .infinity)
         case .greenlight:
             let open = !m.options.isEmpty && ask != nil && ask?.answer == nil
             let (said, q) = open ? asked : (m.text, nil)
-            VStack(alignment: .leading, spacing: Theme.sp2) {
-                Text(name).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(sub)
-                if !said.isEmpty { MDText(text: said).font(chatFace(size: Theme.fs3)).textSelection(.enabled).foregroundColor(m.failed ? Theme.crashedInk : fg) }
-                if !m.options.isEmpty {
-                    let chips = ForEach(m.options, id: \.self) { o in
-                        Button { c.choose(m, o) } label: { Text(o) }.buttonStyle(.plain).font(sys(size: Theme.fs2)).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                            .frame(minHeight: 30).background(Capsule().fill(surface)).overlay(Capsule().stroke(edge)).contentShape(Capsule())
-                            .disabled(c.run != nil)
-                    }
-                    VStack(alignment: .leading, spacing: Theme.sp2) {
-                        if open {
-                            HStack(spacing: Theme.sp1) { Circle().fill(Theme.needs).frame(width: 6, height: 6); Text("Needs your answer") }
-                                .font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(Theme.needsInk)
-                            if let q { MDText(text: q).font(chatFace(size: Theme.fs3)).textSelection(.enabled).foregroundColor(fg) }  // the question sits with its answers
-                        }
-                        if !open, let a = ask?.answer {  // answered: the choice made, the others folded away
-                            HStack(spacing: Theme.sp2) {
-                                Image(systemName: a == "(dismissed)" ? "xmark" : "checkmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(a == "(dismissed)" ? dim : Theme.done)
-                                Text(a == "(dismissed)" ? "Dismissed without an answer" : "You answered")
-                                if a != "(dismissed)" { Text(a).fontWeight(.semibold).foregroundColor(fg).lineLimit(2) }
-                            }.font(sys(size: Theme.fs2)).foregroundColor(dim)
-                        } else {
-                            ViewThatFits(in: .horizontal) {
-                                HStack(spacing: Theme.sp2) { chips }
-                                VStack(alignment: .leading, spacing: Theme.sp2) { chips }
-                            }
-                        }
-                    }.padding(Theme.sp2).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: Theme.r2).fill(open ? Theme.needs.opacity(0.06) : Color.clear))
-                        .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(open ? Theme.needs : line, lineWidth: open ? 1.5 : 1))
-                }
-                work  // how the run went: below the reply and any choices it ends on
+            VStack(alignment: .leading, spacing: Theme.sp4) {
+                turn(said)  // the reply, then how the run went: the designs put it above any choices the reply ends on
+                if !m.options.isEmpty { choices(open, q) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // Each look's hand (the designs in .claude/design/chatthemes): switch on lk.id.
+    // ponytail: left out of the designs: HUD's "Q-01", Phosphor's glow, On Air's bold lead paragraph, text2 on list bodies; Orb's dot is a "•" glyph.
+    /// Chrome type: mono for Phosphor and HUD.
+    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: lk.id == "phosphor" || lk.id == "hud" ? .monospaced : .default) }
+    /// Chrome words in the look's case. ponytail: chrome only (and On Air/HUD chips), never what was said.
+    func cased(_ s: String) -> String { ["onair", "hud"].contains(lk.id) ? s.uppercased() : ["phosphor", "zen"].contains(lk.id) ? s.lowercased() : s }
+    /// Only Orb and Conversation round their corners.
+    var round: Bool { lk.id == "orb" || lk.id == "conversation" }
+    /// The reply's size: 15 Orb and HUD, 16 Editorial and Zen, 13 Phosphor, else 14.
+    var fs: CGFloat { ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1 }
+    func rule(_ c: Color) -> some View { Rectangle().fill(c).frame(width: 1).frame(maxWidth: .infinity, alignment: .leading) }
+
+    @ViewBuilder var you: some View {
+        let t = Text(m.text), f = chatFace(size: Theme.fs3 + 1)
+        switch lk.id {
+        case "phosphor":
+            (Text("you> ").foregroundColor(dim) + t).font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        case "editorial":
+            VStack(alignment: .leading, spacing: Theme.sp1) {
+                Text("LETTERS · YOU ASKED").font(sys(size: 10, weight: .bold)).tracking(1.4).foregroundColor(dim)
+                Text("“\(m.text)”").font(chatFace(size: Theme.fs5 + 1).italic()).foregroundColor(fg).textSelection(.enabled)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        case "hud":
+            VStack(alignment: .leading, spacing: Theme.sp1) {
+                Text("YOU ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(dim)
+                t.font(f).foregroundColor(sub).textSelection(.enabled)
+            }.padding(.leading, Theme.sp3).background(rule(line)).frame(maxWidth: .infinity, alignment: .leading)
+        default:
+            HStack {
+                Spacer(minLength: 60)
+                switch lk.id {
+                case "onair":
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("YOU").font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(fg).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(line)
+                        t.font(f).foregroundColor(fg).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(card)
+                    }
+                case "zen": t.font(f).foregroundColor(dim).multilineTextAlignment(.trailing).textSelection(.enabled)
+                case "conversation":
+                    t.font(f).foregroundColor(.white).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
+                        .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).fill(accent))
+                default:
+                    t.font(f).foregroundColor(fg).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
+                        .background(RoundedRectangle(cornerRadius: 18).fill(card))
+                }
+            }
+        }
+    }
+
+    /// Who's talking, what was said, how the run went.
+    @ViewBuilder func turn(_ said: String) -> some View {
+        let col = VStack(alignment: .leading, spacing: lk.id == "onair" ? 0 : Theme.sp2) {
+            label
+            if !said.isEmpty { reply(said) }
+            work
+        }
+        switch lk.id {
+        case "zen" where said.isEmpty && m.steps.isEmpty && m.duration == 0: EmptyView()  // nothing to show: no gap above the question
+        case "conversation":
+            HStack(alignment: .top, spacing: 10) {
+                Text(String(name.prefix(1))).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(accent).frame(width: 26, height: 26)
+                    .background(Circle().fill(accent.opacity(0.12))).accessibilityLabel(name)
+                col
+            }
+        case "phosphor": HStack(alignment: .firstTextBaseline, spacing: 0) { Text("\(name.lowercased())> ").font(chatFace(size: fs)).foregroundColor(dim); col }
+        case "hud": col.padding(.leading, Theme.sp3).background(rule(accent))
+        default: col
+        }
+    }
+    @ViewBuilder var label: some View {
+        switch lk.id {
+        case "orb": Text(name.uppercased()).font(sys(size: Theme.fs1, weight: .semibold)).tracking(1.5).foregroundColor(dim)
+        case "onair": Text(name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
+        case "editorial": Text("FROM THE DESK").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
+        case "hud": Text("\(name.uppercased()) ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(accent)
+        default: EmptyView()  // Conversation's avatar, Phosphor's prompt, Zen says nothing
+        }
+    }
+    @ViewBuilder func reply(_ said: String) -> some View {
+        let (m, rest) = mood(said)
+        VStack(alignment: .trailing, spacing: 2) {
+            if let m { Text(m).font(.system(size: fs)).accessibilityLabel("Mood \(m)") }  // outside the box, its top-right corner
+            box(rest)
+        }
+    }
+    @ViewBuilder func box(_ said: String) -> some View {
+        let t = MDText(text: said).font(chatFace(size: fs)).textSelection(.enabled)
+        switch lk.id {
+        case "onair":  // inverted: page ink on a text-colored card
+            t.foregroundColor(m.failed ? hx("C62828") : page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)  // failed: crashedInk's light half, the card is light
+        case "conversation":
+            let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
+            t.foregroundColor(m.failed ? crashedInk : fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
+        default: t.foregroundColor(m.failed ? crashedInk : fg)
+        }
+    }
+
+    /// The choices a reply ends on: in the look's "needs you" frame while open, a hairline once answered.
+    func choices(_ open: Bool, _ q: String?) -> some View {
+        let band = open && lk.id == "onair"  // ponytail: inset, not full-bleed as designed
+        let chips = ForEach(m.options, id: \.self) { o in
+            Button { c.choose(m, o) } label: { chip(o, open) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel(o)
+        }
+        let gap = lk.id == "zen" ? Theme.sp5 : lk.id == "editorial" ? Theme.sp4 : Theme.sp2
+        let pad = lk.id == "zen" ? EdgeInsets(top: 2, leading: Theme.sp4, bottom: 2, trailing: 0)
+            : open ? EdgeInsets(top: Theme.sp3, leading: Theme.sp4, bottom: Theme.sp3, trailing: Theme.sp4) : EdgeInsets(top: Theme.sp2, leading: Theme.sp2, bottom: Theme.sp2, trailing: Theme.sp2)
+        return VStack(alignment: .leading, spacing: 0) {
+            if band { needsTag }
+            VStack(alignment: .leading, spacing: Theme.sp3) {
+                if open {
+                    if !band { needsTag }
+                    if let q { question(q) }  // the question sits with its answers
+                }
+                if !open, let a = ask?.answer {  // answered: the choice made, the others folded away
+                    HStack(spacing: Theme.sp2) {
+                        Image(systemName: a == "(dismissed)" ? "xmark" : "checkmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(a == "(dismissed)" ? dim : done)
+                        Text(cased(a == "(dismissed)" ? "Dismissed without an answer" : "You answered"))
+                        if a != "(dismissed)" { Text(a).fontWeight(.semibold).foregroundColor(fg).lineLimit(2) }
+                    }.font(ui(Theme.fs2)).foregroundColor(dim)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: gap) { chips }
+                        VStack(alignment: .leading, spacing: Theme.sp2) { chips }
+                    }
+                }
+            }.padding(pad)
+        }.frame(maxWidth: .infinity, alignment: .leading).background(box(open)).padding(.leading, lk.id == "conversation" ? 36 : 0)
+    }
+    @ViewBuilder func box(_ open: Bool) -> some View {
+        let r = RoundedRectangle(cornerRadius: lk.id == "orb" ? 18 : round ? 12 : 0)
+        switch (open, lk.id) {
+        case (_, "zen"): rule(open ? accent : line)
+        case (false, _): r.strokeBorder(line)
+        case (_, "onair"): Rectangle().fill(accent)
+        case (_, "phosphor"): Rectangle().fill(card).overlay(Rectangle().strokeBorder(fg, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        case (_, "editorial"): Rectangle().fill(card).overlay(alignment: .top) { Rectangle().fill(fg).frame(height: 3) }
+        case (_, "hud"): Rectangle().fill(card).overlay(Rectangle().strokeBorder(line)).overlay(alignment: .top) { Rectangle().fill(accent).frame(height: 2) }
+        default: r.fill(accent.opacity(0.06)).overlay(r.strokeBorder(accent, lineWidth: 1.5))
+        }
+    }
+    @ViewBuilder var needsTag: some View {
+        let id = lk.id
+        let t = id == "hud" ? "▲ INPUT REQUIRED" : id == "phosphor" ? "-- needs your answer --" : id == "zen" ? "needs your answer" : id == "conversation" ? "Needs your answer" : "NEEDS YOUR ANSWER"
+        let f = id == "zen" ? sys(size: Theme.fs2) : id == "phosphor" ? chatFace(size: fs, weight: .bold) : id == "onair" ? sys(size: Theme.fs2, weight: .heavy)
+            : id == "conversation" ? sys(size: Theme.fs2, weight: .semibold) : ui(Theme.fs1, .bold)
+        HStack(spacing: Theme.sp2) {
+            if ["orb", "conversation", "onair"].contains(id) { Circle().fill(accent).frame(width: 7, height: 7) }
+            Text(t)
+        }.font(f).tracking(["orb", "editorial", "onair", "hud"].contains(id) ? 1.5 : 0).foregroundColor(id == "zen" ? dim : id == "phosphor" ? fg : accent)
+            .padding(.horizontal, id == "onair" ? Theme.sp3 : 0).padding(.vertical, id == "onair" ? Theme.sp2 : 0).background(id == "onair" ? page : .clear)
+    }
+    @ViewBuilder func question(_ q: String) -> some View {
+        let f = lk.id == "onair" ? chatFace(size: Theme.fs5 - 1, weight: .bold) : lk.id == "editorial" ? chatFace(size: Theme.fs5 + 1, weight: .semibold)
+            : lk.id == "zen" ? chatFace(size: Theme.fs5, weight: .light) : chatFace(size: fs)
+        let t = MDText(text: q).font(f).textSelection(.enabled).foregroundColor(lk.id == "onair" ? page : fg)
+        if lk.id == "phosphor" { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("? ").font(f).foregroundColor(dim); t } } else { t }
+    }
+    /// One choice; the first is the primary while the question's open.
+    func chip(_ o: String, _ open: Bool) -> some View {
+        let id = lk.id, p = open && o == m.options.first, bare = id == "editorial" || id == "zen"  // text-only choices
+        let st: (ink: Color, fill: Color, edge: Color)
+        switch id {
+        case "conversation": st = p ? (Color.white, accent, Color.clear) : (fg, bg, line)
+        case "onair": st = p ? (fg, page, Color.clear) : open ? (page, Color.clear, page) : (fg, Color.clear, line)
+        case "phosphor": st = p ? (page, fg, Color.clear) : (fg, Color.clear, dim)
+        case "hud": st = p ? (accent, accent.opacity(0.1), accent) : (sub, bg, line)
+        case "editorial": st = (accent, Color.clear, Color.clear)
+        case "zen": st = (p ? accent : sub, Color.clear, Color.clear)
+        default: st = p ? (page, accent, Color.clear) : (fg, card, line)
+        }
+        let n = (m.options.firstIndex(of: o) ?? 0) + 1
+        let t = id == "phosphor" ? "[\(n)] \(o)" : id == "hud" ? "[ \(o.uppercased()) ]" : id == "onair" ? o.uppercased() : o
+        let f = id == "zen" ? sys(size: Theme.fs3 + 1) : id == "onair" ? sys(size: Theme.fs2, weight: .heavy) : ui(id == "hud" ? Theme.fs2 : Theme.fs3, p ? .semibold : .regular)
+        let r = RoundedRectangle(cornerRadius: round ? 16 : 0)
+        return Text(t).font(f).tracking(id == "hud" || id == "onair" ? 1.2 : 0).foregroundColor(st.ink)
+            .padding(.horizontal, bare ? 0 : Theme.sp3).frame(minHeight: id == "hud" ? 34 : bare ? 26 : 32)
+            .background(r.fill(st.fill)).overlay(r.strokeBorder(st.edge, lineWidth: id == "onair" ? 2 : 1))
+            .overlay(alignment: .bottom) { if id == "editorial" { Rectangle().fill(accent).frame(height: p ? 2 : 1) } }
+            .contentShape(r)
     }
     /// An open question's text split in two: what was said before it, and its last paragraph when that asks something.
     var asked: (String, String?) {
@@ -1144,18 +2682,35 @@ struct MsgView: View {
     }
     @ViewBuilder var work: some View {
                 if !m.steps.isEmpty || m.duration > 0 {
-                    Button { m.expanded.toggle() } label: {
-                        HStack(spacing: Theme.sp2) {
-                            Image(systemName: m.failed ? "xmark" : "checkmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(m.failed ? Theme.crashed : Theme.done)
-                            Text(summary)
-                            Image(systemName: m.expanded ? "chevron.down" : "chevron.right").font(sys(size: Theme.glyph, weight: .bold))
-                        }.font(sys(size: Theme.fs1)).foregroundColor(dim).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    Button { m.expanded.toggle() } label: { worked.contentShape(Rectangle()) }.buttonStyle(.plain).padding(.top, lk.id == "onair" ? Theme.sp2 : 0)
                     if m.expanded && !m.steps.isEmpty {
-                        VStack(spacing: 0) { ForEach(m.steps) { StepRow(s: $0, now: Date(), current: false) } }
-                            .padding(.vertical, Theme.sp2).background(RoundedRectangle(cornerRadius: Theme.r2).fill(card))
+                        VStack(spacing: 0) { ForEach(Array(m.steps.enumerated()), id: \.element.id) { i, s in StepRow(s: s, now: Date(), current: false, n: i + 1) } }
+                            .padding(.vertical, Theme.sp2).background(RoundedRectangle(cornerRadius: round ? Theme.r2 : 0).fill(card)).padding(.top, lk.id == "onair" ? Theme.sp2 : 0)
                     }
                 }
+    }
+    /// "Worked 1m 2s · 6 steps": a capsule (Orb, Conversation), a box (On Air, HUD), a line of text (Phosphor, Editorial, Zen).
+    @ViewBuilder var worked: some View {
+        let id = lk.id, ok = m.failed ? crashed : id == "orb" || id == "hud" ? accent : done
+        switch id {
+        case "phosphor":
+            Text("[\(m.failed ? "err" : "ok")] \(cased(summary)) [\(m.expanded ? "-" : "+")]").font(ui(Theme.fs3)).foregroundColor(m.failed ? crashedInk : dim)
+        case "zen":
+            Text("\(cased(summary)) \(m.expanded ? "⌄" : "›")").font(sys(size: Theme.fs2)).foregroundColor(m.failed ? crashedInk : dim)
+        case "hud":
+            HStack(spacing: Theme.sp2) { Text(m.failed ? "✕ ERR" : "✓ OK").foregroundColor(ok); Text("\(cased(summary)) \(m.expanded ? "▾" : "▸")") }
+                .font(ui(Theme.fs1)).tracking(0.9).foregroundColor(dim).padding(.horizontal, 10).frame(minHeight: 28).background(card).overlay(Rectangle().strokeBorder(line))
+        default:
+            let boxed = id != "editorial", r = RoundedRectangle(cornerRadius: round ? 15 : 0)
+            HStack(spacing: Theme.sp2) {
+                if boxed || m.failed { Image(systemName: m.failed ? "xmark" : "checkmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(ok) }
+                Text(cased(summary))
+                Image(systemName: m.expanded ? "chevron.down" : "chevron.right").font(sys(size: Theme.glyph, weight: .bold))
+            }.font(id == "onair" ? sys(size: Theme.fs1, weight: .bold) : sys(size: Theme.fs2)).tracking(id == "onair" ? 1.1 : 0).foregroundColor(dim)
+                .padding(.horizontal, boxed ? Theme.sp3 : 0).frame(minHeight: id == "orb" ? 30 : boxed ? 26 : 22)
+                .background(r.fill(id == "conversation" ? bg : .clear)).overlay(r.strokeBorder(boxed ? line : .clear))
+                .overlay(alignment: .bottom) { if !boxed { Rectangle().fill(line).frame(height: 1) } }
+        }
     }
     var summary: String {
         let cmds = m.steps.filter { !$0.detail.isEmpty && $0.title != "Loaded skill" }.count
@@ -1166,21 +2721,47 @@ struct MsgView: View {
 }
 
 /// Greenlight's markdown as blocks: paragraphs, and list items with a hanging indent (md() alone leaves "- " literal).
-struct MDText: View {
+struct MDText: View, Looked {
     let text: String
     var body: some View {
+        let bs = blocks, zen = lk.id == "zen"
         VStack(alignment: .leading, spacing: Theme.sp2) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
+            ForEach(Array(bs.enumerated()), id: \.offset) { i, b in
                 if let mark = b.mark {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                        Text(mark).foregroundColor(dim).frame(minWidth: 12, alignment: .trailing)
+                        if let t = bullet(mark, nth(bs, i)) { t.frame(minWidth: 12, alignment: .trailing) }
                         Text(md(b.text)).fixedSize(horizontal: false, vertical: true)
-                    }.padding(.leading, CGFloat(b.indent) * Theme.sp4).padding(.top, b.gap ? 0 : -Theme.sp1)  // items 4pt apart, paragraphs 8
+                    }.padding(.vertical, zen ? Theme.sp1 + 2 : 0).frame(maxWidth: zen ? .infinity : nil, alignment: .leading).overlay(alignment: .top) { if zen { Rectangle().fill(line).frame(height: 1) } }  // Zen: hairlines, no marks
+                    .padding(.leading, CGFloat(b.indent) * Theme.sp4).padding(.top, b.gap ? 0 : -Theme.sp1)  // items 4pt apart, paragraphs 8
                 } else {
                     Text(md(b.text)).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+    /// The list mark in the look's hand: Orb's amber dot, Phosphor's `*`, Editorial's red i. ii., HUD's 01 02, On Air's square, Zen none.
+    func bullet(_ mark: String, _ n: Int) -> Text? {
+        let dot = mark == "•"
+        switch lk.id {
+        case "zen": return nil
+        case "orb": return Text(mark).foregroundColor(accent)
+        case "phosphor": return Text(dot ? "*" : mark).foregroundColor(dim)
+        case "editorial":  // ponytail: roman to xii, then digits
+            let r = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"]
+            return Text(dot ? (n <= r.count ? r[n - 1] : "\(n)") + "." : mark).bold().foregroundColor(accent)
+        case "hud": return Text(dot ? String(format: "%02d", n) : mark).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(n == 1 ? accent : dim)
+        case "onair": return Text(dot ? "▪" : mark)  // in the inverted card's ink
+        default: return Text(mark).foregroundColor(sub)
+        }
+    }
+    /// Item i's place (from 1) in its list, counting back to the item that opened it.
+    func nth(_ bs: [(mark: String?, indent: Int, text: String, gap: Bool)], _ i: Int) -> Int {
+        var n = 0, j = i
+        while j >= 0, bs[j].mark != nil, bs[j].indent >= bs[i].indent {
+            if bs[j].indent == bs[i].indent { n += 1; if bs[j].gap { break } }
+            j -= 1
+        }
+        return max(n, 1)
     }
     /// gap: a list item that starts a list (paragraph spacing above) rather than continuing one.
     var blocks: [(mark: String?, indent: Int, text: String, gap: Bool)] {
@@ -1861,6 +3442,7 @@ struct SettingsView: View {
                 Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
             }
             row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+            toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
         }
         let status = engineStatus, ready = !status.hasPrefix("Not ready")
         box("Dictation") {
@@ -1871,6 +3453,30 @@ struct SettingsView: View {
             if c.engine == "whisper" { dependent(off: false) { row("Whisper model") { Button("Choose model…") { delegate.pickModel() } } } }
             if c.engine == "openai" { dependent(off: false) { row("OpenAI key", "Stored in your Keychain.") { Button("Set key…") { delegate.setKey() } } } }
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
+        }
+        box("Voice mode") {
+            row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
+                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
+            }
+            row("Speaking voice", Speech.shared.status.isEmpty ? "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice." : Speech.shared.status) {
+                Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); Speech.shared.stop(); Speech.shared.warm(); c.objectWillChange.send() })) {
+                    ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().frame(width: menuWidth)
+            }
+            if Speech.shared.kind == "kokoro" { dependent(off: false) { row("Kokoro voice", "a = American, b = British; f/m = female/male.") {
+                Picker("Kokoro voice", selection: Binding(get: { Speech.shared.kokoroVoice }, set: { ud.set($0, forKey: "kokoroVoice"); c.objectWillChange.send() })) {
+                    ForEach(Speech.kokoroVoices, id: \.self) { Text($0).tag($0) }
+                }.labelsHidden().frame(width: menuWidth)
+            } } }
+            if Speech.shared.kind == "eleven" { dependent(off: false) {
+                row("ElevenLabs key", "Stored in your Keychain.") { Button("Set key…") { delegate.askKey("elevenlabs", "ElevenLabs API key", "voice mode's speaking voice") } }
+                row("ElevenLabs voice ID", "From elevenlabs.io → Voices. Empty: Sarah.") {
+                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice") })).frame(width: menuWidth)
+                }
+            } }
+            row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
+                Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+            }
         }
         HStack(spacing: Theme.sp1) {
             note("Standing instructions for Greenlight have their own page:")
@@ -1914,7 +3520,7 @@ struct SettingsView: View {
                 }
             }
         }
-        shortcuts("In the app", [("New window", "⌘N"), ("Settings", "⌘,"), ("Show or hide chat", "⇧⌘C"),
+        shortcuts("In the app", [("New window", "⌘N"), ("Settings", "⌘,"), ("Show or hide chat", "⇧⌘C"), ("Live chat on or off (Esc leaves)", "⇧⌘L"),
                                  ("Show or hide terminal", "⇧⌘T"), ("Reload dashboard", "⌘R"), ("Up or down a floor", "⌘↑|⌘↓")])
         shortcuts("While typing in the chat", [("Search chat history", "⌃R"), ("Previous or next sent message", "↑|↓"), ("New line", "⇧↩")])
         shortcuts("In any app", [("Show or hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
@@ -1943,7 +3549,7 @@ struct SettingsView: View {
         HStack(spacing: Theme.sp1) {
             ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
                 if i > 0 { Text("or").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-                Text(key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
+                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
                     .padding(.horizontal, Theme.sp2).frame(minWidth: 26).frame(height: 22)
                     .background(RoundedRectangle(cornerRadius: 5).fill(surface)).overlay(RoundedRectangle(cornerRadius: 5).stroke(edge))
             }
@@ -2053,6 +3659,12 @@ struct SettingsView: View {
                 }
             }
             row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { claudeModelPicker("Suggestions model", $c.nextModel) }
+            row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
+                Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
+            }
+            row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
+                Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
+            }
             dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort) } }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
@@ -2183,7 +3795,7 @@ struct SettingsView: View {
     @ViewBuilder var addRepoForm: some View {
         box("Add a repository") {
             row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
-                TextField("thornode", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
+                TextField("repo", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
             }
             row("Project") {
                 Picker("Project", selection: $rs.draftProj) { ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) } }.labelsHidden().frame(width: 180)
@@ -2372,16 +3984,28 @@ struct SettingsView: View {
     }
 }
 
-struct ChatView: View {
+/// The stage while voice mode is on (and the transcript isn't asked for), else the chat.
+struct StageOr<A: View, B: View>: View {
+    @ObservedObject var v: Voice
+    @ViewBuilder var stage: () -> A
+    @ViewBuilder var chat: () -> B
+    var body: some View { if v.on && !v.transcript { stage() } else { chat() } }
+}
+
+struct ChatView: View, Looked {
     @ObservedObject var c: Core
     @FocusState private var typing: Bool
     @FocusState private var searching: Bool
     var body: some View {
         VStack(spacing: 0) {
+            if lk.id == "zen" {  // Zen's only rule: the context used, as a 2px hairline
+                GeometryReader { g in Rectangle().fill(c.ctxFull > 0.75 ? needs : accent).frame(width: g.size.width * c.ctxFull) }.frame(height: 2).background(card).accessibilityHidden(true)
+            }
             header
-            Divider().overlay(line)
+            rule(top: true)
             ZStack(alignment: .top) {
             Group {  // settings cover the dashboard pane: App.settingsHost
+            StageOr(v: c.voice) { StageView(v: c.voice, c: c) } chat: {
             VStack(spacing: 0) {
             ScrollViewReader { sv in
                 ScrollView {
@@ -2389,15 +4013,8 @@ struct ChatView: View {
                         let started = c.msgs.contains { $0.role == .you }
                         ForEach(c.msgs.filter { !(started && $0.role == .note && $0.text.hasPrefix("Ask me anything")) }) { m in MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)) }
                         if let r = c.run { RunCard(r: r, c: c) }
-                        ForEach(Array(c.queue.enumerated()), id: \.offset) { _, q in
-                            HStack {
-                                Spacer(minLength: 60)
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(q).font(chatFace(size: Theme.fs3)).foregroundColor(sub).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                                        .background(RoundedRectangle(cornerRadius: Theme.r3).stroke(bubble, style: StrokeStyle(lineWidth: 1, dash: [4])))
-                                    Text("queued").font(sys(size: Theme.fs1)).foregroundColor(dim)
-                                }
-                            }
+                        ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in
+                            HStack { Spacer(minLength: 60); queued(q, i) }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(Theme.sp4)
@@ -2408,39 +4025,167 @@ struct ChatView: View {
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
             }
-            Divider().overlay(line)
+            rule(top: false)
             footer
             }.id(c.look)
             }
             }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {  // HUD's corner brackets on the pane; its live stage draws its own
+            if lk.id == "hud" { StageOr(v: c.voice) { EmptyView() } chat: { Brackets().stroke(accent, lineWidth: 2).allowsHitTesting(false).accessibilityHidden(true) } }
+        }
         .background(bg)
         .foregroundColor(fg)
-        .preferredColorScheme(theme.dark ? .dark : .light)
-        .font(sys(size: Theme.fs3))
+        .environment(\.colorScheme, lk.dark ? .dark : .light)  // the look's, for this pane only (not the window)
+        .font(lk.font == monoCSS ? sys(size: Theme.fs3, design: .monospaced) : sys(size: Theme.fs3))
+    }
+
+    // MARK: the look's chrome (header, rules, queued messages, composer)
+
+    var busy: Bool { c.run != nil }
+    var stateWord: String { c.connected ? (busy ? "working" : "idle") : "offline" }
+    var stateInk: Color { !c.connected ? crashed : busy ? accent : dim }
+    var inset: CGFloat { lk.id == "editorial" || lk.id == "zen" ? Theme.sp5 : Theme.sp4 }
+    /// A chrome label in the look's voice: caps and tracking (Orb, On Air, HUD, Editorial), lowercase (Zen), mono (Phosphor, HUD).
+    func tag(_ s: String, _ size: CGFloat = Theme.fs1, _ w: Font.Weight = .regular, caps: Bool? = nil) -> Text {
+        let up = caps ?? ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
+        return Text(up ? s.uppercased() : lk.id == "zen" ? s.lowercased() : s)
+            .font(sys(size: size, weight: w, design: code ? .monospaced : .default).monospacedDigit()).tracking(up ? 1.4 : 0)
     }
 
     var header: some View {
-        HStack(spacing: Theme.sp3) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Theme.sp2) {
+                title
+                Spacer(minLength: Theme.sp2)
+                meta
+                VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) })
+            }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
+                .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
+            if lk.id == "editorial" { masthead }
+        }
+    }
+
+    /// The name as the look prints it; double-click to rename (Return or click away saves). Only the display changes, never c.name.
+    @ViewBuilder func nameView(_ shown: String, _ f: Font, track: CGFloat = 0) -> some View {
+        if c.editingName {
+            TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } }).textFieldStyle(.plain).font(f).frame(width: 160).onSubmit(c.doneNaming)
+        } else {
+            Text(shown).font(f).tracking(track).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
+        }
+    }
+
+    /// Who and how it is: an avatar (Conversation), the orb (Orb), a tally (On Air), a prompt (Phosphor), a masthead (Editorial), a callsign (HUD), a whisper (Zen).
+    @ViewBuilder var title: some View {
+        let n = c.name
+        switch lk.id {
+        case "conversation":
+            Text(n.prefix(1).uppercased()).font(sys(size: Theme.fs4 - 1, weight: .semibold)).foregroundColor(busy ? .white : accent)
+                .frame(width: 30, height: 30).background(Circle().fill(busy ? accent : accent.opacity(0.14))).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                if c.editingName {  // double-click the name to rename the assistant; Return or click away saves
-                    TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } })
-                        .textFieldStyle(.plain).fontWeight(.semibold).frame(width: 160).onSubmit(c.doneNaming)
-                } else {
-                    Text(c.name).fontWeight(.semibold).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
-                }
+                nameView(n, sys(size: Theme.fs4 - 1, weight: .semibold))
                 HStack(spacing: Theme.sp1) {
-                    Circle().fill(c.connected ? Theme.done : Theme.crashed).frame(width: 6, height: 6)
-                    Text("\(host) · \(c.connected ? (c.run != nil ? "working" : "idle") : "offline")\(tps)")
-                }.font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim)
+                    Circle().fill(c.connected ? (busy ? accent : done) : crashed).frame(width: 7, height: 7)
+                    Text("\(host) · \(stateWord)\(tps)")
+                }.font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim)
             }
-            Spacer()
-            if !c.chatOut {
-                Button { c.popChat() } label: { Text("⧉").font(sys(size: Theme.fs4)).foregroundColor(dim) }.buttonStyle(.plain)
-                    .help("Move to its own window (close it to bring it back)").accessibilityLabel("Move to its own window")
-            }
-        }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp3).padding(.vertical, Theme.sp3)
+        case "onair":
+            let live = c.connected && busy
+            HStack(spacing: 7) {
+                Circle().fill(live ? .white : c.connected ? dim : crashed).frame(width: 7, height: 7)
+                tag(!c.connected ? "Off air" : live ? "On air" : "Standby", Theme.fs2, .heavy)
+            }.foregroundColor(live ? .white : fg).padding(.horizontal, Theme.sp3).frame(height: 24).background(Capsule().fill(live ? hx("D1242F") : hx("3A3A40")))
+            nameView((live ? "LIVE · " : "") + n.uppercased(), sys(size: Theme.fs1, weight: .heavy), track: 1.5)
+                .foregroundColor(page).padding(.horizontal, 10).frame(height: 24).background(accent)
+        case "phosphor":
+            nameView("\(n.lowercased())@greenlight", sys(size: Theme.fs3, design: .monospaced))
+            Text("~/chat").foregroundColor(dim)
+        case "editorial":
+            nameView("The \(n)", sys(size: Theme.fs6 + 2, weight: .bold, design: .serif).italic())
+        case "hud":
+            nameView("\(n.uppercased())//CHAT", sys(size: Theme.fs1, design: .monospaced), track: 1.3).foregroundColor(accent)
+            tag(!c.connected ? "✕ Offline" : busy ? "▶ Working" : "◌ Idle").foregroundColor(stateInk).shadow(color: busy ? accent.opacity(0.55) : .clear, radius: 5)
+        case "zen":
+            nameView(n.lowercased(), sys(size: Theme.fs3))
+            Text("· \(stateWord)").font(sys(size: Theme.fs3)).foregroundColor(stateInk)
+        default:  // orb: an amber orb, a second ring while it works
+            Circle().fill(c.connected ? AnyShapeStyle(RadialGradient(colors: [hx("FFD27A"), accent, hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 9)) : AnyShapeStyle(crashed))
+                .frame(width: 14, height: 14).background(Circle().fill(accent.opacity(c.connected ? 0.14 : 0)).padding(-4))
+                .background(Circle().fill(accent.opacity(busy ? 0.06 : 0)).padding(-9)).padding(.horizontal, 4).accessibilityHidden(true)
+            nameView(n.uppercased(), sys(size: Theme.fs2, weight: .semibold), track: 1.7)
+            tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk)
+        }
+    }
+
+    /// Host and tok/s at the right (Conversation has them under the name, Editorial in its dateline).
+    @ViewBuilder var meta: some View {
+        switch lk.id {
+        case "conversation", "editorial": EmptyView()
+        case "phosphor":
+            Text("\(host)\(tps)").foregroundColor(dim).lineLimit(1)
+            Text("[\(stateWord.uppercased())]").fontWeight(busy ? .bold : .regular).foregroundColor(c.connected ? (busy ? fg : dim) : crashed)
+        default: tag("\(host)\(tps)", Theme.fs1, lk.id == "onair" ? .bold : .regular, caps: lk.id == "onair" || lk.id == "hud").foregroundColor(dim).lineLimit(1)
+        }
+    }
+
+    /// Editorial: a double rule, the dateline, a rule.
+    var masthead: some View {
+        let state = !c.connected ? "Offline" : busy ? "Going to press" : "Idle"
+        return VStack(spacing: 0) {
+            VStack(spacing: 2) { Rectangle().fill(fg).frame(height: 1); Rectangle().fill(fg).frame(height: 1) }
+            HStack {
+                tag("\(Date().formatted(.dateTime.weekday(.wide))) edition · \(state)", Theme.fs1 - 1, .semibold).foregroundColor(stateInk)
+                Spacer()
+                tag("\(host)\(tps)", Theme.fs1 - 1, .semibold).foregroundColor(dim)
+            }.padding(.vertical, 6)
+            Rectangle().fill(fg).frame(height: 1)
+        }.padding(.horizontal, inset)
+    }
+
+    /// The rule between header, list and footer, in the look's hand (Editorial's masthead draws the top one; Zen has none).
+    @ViewBuilder func rule(top: Bool) -> some View {
+        switch lk.id {
+        case "onair": Rectangle().fill(top && busy ? hx("D1242F") : line).frame(height: 2)
+        case "phosphor": HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
+        case "editorial": if !top { Rectangle().fill(fg).frame(height: 1).padding(.horizontal, inset) }
+        case "zen": EmptyView()
+        case "conversation": if top { Rectangle().fill(line).frame(height: 1) }
+        default: Rectangle().fill(line).frame(height: 1)
+        }
+    }
+
+    /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
+    @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
+        let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
+        let text = lk.id == "phosphor" ? Text("you> ").foregroundColor(dim) + Text(q) : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
+        VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
+            if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
+            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(lk.id == "conversation" ? accent : lk.id == "zen" ? dim : lk.id == "phosphor" ? fg : sub)
+                .multilineTextAlignment(.trailing).padding(.horizontal, boxed ? 14 : 0).padding(.vertical, boxed ? 10 : 0)
+                .background {
+                    switch lk.id {
+                    case "orb": RoundedRectangle(cornerRadius: 18).stroke(line, style: dash)
+                    case "conversation": UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).stroke(accent, style: dash)
+                    case "onair": Rectangle().stroke(dim, style: dash)
+                    case "hud": Rectangle().stroke(line, style: dash)
+                    default: EmptyView()
+                    }
+                }
+            if lk.id != "onair" { queuedLabel(i) }
+        }.padding(.top, lk.id == "editorial" ? Theme.sp2 : 0)
+            .overlay(alignment: .top) { if lk.id == "editorial" { HLine().stroke(dim, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) } }
+    }
+    func queuedLabel(_ i: Int) -> some View {
+        let s = switch lk.id {
+        case "conversation": "Queued · sends after this run"
+        case "phosphor": "(queued)"
+        case "editorial": "Queued for the next edition"
+        case "hud": "Queued · " + String(format: "%02d", i + 1)
+        default: "Queued"
+        }
+        return tag(s, ["editorial", "hud"].contains(lk.id) ? Theme.fs1 - 1 : lk.id == "orb" ? Theme.fs1 : Theme.fs2, lk.id == "editorial" ? .bold : .regular).foregroundColor(dim)
     }
 
     /// ⌃R: fuzzy search over the prompts you sent; with no query, the recent ones.
@@ -2499,13 +4244,14 @@ struct ChatView: View {
                     HStack(spacing: Theme.sp2) {
                         ForEach(c.attached) { a in
                             HStack(spacing: Theme.sp1) {
-                                Image(systemName: "hexagon.fill").font(sys(size: Theme.glyph)).foregroundColor(a.color)
-                                Text(a.label).font(sys(size: Theme.fs1, weight: .semibold)).lineLimit(1)
+                                Image(systemName: "hexagon.fill").font(sys(size: Theme.glyph)).foregroundColor(a.color)  // ponytail: every look keeps the MR's colored hexagon
+                                tag(a.label, Theme.fs1, .semibold, caps: lk.id == "onair" || lk.id == "editorial").lineLimit(1)
                                 Button { c.attached.removeAll { $0.id == a.id }; c.unattach?(a.id) } label: {
                                     Image(systemName: "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(dim).frame(width: 16, height: 16)
                                 }.buttonStyle(.plain).accessibilityLabel("Remove \(a.label) from the chat")
-                            }.padding(.leading, Theme.sp2).padding(.trailing, 3).frame(height: 24)
-                                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge))
+                            }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : Theme.sp2).padding(.trailing, 3).frame(height: 24)
+                                .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
+                                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
                                 .help(a.sent ? "Already sent to \(c.name)" : "Goes to \(c.name) with your next message")
                         }
                     }
@@ -2516,15 +4262,17 @@ struct ChatView: View {
                 if let since = c.recording {
                     HStack(spacing: 2) {
                         ForEach(c.levels.indices, id: \.self) { i in
-                            Capsule().fill(Theme.crashed).frame(width: 3, height: 3 + CGFloat(c.levels[i]) * 19)
+                            Capsule().fill(crashed).frame(width: 3, height: 3 + CGFloat(c.levels[i]) * 19)
                         }
                     }.frame(height: 30).accessibilityHidden(true)
                     Text("Listening… " + fmt(Date().timeIntervalSince(since))).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim)
                     Spacer(minLength: 0)
                 } else {
-                    TextField(c.transcribing ? "Transcribing…" : c.run != nil ? "Queue a follow-up…" : c.attached.isEmpty ? "Talk to \(c.name)…"
+                    TextField(c.transcribing ? "Transcribing…" : c.run != nil ? "Queue a follow-up…" : c.attached.isEmpty ? greeting
                               : "Ask about \(c.attached.count == 1 && c.attached[0].mrs == 1 ? c.attached[0].label : "these \(c.attached.reduce(0) { $0 + $1.mrs }) MRs")…", text: $c.input, axis: .vertical)
-                        .textFieldStyle(.plain).font(chatFace(size: Theme.fs3)).lineLimit(2...10).padding(.vertical, Theme.sp2).frame(minHeight: 50).focused($typing)  // two lines to write in, growing to ten
+                        .textFieldStyle(.plain).font(chatFace(size: bare ? Theme.fs4 : Theme.fs3, weight: lk.id == "zen" ? .light : .regular))
+                        .lineLimit(2...10).padding(.vertical, Theme.sp2).frame(minHeight: 50).focused($typing)  // two lines to write in, growing to ten
+                        .padding(.leading, ["phosphor", "hud", "zen"].contains(lk.id) ? 18 : 0).overlay(alignment: lk.id == "zen" ? .bottomLeading : .topLeading) { promptGlyph }
                         .onKeyPress(.return, phases: .down) { k in
                             if k.modifiers.contains(.shift) {  // newline at the cursor
                                 NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
@@ -2535,74 +4283,136 @@ struct ChatView: View {
                         Text(c.vimMode).font(sys(size: Theme.fs1).italic()).foregroundColor(dim).padding(.bottom, Theme.sp2)
                     }
                 }
+                let rec = c.recording != nil, pad = padSize, r = corner(pad)
                 Button(action: c.toggleVoice) {
                     Group {
                         if c.transcribing { ProgressView().controlSize(.small).scaleEffect(0.7) }
-                        else { Image(systemName: c.recording != nil ? "stop.fill" : "mic.fill").font(sys(size: Theme.fs3, weight: .semibold)) }
-                    }.frame(width: 30, height: 30)
-                        .background(RoundedRectangle(cornerRadius: Theme.r1).fill(c.recording != nil ? Theme.crashed : Color.clear))  // quiet until it records
-                        .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(c.recording != nil ? Color.clear : line))
-                        .foregroundColor(c.recording != nil ? .white : sub)
+                        else if lk.id == "phosphor" { Text(rec ? "[stop]" : "[mic]").padding(.horizontal, 6) }
+                        else { Image(systemName: rec ? "stop.fill" : "mic.fill").font(sys(size: Theme.fs3, weight: .semibold)) }
+                    }.frame(minWidth: pad).frame(height: pad)
+                        .background(RoundedRectangle(cornerRadius: r).fill(rec ? crashed : lk.id == "conversation" || lk.id == "onair" ? page : .clear))  // quiet until it records
+                        .overlay(RoundedRectangle(cornerRadius: r).stroke(rec || bare ? .clear : line))
+                        .foregroundColor(rec ? .white : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
                 }.buttonStyle(.plain).disabled(c.transcribing)
                     .modifier(Tip(c: c, text: c.recording != nil ? "Stop and transcribe (\(c.shortcut))" : "Speak to \(c.name) (\(c.shortcut))"))
                     .accessibilityLabel(c.recording != nil ? "Stop recording" : "Speak")
                 let empty = c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty  // submit() ignores it anyway
                 Button(action: c.submit) {
-                    Image(systemName: "arrow.up").font(sys(size: Theme.fs3, weight: .bold)).frame(width: 30, height: 30)
-                        .background(RoundedRectangle(cornerRadius: Theme.r1).fill(empty ? Color.clear : accent))
-                        .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(empty ? line : .clear))
-                        .foregroundColor(empty ? dim.opacity(0.6) : bg)
+                    sendLabel(empty).frame(minWidth: pad).frame(height: pad)
+                        .background(RoundedRectangle(cornerRadius: r).fill(sendFill(empty)))
+                        .overlay(RoundedRectangle(cornerRadius: r).stroke(sendEdge(empty)))
+                        .foregroundColor(empty ? dim.opacity(0.6) : lk.id == "hud" || lk.id == "zen" ? accent : lk.dark ? page : .white)
                 }.buttonStyle(.plain).disabled(empty).accessibilityLabel("Send")
             }
-            .padding(.leading, Theme.sp3).padding(.trailing, Theme.sp1).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(surface))
-            .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(c.hp >= 0 ? Theme.working.opacity(0.6) : typing ? Theme.working.opacity(0.45) : edge))  // focus is interaction: blue, never the attention amber
+            .padding(.leading, bare ? 0 : lk.id == "orb" ? Theme.sp4 : Theme.sp3).padding(.trailing, bare ? 0 : 6).padding(.vertical, bare ? 0 : 3).padding(.bottom, bare ? 6 : 0)
+            .background { composerBox }
             .onChange(of: c.hq == nil) { if c.hq == nil { typing = true } }  // ⌃R closed: back to the field
             if c.hp >= 0 {
                 Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(sys(size: Theme.fs1)).foregroundColor(dim)
             }
-            if c.run != nil {
-                Text("Messages you send now run after this reply finishes.").font(sys(size: Theme.fs1)).foregroundColor(dim)
-            }
+            let onair = lk.id == "onair"
             HStack(spacing: Theme.sp2) {
-                Button { c.settingsOpen = true } label: {
-                    HStack(spacing: Theme.sp1) {
-                        Text(!c.isClaude ? c.modelName : "\(c.modelName) · \(effortName(c.effort))").lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down").font(sys(size: Theme.glyph, weight: .semibold))
-                    }.foregroundColor(sub)
-                }.buttonStyle(.plain).fixedSize().modifier(Tip(c: c, text: "Change model and effort in Settings"))
+                if onair { modelButton }  // On Air: the model first, inverse, on the amber strip
+                ViewThatFits {  // the hint gives way first when the row is tight
+                    tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send", lk.id == "editorial" ? Theme.fs1 - 1 : Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .semibold : .regular)
+                        .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
+                    EmptyView()
+                }.layoutPriority(-1)
                 Spacer(minLength: 4)
-                context
+                if !c.agents.isEmpty { agentsButton }
+                if !onair { modelButton }
+                ContextButton(c: c)
                 newChat
             }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small)
-        }.padding(.horizontal, Theme.sp4).padding(.top, Theme.sp3).padding(.bottom, Theme.sp4)
+                .padding(.trailing, onair ? inset : 0).background(onair ? accent : .clear).padding(.horizontal, onair ? -inset : 0)  // full-bleed, the model flush left
+        }.padding(.horizontal, inset).padding(.top, Theme.sp3).padding(.bottom, lk.id == "onair" ? 0 : Theme.sp4)
     }
 
-    /// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then orange.
-    var context: some View {
-        let can = c.run == nil && c.isClaude && c.context > 0, high = full > 0.75, pct = Int((full * 100).rounded())
-        return Button { c.ctxOpen.toggle() } label: {
+    var bare: Bool { lk.id == "editorial" || lk.id == "zen" }  // no boxes, just type and rules
+    /// Corners for the look's controls: round (Orb), 6pt (Conversation), square (the rest).
+    func corner(_ h: CGFloat) -> CGFloat { lk.id == "orb" ? h / 2 : lk.id == "conversation" ? Theme.r1 : 0 }
+    var padSize: CGFloat { switch lk.id { case "onair": 36; case "orb", "conversation": 34; case "hud", "editorial": 32; default: 30 } }
+    var greeting: String { lk.id == "editorial" ? "Write to the desk…" : lk.id == "phosphor" ? "talk to \(c.name.lowercased())_" : "Talk to \(c.name)…" }
+
+    /// What leads the line you type: a shell prompt (Phosphor), a caret (HUD), a dot that lights while you type (Zen).
+    @ViewBuilder var promptGlyph: some View {
+        switch lk.id {
+        case "phosphor": Text("$").foregroundColor(typing ? fg : dim).padding(.top, Theme.sp2).accessibilityHidden(true)
+        case "hud": Text(">").font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(accent).padding(.top, Theme.sp2).accessibilityHidden(true)
+        case "zen": Circle().fill(typing || c.hp >= 0 ? accent : hx("4A4A52")).frame(width: 6, height: 6).padding(.bottom, 15).accessibilityHidden(true)
+        default: EmptyView()
+        }
+    }
+    /// The composer's frame: a capsule (Orb, Conversation), a square (On Air, HUD), a dashed box (Phosphor), a rule under it
+    /// (Editorial, Zen). Focus lights it in the look's accent; walking the history (↑↓) thickens it.
+    @ViewBuilder var composerBox: some View {
+        let hot = typing || c.hp >= 0, walk: CGFloat = c.hp >= 0 ? 1 : 0
+        switch lk.id {
+        case "editorial", "zen":
+            Rectangle().fill(hot ? accent : lk.id == "zen" ? line : fg).frame(height: (hot && lk.id == "editorial" ? 2 : 1) + walk).frame(maxHeight: .infinity, alignment: .bottom)
+        case "phosphor":
+            Rectangle().fill(hot ? card : .clear).overlay(Rectangle().stroke(hot ? fg : line, style: StrokeStyle(lineWidth: 1 + walk, dash: [4, 3])))
+        default:
+            let r: CGFloat = lk.id == "orb" ? 24 : lk.id == "conversation" ? 22 : 0
+            RoundedRectangle(cornerRadius: r).fill(lk.id == "conversation" || lk.id == "hud" ? page : card)
+                .overlay(RoundedRectangle(cornerRadius: r).stroke(hot ? accent : line, lineWidth: (lk.id == "onair" ? 2 : 1) + walk))
+                .background(RoundedRectangle(cornerRadius: r + 3).fill(accent.opacity(lk.id == "conversation" && hot ? 0.15 : 0)).padding(-3))  // Conversation's focus ring
+        }
+    }
+    @ViewBuilder func sendLabel(_ empty: Bool) -> some View {
+        switch lk.id {
+        case "phosphor": Text("[ send ]").padding(.horizontal, 6)
+        case "hud": tag("[ Send ]", Theme.fs2, .bold).padding(.horizontal, Theme.sp3)
+        case "editorial": Text("Send").font(sys(size: Theme.fs3, weight: .bold)).padding(.horizontal, empty ? 2 : 14)
+        default: Image(systemName: "arrow.up").font(sys(size: Theme.fs3, weight: .bold))
+        }
+    }
+    func sendFill(_ empty: Bool) -> Color {
+        if empty { return lk.id == "orb" || lk.id == "onair" ? line : lk.id == "conversation" ? card : .clear }
+        return lk.id == "hud" ? accent.opacity(0.1) : lk.id == "zen" ? .clear : accent
+    }
+    func sendEdge(_ empty: Bool) -> Color { lk.id == "hud" ? (empty ? line : accent) : lk.id == "phosphor" && empty ? line : .clear }
+
+    /// Model and effort, as the look would print it; opens Settings.
+    var modelButton: some View {
+        let m = c.modelName, e = c.isClaude ? effortName(c.effort) : nil, onair = lk.id == "onair"
+        let label = switch lk.id {
+        case "phosphor": "--model \(m.lowercased().replacingOccurrences(of: " ", with: "-"))" + (e.map { " --effort \($0.lowercased())" } ?? "")
+        case "editorial": "Set in \(m)" + (e.map { " · \($0) effort" } ?? "")
+        case "hud": "Mdl \(m)" + (e.map { " · eff \($0)" } ?? "")
+        case "onair": m + (e.map { " · effort \($0)" } ?? "")
+        default: m + (e.map { " · \($0)" } ?? "")
+        }
+        return Button { c.settingsOpen = true } label: {
             HStack(spacing: Theme.sp1) {
-                ZStack {
-                    Circle().stroke(edge, lineWidth: 2)
-                    Circle().trim(from: 0, to: max(full, 0.02)).stroke(high ? Theme.needs : sub, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
-                }.frame(width: 12, height: 12)
-                Text("Context \(pct)%")
-            }.foregroundColor(high ? Theme.needsInk : sub).padding(.horizontal, Theme.sp2).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(c.ctxOpen ? Theme.working.opacity(0.18) : surface))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(high ? Theme.needs.opacity(0.6) : edge)).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("Context, \(pct) percent used")
-            .popover(isPresented: $c.ctxOpen, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: Theme.sp2) {
-                    Text("Context").font(sys(size: Theme.fs3, weight: .semibold))
-                    Text(c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window)) tokens used" : "\(kfmt(c.context)) tokens used")
-                        .font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(high ? Theme.needsInk : sub)
-                    if c.window > 0 { ProgressView(value: full).tint(high ? Theme.needs : sub) }
-                    Button { c.compact(); c.ctxOpen = false } label: { Label("Compact", systemImage: "arrow.down.right.and.arrow.up.left") }.disabled(!can)
-                    Text(!c.isClaude ? "Only Claude can compact." : c.run != nil ? "Wait for the reply to finish." : "Summarizes the chat to free context.")
-                        .font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
-                }.padding(Theme.sp3).frame(width: 240)
-            }
+                tag(label, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1).truncationMode(.middle)  // after the hint, the model gives way
+                if lk.id == "conversation" || lk.id == "hud" { Image(systemName: "chevron.up.chevron.down").font(sys(size: Theme.glyph, weight: .semibold)) }
+            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
+                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
+                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
+        }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
+    }
+
+    /// The agents running in your workspaces: a dot for the busiest (amber asking you, blue working), a pick opens its terminal.
+    var agentsButton: some View {
+        let a = c.agents, onair = lk.id == "onair", n = a.count
+        let dot = a.contains { $0.state == "waiting" } ? needs : working
+        let word = lk.id == "phosphor" ? "agents:\(n)" : lk.id == "hud" ? "Agt \(n)" : "\(n) agent\(n == 1 ? "" : "s")"
+        func say(_ g: Agent) -> String { "\(g.name) · \(g.state == "waiting" ? "asking you" : "working")\(g.type.isEmpty ? "" : " · \(g.type)")" }
+        return Menu {
+            ForEach(a) { g in Button(say(g)) { delegate.toWorkspace(g.id) } }
+        } label: {
+            HStack(spacing: Theme.sp1) {
+                Circle().fill(onair ? accent : dot).frame(width: 7, height: 7)
+                tag(word, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1)
+            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
+                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
+                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .modifier(Tip(c: c, text: "Agents in your workspaces: pick one to open its terminal"))
+            .accessibilityLabel("\(n) agent\(n == 1 ? "" : "s")\(a.contains { $0.state == "waiting" } ? ", one asking you" : ""). Open an agent's terminal")
     }
 
     static let newTip = "New chat — forget this conversation and start fresh"
@@ -2611,14 +4421,59 @@ struct ChatView: View {
         let hot = c.hint == Self.newTip
         return Button(action: c.clear) {
             Image(systemName: "square.and.pencil").font(sys(size: Theme.fs2, weight: .medium)).frame(width: 26, height: 26)
-                .foregroundColor(hot ? accent : sub)
-                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(hot ? accent.opacity(0.18) : surface))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(hot ? accent : edge))
+                .foregroundColor(hot ? accent : lk.id == "phosphor" ? fg : sub)
+                .background(RoundedRectangle(cornerRadius: corner(26)).fill(lk.id == "onair" ? card : hot ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber: tile stays dark
+                .overlay(RoundedRectangle(cornerRadius: corner(26)).stroke(hot ? (lk.id == "onair" ? fg : accent) : bare ? .clear : line))
         }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")
     }
-
-    var full: Double { c.window > 0 ? min(Double(c.context) / Double(c.window), 1) : 0 }
 }
+
+/// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then orange.
+struct ContextButton: View, Looked {
+    @ObservedObject var c: Core
+    var body: some View {
+        let full = c.ctxFull, high = full > 0.75, pct = Int((full * 100).rounded())
+        // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
+        let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
+        let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
+        return Button { c.ctxOpen.toggle() } label: {
+            HStack(spacing: Theme.sp1) {
+                ZStack {
+                    Circle().stroke(edge, lineWidth: 2)
+                    Circle().trim(from: 0, to: max(full, 0.02)).stroke(high ? needs : sub, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
+                }.frame(width: 12, height: 12)
+                Text(up ? "CONTEXT \(pct)%" : lk.id == "zen" ? "context \(pct)%" : "Context \(pct)%").tracking(up ? 1.2 : 0).lineLimit(1).fixedSize()
+                    .font(sys(size: Theme.fs1, weight: lk.id == "onair" ? .heavy : .regular, design: code ? .monospaced : .default).monospacedDigit())
+            }.foregroundColor(high ? needsInk : lk.id == "phosphor" ? fg : sub).padding(.horizontal, bare ? 0 : Theme.sp2).frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "onair" ? card : c.ctxOpen ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber
+                .overlay(RoundedRectangle(cornerRadius: r).stroke(high ? needs.opacity(0.6) : c.ctxOpen && lk.id == "onair" ? fg : bare ? .clear : line)).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel("Context, \(pct) percent used").modifier(CtxPop(c: c))
+    }
+}
+
+/// The context popover: token totals and Compact. On the chat's Context button and each voice look's readout.
+struct CtxPop: ViewModifier, Looked {
+    @ObservedObject var c: Core
+    func body(content: Content) -> some View {
+        let can = c.run == nil && c.isClaude && c.context > 0, full = c.ctxFull, high = full > 0.75
+        return content.popover(isPresented: $c.ctxOpen, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: Theme.sp2) {
+                    Text("Context").font(sys(size: Theme.fs3, weight: .semibold))
+                    Text(c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window)) tokens used" : "\(kfmt(c.context)) tokens used")
+                        .font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(high ? needsInk : sub)
+                    if c.window > 0 { ProgressView(value: full).tint(high ? needs : sub) }
+                    Button { c.compact(); c.ctxOpen = false } label: { Label("Compact", systemImage: "arrow.down.right.and.arrow.up.left") }.disabled(!can)
+                    Text(!c.isClaude ? "Only Claude can compact." : c.run != nil ? "Wait for the reply to finish." : "Summarizes the chat to free context.")
+                        .font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+                }.padding(Theme.sp3).frame(width: 240)
+                    // in the look, not the window's appearance: the look's ink on the look's stage (it opens from the live looks too)
+                    .font(lk.font == monoCSS ? sys(size: Theme.fs3, design: .monospaced) : sys(size: Theme.fs3)).foregroundColor(fg)
+                    .environment(\.colorScheme, lk.dark ? .dark : .light).presentationBackground(bg)
+            }
+    }
+
+}
+extension Core { var ctxFull: Double { window > 0 ? min(Double(context) / Double(window), 1) : 0 } }
 
 // MARK: vim
 
@@ -2848,13 +4703,6 @@ struct Floors: View {
                          ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
     var body: some View {
         HStack(spacing: 10) {
-        if let devName {  // a dev copy: whose it is, dashed so it doesn't read as a floor
-            HStack(spacing: 4) { Image(systemName: "hammer.fill").font(.system(size: 8, weight: .bold)); Text(devName).lineLimit(1).truncationMode(.middle) }
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
-                .padding(.horizontal, 8).frame(height: 20)
-                .background(RoundedRectangle(cornerRadius: 7).strokeBorder(hexColor(light ? "#5F5F64" : "#9A9AA0"), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                .help("Dev copy of the \(devName) workspace").accessibilityLabel("Dev copy: \(devName)")
-        }
         HStack(spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
                 let l = Self.levels[i], on = l.0 == s.at
@@ -2884,7 +4732,7 @@ struct Floors: View {
         }.padding(2)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 300 + devTagWidth, height: 28, alignment: .trailing).padding(.trailing, 10)
+        }.frame(width: 300, height: 28, alignment: .trailing).padding(.trailing, 10)
     }
 }
 /// The project chip: the window's projects, centered in the title bar like a title; a click opens the picker.
@@ -2913,7 +4761,7 @@ struct ProjectChip: View {
 /// Floors in a window's title bar, top right; the project chip in its middle.
 func floorBar(_ w: NSWindow, _ f: Floors) {
     let a = NSTitlebarAccessoryViewController(), h = NSHostingView(rootView: f)
-    h.frame = NSRect(x: 0, y: 0, width: 310 + devTagWidth, height: 28)
+    h.frame = NSRect(x: 0, y: 0, width: 310, height: 28)
     a.view = h; a.layoutAttribute = .trailing
     w.addTitlebarAccessoryViewController(a)
     guard let tb = w.standardWindowButton(.closeButton)?.superview else { return }  // the title bar itself: no accessory slot is centered
@@ -3064,7 +4912,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var timer: Timer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
+        }
         greenlight.showDockIcon()
+        Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.imagePosition = .imageLeading
@@ -3072,9 +4924,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         item.button?.target = self
         item.button?.action = #selector(click)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        if let devName { item.button?.toolTip = "Dev copy of the \(devName) workspace" }
         greenlight.popoverShown = { [weak self] in NSApp.isActive && self?.chatShown == true }
-        greenlight.popChat = { [weak self] in self?.popChat(out: true) }
+        greenlight.popChat = { [weak self] in self?.popChat(out: $0) }
         greenlight.openPage = { [weak self] name in  // as the page's own openPage message
             guard let self, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil else { return }
             self.greenlight.inboxOpen = false
@@ -3111,6 +4962,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return self.greenlight.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
+            if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on,  // Esc leaves live chat (sheets keep theirs)
+               !self.greenlight.settingsOpen, !self.greenlight.inboxOpen { self.greenlight.voice.stopAll(); return nil }
             guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
                   e.keyCode == kVK_UpArrow || e.keyCode == kVK_DownArrow,
                   let w = e.window, let f = self.floorGo[ObjectIdentifier(w)] else { return e }
@@ -3121,12 +4974,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
-        if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
-        if let devDir { watchPages(devDir + "/web") }
+        if ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden
 
         let un = UNUserNotificationCenter.current()
         un.delegate = self
-        if devDir == nil { un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }  // a copy never posts (notify), so never asks
+        un.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         let reply = UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Answer greenlight…")
         un.setNotificationCategories([UNNotificationCategory(identifier: "greenlight", actions: [reply], intentIdentifiers: [])])
         greenlight.tailOutbox()
@@ -3189,7 +5041,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.appearance = window.appearance
         let web = makeWeb()
         w.contentView = web
-        if let u = page("dashboard") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
+        if let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
         if !w.setFrameUsingName("view-" + v) { w.center() }
         w.setFrameAutosaveName("view-" + v)
         viewWindows[v] = w
@@ -3210,6 +5062,31 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func modeJSON(for web: WKWebView) -> String {
         if let v = viewWindows.first(where: { $0.value.contentView === web })?.key { return #"{"only":"\#(v)"}"# }
         return #"{"away":[\#(viewWindows.keys.map { "\"\($0)\"" }.joined(separator: ","))]}"#
+    }
+    var picked: [String] = []  // one Chief, one set of lit hexes: every window shows the same, a window that (re)loads gets them too
+    func pick(_ names: [String]) {
+        picked = names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        webs.forEach(pushPicks)
+    }
+    /// One Chief for every window: it's told which one you were last in (a terminal's tab, the dashboard's open workspace), so
+    /// "this one" or "merge it" means that workspace. The chat window itself doesn't count.
+    func noteFocus(_ w: NSWindow) {
+        guard w !== chatWindow, let web = w.contentView as? WKWebView ?? webs.first(where: { $0.window === w }) else { return }
+        let id = termWins.first { $0.value === w }?.key
+        web.evaluateJavaScript(id != nil ? "JSON.stringify(window.term && term.focus && term.focus())" : "JSON.stringify(window.mc && mc.focus && mc.focus())") { [weak self] r, _ in
+            guard let self else { return }
+            let o = ((r as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]) ?? [:]
+            let line = focusLine(terminal: id, project: id.flatMap { self.floors[$0]?.project } ?? "", o)
+            self.greenlight.focusPaths = o["paths"] as? [String]
+            guard line != self.greenlight.focus else { return }
+            self.greenlight.focus = line
+            let key = id != nil ? ("path", o["path"] as? String) : ("name", o["page"] as? String)  // voice mode: the stage follows you
+            if let k = key.1, let p = self.greenlight.pucks.first(where: { $0[key.0] as? String == k }) { self.greenlight.voice.show(workspaceSpec(p)) }
+        }
+    }
+    func pushPicks(_ web: WKWebView) {
+        guard let d = try? JSONSerialization.data(withJSONObject: picked), let j = String(data: d, encoding: .utf8) else { return }
+        web.evaluateJavaScript("window.mc && mc.pick && mc.pick(\(j))")
     }
     func pushMode() { webs.forEach { $0.evaluateJavaScript("window.mc && mc.mode(\(modeJSON(for: $0)))") } }
     lazy var window: NSWindow = {
@@ -3261,29 +5138,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return w
     }()
 
-    /// A dev copy: reload a page when dev.py lays down a new one (the Swift takes a rebuild, and dev.py relaunches us after it).
-    var pageTimes = [String: Date](), pageTimer: Timer?
-    func watchPages(_ dir: String) {
-        func times() -> [String: Date] {
-            var t = [String: Date]()
-            for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where !f.hasPrefix(".") {
-                t[f] = (try? FileManager.default.attributesOfItem(atPath: dir + "/" + f))?[.modificationDate] as? Date
-            }
-            return t
-        }
-        pageTimes = times()
-        pageTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let now = times(), moved = Set(now.filter { self.pageTimes[$0.key] != $0.value }.keys)
-            self.pageTimes = now
-            if moved.contains("dashboard.html") { self.webs.forEach { $0.reloadFromOrigin() } }
-            if !moved.subtracting(["dashboard.html"]).isEmpty { self.termWebs.forEach { $0.reloadFromOrigin() } }  // terminal.html, or a script of its
-        }
-    }
-
     func loadFluid() {
         let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
-        if s.isEmpty, let u = page("dashboard") {
+        if s.isEmpty, let u = Bundle.main.url(forResource: "dashboard", withExtension: "html") {
             fluid.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent())
         } else if s.hasPrefix("http://") || s.hasPrefix("https://"), let u = URL(string: s) {
             fluid.load(URLRequest(url: u))
@@ -3323,6 +5180,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func queueBuilds(_ l: String) {
         guard let d = l.data(using: .utf8), let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let pucks = snap["pucks"] as? [[String: Any]] else { return }
+        greenlight.pucks = pucks
+        if case let a = agentsOf(pucks), a != greenlight.agents { greenlight.agents = a }
+        greenlight.watched(pucks)
         for p in pucks where building.count < greenlight.designParallel {
             guard let name = p["name"] as? String, let sig = p["sig"] as? String, p["built"] as? Bool == false,
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
@@ -3380,12 +5240,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "ready" {
             from.evaluateJavaScript("mc.mode(\(modeJSON(for: from)))")
             if !dashSnap.isEmpty { from.evaluateJavaScript("mc.update(\(dashSnap))") }
-            pushBuilds()
+            pushBuilds(); pushPicks(from)
             if from === web(showing: "hex") { greenlight.attached = [] }  // a reloaded hive starts with an empty dock
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
         if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
+        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
+        if cmd == "unpick" { pick([]) }  // a click on a lit hex clears them in every window
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
@@ -3425,6 +5287,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "rescan" { rescan() }
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
+        if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
         if cmd == "page", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
@@ -3453,15 +5316,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
         }
-        // The CI view: dash.py ci (runs per day across the tracked MRs/PRs; cached 15 min there, Refresh passes fresh).
-        if cmd == "ci" {
-            let days = min(max(b["days"] as? Int ?? 30, 1), 99), fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
-            var out = ""
-            ssh("\(py)/dash.py ci --days \(days)\(fresh)", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"error":"\#(host) didn't answer (exit \#(code))"}"#
-                from.evaluateJavaScript("mc.ci(\(js))")
-            })
-        }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
            let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
@@ -3475,10 +5329,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
-        if cmd == "merge", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
+        if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            ssh("\(py)/dash.py tree merge '\(path)'", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
+            let op = cmd == "undraft" ? "ready" : cmd
+            ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
+                let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
         }
@@ -3522,7 +5377,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
-                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"),
+                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
         NSApp.mainMenu = bar
@@ -3536,6 +5391,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.palette(true)")
     }
     var lastToggle = Date.distantPast
+    @objc func appLive() {  // ⇧⌘L: live chat on (showing the chat first) or off
+        if !greenlight.voice.on { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
+        greenlight.voice.toggle()
+    }
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
         if Date().timeIntervalSince(lastToggle) < 0.3 { return }
         lastToggle = Date()
@@ -3572,6 +5431,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !out { chatWindow.orderOut(nil) }
         chatHidden = false
         placeChat()
+        if !out { window.makeKeyAndOrderFront(nil) }  // back on the right wall: show it there
     }
 
     /// Puts the chat view where it belongs: the pane, or its window; hidden if `chatHidden`.
@@ -3790,12 +5650,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var termMode: [String: String] { ["mode": isDark ? "dark" : "light", "lightBg": "#" + rgb(lightTheme.bg), "lightFg": "#" + rgb(lightTheme.fg)] }
     func loadTerm(_ web: WKWebView, only: [String]?) {
-        guard let u = page("terminal") else { return }
+        guard let u = Bundle.main.url(forResource: "terminal", withExtension: "html") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
         let look = termLook()
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "dev", value: devName ?? ""), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
+        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
@@ -3806,6 +5666,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if termWindow.isVisible && termWindow.isKeyWindow { termWindow.orderOut(nil); hideFloaters(); return }
         basement()
     }
+    /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
+    /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
+    func toConsole(_ w: String) { toWorkspace(w) }
     var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
     /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
     func toWorkspace(_ path: String) {
@@ -3832,12 +5695,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// claude -p on this Mac at low effort: its stdout, "" when it fails.
     func claudeP(_ prompt: String, model: String, done: @escaping (String) -> Void) {
-        if !devSsh(host).isEmpty {  // a dev copy asks the host's claude: one here would connect in the copy's name
-            var out = ""
-            ssh("exec $SHELL -lc " + shellQuote("cd /tmp && exec claude -p --model \(shellQuote(model)) --effort low"), stdin: prompt,
-                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? out : "") })
-            return
-        }
         DispatchQueue.global().async {
             let p = Process(), inPipe = Pipe(), out = Pipe()
             p.executableURL = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
@@ -3873,9 +5730,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
-        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + [host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
+        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \(shellQuote(host)) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
-    var termLoaded = false, treesProc: Process?, treesAgain = false, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
     func editorApp() -> (bid: String, url: URL, name: String)? {
         [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
@@ -3891,15 +5748,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
     func pushTrees() {
-        guard termLoaded else { return }
-        if treesProc != nil { treesAgain = true; return }  // one is running: it may have listed before this change, so go again after it
+        guard termLoaded, treesProc == nil else { return }
         treesAt = Date()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
             if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
-            if self.treesAgain { self.treesAgain = false; self.pushTrees() }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
@@ -3928,7 +5783,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
             ptys[id] = p; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
         case "in":
-            ptys[id]?.write(b["d"] as? String ?? "")
+            ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
             ptys.removeValue(forKey: id)?.stop()
@@ -3962,7 +5817,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
@@ -4014,7 +5869,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let key = "\(at.host):\(port)"
             if tunnels[key]?.isRunning == true { NSWorkspace.shared.open(u); return tunnelState(key, "open") }
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)"] + devSsh(at.host) + [at.host]
+            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)", at.host]
             p.standardError = FileHandle.nullDevice
             // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
             p.terminationHandler = { [weak self] q in DispatchQueue.main.async { if self?.tunnels[key] === q { self?.tunnels[key] = nil; self?.tunnelState(key, q.terminationStatus == 0 ? "closed" : "failed") } } }  // ssh exiting on its own (port taken, host down, dropped): failed; Cancel removes it first
@@ -4198,6 +6053,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if chatEdge.fillColor != theme.blend(0.1) { chatEdge.fillColor = theme.blend(0.1) }
         for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
+        greenlight.checkIn()
+        greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
         let bell = "\(greenlight.waiting.count), \(greenlight.inboxOpen), \(greenlight.askedJSON)"  // re-pushed whenever a question changes, not only the count
@@ -4226,15 +6083,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let b = item.button else { return }
         // Touch the status item only on change: any menubar update keeps a full-screen window's title bar pinned down.
         let working = greenlight.run != nil
-        let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the stars are all alike
-            + (greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : ""))
+        let title = greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : "")
         let key = "\(working) \(accent)"
         if key != starKey {
             starKey = key
             let img = NSImage(systemSymbolName: working ? "star.fill" : "star", accessibilityDescription: "Greenlight")
             img?.isTemplate = !working
             b.image = working ? img?.withSymbolConfiguration(.init(paletteColors: [NSColor(accent)])) : img
-            item.length = working && devName == nil ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second (a copy's name doesn't fit 64)
+            item.length = working ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second
         }
         if b.title != title { b.title = title }
     }
@@ -4292,17 +6148,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "whisperModel") }
     }
 
-    @objc func setKey() {
+    @objc func setKey() { askKey("openai", "OpenAI API key", "the OpenAI Whisper engine") }
+    func askKey(_ account: String, _ title: String, _ use: String) {
         let a = NSAlert()
-        a.messageText = "OpenAI API key"
-        a.informativeText = "Stored in your login Keychain. Used only for the OpenAI Whisper engine. Leave empty to remove it."
+        a.messageText = title
+        a.informativeText = "Stored in your login Keychain. Used only for \(use). Leave empty to remove it."
         let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         a.accessoryView = f
         a.addButton(withTitle: "Save")
         a.addButton(withTitle: "Cancel")
         a.window.initialFirstResponder = f
         NSApp.activate(ignoringOtherApps: true)
-        if a.runModal() == .alertFirstButtonReturn { keychain("openai", set: f.stringValue.trimmingCharacters(in: .whitespaces)) }
+        if a.runModal() == .alertFirstButtonReturn { keychain(account, set: f.stringValue.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
@@ -4369,7 +6226,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
-    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() } }  // port tunnels die with the app
+    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() }; Speech.shared.stop() }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
@@ -4452,6 +6309,64 @@ func selfTest() {
     let fz = fuzzy("evm test", "run the evm unit tests")
     check("!! and !$ expand as whole words only", expandBang("cat !$ again: !!", "open x/y.go") == "cat x/y.go again: open x/y.go" && expandBang("now!! !4521", "z") == "now!! !4521")
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
+    let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
+    check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
+    let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
+    let hp: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339", "title": "pending liquidity receipts"]], ["name": "selkie"], ["name": "mr-1802"]]
+    check("hexes: Chief's [hexes: …] line, stripped and resolved; the model's picks only when the reply points at them",
+          staged("Merge it.\nOptions: yes | no\n[hexes: selkie, !5339, nope]").hexes == ["selkie", "!5339", "nope"]
+          && staged("Merge it.\nOptions: yes | no\n[hexes: selkie]").text == "Merge it.\nOptions: yes | no"
+          && staged("Nothing.\n[hexes:]").hexes == [] && staged("Hi").hexes == nil && staged("Hi [hexes: sel").text == "Hi"
+          && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
+          && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
+          && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
+    check("agents button: agents only, the one asking you first",
+          agentsOf([["name": "b", "path": "/w/b", "agent": ["state": "working", "type": "claude"]], ["name": "a", "path": "/w/a", "agent": ["state": "done"]], ["name": "d", "path": "/w/d", "agent": ["state": "none"]],
+                    ["name": "c", "path": "/w/c", "agent": ["state": "waiting", "type": "codex"]]]).map(\.name) == ["c", "b"])
+    check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
+    check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
+    check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
+    check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
+    check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
+    check("chat: the mood line sits apart, a reply without one doesn't", mood("😌🔍❤️\n\nAll green.") == ("😌🔍❤️", "All green.") && mood("#3 is up.\nok") == (nil, "#3 is up.\nok") && mood("👍 Done.") == (nil, "👍 Done."))
+    check("voice: mood emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
+    let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
+    check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
+    check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
+          && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
+          && voiceCommand("Show me.") == nil && voiceCommand("stop the deploy on 12") == nil
+          && voiceCommand("OK, start over.") == .reset && voiceCommand("reset the deploy") == nil
+          && asksToShow("highlight the failing ones") && asksToShow("Show me which MRs need me") && asksToShow("light them up")
+          && !asksToShow("merge it") && !asksToShow("what's the status of selkie")
+          && staged("Fresh start.\n[chat: reset]").reset && staged("Fresh start.\n[chat: reset]").text == "Fresh start." && !staged("Hi").reset)
+    let hexPucks: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339"]], ["name": "octo/lifecycle-advice", "mr": ["ref": "#18"]],
+                                     ["name": "octo/dashboard"], ["name": "acme/mr-533"]]
+    check("voice: hexes a reply names outright, by ref or a distinctive name, never a plain word or a longer number",
+          namedHexes("Merge [!5339](u) first, then lifecycle-advice; the dashboard can wait. #180 too.", hexPucks) == ["acme/mr-5339", "octo/lifecycle-advice"])
+    let wsCard = workspaceSpec(["name": "mr-5339", "state": "needs", "why": "approve it", "step": "review_bot", "action": "assign the bot", "goal": "",
+                                "mr": ["ref": "!5339", "title": "receipts", "pipeline": "failed", "draft": false]])
+    check("focus: the stage's card for the workspace you switched to",
+          wsCard["title"] as? String == "mr-5339" && (wsCard["items"] as? [[String: String]])?.map { $0["label"]! } == ["!5339 receipts", "Needs you", "Next: review bot"]
+          && (wsCard["items"] as? [[String: String]])?.first?["detail"] == "CI failed")
+    check("focus: Chief hears which window and workspace you were in",
+          focusLine(terminal: 2, project: "Platform", ["name": "mr-5339", "path": "/w/mr-5339", "mr": "!5339"]) == "a Basement terminal window showing Platform, on the tab for workspace mr-5339 (/w/mr-5339, !5339)"
+          && focusLine(terminal: nil, project: "", ["page": "acme/mr-5339", "view": "overview"]) == "the dashboard, with workspace acme/mr-5339 open"
+          && focusLine(terminal: nil, project: "", ["view": "list"]) == "the dashboard (list)")
+    check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
+    let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
+    var bufs = 0, ended = false, sc: AVAudioConverter?
+    syn.write(AVSpeechUtterance(string: "One minute.")) { b in
+        guard let b = b as? AVAudioPCMBuffer else { return }
+        if b.frameLength == 0 { ended = true; return }
+        if sc?.inputFormat != b.format { sc = AVAudioConverter(from: b.format, to: pf) }
+        if sc.flatMap({ convert(b, $0, pf) }) != nil { bufs += 1 }
+    }
+    let until = Date() + 15
+    while !ended && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+    check("voice: speech converts for the player and ends with an empty buffer (\(bufs) buffers)", bufs > 0 && ended)
+    let tone = (0..<24000).map { Int16(10000 * sin(Double($0) / 10)) }.withUnsafeBytes { Data($0) }
+    let kb = Speech.shared.buffer(tone), kc = kb.flatMap { convert($0, AVAudioConverter(from: $0.format, to: pf)!, pf, whole: true) }
+    check("voice: a second of Kokoro/ElevenLabs PCM plays as about a second (\(kc?.frameLength ?? 0) frames)", kb?.frameLength == 24000 && abs(Int(kc?.frameLength ?? 0) - 22050) < 200 && (kc?.floatChannelData?[0][5] ?? 0) != 0)
     let c = Core()
     Thread.detachNewThread {
         onMain { c.clear(); c.questions = []; c.model = "claude-haiku-5-5"; c.effort = "low" }
@@ -4460,6 +6375,7 @@ func selfTest() {
         onMain { c.send("Run this exact bash command: python3 -c \"import time; time.sleep(60)\" then say finished.") }
         wait("a live step", 90) { !(c.run?.steps.isEmpty ?? true) }
         check("live step while working: \(onMain { c.run?.steps.first?.title ?? "-" })", onMain { c.run != nil })
+        check("live line names the call: \(onMain { c.run?.call ?? "-" })", onMain { c.run?.call.contains("(") ?? false })
         onMain { c.stop() }
         wait("stop", 30) { c.run == nil }
         check("Stop ends the turn as \"Stopped.\"", onMain { c.msgs.last?.text == "Stopped." && c.msgs.last?.failed == true })
@@ -4479,6 +6395,7 @@ func selfTest() {
         check("tapping a chip sends it", onMain { c.msgs[c.msgs.count - 2].text == "yes" && !c.msgs.last!.failed })
 
         onMain {  // pings: options parsed, inbox chips/dismiss
+            c.questions.removeAll { !$0.ping && $0.answer == nil }  // the live chat's own last question, if the model asked one, isn't under test
             let n = c.msgs.count
             c.ping(#"{"ts": 1792700000, "text": "ws-a: merge !1?\nOptions: merge | hold"}"#)
             c.ping(#"{"text": "ws-b: goal for this workspace?"}"#)

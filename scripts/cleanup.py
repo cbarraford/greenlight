@@ -155,6 +155,24 @@ class Repo:
         return [v["head_commit_sha"] for v in vs if v.get("head_commit_sha")]
 
 
+def post_merge_left(path, project):
+    """The lifecycle's steps after `merge` greenlight hasn't seen done for this workspace, or None. Unsure -> keep."""
+    try:
+        post = greenlight.post_merge(project)
+    except Exception:  # noqa: BLE001 - a lifecycle we can't read: keep rather than delete mid-step
+        return "post-merge steps (lifecycle unreadable)"
+    if not post:
+        return None
+    try:
+        rows = json.loads((greenlight.STATE / "last.json").read_text())["rows"]
+    except (OSError, ValueError, KeyError):
+        rows = []
+    nxt = next((r["next"] for r in rows if os.path.normpath(r["path"]) == os.path.normpath(path)), {})
+    if nxt.get("owner") == "done":
+        return None
+    return nxt["step"] if nxt.get("step") in post else ", ".join(post)  # not scanned since the merge: all of them
+
+
 def mr_numbers(wt, branch, repo):
     """MR/PR numbers the workspace itself names: Orca's link, then its comment or an mr-N branch."""
     link = wt.get("linkedGitLabMR" if repo.host == "gitlab.com" else "linkedPR")
@@ -195,6 +213,8 @@ def evaluate(wt, repo, busy):
         newest = mrs[0]  # an open MR older than a merged/closed one for the same work is stale
         if newest["state"] == "open":
             return "keep", f"MR {newest['label']} is open"
+        if newest["state"] == "merged" and (left := post_merge_left(path, repo.project)):
+            return "keep", f"MR {newest['label']} merged, still to do: {left}"
         reason = f"MR {newest['label']} {newest['state']}"
         if any(m["state"] == "open" for m in mrs):
             reason += f" (older {', '.join(m['label'] for m in mrs if m['state'] == 'open')} open, stale)"

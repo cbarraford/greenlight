@@ -20,19 +20,64 @@ DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.g
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_WINDOW = 272000  # ponytail: codex doesn't report its window; fixed guess for the meter
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
     "Never do work yourself (code, debugging, reviews, investigations, writing): dispatch it to an agent in the "
     "appropriate Orca workspace, creating one with a goal if none fits, then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
+    "Begin every reply with a line of exactly three emoji that capture your emotional state right then (say `😌🔍☕`), "
+    "honestly: how the work, the board and the conversation feel to you. Voice mode doesn't speak them. "
     "Replies render as markdown in a narrow popover: keep them short, no tables or headings, MR links as markdown links. "
     "When you ask a question with a few likely answers, end with one final line: `Options: first | second | third`. "
+    "When the user asks you to reset, clear the context or start over, say a short ok and add a line `[chat: reset]`: the app clears "
+    "the conversation after your reply. "
+    "After everything else (even the Options line), end every reply with `[hexes: name, name]`: the workspaces the reply is about, "
+    "by their exact board names, or `[hexes:]` when none. The app hides the line and lights those workspaces' hexes on the dashboard in "
+    "every window until your next reply: it's how you highlight hexes when asked, and the only way. When they ask you to highlight, "
+    "show, light up or point at workspaces (\"show me…\", \"which ones…\"), that is a yes: light them, never ask whether to. "
     "Each message runs in a process that exits when you reply, so background tasks, Monitor and ScheduleWakeup die "
     "at the end of the turn: never use run_in_background, Monitor or ScheduleWakeup here. Leave follow-up watching to "
     "the Greenlight automation, or record it with `greenlight.py note <workspace> \"...\"`. "
-    "A <task-notification> is never the user's message; the text after `USER MESSAGE (reply to this):` is. Always answer it."
+    "A <task-notification> is never the user's message; the text after `USER MESSAGE (reply to this):` is. Always answer it. "
+    "Messages may start with a BOARD: every unfinished workspace with its lifecycle step (step i/n), who it waits on, and when "
+    "it's on the user what to do. It's greenlight's latest scan; trust it over memory and say where a workspace is in its lifecycle "
+    "when it matters. Asked what to work on (or checked in on), pick 1–3 from it: blocks on the user first (others wait on them), "
+    "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
+    "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
+    "`python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS + "/dash.py board` rescans every workspace, "
+    "updates the user's dashboard and prints the fresh board. "
+    "To see the user's GitHub and GitLab work beyond the workspaces (asked what to pick up, what's waiting on them, about an issue "
+    "or MR, or when the board is thin): `python3 " + SCRIPTS + "/dash.py forge` lists the open MRs/PRs they're asked to review, "
+    "their own, and the issues assigned to them, each with its status (draft, conflicts, CI, approvals, threads), how stale it is, "
+    "and the workspace already on it; `dash.py forge <owner/repo>` lists everything open in one repo. Suggest from the statuses: "
+    "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
+    "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
+    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi) each run in a Greenlight terminal tab, a tmux "
+    "session on `tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: you can open those, not read them). "
+    "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
+    "`capture-pane -p -t '=SESSION:' -S -60` reads an agent's screen, to tell the user what it's doing or asking. When the user asks to "
+    "see, open or bring up an agent, add a line `[console: SESSION]` (or its worktree path): the app opens that terminal tab in front of "
+    "them. Only agents: not plain shells. Never type into a terminal or run anything in one (no send-keys); the user does that."
 )
+
+
+def board_note():
+    """The BOARD line ahead of the user's message, or "" when the session already has this one (or there's no scan)."""
+    try:
+        import dash
+        b = dash.board()
+    except Exception:  # ponytail: no scan yet, or it's mid-write: the chat goes on without the board
+        return ""
+    if not b and os.environ.get("GREENLIGHT_ONLY"):
+        b = "(no workspaces in this window)"  # not nothing: the session would go on with the last window's
+    f = os.path.join(DIR, "board")  # the board the session last saw: an unchanged one isn't sent again
+    if not b or (os.path.exists(f) and open(f).read() == b):
+        return ""
+    open(f, "w").write(b)
+    scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
+    return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{b}\n\n"
 WRAP = "USER MESSAGE (reply to this): "
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 # What the status says while the model thinks: one picked per stretch of thinking, held until something else shows.
@@ -80,12 +125,20 @@ def step_title(name, inp):
     return name.split("__")[-1].replace("_", " "), first
 
 
+def call(name, inp):
+    """A tool call the way Claude Code prints it: Bash(git status), Read(scripts/chat.py)."""
+    a = inp.get("command") or inp.get("file_path") or inp.get("path") or inp.get("pattern") or inp.get("query") \
+        or inp.get("url") or inp.get("skill") or inp.get("description") or next((v for v in inp.values() if isinstance(v, str)), "")
+    return f"{name.split('__')[-1]}({short(a, 100)})"
+
+
 class Norm:
     """Each harness's JSON lines (claude stream-json, codex/opencode/pi json) → the app's events."""
 
     def __init__(self):
         self.msg_t = None  # current API message start, for tok/s
         self.chars = 0
+        self.out, self.msg_out = 0, 0  # output tokens: finished messages, the current one
         self.last_tps = 0.0
         self.context = 0
         self.window = None
@@ -148,6 +201,7 @@ class Norm:
             ev = d["event"]
             if ev["type"] == "message_start":
                 self.msg_t, self.chars = time.time(), 0
+                self.out, self.msg_out = self.out + self.msg_out, 0
                 self.context = self.usage(ev["message"].get("usage", {})) or self.context
                 out.append({"e": "usage", "context": self.context})
             elif ev["type"] == "content_block_start" and ev["content_block"]["type"] == "text":
@@ -162,16 +216,17 @@ class Norm:
                     out.append({"e": "status", "text": "Thinking"})
                 if self.msg_t and time.time() - self.last_tps > 0.5:  # live estimate, ~4 chars a token
                     self.last_tps = time.time()
-                    out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1)})
+                    out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1),
+                                "out": self.out + max(self.msg_out, self.chars // 4)})
             elif ev["type"] == "message_delta" and self.msg_t:
-                n = ev.get("usage", {}).get("output_tokens", 0)
-                out.append({"e": "usage", "tps": round(n / max(time.time() - self.msg_t, 0.2), 1)})
+                n = self.msg_out = ev.get("usage", {}).get("output_tokens", 0)
+                out.append({"e": "usage", "tps": round(n / max(time.time() - self.msg_t, 0.2), 1), "out": self.out + n})
         elif t == "assistant":
             for c in d["message"].get("content", []):
                 if c.get("type") == "tool_use":
                     self.cmds[c["id"]] = c.get("input", {}).get("command", "")
                     title, detail = step_title(c["name"], c.get("input", {}))
-                    out.append({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail)})
+                    out.append({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))})
                 elif c.get("type") == "text":
                     self.text = c["text"]
         elif t == "user" and isinstance(d.get("message", {}).get("content"), list):
@@ -192,7 +247,7 @@ class Norm:
         t, it, out = d.get("type"), d.get("item", {}), []
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
-            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd)})
+            out.append({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"})
         elif t == "item.completed" and it.get("type") == "command_execution":
             out.append({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)})
         elif t == "item.completed" and it.get("type") == "agent_message":
@@ -300,11 +355,15 @@ def run(cmd, engine, text, norm, check=False):
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice
                 continue
+            if e["e"] == "done" and sid:  # saved before the app hears done: a Clear right after must not be undone by a late save
+                session(engine, sid)
             if e["e"] == "done":
                 done, norm.reply = True, e["text"] if e["ok"] else None
             emit(**e)
     p.wait()
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
+        if sid:
+            session(engine, sid)
         emit(e="done", ok=True, text=norm.text, context=norm.context, window=norm.window, ms=None)
         done, norm.reply = True, norm.text
     for f in (PIDFILE, BGFILE):  # the process is gone, and its shells with it
@@ -314,7 +373,7 @@ def run(cmd, engine, text, norm, check=False):
         if p.returncode in (-15, 143):  # SIGTERM from `chat.py stop`
             return sid, "Stopped"
         return sid, p.stderr.read().strip() or f"exit {p.returncode}"
-    return sid, None
+    return (None if done else sid), None  # done: its session is saved already
 
 
 def agent_title(a):
@@ -373,8 +432,10 @@ def turn(text, model, effort, compact=False, name=None):
         prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
     sid = session(engine)
     if not compact:
+        if not sid and os.path.exists(os.path.join(DIR, "board")):
+            os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
         decisions.quiet("heard", text)  # an answer to a ping or to the chat's open question goes into that question's record
-        text = WRAP + text
+        text = board_note() + WRAP + text
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True)
     emit(e="start", engine=engine, model=model or "default")
@@ -408,7 +469,7 @@ def main():
     cmd = args[0] if args else "send"
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     if cmd == "new":
-        for f in ["session"] + [f"session_{h}" for h in harness.H]:
+        for f in ["session", "board"] + [f"session_{h}" for h in harness.H]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
         decisions.quiet("forget_chat")
@@ -428,6 +489,8 @@ def main():
         else:
             turn("/compact", opt("--model"), None, compact=True)
     else:
+        if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
+            os.environ["GREENLIGHT_ONLY"] = opt("--only")
         turn(sys.stdin.read().strip(), opt("--model"), opt("--effort"), name=opt("--name"))
 
 
