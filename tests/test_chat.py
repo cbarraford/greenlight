@@ -132,7 +132,7 @@ def test_status_follows_the_turn():
     ]:
         evs += n.track(n.claude(d))
     seen = shown(evs)
-    assert seen[0] == "Ran a shell command"  # while it runs
+    assert seen[0] == "Ran ls"  # while it runs
     i = next(k for k, e in enumerate(evs) if e["e"] == "step_done")
     assert seen[i + 1] == "Thinking", (evs, seen)  # the moment it ends
     assert seen[-2] == "Writing a reply" and seen[-1] is None, seen
@@ -152,8 +152,9 @@ def test_status_not_stuck_through_run(tmp_path, monkeypatch):
     events, _ = turn(tmp_path, monkeypatch, "SHELL then answer")
     seen = shown(events)
     i = next(k for k, e in enumerate(events) if e["e"] == "step_done")
-    assert "Ran a shell command" in seen[:i] and "Ran a shell command" not in seen[i + 1:], (events, seen)
+    assert "Ran ls" in seen[:i] and "Ran ls" not in seen[i + 1:], (events, seen)
     assert seen[i + 1] in chat.THINKING, seen  # track() then phrase(): the "Thinking" after a step gets a playful phrase
+    assert events[i + 1].get("thinking") is True, events  # …marked, so the app's byline doesn't repeat it as what's happening
     assert seen[-1] is None, seen  # the turn's end clears it
 
 
@@ -678,6 +679,124 @@ def test_a_line_ending_in_an_attached_lines_start_shows(tmp_path):
     assert not attach.hide(D, e, attach.needles(D))
 
 
+def test_cmd_title_names_what_ran():
+    t = chat.cmd_title
+    assert t("ls -la") == "Ran ls"
+    assert t("cd /w && python3 /a/scripts/greenlight.py scan >/dev/null; python3 /a/dash.py board") == "Ran greenlight.py scan"
+    assert t("gh pr list --author @me -R a/b") == "Ran gh pr list"
+    assert t("gh pr --repo owner/repo list") == "Ran gh pr list"
+    assert t('echo "x | grep" | wc') == "Ran wc" and t('echo "a; rm -rf /"') == "Ran a shell command"  # quoted separators don't split
+    assert t("command -v jq") == "Ran a shell command" and t("npm --prefix app run test") == "Ran npm run test"
+    assert t('claude -p "fix the tests"') == "Ran claude" and t('codex "fix it"') == "Ran codex" and t("codex exec -") == "Ran codex exec"
+    assert t('claude -p "update the docs"') == t('claude "apply the patch"') == "Ran claude" and t('codex "review my diff"') == "Ran codex"  # the prompt
+    assert t('claude -p "then run claude mcp list"') == "Ran claude" and t('codex "try codex review now"') == "Ran codex"  # not inside the prompt
+    assert t("codex review --base main") == "Ran codex review" and t("/opt/bin/claude mcp list") == "Ran claude mcp"
+    assert t("npm run build") == "Ran npm run build" and t("docker compose up -d") == "Ran docker compose up" and t("git stash pop") == "Ran git stash pop"
+    assert t("tmux -L greenlight capture-pane -p -t '=s:' -S -60") == "Ran tmux capture-pane"
+    assert t("git -C /w status --short") == "Ran git status"
+    assert t("FOO=1 uv run --with pytest python -m pytest -q") == "Ran pytest"
+    assert t("/usr/bin/zsh -lc 'glab mr view 12'") == "Ran glab mr view"
+    assert t("timeout 30 curl -s https://x") == "Ran curl"
+    assert t("python3 -c 'print(1)'") == "Ran python3"
+    assert t("cat a.txt | grep b") == "Ran cat"  # the first program; arguments are the step's detail
+    assert t("echo hi") == t("") == t("cd /x") == "Ran a shell command"  # nothing real ran: the generic line
+    assert t("bash -c 'cd /w && make test'") == "Ran make test" and t("sh -c 'echo x; ls'") == "Ran ls"  # inside the wrapper
+    assert t("sudo -E") == "Ran sudo" and t("sudo -u root git status") == "Ran git status"  # a runner's flag values aren't the program
+    assert t("git commit -m fix") == "Ran git commit" and t("docker login -u me --password-stdin") == "Ran docker login"  # arguments stay out
+    assert t("kubectl -n prod get pods") == "Ran kubectl get" and t("codex exec --full-auto fix") == "Ran codex exec"
+    assert t("python3 - <<'EOF'") == "Ran python3" and t("nohup python3 a.py") == "Ran a.py" and t("for f in *.py; do wc -l $f; done") == "Ran wc"
+    assert step_title("Bash", {"command": "gh pr view 3"}) == ("Ran gh pr view", "gh pr view 3")
+    assert step_title("Bash", {"command": "ls", "description": "List files"})[0] == "List files"  # the agent's own words win
+    assert step_title("TodoWrite", {"todos": []})[0] == "Updated the plan"
+    assert step_title("ToolSearch", {"query": "select:TodoWrite"}) == ("Looked up tools", "select:TodoWrite")
+
+
+def test_plan_progress_and_pace(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(chat.time, "time", lambda: clock[0])
+    n = Norm()
+    todo = lambda *st: {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"p{clock[0]}", "name": "TodoWrite", "input": {"todos": [
+        {"content": f"Task {i}", "activeForm": f"Doing task {i}", "status": s} for i, s in enumerate(st)]}}]}}
+    plan = lambda d: [e for e in n.claude(d) if e["e"] == "plan"][0]
+    p = plan(todo("in_progress", "pending", "pending", "pending", "pending"))
+    assert p == {"e": "plan", "done": 0, "total": 5, "title": "Doing task 0", "eta": None}, p
+    clock[0] += 30
+    p = plan(todo("completed", "in_progress", "pending", "pending", "pending"))
+    assert p["done"] == 1 and p["title"] == "Doing task 1" and p["eta"] is None, p  # one item done is no pace
+    clock[0] += 30
+    p = plan(todo("completed", "completed", "in_progress", "pending", "pending"))
+    assert p["done"] == 2 and p["eta"] == 90, p  # 2 items in 60s → 3 left at 30s each
+    clock[0] += 10
+    assert plan(todo("completed", "completed", "in_progress", "pending", "pending"))["eta"] == 80  # nothing done since: it counts down
+    clock[0] += 100
+    assert plan(todo("completed", "completed", "in_progress", "pending", "pending"))["eta"] is None  # run past its pace: no estimate
+    p = plan(todo("completed", "completed", "completed", "completed", "completed"))
+    assert p["done"] == p["total"] == 5 and p["eta"] is None and p["title"] == ""  # finished: nothing left to estimate
+    clock[0] += 5
+    p = plan(todo("completed", "pending", "pending"))
+    assert p["eta"] is None and p["done"] == 1, p  # a rewritten plan: its pace starts over; items already done carry no timing
+    clock[0] += 20
+    assert plan(todo("completed", "completed", "pending"))["eta"] is None  # still only one item timed
+
+
+def test_plan_pace_needs_two_updates_and_the_same_list(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(chat.time, "time", lambda: clock[0])
+    n = Norm()
+    items = lambda k, total=5, name="T": [(f"{name}{i}", "completed" if i < k else "", None) for i in range(total)]
+    n.plan(items(0))
+    clock[0] = 60
+    assert n.plan(items(3))[0]["eta"] is None  # one update ticking off three is one observation, not a pace
+    clock[0] = 90
+    assert n.plan(items(4))[0]["eta"] == 22  # two: 4 items in 90s → 1 left
+    clock[0] = 100
+    assert n.plan(items(4, 8, "U"))[0]["eta"] is None  # a different list, even at the same count: its pace starts over
+    sub = {"type": "assistant", "parent_tool_use_id": "task1", "message": {"content": [{"type": "tool_use", "id": "x", "name": "TodoWrite",
+           "input": {"todos": [{"content": "sub", "status": "pending"}]}}]}}
+    assert [e["e"] for e in n.claude(sub)] == ["step"]  # a subagent's list isn't the turn's plan
+
+
+def test_a_retry_clears_the_last_runs_plan(tmp_path, monkeypatch):
+    out = []
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "BGFILE", str(tmp_path / "bg.json"))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "emit", lambda **e: out.append(e))
+    n = Norm()
+    n.plan([("a", "completed", None), ("b", "", None)])
+    n.running = [("s", "Ran ls")]
+    chat.run([sys.executable, "-c", "print('{}')"], "claude", "", n)
+    assert out[0] == {"e": "step_done", "id": "s", "ok": False, "out": "interrupted"}, out  # the dead run's open step ends with it
+    assert out[1] == {"e": "plan", "done": 0, "total": 0, "title": "", "eta": None}, out  # the app drops the plan
+    assert n.plan_t0 is None and n.running == []
+
+
+def test_plan_from_codex_and_opencode():
+    c = Norm()
+    p = c.codex({"type": "item.started", "item": {"id": "t", "type": "todo_list", "items": [{"text": "Scan", "completed": True}, {"text": "Report", "completed": False}]}})
+    assert p == [{"e": "plan", "done": 1, "total": 2, "title": "Report", "eta": None}], p
+    assert c.codex({"type": "item.updated", "item": {"id": "t", "type": "todo_list", "items": [{"text": "Scan", "completed": True}, {"text": "Report", "completed": True}]}})[0]["done"] == 2
+    o = Norm()
+    out = o.opencode({"type": "tool_use", "part": {"id": "x", "tool": "todowrite", "state": {"status": "completed", "input": {"todos": [
+        {"content": "Read", "status": "completed"}, {"content": "Write", "status": "in_progress"}]}}}})
+    assert [e["e"] for e in out] == ["step", "step_done", "plan"] and out[-1]["title"] == "Write" and out[0]["title"] == "Updated the plan", out
+    p = o.todos([{"content": "a", "status": "completed"}, {"content": "b", "status": "cancelled"}])[0]
+    assert p["done"] == p["total"] == 1 and p["title"] == "", p  # a cancelled item isn't work left
+
+
+def test_codex_tools_are_steps():
+    c = Norm()
+    s = c.codex({"type": "item.started", "item": {"id": "m", "type": "mcp_tool_call", "server": "orca", "tool": "worktree_ps", "status": "in_progress"}})
+    assert s == [{"e": "step", "id": "m", "title": "worktree ps", "detail": "orca"}], s
+    d = c.codex({"type": "item.completed", "item": {"id": "m", "type": "mcp_tool_call", "server": "orca", "tool": "worktree_ps", "status": "failed", "error": {"message": "down"}}})
+    assert d[0]["e"] == "step_done" and d[0]["ok"] is False and "down" in d[0]["out"], d
+    f = c.codex({"type": "item.completed", "item": {"id": "f", "type": "file_change", "status": "completed", "changes": [{"path": "/w/a.py", "kind": "update"}]}})
+    assert [e["e"] for e in f] == ["step", "step_done"] and f[0]["title"] == "Edited a.py", f
+    w = c.codex({"type": "item.started", "item": {"id": "w", "type": "web_search", "query": "gh cli"}})
+    assert w[0]["title"] == "Searched the web" and w[0]["detail"] == "gh cli"
+    assert c.codex({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "/usr/bin/zsh -lc 'gh pr list'"}})[0]["title"] == "Ran gh pr list"
+
+
 # Voice mode speaks streamed text as it comes, but a whole message (codex, opencode) only once the turn ends on it: a progress
 # note ("I'll check the board.") looks just like the reply. Speaking each, the user heard the reply's phrases two or three times
 # (in 15 of 180 voice turns' logs). The streams below are codex exec --json's (0.167) and opencode's shapes.
@@ -713,7 +832,8 @@ def test_codex_progress_notes_are_not_spoken(tmp_path, monkeypatch):
     assert spoken_live(events) == "" and all(t["whole"] for t in texts), texts  # nothing said early: the notes stay unspoken
     kinds = [e["e"] for e in events]
     assert kinds.index("text") < kinds.index("step") and kinds[-1] == "done", kinds  # a note shows as it comes, before its command
-    assert events[-1]["text"] == reply and kinds[kinds.index("done") - 1] == "text"  # done says the reply: Voice.finished speaks it
+    assert events[-1]["text"] == reply == texts[-1]["delta"]  # done says the reply, the last text shown: Voice.finished speaks it
+    assert [e for e in events if e["e"] == "plan"] == [{"e": "plan", "done": 0, "total": 0, "title": "", "eta": None}]  # the empty list: no plan
 
 
 def test_opencode_progress_notes_are_not_spoken(tmp_path, monkeypatch):

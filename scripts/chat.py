@@ -114,11 +114,74 @@ GEMINI_TOOLS = {"run_shell_command": "Bash", "read_file": "Read", "read_many_fil
                 "glob": "Glob", "grep_search": "Grep", "web_fetch": "WebFetch", "google_web_search": "WebSearch", "invoke_agent": "Agent"}
 
 
+RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nice", "nohup", "exec", "timeout", "command"}  # name what they run
+SHELLS = {"sh", "bash", "zsh"}
+SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude"}  # their subcommands name them
+NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
+WRAPPER_VERBS = {"run", "compose", "stash", "worktree", "remote"}  # …and after these: npm run build, git stash pop (not exec: a prompt)
+VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}  # a subcommand tool's flags that take the next word
+AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt
+RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
+                 "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
+
+
+def cmd_title(cmd):
+    """A shell command as what it ran, not "Ran a shell command": the first real program (the script, for an interpreter), with
+    its subcommand (`cd x && python3 /a/greenlight.py scan | tail` → "Ran greenlight.py scan", `gh pr list -R a/b` → "Ran gh pr
+    list"). Arguments stay out: the step's detail has the whole command. The generic line when nothing's left (echo, cd)."""
+    cmd = str(cmd or "")
+    masked = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", lambda m: "x" * len(m.group()), cmd)  # separators inside quotes don't split
+    cuts = [0] + [x for m in re.finditer(r"&&|\|\||;|\||\n", masked) for x in m.span()] + [len(cmd)]
+    for seg, bare in ((cmd[cuts[i]:cuts[i + 1]], masked[cuts[i]:cuts[i + 1]]) for i in range(0, len(cuts), 2)):
+        w = [x.strip("'\"()") for x in seg.split()]
+        w = [x for x in w if x and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=|^\d?[<>]", x)]  # env assignments, redirections
+        while w and w[0] in ("do", "then", "else", "!"):
+            w = w[1:]
+        if not w or w[0] in ("cd", "export", "set", "source", ".", "true", ":", "echo", "printf", "sleep", "[", "test", "if", "fi",
+                             "done", "for", "while", "until", "case", "esac", "EOF") or w[:2] in (["command", "-v"], ["command", "-V"]):
+            continue  # nothing ran (command -v only looks a program up)
+        if os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
+            return cmd_title(" ".join(w[2:]))
+        while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
+            if w[1] in ("-c", "-e", "-"):  # python3 -c '…' or a heredoc: inline code, the interpreter is the name
+                w = w[:1]
+                break
+            i, valued = 1, RUNNER_VALUED.get(os.path.basename(w[0]), ())
+            while i < len(w) and (w[i].startswith("-") or w[i] == "run" or re.match(r"^\d+[smh]?$", w[i])):
+                if w[i] == "-m" and i + 1 < len(w):  # python -m pytest: the module
+                    i += 1
+                    break
+                i += 2 if w[i] in valued else 1
+            w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
+        prog, sub = os.path.basename(w[0]), []
+        if prog in ("claude", "codex"):  # a subcommand only right after it, unquoted: any other word is the prompt
+            m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", bare)  # quotes blanked
+            return "Ran " + prog + (" " + m.group(1) if m else "")
+        if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
+            i = 1
+            while i < len(w) and len(sub) < (2 if prog in NOUN_VERB or sub[:1] and sub[0] in WRAPPER_VERBS else 1):
+                if w[i].startswith("-"):
+                    if sub and not (prog in NOUN_VERB and w[i] in VALUED):  # flags after the subcommand: its arguments, kept out
+                        break
+                    i += 2 if w[i] in VALUED else 1  # git -C /w status, gh pr --repo a/b list: flags before the words
+                    continue
+                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
+                    break
+                sub.append(w[i])
+                i += 1
+        return short(" ".join(["Ran", prog] + sub), 60)
+    return "Ran a shell command"
+
+
 def step_title(name, inp):
     """A tool call as the one-line step the activity list shows: (title, detail)."""
     p = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
-    if name == "Bash":
-        return inp.get("description") or "Ran a shell command", inp.get("command", "")
+    if name in ("Bash", "bash"):
+        return inp.get("description") or cmd_title(inp.get("command", "")), inp.get("command", "")
+    if name.lower() in ("todowrite", "update_plan"):
+        return "Updated the plan", ""
+    if name == "ToolSearch":
+        return "Looked up tools", inp.get("query", "")
     if name == "Read":
         return f"Read {os.path.basename(p)}", p
     if name in ("Edit", "Write", "NotebookEdit"):
@@ -175,6 +238,9 @@ class Norm:
         self.running = []  # (id, title) of steps started and not yet done, oldest first
         self.musing = None  # the phrase for the current stretch of thinking; None once anything else shows
         self.mused = None  # the last one, so the next stretch picks a different phrase
+        self.plan_t0 = self.plan_last = None  # the plan's first sight, and when an item last got done (this run's evidence of pace)
+        self.plan_k = self.plan_base = self.plan_obs = 0  # items done now, done when first seen (untimed), updates that finished some
+        self.plan_keys = None  # its items, so a replaced list starts its pace over
         self.gem_open = False  # gemini: an assistant reply block is streaming (its deltas append to self.text)
 
     def more(self, e, **kw):
@@ -182,6 +248,28 @@ class Norm:
         if self.verbose:
             e.update({k: v for k, v in kw.items() if v})
         return e
+
+    def plan(self, items):
+        """The agent's own task list (TodoWrite, codex's todo_list), as (item, status, label now) → a plan event: done of total,
+        the item on now, and a time left only from this run's pace: items seen getting done since the plan appeared, over two
+        or more updates (one update ticking off a batch is one observation), counted down from the last one to now."""
+        n, k, t, keys = len(items), sum(1 for _, st, _ in items if st == "completed"), time.time(), [x for x, _, _ in items]
+        if self.plan_t0 is None or k < self.plan_k or keys != self.plan_keys:  # a new plan, or one rewritten: its pace starts over
+            self.plan_t0, self.plan_base, self.plan_last, self.plan_obs, self.plan_keys = t, k, None, 0, keys
+        elif k > self.plan_k:
+            self.plan_last, self.plan_obs = t, self.plan_obs + 1
+        self.plan_k = k
+        on = next((now or x for x, st, now in items if st == "in_progress"), None) or next((x for x, st, _ in items if st != "completed"), "")
+        eta = None
+        if self.plan_obs >= 2 and k < n:
+            eta = round((self.plan_last - self.plan_t0) / (k - self.plan_base) * (n - k) - (t - self.plan_last))
+            eta = eta if eta > 0 else None  # run past its pace: no estimate
+        return [{"e": "plan", "done": k, "total": n, "title": short(on, 80), "eta": eta}]
+
+    def todos(self, todos):
+        """TodoWrite's (claude, opencode) todos: the active one by its present-tense form."""
+        return self.plan([(x.get("content") or "", x.get("status", ""), x.get("activeForm")) for x in todos or []
+                          if isinstance(x, dict) and x.get("status") != "cancelled"])  # opencode's: dropped work isn't left to do
 
     def think(self, s):
         return [{"e": "think", "delta": s}] if self.verbose and s else []
@@ -193,7 +281,7 @@ class Norm:
                 if self.musing is None:
                     self.musing = random.choice([p for p in THINKING if p != self.mused])
                     self.mused = self.musing
-                e["text"] = self.musing
+                e["text"], e["thinking"] = self.musing, True  # the app's byline says what it's really doing, not the phrase
             elif e["e"] in ("status", "step", "text", "text_reset", "done"):  # the status moved on (usage and bg don't show)
                 self.musing = None
         return evs
@@ -272,6 +360,8 @@ class Norm:
                     title, detail = step_title(c["name"], c.get("input", {}))
                     out.append(self.more({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))},
                                          input=full_input(c["name"], c.get("input", {}))))
+                    if c["name"] == "TodoWrite" and not d.get("parent_tool_use_id"):  # a subagent's list isn't the turn's plan
+                        out += self.todos(c.get("input", {}).get("todos"))
                 elif c.get("type") == "text":
                     self.text = c["text"]
         elif t == "user" and isinstance(d.get("message", {}).get("content"), list):
@@ -292,7 +382,7 @@ class Norm:
         t, it, out = d.get("type"), d.get("item", {}), []
         if t == "item.started" and it.get("type") == "command_execution":
             cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
-            out.append(self.more({"e": "step", "id": it["id"], "title": "Ran a shell command", "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
+            out.append(self.more({"e": "step", "id": it["id"], "title": cmd_title(cmd), "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
         elif t == "item.completed" and it.get("type") == "command_execution":
             out.append(self.more({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)},
                                  full=clip(it.get("aggregated_output"), tail=True)))
@@ -301,6 +391,21 @@ class Norm:
         elif t == "item.completed" and it.get("type") == "agent_message":
             self.text = it["text"]
             out += self.whole(it["text"])
+        elif it.get("type") == "todo_list" and t in ("item.started", "item.updated", "item.completed"):
+            out += self.plan([(x.get("text", ""), "completed" if x.get("completed") else "", None) for x in it.get("items") or [] if isinstance(x, dict)])
+        elif it.get("type") in ("mcp_tool_call", "web_search") and t in ("item.started", "item.completed"):
+            mcp = it["type"] == "mcp_tool_call"
+            title, detail = (it.get("tool", "tool").replace("_", " "), it.get("server", "")) if mcp else ("Searched the web", it.get("query", ""))
+            if t == "item.started":
+                out.append({"e": "step", "id": it.get("id"), "title": short(title, 80), "detail": short(detail)})
+            else:
+                res = it.get("error") or it.get("result") or ""
+                out.append({"e": "step_done", "id": it.get("id"), "ok": it.get("status") != "failed" and not it.get("error"),
+                            "out": short(res if isinstance(res, str) else json.dumps(res), 120)})
+        elif t == "item.completed" and it.get("type") == "file_change":
+            names = [os.path.basename(c.get("path", "")) for c in it.get("changes") or [] if isinstance(c, dict)]
+            out += [{"e": "step", "id": it.get("id"), "title": short("Edited " + (", ".join(names) or "files"), 80), "detail": ""},
+                    {"e": "step_done", "id": it.get("id"), "ok": it.get("status") != "failed", "out": ""}]
         elif t == "item.started":
             out.append({"e": "status", "text": it.get("type", "working").replace("_", " ").capitalize()})
         elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
@@ -322,6 +427,8 @@ class Norm:
             out += [self.more({"e": "step", "id": pt.get("id"), "title": short(st.get("title") or title, 80), "detail": short(detail)},
                               input=full_input(pt.get("tool", ""), st.get("input") or {})),
                     self.more({"e": "step_done", "id": pt.get("id"), "ok": st.get("status") == "completed", "out": short(res, 120)}, full=clip(res, tail=True))]
+            if pt.get("tool") == "todowrite":
+                out += self.todos((st.get("input") or {}).get("todos"))
         elif t == "text":
             self.text = pt.get("text", "")
             out += self.whole(self.text)
@@ -421,6 +528,11 @@ def run(cmd, engine, text, norm, check=False, guard=None):
     p.stdin.write(text)
     p.stdin.close()
     sid, done, private = None, False, set()
+    for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
+        emit(e="step_done", id=sid_, ok=False, out="interrupted")
+    if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
+        emit(e="plan", done=0, total=0, title="", eta=None)
+    norm.plan_t0, norm.plan_keys, norm.running = None, None, []
     hiding, needles = guard or watch_for_attachments()
     for line in p.stdout:
         try:
@@ -435,7 +547,7 @@ def run(cmd, engine, text, norm, check=False, guard=None):
             elif hiding and e["e"] == "step_done" and e.get("id") in private:
                 e["out"] = attach.HIDDEN
                 e.pop("full", None)
-            if hiding and e["e"] in ("step", "step_done"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+            if hiding and e["e"] in ("step", "step_done", "plan"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
                 attach.hide(DIR, e, needles)
         evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
         if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
