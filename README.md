@@ -4,6 +4,8 @@ An agent manager for coding-agent workspaces. Every workspace gets a **goal** ("
 
 It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**, a macOS menubar app with a dashboard, a chat with Greenlight, and replyable notifications. Greenlight opens in **the Pipe**: the terminal alone, dark. Its level pill, which names where it goes (the Pipe in dark copper, the Basement in amber), or ⌘B switches to **the Basement**, the same window with its sidebar, where the green light at the bottom right rides up to **Greenlight Center** (the dashboard and chat, light), whose terminal button rides back down. ⌘⇧G goes up, ⌘⇧T down.
 
+**Verbose activity** (Settings › Chat & voice, off by default) adds a live log above the chat's message box, and its newest lines under the live line in voice mode: Chief's every command in full with its output and thinking, each workspace agent's state, tool and last words, and every move Greenlight makes (a workspace's lifecycle step moving, the dashboard's Merge, Park, Run and Answer buttons). Off, the chat is the concise view and `chat.py` streams what it always has.
+
 ## Requirements
 
 - Python 3.10+ (stdlib only).
