@@ -2164,7 +2164,8 @@ func wsHandshake(host: String, path: String, key: String, nonce: String) -> Data
 func wsAccept(_ nonce: String) -> String { Data(Insecure.SHA1.hash(data: Data((nonce + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))).base64EncodedString() }
 /// A reply's head once it has all come in (nil before): status, headers by lowercase name, and the bytes after it.
 func wsReply(_ d: Data) -> (status: Int, headers: [String: String], rest: Data)? {
-    guard let r = d.range(of: Data("\r\n\r\n".utf8)), let head = String(data: d[..<r.lowerBound], encoding: .utf8) else { return nil }
+    guard let r = d.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+    let head = String(decoding: d[..<r.lowerBound], as: UTF8.self)  // never nil: a stray byte can't hide the status
     var lines = head.components(separatedBy: "\r\n"), h = [String: String]()
     let st = lines.removeFirst().split(separator: " ")
     for l in lines { if let c = l.firstIndex(of: ":") { h[l[..<c].lowercased()] = l[l.index(after: c)...].trimmingCharacters(in: .whitespaces) } }
@@ -2173,8 +2174,23 @@ func wsReply(_ d: Data) -> (status: Int, headers: [String: String], rest: Data)?
 /// Whether a refusal's body has all come in: by its length, the last chunk, or (neither) when the server closes.
 func wsBodyDone(_ h: [String: String], _ body: Data) -> Bool {
     if let n = h["content-length"].flatMap(Int.init) { return body.count >= n }
-    return h["transfer-encoding"]?.lowercased() == "chunked" && body.range(of: Data("0\r\n\r\n".utf8)) != nil
+    return h["transfer-encoding"]?.lowercased() == "chunked" && unchunk(body).done
 }
+/// A chunked body's data, and whether its last (zero) chunk has come.
+func unchunk(_ body: Data) -> (data: Data, done: Bool) {
+    var out = Data(), at = body.startIndex
+    while let eol = body[at...].range(of: Data("\r\n".utf8)),
+          let n = Int(String(decoding: body[at..<eol.lowerBound], as: UTF8.self).split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? "", radix: 16) {
+        if n == 0 { return (out, true) }
+        guard body.distance(from: eol.upperBound, to: body.endIndex) >= n + 2 else { break }
+        let end = body.index(eol.upperBound, offsetBy: n)
+        out += body[eol.upperBound..<end]
+        at = body.index(end, offsetBy: 2)
+    }
+    return (out, false)
+}
+/// A reply's body as sent: a chunked one without its chunk sizes (an error's JSON can span chunks).
+func httpBody(_ h: [String: String], _ body: Data) -> Data { h["transfer-encoding"]?.lowercased() == "chunked" ? unchunk(body).data : body }
 /// A refused upgrade's reason: OpenAI's error message, else an HTML page's title ("400 Bad Request" from Cloudflare).
 func liveRefusal(_ body: Data) -> String {
     let t = String(decoding: body, as: UTF8.self)
@@ -2261,7 +2277,7 @@ final class LiveVoice {
         let s = Sock(NWConnection(host: .init(e.host), port: .init(rawValue: e.port)!, using: e.tls ? NWParameters(tls: tls) : .tcp), key)
         q.sync { sock = s; pending = Data() }
         self.on = on
-        s.c.stateUpdateHandler = { [weak self] st in self?.state(s, st) }
+        s.c.stateUpdateHandler = { [weak self, weak s] st in if let s { self?.state(s, st) } }  // weak: the connection keeps its handler
         s.c.start(queue: q)
         send(liveStart(voice: voice, instructions: instructions))  // goes out once the upgrade is through
         q.asyncAfter(deadline: .now() + 10) { [weak self] in if let self, !s.up { self.end(s, s.waited.map { LiveVoice.why(0, "", $0) } ?? "didn't answer in time") } }
@@ -2269,6 +2285,7 @@ final class LiveVoice {
     private func state(_ s: Sock, _ st: NWConnection.State) {
         switch st {
         case .ready:
+            s.waited = nil  // it got through: a later timeout is the server's
             s.c.send(content: wsHandshake(host: LiveVoice.host, path: LiveVoice.path, key: s.key, nonce: s.nonce), completion: .contentProcessed { _ in })
             read(s)
         case .waiting(let e): s.waited = e  // Network retries from here (a path that's down, a refused connection); the deadline says why
@@ -2308,7 +2325,7 @@ final class LiveVoice {
     }
     private func refused(_ s: Sock, _ status: Int, _ h: [String: String]) {
         guard !s.dead else { return }
-        let m = liveRefusal(s.body)
+        let m = liveRefusal(httpBody(h, s.body))
         NSLog("GPT-Live: upgrade refused, HTTP %d, request %@: %@", status, h["x-request-id"] ?? "-", m)
         end(s, LiveVoice.why(status, m))
     }
@@ -2370,7 +2387,8 @@ final class LiveVoice {
     }
     /// Why the socket failed, in words: an HTTP status with the server's reason, or a network error.
     static func why(_ code: Int, _ detail: String = "", _ err: Error? = nil) -> String {
-        let more = detail.isEmpty ? "" : ": \(detail)"
+        let d = detail.hasPrefix("\(code) ") ? String(detail.dropFirst("\(code) ".count)) : detail  // Cloudflare's title has the code
+        let more = d.isEmpty ? "" : ": \(d)"
         switch code {
         case 401: return "refused the OpenAI key (401)"
         case 403, 404: return "isn't available to this OpenAI key's project (\(code)\(more)): it needs access to \(model)"
@@ -2381,6 +2399,7 @@ final class LiveVoice {
         if let e = err as? NWError {
             if case .posix(let c) = e, c == .ETIMEDOUT { return "didn't answer in time" }
             if case .dns = e { return "couldn't look up api.openai.com (\(e.localizedDescription)); is this Mac online?" }
+            if case .tls = e { return "couldn't make a secure connection to api.openai.com (\(e.localizedDescription)); a proxy or security tool may be intercepting it" }
             return "couldn't reach api.openai.com (\(e.localizedDescription)); a firewall like Little Snitch may be blocking it"
         }
         return err.map { "lost the connection (\($0.localizedDescription))" } ?? "lost the connection"
@@ -7566,8 +7585,8 @@ func selfTest() {
     sd.removePersistentDomain(forName: "greenlight-selftest-live")
     check("voice: GPT-Live's socket errors say what to fix", LiveVoice.why(401).contains("key")
           && LiveVoice.why(0, "", NWError.posix(.ECONNREFUSED)).contains("Little Snitch") && LiveVoice.why(429).contains("429")
-          && LiveVoice.why(0, "", NWError.posix(.ETIMEDOUT)) == "didn't answer in time" && LiveVoice.why(0, "", NWError.dns(-65554)).contains("online")
-          && LiveVoice.why(400, "Bad Request") == "refused the connection (400: Bad Request)")
+          && LiveVoice.why(0, "", NWError.posix(.ETIMEDOUT)) == "didn't answer in time" && LiveVoice.why(0, "", NWError.dns(-65554)).contains("online") && LiveVoice.why(0, "", NWError.tls(-9808)).contains("secure")
+          && LiveVoice.why(400, "Bad Request") == "refused the connection (400: Bad Request)" && LiveVoice.why(400, "400 Bad Request") == "refused the connection (400: Bad Request)")
     // The socket: HTTP/1.1 only (over HTTP/2, api.openai.com answers the upgrade with Cloudflare's 400 page), RFC 6455 framing
     let hs = String(decoding: wsHandshake(host: "api.openai.com", path: "/v1/live/sessions", key: "sk-test", nonce: "dGhlIHNhbXBsZSBub25jZQ=="), as: UTF8.self)
     check("voice: GPT-Live's socket upgrades over HTTP/1.1 (TLS offers nothing else), with the key as a bearer token",
@@ -7584,14 +7603,18 @@ func selfTest() {
           partial == nil && whole?.status == 400 && whole.map { wsBodyDone($0.headers, $0.rest) } == true && whole.map { liveRefusal($0.rest) } == "400 Bad Request"
           && liveRefusal(Data(k401.utf8)) == "Incorrect API key provided: sk-bogus." && !wsBodyDone(["transfer-encoding": "chunked"], Data("5\r\nhello\r\n".utf8))
           && wsBodyDone(["transfer-encoding": "chunked"], Data("5\r\nhello\r\n0\r\n\r\n".utf8))
+          && !wsBodyDone(["transfer-encoding": "chunked"], Data("10\r\n\r\n\r\n".utf8)) && unchunk(Data("10\r\n\r\n0\r\n\r\nabcdefghi\r\n0\r\n\r\n".utf8)) == (Data("\r\n0\r\n\r\nabcdefghi".utf8), true)
+          && wsReply(Data("HTTP/1.1 502 Bad".utf8) + Data([0xFF]) + Data(" Gateway\r\nX: \u{FF}\r\n\r\n".utf8))?.status == 502
+          && liveRefusal(httpBody(["transfer-encoding": "chunked"], Data("\(String(k401.utf8.count / 2, radix: 16))\r\n\(k401.prefix(k401.utf8.count / 2))\r\n\(String(k401.utf8.count - k401.utf8.count / 2, radix: 16))\r\n\(k401.dropFirst(k401.utf8.count / 2))\r\n0\r\n\r\n".utf8)))
+             == "Incorrect API key provided: sk-bogus."
           && up?.status == 101 && up?.headers["sec-websocket-accept"] == "x" && upFrames == [WSMessage.text(Data("{}".utf8))])
     do {
         let big = Data((0..<70_000).map { UInt8($0 & 0xFF) }), mid = Data(repeating: 7, count: 300)
         var bytes = wsFrame(0x1, Data("hi".utf8)) + wsFrame(0x2, mid) + wsFrame(0x1, big, mask: nil) + wsFrame(0x9, Data("p".utf8))
         bytes += wsFrame(0x1, Data("frag".utf8), fin: false) + wsFrame(0x0, Data("ment".utf8)) + wsFrame(0x8, Data([0x03, 0xE8]) + Data("bye".utf8))
         var r = WSReader(), got = [WSMessage]()
-        var i = 0
-        while i < bytes.count { let n = [1, 3, 7, 1000][i % 4]; got += r.feed(bytes.subdata(in: i..<min(bytes.count, i + n))); i += n }  // in odd pieces
+        var i = 0, k = 0
+        while i < bytes.count { let n = [1, 3, 7, 1000][k % 4]; k += 1; got += r.feed(bytes.subdata(in: i..<min(bytes.count, i + n))); i += n }  // in odd pieces
         let masked = wsFrame(0x1, Data("hi".utf8), mask: [1, 2, 3, 4])
         var over = WSReader(); _ = over.feed(Data([0x82, 127, 0, 0, 0, 0, 0x7F, 0xFF, 0xFF, 0xFF]))
         check("voice: WebSocket frames survive any split: 7-, 16- and 64-bit lengths, masked or not, fragments joined, pings, a close's code and reason",
@@ -7601,11 +7624,14 @@ func selfTest() {
     // the whole socket against a fake server on this Mac: the 400 page, a JSON 401, then an upgrade that sends events, a ping and a close
     do {
         final class Fake {
-            let l = try! NWListener(using: .tcp, on: .any), q = DispatchQueue(label: "fake")
+            let l: NWListener = { let p = NWParameters.tcp; p.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any); return try! NWListener(using: p) }()  // this Mac only: no firewall prompt
+            let q = DispatchQueue(label: "fake")
             var reply: (String) -> [Data] = { _ in [] }, requests = [String](), frames = [WSMessage]()
+            func set(_ r: @escaping (String) -> [Data]) { q.sync { reply = r } }
+            var seen: (requests: [String], frames: [WSMessage]) { q.sync { (requests, frames) } }
             init() { l.newConnectionHandler = { [unowned self] c in c.start(queue: self.q); self.serve(c, Data(), nil) }; l.start(queue: q) }
             func serve(_ c: NWConnection, _ buf: Data, _ r: WSReader?) {
-                c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [unowned self] d, _, done, _ in
+                c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [unowned self] d, _, done, err in
                     var buf = buf + (d ?? Data()), r = r
                     if r == nil, let h = buf.range(of: Data("\r\n\r\n".utf8)) {
                         let req = String(decoding: buf[..<h.upperBound], as: UTF8.self)
@@ -7614,7 +7640,7 @@ func selfTest() {
                         for (n, o) in out.enumerated() { self.q.asyncAfter(deadline: .now() + 0.05 * Double(n)) { c.send(content: o, completion: .contentProcessed { _ in }) } }
                     }
                     if var rr = r, !buf.isEmpty { self.frames += rr.feed(buf); buf = Data(); r = rr }
-                    if !done { self.serve(c, buf, r) }
+                    if done || err != nil { c.cancel() } else { self.serve(c, buf, r) }
                 }
             }
         }
@@ -7629,13 +7655,13 @@ func selfTest() {
             return evs
         }
         let closed = { (e: [LiveEvent]) in e.contains { if case .closed = $0 { return true }; return false } }
-        fake.reply = { _ in [cfReply.prefix(60), cfReply.dropFirst(60)] }  // in two pieces, the head split
+        fake.set { _ in [cfReply.prefix(60), cfReply.dropFirst(60)] }  // in two pieces, the head split
         let refused = session(closed)
-        fake.reply = { _ in [Data("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: \(k401.utf8.count)\r\n\r\n\(k401)".utf8)] }
+        fake.set { _ in [Data("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: \(k401.utf8.count)\r\n\r\n\(k401)".utf8)] }
         let badKey = session(closed)
         let audio = Data([1, 0, 2, 0]).base64EncodedString()
         let delta = wsFrame(0x1, Data(#"{"type":"session.output_audio.delta","delta":"\#(audio)"}"#.utf8), mask: nil)
-        fake.reply = { req in
+        fake.set { req in
             let n = req.components(separatedBy: "\r\n").first { $0.hasPrefix("Sec-WebSocket-Key: ") }.map { String($0.dropFirst(19)) } ?? ""
             return [Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(wsAccept(n))\r\n\r\n".utf8)
                     + wsFrame(0x1, Data(#"{"type":"session.started","session":{}}"#.utf8), mask: nil),  // in the 101's own packet
@@ -7643,14 +7669,15 @@ func selfTest() {
         }
         let opened = session(closed)
         RunLoop.main.run(until: Date() + 0.2)
-        let sent = fake.frames.compactMap { if case .text(let d) = $0 { return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] }; return nil }
+        let (requests, frames) = fake.seen
+        let sent = frames.compactMap { if case .text(let d) = $0 { return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] }; return nil }
         check("voice: GPT-Live's socket says why the server refused it: Cloudflare's 400 page (\(refused)), a bad key (\(badKey))",
-              refused == [.closed("refused the connection (400: 400 Bad Request)")] && badKey == [.closed("refused the OpenAI key (401)")])
-        check("voice: GPT-Live's socket upgrades over HTTP/1.1, sends session.start once it's up, reads split frames, answers a ping, ends on a close (\(opened), \(fake.requests.count) requests, sent \(sent.compactMap { $0["type"] }), got \(fake.frames.filter { if case .text = $0 { return false }; return true }))",
-              fake.requests.count == 3 && fake.requests.allSatisfy { $0.hasPrefix("GET /v1/live/sessions HTTP/1.1\r\n") && $0.contains("\r\nAuthorization: Bearer sk-test\r\n") }
+              refused == [.closed("refused the connection (400: Bad Request)")] && badKey == [.closed("refused the OpenAI key (401)")])
+        check("voice: GPT-Live's socket upgrades over HTTP/1.1, sends session.start once it's up, reads split frames, answers a ping, ends on a close (\(opened), \(requests.count) requests, sent \(sent.compactMap { $0["type"] }), got \(frames.filter { if case .text = $0 { return false }; return true }))",
+              requests.count == 3 && requests.allSatisfy { $0.hasPrefix("GET /v1/live/sessions HTTP/1.1\r\n") && $0.contains("\r\nAuthorization: Bearer sk-test\r\n") }
               && opened == [.started, .audio(Data([1, 0, 2, 0])), .closed("closed the connection")]
-              && sent.first?["type"] as? String == "session.start" && ((sent.first?["session"] as? [String: Any])?["audio"] as? [String: Any]).flatMap { ($0["output"] as? [String: Any])?["voice"] as? String } == "cedar"
-              && fake.frames.contains(.pong) && fake.frames.contains(.close(1000, "")))
+              && sent.count == 1 && sent.first?["type"] as? String == "session.start" && ((sent.first?["session"] as? [String: Any])?["audio"] as? [String: Any]).flatMap { ($0["output"] as? [String: Any])?["voice"] as? String } == "cedar"
+              && frames.contains(.pong) && frames.contains(.close(1000, "")))
         fake.l.cancel()
     }
     // Settings' voice preview: a session of its own that speaks first, played from the first speech to the quiet after it
