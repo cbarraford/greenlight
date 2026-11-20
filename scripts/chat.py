@@ -93,6 +93,7 @@ class Norm:
         self.reply = None  # what the turn ended on, when it ended well: a question if it closes with an Options line
         self.cmds = {}  # Bash tool_use id → command, so a background shell can be found and stopped
         self.shells = {}  # task_id → {id, title, cmd, started}
+        self.running = []  # (id, title) of steps started and not yet done, oldest first
         self.musing = None  # the phrase for the current stretch of thinking; None once anything else shows
         self.mused = None  # the last one, so the next stretch picks a different phrase
 
@@ -107,6 +108,23 @@ class Norm:
             elif e["e"] in ("status", "step", "text", "text_reset", "done"):  # the status moved on (usage and bg don't show)
                 self.musing = None
         return evs
+
+    def track(self, evs):
+        """Keep the status on what's happening now: a step's title only while it runs, then what comes next.
+        The app shows a step's title until another status arrives, so without this it stuck after the step ended."""
+        out = []
+        for e in evs:
+            out.append(e)
+            if e["e"] == "step":
+                self.running.append((e["id"], e["title"]))
+            elif e["e"] == "step_done":
+                self.running = [s for s in self.running if s[0] != e["id"]]
+                out.append({"e": "status", "text": self.running[-1][1] if self.running else "Thinking"})  # parallel steps: the newest still going
+            elif e["e"] == "text_reset":
+                out.append({"e": "status", "text": "Writing a reply"})
+            elif e["e"] == "done":
+                self.running = []
+        return out
 
     def usage(self, u):
         return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
@@ -266,7 +284,7 @@ def run(cmd, engine, text, norm, check=False):
         except ValueError:
             continue
         sid = d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
-        evs = norm.phrase(getattr(norm, engine)(d))
+        evs = norm.phrase(norm.track(getattr(norm, engine)(d)))  # track first, so its "Thinking" gets a phrase too
         if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
             try:
                 os.killpg(p.pid, signal.SIGTERM)
