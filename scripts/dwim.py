@@ -424,7 +424,9 @@ def apply(o):
         return {"ok": True, "done": [], "errors": []}
     live = [w for w, _ in dash.live_agents().values()]
     said = " ".join((o.get("text") or "").split())[:200]
-    undo = uuid.uuid4().hex[:12] if any(a["verb"] not in LAUNCH for a in acts) else None
+    requested_undo = o.get("undo")
+    undo = (requested_undo if isinstance(requested_undo, str) and re.fullmatch(r"[0-9a-f]{12}", requested_undo)
+            else uuid.uuid4().hex[:12]) if any(a["verb"] not in LAUNCH for a in acts) else None
     record = {"at": time.time(), "text": said, "edits": []}
     journal_lock = threading.Lock()
     journal = DWIM / "undo" / f"{undo}.json" if undo else None

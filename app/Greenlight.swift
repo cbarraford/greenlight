@@ -1027,6 +1027,10 @@ func dwimUndoReply(_ out: String, _ code: Int) -> [String: Any]? {
     if r["error"] is String { return r }
     return r["ok"] as? Bool == true && r["undone"] is [String] && r["kept"] is [String] ? r : nil
 }
+func dwimApplyReply(_ out: String, failure: String, recovery: String?) -> [String: Any] {
+    if let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] { return r }
+    return ["errors": [failure], "undo": recovery.map { $0 as Any } ?? NSNull()]
+}
 func dwimSkipped(_ plan: [String: Any]) -> String {
     let skipped = (plan["skipped"] as? [[String: String]] ?? []).compactMap { s -> String? in
         guard let name = s["ws"], let why = s["why"] else { return nil }
@@ -3823,9 +3827,12 @@ final class Core: ObservableObject {
 
     private func apply(_ o: [String: Any], text: String, id: UUID) {
         var out = ""
-        ssh("\(py)/dwim.py apply", stdin: dwimJSON(["text": text, "source": o["source"] ?? "chat", "actions": o["actions"] ?? []]), onLine: { out += $0 }, onExit: { [weak self] code in
+        let acts = o["actions"] as? [[String: Any]] ?? []
+        let recovery = acts.contains { ["park", "unpark", "hold", "release"].contains($0["verb"] as? String ?? "") }
+            ? UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased() : nil
+        ssh("\(py)/dwim.py apply", stdin: dwimJSON(["text": text, "source": o["source"] ?? "chat", "actions": acts, "undo": recovery ?? ""]), onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
-            let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["errors": ["\(host) didn't answer (exit \(code))"]]
+            let r = dwimApplyReply(out, failure: "\(host) didn't answer (exit \(code)); outcome unknown", recovery: recovery)
             let errs = r["errors"] as? [String] ?? [], done = r["done"] as? [String] ?? [], unchanged = r["unchanged"] as? [String] ?? [], undo = r["undo"] as? String
             let line = (done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))") + (done.isEmpty ? "" : dwimSkipped(o))
             if !done.isEmpty {
@@ -8688,6 +8695,8 @@ func selfTest() {
     check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
     check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil
           && dwimUndoReply(#"{"ok":true,"undone":["a"],"kept":[]}"#, 0) != nil)
+    check("dwim: lost apply reply retains a known Undo id", dwimApplyReply("", failure: "lost", recovery: "abc123abc123")["undo"] as? String == "abc123abc123"
+          && dwimApplyReply(#"{"undo":null,"errors":["can't record Undo"]}"#, failure: "lost", recovery: "abc123abc123")["undo"] is NSNull)
     check("dwim: mixed bulk notice names skipped targets", dwimSkipped(["skipped": [["ws": "billing", "why": "agent working"]]]) == " Skipped billing: agent working.")
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
