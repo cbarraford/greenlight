@@ -3541,7 +3541,7 @@ final class Core: ObservableObject {
         msgs.append(Msg(.note, message))
         notify(title: name, body: message, subtitle: nil, reply: false, id: "expired:\(about)")
     }
-    func reply(to about: String, _ text: String, questionID: UUID? = nil) {
+    func reply(to about: String, _ text: String, questionID: UUID? = nil, freeform: Bool = false) {
         if let questionID {
             guard let q = notificationQuestion(about, id: questionID) else {
                 expiredNotification(about)
@@ -3551,13 +3551,12 @@ final class Core: ObservableObject {
             answer(q, text)
             return
         }
-        let oldPing = questions.contains { $0.ping && $0.text == about && $0.answer != nil }
-        if oldPing || (notificationQuestion(about) == nil && questions.contains { $0.ping && $0.text == about }) {
-            expiredNotification(about)  // a banner from before question IDs were included
+        guard freeform else {  // older banners have no reliable ping identity, so answer from the current bell instead
+            expiredNotification(about)
             return
         }
         unread = max(0, unread - 1)
-        if let q = notificationQuestion(about) { answer(q, text) }
+        if let q = waiting.first(where: { !$0.ping && $0.text == about }) { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
 
@@ -3979,7 +3978,7 @@ final class Core: ObservableObject {
         }
         if !popoverShown() && !r.stopping {
             missed += 1
-            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
     }
@@ -4043,7 +4042,7 @@ final class Core: ObservableObject {
     }
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
-    func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil, questionID: UUID? = nil) {
+    func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil, questionID: UUID? = nil, freeform: Bool = false) {
         if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
         let c = UNMutableNotificationContent()
         c.title = title
@@ -4053,6 +4052,7 @@ final class Core: ObservableObject {
         if reply && session == 0 { c.categoryIdentifier = "greenlight" }  // a banner reply goes to the main chat: a second window's has none
         var info: [String: Any] = ["text": body]
         if let questionID { info["questionID"] = questionID.uuidString }
+        if freeform { info["freeform"] = true }
         c.userInfo = info
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id ?? UUID().uuidString, content: c, trigger: nil))
     }
@@ -8820,7 +8820,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if let t = r as? UNTextInputNotificationResponse, !t.userText.isEmpty {
                 let info = r.notification.request.content.userInfo
                 let qid = (info["questionID"] as? String).flatMap { UUID(uuidString: $0) }
-                self.greenlight.reply(to: info["text"] as? String ?? "", t.userText, questionID: qid)
+                self.greenlight.reply(to: info["text"] as? String ?? "", t.userText, questionID: qid,
+                                      freeform: info["freeform"] as? Bool ?? false)
             } else {
                 self.greenlight.inboxOpen = !self.greenlight.waiting.isEmpty
                 self.show()
@@ -9710,6 +9711,8 @@ func selfTest() {
             c.reply(to: "ws-f: choose?", "stale choice", questionID: UUID())
             check("an expired banner reply never reaches the agent", c.run == nil && c.msgs.count == beforeExpired + 1
                   && c.msgs.last?.text.contains("no longer open") == true && c.unread == unreadBeforeExpired)
+            c.reply(to: "ws-f: choose?", "legacy choice")
+            check("a legacy banner without an ID is rejected", c.run == nil && c.msgs.last?.text.contains("no longer open") == true)
             c.answer(chatQuestion, "(dismissed)", send: false)
             c.answer(pingQuestion, "(dismissed)", send: false)
             c.ping(#"{"text": "ws-c: delete it?", "key": "ws-c"}"#)
@@ -9754,7 +9757,8 @@ func selfTest() {
         check("rename saved: \(d.string(forKey: "name") ?? "-")", onMain { c.name == "Jarvis" && !c.editingName } && d.string(forKey: "name") == "Jarvis")
         onMain {
             c.ping(#"{"text": "MR !4321 needs your review"}"#)
-            c.reply(to: "MR !4321 needs your review", "Which MR number was that about, and what is your name? One line.")
+            c.reply(to: "MR !4321 needs your review", "Which MR number was that about, and what is your name? One line.",
+                    questionID: c.waiting.first { $0.text == "MR !4321 needs your review" }?.id)
             check("banner reply answers the ping in the inbox", c.waiting.isEmpty)
         }
         wait("notification reply", 120) { c.run == nil }
