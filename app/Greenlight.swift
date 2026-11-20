@@ -947,7 +947,7 @@ Domino-toppling Jigsawing
 """.split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
 
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
-enum VoiceCmd: Equatable { case bye, stop, captions(Bool), reset, undo }
+enum VoiceCmd: Equatable { case bye, stop, cancel, captions(Bool), reset, undo }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z0-9' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
@@ -956,7 +956,8 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
     case "that's all", "thats all", "that is all", "that's it", "thats it", "i'm done", "im done", "we're done", "were done", "stop listening",
          "goodbye", "good bye", "bye", "bye bye", "see you", "see ya", "see you later", "later", "talk to you later", "talk later", "catch you later",
          "good night", "goodnight", "end voice mode", "exit voice mode", "turn off voice mode", "voice off": return .bye
-    case "stop", "never mind", "nevermind", "cancel", "stop that": return .stop
+    case "stop", "stop that": return .stop
+    case "never mind", "nevermind", "cancel": return .cancel
     case "reset", "reset context", "reset the context", "reset the chat", "clear", "clear context", "clear the context", "clear the chat",
          "start over", "start fresh", "fresh start", "new chat", "new conversation", "forget everything", "wipe it": return .reset
     case "undo", "undo that", "undo it", "take that back", "put it back", "put them back": return .undo
@@ -964,6 +965,9 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
     case "captions off", "turn off captions", "hide captions": return .captions(false)
     default: return nil
     }
+}
+func voiceStopsPending(_ cmd: VoiceCmd, chiefRunning: Bool, pending: Bool) -> Bool {
+    pending && (cmd == .cancel || !chiefRunning)
 }
 
 /// While Chief speaks: you cutting in, not its own voice leaking back? 3+ of your latest words, mostly not ones it just said.
@@ -2107,9 +2111,10 @@ final class Voice: NSObject, ObservableObject {
         switch cmd {
         case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
         case .undo: if let t = core?.latestUndoableToast { core?.undoToast(t.id) } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
-        case .stop: core?.cancelPlans()  // a plan may be pending while Chief has a different turn running
+        case .stop, .cancel: core?.cancelPlans()  // a plan may be pending while Chief has a different turn running
+            if voiceStopsPending(cmd, chiefRunning: core?.run != nil, pending: core?.toasts.contains(where: { $0.pending }) == true),
+               let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }
             if core?.run != nil { hush(); core?.stop(); return }
-            if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
@@ -8684,6 +8689,10 @@ func selfTest() {
           && dwimCandidate("fix for CI #42") && dwimCandidate("put #42 on ice")
           && !dwimCandidate("what's on fire?") && !dwimCandidate("merge #42") && !dwimCandidate("parking lot ideas") && !dwimCandidate("")
           && !dwimCandidate("park\nthe auth ones") && voiceCommand("Undo that.") == .undo && voiceCommand("undo #42") == nil && voiceCommand("cancel #42") == nil && voiceCommand("undo the deploy") == nil)
+    check("voice: cancel chooses a pending launch even while Chief runs", voiceCommand("cancel") == .cancel
+          && voiceStopsPending(.cancel, chiefRunning: true, pending: true)
+          && !voiceStopsPending(.stop, chiefRunning: true, pending: true)
+          && voiceStopsPending(.stop, chiefRunning: false, pending: true))
     check("dwim: snapshot facts trimmed for dwim.py", dwimPucks([["name": "a", "page": ["big": 1], "agent": ["state": "working", "last": "x"]]]).first.map {
         $0["page"] == nil && ($0["agent"] as? [String: String]) == ["state": "working"] && $0["name"] as? String == "a" } == true)
     check("dwim: scope excludes other projects", dwimScopedPucks([["name": "a", "path": "/a", "repo": "A"], ["name": "b", "path": "/b", "repo": "B"]], #"{"paths":["/a"],"repos":["A"]}"#).count == 1)
