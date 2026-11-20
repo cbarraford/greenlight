@@ -526,9 +526,10 @@ struct Attached: Identifiable {
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), a [stage: full|normal]
 /// size directive, and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var size: String? }
+struct Staged: Equatable { var text: String; var stage: String?; var size: String?; var end = false }
 func staged(_ s: String) -> Staged {
-    var text = s, stage: String?, size: String?
+    var text = s, stage: String?, size: String?, end = false
+    if let r = text.range(of: #"\[voice: ?off\]"#, options: [.regularExpression, .caseInsensitive]) { end = true; text.removeSubrange(r) }  // Chief ends voice mode
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) {
         size = text[r].lowercased().contains("full") ? "full" : "normal"
         text.removeSubrange(r)
@@ -539,7 +540,7 @@ func staged(_ s: String) -> Staged {
             text.removeSubrange(open.lowerBound..<close.upperBound)
         } else { text = String(text[..<open.lowerBound]) }
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size)
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size, end: end)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -651,7 +652,8 @@ let voiceNote = "(Voice mode: the user is talking to you out loud, and your repl
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
     + "either plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
     + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). To make the stage fill the screen, or bring it back, add a line "
-    + "[stage: full] or [stage: normal].)\n"
+    + "[stage: full] or [stage: normal]. When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
+    + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
 
 /// The waveforms' levels, apart from Voice so 40 updates a second redraw only the bars.
 final class Meter: ObservableObject {
@@ -740,6 +742,7 @@ final class Voice: NSObject, ObservableObject {
     let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
     var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
     var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
@@ -870,7 +873,7 @@ final class Voice: NSObject, ObservableObject {
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false
+        said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
         guard on else { return }
         wait("One minute", r.question)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -896,6 +899,7 @@ final class Voice: NSObject, ObservableObject {
         let p = plain(body) + "\n"
         sentences(p, from: min(said, p.count)).said.forEach(say)
         said = 0
+        if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
         if !chiefDrew { draw(plain(body), last: true) }
     }
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
@@ -951,7 +955,7 @@ final class Voice: NSObject, ObservableObject {
                 guard self.gen == g else { return }
                 self.speaking = max(0, self.speaking - 1)
                 if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
-                if self.speaking == 0 && self.lines.isEmpty && self.on { self.listen() }  // Chief's echo is in that request
+                if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
             }}
             if !self.player.isPlaying && self.engine.isRunning { self.player.play() }  // play() raises on a stopped engine
         }
@@ -973,7 +977,7 @@ final class Voice: NSObject, ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.mainMixerNode.removeTap(onBus: 0)
         if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
-        on = false; full = false; transcript = false
+        on = false; full = false; transcript = false; ending = false
         heard = ""; caption = ""
         meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
     }
@@ -4951,6 +4955,7 @@ func selfTest() {
     let w0 = newNeeds(nil, [["name": "a", "state": "needs", "why": "x"]]), w1 = newNeeds(w0.now, [["name": "a", "state": "needs"], ["name": "b", "state": "needs", "why": "ci"], ["name": "c", "state": "working"]])
     check("watch: launch isn't news, a newly-needing workspace is", w0.new.isEmpty && w1.new == ["b": "ci"] && w1.now.count == 2)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
+    check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, size: nil, end: true))
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>", size: "full") && open.text == "Here." && open.stage == nil)
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
