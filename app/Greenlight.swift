@@ -3744,6 +3744,7 @@ final class Core: ObservableObject {
     var launchWorks: [UUID: DispatchWorkItem] = [:]  // each accepted launch keeps its own grace and Undo
     var toasted: ((DwimToast?) -> Void)?  // the ⌘J palette's window shows the toast too, with its own Undo
     var toastListeners: [UUID: (DwimToast?) -> Void] = [:]
+    var toastExpiry = [UUID: UUID]()
     var plans = DwimPlans()
     func cancelPlans() {
         for text in plans.cancel() { msgs.append(Msg(.you, text)); msgs.append(Msg(.note, "Cancelled before applying.")) }
@@ -3819,7 +3820,7 @@ final class Core: ObservableObject {
             let r = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["errors": ["\(host) didn't answer (exit \(code))"]]
             let errs = r["errors"] as? [String] ?? [], done = r["done"] as? [String] ?? [], unchanged = r["unchanged"] as? [String] ?? [], undo = r["undo"] as? String
             let line = done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))"
-            if !done.isEmpty && errs.isEmpty {
+            if !done.isEmpty {
                 self.msgs.append(Msg(.note, line))
                 if self.voice.on {
                     self.voice.say(line)
@@ -3835,7 +3836,7 @@ final class Core: ObservableObject {
             self.log(.greenlight, "dwim", errs.isEmpty ? .action : .failed, "applied in \(r["ms"] ?? "?") ms" + (errs.isEmpty ? "" : ": " + errs.joined(separator: "; ")))
             guard var t = self.toasts.first(where: { $0.id == id }) else { return }
             t.undo = undo; t.failed = !errs.isEmpty; t.applying = false
-            t.text = errs.isEmpty ? line : "Didn't finish: \(errs.joined(separator: "; "))"
+            t.text = errs.isEmpty ? line : done.isEmpty ? "Didn't finish: \(errs.joined(separator: "; "))" : "\(line) · \(errs.count) failed"
             if t.undoing && undo != nil { t.undoing = false; self.show(t, for: nil); return self.undoToast(id) }  // Undo was pressed before the apply came back
             t.undoing = false
             self.show(t, for: Core.toastFor)
@@ -3846,11 +3847,14 @@ final class Core: ObservableObject {
         if !toasts.contains(where: { $0.id == t.id }), let toasted { toastListeners[t.id] = toasted }
         toasts = keepingToast(toasts, t)
         toastListeners[t.id]?(t)
+        let expiry = UUID(); toastExpiry[t.id] = expiry  // an update without a timer invalidates the old one too
         guard let secs else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in self?.removeToast(t.id) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in
+            if self?.toastExpiry[t.id] == expiry { self?.removeToast(t.id) }
+        }
     }
 
-    private func removeToast(_ id: UUID) { toasts.removeAll { $0.id == id }; toastListeners.removeValue(forKey: id) }
+    private func removeToast(_ id: UUID) { toasts.removeAll { $0.id == id }; toastListeners.removeValue(forKey: id); toastExpiry.removeValue(forKey: id) }
 
     /// The toast's Undo (and "undo" said in voice mode): cancels a launch still in its grace, or puts the edited goals back.
     func undoToast(_ id: UUID? = nil) {

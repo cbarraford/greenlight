@@ -53,6 +53,7 @@ assert plan("park this")["route"] == "chief"  # nowhere to point "this"
 assert plan("rebase the 45 one", [puck("mr-45", 7, conflicts=True, moves=["conflicts"]), puck("mr-46", 8)])["route"] == "chief"  # 45 is a count-sized number
 assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflicts=True, moves=["conflicts"]), puck("mr-5108", 8)])["actions"]] == ["mr-5107"]
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
+assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
 assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
 
@@ -159,6 +160,17 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert dwim.undo(r["undo"])["kept"] == ["search"] and goals["id3"] != multiline
     assert dwim._goal_after("unpark", multiline + " (parked)") == multiline
     goals["id3"] = "Search box"
+    with mock.patch.object(dwim, "_write_undo", side_effect=OSError("disk full")):
+        r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
+    assert not r["ok"] and goals["id3"] == "Search box" and "can't record Undo" in r["errors"][0]
+    def journaled_orca(*a, **k):
+        if a[3] == "id:id3":
+            records = [json.loads(f.read_text()) for f in (dwim.DWIM / "undo").glob("*.json")]
+            assert any(any(e["after"] == a[5] for e in rec["edits"]) for rec in records)  # durable before Orca changes it
+        return orca(*a, **k)
+    with mock.patch.object(gl, "orca", side_effect=journaled_orca):
+        r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
+    assert r["ok"] and dwim.undo(r["undo"])["undone"] == ["search"]
     def slow_orca(*a, **k):
         time.sleep(.03)
         return orca(*a, **k)
@@ -185,6 +197,8 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     dupes["d1"][0]["linkedPR"] = 99
     with mock.patch.object(dash, "live_agents", return_value=dupes):
         assert dwim.apply({"actions": [action]})["errors"] == ["duplicate: workspace or MR changed since planning"]
+    with mock.patch.object(dash, "live_agents", return_value=dupes), mock.patch.object(dash, "snapshot", side_effect=FileNotFoundError):
+        assert dwim.apply({"actions": [{"verb": "hold", "ws": "duplicate", "path": "/one"}]})["done"] == ["duplicate"]
 log = [json.loads(l) for l in (Path(os.environ["GREENLIGHT_HOME"]) / "dwim" / "log.jsonl").read_text().splitlines()]
 assert {"apply", "undo"} <= {e["op"] for e in log}
 
@@ -198,6 +212,11 @@ c = dwim.stage({"text": "which CI status for auth-login?", "pucks": B2})
 assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-login"], c
 c = dwim.stage({"text": "which ones are red", "pucks": B2})
 assert c["kind"] == "table" and c["rows"] == [["auth-login", "#42", "failed", "CI failed on #42."]] and c["tones"] == ["bad"], c
+c = dwim.stage({"text": "which ones are waiting?", "pucks": B2})
+assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-tokens"], c
+c = dwim.stage({"text": "show all workspaces", "pucks": [puck(f"work-{i}", i) for i in range(1, 13)]})
+assert c["kind"] == "table" and c["title"] == "10 of 12 workspaces", c
+assert dwim.stage({"text": "show diff for auth-login", "pucks": [puck("auth-login", 42, path="/not/a/repo")], "focus": "auth-login"})["kind"] is None
 assert dwim.stage({"text": "tell me a joke", "pucks": B2})["kind"] is None
 assert dwim.stage({"text": "how's it going", "pucks": B2, "focus": "auth-login"})["kind"] == "lifecycle"  # "it" is the window you're in
 with mock.patch.dict(sys.modules, dash=types.SimpleNamespace(history=lambda n: [{"ts": "2026-11-20 14:02", "text": "parked from voice"}])):
