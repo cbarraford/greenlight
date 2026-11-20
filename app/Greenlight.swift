@@ -407,6 +407,7 @@ final class Run: ObservableObject {
     @Published var steps: [Step] = []
     @Published var live = ""
     @Published var stopping = false
+    @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
     var gotDone = false, checkIn = false, watch = false
     init(_ q: String) { question = q }
 }
@@ -1693,6 +1694,8 @@ final class Core: ObservableObject {
     @Published var context = UserDefaults.standard.integer(forKey: "context") { didSet { UserDefaults.standard.set(context, forKey: "context") } }
     @Published var window = UserDefaults.standard.integer(forKey: "window") { didSet { UserDefaults.standard.set(window, forKey: "window") } }
     @Published var tps = 0.0
+    @Published var outTok = 0  // this run's output tokens, for the live line
+    @Published var liveLine = ud.object(forKey: "liveLine") as? Bool ?? true { didSet { ud.set(liveLine, forKey: "liveLine") } }
     @Published var lastTps = 0.0
     @Published var connected = false
     @Published var unread = 0
@@ -2060,7 +2063,7 @@ final class Core: ObservableObject {
 
     private func start(_ r: Run, _ remote: String, stdin: String) {
         run = r
-        tps = 0
+        tps = 0; outTok = 0
         if !r.watch && !r.checkIn { voice.began(r) }
         proc = ssh(remote, stdin: stdin, onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
@@ -2077,7 +2080,7 @@ final class Core: ObservableObject {
         case "status": if !r.stopping { r.status = j["text"] as? String ?? r.status; voice.status(r.status) }
         case "step":
             let s = Step(id: j["id"] as? String ?? UUID().uuidString, title: j["title"] as? String ?? "", detail: j["detail"] as? String ?? "")
-            r.steps.append(s)
+            r.steps.append(s); r.call = j["call"] as? String ?? ""
             if !r.stopping { r.status = s.title; voice.status(s.title) }
         case "step_done":
             if let i = r.steps.firstIndex(where: { $0.id == j["id"] as? String }) {
@@ -2090,6 +2093,7 @@ final class Core: ObservableObject {
         case "usage":
             if let c = j["context"] as? Int, c > 0 { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }
+            if let o = j["out"] as? Int { outTok = o }
         case "done":
             r.gotDone = true
             if let c = j["context"] as? Int, c > 0 { context = c }
@@ -2261,7 +2265,23 @@ struct RunCard: View, Looked {
                 }
             })
             if !r.live.isEmpty { liveText.padding(.top, lk.id == "onair" ? Theme.sp4 : 0) }
+            if c.liveLine { activity }
         }
+    }
+    /// Claude Code's live line, under the reply in every look: the running call, then the spinner with time, tokens and speed.
+    /// ponytail: no live shell output; claude's stream only sends a tool's elapsed seconds while it runs.
+    var activity: some View {
+        let t = max(0, c.now.timeIntervalSince(r.start)), cur = r.steps.last.flatMap { $0.ok == nil ? $0 : nil }
+        let w = r.stopping ? "Stopping…" : c.voice.waitWord.hasSuffix("…") ? c.voice.waitWord : c.voice.waitWord + "…"
+        let bits = [fmt(t), c.outTok > 0 ? "↓ \(kfmt(c.outTok)) tokens" : nil, c.tps > 0 ? "\(Int(c.tps)) tok/s" : nil,
+                    r.status == "Thinking" ? "thinking" : nil].compactMap { $0 }.joined(separator: " · ")
+        return VStack(alignment: .leading, spacing: 2) {
+            if let s = cur {
+                Text("\(Text("⏺ ").foregroundColor(accent))\(r.call.isEmpty ? s.title : r.call)").foregroundColor(fg).lineLimit(1).truncationMode(.middle)
+                Text("  ⎿  Running… \(fmt(c.now.timeIntervalSince(s.start)))").foregroundColor(dim)
+            }
+            Text("\(Text(["·", "✢", "✳", "✶", "✻", "✽"][Int(t) % 6] + " ").foregroundColor(accent))\(Text(w).foregroundColor(fg)) \(Text("(\(bits))").foregroundColor(dim))").lineLimit(1)
+        }.font(sys(size: Theme.fs2, design: .monospaced)).textSelection(.enabled).accessibilityElement(children: .combine)
     }
     var state: String { r.stopping ? "stopping" : "working" }
     /// Chrome in the look's face: mono for Phosphor.
@@ -3364,6 +3384,7 @@ struct SettingsView: View {
                 Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
             }
             row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+            toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
         }
         let status = engineStatus, ready = !status.hasPrefix("Not ready")
         box("Dictation") {
@@ -6265,6 +6286,7 @@ func selfTest() {
         onMain { c.send("Run this exact bash command: python3 -c \"import time; time.sleep(60)\" then say finished.") }
         wait("a live step", 90) { !(c.run?.steps.isEmpty ?? true) }
         check("live step while working: \(onMain { c.run?.steps.first?.title ?? "-" })", onMain { c.run != nil })
+        check("live line names the call: \(onMain { c.run?.call ?? "-" })", onMain { c.run?.call.contains("(") ?? false })
         onMain { c.stop() }
         wait("stop", 30) { c.run == nil }
         check("Stop ends the turn as \"Stopped.\"", onMain { c.msgs.last?.text == "Stopped." && c.msgs.last?.failed == true })
