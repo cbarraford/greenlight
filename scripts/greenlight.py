@@ -180,7 +180,7 @@ OFFER_RE = re.compile(  # the chat's question offered a change, not an answer th
     rf"\b(?:i|me|we|us)\b{S}*?{OFFER_VERB}{S}*\?|\bwant (?:a|an|me to|us to|it|this|that|one)\b{S}*\?"  # "can I add a meter?"
     rf"|\b(?:i can|i could|i'll|i will|let me|happy to)\s+(?:\S+\s+){{0,2}}?{OFFER_VERB}"  # "I can add a meter."
     rf"|^[ \t]*(?:[-*•]|\d+[.)])\s+(?:\*\*|__)?{OFFER_VERB}"  # "1. **Add a cost meter**: $2/mo", not a breakdown row:
-    rf"(?!(?:[ \t]+\w+)?[ \t]*:)(?!(?:[ \t]+\w+){{0,2}}[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
+    rf"(?!(?:[ \t]+\w+)?(?:\*\*|__)?[ \t]*:)(?!(?:[ \t]+(?!(?:{DET})\b)\w+){{0,2}}(?:\*\*|__)?[ \t]*[$€£])"  # "- Agent runs: $3", "- Test runs cost $3"
     rf"|^`?options:[^\n]*{OFFER_VERB}|{OFFER_VERB}[^\n]*\n`?options:", re.I | re.M)  # "Add a meter?\nOptions: …"
 AGREE_RE = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please do|go for it|sounds good)\b", re.I)  # in an answer: "sure" agrees to a change
 READ_ONLY_REFUSAL = ("refused: this request only asks a question (status, research, a billing lookup, an inspection), so "
