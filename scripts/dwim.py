@@ -72,7 +72,7 @@ DESTRUCTIVE = re.compile(r"\b(?:merge[sd]?|merging|close[sd]?|closing|delete[sd]
                          r"abandon(?:ed)?|force|reset|revert(?:ed)?|wipe|discard|deploy(?:ed)?|ship|approve[sd]?|undraft|ready|push|"
                          r"cancel(?:led)?|stop|restart|rename|retarget|squash|cherry-?pick)\b", re.I)
 REASONING = re.compile(r"\?\s*$|^\s*(?:why|what|how|which|who|when|where|should|could|would|can|is|are|does|do you|tell|explain|"
-                       r"show|summari[sz]e|compare|list)\b|\b(?:if|unless|until|after|before|once|then|instead|because|except|but|or)\b", re.I)
+                       r"show|summari[sz]e|compare|list)\b|\b(?:if|when|unless|until|after|before|once|then|instead|because|except|but|or)\b", re.I)
 NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop|not)\b(?! merge)", re.I)
 REQUEST_PREFIX = re.compile(r"^\s*(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you\b|please\b|go ahead and\b|let'?s\b)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
@@ -253,8 +253,7 @@ def structural(g, pucks, focus):
     if g["here"]:
         pool = [p for p in pool if p.get("name") == focus]
     for f in g["filters"]:
-        if f != "parked" or verb != "unpark":
-            pool = [p for p in pool if FILTERS[f][1](p)]
+        pool = [p for p in pool if FILTERS[f][1](p)]
     if (g["names"] or g["here"]) and len({p.get("name") for p in pool}) < len(pool):
         return None, "that workspace name is used in more than one repo"
     if not (g["names"] or g["refs"] or g["here"] or g["filters"] or g["tokens"]):
@@ -609,11 +608,12 @@ def _named(text, pucks, focus):
 
 
 def card_table(text, pucks, one):
-    rows = [p for p in pucks if not p.get("hidden")]
+    show_parked = bool(FILTERS["parked"][0].search(text))
+    rows = [p for p in pucks if show_parked or not p.get("hidden")]
     named = [p for p in pucks if len(p.get("name", "")) >= 3 and re.search(rf"(?<![\w-]){re.escape(p['name'])}(?![\w-])", text, re.I)]
     refs = [int(m) for m in REF_RE.findall(text)]
     if named:
-        rows = [p for p in named if not p.get("hidden")]
+        rows = [p for p in named if show_parked or not p.get("hidden")]
     elif refs:
         rows = [p for p in rows if (p.get("mr") or {}).get("iid") in refs]
     elif one:

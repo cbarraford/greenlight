@@ -2103,8 +2103,9 @@ final class Voice: NSObject, ObservableObject {
         switch cmd {
         case .bye: if core?.run == nil { core?.queue.removeAll { $0.spoken } }; stopAll()  // a turn still waiting on its file doesn't go
         case .undo: if let t = core?.latestUndoableToast { core?.undoToast(t.id) } else { core?.spoken("undo") }  // nothing of ours to undo: Chief's
-        case .stop: if core?.run != nil { hush(); core?.stop(); return }
-            core?.cancelPlans(); if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
+        case .stop: core?.cancelPlans()  // a plan may be pending while Chief has a different turn running
+            if core?.run != nil { hush(); core?.stop(); return }
+            if let pending = core?.toasts.last(where: { $0.pending }) { return core!.undoToast(pending.id) }  // "cancel" during a launch's grace: that launch
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()

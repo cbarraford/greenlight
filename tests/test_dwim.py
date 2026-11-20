@@ -46,6 +46,9 @@ assert r["route"] == "direct" and not r["actions"] and "edit the goal" in r["say
 assert plan("release billing")["route"] == "chief"  # a bare "release" could mean ship it
 assert plan("lift the hold on billing", [puck("billing", 44, goal="Billing page (hold)")])["actions"][0]["verb"] == "release"
 assert plan("unpark old-thing")["actions"][0]["ws"] == "old-thing"
+parked = [puck("sleeping-a", 47, goal="A (parked)", hidden=True), puck("sleeping-b", 48, goal="B (parked)", hidden=True), puck("active", 49, goal="Active")]
+assert [a["ws"] for a in plan("unpark the two parked ones", parked)["actions"]] == ["sleeping-a", "sleeping-b"]
+assert [a["ws"] for a in plan("unpark the parked ones", parked)["actions"]] == ["sleeping-a", "sleeping-b"]
 assert plan("park old-thing")["route"] == "chief"  # a parked one is off the board for everything but unpark
 assert plan("rebase search")["actions"][0]["prompt"] == "conflicts prompt for search"
 assert plan("fix the merge conflicts on search")["actions"][0]["verb"] == "rebase"  # "merge conflicts" isn't a merge
@@ -56,6 +59,7 @@ assert [a["ws"] for a in plan("rebase the 5107 one", [puck("mr-5107", 7, conflic
 assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"  # don't park only the name that matched
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
+assert plan("hold #42 when CI fails", [puck("auth-login", 42, goal="CI fails when tests run")])["route"] == "chief"
 assert plan("hold #42 not #43")["route"] == "chief"  # don't treat an excluded target as another action
 assert [a["ws"] for a in plan("hold the api ones", [puck("api-server", 42), puck("capital-forecast", 43)])["actions"]] == ["api-server"]
 assert plan("hold this", [puck("same", 42, path="/one"), puck("same", 43, path="/two")], focus="same")["route"] == "chief"
@@ -239,6 +243,10 @@ c = dwim.stage({"text": "which ones are red", "pucks": B2})
 assert c["kind"] == "table" and c["rows"] == [["auth-login", "#42", "failed", "CI failed on #42."]] and c["tones"] == ["bad"], c
 c = dwim.stage({"text": "which ones are waiting?", "pucks": B2})
 assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-tokens"], c
+c = dwim.stage({"text": "Which workspaces are parked?", "pucks": parked})
+assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["sleeping-a", "sleeping-b"], c
+c = dwim.stage({"text": "Which parked sleeping-a workspace?", "pucks": parked})
+assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["sleeping-a"], c
 c = dwim.stage({"text": "show all workspaces", "pucks": [puck(f"work-{i}", i) for i in range(1, 13)]})
 assert c["kind"] == "table" and c["title"] == "10 of 12 workspaces", c
 assert dwim.stage({"text": "show diff for auth-login", "pucks": [puck("auth-login", 42, path="/not/a/repo")], "focus": "auth-login"})["kind"] is None
