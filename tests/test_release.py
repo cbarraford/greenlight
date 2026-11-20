@@ -11,7 +11,7 @@ if not f.exists():
     print(f"test_release skipped: no {f}")
     raise SystemExit(0)
 LEAK = re.compile("|".join(x for x in f.read_text().splitlines() if x.strip()), re.I)
-SKIP = {".git", "memory", "node_modules", "__pycache__", "vendor"}  # memory/: gitignored, owner-only
+SKIP = {".git", ".claude", "memory", "node_modules", "__pycache__", "vendor"}  # memory/: gitignored, owner-only; .claude/: local Claude Code state (worktrees), untracked
 root = Path(__file__).resolve().parents[1]
 hits = []
 for d, dirs, files in os.walk(root):

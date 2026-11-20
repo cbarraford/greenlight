@@ -527,7 +527,7 @@ struct Attached: Identifiable {
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), a [stage: full|normal]
 /// size directive, and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var size: String?; var end = false; var hexes: [String]? = nil }
+struct Staged: Equatable { var text: String; var stage: String?; var size: String?; var end = false; var hexes: [String]? = nil; var reset = false }
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, size: String?, end = false, hexes: [String]?
     if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
@@ -536,6 +536,7 @@ func staged(_ s: String) -> Staged {
         text.removeSubrange(r)
     }
     if let r = text.range(of: #"\[voice: ?off\]"#, options: [.regularExpression, .caseInsensitive]) { end = true; text.removeSubrange(r) }  // Chief ends voice mode
+    let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) {
         size = text[r].lowercased().contains("full") ? "full" : "normal"
         text.removeSubrange(r)
@@ -546,7 +547,7 @@ func staged(_ s: String) -> Staged {
             text.removeSubrange(open.lowerBound..<close.upperBound)
         } else { text = String(text[..<open.lowerBound]) }
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size, end: end, hexes: hexes)
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, size: size, end: end, hexes: hexes, reset: reset)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -575,7 +576,7 @@ func sentences(_ s: String, from: Int) -> (said: [String], to: Int) {
 }
 
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
-enum VoiceCmd: Equatable { case bye, stop, full, normal, captions(Bool) }
+enum VoiceCmd: Equatable { case bye, stop, full, normal, captions(Bool), reset }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
@@ -589,6 +590,8 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
          "let me see", "let me see it", "let me see that", "big screen", "go big": return .full
     case "normal size", "smaller", "make it smaller", "exit full screen", "go back to normal", "back to normal", "step aside", "step back",
          "normal view", "standard view", "standard size", "minimize", "shrink", "go small": return .normal
+    case "reset", "reset context", "reset the context", "reset the chat", "clear", "clear context", "clear the context", "clear the chat",
+         "start over", "start fresh", "fresh start", "new chat", "new conversation", "forget everything", "wipe it": return .reset
     case "captions on", "turn on captions", "show captions": return .captions(true)
     case "captions off", "turn off captions", "hide captions": return .captions(false)
     default: return nil
@@ -759,7 +762,9 @@ func level(_ b: AVAudioPCMBuffer) -> Float {
 let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer in 1–3 short spoken sentences: "
     + "no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
-    + "either plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
+    + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
+    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
     + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). To make the stage fill the screen, or bring it back, add a line "
     + "[stage: full] or [stage: normal]. When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
     + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
@@ -785,8 +790,14 @@ struct StageView: View {
                 }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, Theme.sp4).accessibilityElement(children: .combine)
             }
             Waves(m: v.meter)
-            Text(v.speaking > 0 ? "\(c.name) is speaking" + (v.vp && v.bargeIn ? " · talk to interrupt" : "") : c.run != nil ? "Thinking… · say “stop” to cancel" : "Listening · “that’s all” ends voice mode")
-                .font(sys(size: Theme.fs1)).foregroundColor(dim).padding(.bottom, Theme.sp3)
+            HStack(spacing: Theme.sp2) {
+                Text(v.speaking > 0 ? "\(c.name) is speaking" + (v.vp && v.bargeIn ? " · talk to interrupt" : "") : c.run != nil ? "Thinking… · say “stop” to cancel" : "Listening · “that’s all” ends voice mode")
+                    .foregroundColor(dim).lineLimit(1)
+                Spacer(minLength: 4)
+                ContextButton(c: c)
+                Button { v.run(.reset) } label: { Label("Clear", systemImage: "square.and.pencil") }
+                    .help("Clear the context and start a new conversation (or say “reset”)")
+            }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small).padding(.horizontal, Theme.sp4).padding(.bottom, Theme.sp3)
         }
     }
 }
@@ -983,6 +994,7 @@ final class Voice: NSObject, ObservableObject {
         case .full: full = true
         case .normal: full = false
         case .captions(let b): captions = b
+        case .reset: hush(); core?.clear()
         }
     }
 
@@ -1030,7 +1042,9 @@ final class Voice: NSObject, ObservableObject {
         guard !chiefDrew else { return }
         chiefDrew = true; shown = true
         drawSeq += 1
-        if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
+        let j = h.replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)  // ```stage json
+        if j.hasPrefix("{"), let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any], o["chart"] != nil { js("stage.chart", [o]) }
+        else if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
     }
     func draw(_ text: String, last: Bool, force: Bool = false) {
         drawSeq += 1
@@ -1494,6 +1508,9 @@ final class Core: ObservableObject {
         ssh("\(chatCmd) new")
         for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
         msgs = [Msg(.note, "Context cleared. New conversation.")]
+        focusSent = ""  // the new conversation hasn't heard where you are
+        picks += 1; delegate.pick([])  // nor lit anything
+        if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
         context = 0
     }
@@ -1573,6 +1590,7 @@ final class Core: ObservableObject {
         }
         run = nil
         tps = 0
+        if ok && st.reset { DispatchQueue.main.async { [weak self] in self?.clear() } }  // [chat: reset]: after this reply, which says so
         if !popoverShown() && !r.stopping {
             missed += 1
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration))
@@ -2830,7 +2848,7 @@ struct SettingsView: View {
     @ViewBuilder var addRepoForm: some View {
         box("Add a repository") {
             row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
-                TextField("widgets", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
+                TextField("repo", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
             }
             row("Project") {
                 Picker("Project", selection: $rs.draftProj) { ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) } }.labelsHidden().frame(width: 180)
@@ -3230,14 +3248,29 @@ struct ChatView: View {
                     }.foregroundColor(sub)
                 }.buttonStyle(.plain).fixedSize().modifier(Tip(c: c, text: "Change model and effort in Settings"))
                 Spacer(minLength: 4)
-                context
+                ContextButton(c: c)
                 newChat
             }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small)
         }.padding(.horizontal, Theme.sp4).padding(.top, Theme.sp3).padding(.bottom, Theme.sp4)
     }
 
-    /// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then orange.
-    var context: some View {
+    static let newTip = "New chat — forget this conversation and start fresh"
+
+    var newChat: some View {
+        let hot = c.hint == Self.newTip
+        return Button(action: c.clear) {
+            Image(systemName: "square.and.pencil").font(sys(size: Theme.fs2, weight: .medium)).frame(width: 26, height: 26)
+                .foregroundColor(hot ? accent : sub)
+                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(hot ? accent.opacity(0.18) : surface))
+                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(hot ? accent : edge))
+        }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")
+    }
+}
+
+/// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then orange.
+struct ContextButton: View {
+    @ObservedObject var c: Core
+    var body: some View {
         let can = c.run == nil && c.isClaude && c.context > 0, high = full > 0.75, pct = Int((full * 100).rounded())
         return Button { c.ctxOpen.toggle() } label: {
             HStack(spacing: Theme.sp1) {
@@ -3261,18 +3294,6 @@ struct ChatView: View {
                         .font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
                 }.padding(Theme.sp3).frame(width: 240)
             }
-    }
-
-    static let newTip = "New chat — forget this conversation and start fresh"
-
-    var newChat: some View {
-        let hot = c.hint == Self.newTip
-        return Button(action: c.clear) {
-            Image(systemName: "square.and.pencil").font(sys(size: Theme.fs2, weight: .medium)).frame(width: 26, height: 26)
-                .foregroundColor(hot ? accent : sub)
-                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(hot ? accent.opacity(0.18) : surface))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(hot ? accent : edge))
-        }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")
     }
 
     var full: Double { c.window > 0 ? min(Double(c.context) / Double(c.window), 1) : 0 }
@@ -5142,7 +5163,9 @@ func selfTest() {
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
           && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
           && voiceCommand("Show me.") == .full && voiceCommand("OK, step aside") == .normal && voiceCommand("show me the failing MRs") == nil
-          && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full)
+          && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full
+          && voiceCommand("OK, start over.") == .reset && voiceCommand("reset the deploy") == nil
+          && staged("Fresh start.\n[chat: reset]").reset && staged("Fresh start.\n[chat: reset]").text == "Fresh start." && !staged("Hi").reset)
     let hexPucks: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339"]], ["name": "octo/lifecycle-advice", "mr": ["ref": "#18"]],
                                      ["name": "octo/dashboard"], ["name": "acme/mr-533"]]
     check("voice: hexes a reply names outright, by ref or a distinctive name, never a plain word or a longer number",

@@ -134,3 +134,17 @@ def test_stop_shell(tmp_path, monkeypatch):
 if __name__ == "__main__":
     test_norm()
     print("ok")
+
+
+def test_session_saved_before_done(tmp_path, monkeypatch):
+    """The app may Clear (`chat.py new`) the moment it hears done: the session must already be saved, never written after."""
+    seen = []
+    def on(**e):
+        if e["e"] == "done":
+            seen.append(os.path.exists(tmp_path / "session"))
+            os.remove(tmp_path / "session")  # Clear
+    turn(tmp_path, monkeypatch, "status update")
+    monkeypatch.setattr(chat, "emit", on)
+    os.path.exists(tmp_path / "session") or (tmp_path / "session").write_text("s0")
+    chat.turn("status update", "claude-haiku-5-5", None)
+    assert seen == [True] and not os.path.exists(tmp_path / "session")
