@@ -10,6 +10,7 @@ import AppKit
 import Combine
 import AVFoundation
 import Carbon
+import FoundationModels
 import Security
 import Speech
 import SwiftUI
@@ -568,16 +569,21 @@ func sentences(_ s: String, from: Int) -> (said: [String], to: Int) {
     return (out, start)
 }
 
-/// What voice mode does itself instead of sending to Chief: only when that's all you said.
+/// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
 enum VoiceCmd: Equatable { case bye, stop, full, normal, captions(Bool) }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z' ]", with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
         .split(separator: " ").joined(separator: " ")
     switch t {
-    case "that's all", "thats all", "that is all", "stop listening", "goodbye", "bye", "end voice mode": return .bye
+    case "that's all", "thats all", "that is all", "that's it", "thats it", "i'm done", "im done", "we're done", "were done", "stop listening",
+         "goodbye", "good bye", "bye", "bye bye", "see you", "see ya", "see you later", "later", "talk to you later", "talk later", "catch you later",
+         "good night", "goodnight", "end voice mode", "exit voice mode", "turn off voice mode", "voice off": return .bye
     case "stop", "never mind", "nevermind", "cancel", "stop that": return .stop
-    case "full screen", "fullscreen", "maximize", "bigger", "make it bigger", "go full screen": return .full
-    case "normal size", "smaller", "make it smaller", "exit full screen", "go back to normal": return .normal
+    case "full screen", "fullscreen", "maximize", "bigger", "make it bigger", "go full screen", "show me", "show me that", "show me it",
+         "let me see", "let me see it", "let me see that", "big screen", "go big": return .full
+    case "normal size", "smaller", "make it smaller", "exit full screen", "go back to normal", "back to normal", "step aside", "step back",
+         "normal view", "standard view", "standard size", "minimize", "shrink", "go small": return .normal
     case "captions on", "turn on captions", "show captions": return .captions(true)
     case "captions off", "turn off captions", "hide captions": return .captions(false)
     default: return nil
@@ -636,22 +642,45 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
           "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
 }
 
-/// The decision model for the dashboard: which workspaces (hexes) Chief's reply is about. Picks only real names (an enum of them);
-/// none when the reply isn't about any. nil: no key or a failed call, so the hive is left as it is.
-func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([String]?) -> Void) {
-    let ws = pucks.prefix(150).compactMap { p -> (String, String)? in
+/// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
+func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
+    let low = reply.lowercased()
+    let has = { (k: String) in low.range(of: "(?<![\\w!#-])" + NSRegularExpression.escapedPattern(for: k.lowercased()) + "(?![\\w-])", options: .regularExpression) != nil }
+    return pucks.compactMap { p in
+        guard let n = p["name"] as? String else { return nil }
+        let short = String(n.split(separator: "/").last ?? Substring(n))
+        let ref = (p["mr"] as? [String: Any])?["ref"] as? String
+        return (ref.map(has) ?? false) || (short.count >= 5 && short.contains { !$0.isLetter } && has(short)) ? n : nil
+    }
+}
+
+/// The decision model for the dashboard: which workspaces (hexes) Chief's reply is about. The ones it names outright, plus what
+/// Apple's on-device model picks (local, no key; only real names, an enum of them). Without Apple Intelligence: the named ones.
+func pickHexes(_ reply: String, _ pucks: [[String: Any]], done: @escaping ([String]) -> Void) {
+    let named = namedHexes(reply, pucks)
+    let ws = pucks.prefix(60).compactMap { p -> (String, String)? in  // ponytail: the on-device context is ~4k tokens; 60 workspaces fit
         guard let n = p["name"] as? String else { return nil }
         let mr = p["mr"] as? [String: Any]
-        return (n, [n, mr?["ref"] as? String, mr?["title"] as? String, p["state"] as? String, p["why"] as? String].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
+        return (n, [n, mr?["ref"] as? String, (mr?["title"] as? String).map { String($0.prefix(60)) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
     }
-    guard !ws.isEmpty else { return done([]) }
-    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["hexes"],
-                                 "properties": ["hexes": ["type": "array", "items": ["type": "string", "enum": ws.map(\.0)]]]]
-    haiku("You decide which of the user's workspaces an assistant's reply is about, to highlight them on the user's dashboard. "
-            + "hexes: the names of the workspaces the reply names, recommends, asks about or acts on (by name, branch, MR/PR number or title). "
-            + "Empty when it's about none of them or only about all of them in general. Never guess.",
-          "Workspaces (name | MR | title | state | why):\n" + ws.map(\.1).joined(separator: "\n") + "\n\nThe reply:\n" + reply, schema) { out in
-        done(out.map { ($0["hexes"] as? [String] ?? []).filter { n in ws.contains { $0.0 == n } } })
+    guard !ws.isEmpty, SystemLanguageModel.default.isAvailable else { return done(named) }
+    Task {
+        var picked: [String] = []
+        do {
+            let root = DynamicGenerationSchema(name: "Pick", properties: [  // "specific" first: without it the small model picks every one for small talk
+                .init(name: "specific", description: "does the reply name or point at particular workspaces?", schema: DynamicGenerationSchema(type: Bool.self)),
+                .init(name: "hexes", description: "workspaces the reply is about; empty when none",
+                schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Workspace", anyOf: ws.map(\.0)), maximumElements: 8))])
+            let session = LanguageModelSession(instructions: "You decide which of the user's workspaces an assistant's reply is about, to highlight them "
+                + "on the user's dashboard: the ones it names, recommends, asks about or acts on (by name, branch, MR/PR number or title). "
+                + "Return an empty list when the reply is about none of them, or about all of them in general. Never guess.")
+            let r = try await session.respond(to: "Workspaces (name | MR | title):\n" + ws.map(\.1).joined(separator: "\n") + "\n\nThe reply:\n" + String(reply.prefix(1500)),
+                                              schema: try GenerationSchema(root: root, dependencies: []), options: GenerationOptions(temperature: 0))
+            picked = try r.content.value(Bool.self, forProperty: "specific") ? r.content.value([String].self, forProperty: "hexes") : []
+            if picked.count > 3 && picked.count >= ws.count { picked = [] }  // all of them is about none in particular
+        } catch { NSLog("pick: %@", "\(error)") }
+        let out = named + picked.filter { n in !named.contains(n) && ws.contains { $0.0 == n } }
+        await MainActor.run { done(out) }
     }
 }
 
@@ -740,7 +769,7 @@ struct VoiceButtons: View {
             Button(action: v.toggle) {
                 Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)).frame(width: 26, height: 22)
                     .background(RoundedRectangle(cornerRadius: Theme.r1).fill(v.on ? accent : .clear)).foregroundColor(v.on ? bg : dim)
-            }.buttonStyle(.plain).help(v.on ? "End voice mode (or say “that’s all”)" : "Voice mode: talk with it hands-free")
+            }.buttonStyle(.plain).help(v.on ? "End voice mode (or say “goodbye”)" : "Voice mode: talk with it hands-free")
                 .accessibilityLabel(v.on ? "End voice mode" : "Start voice mode")
         }
     }
@@ -814,7 +843,7 @@ final class Voice: NSObject, ObservableObject {
             }
             self.on = true
             self.listen()
-            self.wait("Listening", "Say something, or “that’s all” to stop.")
+            self.wait("Listening", "Say something, or “goodbye” to stop.")
         }}}
     }
 
@@ -882,6 +911,9 @@ final class Voice: NSObject, ObservableObject {
         listen()
         guard !t.isEmpty, let c = core else { return }
         if let cmd = voiceCommand(t) { return run(cmd) }
+        let low = t.lowercased()
+        if ["show me", "let me see"].contains(where: low.hasPrefix) { full = true }  // "show me the failing MRs": big, and still asked
+        if ["step aside", "step back"].contains(where: low.hasPrefix) { full = false }
         lastHeard = t
         caption = ""
         c.send(t)  // send() adds voiceNote
@@ -1469,7 +1501,7 @@ final class Core: ObservableObject {
             picks += 1
             let n = picks
             delegate.pick([])
-            pickHexes(body, pucks) { [weak self] names in if let names, n == self?.picks { delegate.pick(names) } }
+            pickHexes(body, pucks) { [weak self] names in if n == self?.picks { delegate.pick(names) } }
         }
         run = nil
         tps = 0
@@ -2406,8 +2438,8 @@ struct SettingsView: View {
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
         }
         box("Voice mode") {
-            row("Anthropic key", "Claude Haiku 5.5 draws what \(c.name) says on the stage, and lights up the workspaces each reply is about. Stored in your Keychain; without it the stage shows a plain list and nothing lights up.") {
-                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "Claude Haiku 5.5: voice mode's stage and the highlighted workspaces") }
+            row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
+                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
             }
             row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
                 Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
@@ -4125,6 +4157,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     var beforeFull: (out: Bool, frame: NSRect)?
+    var escMonitor: Any?  // while the stage is full size, Esc in its window takes it back to normal
     /// Voice mode's stage at full size: the chat pops out and fills the screen; normal puts it back as it was.
     func stageSize(_ full: Bool) {
         if full, beforeFull == nil {
@@ -4133,8 +4166,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             chatWindow.setFrameAutosaveName("")  // ponytail: the maximised frame isn't saved as "chat"
             chatWindow.setFrame((chatWindow.screen ?? NSScreen.main)?.visibleFrame ?? chatWindow.frame, display: true, animate: true)
             chatWindow.makeKeyAndOrderFront(nil)
+            escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                guard e.keyCode == kVK_Escape, let self, e.window === self.chatWindow, self.greenlight.voice.full else { return e }
+                self.greenlight.voice.full = false
+                return nil
+            }
         } else if !full, let b = beforeFull {
             beforeFull = nil
+            if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
             chatWindow.setFrame(b.frame, display: true, animate: true)
             chatWindow.setFrameAutosaveName("chat")
             if !b.out { popChat(out: false) }
@@ -4999,7 +5038,13 @@ func selfTest() {
     let ss = sentences(plain("**Two** MRs: [!12](https://x/12) is green. One fails! Fix it"), from: 0)
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("voice: commands only when that's all you said", voiceCommand("That’s all.") == .bye && voiceCommand("Captions off") == .captions(false)
+          && voiceCommand("OK, bye Chief!") == .bye && voiceCommand("Thank you, see you later.") == .bye && voiceCommand("tell them goodbye") == nil
+          && voiceCommand("Show me.") == .full && voiceCommand("OK, step aside") == .normal && voiceCommand("show me the failing MRs") == nil
           && voiceCommand("stop the deploy on 12") == nil && voiceCommand("Full screen") == .full)
+    let hexPucks: [[String: Any]] = [["name": "acme/mr-5339", "mr": ["ref": "!5339"]], ["name": "octo/lifecycle-advice", "mr": ["ref": "#18"]],
+                                     ["name": "octo/dashboard"], ["name": "acme/mr-533"]]
+    check("voice: hexes a reply names outright, by ref or a distinctive name, never a plain word or a longer number",
+          namedHexes("Merge [!5339](u) first, then lifecycle-advice; the dashboard can wait. #180 too.", hexPucks) == ["acme/mr-5339", "octo/lifecycle-advice"])
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     var bufs = 0, ended = false, sc: AVAudioConverter?
