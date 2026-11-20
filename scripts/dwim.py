@@ -191,10 +191,6 @@ def grammar(text, pucks, focus=None):
     g = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
     if raw.endswith("?") and not REQUEST_PREFIX.search(raw):
         g["why"] = "it's a question or has a condition"
-    matches = {v: list(r.finditer(t)) for v, r in VERB_RES.items()}
-    for inner, outer in (("hold", "release"), ("park", "unpark")):
-        matches[inner] = [m for m in matches[inner] if not any(o.start() <= m.start() and m.end() <= o.end() for o in matches[outer])]
-    g["verbs"] = [v for v in VERB_RES if matches[v]]
     # the workspaces named outright, longest first, cut out of the text so their words aren't read as anything else
     rest = t
     for p in sorted(pucks, key=lambda p: -len(p.get("name", ""))):
@@ -202,6 +198,10 @@ def grammar(text, pucks, focus=None):
         if len(n) >= 3 and re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", rest, re.I):
             g["names"].append(n)
             rest = re.sub(rf"(?<![\w-]){re.escape(n)}(?![\w-])", " ", rest, flags=re.I)
+    matches = {v: list(r.finditer(rest)) for v, r in VERB_RES.items()}
+    for inner, outer in (("hold", "release"), ("park", "unpark")):
+        matches[inner] = [m for m in matches[inner] if not any(o.start() <= m.start() and m.end() <= o.end() for o in matches[outer])]
+    g["verbs"] = [v for v in VERB_RES if matches[v]]
     g["refs"] = [int(m) for m in REF_RE.findall(rest)]
     rest = REF_RE.sub(" ", rest)
     cleared = NOT_DESTRUCTIVE.sub(" ", rest)
@@ -220,6 +220,8 @@ def grammar(text, pucks, focus=None):
         w = m[1].lower()
         g["count"] = NUMS[w] if w in NUMS else (int(w) if w.isdigit() else None)
     g["here"] = bool(HERE_RE.search(rest)) and not g["names"] and not g["refs"] and bool(focus)
+    if (g["names"] or g["refs"]) and re.search(r"\band\b", rest, re.I) and HERE_RE.search(rest):
+        g["why"] = "it combines an explicit workspace with this one"
     bare = NOT_DESTRUCTIVE.sub(" ", rest)
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)
@@ -290,9 +292,13 @@ def applies(verb, p):
     hold = HOLD
     if verb == "park" and p.get("hidden"):
         return "already parked"
-    if verb == "hold" and hold.search(goal):
+    if verb == "unpark" and not _one_trailing_marker(goal, "parked"):
+        return "its goal has ambiguous parked text: edit the goal"
+    if verb == "hold" and _explicit_hold(goal):
         return "already on hold"
     if verb == "release":
+        if "(hold)" in goal.lower() and not _one_trailing_marker(goal, "hold"):
+            return "its goal has ambiguous hold text: edit the goal"
         if hold.search(re.sub(r"\(hold\)", "", goal, flags=re.I)):
             return "its goal says hold in its own words: edit the goal"
     if verb in LAUNCH:
@@ -376,16 +382,22 @@ def plan(o):
 
 # ---- doing it -----------------------------------------------------------------------------------------------------------
 
+def _explicit_hold(goal):
+    return bool(re.search(r"\(hold(?:\)|\s+(?:until|for|pending)\b)|(?<![\w-])hold(?=\s+until\b|\s*$)|(?<![\w-])do ?n[o'’]?t merge(?![\w-])", goal, re.I))
+
+def _one_trailing_marker(goal, marker):
+    return len(re.findall(rf"\({marker}\)", goal, re.I)) == 1 and bool(re.search(rf"\({marker}\)$", goal, re.I))
+
 def _goal_after(verb, goal):
     goal = goal or ""
     if verb == "park":
         return goal if re.search(r"\(parked\)", goal, re.I) else f"{goal}{' ' if goal else ''}(parked)"
     if verb == "unpark":
-        return re.sub(r" ?\(parked\)", "", goal, count=1, flags=re.I)
+        return re.sub(r" ?\(parked\)$", "", goal, flags=re.I) if _one_trailing_marker(goal, "parked") else goal
     if verb == "hold":
-        return goal if HOLD.search(goal) else f"{goal}{' ' if goal else ''}(hold)"
+        return goal if _explicit_hold(goal) else f"{goal}{' ' if goal else ''}(hold)"
     if verb == "release":
-        return re.sub(r" ?\(hold\)", "", goal, count=1, flags=re.I)
+        return re.sub(r" ?\(hold\)$", "", goal, flags=re.I) if _one_trailing_marker(goal, "hold") else goal
     return goal
 
 
