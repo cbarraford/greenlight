@@ -327,6 +327,9 @@ with decisions.book() as recs:
         recs.append(r)
 g = autonomy.gate("check-in", now=now)
 assert not g["ok"] and g["dismissed"] > 2.9 and g["score"] == 0.2, g
+autonomy.decide = Fake(i=0, p=0.5, provider="haiku", boom=False, s=1.0)
+assert not autonomy.gate("check-in", "a very appealing check-in", now=now)["ok"]  # model enthusiasm cannot override dismissals
+autonomy.decide = None
 assert autonomy.gate("check-in", now=now + 28 * 86400)["ok"]  # four weeks on, three dismissals weigh 0.75
 assert autonomy.gate("watch", now=now)["ok"]  # another kind's history isn't this one's
 past("check-in", "fix-1", ["fix-1", "later"], 3, ago=0, via="chat")

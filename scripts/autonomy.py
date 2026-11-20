@@ -323,7 +323,8 @@ def gate(kind, text="", recs=None, s=None, now=None):
         try:
             d = decide.score(STATE, PREFLIGHT_RUBRICS.get(kind, RUBRIC), context=text)
             if d.get("provider") != "local":
-                score = (score + max(0.0, min(1.0, float(d["score"])))) / 2
+                model_score = max(0.0, min(1.0, float(d["score"])))
+                score = min(score, (score + model_score) / 2)  # content may hold a ping; repeated dismissals still veto it
                 provider = d.get("provider") or "?"
         except Exception as e:
             print(f"autonomy: decide.score: {e}", file=sys.stderr)
