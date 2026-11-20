@@ -45,8 +45,11 @@ if [ ! -f "$kc" ]; then
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$(cat "$d/signing.pass")" "$kc" >/dev/null
 fi
 security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
+# codesign only finds identities in keychains on the search list (--keychain alone says "no identity found"): add it once, keeping the rest
+kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
+case " ${kcs[*]} " in *" $kc "*) ;; *) security list-keychains -d user -s "${kcs[@]}" "$kc" ;; esac
 id=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
-codesign -fs "${id:--}" --keychain "$kc" "$app"
+codesign -fs "${id:--}" --keychain "$kc" "$app" || { echo "build.sh: signing with Greenlight Dev failed; signing ad hoc (macOS will ask for the mic, speech and Keychain again)" >&2; codesign -fs - "$app"; }
 # re-register so Finder/Dock pick up icon changes instead of a cached blank one
 touch "$app"; /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"
