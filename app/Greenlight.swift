@@ -1792,19 +1792,39 @@ final class Voice: NSObject, ObservableObject {
         }
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] n in
             guard let self, self.on, n.object as AnyObject? === self.engine else { return }  // a headset in or out: the engine stopped itself
-            do { try self.startEngine(); self.listen() } catch { self.stopAll() }  // listen() is a no-op on GPT-Live, whose socket stays up
+            self.restart()
+        }
+    }
+    /// The engine stopped itself (a headset in or out): start it again, on a new engine if the old one won't (see start(attempt:)).
+    func restart() {
+        do { try startEngine(); listen() }  // listen() is a no-op on GPT-Live, whose socket stays up
+        catch {
+            NSLog("voice: audio restart failed: %@", "\(error)")
+            freshEngine()
+            do { try startEngine(); listen() } catch {
+                core?.msgs.append(Msg(.note, "Voice mode stopped: the audio didn't restart after the devices changed (\(error.localizedDescription))."))
+                stopAll()
+            }
         }
     }
 
-    func toggle() { on ? stopAll() : start() }
-    func start() { start(attempt: 0) }
+    func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
+    var starting = false, startGen = 0  // a start (and its retries) under way; stopAll() bumps startGen, which ends it
+    func start() {
+        guard !on, !starting else { return }
+        starting = true; startGen += 1
+        start(attempt: 0, gen: startGen)
+    }
     /// Waits before each retry of a start that failed: about 3 s in all, then the error is shown.
     static let startRetries = [0.3, 0.8, 1.5]
-    func start(attempt: Int) {
-        guard !on, core?.recording == nil else { return }  // dictation has the mic
+    func start(attempt: Int, gen g: Int) {
+        guard g == startGen else { return }  // cancelled
+        guard !on, core?.recording == nil else { starting = false; return }  // dictation has the mic
         let live = Speech.shared.kind == "live"  // GPT-Live hears you itself: Speech Recognition isn't needed
         AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
+            guard g == self.startGen else { return }
             guard ok, st == .authorized || live else {
+                self.starting = false
                 self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
                 return
             }
@@ -1818,12 +1838,13 @@ final class Voice: NSObject, ObservableObject {
                 NSLog("voice: audio start %d failed: %@", attempt + 1, "\(error)")
                 self.freshEngine()
                 if attempt < Self.startRetries.count && (error as NSError).domain != "Voice" {  // not when there's no mic: no retry finds one
-                    return DispatchQueue.main.asyncAfter(deadline: .now() + Self.startRetries[attempt]) { self.start(attempt: attempt + 1) }
+                    return DispatchQueue.main.asyncAfter(deadline: .now() + Self.startRetries[attempt]) { self.start(attempt: attempt + 1, gen: g) }
                 }
                 self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
                 return self.stopAll()
             }
             if attempt > 0 { NSLog("voice: audio started on try %d", attempt + 1) }
+            self.starting = false
             self.on = true
             self.fallback = ""; self.toldFallback = ""
             self.claimedAt = Date().timeIntervalSince1970
@@ -2139,6 +2160,7 @@ final class Voice: NSObject, ObservableObject {
     }
 
     func stopAll() {
+        startGen += 1; starting = false  // and any start still retrying
         hush()
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
@@ -6861,7 +6883,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var lastToggle = Date.distantPast
     @objc func appLive() {  // ⇧⌘L: live chat on (showing the chat first) or off
-        if !greenlight.voice.on { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
+        if !greenlight.voice.on && !greenlight.voice.starting { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
         greenlight.voice.toggle()
     }
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
