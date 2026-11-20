@@ -220,7 +220,7 @@ def grammar(text, pucks, focus=None):
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)
     g["tokens"] = [] if g["names"] or g["refs"] or g["here"] else \
-        [w for w in words(bare) if w not in STOP and w not in NUMS and not w.isdigit() and len(w) > 1]  # a name, #N or "this" says which
+        [w for w in words(bare) if w not in STOP and w not in NUMS and (not w.isdigit() or len(w) >= 3) and len(w) > 1]  # a long number may be part of a name
     return g
 
 
