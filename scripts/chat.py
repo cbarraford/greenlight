@@ -12,7 +12,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bg                         # one JSON line: this chat's background shells + working Orca agents
   chat.py bgstop <task_id>           # kill one background shell
 """
-import json, os, random, re, signal, subprocess, sys, time
+import glob, json, os, random, re, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import attach  # noqa: E402
@@ -152,18 +152,18 @@ def call(name, inp):
     return f"{name.split('__')[-1]}({short(a, 100)})"
 
 
-def codex_usage(thread, tail=1 << 20):
+def codex_usage(thread, total=None):
     """(context, window) from the thread's rollout log, else (None, None).
+    total: turn.completed's input_tokens. The token_count must be this turn's (its running total equals it), not one still in Codex's write queue.
     `codex exec --json`'s turn.completed carries the thread's cumulative input, not the context; the rollout's last
     token_count has the latest request's (last_token_usage, what Codex's own footer uses) and the usable window.
     ponytail: the rollout is Codex's internal format; anything unexpected falls back to tokens-only, never a wrong %."""
     if not thread:
         return None, None
     try:
-        import glob
         f = max(glob.glob(os.path.join(CODEX_SESSIONS, "*", "*", "*", f"rollout-*-{glob.escape(thread)}.jsonl")), key=os.path.getmtime)
         with open(f, "rb") as fh:
-            fh.seek(max(0, os.path.getsize(f) - tail))
+            fh.seek(max(0, os.path.getsize(f) - (1 << 20)))  # the last MB: its last token_count
             lines = fh.read().splitlines()
         for line in reversed(lines):
             if b'"token_count"' not in line:
@@ -174,6 +174,8 @@ def codex_usage(thread, tail=1 << 20):
                 continue  # the tail's cut first line
             info = p.get("info") if p.get("type") == "token_count" else None
             if info and (info.get("last_token_usage") or {}).get("total_tokens"):
+                if total is not None and (info.get("total_token_usage") or {}).get("input_tokens") != total:
+                    return None, None  # the previous turn's: this one's isn't on disk yet
                 w = info.get("model_context_window")
                 return info["last_token_usage"]["total_tokens"], w if isinstance(w, int) and w > 0 else None
     except (OSError, ValueError, AttributeError, TypeError):
@@ -325,8 +327,12 @@ class Norm:
         elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
             out.append({"e": "status", "text": short(d["message"], 80)})
         elif t == "turn.completed":
-            ctx, self.window = codex_usage(self.thread)
-            self.context = ctx or d.get("usage", {}).get("input_tokens", 0)  # unread: the cumulative input, shown as tokens only (no window)
+            total = d.get("usage", {}).get("input_tokens")
+            ctx, self.window = codex_usage(self.thread, total)
+            if ctx is None and self.thread:  # Codex writes its rollout from a queue: give the last token_count a moment
+                time.sleep(0.1)
+                ctx, self.window = codex_usage(self.thread, total)
+            self.context = ctx or 0  # unread: 0, so the app keeps its last reading (input_tokens is the running total, not the context)
             out.append({"e": "done", "ok": True, "text": self.text, "context": self.context, "window": self.window, "ms": None})
         elif t in ("turn.failed", "error"):
             out.append({"e": "done", "ok": False, "text": str(d.get("error") or d.get("message")), "context": self.context, "window": self.window, "ms": None})

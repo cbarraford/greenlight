@@ -427,6 +427,7 @@ final class Run: ObservableObject {
     @Published var stopping = false
     @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
     var gotDone = false, checkIn = false, watch = false
+    var meterStale = false  // Clear or a harness change mid-turn: its usage is the old conversation's, not the meter's
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     init(_ q: String) { question = q }
 }
@@ -1264,6 +1265,7 @@ struct Live {
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
     var pct: Int { Int((frac * 100).rounded()) }
+    var known: Bool { c.window > 0 }  // else tokens only: an unknown window is no "0%"
     var high: Bool { frac > 0.75 }
     var tokens: String { c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window))" : kfmt(c.context) }
     var name: String { c.name }
@@ -1286,7 +1288,7 @@ struct Live {
     }
     /// The context readout as a button: its popover has the totals and Compact.
     func ctx<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).accessibilityLabel("Context, \(pct) percent used").modifier(CtxPop(c: c))
+        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
     func clearButton<L: View>(@ViewBuilder _ label: () -> L) -> some View {
         Button(action: clear) { label() }.buttonStyle(.plain).help("Clear the context and start a new conversation (or say “reset”)").accessibilityLabel("Clear the context")
@@ -1354,7 +1356,7 @@ struct ConversationLook: View {
             HStack(spacing: 10) {
                 Bars(m: s.v.meter, n: 36, on: hx(l.accent), off: hx("8C959F"))
                 Spacer(minLength: 4)
-                s.ctx { Text("\(s.pct)% context").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(s.high ? hx("9A6700") : hx(l.dim)) }
+                s.ctx { Text("\(s.c.ctxShort) context").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(s.high ? hx("9A6700") : hx(l.dim)) }
                 s.clearButton {
                     Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .semibold)).foregroundColor(.white).frame(width: 34, height: 34).background(Circle().fill(hx(l.text)))
                 }
@@ -1388,7 +1390,7 @@ struct OrbLook: View {
             }
             s.activity(l).padding(.horizontal, 20)
             HStack(spacing: 12) {
-                s.ctx { Text("\(s.pct)% · \(s.tokens)").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
+                s.ctx { Text(s.known ? "\(s.pct)% · \(s.tokens)" : "\(s.tokens) tokens").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
                 s.clearButton {
                     Label("Start over", systemImage: "arrow.counterclockwise").font(.system(size: 13, weight: .semibold)).foregroundColor(hx(l.text))
                         .padding(.horizontal, 16).frame(height: 36).background(Capsule().fill(hx(l.stage))).overlay(Capsule().stroke(hx("FFFFFF", 0.14)))
@@ -1410,7 +1412,7 @@ struct Orb: View {
             Circle().stroke(hx(l.accent, 0.32)).frame(width: 144 * k, height: 144 * k)
             Circle().fill(hx(l.accent, 0.16)).frame(width: 113 * k, height: 113 * k)
             Circle().fill(core).frame(width: 79 * k, height: 79 * k).shadow(color: s.talk == .thinking ? .clear : core.opacity(0.5), radius: 30)
-        }.animation(.easeOut(duration: 0.12), value: lv).accessibilityElement().accessibilityLabel("\(s.label), context \(s.pct) percent")
+        }.animation(.easeOut(duration: 0.12), value: lv).accessibilityElement().accessibilityLabel("\(s.label), context \(s.c.ctxSpoken)")
     }
 }
 
@@ -1440,7 +1442,7 @@ struct OnAirLook: View {
             HStack(spacing: 12) {
                 s.ctx {
                     HStack(spacing: 10) {
-                        Text("CONTEXT \(s.pct)%").font(.system(size: 11, weight: .heavy).monospacedDigit()).tracking(1.2)
+                        Text("CONTEXT \(s.c.ctxShort)").font(.system(size: 11, weight: .heavy).monospacedDigit()).tracking(1.2)
                         HStack(spacing: 2) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(i < Int((s.frac * 10).rounded()) ? hx(l.page) : hx(l.page, 0.22)).frame(width: 8, height: 16) } }
                         Text("· \(s.tokens.uppercased()) · SAY “RESET”").font(.system(size: 11, weight: .bold)).lineLimit(1)
                     }.foregroundColor(hx(l.page))
@@ -1491,7 +1493,7 @@ struct PhosphorLook: View {
                 .padding(.horizontal, 14).padding(.bottom, 10)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
             HStack(spacing: 10) {
-                s.ctx { Text("ctx [\(String(repeating: "#", count: f) + String(repeating: ".", count: 10 - f))] \(s.pct)%").foregroundColor(s.high ? hx("FFB000") : ink) }
+                s.ctx { Text("ctx [\(String(repeating: "#", count: f) + String(repeating: ".", count: 10 - f))] \(s.c.ctxShort)").foregroundColor(s.high ? hx("FFB000") : ink) }
                 Text(s.tokens).foregroundColor(faint).lineLimit(1)
                 Spacer()
                 s.clearButton { Text("[ clear ]").fontWeight(.bold).foregroundColor(hx(l.page)).padding(.horizontal, 10).frame(height: 30).background(ink) }
@@ -1537,7 +1539,7 @@ struct EditorialLook: View {
             Scope(m: s.v.meter, ink: s.talk == .speaking ? red : ink, rule: hx(l.line)).frame(height: 44).padding(.top, 12)
             Rectangle().fill(ink).frame(height: 1)
             HStack(spacing: 14) {
-                s.ctx { Text("Context \(Text("\(s.pct)").bold()) percent used · \(s.tokens)").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? red : hx(l.text2)) }
+                s.ctx { (s.known ? Text("Context \(Text("\(s.pct)").bold()) percent used · \(s.tokens)") : Text("Context \(Text(s.tokens).bold()) tokens used")).font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? red : hx(l.text2)) }
                 Spacer()
                 s.clearButton { Text("Clear the page").font(.system(size: 13, weight: .bold)).foregroundColor(red).padding(.bottom, 2).overlay(Rectangle().fill(red).frame(height: 2), alignment: .bottom) }
             }.padding(.top, 12).padding(.bottom, 18)
@@ -1592,7 +1594,7 @@ struct HUDLook: View {
                     ZStack {
                         Circle().trim(from: 0, to: 0.75).stroke(hx(l.line), lineWidth: 5).rotationEffect(.degrees(135))
                         Circle().trim(from: 0, to: 0.75 * max(s.frac, 0.005)).stroke(s.high ? hx("FF9F0A") : cyan, lineWidth: 5).rotationEffect(.degrees(135))
-                        VStack(spacing: 0) { Text("\(s.pct)").font(.system(size: 17, weight: .bold, design: .monospaced)); Text("CTX%").font(.system(size: 9, design: .monospaced)).foregroundColor(faint) }
+                        VStack(spacing: 0) { Text(s.c.ctxShort.replacingOccurrences(of: "%", with: "")).font(.system(size: 17, weight: .bold, design: .monospaced)); Text(s.known ? "CTX%" : "CTX").font(.system(size: 9, design: .monospaced)).foregroundColor(faint) }
                     }.frame(width: 64, height: 64)
                 }
                 Text("\(s.tokens.uppercased()) TOKENS\nSAY “RESET” TO CLEAR").font(mono).tracking(0.8).foregroundColor(faint).lineSpacing(3)
@@ -1627,7 +1629,7 @@ struct ZenLook: View {
             Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
             Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)
             HStack {
-                s.ctx { Text("\(s.pct)%").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
+                s.ctx { Text(s.c.ctxShort).font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
                 Spacer()
                 s.clearButton { Text("Clear").font(.system(size: 13)).foregroundColor(hx(l.text2)) }
             }.padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 18)
@@ -2869,7 +2871,7 @@ final class Core: ObservableObject {
             UserDefaults.standard.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
                 msgs.append(Msg(.note, isClaude ? "Back to the Claude conversation." : "\(modelName) keeps its own conversation, separate from Claude's."))
-                context = 0; window = 0  // the meter was the other harness's: tokens only until this one reports
+                context = 0; window = 0; run?.meterStale = true  // the meter was the other harness's: tokens only until this one reports
             }
         }
     }
@@ -3281,7 +3283,7 @@ final class Core: ObservableObject {
         picks += 1; light([])  // nor lit anything
         if voice.on { voice.wait("Listening", "New conversation. Context cleared.") }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
-        context = 0; window = 0  // the next harness reports its own window
+        context = 0; window = 0; run?.meterStale = true  // the next harness reports its own window
     }
 
     func stop() {
@@ -3331,14 +3333,14 @@ final class Core: ObservableObject {
         case "text_reset": r.live = ""; voice.said = 0
         case "text": r.live += j["delta"] as? String ?? ""; if !r.watch && !r.checkIn { voice.live(r) }
         case "usage":
-            if let c = j["context"] as? Int, c > 0 { context = c }
+            if let c = j["context"] as? Int, c > 0, !r.meterStale { context = c }
             if let t = j["tps"] as? Double { tps = t; if t > 0 { lastTps = t } }
             if let o = j["out"] as? Int { outTok = o }
         case "done":
             r.gotDone = true
-            if let c = j["context"] as? Int, c > 0 { context = c }
+            if let c = j["context"] as? Int, c > 0, !r.meterStale { context = c }
             let ok = j["ok"] as? Bool ?? false, w = j["window"] as? Int ?? 0
-            if w > 0 || ok { window = w }  // a good turn without a window (codex unread, opencode, pi): unknown, not the last harness's
+            if w > 0 || ok, !r.meterStale { window = w }  // a good turn without a window (codex unread, opencode, pi): unknown, not the last harness's
             var text = j["text"] as? String ?? ""
             if r.question == "Compact context" { text = text.isEmpty ? "Compacted. Context is now \(kfmt(context))." : text }
             finish(r, ok: ok, text: r.stopping ? "Stopped." : text)
@@ -5794,7 +5796,7 @@ struct ChatView: View, Looked {
 struct ContextButton: View, Looked {
     @ObservedObject var c: Core
     var body: some View {
-        let full = c.ctxFull, high = full > 0.75, pct = Int((full * 100).rounded())
+        let full = c.ctxFull, high = full > 0.75
         // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
         let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
         let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
@@ -5804,12 +5806,12 @@ struct ContextButton: View, Looked {
                     Circle().stroke(edge, lineWidth: 2)
                     Circle().trim(from: 0, to: max(full, 0.02)).stroke(high ? needs : sub, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
                 }.frame(width: 12, height: 12)
-                Text(up ? "CONTEXT \(pct)%" : lk.id == "zen" ? "context \(pct)%" : "Context \(pct)%").tracking(up ? 1.2 : 0).lineLimit(1).fixedSize()
+                Text(up ? "CONTEXT \(c.ctxShort)" : lk.id == "zen" ? "context \(c.ctxShort)" : "Context \(c.ctxShort)").tracking(up ? 1.2 : 0).lineLimit(1).fixedSize()
                     .font(sys(size: Theme.fs1, weight: lk.id == "onair" ? .heavy : .regular, design: code ? .monospaced : .default).monospacedDigit())
             }.foregroundColor(high ? needsInk : lk.id == "phosphor" ? fg : sub).padding(.horizontal, bare ? 0 : Theme.sp2).frame(height: 24)
                 .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "onair" ? card : c.ctxOpen ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber
                 .overlay(RoundedRectangle(cornerRadius: r).stroke(high ? needs.opacity(0.6) : c.ctxOpen && lk.id == "onair" ? fg : bare ? .clear : line)).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("Context, \(pct) percent used").modifier(CtxPop(c: c))
+        }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
 }
 
@@ -5835,7 +5837,12 @@ struct CtxPop: ViewModifier, Looked {
     }
 
 }
-extension Core { var ctxFull: Double { window > 0 ? min(Double(context) / Double(window), 1) : 0 } }
+extension Core {
+    var ctxFull: Double { window > 0 ? min(Double(context) / Double(window), 1) : 0 }
+    /// The readout: "27%", or the tokens ("35k") while the window is unknown (a harness that doesn't say, or not yet).
+    var ctxShort: String { window > 0 ? "\(Int((ctxFull * 100).rounded()))%" : kfmt(context) }
+    var ctxSpoken: String { window > 0 ? "\(Int((ctxFull * 100).rounded())) percent used" : "\(kfmt(context)) tokens used" }
+}
 
 // MARK: vim
 
@@ -6992,7 +6999,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         l.c.queue = []; l.c.proc?.terminate(); l.c.run = nil  // its turn's late result writes nothing (onExit checks run)
         ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(greenlightHome) && rm -rf chat-\(l.id)")  // cd: a home with a space fails, not rm's word split
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
-        [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // a later window with this id starts empty
+        [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
