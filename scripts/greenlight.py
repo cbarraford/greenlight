@@ -152,6 +152,12 @@ def orca(*args, timeout=120):
     return orca_cli(*args, timeout=timeout)
 
 
+def primary_agent(agents):
+    """The live session to show for a workspace. A completed review may be newer than its still-running parent."""
+    return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"),
+                                             a.get("updatedAt") or a.get("stateStartedAt") or 0))
+
+
 def orca_cli(*args, timeout=120):
     """The Orca CLI itself, whatever GREENLIGHT_ADE is (dash.py trees asks every ADE)."""
     # Bare `orca` on Linux outside an Orca terminal is the GNOME screen reader.
@@ -959,8 +965,7 @@ def scan(save=True):
             skipped += 1  # main checkouts, detached HEADs (cache trees), repos on neither GitLab nor GitHub
             continue
         forge, project = projects[w["repoId"]]
-        agents = sorted(w.get("agents", []), key=lambda a: a.get("updatedAt") or 0, reverse=True)
-        ag = agents[0] if agents else {}
+        ag = primary_agent(w.get("agents"))
         rows.append({
             "id": w["worktreeId"], "name": w["displayName"], "path": w["path"], "branch": branch,
             "project": project, "forge": forge, "goal": "" if STATUS_LINE_RE.search(w.get("comment") or "") else (w.get("comment") or "").strip(),

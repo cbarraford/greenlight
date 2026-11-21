@@ -474,8 +474,7 @@ def advice(r):
 def live_agents():
     out = {}
     for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]:
-        ags = sorted(w.get("agents", []), key=lambda a: a.get("updatedAt") or 0, reverse=True)
-        out[w["worktreeId"]] = (w, ags[0] if ags else {})
+        out[w["worktreeId"]] = (w, greenlight.primary_agent(w.get("agents")))
     return out
 
 
@@ -574,7 +573,7 @@ def trees():
             if w.get("isArchived") or not w.get("path") or w["path"] in seen:
                 continue
             seen.add(w["path"])
-            ag = max(w.get("agents") or [{}], key=lambda a: a.get("updatedAt") or 0)
+            ag = greenlight.primary_agent(w.get("agents"))
             out.append({"ade": ade, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
