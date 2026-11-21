@@ -547,7 +547,8 @@ def check_code(code, lang, ctx=None, depth=0):
     dump = re.search(r"os\.environ\b(?!\s*[\[.])|process\.env\b(?!\.)|dict\(os\.environ|environ\.(?:items|copy|values)\(", code)
     env_read = re.search(r"os\.environ\b|os\.getenv\s*\(|process\.env\b|ENV\s*\[", code)
     literal_secret_path = any(SECRET_PATH_RE.search(s) for s in re.findall(r"['\"]([^'\"]+)['\"]", code))
-    if SECRET_PATH_RE.search(code) or literal_secret_path or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named):
+    assembled_secret_path = bool(re.search(r"\.aws.{0,100}credentials|\.ssh.{0,100}id_(?:rsa|ed25519|ecdsa)", code, re.S))
+    if SECRET_PATH_RE.search(code) or literal_secret_path or assembled_secret_path or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     elif net and env_read:
         benign = {"PATH", "HOME", "PWD", "TMPDIR", "LANG", "USER", "SHELL"}
@@ -557,7 +558,7 @@ def check_code(code, lang, ctx=None, depth=0):
         v.add("medium", f"{lang} code that deletes files")
     if re.search(r"child_process|execSync|spawnSync|\.exec\s*\(|\.spawn\s*\(", code):
         v.add("high", f"{lang} code launches a command the guard cannot fully inspect")
-    if re.search(r"\.greenlight.{0,100}(?:config\.json|guard)|\.claude.{0,100}(?:settings(?:\.local)?\.json|skills/greenlight/)|\.codex.{0,100}config\.toml", code, re.S) and re.search(
+    if re.search(r"\.greenlight.{0,100}(?:config\.json|guard)|\.claude.{0,100}(?:settings(?:\.local)?\.json|skills.{0,100}greenlight)|\.codex.{0,100}config\.toml", code, re.S) and re.search(
             r"write_text|write_bytes|\.write\s*\(|open\s*\(|os\.remove|unlink|rmtree|fs\.write|fs\.rm|writeFile|rmSync", code):
         v.add("deny", f"{lang} code that can change the guard or agent permissions")
     if leak := leaks(code):
@@ -573,6 +574,16 @@ def check_code(code, lang, ctx=None, depth=0):
                     continue
                 func = node.func
                 call = f"{func.value.id}.{func.attr}" if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else ""
+                if call == "shutil.rmtree":
+                    try:
+                        target = ast.literal_eval(node.args[0])
+                    except (ValueError, TypeError, SyntaxError):
+                        target = "~" if "Path.home()" in ast.unparse(node.args[0]) else None
+                    if isinstance(target, str):
+                        v.merge(check_rm([target], ctx))
+                    else:
+                        v.add("high", "shutil.rmtree target cannot be resolved")
+                    continue
                 if call not in ("os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_call",
                                 "subprocess.check_output", "subprocess.Popen"):
                     continue
@@ -610,6 +621,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         return v
     if cmd.rstrip("0123456789.") in INTERPS:
+        if "-m" in args and args.index("-m") + 2 < len(args) and args[args.index("-m") + 1] in ("pip", "pip3", "pipx", "uv") and args[args.index("-m") + 2] in ("install", "add", "get"):
+            v.add("high", f"{cmd} module installs packages that may run scripts with credentials")
         for flag in ("-c", "-e", "--eval", "-r"):
             if flag in args and args.index(flag) + 1 < len(args):
                 v.merge(check_code(args[args.index(flag) + 1], cmd, ctx, depth + 1))
@@ -1278,6 +1291,8 @@ def check_net(cmd, args, ctx):
         v.add("deny", f"the request {leak}", "secret", "egress")
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
     header_vars = {n for a in args if re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for n in secret_vars(a)}
+    if header_vars and any(urlsplit(url).scheme.lower() != "https" for url in urls):
+        v.add("deny", "sends an authentication secret over a non-HTTPS URL", "secret", "egress")
     auth_hosts = {"github.com", "api.github.com", "gitlab.com", "api.gitlab.com"}
     allowed_header = {n for n in header_vars if
                       (hosts <= {"github.com", "api.github.com"} and n.upper().startswith(("GITHUB_", "GH_"))) or
@@ -1607,7 +1622,9 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     why = redact(why)
     ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": [redact(reason) for reason in v.why], "s1": s1, "s1_ms": s1_ms,
           "session": session}
-    scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}"
+    routing_env = {k: os.environ.get(k, "") for k in ("GH_REPO", "GH_HOST", "GLAB_REPO", "GITLAB_HOST", "GIT_SSH_COMMAND")}
+    routing_env.update({k: value for k, value in os.environ.items() if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))})
+    scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}\0{json.dumps(routing_env, sort_keys=True)}\0{v.tier}"
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
     if verdict == "pause" and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
