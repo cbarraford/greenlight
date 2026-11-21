@@ -762,12 +762,12 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd.rstrip("0123456789.") in INTERPS:
         if "-m" in args and args.index("-m") + 2 < len(args) and args[args.index("-m") + 1] in ("pip", "pip3", "pipx", "uv") and args[args.index("-m") + 2] in ("install", "add", "get"):
             v.add("high", f"{cmd} module installs packages that may run scripts with credentials")
-        for flag in ("-c", "-e", "--eval", "-r"):
+        for flag in ("-c", "-e", "--eval", "-r", *(("-p", "--print") if cmd == "node" else ())):
             if flag in args and args.index(flag) + 1 < len(args):
                 v.merge(check_code(args[args.index(flag) + 1], cmd, ctx, depth + 1))
         for arg in args:
-            if re.match(r"^-[cer].+", arg) and arg not in ("-c", "-e", "-r"):
-                v.merge(check_code(arg[2:], cmd, ctx, depth + 1))
+            if re.match(r"^-[cer].+", arg) and arg not in ("-c", "-e", "-r") or cmd == "node" and re.match(r"^-p.+|^--print=.+", arg):
+                v.merge(check_code(arg.split("=", 1)[1] if arg.startswith("--print=") else arg[2:], cmd, ctx, depth + 1))
         if piped_from and not any(a.endswith((".py", ".js", ".rb", ".pl", ".ts")) for a in args) and "-m" not in args:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         if cmd in ("perl", "ruby") and any(re.fullmatch(r"-\w*i\w*|--in-place.*", a) for a in args):
@@ -912,7 +912,12 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 if payload:
                     v.merge(check_argv(payload, ctx, depth + 1))
         return v
-    if cmd in ("dd", "mkfs", "diskutil", "fdisk", "parted") or cmd.startswith("mkfs."):
+    if cmd == "dd":
+        if target := next((a[3:] for a in args if a.startswith("of=") and len(a) > 3), None):
+            v.merge(check_write(ctx.path(target), ctx, "dd output", raw=target))
+        v.add("high", "dd writes disks or files")
+        return v
+    if cmd in ("mkfs", "diskutil", "fdisk", "parted") or cmd.startswith("mkfs."):
         v.add("high", f"{cmd} writes disks")
         return v
     if cmd in ("tee", "cp", "mv", "install", "ln", "truncate", "chmod", "chown", "touch", "mkdir", "rsync"):
@@ -1114,8 +1119,10 @@ def check_git(args, ctx, depth=0):
         v.add("high", "git stash clear discards every stash")
     elif sub == "stash" and rest[:1] == ["drop"]:
         v.add("high", "drops stashed work")
-    elif sub == "branch" and any(x in ("-D", "--delete", "-d", "-M", "--force") for x in rest):
-        v.add("high" if any(x in ("-D", "--delete", "-M", "--force") for x in rest) else "low", f"git {sub} changes branch references")
+    elif sub == "branch" and any(x in ("-D", "--delete", "-d", "-M", "--force", "-f") for x in rest):
+        v.add("high" if any(x in ("-D", "--delete", "-M", "--force", "-f") for x in rest) else "low", f"git {sub} changes branch references")
+    elif sub == "update-ref":
+        v.add("high", "git update-ref can rewrite local branch tips")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
     elif sub == "prune" or sub == "reflog" and rest[:1] in (["delete"], ["expire"]):
@@ -1134,17 +1141,16 @@ def check_git(args, ctx, depth=0):
 def check_push(rest, ctx, v):
     pos = [x for x in rest if not x.startswith("-")]
     flags = [x for x in rest if x.startswith("-")]
-    if not ctx.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
-        v.add("high", "cannot verify the remote default branch before pushing", "egress")
     if any(f == "--recurse-submodules" or f.startswith("--recurse-submodules=") and f != "--recurse-submodules=no" for f in flags) or ctx.git("config", "--get", "push.recurseSubmodules") not in ("", "no", "false"):
         v.add("high", "push may also send uninspected submodule commits", "egress")
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
                 for f in flags) or any(p.startswith("+") for p in pos[1:])
-    if force and not ctx.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
-        v.add("deny", "force push cannot prove the default branch without origin/HEAD", "egress")
     remote = pos[0] if pos else (ctx.git("config", "--get", f"branch.{ctx.branch}.pushRemote") or
                                  ctx.git("config", "--get", "remote.pushDefault") or
                                  ctx.git("config", "--get", f"branch.{ctx.branch}.remote") or "origin")
+    default = advertised_default(ctx, remote)
+    if not default:
+        v.add("deny" if force else "high", "cannot verify the remote default branch before pushing", "egress")
     push_default = ctx.git("config", "--get", "push.default") or "simple"
     if len(pos) < 2 and push_default not in ("simple", "current"):
         v.add("high", f"git push with push.default={push_default} may send other refs", "egress")
@@ -1185,7 +1191,7 @@ def check_push(rest, ctx, v):
         dst = r.lstrip("+").split(":")[-1] if ":" in r else r.lstrip("+")
         dst = ctx.branch if dst == "HEAD" else dst
         dst = re.sub(r"^refs/heads/", "", dst)
-        if dst in ctx.default:
+        if dst == default:
             if force:
                 v.add("deny", f"force-pushes the default branch ({dst})", "egress")
             else:
@@ -1367,6 +1373,28 @@ def check_outgoing_archive(data, path):
     except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError):
         v.add("high", "cannot inspect outgoing archive", "egress")
     return v
+
+
+def advertised_default(ctx, remote):
+    """Resolve the push remote's current default branch without trusting local origin/HEAD."""
+    urls = ctx.git("remote", "get-url", "--push", "--all", remote).splitlines()
+    if len(urls) != 1 or host_of(urls[0]) not in ("github.com", "gitlab.com") or leaks(urls[0]):
+        return ""
+    try:
+        parsed = urlsplit(urls[0])
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return ""
+    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k != "GIT_SSH_COMMAND"}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        output = subprocess.run(["git", "-C", str(ctx.cwd), "ls-remote", "--symref", urls[0], "HEAD"],
+                                capture_output=True, text=True, timeout=2, env=env, check=True).stdout
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return ""
+    match = re.search(r"(?m)^ref:\s+refs/heads/([^\s]+)\s+HEAD$", output)
+    return match[1] if match else ""
 
 
 def advertised_base(ctx, remote, source, target):
@@ -1640,6 +1668,9 @@ def check_net(cmd, args, ctx):
         for flag in ("-D", "--dump-header", "-c", "--cookie-jar"):
             target = opt(args, flag) or next((a[len(flag):] for a in args if len(flag) == 2 and a.startswith(flag) and len(a) > 2), None)
             if target:
+                v.merge(check_write(ctx.path(target), ctx, f"curl {flag} output", raw=target))
+        for flag in ("--trace", "--trace-ascii"):
+            if target := opt(args, flag):
                 v.merge(check_write(ctx.path(target), ctx, f"curl {flag} output", raw=target))
     if cmd == "wget" and not output:
         directory = opt(args, "-P", "--directory-prefix") or "."
