@@ -371,6 +371,19 @@ test("hover card button: greyed \"Please wait…\" until the step is written, th
   assert.deepEqual((await posts(page, "run")).map(m => m.prompt), ["Fix the gofmt error in x.go and push."]);
 });
 
+test("hover card footer: one glyph for the agent (a live one outranks a crash), and the MR link only when there is one", async page => {
+  const foot = (agent, state, mr) => page.evaluate(([agent, state, mr]) => { const p = puckOf("plan-a"); p.agent = agent; p.state = state; p.mr = mr;
+    hideCard(); document.body.append(hoverCard(p));
+    const g = document.querySelector("#hcard .hf .gl"), l = document.querySelector("#hcard .hf .lk");
+    return [g && g.getAttribute("class"), l && l.getAttribute("href"), document.querySelector("#hcard .hfx").textContent] }, [agent, state, mr]);
+  const mr = {iid: 12, ref: "!12", state: "opened", title: "x", web_url: "https://gl/12"};
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["gl idle", "https://gl/12", "Claude is idle"]);
+  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["gl working", "https://gl/12", "Claude is working"]);
+  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["gl waiting", null, "Codex is waiting"]);
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["gl crashed", null, "Claude crashed"]);
+  assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
+});
+
 test("hover card: the smart button on top replaces the next step; Also runs the rest; Merge asks twice", async page => {
   await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle";
     p.mr = {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12"};
@@ -434,7 +447,7 @@ test("hover card: the recommendation shows when it's on you; the steps bar opens
   await page.click("#hcard .sbar");
   assert.equal(await page.getAttribute("#hcard .sbar", "aria-expanded"), "true");
   assert.deepEqual(await page.$$eval("#hcard .chk li", l => l.map(e => e.className + ":" + e.textContent)),
-    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deployon you"]);
   assert.equal(await page.evaluate(() => localStorage.getItem("stepsOpen")), "1");
   await page.focus("#hcard .sbar"); await page.keyboard.press("Enter"); await page.waitForTimeout(300);
   assert.ok(await page.$("#hcard") && !(await page.$("#hcard .chk")), "Enter closes the checklist and the card stays");

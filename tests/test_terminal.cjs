@@ -606,7 +606,7 @@ test("workspace card: the recommendation when it's on you, and the lifecycle bar
   await page.click("#card .sbar");
   assert.equal(await page.getAttribute("#card .sbar", "aria-expanded"), "true");
   assert.deepEqual(await page.$$eval("#card .chk li", l => l.map(e => e.className + ":" + e.textContent)),
-    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deployon you"]);
   await page.keyboard.press("Escape");
   // no rule for the step: the suggestion's advice line, asked for on open; none when it's not on you
   await tree({advice: null, step: "qa", steps: ["mr_open", "qa", "merge"], step_index: 1});
@@ -633,7 +633,7 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   // byline: forge avatars titled with the username; a dead image leaves the initial
   assert.deepEqual(await page.$$eval("#card .by .av", a => a.map(x => x.title)), ["sam", "me", "review-bot"]);
   assert.match(await page.$eval("#card .by", d => d.textContent), /^by s · assigned mr$/);
-  assert.match(await page.$eval("#card .goal", d => d.innerHTML), /<circle/);
+  assert.match(await page.$eval("#card .goal", d => d.innerHTML), /^<span><em class="lb">Goal<\/em>/);  // a well: the caps label over the goal
   assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "info", path: "/w/sidebar"});
   await page.evaluate(() => term.tree({op: "info", path: "/w/sidebar", dirty: 3, unpushed: 0, commit: Date.now() - 7200e3}));
   assert.equal(await page.$eval("#card .st", d => d.textContent), "3uncommitted0unpushed2hlast commit");
