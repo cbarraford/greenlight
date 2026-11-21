@@ -16,4 +16,4 @@ Failed jobs:
 
 5. Show me the cause in one line, the diff, and what you ran to prove it passes.
 
-When I say so: push. Retry a flaky job only when I say so. If {target} is broken too, say so and stop.
+When I say so: run `python3 ~/.claude/skills/greenlight/scripts/greenlight.py scan`, then `python3 ~/.claude/skills/greenlight/scripts/audit.py gate push --execute` from the clean worktree. The gate pushes the audited commit; do not run a separate git push. Retry a flaky job only when I say so. If {target} is broken too, say so and stop.
