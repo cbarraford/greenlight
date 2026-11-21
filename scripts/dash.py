@@ -870,11 +870,22 @@ def design(f, model="claude-haiku-5-5", effort="low"):
 
 
 def ask(prompt, model, effort):
-    """One headless answer: a gemini-* model runs on Gemini CLI, anything else on config llm_harness
+    """One headless answer: a gemini-* model runs on agy, anything else on config llm_harness
     (a Claude model name means nothing to another harness, so that one uses its default)."""
     h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
     cmd, text = harness.argv(h, prompt, model=model, effort=effort)
-    return subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180).stdout
+    output = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180).stdout
+    if h == "agy":
+        for line in reversed(output.splitlines()):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("event") == "result":
+                result = event.get("result") or {}
+                return result.get("response", "") if result.get("status") == "SUCCESS" else ""
+        return ""
+    return output
 
 
 def suggest(name, model="claude-haiku-5-5", effort="low"):

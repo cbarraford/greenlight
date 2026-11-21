@@ -65,9 +65,10 @@ assert harness.interactive("gemini", "go") == ["gemini", "-i", "go"] and harness
 
 # route: which harness runs a model id (chat's model, dash.py's --model)
 assert harness.route("claude-haiku-5-5") == ("claude", "claude-haiku-5-5") and harness.route(None) == ("claude", None)
-assert harness.route("gemini-4-neon") == ("gemini", "gemini-4-neon") and harness.route("gemini") == ("gemini", None)
+assert harness.route("gemini-4-neon-medium") == ("agy", "gemini-4-neon-medium") and harness.route("gemini") == ("gemini", None)
+assert harness.route("gemini-4-neon") == ("agy", "gemini-4-neon-medium")  # old saved choice
 assert harness.route("codex") == ("codex", None)
-assert harness.route("gemini-4-neon", "codex") == ("gemini", "gemini-4-neon")  # a Gemini pick wins over llm_harness
+assert harness.route("gemini-4-neon-medium", "codex") == ("agy", "gemini-4-neon-medium")  # a Gemini pick wins over llm_harness
 assert harness.route("claude-haiku-5-5", "codex") == ("codex", None)  # a Claude name means nothing to codex: its default
 
 # gemini --output-format stream-json (JsonStreamEvent shapes from gemini-cli-core 0.70's output/types)
@@ -103,4 +104,24 @@ k.gemini({"type": "message", "role": "assistant", "content": "No response reques
 k.text = ""  # turn() before the retry
 k.gemini({"type": "init", "session_id": "uuid-2", "model": "gemini-4-neon"})
 assert k.gemini({"type": "message", "role": "assistant", "content": "real", "delta": True})[0] == {"e": "text_reset"}
+cmd, text = harness.argv("agy", "hi", model="gemini-4-neon-medium", system="SYS", stream=True)
+assert cmd == ["agy", "--mode", "accept-edits", "--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-4-neon-medium"]
+assert __import__("json").loads(text)["message"]["content"] == "SYS\n\nhi"
+cmd, text = harness.argv("agy", "again", sid="conv-1", system="SYS")
+assert cmd == ["agy", "--mode", "accept-edits", "--input-format", "stream-json", "--output-format", "stream-json", "--conversation", "conv-1"]
+assert __import__("json").loads(text)["message"]["content"] == "again"
+a = Norm()
+assert a.agy({"event": "init", "conversation_id": "conv-1"}) == []
+assert a.agy({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "pong"}}) == [{"e": "text_reset"}, {"e": "text", "delta": "pong"}]
+step = {"event": "step_update", "step_update": {"step_index": 2, "step_type": "tool", "state": "ACTIVE", "tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "pwd"}}}}
+assert a.agy(step)[0]["detail"] == "pwd"
+step["step_update"].update(state="DONE", tool_info={"output": "Command exited with code 0.\n/tmp"})
+assert a.agy(step)[0]["ok"]
+step["step_update"].update(state="ERROR", tool_info={"error": "permission denied"})
+assert not a.agy(step)[0]["ok"]
+usage = a.agy({"event": "step_update", "step_update": {"step_type": "agent_response", "state": "DONE", "usage": {"input_tokens": 2217, "cache_read_tokens": 6819}}})
+assert usage == [{"e": "usage", "context": 9036}]
+assert a.agy({"event": "result", "result": {"status": "SUCCESS", "response": "pong", "duration_seconds": 1.5}})[0] == {"e": "done", "ok": True, "text": "pong", "context": 9036, "window": None, "ms": 1500}
+denied = Norm().agy({"event": "result", "result": {"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}})[0]
+assert not denied["ok"] and "command" in denied["text"]
 print("test_harness ok")

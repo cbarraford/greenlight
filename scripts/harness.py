@@ -26,16 +26,15 @@ H = {
     # folder it doesn't trust it refuses to start, so both modes pass --skip-trust (trust loads the folder's .gemini
     # settings; what the agent may do is still the approval mode).
     "gemini": {"safe": ["--approval-mode", "auto_edit", "--skip-trust"], "bypass": ["--approval-mode", "yolo", "--skip-trust"], "system": False},
+    "agy": {"safe": ["--mode", "accept-edits"], "bypass": ["--dangerously-skip-permissions"], "system": False},
 }
 def route(model, default="claude"):
-    """The harness that runs `model` and the model id it gets: a harness name runs its default model, gemini-* runs
-    on gemini, anything else (a Claude model, or nothing) on `default`, which gets the model only when it's claude.
-    Gemini CLI passes any -m id to the API as is: gemini-4-neon isn't in its own model list yet
-    (google-gemini/gemini-cli#30385), so the account needs API access to it."""
+    """The harness that runs `model` and the model id it gets. Gemini model IDs run on agy;
+    the plain `gemini` harness name still selects Gemini CLI's default model."""
     if model in H:
         return model, None
     if model and model.startswith("gemini-"):
-        return "gemini", model
+        return "agy", "gemini-4-neon-medium" if model == "gemini-4-neon" else model
     return default, model if default == "claude" else None
 
 
@@ -72,6 +71,11 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
         cmd = [b, "run", *perms, *(["--format", "json"] if stream else []), *opt("-m", model), *opt("--variant", effort), *opt("-s", sid)]
     elif name == "gemini":
         cmd = [b, *perms, *(["--output-format", "stream-json"] if stream else []), *opt("-m", model), *opt("--resume", sid)]
+    elif name == "agy":
+        import json
+        cmd = [b, *perms, "--input-format", "stream-json", "--output-format", "stream-json",
+               *opt("--model", model), *opt("--conversation", sid)]
+        text = json.dumps({"event": "user", "message": {"role": "user", "content": text}}) + "\n"
     else:
         cmd = [b, "-p", *perms, *(["--mode", "json"] if stream else []), *opt("--model", model),
                *opt("--thinking", {"max": "xhigh"}.get(effort, effort)), *opt("--session", sid), *opt("--append-system-prompt", system)]
