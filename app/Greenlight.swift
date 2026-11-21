@@ -5251,17 +5251,17 @@ struct SettingsView: View {
     }
     func count(_ t: String) -> Int? { t == "Projects" ? rs.projs.count : t == "Repositories" ? allRepos.count : t == "Memory" ? rs.notes.count : nil }
 
-    @ViewBuilder var pane: some View {
+    var pane: AnyView {
         switch c.settingsTab {
-        case "Appearance": appearance
-        case "Chat & voice": chat
-        case "Keyboard": keyboard
-        case "Terminal": terminal
-        case "Hosts": hosts
-        case "Automation": automation
-        case "Autonomy": autonomyPane
-        case "Instructions": instructions
-        default: general
+        case "Appearance": return AnyView(appearance)
+        case "Chat & voice": return AnyView(chat)
+        case "Keyboard": return AnyView(keyboard)
+        case "Terminal": return AnyView(terminal)
+        case "Hosts": return AnyView(hosts)
+        case "Automation": return AnyView(automation)
+        case "Autonomy": return AnyView(autonomyPane)
+        case "Instructions": return AnyView(instructions)
+        default: return AnyView(general)
         }
     }
     /// The list-and-detail panes fill the window: their own list column and scrolling.
