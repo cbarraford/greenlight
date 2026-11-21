@@ -105,7 +105,7 @@ def orchestrator(a, log):
     try:
         out, _ = p.communicate(timeout=int(a.get("timeout") or 30) * 60)
         code = p.returncode
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         kill_process_tree(p.pid, nonce=nonce)
         try:
             tail, _ = p.communicate(timeout=5)
@@ -190,7 +190,7 @@ def execute(name):
     with logf.open("w") as log:
         if a.get("precheck"):
             # shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
-            p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),
+            p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),  # noqa: S602
                                text=True, capture_output=True, timeout=300)
             log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
             if p.returncode:

@@ -39,13 +39,13 @@ import hashlib
 import json
 import math
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -210,10 +210,12 @@ def finish(q, raw, provider):
 # ---- providers ----
 
 def post(url, body, headers, timeout):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError(f"unsupported URL scheme: {url!r}")
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",  # noqa: S310
                                  headers={"content-type": "application/json", "user-agent": "greenlight-decide/1", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         detail = e.read()[:300].decode(errors="replace")
