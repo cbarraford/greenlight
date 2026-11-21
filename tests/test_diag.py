@@ -96,4 +96,52 @@ for _ in range(300):
 files = sorted(p.name for p in diag.path().parent.glob("events.jsonl*"))
 assert files == ["events.jsonl", "events.jsonl.1", "events.jsonl.2", "events.jsonl.3"], files
 assert diag.path().stat().st_size < 2000 + 200
+# export: a bundle re-checks every event, and leaves out one that now hits (a phone-shaped token, a term added to leak.re since)
+diag.MAX = 5 << 20
+diag.event("probe", name="555-234-5678")  # a token by shape, a phone number by audit's patterns
+diag.event("probe", name="quokka")
+(Path(HOME) / "leak.re").write_text("zebracorn\nquokka\n")
+diag._leak = False
+app = [{"ts": 1e10, "kind": "js_error", "comp": "app", "name": "TypeError", "line": 3}, {"ts": 1e10, "kind": "x", "comp": "app", "to": "a@b.co"}]
+b = diag.bundle(0, app)
+text = json.dumps(b)
+assert "555-234-5678" not in text and "quokka" not in text and "a@b.co" not in text and "zebracorn" not in text, text[-800:]
+assert b["manifest"]["left_out"] == 1 and any(e.get("name") == "TypeError" for e in b["events"]), b["manifest"]
+assert not any("to" in e for e in b["events"] if e.get("kind") == "x")  # the app's field failed the schema, so it went
+assert set(b) == {"manifest", "summary", "errors", "events"} and "top_errors" not in b["summary"]
+
+# report: the user's own text is checked too, and blocks; a preview files nothing; --execute runs gh on the protocol's repo
+r = diag.report("Crash on scan", "my email is dev@corp.test")
+assert r == {"ok": False, "blocked": "description", "reason": "the description contains an email address: take it out and try again"}, r
+assert diag.report("quokka broke", "")["blocked"] == "title"
+r = diag.report("Crash on scan", "It crashed after Rescan.")
+assert r["ok"] and r["preview"] and r["body"].startswith("It crashed after Rescan.") and len(r["body"]) <= diag.ISSUE_MAX
+assert Path(r["bundle"]).exists() and oct(Path(r["bundle"]).stat().st_mode & 0o777) == "0o600"
+bin_ = Path(HOME, "bin"); bin_.mkdir()
+(bin_ / "gh").write_text(f"#!/bin/sh\necho \"$@\" > {HOME}/gh.args; cat > {HOME}/gh.body; echo https://github.com/x/y/issues/9\n")
+(bin_ / "gh").chmod(0o755)
+os.environ["PATH"] = f"{bin_}:{os.environ['PATH']}"
+r = diag.report("Crash on scan", "It crashed after Rescan.", execute=True)
+assert r["filed"] and r["url"] == "https://github.com/x/y/issues/9", r
+assert Path(HOME, "gh.args").read_text().split()[:4] == ["issue", "create", "--repo", diag.REPO]
+assert Path(HOME, "gh.body").read_text() == r["body"]
+assert diag.report("Crash on scan", "x", execute=True, shown=r["body"] + " dev@corp.test")["blocked"] == "report"
+diag.report("Crash on scan", "x", execute=True, shown="as previewed")
+assert Path(HOME, "gh.body").read_text() == "as previewed"  # the shown body is filed, not a rebuild with newer events
+os.environ["PATH"] = "/nonexistent"
+r = diag.report("Crash on scan", "It crashed.", execute=True)
+assert r["filed"] is False and r["url"].startswith(f"https://github.com/{diag.REPO}/issues/new?"), r
+
+# the check fails closed: if audit can't load, nothing is exported
+sys.modules["audit"] = None
+n = len(list(Path(HOME, "diag").glob("bundle-*")))
+for f in (lambda: diag.bundle(0), lambda: diag.report("t", "x")):
+    try:
+        f()
+    except ImportError:
+        pass
+    else:
+        raise AssertionError("exported without the check")
+assert len(list(Path(HOME, "diag").glob("bundle-*"))) == n
+del sys.modules["audit"]
 print("test_diag ok")

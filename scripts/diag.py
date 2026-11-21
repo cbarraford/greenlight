@@ -4,6 +4,8 @@
     diag.py tail [-n N] [--kind K] [--since 1h] [--run ID]   the newest events, JSON lines
     diag.py errors [--since 24h]                            failures grouped by (component, kind, error, class, where)
     diag.py summary [--since 24h]                           version, environment, config shape, span timings, recent automations
+    diag.py bundle [--since 7d] [--out F|-]                 a bug-report bundle (summary, errors, recent events), re-checked for leaks
+    diag.py report --title T [--body-file F|-] [--execute]  preview the GitHub issue for a bug; --execute files it (gh)
 
 Events go to $GREENLIGHT_HOME/diag/events.jsonl, and the app's own events go to ~/Library/Logs/Greenlight/app.jsonl.
 Both files rotate at 5 MB and keep three old copies. Nothing is uploaded.
@@ -12,6 +14,8 @@ Privacy holds by construction: a field is a number, a bool, or a string under a 
 Free text (messages, argv, stderr, titles, goals, names) never fits that shape, so it is dropped and counted as
 `dropped`. Names that events need to correlate go through h(), a salted hash; the salt never leaves this machine.
 Errors are recorded by exception type, script frames and classify()'s class, never by message.
+A bundle or report re-checks every string against audit.py's secret and personal-data patterns and leak.re: an event
+that hits is left out, and if that check can't run, nothing is exported.
 Stdlib only, and no greenlight import, so every script can use it. Writing never raises.
 """
 import contextlib
@@ -330,6 +334,113 @@ def summary(after):
     }
 
 
+# ---- export: a bug-report bundle and the issue it files. Only ever on the user's say-so.
+
+REPO = "cbarraford/greenlight"
+ISSUE_MAX = 60000  # GitHub's issue body limit is 65536
+BUNDLE_EVENTS = 500
+
+
+def strings(o):
+    """Every string in a JSON value, dict keys included."""
+    if isinstance(o, str):
+        yield o
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield str(k)
+            yield from strings(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from strings(v)
+
+
+def gate():
+    """The export check: text -> the kind of thing it leaks, or None. Raises when it can't be built, so nothing exports."""
+    import audit  # stdlib-only at import; late so writing events never needs it
+    res = [*audit.SECRET_RES, *audit.PERSONAL_RES] + ([(leak(), "a private term")] if leak() else [])
+    return lambda text: next((why for rx, why in res if rx.search(text)), None)
+
+
+def bundle(after, app_events=(), hit=None):
+    """Summary, errors and the newest events, every event re-cleaned and checked: one that hits the gate is left out."""
+    hit = hit or gate()
+    seen, kept, left_out = set(), [], 0
+    for e in sorted([*read(after), *(x for x in app_events if isinstance(x, dict))], key=lambda e: e.get("ts", 0)):
+        key = (e.get("ts"), e.get("pid"), e.get("kind"), e.get("comp"))
+        if key in seen:  # the app's events, when it shares this machine, arrive both ways
+            continue
+        seen.add(key)
+        c = clean(e)  # written by an older version, or by the app: the schema is checked again
+        if any(hit(x) for x in strings(c)):
+            left_out += 1
+        else:
+            kept.append(c)
+    summ = summary(after)
+    summ.pop("top_errors", None)  # computed over unchecked events; errors below are over kept ones
+    b = {"manifest": {"format": 1, "created": round(time.time()), "version": version(), "since": round(after),
+                      "events": len(kept), "left_out": left_out},
+         "summary": summ, "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
+    why = next((w for w in map(hit, strings({"summary": b["summary"], "errors": b["errors"]})) if w), None)
+    if why:
+        raise SystemExit(f"diag: the summary would export {why}; nothing written")
+    return b
+
+
+def save(b):
+    f = home() / "diag" / f"bundle-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as w:
+        json.dump(b, w, indent=1)
+    return f
+
+
+def issue_body(text, b):
+    """The user's description, then the bundle's summary, errors and as many of the newest events as fit."""
+    head = (text.strip() or "_(no description)_") + f"\n\n---\nGreenlight `{b['manifest']['version']}`, diagnostics from `diag.py report`" \
+        f" ({b['manifest']['events']} events, {b['manifest']['left_out']} left out by the privacy check).\n\n"
+
+    def render(ev):
+        d = {"summary": b["summary"], "errors": b["errors"][:20], "events": ev}
+        return head + "<details><summary>Diagnostics</summary>\n\n```json\n" + json.dumps(d, indent=1) + "\n```\n</details>\n"
+    ev = b["events"][-200:]
+    out = render(ev)
+    while len(out) > ISSUE_MAX and ev:  # ponytail: drops events in halves, oldest first; fine at 200
+        ev = ev[len(ev) // 2 + 1:]
+        out = render(ev)
+    return out[:ISSUE_MAX]
+
+
+def report(title, text, app_events=(), execute=False, inline=False, shown=None):
+    """Preview (default) or file the bug as an issue on REPO. The title and description are checked like the events.
+    `shown`: the body a preview returned, filed as it was seen (checked again) instead of rebuilt with newer events."""
+    hit = gate()
+    for what, t in (("title", title), ("description", text), ("report", shown)):
+        why = hit(t or "")
+        if why:
+            return {"ok": False, "blocked": what, "reason": f"the {what} contains {why}: take it out and try again"}
+    if not (title or "").strip():
+        return {"ok": False, "blocked": "title", "reason": "a bug report needs a title"}
+    b = bundle(since("7d"), app_events, hit)
+    out = {"ok": True, "repo": REPO, "title": title.strip(), "body": shown[:ISSUE_MAX] if execute and shown else issue_body(text or "", b),
+           "bundle": str(save(b))}
+    if inline:
+        out["data"] = b
+    if not execute:
+        return {**out, "preview": True}
+    if not shutil.which("gh"):
+        import urllib.parse
+        q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip() + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
+        return {**out, "filed": False, "url": f"https://github.com/{REPO}/issues/new?{q}"}
+    with span("report", tool="gh") as d:
+        p = subprocess.run(["gh", "issue", "create", "--repo", REPO, "--title", out["title"], "--body-file", "-"],
+                           input=out["body"], capture_output=True, text=True, timeout=60)
+        d.update(rc=p.returncode, msg_class=classify(p.stderr) if p.returncode else None)
+    if p.returncode:
+        return {**out, "ok": False, "filed": False, "reason": (p.stderr.strip() or "gh issue create failed")[-500:]}
+    return {**out, "filed": True, "url": p.stdout.strip().splitlines()[-1] if p.stdout.strip() else ""}
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(prog="diag.py", description=__doc__.split("\n\n")[0])
@@ -341,6 +452,14 @@ def main(argv=None):
     t.add_argument("--run")
     for name in ("errors", "summary"):
         sub.add_parser(name).add_argument("--since", default="24h")
+    b = sub.add_parser("bundle")
+    b.add_argument("--since", default="7d")
+    b.add_argument("--out", help="a file, or - for stdout (default: a new file in $GREENLIGHT_HOME/diag)")
+    r = sub.add_parser("report")
+    r.add_argument("--title", default="")
+    r.add_argument("--body-file", help="the description: a file, or - for stdin")
+    r.add_argument("--json", action="store_true", help='stdin is {"title", "body", "app_events", "shown"} (the app); the result includes the bundle')
+    r.add_argument("--execute", action="store_true", help="file it; without this, only a preview")
     a = ap.parse_args(argv)
     if a.cmd == "tail":
         ev = [e for e in read(since(a.since)) if (not a.kind or e.get("kind") == a.kind) and (not a.run or e.get("run") == a.run)]
@@ -348,9 +467,30 @@ def main(argv=None):
             print(json.dumps(e))
     elif a.cmd == "errors":
         print(json.dumps(errors(read(since(a.since))), indent=1))
+    elif a.cmd == "bundle":
+        bd = bundle(since(a.since))
+        if a.out == "-":
+            print(json.dumps(bd, indent=1))
+        elif a.out:
+            Path(a.out).write_text(json.dumps(bd, indent=1))
+            print(a.out)
+        else:
+            print(save(bd))
+    elif a.cmd == "report":
+        if a.json:
+            j = json.loads(sys.stdin.read() or "{}")
+            title, text, app = str(j.get("title") or ""), str(j.get("body") or ""), j.get("app_events") or []
+            shown = j.get("shown") if isinstance(j.get("shown"), str) else None
+        else:
+            title, app, shown = a.title, [], None
+            text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
+        res = report(title, text, app if isinstance(app, list) else [], a.execute, inline=a.json, shown=shown)
+        print(json.dumps(res, indent=1))
+        sys.exit(0 if res["ok"] else 1)
     else:
         print(json.dumps(summary(since(a.since)), indent=1))
 
 
 if __name__ == "__main__":
+    install("diag")
     main()

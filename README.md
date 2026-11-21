@@ -105,6 +105,13 @@ such as `auth` or `timeout`, the code location, the app's menu and button comman
 stderr, paths, hosts, or workspace, branch and MR names: those appear only as salted hashes, and the salt never leaves
 `~/.greenlight/diag/salt`. Nothing is uploaded. Delete it any time with `rm -r ~/.greenlight/diag ~/Library/Logs/Greenlight`.
 
+To report a bug, use the app's **Help › Report a Bug…**, ask Chief to file one, or run
+`diag.py report --title "…" --body-file -` (a preview) and then the same command with `--execute`, which files it on
+cbarraford/greenlight with `gh` (or opens GitHub's form without it). The report carries the trail's summary, its
+errors and its newest events. Every string is checked again against the secret and personal-data patterns `audit.py`
+uses and your `leak.re`: an event that matches is left out, your own text must pass the same check, and if the check
+can't run, nothing is exported. `diag.py bundle` writes the same data to a file (mode 0600) for you to read or attach.
+
 ## Layout
 
 | path | what |

@@ -7847,12 +7847,82 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                             ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
+        _ = menu("Help", [("Report a Bug…", "appReportBug", "")], target: self)
         NSApp.mainMenu = bar
     }
     @objc func appNewWindow() { newTermWindow(sharedOnly, from: NSApp.keyWindow.flatMap { termWins.values.contains($0) ? $0 : nil }) }  // the shared pick
     @objc func appNewL1() { newL1(l1s.values.first { $0.w.isKeyWindow }?.only ?? sharedOnly, from: NSApp.keyWindow) }  // the projects of the one you're in
     @objc func appSettings() { greenlight.settingsOpen = true; greenlight.inboxOpen = false }
     @objc func appReload() { loadFluid(l1s.values.first { $0.w.isKeyWindow }?.web) }
+
+    /// Help › Report a Bug…: a title and description, then the full issue diag.py would file (its trail, re-checked for
+    /// leaks on greenlight's host), then Save… or File on GitHub. Nothing leaves this Mac before that last click.
+    @objc func appReportBug() {
+        let a = NSAlert()
+        a.messageText = "Report a Bug"
+        a.informativeText = "The report goes on GitHub, in public. Greenlight adds its diagnostic trail: event kinds, timings and error classes, with names hashed and no messages. You'll see all of it before anything is sent. Leave names, paths and secrets out of what you write."
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 176))
+        let t = NSTextField(frame: NSRect(x: 0, y: 150, width: 420, height: 24))
+        t.placeholderString = "What went wrong, in a line"
+        let sv = NSTextView.scrollableTextView()
+        sv.frame = NSRect(x: 0, y: 0, width: 420, height: 142)
+        sv.borderType = .bezelBorder
+        let tv = sv.documentView as! NSTextView
+        tv.isRichText = false; tv.font = .systemFont(ofSize: 12); tv.isAutomaticQuoteSubstitutionEnabled = false
+        box.addSubview(t); box.addSubview(sv)
+        a.accessoryView = box
+        a.addButton(withTitle: "Preview…"); a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = t
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        bugReport(t.stringValue, tv.string, execute: false)
+    }
+    /// diag.py report on greenlight's host, with this app's own events on stdin (it checks them like its own).
+    func bugReport(_ title: String, _ body: String, execute: Bool, shown: String? = nil) {
+        let app = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n").suffix(500)
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) }
+        let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown ?? NSNull()])) ?? Data("{}".utf8)
+        var out = ""
+        _ = ssh("\(py)/diag.py report --json\(execute ? " --execute" : "")", stdin: String(decoding: input, as: UTF8.self),
+                onLine: { out += $0 }, onExit: { [weak self] code in
+            let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+            self?.bugResult(j, code, title, body, execute)
+        })
+    }
+    func bugResult(_ j: [String: Any], _ code: Int32, _ title: String, _ body: String, _ executed: Bool) {
+        let a = NSAlert()
+        NSApp.activate(ignoringOtherApps: true)
+        guard j["ok"] as? Bool == true else {
+            a.messageText = j["blocked"] != nil ? "Not sent" : "Couldn't make the report"
+            a.informativeText = j["reason"] as? String ?? "diag.py on \(host.isEmpty ? "this Mac" : host) didn't answer (exit \(code)). Is greenlight synced there?"
+            a.runModal(); return
+        }
+        if executed {
+            a.messageText = j["filed"] as? Bool == true ? "Filed" : "Finish on GitHub"
+            a.informativeText = j["filed"] as? Bool == true ? "Thank you. The issue is open in your browser." :
+                "gh isn't set up where greenlight runs, so GitHub's form is open with your title and description. Attach the bundle you saved."
+            if let u = (j["url"] as? String).flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
+            a.runModal(); return
+        }
+        a.messageText = "This is the whole report"
+        a.informativeText = "It will be public on github.com/\(j["repo"] as? String ?? "cbarraford/greenlight"). Events that failed the privacy check are already left out."
+        let sv = NSTextView.scrollableTextView()
+        sv.frame = NSRect(x: 0, y: 0, width: 560, height: 320)
+        let tv = sv.documentView as! NSTextView
+        tv.isEditable = false; tv.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        tv.string = "\(j["title"] as? String ?? "")\n\n\(j["body"] as? String ?? "")"
+        a.accessoryView = sv
+        a.addButton(withTitle: "File on GitHub"); a.addButton(withTitle: "Save Bundle…"); a.addButton(withTitle: "Cancel")
+        switch a.runModal() {
+        case .alertFirstButtonReturn: bugReport(title, body, execute: true, shown: j["body"] as? String)  // what was shown, not a rebuild
+        case .alertSecondButtonReturn:
+            let s = NSSavePanel()
+            s.nameFieldStringValue = "greenlight-bug-report.json"
+            if s.runModal() == .OK, let u = s.url, let d = j["data"],
+               let data = try? JSONSerialization.data(withJSONObject: d, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: u) }
+        default: break
+        }
+    }
     @objc func appToggleTerm() { toggleTerm() }
     @objc func appJumpTerm() {  // ⌘J from any window: the terminal with its jump palette open (the page catches ⌘J itself when it has focus)
         if !(termWindow.isVisible && termWindow.isKeyWindow) { toggleTerm() }
