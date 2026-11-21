@@ -186,6 +186,12 @@ unclosed_removed = "diff --git a/key.pem b/key.pem\n@@ -1 +0,0 @@\n-" + pem_open
 r = audit.contracts({}, audit.MERGE_CHECKS, diff=unclosed_removed)
 assert r["ok"] and "@pytest.mark.skip" in repr(calls) and pem_open not in repr(calls), r
 calls.clear()
+retained_body = "diff --git a/key.pem b/key.pem\n@@ -1,3 +1,2 @@\n-" + pem_open + "\n " + pem_body + "\n " + pem_close + "\n"
+try: audit.contracts({}, audit.MERGE_CHECKS, diff=retained_body)
+except ValueError as e: assert "private-key material remains" in str(e)
+else: assert False, "retained PEM body after marker removal must fail before the model"
+assert not calls
+calls.clear()
 encrypted_removed = ("diff --git a/key.pem b/key.pem\n@@ -5 +0,0 @@\n-" + pem_open + "\n-Proc-Type: 4,ENCRYPTED\n"
                      "-DEK-Info: AES-256-CBC,0123456789ABCDEF\n-" + pem_body + "\n-" + pem_close + "\n"
                      "diff --git a/tests/test_x.py b/tests/test_x.py\n@@ -1 +1 @@\n-assert result == expected\n+" + "@pytest.mark.skip(reason='broken')\n")
@@ -547,6 +553,14 @@ with mock.patch.object(audit.subprocess, "Popen") as po:
     lk = audit.state_dir() / f"{audit.key(wt, sha)}.lock"
     os.utime(lk, (1, 1))
     assert audit.kick(wt, sha) and po.call_count == 2  # a stale lock (a crashed audit) doesn't hold it forever
+with mock.patch.object(audit.subprocess, "Popen", side_effect=OSError("could not launch")):
+    try: audit.kick(wt, sha, tag="startup-fail", spec={"goal": "g"})
+    except OSError: pass
+    else: assert False, "failed worker launch must be reported"
+assert not (audit.state_dir() / f"{audit.key(wt, sha, 'startup-fail')}.lock").exists()
+assert not (audit.state_dir() / f"{audit.key(wt, sha, 'startup-fail')}.req.json").exists()
+with mock.patch.object(audit.subprocess, "Popen") as po:
+    assert audit.kick(wt, sha, tag="startup-fail", spec={"goal": "g"}) and po.call_count == 1
 row = {"name": "feat", "path": wt, "mr": {"sha": sha, "ref": "#1", "web_url": "https://gh/1"}}
 blk = {"ok": False, "failed": [{"check": "diff_matches_goal", "contract": "NoScopeCreep", "p_broken": 0.9}]}
 with mock.patch.object(greenlight, "ping") as pg:
@@ -803,6 +817,7 @@ with mock.patch.object(audit, "row_for", return_value=scanned), mock.patch.objec
     code, out = cli("gate", "post", str(cf), "--path", wt, "--kind", "review", "--execute")
 assert code == 0 and json.loads(out)["posted"] == ["C1"] and not json.loads(out)["post"], out
 assert posted.call_args.args[:4] == ("o/x", 23, "github", "abc") and posted.call_args.args[4]["body"] == "STRONG: crash on empty input"
+assert posted.call_args.args[5:] == (("abc", "main", "base1"), DIFF)
 with mock.patch.object(audit, "row_for", return_value=scanned), \
      mock.patch.object(audit, "forge_refs", side_effect=[("abc", "main", "base1")] * 3 + [("changed", "main", "base1")]), \
      mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "post_review_comment") as posted:
@@ -959,6 +974,12 @@ with mock.patch.object(audit, "live_thread_snapshot", side_effect=[{"text": "Ori
     else: assert False, "new feedback must remain unresolved"
     assert ran.call_count == 1
 review_cm = {"body": "Exact review point", "path": "app.py", "line": 1}
+with mock.patch.object(audit, "forge_refs", side_effect=[("abc", "main", "base1"), ("abc", "main", "base2")]), \
+     mock.patch.object(audit, "_run") as ran:
+    try: audit.post_review_comment("o/x", 23, "github", "abc", review_cm, ("abc", "main", "base1"), DIFF)
+    except RuntimeError as e: assert "target changed" in str(e)
+    else: assert False, "target move during comment preparation must not post"
+    assert not ran.called
 with mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "_run", return_value=json.dumps({"id": 99, "body": "Exact review point", "path": "app.py", "commit_id": "abc"})) as ran:
     assert audit.post_review_comment("o/x", 23, "github", "abc", review_cm) == "99"
     args = ran.call_args.args[0]
