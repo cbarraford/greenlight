@@ -4,6 +4,9 @@ import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREEN
 import shutil, sys
 import greenlight
 import audit
+assert greenlight.primary_agent([]) == {}
+assert greenlight.primary_agent([{"state": "working", "updatedAt": 1}, {"state": "done", "updatedAt": 2}])["state"] == "working"
+assert greenlight.primary_agent([{"state": "waiting", "updatedAt": 1}, {"state": "working", "updatedAt": 2}])["state"] == "working"
 real_merge_verdict = audit.merge_verdict
 audit.merge_verdict = lambda ws, mr: {"ok": True, "failed": [], "target_oid": "base1"}
 

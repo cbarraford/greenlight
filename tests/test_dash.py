@@ -217,6 +217,18 @@ with mock.patch.object(dash, "live_agents", return_value={
     _pk = {p["name"]: p for p in dash.snapshot()["pucks"]}
 assert (_pk["ws-gh"]["repo"], _pk["openai-live-voice"]["repo"]) == ("greenlight", "greenlight")
 assert (_pk["openai-live-voice"]["state"], _pk["openai-live-voice"]["agent"]["state"], _pk["openai-live-voice"]["agent"]["type"]) == ("working", "working", "claude")
+# A finished review session may update after the parent session. Both PR workspaces must still reach the Agent view.
+_active = {"state": "working", "agentType": "codex", "updatedAt": 10}
+_finished = {"state": "done", "agentType": "claude", "updatedAt": 20}
+_worktrees = [{"worktreeId": n, "displayName": n, "path": "/w/" + n, "branch": "refs/heads/" + n,
+               "repo": "greenlight", "comment": "Merge PR #" + number, "agents": [_active, _finished]}
+              for n, number in (("egress-guard", "65"), ("smart-orchestrator", "66"))]
+with mock.patch.object(dash.greenlight, "orca", return_value={"worktrees": _worktrees}):
+    _selected = dash.live_agents()
+assert {n: a["state"] for n, (_, a) in _selected.items()} == {"egress-guard": "working", "smart-orchestrator": "working"}
+with mock.patch.object(dash, "live_agents", return_value=_selected):
+    _visible = {p["name"]: p for p in dash.snapshot()["pucks"]}
+assert {n: _visible[n]["agent"]["state"] for n in _selected} == {"egress-guard": "working", "smart-orchestrator": "working"}
 # lifestage.py's place for it rides on the puck (this row predates `life`, so it's worked out here), with the live agent's state on top
 assert (pk["life"]["at"], pk["life"]["pile"], pk["life"]["holder"], pk["life"]["suggestion"]["label"]) == ("4.1", "working", "Greenlight", "Mark it ready")
 with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20",
