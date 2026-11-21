@@ -37,6 +37,11 @@ def _batch(state, questions):
 
 fake.bool, fake.score, fake.batch = _bool, _score, _batch
 sys.modules["decide"] = fake
+private_state = {"cwd": "/home/alice/ghp_abcdefghijklmnopqrstuvwxyz0123456789", "nested": ["/Users/bob/private"]}
+seen_state = []
+with mock.patch.object(fake, "batch", side_effect=lambda state, qs: (seen_state.append(state), {k: {"value": True, "prob": .99, "provider": "remote"} for k in qs})[1]):
+    audit.ask(private_state, {"safe": {"type": "bool", "question": "Safe?", "context": "ok"}})
+assert "alice" not in repr(seen_state) and "bob" not in repr(seen_state) and "abcdefghijklmnopqrstuvwxyz" not in repr(seen_state)
 Q = {k: v[1] for k, v in audit.CONTRACTS.items()}
 DIFF = """diff --git a/app.py b/app.py
 --- a/app.py
@@ -114,6 +119,9 @@ removed_path = f"diff --git a/{path_token} b/{path_token}\ndeleted file mode 100
 renamed_path = f"diff --git a/{path_token} b/clean.txt\nrename from {path_token}\nrename to clean.txt\n"
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=removed_path)["ok"]
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=renamed_path)["ok"]
+empty_spaced_secret_path = "credential file " + tok + ".dat"
+empty_spaced_diff = f"diff --git a/{empty_spaced_secret_path} b/{empty_spaced_secret_path}\nnew file mode 100644\nindex 0000000..e69de29\n"
+assert not audit.contracts({}, ("no_secrets_or_pii",), diff=empty_spaced_diff)["ok"]
 plus_diff = "diff --git a/count.cpp b/count.cpp\n--- a/count.cpp\n+++ b/count.cpp\n@@ -0,0 +1 @@\n+++counter; // " + path_token + "\n"
 assert not audit.contracts({}, ("no_secrets_or_pii",), diff=plus_diff)["ok"]  # added content beginning ++ is not a +++ header
 plus_space_diff = "diff --git a/count.cpp b/count.cpp\n--- a/count.cpp\n+++ b/count.cpp\n@@ -0,0 +1 @@\n+++ " + path_token + "\n"
