@@ -542,7 +542,9 @@ def said(ws, mr):
     title = (mr.get("title") or "").strip()
     texts = dict.fromkeys(t for t in ((ws.get("comment", ""),) if ws.get("_goal_backfill") else
                                       (ws.get("goal", ""), ws.get("comment", ""))) if t)
-    if title:
+    # An edited title can absorb an explicit hold from an older goal. Keep the
+    # hold in that ambiguous case; a false hold is safer than an automatic merge.
+    if title and not re.search(r"(?:\(|[—–-]\s*)\s*(?:hold|do ?n[o'’]t merge)\b", title, re.I):
         header = re.compile(rf"^((?:Merge|Review)\s+[#!]\d+:\s*){re.escape(title)}(?=[.!?]?(?:$|\n)|\s+\((?!until\b)|\s+[—–-]\s+)", re.I)
         texts = [header.sub(r"\1", t, count=1) for t in texts]
     return "\n".join(texts)
@@ -1005,7 +1007,8 @@ def goal_with_backfill(comment, worktree_id, backfills, branch=None, linked_mr=N
     remembered = backfills.get(worktree_id)
     if not remembered:
         return goal, False
-    if (comment != remembered.get("comment") or branch is not None and remembered.get("branch", branch) != branch
+    if ((comment != remembered.get("comment") and not (not remembered.get("comment") and not goal))
+            or branch is not None and remembered.get("branch", branch) != branch
             or forge is not None and remembered.get("forge") != forge
             or project is not None and remembered.get("project") != project
             or "linked_mr" in remembered and remembered["linked_mr"] != linked_mr):

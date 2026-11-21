@@ -294,8 +294,9 @@ def risks(row):
     if "out of tokens" in act:
         out.append(act[act.index("[") + 1:].rstrip("]") if "[" in act else "agent out of tokens")
     goal_words = row.get("goal") or ""
-    if mr.get("title"):
-        header = re.compile(rf"^((?:Merge|Review)\s+[#!]\d+:\s*){re.escape(mr['title'].strip())}(?=\s|$)", re.I)
+    if mr.get("title") and not re.search(r"(?:\(|[—–-]\s*)\s*(?:hold|do ?n[o'’]t merge)\b", mr["title"], re.I):
+        header = re.compile(rf"^((?:Merge|Review)\s+[#!]\d+:\s*){re.escape(mr['title'].strip())}"
+                            r"(?=[.!?]?(?:$|\n)|\s+\((?!until\b)|\s+[—–-]\s+)", re.I)
         goal_words = header.sub(r"\1", goal_words, count=1)
     if re.search(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", goal_words, re.I):
         out.append("goal says hold: no merge")
@@ -757,7 +758,9 @@ def top(query, k=5, kinds=("card", "note"), allow=None):
                 for score, doc in candidates:
                     if doc.startswith("card:") and isinstance(allow, dict):
                         name = doc[5:]
-                        card = cards.setdefault(name, load(name))
+                        if name not in cards:
+                            cards[name] = load(name)
+                        card = cards[name]
                         identity = (card.get("forge") or "", card.get("project") or "", card.get("mr_ref") or "",
                                     card.get("sha") or "", card.get("goal_source") or "", card.get("target_branch") or "",
                                     card.get("id") or "", card.get("branch") or "", card.get("last_stage") or "")

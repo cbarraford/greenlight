@@ -89,6 +89,8 @@ assert c["goal_contract"] == "Merge #1 — done when #1 merges"
 assert "done when #1 merges" in ws_state.contract(row("manual"))
 title_hold = row("title-hold", goal="Merge #1: Hold inbound transactions", mrx={"title": "Hold inbound transactions"})
 assert "goal says hold: no merge" not in ws_state.risks(title_hold)
+assert "goal says hold: no merge" in ws_state.risks(row("suffix-hold", goal="Merge !12: Hold until QA signs off", mrx={"title": "Hold"}))
+assert "goal says hold: no merge" in ws_state.risks(row("edited-title-hold", goal="Merge !66: Fix parser (hold until QA)", mrx={"title": "Fix parser (hold until QA)"}))
 assert ws_state.tokens("#7") == ["7"]
 ws_state.observe(row("ref-only", goal="Fix startup timeout", mrx={"iid": 7, "ref": "#7"}))
 assert any(h["name"] == "ref-only" for h in ws_state.top("#7", 5, kinds=("card",)))
@@ -729,6 +731,19 @@ parked_card["dispatches"] = [{"ts": 1, "agent": "launch pending", "step": "ci_gr
 ws_state.save(parked_card)
 parked_action = orchestrate.plan([parked_pending], {"parked-pending": ws_state.load("parked-pending")})[0]
 assert parked_action["do"] == "fork" and parked_action["pending_sig"] == "ci_green@abc"
+nonagent = row("pending-merge", step="merge", owner="greenlight", action="merge", sha="s1",
+               nxt={"cmd": ["gh", "pr", "merge", "1", "--merge"]})
+ws_state.observe(nonagent); nonagent["card"] = "pending-merge"
+nonagent_card = ws_state.load("pending-merge")
+nonagent_card["forks"][orchestrate.sig(nonagent)] = {"awaiting_nonagent": True, "ping_key": "@stuck:pending-merge",
+                                                   "ts": 1, "choice": "ask the user", "done": True}
+ws_state.save(nonagent_card)
+with mock.patch.object(ws_state, "decision_records", return_value=[]):
+    assert orchestrate.plan([nonagent], {"pending-merge": nonagent_card})[-1]["do"] == "skip"
+with mock.patch.object(ws_state, "decision_records", return_value=[{"key": "@stuck:pending-merge", "answered": 2, "choice": 1}]):
+    assert orchestrate.plan([nonagent], {"pending-merge": nonagent_card})[-1]["do"] == "skip"
+with mock.patch.object(ws_state, "decision_records", return_value=[{"key": "@stuck:pending-merge", "answered": 2, "choice": 0}]):
+    assert orchestrate.plan([nonagent], {"pending-merge": nonagent_card})[-1]["do"] == "cmd"
 with mock.patch.object(orchestrate.subprocess, "run", return_value=types.SimpleNamespace(returncode=0, stdout="", stderr="")) as invoked:
     orchestrate.TICK_LOCK_FD = 77
     try:
@@ -909,6 +924,9 @@ forge_acts = [{"do": "cmd", "id": first["id"], "ws": first["name"], "cmd": ["gh"
 with mock.patch.object(orchestrate, "act_one", return_value=["ran first"] ) as run_forge:
     forge_done = orchestrate.act([first, second], {}, forge_acts)
     assert run_forge.call_count == 1 and "forge action cap" in forge_done[-1]
+with mock.patch.object(orchestrate, "act_one", side_effect=[["left cap-first: goal says hold"], ["ran cap-second"]]) as run_forge:
+    forge_done = orchestrate.act([first, second], {}, forge_acts)
+    assert run_forge.call_count == 2 and "ran cap-second" in forge_done
 orchestrate.OPTS["max_forge_actions"] = 5
 same_a, same_b = row("same-pr-a"), row("same-pr-b")
 orchestrate.OPTS["max_dispatch"] = 2

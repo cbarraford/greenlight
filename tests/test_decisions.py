@@ -5,6 +5,7 @@ import json, stat, subprocess, sys
 from pathlib import Path
 from unittest import mock
 import chat, decisions, greenlight
+import dash
 
 recs = decisions.load
 by_q = lambda q: [r for r in recs() if r["question"] == q]
@@ -196,6 +197,14 @@ fake.write_text(FAKE)
 fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 chat.harness.binary = lambda n: str(fake)
 chat.DIR, chat.PIDFILE, chat.emit = str(tmp), str(tmp / "pid"), lambda **e: None
+# The chat must verify the board before recording a new question. Supply the same
+# two workspace identities as the synthetic scan instead of relying on a live ADE.
+allowed = dash.BoardAllow({
+    name: ("gitlab", "acme/widgets", ref, "", "", "", name + "-id", "")
+    for name, ref in (("fix-001", "!101"), ("fix-002", "!102"))
+})
+board = mock.patch.object(dash, "board", return_value=("- fix-001\n- fix-002", allowed))
+board.start()
 (greenlight.STATE / "decisions.jsonl").unlink()
 greenlight.ping("fix-001: approved and green, held by its goal. Merge !101?" + O, "fix-001", kind="merge-held")
 chat.turn('(Replying to your question: "fix-001: approved and green, held by its goal. Merge !101?")\nmerge ASK', "claude-haiku-5-5", None)
