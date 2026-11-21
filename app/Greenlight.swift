@@ -3576,7 +3576,8 @@ final class Core: ObservableObject {
     }
 
     func stop() {
-        guard let r = run, !r.stopping else { if run == nil { cancelPlans() }; return }
+        cancelPlans()
+        guard let r = run, !r.stopping else { return }
         r.stopping = true
         r.status = "Stopping"; r.thinking = false
         ssh("\(chief) stop")
@@ -8707,6 +8708,11 @@ func selfTest() {
     check("dwim: repeated Undo waits for the first request", canBeginDwimUndo(finishedFirst) && !canBeginDwimUndo(inFlightUndo))
     var planGate = DwimPlans(); let cancelledPlan = planGate.begin("hold #42"); let cancelledText = planGate.cancel(); let activePlan = planGate.begin("park #42")
     check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
+    let stopCore = Core(session: -9002), stoppingChief = Run("Chief answer")
+    let stopPlan = stopCore.plans.begin("hold #42")
+    stoppingChief.stopping = true; stopCore.run = stoppingChief; stopCore.stop()
+    check("dwim: Stop invalidates a plan while Chief is active", !stopCore.plans.finish(stopPlan))
+    try? FileManager.default.removeItem(at: stopCore.transcriptFile)
     check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil
           && dwimUndoReply(#"{"ok":true,"undone":["a"],"kept":[]}"#, 0) != nil)
     check("dwim: lost apply reply retains a known Undo id", dwimApplyReply("", failure: "lost", recovery: "abc123abc123")["undo"] as? String == "abc123abc123"
