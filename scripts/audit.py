@@ -497,7 +497,8 @@ def score_outbound(state, comments, *, kind="review", diff="", goal=""):
                 item = {"comment": i, "body": "[redacted: SafeToPublish]", "scores": item["scores"], "mean": item["mean"], "why": item["why"]}
             out["draft"].append(item)
             out["failed"] += [{"comment": i, "contract": b} for b in dict.fromkeys(broken)]
-        elif mean >= c["post"] and not guess and (kind == "reply" or
+        elif mean >= c["post"] and not guess and (kind == "reply" and
+              p_true(ans[f"{i}:thread_truly_addressed"]) >= c["post"] or kind == "review" and
               (sc["evidence"] >= c["draft"] and sc["severity"] >= 0.5 and sc["non_nitpick"] >= 0.75)):
             out["post"].append(item)
         elif mean >= c["draft"] or (guess and kind == "reply"):
@@ -806,15 +807,47 @@ def post_reply(project, iid, forge, thread_id, body, baseline_text):
     raise ValueError(f"unsupported forge: {forge}")
 
 
+def review_position(diff, path, line, side="RIGHT"):
+    """Resolve a comment's old/new path and line from the exact unified diff."""
+    if side not in ("LEFT", "RIGHT") or not isinstance(line, int) or line < 1:
+        raise ValueError("review comment needs a positive line and LEFT or RIGHT side")
+    old_path = new_path = None
+    old_no = new_no = None
+    for row in (diff or "").splitlines():
+        if row.startswith("diff --git "):
+            old_path = new_path = None
+            old_no = new_no = None
+        elif old_no is None and row.startswith("--- "):
+            old_path = row[6:] if row.startswith("--- a/") else None
+        elif old_no is None and row.startswith("+++ "):
+            new_path = row[6:] if row.startswith("+++ b/") else None
+        elif row.startswith("@@ "):
+            m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", row)
+            old_no, new_no = (int(m[1]), int(m[2])) if m else (None, None)
+        elif old_no is not None and new_no is not None and row[:1] in (" ", "+", "-"):
+            old_here = old_no if row[0] != "+" else None
+            new_here = new_no if row[0] != "-" else None
+            wanted_path = old_path if side == "LEFT" else new_path
+            wanted_line = old_here if side == "LEFT" else new_here
+            if wanted_path == path and wanted_line == line:
+                return {"old_path": old_path or new_path, "new_path": new_path or old_path,
+                        "old_line": old_here, "new_line": new_here}
+            old_no += row[0] != "+"
+            new_no += row[0] != "-"
+    raise ValueError("review comment line is not on the requested side of this diff")
+
+
 def post_review_comment(project, iid, forge, sha, cm):
     """Post one approved comment from its scored bytes and pin inline comments to the reviewed commit."""
     body, path, line = cm["body"], cm.get("path"), cm.get("line")
-    if path and line is not None and (not isinstance(line, int) or line < 1):
-        raise ValueError("review comment line must be a positive integer")
+    side = cm.get("side", "RIGHT")
+    if side not in ("LEFT", "RIGHT"):
+        raise ValueError("review comment side must be LEFT or RIGHT")
     if line is not None and not path:
         raise ValueError("review comment line needs a path")
     if forge == "gitlab" and path and line is None:
         raise ValueError("GitLab inline review comments need a line")
+    position = review_position(forge_diff(project, iid, forge, sha), path, line, side) if path and line is not None else None
     gl_refs = None
     if forge == "gitlab" and path:
         endpoint = f"projects/{quote(project, safe='')}/merge_requests/{iid}"
@@ -822,7 +855,7 @@ def post_review_comment(project, iid, forge, sha, cm):
         gl_refs = mr.get("diff_refs") or {}
         if mr.get("sha") != sha or not all(gl_refs.get(k) for k in ("base_sha", "start_sha", "head_sha")) or gl_refs["head_sha"] != sha:
             raise RuntimeError("GitLab diff refs changed before review comment publication")
-    ident = hashlib.sha256(json.dumps([forge, project, iid, sha, body, path, line], sort_keys=True).encode()).hexdigest()[:24]
+    ident = hashlib.sha256(json.dumps([forge, project, iid, sha, body, path, line, side], sort_keys=True).encode()).hexdigest()[:24]
     marker = state_dir() / f"review-{ident}.pending"
     done = marker.with_suffix(".posted")
     if done.exists():
@@ -837,7 +870,7 @@ def post_review_comment(project, iid, forge, sha, cm):
         args = ["gh", "api", "-X", "POST", endpoint, "-f", f"body={body}"]
         if path:
             args += ["-f", f"commit_id={sha}", "-f", f"path={path}"]
-            args += (["-F", f"line={line}", "-f", "side=RIGHT"] if line is not None else ["-f", "subject_type=file"])
+            args += (["-F", f"line={line}", "-f", f"side={side}"] if line is not None else ["-f", "subject_type=file"])
         out = _run(args, timeout=90)
         result = json.loads(out or "null") or {}
         if not result.get("id") or result.get("body") != body or (path and
@@ -849,8 +882,10 @@ def post_review_comment(project, iid, forge, sha, cm):
         if path:
             args += ["-f", "position[position_type]=text", "-f", f"position[base_sha]={gl_refs['base_sha']}",
                      "-f", f"position[start_sha]={gl_refs['start_sha']}", "-f", f"position[head_sha]={sha}",
-                     "-f", f"position[old_path]={path}", "-f", f"position[new_path]={path}",
-                     "-F", f"position[new_line]={line}"]
+                     "-f", f"position[old_path]={position['old_path']}", "-f", f"position[new_path]={position['new_path']}"]
+            for kind in ("old_line", "new_line"):
+                if position[kind] is not None:
+                    args += ["-F", f"position[{kind}]={position[kind]}"]
         out = _run(args, timeout=90)
         result = json.loads(out or "null") or {}
         if not result.get("id") or not any(n.get("body") == body for n in result.get("notes") or []):
@@ -1254,7 +1289,7 @@ def main(argv=None):
                 if len(ids) != len(set(ids)):
                     raise ValueError("duplicate thread_id in reply batch; give each discussion one reply")
             if execute and kind == "review":
-                keys = [(cm["body"], cm.get("path"), cm.get("line")) for cm in comments]
+                keys = [(cm["body"], cm.get("path"), cm.get("line"), cm.get("side", "RIGHT")) for cm in comments]
                 if len(keys) != len(set(keys)):
                     raise ValueError("duplicate review comment in batch; submit each comment once")
             row = row_for(path) or {}
@@ -1281,6 +1316,10 @@ def main(argv=None):
                 raise RuntimeError("the reviewed MR changed while fetching its diff")
             if not diff or not diff.strip():
                 raise RuntimeError(f"no diff to review in {path}")
+            if kind == "review":
+                for cm in comments:
+                    if cm.get("path") and cm.get("line") is not None:
+                        review_position(diff, cm["path"], cm["line"], cm.get("side", "RIGHT"))
             res = score_outbound({"cwd": path, "action": "post", "kind": kind}, comments, kind=kind,
                                  diff=diff, goal=goal_of(row))
             if kind == "reply":
