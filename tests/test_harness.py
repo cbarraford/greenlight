@@ -117,7 +117,11 @@ step = {"event": "step_update", "step_update": {"step_index": 2, "step_type": "t
 assert a.agy(step)[0]["detail"] == "pwd"
 step["step_update"].update(state="DONE", tool_info={"output": "Command exited with code 0.\n/tmp"})
 assert a.agy(step)[0]["ok"]
-assert a.agy({"event": "result", "result": {"status": "SUCCESS", "response": "pong", "duration_seconds": 1.5}})[0] == {"e": "done", "ok": True, "text": "pong", "context": 0, "window": None, "ms": 1500}
+step["step_update"].update(state="ERROR", tool_info={"error": "permission denied"})
+assert not a.agy(step)[0]["ok"]
+usage = a.agy({"event": "step_update", "step_update": {"step_type": "agent_response", "state": "DONE", "usage": {"input_tokens": 2217, "cache_read_tokens": 6819}}})
+assert usage == [{"e": "usage", "context": 9036}]
+assert a.agy({"event": "result", "result": {"status": "SUCCESS", "response": "pong", "duration_seconds": 1.5}})[0] == {"e": "done", "ok": True, "text": "pong", "context": 9036, "window": None, "ms": 1500}
 denied = Norm().agy({"event": "result", "result": {"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}})[0]
 assert not denied["ok"] and "command" in denied["text"]
 print("test_harness ok")
