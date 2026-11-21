@@ -1097,8 +1097,9 @@ def cached_suggest(name):
 
 
 def fresh_suggest(sg, p):
-    """The cached suggestion is for this state, and has an advice line if this puck needs one (older ones have neither)."""
-    return sg.get("sig") == p["sig"] and "label" in sg and (p.get("advice") is not None or "advice" in sg)  # "" is the model's answer: don't ask again
+    """The cached suggestion is complete for this state, including a button label."""
+    return (sg.get("sig") == p["sig"] and bool(sg.get("label"))
+            and (p.get("advice") is not None or "advice" in sg))
 
 
 def split_advice(text):
