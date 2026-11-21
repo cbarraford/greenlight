@@ -1033,10 +1033,15 @@ def design(f, model="claude-haiku-5-5", effort="low"):
 
 def ask(prompt, model, effort):
     """One headless answer: a gemini-* model runs on agy, anything else on config llm_harness
-    (a Claude model name means nothing to another harness, so that one uses its default)."""
+    (a Claude model name means nothing to another harness, so that one uses its default).
+    A failed run answers "": `claude -p` prints its errors ("There's an issue with the selected model ...", a usage limit)
+    on stdout and exits 1, and that text must not become a suggestion the console sends to an agent as its task."""
     h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
     cmd, text = harness.argv(h, prompt, model=model, effort=effort)
-    output = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180).stdout
+    p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180)
+    if p.returncode:
+        return ""
+    output = p.stdout
     if h == "agy":
         for line in reversed(output.splitlines()):
             try:

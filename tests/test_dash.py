@@ -263,6 +263,19 @@ assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
+# a failed model run answers "": `claude -p` prints its error on stdout and exits 1, and that text became the console's
+# suggestion, which was then launched into an agent as its task ("There's an issue with the selected model (gemini-...)")
+_err = "There's an issue with the selected model (claude-gone-1). It may not exist or you may not have access to it. Run --model to pick a different model.\n"
+_run = lambda rc, out: mock.patch.object(dash.subprocess, "run", return_value=_sp_run.CompletedProcess([], rc, stdout=out, stderr=""))
+import subprocess as _sp_run
+with _run(1, _err):
+    assert dash.ask("p", "claude-gone-1", "low") == ""
+with _run(0, "Mark ready\nMark #23 ready.\n"):
+    assert dash.ask("p", "claude-haiku-5-5", "low") == "Mark ready\nMark #23 ready.\n"
+(dash.DASH / "suggest" / "ws-gh.json").unlink()
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "facts", return_value={}), _run(1, _err):
+    _s = dash.suggest("ws-gh", model="claude-gone-1")
+assert _s["prompt"] == "" and "issue" not in json.dumps(_s) and not (dash.DASH / "suggest" / "ws-gh.json").exists(), _s  # nothing cached: asked again next time
 print("ok")
 # advice: a rule when you're the blocker or an agent step has no agent; None -> suggest writes it; "" -> no advice at all
 _r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"step": step, "owner": owner, "action": action, "cmd": cmd},
