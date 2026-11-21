@@ -82,6 +82,7 @@ SECRET_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 SECRET_PATH_RE = re.compile(r"(?:^|/)(?:\.ssh/|\.aws/|\.gnupg/|\.kube/config|\.docker/config\.json|\.netrc|\.git-credentials|\.npmrc|\.pypirc"
                             r"|\.config/gh/hosts\.yml|\.config/glab-cli/|\.config/gcloud/|Library/Keychains/|\.password-store/"
                             r"|\.env(?:\.(?!(?:example|sample|template|dist)$)[\w.-]+)?$|[^/]*credentials[^/]*\.json$|id_(?:rsa|ed25519|ecdsa|dsa)[^/]*$|[^/]+\.(?:pem|p12|pfx|key)$)")
+SECRET_DIR_RE = re.compile(r"(?:^|/)(?:\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.password-store|\.config/gh|\.config/glab-cli|\.config/gcloud|Library/Keychains)$")
 # Writing these would switch the guard off or run code outside the agent's turn: refused.
 GUARD_PATH_RE = re.compile(r"(?:^|/)\.claude/(?:settings(?:\.local)?\.json|skills/greenlight/)|(?:^|/)\.greenlight/(?:config\.json|guard)"
                            r"|(?:^|/)\.codex/config\.toml$")
@@ -242,6 +243,7 @@ def leaks(text):
 
 def redact(text):
     text = SECRET_RE.sub("[credential redacted]", text)
+    text = re.sub(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@/\s]+(@)", r"\1[password redacted]\2", text)
     text = re.sub(r"(?i)(--oauth2-bearer(?:=|\s+))[^\s]+", r"\1[credential redacted]", text)
     text = re.sub(r"(?:^|\s)(?:-u\s*|--user(?:=|\s+))([^\s:]+):([^\s]+)",
                   lambda m: m[0].replace(m[2], "[password redacted]"), text)
@@ -1119,12 +1121,16 @@ def check_git(args, ctx, depth=0):
         v.add("high", "git stash clear discards every stash")
     elif sub == "stash" and rest[:1] == ["drop"]:
         v.add("high", "drops stashed work")
+    elif sub == "tag" and any(x in ("-d", "--delete", "-f", "--force") or re.fullmatch(r"-[A-Za-z]*[df][A-Za-z]*", x) for x in rest):
+        v.add("high", "git tag changes an existing tag reference")
     elif sub == "branch" and any(x in ("-D", "--delete", "-d", "-M", "--force", "-f") for x in rest):
         v.add("high" if any(x in ("-D", "--delete", "-M", "--force", "-f") for x in rest) else "low", f"git {sub} changes branch references")
     elif sub == "update-ref":
         v.add("high", "git update-ref can rewrite local branch tips")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
+    elif sub == "gc" and (not rest or any(x == "--prune" or x.startswith("--prune=") or x == "--aggressive" for x in rest)):
+        v.add("high", "git gc may permanently remove unreachable objects")
     elif sub == "prune" or sub == "reflog" and rest[:1] in (["delete"], ["expire"]):
         v.add("high", f"git {sub} can erase recovery history")
     elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
@@ -1589,6 +1595,9 @@ def check_forge(cmd, args, ctx):
             v.merge(check_write(ctx.path(directory), ctx, f"{cmd} download", raw=directory))
     if verb in FORGE_READ or group in ("help", "version", "--version", "completion"):
         return v
+    if group == "repo" and verb == "clone":
+        v.add("high", f"{cmd} repo clone may run SSH configuration", "egress")
+        return v
     if group in ("secret", "variable", "ssh-key", "gpg-key", "extension", "alias", "config") or group == "repo" and verb in (
             "delete", "archive", "rename", "edit", "create", "fork", "set-default", "unarchive", "deploy-key") or group == "gist" or group == "release":
         v.add("high", f"{cmd} {group} {verb} changes the repo or account, or publishes", "egress")
@@ -1686,7 +1695,8 @@ def check_net(cmd, args, ctx):
     output = opt(args, "-o", "-O" if cmd == "wget" else "-o", "--output", "--output-document")
     output = output or next((a[2:] for a in args if a.startswith(("-o", "-O" if cmd == "wget" else "-o")) and len(a) > 2), None)
     if cmd == "curl" and not output:
-        output = next((args[i + 1] for i, a in enumerate(args) if re.fullmatch(r"-[A-Za-z]*o", a) and i + 1 < len(args)), None)
+        output = next((match[1] for a in args if (match := re.fullmatch(r"-[A-Za-z]*?o(.+)", a))), None)
+        output = output or next((args[i + 1] for i, a in enumerate(args) if re.fullmatch(r"-[A-Za-z]*o", a) and i + 1 < len(args)), None)
     if output:
         if cmd == "curl" and (directory := opt(args, "--output-dir")):
             output = os.path.join(directory, output)
@@ -1881,7 +1891,7 @@ def check_write(p, ctx, how="write", raw=None):
     if raw and "$" in raw and "$" in s:
         v.add("high", f"{how} uses an unresolved variable ({raw})")
     if ctx.unknown and raw and not os.path.isabs(os.path.expanduser(raw)):
-        v.add("medium", f"{how} to {raw} after an unknown directory change")
+        v.add("high", f"{how} to {raw} after an unknown directory change")
     if GUARD_PATH_RE.search(s):
         v.add("deny", f"{how} to {s}: that would change the guard or the agent's own permissions")
     elif ESCAPE_PATH_RE.search(s):
@@ -1909,7 +1919,7 @@ def check_tool(tool, inp, ctx):
         return v
     if tool in ("Read", "Grep", "Glob", "LS"):
         p = inp.get("file_path") or inp.get("path") or ""
-        if p and SECRET_PATH_RE.search(str(ctx.path(p))):
+        if p and (SECRET_PATH_RE.search(str(ctx.path(p))) or SECRET_DIR_RE.search(str(ctx.path(p)))):
             v.add("high", f"reads a credential file ({p})", "secret")
         return v
     if tool == "WebFetch":
