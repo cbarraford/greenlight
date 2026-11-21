@@ -546,6 +546,9 @@ def check_shell(script, ctx, depth=0):
             if item.startswith("GIT_SSH_COMMAND="):
                 v.add("high", "command-local SSH command can run during git network operations", "egress")
                 v.merge(check_shell(item.split("=", 1)[1], ctx, depth + 1))
+            if item.startswith(("GIT_EDITOR=", "VISUAL=", "EDITOR=")):
+                v.add("high", "command-local editor can run during Git operations", "egress")
+                v.merge(check_shell(item.split("=", 1)[1], ctx, depth + 1))
             if item.startswith("GIT_CONFIG_"):
                 v.add("high", "command-local Git configuration may change a push target", "egress")
             if item.startswith(("GH_REPO=", "GLAB_REPO=")) and not own_repo(item.split("=", 1)[1], ctx):
@@ -661,7 +664,7 @@ def check_code(code, lang, ctx=None, depth=0):
                             v.merge(check_write(ctx.path(path), ctx, "inline Python Path.open", raw=path))
                         else:
                             v.add("high", "inline Python .open write target cannot be resolved")
-                if call in ("os.replace", "os.rename", "shutil.move") and len(node.args) > 1:
+                if call in ("os.replace", "os.rename", "shutil.move", "shutil.copy", "shutil.copy2", "shutil.copyfile", "shutil.copytree") and len(node.args) > 1:
                     destination = node.args[1]
                     if isinstance(destination, ast.Call) and ast.unparse(destination.func) == "os.path.expanduser" and destination.args:
                         destination = destination.args[0]
@@ -722,6 +725,16 @@ def check_argv(argv, ctx, depth, piped_from=None):
             v.merge(check_argv(args, ctx, depth + 1, piped_from=piped_from))
         else:
             v.add("high", "BusyBox applet cannot be identified")
+        return v
+    if cmd == "watch":
+        rest = list(args)
+        while rest and rest[0].startswith("-"):
+            takes_value = rest[0] in ("-n", "--interval")
+            rest = rest[2:] if takes_value else rest[1:]
+        if rest:
+            v.merge(check_shell(" ".join(rest), ctx, depth + 1))
+        else:
+            v.add("high", "watch command cannot be identified")
         return v
     if cmd == "openssl" and args[:1] == ["s_client"]:
         v.add("high", "openssl s_client opens a network connection", "egress")
@@ -1404,6 +1417,13 @@ def opt(args, *names):
 def check_forge(cmd, args, ctx):
     v = Verdict()
     a = [x for x in args]
+    while a:
+        if a[0] in ("-R", "--repo", "--hostname") and len(a) > 1:
+            a = a[2:]
+        elif a[0].startswith(("--repo=", "--hostname=")) or a[0].startswith("-R") and len(a[0]) > 2:
+            a = a[1:]
+        else:
+            break
     if not a:
         return v
     group, verb = a[0], (a[1] if len(a) > 1 else "")
@@ -1421,10 +1441,10 @@ def check_forge(cmd, args, ctx):
     repo_env = os.environ.get("GH_REPO" if cmd == "gh" else "GLAB_REPO", "")
     if repo_env and not own_repo(repo_env, ctx) and verb not in FORGE_READ:
         v.add("high", f"{cmd} repository differs from this workspace's repo", "egress")
-    selected_host = opt(a, "--hostname")
+    selected_host = opt(args, "--hostname")
     if selected_host and host_of(selected_host) != origin_host and verb not in FORGE_READ:
         v.add("high", f"{cmd} --hostname differs from this workspace's origin", "egress")
-    text = " ".join(a)
+    text = " ".join(args)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr", "issue") else []),
                 *(["-T", "--template"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
@@ -1452,7 +1472,7 @@ def check_forge(cmd, args, ctx):
                 for source in nested_args[1:]:
                     if not source.startswith("-"):
                         v.merge(check_upload_file(source, ctx, f"{cmd} command output"))
-    other = opt(a, "--repo", "-R") or next((x[2:] for x in a if x.startswith("-R") and len(x) > 2), None)
+    other = opt(args, "--repo", "-R") or next((x[2:] for x in args if x.startswith("-R") and len(x) > 2), None)
     if other and not own_repo(other, ctx):
         if verb not in FORGE_READ:
             v.add("high", f"writes to {other}, not this workspace's repo", "egress")
@@ -1670,6 +1690,10 @@ def check_net(cmd, args, ctx):
             source = opt(args, flag)
             if source:
                 v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
+    if cmd in ("http", "https", "xh", "httpie"):
+        for arg in args:
+            if match := re.match(r"^[A-Za-z_][\w.-]*(?::|==|:=|=)?@(.+)$", arg):
+                v.merge(check_upload_file(match[1], ctx, f"{cmd} upload"))
     if hosts and hosts <= LOCAL_HOSTS and not routed:
         local_method = (opt(args, "-X", "--request", "--method") or next((a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")).upper()
         if local_method in ("POST", "PUT", "PATCH", "DELETE") or any(re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-", a) for a in args):
