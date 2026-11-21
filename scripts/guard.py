@@ -841,11 +841,13 @@ def check_argv(argv, ctx, depth, piped_from=None):
         if archive:
             try:
                 with zipfile.ZipFile(ctx.path(archive)) as fh:
-                    for i, name in enumerate(fh.namelist()):
+                    for i, member in enumerate(fh.infolist()):
                         if i >= 1000:
                             v.add("high", "zip archive has too many entries to inspect")
                             break
-                        v.merge(check_write(ctx.path(os.path.join(directory, name)), ctx, "unzip extraction", raw=name))
+                        v.merge(check_write(ctx.path(os.path.join(directory, member.filename)), ctx, "unzip extraction", raw=member.filename))
+                        if member.external_attr >> 16 & 0o170000 == 0o120000:
+                            v.add("high", "zip archive contains links that can redirect later file operations")
             except (OSError, zipfile.BadZipFile):
                 v.add("high", "cannot inspect zip extraction contents")
         else:
@@ -1702,6 +1704,14 @@ def check_net(cmd, args, ctx):
             output = os.path.join(directory, output)
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
     if cmd == "curl":
+        for i, arg in enumerate(args):
+            extra = args[i + 1] if arg in ("-o", "--output") and i + 1 < len(args) else ""
+            if not extra and arg.startswith("--output="):
+                extra = arg.split("=", 1)[1]
+            if not extra and (match := re.fullmatch(r"-[A-Za-z]*?o(.+)", arg)):
+                extra = match[1]
+            if extra:
+                v.merge(check_write(ctx.path(extra), ctx, "curl output", raw=extra))
         for flag in ("-D", "--dump-header", "-c", "--cookie-jar"):
             target = opt(args, flag) or next((a[len(flag):] for a in args if len(flag) == 2 and a.startswith(flag) and len(a) > 2), None)
             if target:
@@ -1741,6 +1751,10 @@ def check_net(cmd, args, ctx):
         for source in re.findall(r"@([^\s\"']+)", config_text):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if cmd == "wget":
+        if any(a in ("--http-password", "--ftp-password", "--password") or a.startswith(("--http-password=", "--ftp-password=", "--password=")) for a in args):
+            v.add("deny", "wget sends a password supplied on the command line", "secret", "egress")
+        elif any(a in ("--http-user", "--ftp-user", "--user") or a.startswith(("--http-user=", "--ftp-user=", "--user=")) for a in args):
+            v.add("high", "wget sends an explicit username", "secret", "egress")
         if opt(args, "--max-redirect") != "0":
             v.add("high", "wget may follow a redirect to an unapproved host", "egress")
         wgetrc = Path(os.environ.get("WGETRC") or HOME / ".wgetrc")
@@ -1892,7 +1906,7 @@ def check_write(p, ctx, how="write", raw=None):
         v.add("high", f"{how} uses an unresolved variable ({raw})")
     if ctx.unknown and raw and not os.path.isabs(os.path.expanduser(raw)):
         v.add("high", f"{how} to {raw} after an unknown directory change")
-    if GUARD_PATH_RE.search(s):
+    if GUARD_PATH_RE.search(s) or p == (STATE / "config.json").resolve() or p == STATE.resolve():
         v.add("deny", f"{how} to {s}: that would change the guard or the agent's own permissions")
     elif ESCAPE_PATH_RE.search(s):
         v.add("high", f"{how} to {s}: runs code outside the agent's turn")

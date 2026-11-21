@@ -317,6 +317,21 @@ assert tier("gh repo clone acme/widgets") == "high"
 assert tier("glab repo clone acme/widgets") == "high"
 assert tier("", "Grep", {"path": "~/.ssh", "pattern": "PRIVATE"}) == "high"
 assert "inert-pass-742" not in guard.redact("curl -q https://alice:inert-pass-742@example.invalid/path")
+assert tier("curl -q -o safe https://api.github.com/ --next -o ~/.greenlight/config.json https://api.github.com/") == "deny"
+assert tier("wget --max-redirect=0 --http-user=alice --http-password=inert-example https://pypi.org/simple/") == "deny"
+saved_state = guard.STATE
+guard.STATE = repo / "custom-state"
+assert tier("printf '%s' inert > custom-state/config.json") == "deny"
+assert tier("", "Write", {"file_path": str(guard.STATE / "config.json"), "content": "inert"}) == "deny"
+guard.STATE = saved_state
+link_zip = tmp / "link.zip"
+with zipfile.ZipFile(link_zip, "w") as fh:
+    link = zipfile.ZipInfo("redirect")
+    link.create_system = 3
+    link.external_attr = 0o120777 << 16
+    fh.writestr(link, "../outside")
+    fh.writestr("redirect/config.json", "inert")
+assert tier(f"unzip -o {link_zip} -d staging") == "high"
 stale_default = guard.Ctx(repo)
 stale_default._git[("symbolic-ref", "--short", "refs/remotes/origin/HEAD")] = "origin/feat"
 stale_default._git[("rev-parse", "--abbrev-ref", "HEAD")] = "main"
