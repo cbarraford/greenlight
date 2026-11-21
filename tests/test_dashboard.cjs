@@ -51,6 +51,23 @@ async function newTask(page){  // the sheet's one way in: the empty page's butto
 }
 const sheet = page => page.$(".sheet[aria-label='New task']");
 
+test("agent avatars use the OpenAI and Claude logos", async page => {
+  await page.evaluate(s => {
+    s.pucks[0].state = "working";
+    s.pucks[0].agent.state = "working";
+    s.pucks[1].agent.type = "codex";
+    mc.update(s);
+  }, JSON.parse(JSON.stringify(SNAP)));
+  const logos = await page.$$eval(".acard .av svg", es => es.map(e => ({
+    viewBox: e.getAttribute("viewBox"), fill: e.getAttribute("fill"),
+    path: e.querySelector("path").getAttribute("d"), circles: e.querySelectorAll("circle").length
+  })));
+  assert.equal(logos.length, 2);
+  assert.ok(logos.every(e => e.viewBox === "0 0 24 24" && e.fill === "currentColor" && !e.circles));
+  assert.notEqual(logos[0].path, logos[1].path, "providers must have different logos");
+  assert.equal(await page.locator(".acard .av").allTextContents().then(xs => xs.join("")), "");
+});
+
 test("the Plan view is gone: Build is the only view; the bar has no New task, the empty page's opens the sheet", async page => {
   assert.equal(await page.$(".mode"), null);
   assert.equal(await page.evaluate(() => document.getElementById("main").innerText.includes("Plan")), false);
