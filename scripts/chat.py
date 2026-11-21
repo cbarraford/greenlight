@@ -559,10 +559,12 @@ class Norm:
                                       "out": short(result, 120)}, full=clip(result, tail=True)))
         elif event == "result":
             result = d.get("result") or {}
-            ok = result.get("status") == "SUCCESS"
+            denied = result.get("denied_actions") or []
+            ok = result.get("status") == "SUCCESS" and not denied
             reply = result.get("response") or self.text
             duration = result.get("duration_seconds")
-            out.append({"e": "done", "ok": ok, "text": reply if ok else result.get("error") or reply or "agy failed",
+            reason = result.get("error") or ("agy was denied permission for " + ", ".join(str(x.get("action") or "a tool") for x in denied) if denied else "")
+            out.append({"e": "done", "ok": ok, "text": reply if ok else reason or reply or "agy failed",
                         "context": self.context, "window": None, "ms": round(duration * 1000) if isinstance(duration, (int, float)) else None})
         elif event == "error":
             out.append({"e": "status", "text": short(str(d.get("message") or d.get("error") or "agy error"), 80)})
