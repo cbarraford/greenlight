@@ -124,6 +124,13 @@ wrong_target = lambda k, q: ({"choice": "direct_board_action", "confidence": .9,
 with mock.patch.object(dwim, "decide", fake(wrong_target)):
     r = plan("park the auth ones")
     assert r["route"] == "chief" and "disagree" in r["why"], r
+thirteen = [puck(f"service-{i}", 100 + i, goal="unrelated") for i in range(13)]
+some_yes = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
+                         {"choice": "hold", "confidence": .9, "provider": "jev"} if k == "verb" else
+                         {"value": k in ("is:0", "is:12"), "prob": .95, "provider": "jev"})
+with mock.patch.object(dwim, "decide", fake(some_yes)):
+    r = plan("hold the migration ones", thirteen)
+    assert r["route"] == "chief" and "every possible workspace" in r["why"], r
 twins = [puck("search", 42, path="/one", goal="Login auth"), puck("search", 43, path="/two", goal="Billing")]
 twin_pick = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
                           {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else

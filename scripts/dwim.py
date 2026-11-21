@@ -281,6 +281,8 @@ def pick_targets(g, pool, answers):
         if lex:
             pool = lex
         elif any(v is not None for v in sem.values()):  # no literal match: System One can still read an indirect description
+            if len(sem) != len(pool) or any(v is None for v in sem.values()):
+                return None, "System One didn't check every possible workspace"
             pool = [p for i, p in enumerate(pool) if sem.get(i)]
         else:
             pool = lex
