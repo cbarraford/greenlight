@@ -305,6 +305,9 @@ assert o["draft"][0]["why"] == "broke NoBrushOff" and set(o["draft"][0]["scores"
 ans.clear()
 o = audit.score_outbound({}, [{"thread": "why?", "body": "Fixed in 1a2b: the guard now covers n=0, test_n0 added"}], kind="reply")
 assert len(o["post"]) == 1, o
+ans[Q["thread_truly_addressed"]] = {"value": True, "prob": 0.5, "provider": "jev"}
+o = audit.score_outbound({}, [{"thread": "why?", "body": "Fixed in 1a2b: the guard now covers n=0, test_n0 added"}], kind="reply")
+assert not o["post"] and o["draft"], o  # an uncertain real-model NoBrushOff answer cannot resolve a thread
 ans[Q["thread_truly_addressed"]] = {"value": True, "prob": 0.5, "provider": "local"}
 o = audit.score_outbound({}, [{"thread": "why?", "body": "Fixed in 1a2b: the guard now covers n=0, test_n0 added"}], kind="reply")
 assert not o["post"] and o["draft"][0]["why"] == "a guess (no model answered)", o
@@ -907,19 +910,32 @@ with mock.patch.object(audit, "live_thread_snapshot", side_effect=[{"text": "Ori
     else: assert False, "new feedback must remain unresolved"
     assert ran.call_count == 1
 review_cm = {"body": "Exact review point", "path": "app.py", "line": 1}
-with mock.patch.object(audit, "_run", return_value=json.dumps({"id": 99, "body": "Exact review point", "path": "app.py", "commit_id": "abc"})) as ran:
+with mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "_run", return_value=json.dumps({"id": 99, "body": "Exact review point", "path": "app.py", "commit_id": "abc"})) as ran:
     assert audit.post_review_comment("o/x", 23, "github", "abc", review_cm) == "99"
     args = ran.call_args.args[0]
     assert "body=Exact review point" in args and "commit_id=abc" in args and "line=1" in args
-with mock.patch.object(audit, "_run") as ran:
+with mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "_run") as ran:
     try: audit.post_review_comment("o/x", 23, "github", "abc", review_cm)
     except RuntimeError as e: assert "already posted" in str(e)
     else: assert False, "confirmed review comment must not post twice"
     assert not ran.called
-with mock.patch.object(audit, "_run", side_effect=[json.dumps({"sha": "abc", "diff_refs": {"base_sha": "base", "start_sha": "start", "head_sha": "abc"}}),
+with mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "_run", side_effect=[json.dumps({"sha": "abc", "diff_refs": {"base_sha": "base", "start_sha": "start", "head_sha": "abc"}}),
                                                   json.dumps({"id": "D1", "notes": [{"body": "Exact review point"}]})]) as ran:
     assert audit.post_review_comment("o/x", 23, "gitlab", "abc", review_cm) == "D1"
     assert "position[head_sha]=abc" in ran.call_args_list[1].args[0] and "body=Exact review point" in ran.call_args_list[1].args[0]
+rename_diff = "diff --git a/old.py b/new.py\nrename from old.py\nrename to new.py\n--- a/old.py\n+++ b/new.py\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n"
+assert audit.review_position(rename_diff, "new.py", 1) == {"old_path": "old.py", "new_path": "new.py", "old_line": None, "new_line": 1}
+assert audit.review_position(rename_diff, "old.py", 1, "LEFT") == {"old_path": "old.py", "new_path": "new.py", "old_line": 1, "new_line": None}
+assert audit.review_position(rename_diff, "new.py", 2) == {"old_path": "old.py", "new_path": "new.py", "old_line": 2, "new_line": 2}
+try: audit.review_position(rename_diff, "new.py", 50)
+except ValueError: pass
+else: assert False, "an unbound line must be rejected before posting"
+with mock.patch.object(audit, "forge_diff", return_value=rename_diff), mock.patch.object(audit, "_run", side_effect=[json.dumps({"sha": "abc", "diff_refs": {"base_sha": "base", "start_sha": "start", "head_sha": "abc"}}),
+                                                  json.dumps({"id": "D2", "notes": [{"body": "Exact review point"}]})]) as ran:
+    assert audit.post_review_comment("o/x", 23, "gitlab", "abc", {"body": "Exact review point", "path": "old.py", "line": 1, "side": "LEFT"}) == "D2"
+    args = ran.call_args_list[1].args[0]
+    assert "position[old_path]=old.py" in args and "position[new_path]=new.py" in args
+    assert "position[old_line]=1" in args and not any("position[new_line]" in x for x in args)
 print("cli ok")
 g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 assert audit.default_target(wt) == "main"
