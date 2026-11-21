@@ -41,6 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade_common  # noqa: E402
+import audit  # noqa: E402
 import blocking  # noqa: E402
 import greenlight  # noqa: E402
 import harness  # noqa: E402
@@ -118,6 +119,12 @@ AUTO = {
     "merge": ("greenlight says it can merge now", []),
 }
 AUTO_HEAD = "This run was started automatically by Greenlight; nobody is watching. "
+PUSH_RULE = (f" Before any push, run `python3 {greenlight.HERE / 'greenlight.py'} scan` to refresh this workspace's goal "
+             f"and MR, then `python3 {audit.HERE / 'audit.py'} gate push --execute` from its clean worktree. "
+             "The gate audits and pushes the exact commit; use `--target <base branch>` for a nondefault target and do not run a separate git push. "
+             f"Before creating a draft PR/MR, put its exact title, body, and target branch in a JSON file outside the worktree and run "
+             f"`python3 {audit.HERE / 'audit.py'} gate pr <metadata.json> --execute`; the gate audits and creates it. "
+             "Stop and report any block.")
 
 
 def autorun():
@@ -163,15 +170,32 @@ def moves(r, blk=None):
             text = re.sub(r"\{(\w+)\}", lambda m: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
     fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
-    if not fix and nxt.get("step") == "merge" and cmd[:1] in (["gh"], ["glab"]):
+    if not fix and nxt.get("step") == "merge" and (cmd[:1] in (["gh"], ["glab"]) or cmd[2:3] == ["checked-merge"]):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
     if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "ready"})
     for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
         g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) \
             and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
-        if isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1])):
-            m["sha"], m["auto"] = mr.get("sha"), True if m["kind"] == "merge" else f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]}\n\n{m['prompt']}"
+        if not (isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1]))):
+            continue
+        if m["kind"] != "merge":  # the run's own gate, then audit.py's: the contracts before it pushes, the outbound scorer before it posts
+            m["sha"], m["auto"] = mr.get("sha"), f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]} {audit.brief(m['kind'], g)}".rstrip() + f"\n\n{m['prompt']}"
+            continue
+        tag = audit.ident(r, mr)
+        v = audit.cached(r.get("path") or "", mr.get("sha") or "", tag)  # an unattended merge waits on the semantic audit of this head
+        scoped = r.get("project") and mr.get("iid") and r.get("forge") and mr.get("target_branch")
+        valid = audit.fresh(v) and (not scoped or audit.same_target(v, r["project"], mr["iid"], r["forge"], mr["sha"], mr["target_branch"]))
+        if valid and v.get("ok"):
+            m["sha"], m["auto"] = mr.get("sha"), True
+        elif valid:
+            m["audit"] = audit.summary(v)  # held: the user was pinged the failed contracts; the card's Merge is still theirs
+        elif r.get("path") and mr.get("sha"):
+            audit.kick(r["path"], mr["sha"], escalate=True, tag=tag,
+                       spec={"target": mr.get("target_branch"), "goal": audit.goal_of(r, mr), "project": r.get("project"),
+                             "iid": mr.get("iid"), "forge": r.get("forge"), "name": r.get("name"),
+                             "ref": mr.get("ref"), "web_url": mr.get("web_url")})
+            m["audit"] = "auditing"
     return out
 
 
@@ -183,8 +207,19 @@ def tree_merge(path):
     m = next((x for x in moves(r) if x["kind"] == "merge"), None) if r else None
     if not m or not r["mr"].get("sha"):
         return {"error": "greenlight doesn't say this can merge now"}
-    gh = r["next"]["cmd"][0] == "gh"
-    greenlight.run(r["next"]["cmd"] + ["--match-head-commit" if gh else "--sha", r["mr"]["sha"]], timeout=90)
+    cmd = r["next"]["cmd"]
+    if cmd[2:3] == ["checked-merge"]:
+        guarded = cmd
+    elif m.get("auto"):
+        mr = r["mr"]
+        v = audit.cached(path, mr["sha"], audit.ident(r, mr))
+        if not v or not v.get("ok") or not v.get("target_oid"):
+            return {"error": "the audited target commit is unavailable"}
+        guarded = [sys.executable, str(audit.HERE / "audit.py"), "checked-merge", r["forge"], r["project"], str(mr["iid"]),
+                   mr["target_branch"], mr["sha"], v["target_oid"], *cmd]
+    else:
+        guarded = cmd + ["--match-head-commit" if cmd[0] == "gh" else "--sha", r["mr"]["sha"]]
+    greenlight.run(guarded, timeout=90)
     # ponytail: mark it merged in the snapshot so the card stops offering it; greenlight's next scan rewrites the row anyway
     post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
     r["mr"]["state"], r["next"] = "merged", {"step": post[0], "owner": "me", "action": f"merged from Greenlight; next: {post[0].replace('_', ' ')}"} \
@@ -706,7 +741,7 @@ def tree_new(path, o):
         return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
     out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
     if o.get("agent") and wid:
-        prompt = (goal + (gate or {}).get("brief", "")
+        prompt = (goal + (gate or {}).get("brief", "") + PUSH_RULE
                   + f"\n\nIf you implement code, run its tests with `python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` "
                     "in this worktree before opening a draft PR, so the self-test is on record.")
         r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}",
@@ -990,7 +1025,7 @@ def run(name, prompt, worktree_id=None):
     order = list(dict.fromkeys([agent, *greenlight.CONFIG["agents"]]))
     for a in order:
         try:
-            greenlight.orca("agent", "launch", "--agent", a, "--worktree", f"id:{w['worktreeId']}", "--prompt", prompt)
+            greenlight.orca("agent", "launch", "--agent", a, "--worktree", f"id:{w['worktreeId']}", "--prompt", prompt + PUSH_RULE)
             break
         except RuntimeError as e:
             if a == order[-1] or not greenlight.LIMIT_RE.search(str(e)):
@@ -1375,7 +1410,7 @@ def task_new(repo_name, payload):
                "Otherwise implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the "
                f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess. Before you open the MR, run its tests with "
                f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record."
-             + f"\n\nMy request:\n\n{quoted}{gate['brief']}")
+              + f"\n\nMy request:\n\n{quoted}{gate['brief']}" + PUSH_RULE)
     for a in greenlight.CONFIG["agents"]:
         try:
             res = greenlight.orca("worktree", "create", "--repo", f"id:{repo['id']}", "--name", name, "--setup", "skip",
