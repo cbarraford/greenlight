@@ -7,13 +7,16 @@ One JSON object per line in ~/.greenlight/decisions.jsonl. The answer is written
      "workspace", "repo", "role", "step", "owner", "mr",    # the workspace it's about, as of the last scan
      "workspaces": [{...}, ...],                           # only when it's about several: the fields above then hold what they share
      "answer", "answered", "answer_via", "choice",         # choice: the option picked (its index), None for a typed answer
-     "closed"}                                             # ended with no answer: "superseded" or "resolved: <why>"
+     "closed",                                             # ended with no answer: "superseded", "dismissed" (the inbox's ✕) or "resolved: <why>"
+     "proposal"}                                           # autonomy.py's guess before it was asked: {choice, index, prob, tier, provider}; pings of a known kind only
 
 Who writes it: `greenlight.py ping` / `resolve` (pings), chat.py (the menubar chat's own questions, and every answer
 that comes back through it: an inbox chip, a banner reply, a typed message), and `decisions.py hook`, SKILL.md's
 PostToolUse hook on AskUserQuestion (question and answer at once).
 
     decisions.py list [--open] [--json]    # the record, oldest first
+    decisions.py calibrate [--json]        # per kind: how often autonomy.py's proposals matched your answer, by P band
+    decisions.py dismiss < {"text", "key", "ping"}   # the app's ✕ on an inbox question
     decisions.py hook < hook JSON          # Claude Code's PostToolUse payload for one AskUserQuestion call
 
 Stdlib only, and it never imports greenlight.py (whose import reads config and may call the forge).
@@ -116,7 +119,7 @@ def record(text, via, key=None, ws=(), kind=None, also=""):
     question, options = split_options(text)
     sits = situations(ws, f"{question}\n{also}")
     now = time.time()
-    rec = {"id": f"{int(now * 1000):x}-{os.getpid():x}", "ts": int(now), "via": via, "key": key, "kind": kind_of(kind, key, sits),
+    rec = {"id": f"{time.time_ns():x}-{os.getpid():x}", "ts": int(now), "via": via, "key": key, "kind": kind_of(kind, key, sits),
            "question": question, "options": options}
     # one workspace: its situation. Several: what they share (the repo, the step), and each one's own under "workspaces"
     rec |= {f: (v.pop() if len(v := {s[f] for s in sits}) == 1 else None) for f in FIELDS}
@@ -129,18 +132,23 @@ def is_open(r):
     return r["answer"] is None and not r["closed"]
 
 
-def asked(text, via="ping", key=None, ws=(), kind=None, chat=None):
+def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None):
     """Greenlight asked something. Returns the record's id. A newer question on the same key (or a newer chat
     question, in the same chat) supersedes the open one, as in the app's inbox; the same open ping asked again isn't recorded twice.
     chat: which chat asked (chat.py's CHAT_DIR name, a second L1 window's); None: the main one."""
-    rec = record(text, via, key, ws, kind) | ({"chat": chat} if chat else {})
+    rec = record(text, via, key, ws, kind) | ({"chat": chat} if chat else {}) | ({"proposal": proposal} if proposal else {})
     with book() as recs:
         for r in recs:
             if not is_open(r) or r["via"] != via:
                 continue
-            if via == "ping" and r["question"] == rec["question"] and r["key"] == key:
+            if via == "ping" and r["question"] == rec["question"] and r["key"] == key and r["options"] == rec["options"]:
+                r["kind"] = rec["kind"]
+                if proposal:
+                    r["proposal"] = proposal
+                else:
+                    r.pop("proposal", None)
                 return r["id"]
-            if (via == "ping" and key and r["key"] == key) or (via == "chat" and r.get("chat") == chat):
+            if (via == "ping" and ((key and r["key"] == key) or (key is None and r["key"] is None and r["question"] == rec["question"]))) or (via == "chat" and r.get("chat") == chat):
                 r["closed"] = "superseded"
         recs.append(rec)
     return rec["id"]
@@ -180,9 +188,67 @@ def heard(message, chat=None):
         return waiting[-1]
 
 
-def said(reply, chat=None):
-    """Greenlight's reply in the menubar chat: a question when it ends with an Options line (the app puts it in the inbox)."""
-    return asked(reply, via="chat", chat=chat) if reply and split_options(reply)[1] else None
+# the app's own turns (Greenlight.swift checkIn and watchTurn): their questions are the proactive kinds autonomy.py gates
+TURNS = {"(Greenlight's idle check-in": "check-in", "(Greenlight's watch": "watch"}
+
+
+def turn_kind(message):
+    """The kind of question a chat turn's reply asks, from the message that started it: an idle check-in, the watch, else None."""
+    head = (message or "").lstrip()[:200]
+    return next((k for t, k in TURNS.items() if t in head), None)
+
+
+def said(reply, chat=None, kind=None):
+    """Greenlight's reply in the menubar chat: a question when it ends with an Options line (the app puts it in the inbox).
+    kind: turn_kind() of the message it answered."""
+    visible = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
+    return asked(visible, via="chat", chat=chat, kind=kind) if split_options(visible)[1] else None
+
+
+def dismiss(text, key=None, ping=True, chat=None):
+    """The inbox's ✕ on a question: close its open record as dismissed (autonomy.py's gate counts it against its kind)."""
+    question = split_options(text)[0]
+    with book() as recs:
+        for r in reversed(recs):
+            if (is_open(r) and r["via"] == ("ping" if ping else "chat") and r["question"] == question
+                    and ((ping and r["key"] == key) or (not ping and r.get("chat") == chat))):
+                r["closed"] = "dismissed"
+                return r
+    return None
+
+
+T1, T2 = 0.95, 0.65  # autonomy.py's tiers: auto-answer at T1+, preselect at T2+
+
+
+def band(p):
+    return "auto" if p >= T1 else "suggest" if p >= T2 else "ask"
+
+
+def calibrate(recs=None):
+    """Empirical accuracy of autonomy.py's proposals, per kind: {kind: {n, right, acc, bands: {auto|suggest|ask: {n, right, acc}}}}.
+    Right: you picked the proposed option. An auto answer is measured only when the user answers its re-ask."""
+    recs = load() if recs is None else recs
+    f = STATE / "autonomy.jsonl"
+    reasked = {e.get("record"): e.get("reasked_record") for e in map(json.loads, f.read_text().splitlines() if f.exists() else [])
+               if e.get("undone")}
+    by_id = {r["id"]: r for r in recs}
+    out = {}
+    for r in recs:
+        prop = r.get("proposal")
+        if not prop or r["answer"] is None:
+            continue
+        verdict = by_id.get(reasked.get(r["id"])) if r["answer_via"] == "auto" else r
+        if verdict is None or verdict["answer"] is None:
+            continue
+        right = verdict["choice"] == prop["index"]
+        k = out.setdefault(r["kind"], {"n": 0, "right": 0, "bands": {b: {"n": 0, "right": 0} for b in ("auto", "suggest", "ask")}})
+        for s in (k, k["bands"][band(prop["prob"])]):
+            s["n"] += 1
+            s["right"] += right
+    for k in out.values():
+        for s in [k, *k["bands"].values()]:
+            s["acc"] = round(s["right"] / s["n"], 3) if s["n"] else None
+    return out
 
 
 def resolve(key, why):
@@ -247,6 +313,21 @@ def main():
             hook(json.loads(sys.stdin.read() or "{}"))
         except Exception:
             pass
+        return
+    if cmd == "dismiss":
+        try:  # the app's ✕: never in the way
+            d = json.loads(sys.stdin.read() or "{}")
+            dismiss(d["text"], d.get("key"), d.get("ping", True), d.get("chat") or None)
+        except Exception as e:
+            print(f"decision record: {e}", file=sys.stderr)
+        return
+    if cmd == "calibrate":
+        cal = calibrate()
+        if "--json" in sys.argv:
+            return print(json.dumps(cal, indent=1))
+        for k, v in sorted(cal.items()):
+            bands = "  ".join(f"{b} {x['right']}/{x['n']}" for b, x in v["bands"].items() if x["n"])
+            print(f"{k:18} {v['right']}/{v['n']} right ({v['acc']:.0%})   {bands}")
         return
     recs = [r for r in load() if "--open" not in sys.argv or is_open(r)]
     if "--json" in sys.argv:

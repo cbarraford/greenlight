@@ -761,6 +761,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     if os.path.exists(rules):  # the user's standing instructions (Settings → Model), read every turn
         prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
     sid = session(engine)
+    kind = decisions.turn_kind(text)  # the app's idle check-in or watch: its question is that kind (autonomy.py gates them)
     if not compact:
         if not sid and os.path.exists(os.path.join(DIR, "board")):
             os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
@@ -793,7 +794,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     if new_sid:
         session(engine, new_sid)
     if not compact and not err:
-        decisions.quiet("said", norm.reply, chat=CHAT)  # a reply ending in an Options line is a question: record it
+        decisions.quiet("said", norm.reply, chat=CHAT, kind=kind)  # a reply ending in an Options line is a question: record it
         asked, question = os.path.join(DIR, "asked"), asked_question(norm.reply)
         if question:  # the next message answers it: judged with this request (greenlight.read_only)
             open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
