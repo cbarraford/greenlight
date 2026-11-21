@@ -149,7 +149,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #card .br{display:flex;align-items:center;gap:6px;margin-top:-6px;color:var(--dim);font:11px ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;white-space:nowrap} #card .br span{overflow:hidden;text-overflow:ellipsis}  /* minmax(0,1fr): a long branch can't widen the card past 348px */
 #card .by{display:flex;align-items:center;gap:5px;margin-top:-6px;color:var(--dim);font-size:11px} #card .by i{display:flex;margin-left:2px} #card .av{position:relative;display:grid;place-items:center;width:18px;height:18px;margin-left:-4px;border-radius:50%;overflow:hidden;background:var(--hair);color:var(--fg);font:600 9px/1 inherit;font-style:normal;text-transform:uppercase;box-shadow:0 0 0 2px var(--strip)} #card .av:first-child{margin-left:0} #card .av img{position:absolute;inset:0;width:100%;height:100%}
 #card .goal .lb{display:block;margin-bottom:1px;color:var(--dim);font-size:10px;font-weight:600;line-height:1.3;font-style:normal;letter-spacing:.06em;text-transform:uppercase}
-#card .goal{display:block;width:100%;padding:8px 10px;border:0;border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;font-size:12.5px;line-height:1.4;text-align:left} #card .goal.none{background:none;box-shadow:inset 0 0 0 1px var(--hair);color:var(--dim)}
+#card .goal{display:block;width:100%;padding:8px 10px;border:0;border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;font-size:12.5px;line-height:1.4;text-align:left} #card .goal.none{background:none;box-shadow:none;outline:1px dashed var(--hair);outline-offset:-1px} #card .goal.none small{display:block;color:var(--dim)}
 #card textarea{box-sizing:border-box;width:100%;padding:7px 9px;border:0;border-radius:7px;background:var(--bg);color:var(--fg);font:inherit;line-height:1.4;resize:none;outline:2px solid var(--accent)}
 #card .hint{display:flex;align-items:center;gap:10px;margin-top:-4px;color:var(--dim);font-size:10.5px} #card .hint .sp{flex:1} #card .hint .n{font-variant-numeric:tabular-nums} #card kbd{padding:0 5px;border-radius:4px;font:inherit;box-shadow:inset 0 0 0 1px var(--hair)}
 #card .tags{display:flex;flex-wrap:wrap;gap:5px} #card .tag{height:20px;box-sizing:border-box;border-radius:5px;padding:0 7px;font-weight:600}
@@ -160,7 +160,7 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #card .rec .lb{color:var(--dim);font-size:10px;font-weight:600;line-height:1.3;font-style:normal;letter-spacing:.06em;text-transform:uppercase} #card .rec.wait{color:var(--dim)}
 #card .sbar{display:grid;gap:5px;width:100%;padding:0;border:0;background:none;color:var(--dim);font:inherit;font-size:11px;text-align:left;cursor:pointer} #card .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
 #card .sbar .trk{display:flex;align-items:center;gap:3px} #card .sbar .trk i.cur{height:6px;border-radius:3px} #card .sbar .trk i{flex:1;height:4px;border-radius:2px;background:var(--hair)} #card .sbar b{color:var(--b);font-weight:600}
-#card .sbar .sl::after{content:" ▸"} #card .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
+#card .sbar .sl{display:flex;flex-wrap:wrap;column-gap:4px} #card .sbar .lf{order:1;margin-left:auto} #card .sbar .sl::after{content:"▸"} #card .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
 #card .chk{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;color:var(--dim);font-size:11.5px} #card .chk[hidden]{display:none}
 #card .chk li{display:grid;grid-template-columns:14px minmax(0,1fr);gap:7px} #card .chk li.ok{color:var(--fg);opacity:.75} #card .chk li.cur{color:var(--fg);font-weight:600} #card .chk .ow{float:right;margin-left:8px;font-weight:400;color:var(--dim)}
 #card .chk li.sep{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase} #card .chk li.sep::after{content:"";flex:1;height:1px;background:var(--hair)}
@@ -788,7 +788,7 @@ function wsMenu(e, ws, w){
   c.insertAdjacentHTML("beforeend", `<div class="hd"><b>${esc(w.name)}</b>${label ? `<span class="pill k-${k}"><i></i>${label}${w.since ? " · " + dur(w.since) : ""}</span>` : ""}</div>`
     + (w.branch ? `<div class="br" title="${esc(ws)}">${g16(G.branch)}<span>${esc(w.branch)}</span></div>` : "")
     + (m.by ? `<div class="by">by <i>${face(m.by)}</i>${m.assignees?.length ? ` · assigned <i>${m.assignees.map(face).join("")}</i>` : ""}</div>` : ""));
-  const goal = () => btn("goal" + (w.goal ? "" : " none"), `<span><em class="lb">Goal</em>${esc(w.goal || "What does done look like? Set the end state to work toward")}</span>`, editGoal);
+  const goal = () => btn("goal" + (w.goal ? "" : " none"), `<span><em class="lb">Goal</em>${w.goal ? esc(w.goal) : "What does done look like?<small>Set the end state to work toward</small>"}</span>`, editGoal);
   function editGoal(){
     const box = Object.assign(el("textarea"), {value: w.goal || "", rows: 3, maxLength: 500}), hint = el("div", "hint", `<span><kbd>↩</kbd> save</span><span><kbd>esc</kbd> cancel</span><span class="sp"></span><span class="n"></span>`);
     box.setAttribute("aria-label", "Goal"); const cnt = () => hint.querySelector(".n").textContent = `${box.value.length} / 500`; cnt(); box.oninput = cnt;
@@ -863,7 +863,7 @@ function lifeEls(w){
   const st = w.steps || [], n = st.length; if (!n) return out;  // a goal-only tree has no lifecycle
   const i = w.state === "done" ? n : w.step_index ?? 0, after = st.indexOf("merge"), here = w.state === "done" ? "Done" : stepName(w.step || "");
   const bar = el("button", "sbar", `<span class="trk">${st.map((_, k) => `<i${k === i ? ' class="cur"' : ""} style="${k < i ? "background:var(--g)" : k === i ? "background:var(--accent)" : ""}"></i>`).join("")}</span>`
-    + `<span class="sl">Step ${Math.min(i + 1, n)} of ${n} · <b>${esc(here)}</b></span>`);
+    + `<span class="sl">Step ${Math.min(i + 1, n)} of ${n} · <b>${esc(here)}</b>${w.life?.stage_name ? `<span class="lf">${esc(w.life.stage_name + (w.life.sub_name ? ` › ${w.life.sub_name}` : ""))}</span>` : ""}</span>`);
   bar.type = "button"; bar.onclick = () => {
     stepsOpen = !stepsOpen; store("stepsOpen", stepsOpen ? "1" : ""); bar.setAttribute("aria-expanded", stepsOpen); list.hidden = !stepsOpen;
     const c = $("card"), r = c.getBoundingClientRect(); c.style.top = Math.max(6, Math.min(r.top, innerHeight - c.offsetHeight - 6)) + "px" };  // taller: keep it on screen
@@ -871,7 +871,7 @@ function lifeEls(w){
   const list = el("ol", "chk", st.map((k, j) => (j === after + 1 && after >= 0 ? `<li class="sep" aria-hidden="true">After merge</li>` : "")
     + `<li class="${j < i ? "ok" : j === i ? "cur" : ""}"><span aria-hidden="true" style="color:${j < i ? "var(--g)" : j === i ? "var(--accent)" : "inherit"}">${j < i ? "✓" : j === i ? "●" : "○"}</span>`
     + `<span><span class="vh">${j < i ? "done: " : j === i ? "now: " : "ahead: "}</span>${esc(stepName(k))}`
-    + `${j === i && OWNER_SAY[w.owner] ? `<span class="ow">on ${OWNER_SAY[w.owner]}</span>` : ""}</span></li>`).join(""));
+    + `${j === i && OWNER_SAY[w.owner] ? `<span class="ow"><span class="vh"> · </span>on ${OWNER_SAY[w.owner]}</span>` : ""}</span></li>`).join(""));
   list.hidden = !stepsOpen;
   const box = el("div", "life"); box.append(bar, list); out.push(box);
   return out;

@@ -381,6 +381,7 @@ test("hover card footer: one glyph for the agent (a live one outranks a crash), 
   assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["gl working", "https://gl/12", "Claude is working"]);
   assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["gl waiting", null, "Codex is waiting"]);
   assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["gl crashed", null, "Claude crashed"]);
+  assert.deepEqual(await foot({}, "crashed", null), ["gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
   assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
 });
 
@@ -447,7 +448,7 @@ test("hover card: the recommendation shows when it's on you; the steps bar opens
   await page.click("#hcard .sbar");
   assert.equal(await page.getAttribute("#hcard .sbar", "aria-expanded"), "true");
   assert.deepEqual(await page.$$eval("#hcard .chk li", l => l.map(e => e.className + ":" + e.textContent)),
-    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deployon you"]);
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
   assert.equal(await page.evaluate(() => localStorage.getItem("stepsOpen")), "1");
   await page.focus("#hcard .sbar"); await page.keyboard.press("Enter"); await page.waitForTimeout(300);
   assert.ok(await page.$("#hcard") && !(await page.$("#hcard .chk")), "Enter closes the checklist and the card stays");
