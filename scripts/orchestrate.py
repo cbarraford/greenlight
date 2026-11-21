@@ -374,6 +374,19 @@ def plan(rows, cards, judge=True):
                     "ts": prior_question.get("ts") or int(time.time()), "why": why,
                     **({"ping_key": prior_question["ping_key"]} if prior_question.get("ping_key") else {})})
             continue
+        if nxt["owner"] != "agent":
+            prior_question = card.get("forks", {}).get(sig(r)) or {}
+            if prior_question.get("awaiting_nonagent"):
+                if records is None:
+                    records = ws_state.decision_records()
+                answered = next((d for d in records if d.get("key") == prior_question.get("ping_key")
+                                 and d.get("answered", 0) and d["answered"] >= prior_question.get("ts", 0)), None)
+                if not answered:
+                    act(do="skip", why="interrupted launch needs the user's answer")
+                    continue
+                if answered.get("choice") != 0:
+                    act(do="skip", why="the user left the interrupted launch parked")
+                    continue
         if nxt["owner"] == "greenlight" and (cmd := nxt.get("cmd")):
             checked_merge = isinstance(cmd, list) and len(cmd) > 2 and cmd[:3] == [sys.executable, str(Path(greenlight.__file__).with_name("audit.py")), "checked-merge"]
             if not isinstance(cmd, list) or cmd[:1] not in (["glab"], ["gh"]) and not checked_merge:
@@ -865,7 +878,6 @@ def act(rows, cards, acts):
             if forge_actions >= OPTS["max_forge_actions"]:
                 done.append(f"left {name}: forge action cap ({OPTS['max_forge_actions']}) reached this tick")
                 continue
-            forge_actions += 1
         if a["do"] == "skip" and str(a.get("why", "")).startswith("dispatch cap") and launches < OPTS["max_dispatch"]:
             a = plan([r], cards)[-1]  # an earlier launch failed; give this row the unused slot
         launch_action = a["do"] == "dispatch" or a["do"] == "fork" and not (a.get("verdict") or {}).get("done") and \
@@ -882,6 +894,8 @@ def act(rows, cards, acts):
         try:
             result = act_one(r, name, a, cards, live_snapshot, rows)
             done += result
+            if a["do"] == "cmd" and any(x.startswith(("ran ", "FAILED ")) for x in result):
+                forge_actions += 1
             if a["do"] == "goal" and any(x.startswith("backfilled ") for x in result):
                 cards[r["card"]] = ws_state.load(r["card"])
             launches += sum(x.startswith("dispatched ") for x in result)
@@ -893,6 +907,8 @@ def act(rows, cards, acts):
                 if not pending:
                     claimed.discard(request)
         except Exception as e:  # noqa: BLE001 - one workspace's failure never stops the tick
+            if a["do"] == "cmd":
+                forge_actions += 1  # outcome unknown: do not exceed the action cap
             done.append(f"{a['do']} failed on {name}: {type(e).__name__}: {str(e)[:150]}")
     return done
 
@@ -979,15 +995,17 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
                 ping_key = v.get("ping_key") or stuck_key(r, a["sig"])
                 if not set_fork(key, a["sig"], v | {"ping_key": ping_key}, expected):
                     return [f"left {name}: card changed before asking; retry from current situation"]
-                sent_ping = greenlight.ping(f"{name}: greenlight won't re-dispatch on its own: {a['why']}. Next step: {r['next']['action'][:200]} {url}"
-                                            "\nOptions: dispatch again | leave it", key=ping_key, ws=[r["id"]], kind="agent-stuck")
+                nonagent = r["next"]["owner"] != "agent"
+                sent_ping = greenlight.ping(f"{name}: greenlight won't continue on its own: {a['why']}. Next step: {r['next']['action'][:200]} {url}"
+                                            + ("\nOptions: continue | leave it" if nonagent else "\nOptions: dispatch again | leave it"),
+                                            key=ping_key, ws=[r["id"]], kind="agent-stuck")
                 if sent_ping is None and ping_key not in greenlight.pinged():
                     return [f"left {name}: stuck question was not published; pending launch remains unresolved"]
                 if any(d.get("sig") == (a.get("pending_sig") or a["sig"]) and d.get("pending") for d in card["dispatches"]):
                     mark_interrupted(r, a.get("pending_sig") or a["sig"])
                 greenlight.note(name, f"{ref} stuck: {a['why']} → asked the user (orchestrator)")
                 done.append(f"asked about {name}: {a['why']}")
-                set_fork(key, a["sig"], v | {"done": True, "ping_key": ping_key}, expected)
+                set_fork(key, a["sig"], v | {"done": True, "ping_key": ping_key, "awaiting_nonagent": nonagent}, expected)
                 return done
         card = ws_state.load(key)  # the judge or another agent may have written a decision since phase_cards
         first = None

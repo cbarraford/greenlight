@@ -48,6 +48,7 @@ for extra in [" (hold)", " hold", " (hold until 3.22)", " — don't merge", " (d
 assert held("renamed since", f"Merge !290: {t290} (hold)")  # title edited after the goal was written: still held
 assert held("Hold", "Merge !290: Hold\nHold until #67 merges")  # a second occurrence is an instruction
 assert held("Hold", "Merge !12: Hold until QA signs off")  # a title prefix must not erase an explicit hold
+assert held("Fix parser (hold until QA)", "Merge !66: Fix parser (hold until QA)")  # edited title must not absorb a goal's hold
 assert not greenlight.intents({"goal": "Merge !12: Document the (parked) label (keep draft)", "comment": ""},
                               {"title": "Document the (parked) label"})["is_parked"]
 assert not greenlight.intents({"goal": "Merge !12: Document the (parked) label (hold until QA)", "comment": ""},
@@ -85,6 +86,7 @@ assert nxt(mr(draft=True)) == ("ready", "greenlight")
 assert nxt(mr(draft=True), ws("Merge !1 (stay draft)")) == ("ready", "me")
 remembered = {"wid": {"comment": "", "goal": "Merge !1: x (stay draft)"}}
 assert greenlight.goal_with_backfill("", "wid", remembered) == ("Merge !1: x (stay draft)", False)
+assert greenlight.goal_with_backfill("Review !1 — dispatched 2026-11-21", "wid", remembered) == ("Merge !1: x (stay draft)", False)
 assert greenlight.goal_with_backfill("new user goal", "wid", remembered) == ("new user goal", True)
 remembered = {"wid": {"comment": "", "goal": "Merge !12: old", "branch": "feature", "linked_mr": 12}}
 assert greenlight.goal_with_backfill("", "wid", remembered, "feature", 34) == ("", True)
