@@ -424,7 +424,10 @@ def unwrap(argv):
         elif b in WRAPPERS:
             v = v[1:]
             while v and v[0].startswith("-"):
+                takes_value = b == "sudo" and v[0] in ("-u", "-g", "-h", "-p", "--user", "--group", "--host", "--prompt")
                 v = v[1:]
+                if takes_value:
+                    v = v[1:]
         elif b == "env":
             rest = v[1:]
             while rest and (rest[0].startswith("-") or "=" in rest[0]):
@@ -495,6 +498,9 @@ def check_shell(script, ctx, depth=0):
         if piped and any(os.path.basename(item) == "xargs" for item in argv):
             v.add("high", "xargs runs a command with file paths from a pipe")
         argv = unwrap(argv)
+        if argv and argv[0] in ("if", "then", "fi", "for", "do", "done", "while", "until", "case", "esac"):
+            v.add("high", "shell control syntax contains commands this parser cannot isolate")
+            continue
         if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
             to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
             if to is None or to == "-" or "$" in to or "`" in to:
@@ -768,7 +774,9 @@ def check_git(args, ctx):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
         v.add("medium", "git stash clear discards every stash")
-    elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest) or sub == "stash" and rest[:1] == ["drop"]:
+    elif sub == "stash" and rest[:1] == ["drop"]:
+        v.add("high", "drops stashed work")
+    elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest):
         v.add("low", f"git {sub} deletes work")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
@@ -971,7 +979,8 @@ def check_forge(cmd, args, ctx):
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr", "issue") else []),
                 *(["-T", "--template"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
-    bfile = bfile or next((x[2:] for x in a if x.startswith("-T") and len(x) > 2), None)
+    bfile = bfile or next((x[2:] for x in a if (x.startswith("-F") and len(x) > 2 and group in ("pr", "mr", "issue")) or
+                         (x.startswith("-T") and len(x) > 2 and group in ("pr", "mr"))), None)
     for source in filter(None, (bfile, opt(a, "--input"))):
         v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     for i, field in enumerate(a):
@@ -1020,8 +1029,8 @@ def check_forge(cmd, args, ctx):
             v.add("high", "cannot inspect the head branch used to fill the PR", "egress")
         else:
             v.merge(check_outgoing_commits(ctx, "origin", source, default))
-    if group == "gist" and verb == "create" or group == "release" and verb == "upload":
-        for source in a[2:]:
+    if group == "gist" and verb == "create" or group == "release" and verb in ("upload", "create"):
+        for source in a[3:] if group == "release" and verb == "create" else a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
                 v.merge(check_upload_file(source, ctx, f"{cmd} {group} upload"))
     if verb == "download":
@@ -1040,6 +1049,12 @@ def check_forge(cmd, args, ctx):
         return v
     low = {("pr", "create"), ("pr", "edit"), ("pr", "ready"), ("mr", "create"), ("mr", "update"), ("pr", "checkout"), ("mr", "checkout")}
     if (group, verb) in low:
+        if (group, verb) in (("pr", "edit"), ("pr", "ready"), ("mr", "update")):
+            goal = situation(ctx)[1]
+            expected = re.search(r"[#!](\d+)", goal)
+            target = a[2] if len(a) > 2 and not a[2].startswith("-") else ""
+            if not expected or target != expected[1]:
+                v.add("high", f"{cmd} {group} target is not verified as this workspace's PR/MR", "egress")
         v.add("low", f"{cmd} {group} {verb} on this workspace's PR/MR", "egress")
     elif group in ("pr", "mr", "issue") and verb in ("comment", "note", "review", "reply", "create", "edit", "update"):
         v.add("medium", f"{cmd} {group} {verb} posts text to the forge", "egress")
@@ -1088,6 +1103,12 @@ def check_net(cmd, args, ctx):
     user = opt(args, "-u", "--user") or next((a[2:] for a in args if a.startswith("-u") and len(a) > 2), None)
     if user:
         v.add("deny" if ":" in user else "high", f"{cmd} sends credentials from --user", "secret", "egress")
+    cookie = opt(args, "-b", "--cookie") or next((a[2:] for a in args if a.startswith("-b") and len(a) > 2), None)
+    if cookie:
+        if "=" in cookie:
+            v.add("high", f"{cmd} sends a literal cookie", "secret", "egress")
+        else:
+            v.merge(check_upload_file(cookie, ctx, f"{cmd} cookie"))
     for i, arg in enumerate(args):
         value = args[i + 1] if arg == "--variable" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--variable=") else ""
         if "@" in value:
@@ -1157,9 +1178,9 @@ def check_net(cmd, args, ctx):
                 v.merge(check_upload_file(form.split("=<", 1)[1].split(";", 1)[0], ctx, f"{cmd} form upload"))
         elif a.startswith(("-F", "--form=")) and "=<" in a:
             v.merge(check_upload_file(a.split("=<", 1)[1].split(";", 1)[0], ctx, f"{cmd} form upload"))
-        if a in ("-d", "-F", "--data", "--data-binary", "--data-urlencode", "--form", "-T", "--upload-file") and i + 1 < len(args):
+        if a in ("-d", "-F", "--data", "--data-binary", "--data-urlencode", "--form", "--json", "-T", "--upload-file") and i + 1 < len(args):
             source = args[i + 1]
-        elif a.startswith(("--data=", "--data-binary=", "--data-urlencode=", "--form=", "--upload-file=")):
+        elif a.startswith(("--data=", "--data-binary=", "--data-urlencode=", "--form=", "--json=", "--upload-file=")):
             source = a.split("=", 1)[1]
         elif a.startswith(("-d@", "-F", "-T")) and len(a) > 2:
             source = a[2:]
