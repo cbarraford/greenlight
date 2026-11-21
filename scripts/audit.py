@@ -75,6 +75,8 @@ REPLY_RUBRICS = {
 # A credential shape in outbound text blocks whatever the model says. Kept tight: a false hit stops an unattended run.
 SECRET_RES = [
     (re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"), "a private key"),
+    (re.compile(r"(?i)\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/-]{20,}={0,2}\b"), "a bearer credential"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), "a JWT credential"),
     (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b"), "a GitHub token"),
     (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"), "a GitLab token"),
     (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "an AWS access key"),
