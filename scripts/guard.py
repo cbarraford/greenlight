@@ -204,7 +204,7 @@ class Ctx:
 
     def inside(self, p):
         """In the worktree (not its .git) or a temp dir that isn't another repo (a sibling worktree under /tmp)."""
-        s, root = str(p), self.root and str(self.root)
+        s, root = str(p), (self.source_root or self.root) and str(self.source_root or self.root)
         if root and s.startswith(root + "/"):
             return "/.git/" not in s[len(root):] + "/" and not s.endswith("/.git")
         if any(s == t or s.startswith(t + "/") for t in temp_dirs()):
@@ -405,14 +405,14 @@ def commands(script):
         elif t in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "&>|"):
             want = "write" if t != "<&" else "skip"
         elif t and set(t) <= set(";&|()"):
-            if argv:
+            if argv or redir or inputs:
                 out.append((argv, redir, inputs, piped))
             argv, redir, inputs, piped = [], [], [], t == "|"
         elif t in ("<", "<<", "<<<", "<<-"):
             want = "read" if t == "<" else "herestring" if t == "<<<" else "skip"
         else:
             argv.append(t)
-    if argv:
+    if argv or redir or inputs:
         out.append((argv, redir, inputs, piped))
     return out
 
@@ -497,6 +497,9 @@ def check_shell(script, ctx, depth=0):
             if SECRET_PATH_RE.search(str(ctx.path(r))):
                 v.add("high", f"reads a credential file through input redirection ({r})", "secret")
         for item in argv:
+            if item.startswith("GIT_SSH_COMMAND="):
+                v.add("high", "command-local SSH command can run during git network operations", "egress")
+                v.merge(check_shell(item.split("=", 1)[1], ctx, depth + 1))
             if item.startswith("GIT_CONFIG_"):
                 v.add("high", "command-local Git configuration may change a push target", "egress")
             if item.startswith(("GH_REPO=", "GLAB_REPO=")) and not own_repo(item.split("=", 1)[1], ctx):
@@ -767,7 +770,7 @@ READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "ag", "jq", "wc"
 
 def check_git(args, ctx):
     v = Verdict()
-    a = list(args)
+    a = [part for arg in args for part in (["-c", arg[2:]] if arg.startswith("-c") and len(arg) > 2 else [arg])]
     source_root = ctx.source_root or ctx.root
     push_override = False
     while a and a[0].startswith("-"):  # git -C dir -c k=v ...
@@ -789,6 +792,9 @@ def check_git(args, ctx):
         return v
     sub, rest = a[0], a[1:]
     if sub == "push":
+        if os.environ.get("GIT_SSH_COMMAND"):
+            v.add("high", "inherited SSH command can run during git push", "egress")
+            v.merge(check_shell(os.environ["GIT_SSH_COMMAND"], ctx, 1))
         if any(k.startswith("GIT_CONFIG_KEY_") and re.match(r"(?i)(remote\.|branch\.|push\.|url\.)", value)
                for k, value in os.environ.items()):
             v.add("high", "inherited Git configuration may change the push target", "egress")
@@ -809,6 +815,8 @@ def check_git(args, ctx):
         url = next((x for x in rest if not x.startswith("-")), "")
         if host_of(url) not in HOSTS | LOCAL_HOSTS and re.match(r"[\w+.-]+://|[^/]+@[^/]+:", url):
             v.add("low", f"clones from {host_of(url)}", "egress")
+    elif sub in ("fetch", "pull", "ls-remote") and any(re.match(r"[\w+.-]+://|[^/]+@[^/]+:", x) for x in rest):
+        v.add("low", f"git {sub} reaches an explicit network URL", "egress")
     elif sub == "reset" and "--hard" in rest:
         v.add("medium", "git reset --hard drops uncommitted work")
     elif sub == "restore":
