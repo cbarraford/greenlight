@@ -746,8 +746,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
         v.add("high", f"{cmd} reads a secret store", "secret")
         return v
     if cmd in ("pip", "pip3", "npm", "pnpm", "yarn", "cargo", "go", "gem", "brew", "apt", "apt-get") and args[:1] and args[0] in (
-            "install", "add", "i", "get") and len([a for a in args[1:] if not a.startswith("-")]) > 0:
-        v.add("low", f"{cmd} installs packages from the network")
+            "install", "add", "i", "get"):
+        v.add("high", f"{cmd} installs packages that may run scripts with the agent's credentials")
         return v
     if cmd in ("npx", "pnpx", "bunx", "uvx", "pipx") and args:
         v.add("low", f"{cmd} fetches and runs a package")
@@ -757,7 +757,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
         if a.startswith("-"):
             continue
         p = ctx.path(a.split("=", 1)[-1] if a.startswith("--") else a)
-        if SECRET_PATH_RE.search(str(p)):
+        if SECRET_PATH_RE.search(str(p)) or p.is_dir() and p.name in (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".password-store"):
             v.add("high", f"reads a credential file ({a})", "secret")
         elif GUARD_PATH_RE.search(str(p)) and cmd not in READERS:
             v.add("deny", f"{cmd} on {a}: it could change the guard or the agent's own permissions")
@@ -825,6 +825,8 @@ def check_git(args, ctx):
         v.add("medium", "git checkout -- can discard uncommitted work")
     elif sub == "checkout" and any(x in ("-f", "--force") for x in rest) or sub == "switch" and any(x in ("-f", "--force", "--discard-changes") for x in rest):
         v.add("medium", f"git {sub} discards uncommitted work")
+    elif sub in ("checkout", "switch") and any(x in ("-B", "-C", "--force-create") for x in rest):
+        v.add("high", f"git {sub} can reset an existing branch tip")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
@@ -1149,6 +1151,14 @@ def workspace_project(ctx):
 
 def check_net(cmd, args, ctx):
     v = Verdict()
+    if cmd == "curl" and args[:1] not in (["-q"], ["--disable"]):
+        configs = [Path(os.environ.get("CURL_HOME") or HOME) / ".curlrc",
+                   Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "curlrc", HOME / ".curlrc"]
+        try:
+            if any(p.is_file() and p.stat().st_size for p in configs):
+                v.add("high", "curl loads a default config the guard cannot safely infer", "egress")
+        except OSError:
+            v.add("high", "cannot inspect curl's default config", "egress")
     urls = [a for a in args if re.match(r"(?i)[a-z][a-z0-9+.-]*://", a) or (not a.startswith("-") and re.match(r"[\w.-]+\.[a-z]{2,}(?:[:/]|$)", a))]
     hosts = {host_of(u) for u in urls}
     for url in urls:
@@ -1161,6 +1171,8 @@ def check_net(cmd, args, ctx):
         v.add("high", f"{cmd} can route through a different network destination", "egress")
     if "--expand-url" in args:
         v.add("high", f"{cmd} expands a URL after the guard inspects it", "egress")
+    if cmd == "curl" and any(a in ("--unix-socket", "--abstract-unix-socket") or a.startswith(("--unix-socket=", "--abstract-unix-socket=")) for a in args):
+        v.add("high", "curl uses a local service socket with possible side effects", "egress")
     if cmd == "curl" and ("--location" in args or "--location-trusted" in args or
                            any(re.fullmatch(r"-[A-Za-z]*L[A-Za-z]*", a) for a in args)):
         v.add("high", "curl may follow a redirect to another host", "egress")
@@ -1229,6 +1241,9 @@ def check_net(cmd, args, ctx):
             if source:
                 v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     if hosts and hosts <= LOCAL_HOSTS and not routed:
+        local_method = (opt(args, "-X", "--request", "--method") or "").upper()
+        if local_method in ("POST", "PUT", "PATCH", "DELETE") or any(re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-", a) for a in args):
+            v.add("high", f"{cmd} writes to a local service", "egress")
         return v
     data = [a for a in args if re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-|--body-|--method", a)]
     if cmd in ("http", "https", "xh", "httpie"):
