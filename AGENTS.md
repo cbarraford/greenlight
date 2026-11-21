@@ -33,6 +33,10 @@ the host: the checkout is `~/.claude/skills/greenlight`.
 - Names are salted hashes (`ws_h`, `mr_h`, `name_h`): stable within one install, meaningless outside it. Ask the user
   which workspace or MR they mean; don't try to reverse them.
 
+**Bug reports**: `diag.py bundle` (a file) and `diag.py report --title T --body-file F` (a preview; `--execute` files it on
+cbarraford/greenlight). Both re-check every string with `audit.py`'s patterns and `leak.re` and fail closed. Never file
+without the user's yes, and never attach anything but a bundle.
+
 ## Privacy rules (the trail may be shared publicly)
 
 - Never add free text to an event: no messages, argv, stderr, titles, goals, branch or workspace names, paths or hosts.
