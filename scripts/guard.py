@@ -512,7 +512,7 @@ def check_code(code, lang, ctx=None, depth=0):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
-    if re.search(r"\.greenlight/(?:config\.json|guard)|\.claude/(?:settings(?:\.local)?\.json|skills/greenlight/)|\.codex/config\.toml", code) and re.search(
+    if re.search(r"\.greenlight.{0,100}(?:config\.json|guard)|\.claude.{0,100}(?:settings(?:\.local)?\.json|skills/greenlight/)|\.codex.{0,100}config\.toml", code, re.S) and re.search(
             r"write_text|write_bytes|\.write\s*\(|open\s*\(|os\.remove|unlink|rmtree|fs\.write|fs\.rm|writeFile|rmSync", code):
         v.add("deny", f"{lang} code that can change the guard or agent permissions")
     if leak := leaks(code):
@@ -641,7 +641,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
         return v
     if cmd in ("tee", "cp", "mv", "install", "ln", "truncate", "chmod", "chown", "touch", "mkdir", "rsync"):
         files = [a for a in args if not a.startswith("-")]
-        target_dir = opt(args, "-t", "--target-directory") if cmd in ("cp", "mv", "install", "ln") else None
+        target_dir = (opt(args, "-t", "--target-directory") or next((a[2:] for a in args if a.startswith("-t") and len(a) > 2), None)) if cmd in ("cp", "mv", "install", "ln") else None
         if target_dir:
             sources = [a for a in files if a != target_dir]
             targets = [str(ctx.path(target_dir) / os.path.basename(src)) for src in sources]
@@ -749,7 +749,7 @@ def check_git(args, ctx):
         v.add("medium", "git restore can discard uncommitted work")
     elif sub == "checkout" and "--" in rest:
         v.add("medium", "git checkout -- can discard uncommitted work")
-    elif sub == "checkout" and any(x in ("-f", "--force") for x in rest) or sub == "switch" and "--discard-changes" in rest:
+    elif sub == "checkout" and any(x in ("-f", "--force") for x in rest) or sub == "switch" and any(x in ("-f", "--force", "--discard-changes") for x in rest):
         v.add("medium", f"git {sub} discards uncommitted work")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
@@ -792,7 +792,7 @@ def check_push(rest, ctx, v):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
     if any(f in ("--mirror", "--all", "--tags", "--prune") for f in flags):
         v.add("high", "pushes every branch or tag, or deletes remote ones", "egress")
-    if "--follow-tags" in flags or "--tags" in flags:
+    if "--follow-tags" in flags or "--tags" in flags or ctx.git("config", "--bool", "--get", "push.followTags") == "true":
         v.add("high", "pushes tag objects that need inspection", "egress")
         v.merge(check_tag_objects(ctx))
     if "--mirror" in flags or (force and "--all" in flags):
@@ -953,7 +953,8 @@ def check_forge(cmd, args, ctx):
         v.add("high", f"{cmd} repository differs from this workspace's repo", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
-    bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
+    bfile = opt(a, "--body-file", "--notes-file", *(["-F", "-T", "--template"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
+    bfile = bfile or next((x[2:] for x in a if x.startswith("-T") and len(x) > 2), None)
     for source in filter(None, (bfile, opt(a, "--input"))):
         v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     for i, field in enumerate(a):
@@ -1061,6 +1062,8 @@ def check_net(cmd, args, ctx):
             v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} URL query"))
     output = opt(args, "-o", "-O" if cmd == "wget" else "-o", "--output", "--output-document")
     output = output or next((a[2:] for a in args if a.startswith(("-o", "-O" if cmd == "wget" else "-o")) and len(a) > 2), None)
+    if cmd == "curl" and not output:
+        output = next((args[i + 1] for i, a in enumerate(args) if re.fullmatch(r"-[A-Za-z]*o", a) and i + 1 < len(args)), None)
     if output:
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
     if cmd == "wget" and not output:
@@ -1069,7 +1072,7 @@ def check_net(cmd, args, ctx):
             name = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1] or "index.html"
             target = os.path.join(directory, name)
             v.merge(check_write(ctx.path(target), ctx, "wget output", raw=target))
-    if cmd == "curl" and ("-O" in args or "--remote-name" in args):
+    if cmd == "curl" and ("--remote-name" in args or any(re.fullmatch(r"-[A-Za-z]*O[A-Za-z]*", a) for a in args)):
         for url in urls:
             name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
             if name:
@@ -1102,6 +1105,9 @@ def check_net(cmd, args, ctx):
     full = " ".join(args)
     for i, a in enumerate(args):
         source = None
+        if a.startswith("-H@") or a.startswith("--header=@"):
+            source = a.split("@", 1)[1]
+            v.merge(check_upload_file(source, ctx, f"{cmd} header"))
         if a in ("-d", "-F", "--data", "--data-binary", "--data-urlencode", "--form", "-T", "--upload-file") and i + 1 < len(args):
             source = args[i + 1]
         elif a.startswith(("--data=", "--data-binary=", "--data-urlencode=", "--form=", "--upload-file=")):
