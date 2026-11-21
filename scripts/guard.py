@@ -828,6 +828,15 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in ("secret-tool", "op", "pass", "gopass", "vault", "bw") or (cmd in ("aws", "gcloud") and "get" in " ".join(args[:3])):
         v.add("high", f"{cmd} reads a secret store", "secret")
         return v
+    if cmd in ("aws", "gcloud", "gsutil") and args and args[0] not in ("--version", "version", "help", "--help"):
+        v.add("high", f"{cmd} can send data to a cloud service", "egress")
+        if any(a.startswith(("s3://", "gs://")) for a in args):
+            first_cloud = next(i for i, a in enumerate(args) if a.startswith(("s3://", "gs://")))
+            for source in args[:first_cloud]:
+                if source.startswith(("-", "s3://", "gs://")) or source in ("s3", "storage", "cp", "mv", "sync", "rsync", "-", "."):
+                    continue
+                v.merge(check_upload_file(source, ctx, cmd))
+        return v
     if cmd in ("pip", "pip3", "npm", "pnpm", "yarn", "cargo", "go", "gem", "brew", "apt", "apt-get") and args[:1] and args[0] in (
             "install", "add", "i", "get"):
         v.add("high", f"{cmd} installs packages that may run scripts with the agent's credentials")
@@ -868,7 +877,7 @@ def check_git(args, ctx, depth=0):
                 v.add("high", f"git {a[0]} changes the effective repository")
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
-            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url|mirror)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
+            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url|mirror)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.(?:default|recurseSubmodules))=", a[1]):
                 push_override = True
                 v.add("high", f"git -c {a[1].split('=')[0]} changes the effective push target", "egress")
                 if a[1].split("=", 1)[1].startswith("+"):
@@ -911,6 +920,8 @@ def check_git(args, ctx, depth=0):
         v.add("high", "git config that routes pushes or runs commands")
     elif sub == "config" and any(x in ("--global", "--system") for x in rest) and not any(x in ("--get", "--list", "-l", "--get-all") for x in rest):
         v.add("medium", "changes git config outside the repo")
+    elif sub == "config" and (path := opt(rest, "--file", "-f") or next((x[2:] for x in rest if x.startswith("-f") and len(x) > 2), None)) and not any(x in ("--get", "--list", "-l", "--get-all") for x in rest):
+        v.merge(check_write(ctx.path(path), ctx, "git config --file", raw=path))
     elif sub == "clone":
         url = next((x for x in rest if not x.startswith("-")), "")
         if host_of(url) not in HOSTS | LOCAL_HOSTS and re.match(r"[\w+.-]+://|[^/]+@[^/]+:", url):
@@ -921,8 +932,8 @@ def check_git(args, ctx, depth=0):
         v.add("medium", "git reset --hard drops uncommitted work")
     elif sub == "restore":
         v.add("medium", "git restore can discard uncommitted work")
-    elif sub == "checkout" and "--" in rest:
-        v.add("medium", "git checkout -- can discard uncommitted work")
+    elif sub == "checkout" and ("--" in rest or any(x == "." or not x.startswith("-") and ctx.path(x).exists() for x in rest)):
+        v.add("medium", "git checkout path can discard uncommitted work")
     elif sub == "checkout" and any(x in ("-f", "--force") for x in rest) or sub == "switch" and any(x in ("-f", "--force", "--discard-changes") for x in rest):
         v.add("medium", f"git {sub} discards uncommitted work")
     elif sub in ("checkout", "switch") and any(x in ("-B", "-C", "--force-create") for x in rest):
@@ -947,6 +958,8 @@ def check_git(args, ctx, depth=0):
 def check_push(rest, ctx, v):
     pos = [x for x in rest if not x.startswith("-")]
     flags = [x for x in rest if x.startswith("-")]
+    if any(f == "--recurse-submodules" or f.startswith("--recurse-submodules=") and f != "--recurse-submodules=no" for f in flags) or ctx.git("config", "--get", "push.recurseSubmodules") not in ("", "no", "false"):
+        v.add("high", "push may also send uninspected submodule commits", "egress")
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
                 for f in flags) or any(p.startswith("+") for p in pos[1:])
     if force and not ctx.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
