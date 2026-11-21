@@ -46,6 +46,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 from pathlib import Path
@@ -543,8 +544,12 @@ def check_code(code, lang, ctx=None, depth=0):
     dump = re.search(r"os\.environ\b(?!\s*[\[.])|process\.env\b(?!\.)|dict\(os\.environ|environ\.(?:items|copy|values)\(", code)
     env_read = re.search(r"os\.environ\b|os\.getenv\s*\(|process\.env\b|ENV\s*\[", code)
     literal_secret_path = any(SECRET_PATH_RE.search(s) for s in re.findall(r"['\"]([^'\"]+)['\"]", code))
-    if SECRET_PATH_RE.search(code) or literal_secret_path or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named) or (net and env_read):
+    if SECRET_PATH_RE.search(code) or literal_secret_path or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
+    elif net and env_read:
+        benign = {"PATH", "HOME", "PWD", "TMPDIR", "LANG", "USER", "SHELL"}
+        v.add("high" if named and set(named) <= benign else "deny",
+              "code reads an environment variable and reaches the network", "egress")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
     if re.search(r"child_process|execSync|spawnSync|\.exec\s*\(|\.spawn\s*\(", code):
@@ -625,13 +630,33 @@ def check_argv(argv, ctx, depth, piped_from=None):
         flags = "".join(a.lstrip("-") for a in args if a.startswith("-") and not a.startswith("--"))
         extracting = "x" in flags or "--extract" in args
         creating = "c" in flags or "--create" in args
-        dest = opt(args, "-C", "--directory")
-        if extracting and dest:
+        dest = opt(args, "-C", "--directory") or "."
+        if extracting:
             p = ctx.path(dest)
             if GUARD_PATH_RE.search(str(p / "config.json")) or GUARD_PATH_RE.search(str(p / "settings.json")):
                 v.add("deny", f"tar extraction can overwrite guarded files in {dest}")
             else:
                 v.merge(check_write(p, ctx, "tar extraction", raw=dest))
+            if "P" in flags or "--absolute-names" in args:
+                v.add("high", "tar extraction preserves absolute and parent paths")
+            archive = opt(args, "-f", "--file") or next((a[2:] for a in args if a.startswith("-f") and len(a) > 2), None)
+            archive = archive or next((args[i + 1] for i, a in enumerate(args)
+                                       if re.fullmatch(r"-[A-Za-z]*f[A-Za-z]*", a) and i + 1 < len(args)), None)
+            if archive:
+                try:
+                    with tarfile.open(ctx.path(archive), "r:*") as fh:
+                        for i, member in enumerate(fh):
+                            if i >= 1000:
+                                v.add("high", "tar archive has too many entries to inspect")
+                                break
+                            target = ctx.path(os.path.join(dest, member.name))
+                            v.merge(check_write(target, ctx, "tar extraction", raw=member.name))
+                            if member.issym() or member.islnk():
+                                v.add("high", "tar archive contains links that can redirect extraction")
+                except (OSError, tarfile.TarError):
+                    v.add("high", "cannot inspect tar extraction contents")
+            else:
+                v.add("high", "tar extraction archive cannot be identified")
         if creating and any(SECRET_PATH_RE.search(str(ctx.path(a))) or str(ctx.path(a)).startswith(str(HOME / ".ssh"))
                             for a in args if not a.startswith("-")):
             v.add("deny", "tar archive would package credentials", "secret")
@@ -646,6 +671,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 v.merge(check_write(ctx.path(files[-1]), ctx, "rsync", raw=files[-1]))
             return v
         if host_of(dest.split(":")[0]) in LOCAL_HOSTS:
+            if cmd == "ssh" and len(args) > args.index(dest) + 1:
+                v.merge(check_shell(" ".join(args[args.index(dest) + 1:]), Ctx(ctx.cwd, unknown=True, source_root=ctx.root), depth + 1))
             return v
         v.add("high", f"{cmd} opens a connection off the machine", "egress")
         if cmd in ("scp", "rsync") and args:
@@ -797,7 +824,7 @@ def check_git(args, ctx):
     elif sub == "stash" and rest[:1] == ["drop"]:
         v.add("high", "drops stashed work")
     elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest):
-        v.add("low", f"git {sub} deletes work")
+        v.add("high" if any(x in ("-D", "--delete") for x in rest) else "low", f"git {sub} deletes work")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
     elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
@@ -825,10 +852,11 @@ def check_push(rest, ctx, v):
         if force:
             v.add("deny", "force push uses configured refspecs that may include the default branch", "egress")
     if remote in ctx.remotes:
-        dest = ctx.git("remote", "get-url", "--push", remote)
+        destinations = ctx.git("remote", "get-url", "--push", "--all", remote).splitlines()
         project = workspace_project(ctx)
         origin_host = host_of(ctx.git("remote", "get-url", "origin"))
-        if not project or repo_slug(dest) != project.lower() or host_of(dest) != origin_host or origin_host not in ("github.com", "gitlab.com"):
+        if not destinations or not project or origin_host not in ("github.com", "gitlab.com") or any(
+                repo_slug(dest) != project.lower() or host_of(dest) != origin_host for dest in destinations):
             v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
     if remote not in ctx.remotes and remote != "origin" and ("/" in remote or ":" in remote or "@" in remote):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
