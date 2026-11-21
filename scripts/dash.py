@@ -1053,12 +1053,13 @@ def waiting_term(name):
         return f"no workspace {name}"
     if ag.get("state") != "waiting":
         return "its agent isn't waiting on you any more"
-    # ponytail: newest agent terminal in the tree; match on agent identity if a tree ever runs two at once
-    terms = sorted((t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
-                    if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")), key=lambda t: t.get("lastOutputAt") or 0)
+    terms = [t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
+             if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")]
+    if pane := ag.get("paneKey"):
+        terms = [t for t in terms if f'{t.get("tabId")}:{t.get("leafId")}' == pane]
     if not terms:
-        return "no agent terminal found there"
-    h = terms[-1]["handle"]
+        return "no terminal found for its waiting agent"
+    h = max(terms, key=lambda t: t.get("lastOutputAt") or 0)["handle"]
     return w, ag, h, greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"]
 
 

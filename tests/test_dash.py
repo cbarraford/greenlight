@@ -70,6 +70,20 @@ for st, word in (("working", "working"), ("waiting", "waiting")):
     with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws", "worktreeId": "w1"}, {"state": st})}), \
             mock.patch.object(dash.greenlight, "orca") as o:
         assert word in dash.run("ws", "do it")["error"] and not o.called
+# The Answer button must target the waiting pane, even when a finished review has the newest output.
+_waiting = {"state": "waiting", "paneKey": "parent:leaf", "lastAssistantMessage": "Which branch?"}
+_term = lambda tab, leaf, when: {"worktreeId": "w1", "agentIdentity": "claude", "tabId": tab, "leafId": leaf,
+                                "handle": tab, "lastOutputAt": when}
+_terminals = {"terminals": [_term("parent", "leaf", 10), _term("review", "leaf", 20)]}
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws", "worktreeId": "w1"}, _waiting)}), \
+        mock.patch.object(dash.greenlight, "orca", side_effect=[_terminals, {"terminal": {"tail": ["❯"]}}]) as o:
+    assert dash.waiting_term("ws")[2] == "parent"
+    assert o.call_args.args == ("terminal", "read", "--terminal", "parent", "--limit", "60")
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws", "worktreeId": "w1"}, _waiting)}), \
+        mock.patch.object(dash.greenlight, "orca", return_value=_terminals) as o:
+    _waiting["paneKey"] = "missing:leaf"
+    assert "no terminal" in dash.answer("ws", "yes")["error"] and o.call_count == 1
+    _waiting["paneKey"] = "parent:leaf"
 with mock.patch.object(dash, "live_agents", return_value={}):
     assert "no workspace" in dash.run("ws", "do it")["error"]
 # console transcript: prompts, replies, tool calls; drops reminders, meta and subagent lines
