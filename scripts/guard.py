@@ -27,7 +27,7 @@ A pause is a question to the user, by mode (GREENLIGHT_GUARD_MODE in the hook's 
     guard.py settings [--mode ping]     # the hooks block for a settings.json (or claude --settings)
     guard.py log [-n N]                 # the last decisions, with how long each took
 
-config.json `guard`: {"on": true, "mode": "auto"|"ask"|"ping", "timeout": 240, "budget_ms": 200,
+config.json `guard`: {"on": true, "mode": "auto"|"ask"|"ping", "timeout": 240 (maximum 240), "budget_ms": 200,
   "hosts": [extra hosts a GET may reach], "allow": [regexes a call auto-allows], "deny": [regexes it refuses]}.
 Off (no `guard` key, or "on": false) the hook says nothing. Every boundary decision is logged to ~/.greenlight/guard.jsonl.
 Stdlib only; never imports greenlight.py on the fast path (it reads the forge's config); decide.py is optional.
@@ -37,6 +37,7 @@ or code it decodes at run time, is opaque here (Write/Edit content is scanned fo
 and codex's own sandbox blocks the network). It is a gate on the obvious paths, not a sandbox.
 """
 import ast
+import fnmatch
 import hashlib
 import json
 import math
@@ -118,6 +119,7 @@ def enabled(c):
             out[k] = max(1, int(c.get(k, d)))
         except (TypeError, ValueError):
             out[k] = d
+    out["timeout"] = min(out["timeout"], 240)  # the skill's installed hook timeout is 270 seconds
     for k in ("allow", "deny", "hosts"):
         out[k] = [x for x in (c.get(k) or []) if isinstance(x, str)] if isinstance(c.get(k), list) else []
     return out
@@ -237,6 +239,8 @@ def leaks(text):
 
 def redact(text):
     text = SECRET_RE.sub("[credential redacted]", text)
+    text = re.sub(r"(?:^|\s)(?:-u\s*|--user(?:=|\s+))([^\s:]+):([^\s]+)",
+                  lambda m: m[0].replace(m[2], "[password redacted]"), text)
     for value in secret_values():
         text = text.replace(value, "[credential redacted]")
     return text
@@ -965,7 +969,8 @@ def check_forge(cmd, args, ctx):
         v.add("high", f"{cmd} repository differs from this workspace's repo", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
-    bfile = opt(a, "--body-file", "--notes-file", *(["-F", "-T", "--template"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
+    bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr", "issue") else []),
+                *(["-T", "--template"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
     bfile = bfile or next((x[2:] for x in a if x.startswith("-T") and len(x) > 2), None)
     for source in filter(None, (bfile, opt(a, "--input"))):
         v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
@@ -1019,6 +1024,14 @@ def check_forge(cmd, args, ctx):
         for source in a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
                 v.merge(check_upload_file(source, ctx, f"{cmd} {group} upload"))
+    if verb == "download":
+        directory = opt(a, "--dir", "-D") or "."
+        pattern = opt(a, "--pattern")
+        if pattern and not any(c in pattern for c in "*?["):
+            target = os.path.join(directory, pattern)
+            v.merge(check_write(ctx.path(target), ctx, f"{cmd} download", raw=target))
+        else:
+            v.merge(check_write(ctx.path(directory), ctx, f"{cmd} download", raw=directory))
     if verb in FORGE_READ or group in ("help", "version", "--version", "completion"):
         return v
     if group in ("secret", "variable", "ssh-key", "gpg-key", "extension", "alias", "config") or group == "repo" and verb in (
@@ -1072,6 +1085,9 @@ def check_net(cmd, args, ctx):
         v.add("high", f"{cmd} can route through a different network destination", "egress")
     if "--expand-url" in args:
         v.add("high", f"{cmd} expands a URL after the guard inspects it", "egress")
+    user = opt(args, "-u", "--user") or next((a[2:] for a in args if a.startswith("-u") and len(a) > 2), None)
+    if user:
+        v.add("deny" if ":" in user else "high", f"{cmd} sends credentials from --user", "secret", "egress")
     for i, arg in enumerate(args):
         value = args[i + 1] if arg == "--variable" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--variable=") else ""
         if "@" in value:
@@ -1084,6 +1100,8 @@ def check_net(cmd, args, ctx):
     if cmd == "curl" and not output:
         output = next((args[i + 1] for i, a in enumerate(args) if re.fullmatch(r"-[A-Za-z]*o", a) and i + 1 < len(args)), None)
     if output:
+        if cmd == "curl" and (directory := opt(args, "--output-dir")):
+            output = os.path.join(directory, output)
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
     if cmd == "wget" and not output:
         directory = opt(args, "-P", "--directory-prefix") or "."
@@ -1092,10 +1110,12 @@ def check_net(cmd, args, ctx):
             target = os.path.join(directory, name)
             v.merge(check_write(ctx.path(target), ctx, "wget output", raw=target))
     if cmd == "curl" and ("--remote-name" in args or any(re.fullmatch(r"-[A-Za-z]*O[A-Za-z]*", a) for a in args)):
+        directory = opt(args, "--output-dir") or "."
         for url in urls:
             name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
             if name:
-                v.merge(check_write(ctx.path(name), ctx, "curl remote-name output", raw=name))
+                target = os.path.join(directory, name)
+                v.merge(check_write(ctx.path(target), ctx, "curl remote-name output", raw=target))
     if cmd == "curl" and any(a in args for a in ("--netrc", "-n", "--netrc-optional")) or opt(args, "--netrc-file"):
         v.add("deny", f"{cmd} may send credentials from a netrc file", "secret", "egress")
     config_file = opt(args, "-K", "--config") or next((a[2:] for a in args if a.startswith("-K") and len(a) > 2), None)
@@ -1191,6 +1211,8 @@ def check_rm(args, ctx):
             continue
         if any(c in raw for c in "*?["):
             anchor = raw.split("*", 1)[0].split("?", 1)[0].split("[", 1)[0].rstrip("/") or "."
+            if fnmatch.fnmatch(".git", os.path.basename(raw)) or "/.git" in raw:
+                v.add("high", f"deletes a glob that may match git data ({raw})")
             if not (ctx.root and ctx.path(anchor) == ctx.root or ctx.root and str(ctx.path(anchor)).startswith(str(ctx.root) + "/")):
                 v.add("high", f"deletes a glob outside the worktree ({raw})")
         if ctx.unknown and not os.path.isabs(os.path.expanduser(raw)):
@@ -1411,7 +1433,7 @@ def approvals(update=None):
 def wait_for_user(summary, why, ctx, conf):
     """Ping the menubar app and wait for allow | deny. Unanswered by the timeout: deny."""
     import decisions  # stdlib, never imports greenlight.py
-    timeout = int(conf.get("timeout", 240))
+    timeout = min(int(conf.get("timeout", 240)), 240)
     name, goal, _ = situation(ctx)
     key = f"@guard-{int(time.time() * 1000):x}-{os.getpid():x}"
     ws = name or (ctx.root.name if ctx.root else ctx.cwd.name)
@@ -1528,7 +1550,7 @@ def hook_main(stdin=sys.stdin, stdout=sys.stdout):
 def settings(conf=None, how=None):
     """The hooks block that runs this guard before every tool call. how: ask | ping | chat, set in the hook's own env
     (so the agent can't change it); None leaves it to config and GREENLIGHT_UNATTENDED."""
-    t = int((conf if conf is not None else config() or {}).get("timeout", 240)) + 30
+    t = min(int((conf if conf is not None else config() or {}).get("timeout", 240)), 240) + 30
     env = f"GREENLIGHT_GUARD_MODE={how} " if how else ""
     return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
         {"type": "command", "command": f"{env}python3 {shlex.quote(str(Path(__file__).resolve()))} hook", "timeout": t}]}]}}
