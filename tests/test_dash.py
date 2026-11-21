@@ -176,6 +176,7 @@ out, calls = task({"text": REQ}, ws={"w2": ({"displayName": "retry-stuck-outboun
 assert out["name"] == "retry-stuck-outbound-txs-after-a-churn-3" and "attached" not in opt(next(a for a in calls if is_create(a)), "--prompt")
 out, calls = task({"text": "Fix the flake"}, fail={lambda a: is_create(a) and "claude" in a: "You've hit your usage limit"})  # claude out: codex
 assert out["ok"] and [opt(a, "--agent") for a in calls if is_create(a)] == ["claude", "codex"]
+assert all("gate push --execute" in opt(a, "--prompt") and "greenlight.py" in opt(a, "--prompt") for a in calls if is_create(a))
 out, calls = task({"text": "Fix it"}, fail={lambda a: is_create(a) and "claude" in a: "bad repo"})  # any other error: no codex retry
 assert "bad repo" in out["error"] and len([a for a in calls if is_create(a)]) == 1
 out, calls = task({"text": "Fix them"}, fail={lambda a: a[:2] == ("worktree", "set"): "busy"})  # the rename is cosmetic
@@ -394,7 +395,22 @@ mv = {m["kind"]: m for m in dash.moves(mine)}
 assert mv["ci"]["auto"].startswith(dash.AUTO_HEAD + "You have my OK to push") and mv["ci"]["prompt"] in mv["ci"]["auto"] and mv["ci"]["sha"] == "abc123"
 assert "auto" not in mv["conflicts"] and "auto" not in mv["threads"]
 assert not any("auto" in m for m in dash.moves({**mine, "goal": "fix it (hold)"}))
-assert dash.moves({**mine, "mr": {**mine["mr"], **_clean, "role": "review"}})[0]["auto"] is True
+assert "audit.py gate push --execute`" in mv["ci"]["auto"] and "gate post" not in mv["ci"]["auto"]  # the contracts and exact push in one command
+_cm = {**mine, "mr": {**mine["mr"], **_clean, "role": "review"}}
+with mock.patch.object(dash.audit, "kick") as _k, mock.patch.object(dash.audit, "same_target", return_value=True):  # an unattended merge waits on the semantic audit of this head
+    _m = dash.moves(_cm)[0]
+    assert "auto" not in _m and _m["audit"] == "auditing" and _k.call_args.args == ("/w/b", "abc123"), (_m, _k.call_args)
+    assert _k.call_args.kwargs["spec"]["target"] == _cm["mr"].get("target_branch") and _k.call_args.kwargs["spec"]["goal"] == dash.audit.goal_of(_cm, _cm["mr"])
+    _tag = dash.audit.ident(_cm, _cm["mr"])
+    dash.audit.save("/w/b", "abc123", {"ok": False, "failed": [{"check": "diff_matches_goal", "contract": "NoScopeCreep", "p_broken": 0.9}]}, _tag)
+    _m = dash.moves(_cm)[0]
+    assert "auto" not in _m and _m["audit"] == "NoScopeCreep (diff_matches_goal, p=0.90)", _m  # held, the failed contract named
+    dash.audit.save("/w/b", "abc124", {"ok": True, "failed": []}, _tag)  # another head's pass doesn't count
+    assert "auto" not in dash.moves(_cm)[0]
+    dash.audit.save("/w/b", "abc123", {"ok": True, "failed": []})  # nor one for another target/goal
+    assert "auto" not in dash.moves(_cm)[0]
+    dash.audit.save("/w/b", "abc123", {"ok": True, "failed": []}, _tag)
+    assert dash.moves(_cm)[0]["auto"] is True
 assert not any("auto" in m for m in dash.moves({**mine, "mr": {**mine["mr"], "role": "review"}}))  # never pushes unattended to someone else's branch
 assert not any("auto" in m for m in dash.moves(_rv))  # auto-merge never jumps a pending review
 dash.settings("autorun-set", "greenlight", "{}")
@@ -403,14 +419,26 @@ assert not any("auto" in m for m in dash.moves(mine))
 _ran, _run = [], dash.greenlight.run
 dash.greenlight.run = lambda cmd, **k: _ran.append(cmd) or ""
 _lj = dash.greenlight.STATE / "last.json"; _old = _lj.read_text() if _lj.exists() else None
+pending_row = {**mine, "next": {**mine["next"], "owner": "ci", "action": "automerge waits on the semantic audit of abc123"},
+               "mr": {**mine["mr"], **_clean}}
+_lj.write_text(json.dumps({"ts": 1, "rows": [pending_row]}))
+assert [m["kind"] for m in dash.moves(pending_row)] == ["merge"]
+assert dash.tree_merge("/w/b")["ok"] and _ran[-1] == mine["next"]["cmd"] + ["--sha", "abc123"]
+_ran.clear()
 _lj.write_text(json.dumps({"ts": 1, "rows": [mine]}))
 assert dash.tree_merge("/w/b")["error"] and not _ran  # conflicts/CI/threads outrank merge, so it isn't offered
 _lj.write_text(json.dumps({"ts": 1, "rows": [{**mine, "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}]}))
 assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "target": "main", "how": "Squash"}
 assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
+_auto_row = {**mine, "forge": "gitlab", "mr": {**mine["mr"], **_clean, "iid": 58}}
+_lj.write_text(json.dumps({"ts": 1, "rows": [_auto_row]}))
+dash.audit.save("/w/b", "abc123", {"ok": True, "failed": [], "target_oid": "base1"}, dash.audit.ident(_auto_row, _auto_row["mr"]))
+with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]):
+    assert dash.tree_merge("/w/b")["ok"]
+assert _ran[-1][2:9] == ["checked-merge", _auto_row["forge"], _auto_row["project"], str(_auto_row["mr"]["iid"]), "main", "abc123", "base1"], _ran[-1]
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
-assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 2
+assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 3
 # Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off
 import tempfile
 _wt = tempfile.mkdtemp()
@@ -419,14 +447,14 @@ _wt = tempfile.mkdtemp()
 _dep = {"path": _wt, "project": "acme/dep", "mr": {"state": "merged", "ref": "!9"}, "next": {"step": "deploy", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/dep", "9", "deploy"]}}
 assert dash.moves(_dep) == [{"kind": "signoff", "step": "deploy", "run": "echo hi > ran.txt"}]
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dep]}))
-assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 3
+assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 4
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
-assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3 and dash.tree_signoff("/w/x")["error"]
+assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 4 and dash.tree_signoff("/w/x")["error"]
 # a row scanned before greenlight.md dropped deploy: no Deploy button, and a click signs nothing off
 _stale = {**_dep, "project": "cbarraford/greenlight", "next": {**_dep["next"], "cmd": ["python3", "greenlight.py", "signoff", "cbarraford/greenlight", "9", "deploy"]}}
 assert dash.moves(_stale) == []
 _lj.write_text(json.dumps({"ts": 1, "rows": [_stale]}))
-assert "doesn't say" in dash.tree_signoff(_wt)["error"] and len(_ran) == 3
+assert "doesn't say" in dash.tree_signoff(_wt)["error"] and len(_ran) == 4
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "deploy", "done": "signoff"}, {"key": "merge"}]}))
 assert dash.moves(_dep) == []  # a step moved before the merge isn't asked after it either
 # the chat's board: unfinished workspaces, yours first, finished ones counted
