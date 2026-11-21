@@ -154,6 +154,167 @@ test("started: the sheet closes, the draft clears, a toast opens it in the Basem
   assert.equal(await page.$(".toast"), null);
 });
 
+test("an ambiguous goal pauses: chips answer preflight's questions, then the same task goes again with them; Start anyway forces it; an edit re-asks", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "make it better");
+  await page.press("#ps-task", "Enter");
+  const Q = {op: "new", arg: "widgets", paused: true, p_ambiguous: 0.9, questions: [
+    {id: "done", q: "What does done look like?", options: ["A draft PR with tests", "A working prototype I can try"]},
+    {id: "scope", q: "How far should it go?", options: ["The smallest change that works", "Investigate and report back first"]}]};
+  await page.evaluate(q => window.mc.tasked(q), Q);
+  assert.ok(await sheet(page), "the sheet closed on a pause");
+  assert.match(await page.textContent("#ps-ask"), /Two questions before it starts.*90% sure/);
+  assert.equal(await page.isDisabled("#ps-go"), true, "Start was live with nothing answered");
+  assert.match(await page.textContent("#ps-go"), /Start with answers/);
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), "A draft PR with tests", "the first chip doesn't have the focus");
+  await page.click("#ps-ask button:has-text('A working prototype I can try')");
+  assert.equal(await page.getAttribute("#ps-ask button:has-text('A working prototype I can try')", "aria-pressed"), "true");
+  assert.equal(await page.isDisabled("#ps-go"), true, "one of two answered is enough");
+  await page.fill("#ps-ask input[aria-label^='How far']", "Only the retry path");
+  await page.click("#ps-go");
+  const n = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(n.length, 2);
+  assert.deepEqual(JSON.parse(n[1].text).answers, {done: "A working prototype I can try", scope: "Only the retry path"});
+  await page.evaluate(q => window.mc.tasked(q), Q);  // asked again (say the other window sent it): Start anyway
+  await page.click("#ps-anyway");
+  const f = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(JSON.parse(f[2].text).force, true); assert.equal(JSON.parse(f[2].text).answers, undefined);
+  await page.evaluate(q => window.mc.tasked(q), Q);
+  await page.type("#ps-task", " now");  // a changed goal: its questions go, and it's judged afresh
+  assert.equal(await page.$("#ps-ask"), null); assert.equal(await page.$("#ps-anyway"), null);
+  assert.match(await page.textContent("#ps-go"), /^Start task/);
+  await page.press("#ps-task", "Enter");
+  const g = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(g.length, 4); assert.equal(JSON.parse(g[3].text).answers, undefined);
+  await page.keyboard.press("Escape");
+  await page.evaluate(q => window.mc.tasked(q), Q);  // the sheet closed before the pause came back: the toast says so
+  assert.match(await page.textContent(".toast"), /question about the goal first/);
+  assert.deepEqual(page._errs, []);
+});
+
+test("a preflight reply for an edited task cannot clear the new goal", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "make it better");
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "build something different");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", paused: true, questions: [
+    {id: "done", q: "What does done look like?", options: ["A draft PR with tests"]}]}));
+  assert.equal(await page.$("#ps-ask"), null);
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  await page.click("#ps-go");
+  const started = (await posts(page, "task")).filter(m => m.op === "new");
+  assert.equal(started.length, 2);
+  assert.equal(JSON.parse(started[1].text).text, "build something different");
+  assert.equal(JSON.parse(started[1].text).answers, undefined);
+});
+
+test("a completed earlier task preserves a newly edited draft and keeps its error off the new goal", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task B");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task B");
+  assert.equal(await page.evaluate(() => localStorage.getItem("taskDraft")), "Task B");
+  assert.match(await page.textContent(".toast"), /Task started.*task-a/);
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task C");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "workspace task-b already exists"}));
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task C");
+  assert.equal(await page.$("#ps-err"), null);
+  assert.equal(await page.isDisabled("#ps-go"), false);
+});
+
+test("a late reply preserves edited attachments, and Reopen keeps the current sheet", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.press("#ps-task", "Enter");
+  await page.setInputFiles(".tdrop input[type=file]", {name: "later.txt", mimeType: "text/plain", buffer: Buffer.from("later")});
+  await page.waitForSelector(".tfile");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page));
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
+  await page.press("#ps-task", "Enter");
+  await page.fill("#ps-task", "Task B");
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "old task failed"}));
+  await page.locator(".toast button:has-text('Reopen')").focus();
+  await page.keyboard.press("Enter");
+  assert.ok(await sheet(page));
+  assert.equal(await page.inputValue("#ps-task"), "Task B");
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
+});
+
+test("a selected file counts as an edit before its reader finishes", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,bGF0ZXI="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", {name: "before.txt", mimeType: "text/plain", buffer: Buffer.from("before")});
+  assert.equal(await page.isDisabled("#ps-go"), true, "a pending read was omitted from a submitted task");
+  await page.evaluate(() => window.__reads[0].onload());
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  await page.press("#ps-task", "Enter");
+  await page.setInputFiles(".tdrop input[type=file]", {name: "later.txt", mimeType: "text/plain", buffer: Buffer.from("later")});
+  await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
+  assert.ok(await sheet(page), "success closed a sheet with a selected file still loading");
+  await page.evaluate(() => window.__reads[1].onload());
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["before.txt", "later.txt"]);
+});
+
+test("a failed file read stays visible until removed and cannot trigger task Retry", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,b2s="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", {name: "broken.txt", mimeType: "text/plain", buffer: Buffer.from("bad")});
+  await page.evaluate(() => window.__reads[0].onerror());
+  assert.match(await page.textContent(".perr"), /Couldn't read broken.txt.*Remove it and choose it again/);
+  assert.equal(await page.$("#ps-retry"), null);
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  await page.setInputFiles(".tdrop input[type=file]", {name: "replacement.txt", mimeType: "text/plain", buffer: Buffer.from("ok")});
+  assert.match(await page.textContent(".perr"), /broken.txt/);
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  await page.evaluate(() => window.__reads[1].onload());
+  assert.equal(await page.isDisabled("#ps-go"), true, "one replacement silently cleared the failed entry");
+  await page.click("button[aria-label='Remove broken.txt']");
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["replacement.txt"]);
+});
+
+test("multiple failed reads remain visible, and a removed reader cannot revive an error", async page => {
+  await newTask(page);
+  await page.selectOption("#ps-repo", "widgets");
+  await page.fill("#ps-task", "Task A");
+  await page.evaluate(() => { window.__reads = []; window.FileReader = class {
+    readAsDataURL(){ this.result = "data:text/plain;base64,b2s="; window.__reads.push(this) }
+  } });
+  await page.setInputFiles(".tdrop input[type=file]", [
+    {name: "bad-a.txt", mimeType: "text/plain", buffer: Buffer.from("a")},
+    {name: "bad-b.txt", mimeType: "text/plain", buffer: Buffer.from("b")}]);
+  await page.evaluate(() => window.__reads[0].onerror());
+  await page.setInputFiles(".tdrop input[type=file]", {name: "replacement.txt", mimeType: "text/plain", buffer: Buffer.from("ok")});
+  await page.evaluate(() => window.__reads[2].onload());
+  assert.equal(await page.isDisabled("#ps-go"), true);
+  assert.match(await page.textContent(".perr"), /bad-a.txt/);
+  await page.click("button[aria-label='Remove bad-a.txt']");
+  assert.equal(await page.isDisabled("#ps-go"), true, "the second unread file was omitted");
+  await page.click("button[aria-label='Remove bad-b.txt']");
+  await page.evaluate(() => window.__reads[1].onerror());
+  assert.equal(await page.$(".perr"), null);
+  assert.equal(await page.isDisabled("#ps-go"), false);
+  assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["replacement.txt"]);
+});
+
 test("with workspaces on the page, a failed start's Reopen still opens the sheet (the bar has no New task)", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "no space"}));
   await page.click(".toast button:has-text('Reopen')");

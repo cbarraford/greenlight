@@ -553,6 +553,12 @@ body.nohex main{margin-left:0;padding-right:0}  /* the rails are hidden: so are 
 .pchips button{height:28px;padding:0 12px;border-radius:14px;border:1px solid var(--hair);background:transparent;color:var(--text);font:inherit;font-size:12.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pchips button.first{background:var(--orange);border-color:var(--orange);color:#1C1C1E;font-weight:600}
 .pchips button:disabled{opacity:.5}
+.pchips button[aria-pressed=true]{background:var(--orange);border-color:var(--orange);color:#1C1C1E;font-weight:600}
+/* New task's preflight: decide.py read the goal as ambiguous, so 1-2 questions with options come before the workspace exists */
+.pclar{display:flex;flex-direction:column;gap:var(--sp-2);padding:10px 12px;border-radius:8px;border:1px solid var(--card-line);background:var(--card)}
+.pclar .pch{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap} .pclar .pq{display:flex;flex-direction:column;gap:6px}
+.pclar .pql{font-size:var(--fs-2);font-weight:600;color:var(--text)}
+.pclar input{height:28px;padding:0 10px;border:0;border-radius:8px;background:var(--bg);box-shadow:0 0 0 1px var(--card-line);color:var(--text);font:inherit;font-size:12.5px}
 .areply:has(input){flex-direction:row}
 .areply input{flex-grow:1;min-width:0;height:32px;padding:0 12px;border:0;border-radius:8px;background:var(--card);box-shadow:0 0 0 1px var(--card-line);color:var(--text);font:inherit;font-size:12.5px}
 .areply .btn{height:40px;color:var(--blue-ink);font-weight:600}
@@ -2083,13 +2089,13 @@ function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
 document.addEventListener("click", e => { const el = e.metaKey && e.target.closest && e.target.closest("[data-dock]"), it = el && ui.dk[el.dataset.dock]; if (it) { e.preventDefault(); e.stopPropagation(); dockToggle(it) } }, true);
 
 /* ---------- New task: describe it, attach files, pick the project; a fresh workspace and its agent start on it at once ---------- */
-ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0};
+ui.task = {sheet: null, repos: null, busy: false, err: "", done: null, fresh: null, t: 0, ask: null, pending: null};  // ask: preflight's questions on the goal ({qs, ans, p}), before it starts
 const TASK_CAP = 15 << 20;  // all files together; dash.py task new refuses more
 const PLUS = s("svg", {width:13, height:13, viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", "stroke-width":"2.4", "stroke-linecap":"round", "aria-hidden":"true"}, s("path", {d:"M12 5v14M5 12h14"}));
 function taskSlug(t){ return String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "untitled" }  // dash.py _slug
 function taskSheet(){
   const repo = localGet("taskRepo") || "";
-  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: []}; ui.task.err = "";
+  ui.task.sheet = {repo, text: localGet("taskDraft") || "", files: [], fileRev: 0}; ui.task.err = ""; ui.task.ask = null;
   post({cmd: "task", op: "repos", arg: "-"});  // every open: a repo added to Orca shows up without a relaunch
   render(); const i = document.getElementById(repo || !ui.task.repos ? "ps-task" : "ps-repo");  // the first thing missing gets the caret
   if (i) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); i.scrollTop = i.scrollHeight } catch {} }
@@ -2097,23 +2103,34 @@ function taskSheet(){
 function attach(files){
   const sh = ui.task.sheet; if (!sh) return;
   for (const f of [...(files || [])]) {
+    const entry = {name: f.name || "pasted.png", size: f.size, data: null, error: false};
+    sh.files.push(entry); sh.fileRev++;
     const r = new FileReader();
-    r.onload = () => { if (ui.task.sheet === sh) { sh.files.push({name: f.name || "pasted.png", size: f.size, data: r.result}); render() } };
-    r.readAsDataURL(f);
+    const current = () => ui.task.sheet === sh && sh.files.includes(entry);
+    r.onload = () => { if (current()) { entry.data = r.result; sh.fileRev++; render() } };
+    r.onerror = () => { if (current()) { entry.error = true; sh.fileRev++; render() } };
+    try { r.readAsDataURL(f) } catch { r.onerror() }
   }
+  render();
 }
 function taskSheetEl(){
   const sh = ui.task.sheet; if (!sh) return null;
   const close = () => { ui.task.sheet = null; render() }, busy = ui.task.busy, repos = ui.task.repos;
   const size = sh.files.reduce((n, f) => n + f.size, 0), big = size > TASK_CAP;
+  const failed = sh.files.filter(f => f.error);
   const line = () => (String(sh.text).split("\n").find(l => l.trim()) || "").trim();  // live: typing doesn't re-render the sheet
-  const repo = (repos || []).find(r => r.name === sh.repo), ok = () => !busy && !big && repo && line() && !ui.task.err;
+  const ask = ui.task.ask, answered = () => { const a = ui.task.ask; return !a || a.qs.every(q => (a.ans[q.id] || "").trim()) };  // live: an edit drops the questions without a render
+  const repo = (repos || []).find(r => r.name === sh.repo), ok = force => !busy && !big && sh.files.every(f => !!f.data && !f.error) && repo && line() && !ui.task.err && (force || answered());
+  const syncGo = () => { const b = document.getElementById("ps-go"); if (b) b.disabled = !ok() };
   const unerr = () => { ui.task.err = ""; ui.task.errAt = null; document.getElementById("ps-err")?.remove(); document.getElementById("ps-task")?.removeAttribute("aria-invalid"); const hp = document.getElementById("ps-help"); if (hp) hp.textContent = HELP; document.getElementById("ps-task")?.setAttribute("aria-describedby", "ps-help") };  // a changed title or project is a fresh try
-  const go = () => {
-    if (!ok()) return;
-    ui.task.busy = true; ui.task.err = "";
-    post({cmd: "task", op: "new", arg: repo.name, text: JSON.stringify({text: sh.text.trim(), files: sh.files.map(({name, data}) => ({name, data}))})}); render();
+  const go = (force = false) => {  // force: Start anyway, past preflight's questions
+    if (!ok(force)) return;
+    ui.task.busy = true; ui.task.err = ""; ui.task.pending = {sheet: sh, text: sh.text.trim(), repo: repo.name, files: sh.files.slice(), fileRev: sh.fileRev};
+    const more = force === true ? {force: true} : ui.task.ask ? {answers: ui.task.ask.ans} : {};
+    post({cmd: "task", op: "new", arg: repo.name, text: JSON.stringify({text: sh.text.trim(), files: sh.files.map(({name, data}) => ({name, data})), ...more})}); render();
   };
+  const unask = () => { if (!ui.task.ask) return; ui.task.ask = null; document.getElementById("ps-ask")?.remove(); document.getElementById("ps-anyway")?.remove();
+    const b = document.getElementById("ps-go"); if (b) b.firstChild.textContent = "Start task" };  // a changed goal is asked about afresh
   const HELP = "First line becomes the workspace name. Enter starts · Shift+Enter adds a line.";
   const kb = n => n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;  // one precision: the rows add up to the total
   const field = (label, ...el) => h("label", {class:"pf"}, label, ...el);
@@ -2132,21 +2149,37 @@ function taskSheetEl(){
         : h("span", {class:"ast"}, "Loading repositories…"), repos && !repo ? h("span", {class:"phelp", id:"ps-rhelp"}, "Required to start the task") : null),  // why Start is off, beside the field that fixes it
       field("What do you want to get done?", h("textarea", {class:"ptext", id:"ps-task", spellcheck:"true", "aria-invalid": /already exists/.test(ui.task.err) ? "true" : null, "aria-describedby": ui.task.err ? "ps-help ps-err" : "ps-help",
         placeholder:"e.g. Add retry backoff to the outbound queue",
-        oninput: e => { sh.text = e.target.value; grow(e.target); if (ui.task.err && !(ui.task.errAt && ui.task.errAt === taskSlug(line()))) unerr(); localSet("taskDraft", sh.text); document.getElementById("ps-foot").replaceChildren(...foot()); document.getElementById("ps-go").disabled = !ok() },  // a draft: closing keeps it
+        oninput: e => { sh.text = e.target.value; grow(e.target); unask(); if (ui.task.err && !(ui.task.errAt && ui.task.errAt === taskSlug(line()))) unerr(); localSet("taskDraft", sh.text); document.getElementById("ps-foot").replaceChildren(...foot()); document.getElementById("ps-go").disabled = !ok() },  // a draft: closing keeps it
         onkeydown: e => {  // Enter starts it, Shift+Enter is a new line
           if (e.key !== "Enter" || e.isComposing || e.shiftKey || e.altKey || e.ctrlKey) return;
           e.preventDefault(); go();
         }}, sh.text), h("span", {class:"phelp", id:"ps-help"}, /already exists/.test(ui.task.err) ? "Change the first line to use a different workspace name." : HELP)),
-      ui.task.err ? errEl() : null,
+      ui.task.err ? errEl() : null, askEl(),
       h("div", {class:"tdrop" + (sh.files.length ? " has" : "")}, over,
         sh.files.length ? h("div", {class:"thd"}, h("b", {}, `Attachments (${sh.files.length})`), h("span", {class:big ? "bad" : ""}, `${kb(size)} of ${kb(TASK_CAP)}`)) : null,
         sh.files.length ? h("div", {class:"tfiles"}, sh.files.map((f, i) => { const m = /^(.+?)(\.[^.]+)?$/.exec(f.name);  // the stem truncates, the extension stays
-          return h("span", {class:"tfile"}, icon("file"), h("span", {class:"mono fn", title: f.name}, h("span", {class:"b"}, m[1]), m[2] || ""), h("small", {}, kb(f.size)),
-          h("button", {type:"button", "aria-label":`Remove ${f.name}`, onclick: () => { sh.files.splice(i, 1); render() }}, icon("close", 12))) })) : null,
+          return h("span", {class:"tfile"}, icon("file"), h("span", {class:"mono fn", title: f.name}, h("span", {class:"b"}, m[1]), m[2] || ""), h("small", {}, f.error ? "Couldn't read" : f.data ? kb(f.size) : "Reading…"),
+          h("button", {type:"button", "aria-label":`Remove ${f.name}`, onclick: () => { sh.files.splice(i, 1); sh.fileRev++; render() }}, icon("close", 12))) })) : null,
         h("span", {class:"hint"}, icon("clip"), h("button", {type:"button", class:"lnk", onclick: () => pick.click()}, "Add files"), " or drop / paste a screenshot"), pick),
       big ? h("div", {class:"perr", role:"alert"}, icon("alert"), h("span", {}, `Attachments are capped at 15 MB together (${kb(size)} now)`)) : null,
-      h("div", {class:"sfoot"}, h("span", {id:"ps-foot", class:"pfoot"}, ...foot()), h("button", {type:"button", class:"btn ghost", onclick: close}, "Cancel"),
-        h("button", {type:"submit", class:"btn go", id:"ps-go", disabled: !ok(), title:"Enter starts it · Shift+Enter for a new line"}, busy ? "Starting…" : ["Start task", h("kbd", {"aria-hidden":"true"}, "↵")]))));
+      failed.length ? h("div", {class:"perr", role:"alert"}, icon("alert"), h("span", {}, `Couldn't read ${failed.map(f => f.name).join(", ")}. Remove ${failed.length === 1 ? "it" : "them"} and choose ${failed.length === 1 ? "it" : "them"} again.`)) : null,
+      h("div", {class:"sfoot"}, h("span", {id:"ps-foot", class:"pfoot"}, ...foot()),
+        ask && !busy ? h("button", {type:"button", class:"btn ghost", id:"ps-anyway", title:"Start it as written, without answering", onclick: () => go(true)}, "Start anyway") : null,
+        h("button", {type:"button", class:"btn ghost", onclick: close}, "Cancel"),
+        h("button", {type:"submit", class:"btn go", id:"ps-go", disabled: !ok(), title:"Enter starts it · Shift+Enter for a new line"}, busy ? "Starting…" : [ask ? "Start with answers" : "Start task", h("kbd", {"aria-hidden":"true"}, "↵")]))));
+  function askEl(){  // preflight paused it: each question's options as chips, or the user's own words
+    if (!ask) return null;
+    const n = ask.qs.length;
+    return h("div", {class:"pclar", id:"ps-ask", role:"group", "aria-labelledby":"ps-askh"},
+      h("div", {class:"pch"}, h("b", {id:"ps-askh"}, n > 1 ? "Two questions before it starts" : "One question before it starts"),
+        h("span", {class:"ast"}, `The goal reads as ambiguous${ask.p != null ? ` (${Math.round(ask.p * 100)}% sure)` : ""}. The answers go to the agent.`)),
+      ...ask.qs.map(q => { const own = h("input", {type:"text", maxlength:"300", placeholder:"Or in your own words", "aria-label":`${q.q} In your own words`,
+          value: q.options.includes(ask.ans[q.id]) ? "" : ask.ans[q.id] || "",
+          oninput: e => { ask.ans[q.id] = e.target.value; e.target.closest(".pq").querySelectorAll(".pchips button").forEach(b => b.setAttribute("aria-pressed", "false")); syncGo() }});
+        return h("div", {class:"pq"}, h("span", {class:"pql", id:`ps-q-${q.id}`}, q.q),
+          h("div", {class:"pchips", role:"group", "aria-labelledby":`ps-q-${q.id}`}, q.options.map(o =>
+            h("button", {type:"button", "aria-pressed": String(ask.ans[q.id] === o), onclick: () => { ask.ans[q.id] = o; render() }}, o))), own) }));
+  }
   function errEl(){  // right under the field it's about: a taken name is the title's to fix, anything else is worth a retry
     const taken = /already exists/.test(ui.task.err), name = (ui.task.err.match(/workspace (\S+) already exists/) || [])[1];
     if (taken && !ui.task.errAt) ui.task.errAt = taskSlug(line());  // the name that's taken: editing the details below it keeps the error
@@ -2168,7 +2201,7 @@ function toastEl(){
   return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`, onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer,  // read it at your pace: the clock waits
       onfocusin: () => clearTimeout(ui.task.t), onfocusout: e => e.currentTarget.contains(e.relatedTarget) || toastTimer()}, h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
     h("span", {class:"tmsg"}, h("b", {}, d.error ? "Task didn't start" : "Task started"), d.error ? h("span", {}, short(d.error, 160)) : h("span", {}, h("span", {class:"mono"}, d.name), ` · ${d.repo}`)),  // the outcome first, then which one
-    d.error ? h("button", {class:"btn", onclick: () => { ui.task.done = null; taskSheet() }}, "Reopen")
+    d.error ? h("button", {class:"btn", onclick: () => { ui.task.done = null; if (ui.task.sheet) { render(); document.getElementById("ps-task")?.focus() } else taskSheet() }}, "Reopen")
       : h("button", {class:"btn pri", onclick: () => { ui.task.done = null; render(); toBasement(d.name) }}, "Open in Basement"),
     h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: x}, icon("close")));
 }
@@ -2182,8 +2215,17 @@ function tasked(r){
     return;
   }
   ui.task.busy = false;
-  if (r.error && ui.task.sheet) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
-  if (!r.error) { ui.task.sheet = null; localSet("taskDraft", ""); ui.task.fresh = r.name }
+  const pending = ui.task.pending; ui.task.pending = null;
+  const changed = pending && (!ui.task.sheet || ui.task.sheet !== pending.sheet || ui.task.sheet.text.trim() !== pending.text || ui.task.sheet.repo !== pending.repo || ui.task.sheet.fileRev !== pending.fileRev ||
+    ui.task.sheet.files.length !== pending.files.length || ui.task.sheet.files.some((f, i) => f !== pending.files[i]));
+  if (r.paused) {  // preflight wants answers first: nothing was made yet
+    if (!ui.task.sheet) { ui.task.done = {error: "It has a question about the goal first. Reopen it to answer."}; toastTimer(); return render() }
+    if (changed) return render();
+    ui.task.ask = {qs: r.questions || [], ans: {}, p: r.p_ambiguous}; render();
+    return document.querySelector("#ps-ask .pchips button")?.focus();
+  }
+  if (r.error && ui.task.sheet && !changed) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
+  if (!r.error) { if (!changed) { ui.task.sheet = null; localSet("taskDraft", "") } ui.task.fresh = r.name }
   ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};
   toastTimer(); render();
 }
