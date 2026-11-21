@@ -604,6 +604,21 @@ def check_code(code, lang, ctx=None, depth=0):
                         v.merge(check_write(ctx.path(path), ctx, "inline Python write", raw=path))
                     else:
                         v.add("high", "inline Python writes to a path the guard cannot resolve")
+                if isinstance(func, ast.Attribute) and func.attr == "open":
+                    try:
+                        mode = ast.literal_eval(node.args[0]) if node.args else "r"
+                    except (ValueError, TypeError, SyntaxError):
+                        mode = "w"  # unknown modes may write
+                    if any(c in str(mode) for c in "wax+"):
+                        base = func.value
+                        try:
+                            path = ast.literal_eval(base.args[0]) if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "Path" else None
+                        except (ValueError, TypeError, SyntaxError, IndexError):
+                            path = None
+                        if isinstance(path, str):
+                            v.merge(check_write(ctx.path(path), ctx, "inline Python Path.open", raw=path))
+                        else:
+                            v.add("high", "inline Python .open write target cannot be resolved")
                 if call in ("os.replace", "os.rename", "shutil.move") and len(node.args) > 1:
                     destination = node.args[1]
                     if isinstance(destination, ast.Call) and ast.unparse(destination.func) == "os.path.expanduser" and destination.args:
@@ -771,6 +786,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in NET_TOOLS:
         return check_net(cmd, args, ctx)
     if cmd in RAW_NET:
+        if cmd == "ssh":
+            v.add("high", "ssh may run local configuration commands", "egress")
         if cmd == "ssh" and any(a.startswith(("-oProxyCommand", "-oLocalCommand", "-oPermitLocalCommand", "-F", "-J")) or
                                  a in ("-o", "-F", "-J") for a in args):
             v.add("high", "ssh options can run a local command or change the route", "egress")
@@ -933,8 +950,16 @@ def check_git(args, ctx, depth=0):
         target = next((x for x in rest if not x.startswith("-")), "")
         if sub != "clone" and (not target or target in ctx.remotes):
             target = ctx.git("remote", "get-url", target or "origin")
-        if target.startswith("ssh://") or re.match(r"^[^/\s]+@?[^/\s]*:[^/\s]", target) or os.environ.get("GIT_SSH_COMMAND"):
+        if any(x.startswith("ssh://") or re.match(r"^[^/\s]+@?[^/\s]*:[^/\s]", x) for x in (target, *rest)) or os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", f"git {sub} may run local SSH configuration commands", "egress")
+    if sub == "send-pack":
+        if any(x in ("-f", "--force") or x.startswith("+") for x in rest):
+            v.add("deny", "git send-pack force update bypasses push safety checks", "egress")
+        else:
+            v.add("high", "git send-pack writes remote refs without push inspection", "egress")
+        return v
+    if sub == "fetch" and any(x in ("--all", "--multiple") for x in rest) or sub == "remote" and rest[:1] == ["update"] or sub == "submodule" and rest[:1] == ["update"]:
+        v.add("high", f"git {sub} can contact several uninspected remotes", "egress")
     if sub == "push":
         if os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", "inherited SSH command can run during git push", "egress")
@@ -958,6 +983,11 @@ def check_git(args, ctx, depth=0):
     elif sub == "config" and (path := opt(rest, "--file", "-f") or next((x[2:] for x in rest if x.startswith("-f") and len(x) > 2), None)) and not any(x in ("--get", "--list", "-l", "--get-all") for x in rest):
         v.merge(check_write(ctx.path(path), ctx, "git config --file", raw=path))
     elif sub == "clone":
+        clone_args = [x for x in rest if not x.startswith("-")]
+        if len(clone_args) > 1:
+            v.merge(check_write(ctx.path(clone_args[-1]), ctx, "git clone destination", raw=clone_args[-1]))
+        if separate := opt(rest, "--separate-git-dir"):
+            v.merge(check_write(ctx.path(separate), ctx, "git clone separate git dir", raw=separate))
         url = next((x for x in rest if not x.startswith("-")), "")
         if host_of(url) not in HOSTS | LOCAL_HOSTS and re.match(r"[\w+.-]+://|[^/]+@[^/]+:", url):
             v.add("low", f"clones from {host_of(url)}", "egress")
@@ -987,6 +1017,10 @@ def check_git(args, ctx, depth=0):
         v.add("medium", f"git {sub} rewrites history")
     elif sub == "send-email" or sub == "credential" or sub == "archive" and "--remote" in " ".join(rest):
         v.add("high", f"git {sub} reaches outside the repo", "egress")
+    if sub == "archive":
+        output = opt(rest, "-o", "--output") or next((x[2:] for x in rest if x.startswith("-o") and len(x) > 2), None)
+        if output:
+            v.merge(check_write(ctx.path(output), ctx, "git archive output", raw=output))
     return v
 
 
