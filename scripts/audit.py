@@ -130,7 +130,7 @@ MAXPARTS = 8  # enough for large multi-file PRs; beyond this, an error (blocks),
 DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True}
 CACHE_VERSION = 3  # old merge passes did not scan each commit's added content
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
-PHONE_RE = re.compile(r"\b(?:\+?1[-. ]?)?\(?[0-9]{3}\)?[-. ]?[0-9]{3}[-. ]?[0-9]{4}\b")
+PHONE_RE = re.compile(r"(?<!\w)(?:\+?1[-. ]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-. ]?[2-9]\d{2}[-. ]?\d{4}\b")
 HOME_RE = re.compile(r"(/(?:home|Users)/|[A-Za-z]:\\+Users\\+)[^/\\\s]+", re.I)
 PERSONAL_RES = ((EMAIL_RE, "an email address"), (PHONE_RE, "a phone number"), (HOME_RE, "a home-directory username"))
 PUBLIC_EMAIL_DOMAINS = {"example.com", "example.net", "example.org"}  # IANA-reserved documentation domains
@@ -648,10 +648,10 @@ def branch_diff(path, target=None, sha="HEAD"):
 
 
 def branch_messages(path, target=None, sha="HEAD"):
-    """Messages of branch commits published with the diff, including message-only commits."""
+    """Messages and author/committer identities of every commit published with the diff."""
     base = base_ref(path, target)
     ancestor = base and git(path, "merge-base", base, sha)
-    return ancestor and git(path, "log", "--format=%B", f"{ancestor.strip()}..{sha}")
+    return ancestor and git(path, "log", "--format=author: %an <%ae>%ncommitter: %cn <%ce>%n%B", f"{ancestor.strip()}..{sha}")
 
 
 def branch_history(path, target=None, sha="HEAD"):

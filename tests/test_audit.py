@@ -127,6 +127,8 @@ removed_path = f"diff --git a/{path_token} b/{path_token}\ndeleted file mode 100
 renamed_path = f"diff --git a/{path_token} b/clean.txt\nrename from {path_token}\nrename to clean.txt\n"
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=removed_path)["ok"]
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=renamed_path)["ok"]
+assert audit.secrets("build_id = 1700000000") == []
+assert audit.secrets("call 202-555-0123") and audit.secrets("call 2025550123")
 empty_spaced_secret_path = "credential file " + tok + ".dat"
 empty_spaced_diff = f"diff --git a/{empty_spaced_secret_path} b/{empty_spaced_secret_path}\nnew file mode 100644\nindex 0000000..e69de29\n"
 assert not audit.contracts({}, ("no_secrets_or_pii",), diff=empty_spaced_diff)["ok"]
@@ -323,6 +325,16 @@ ans.clear()
 o = audit.score_outbound({}, [{"body": "Fixed in 1a2b: the guard now covers n=0, test_n0 added"}], kind="reply")
 assert not o["post"] and o["draft"][0]["why"] == "broke NoBrushOff", o  # no thread given: nothing to check it against
 print("outbound ok")
+
+idwt = tempfile.mkdtemp()
+gid = lambda *a: subprocess.run(["git", "-C", idwt, *a], check=True, capture_output=True, text=True).stdout.strip()
+gid("init", "-q", "-b", "main"); gid("config", "user.email", "t@t"); gid("config", "user.name", "t")
+gid("commit", "--allow-empty", "-qm", "base")
+gid("update-ref", "refs/remotes/origin/main", gid("rev-parse", "HEAD"))
+gid("checkout", "-qb", "feat")
+gid("commit", "--allow-empty", "-qm", "ordinary change", "--author", "Private User <person@private-mail.test>")
+published_identity = audit.branch_messages(idwt, "main")
+assert "person@private-mail.test" in published_identity and audit.secrets(published_identity)
 
 # ---- the merge audit: the branch's diff at that head, cached per head; an error blocks and is retried later
 wt = tempfile.mkdtemp()
