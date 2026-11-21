@@ -179,6 +179,144 @@ git("push", "-q", "origin", "--delete", "feature")  # the push prunes the remote
 assert gone("feature") and not gone("local-only") and not gone("main")
 assert not greenlight.upstream_gone({"path": "/nonexistent", "branch": "feature"})
 
+# 1.3 Done condition: preflight asks decide.py before a new workspace's agent starts (a fake decide here: never a network call)
+class Decide:
+    def __init__(self, p, clarity=0.8, value=None, fail=None, provider="fake"):
+        self.p, self.clarity, self.value, self.fail, self.provider, self.calls = p, clarity, value, fail, provider, []
+    def bool(self, state, question, *, context=""):
+        self.calls.append(("bool", state, context))
+        if self.fail:
+            raise self.fail
+        return {"value": self.p > 0.5 if self.value is None else self.value, "prob": self.p, "provider": self.provider}
+    def score(self, state, rubric, *, context=""):
+        self.calls.append(("score", state, context))
+        return {"score": self.clarity, "provider": self.provider}
+
+pf = lifestage.preflight
+clear = pf("Add exponential retry backoff to the outbound queue; done when test_queue passes", decide=(d := Decide(0.1)))
+assert not clear["pause"] and clear["questions"] == [] and clear["record"]["ok"] is True and clear["brief"] == ""
+assert isinstance(d.calls[0][1], str) and "Goal: Add exponential" in d.calls[0][1] and [c[0] for c in d.calls] == ["bool", "score"]
+assert not pf("x", decide=Decide(0.70))["pause"]  # the line itself is clear: only over 0.70 pauses
+amb = pf("make it better", decide=Decide(0.9, clarity=0.2))
+assert amb["pause"] and amb["record"] is None and amb["p_ambiguous"] == 0.9 and amb["clarity"] == 0.2
+assert [q["id"] for q in amb["questions"]] == ["done", "scope"] and all(2 <= len(q["options"]) <= 4 for q in amb["questions"])
+assert amb["questions"][0]["q"] == "What does done look like?"
+assert [q["id"] for q in pf("Rework how the scheduler decides which of the queued jobs runs first", decide=Decide(0.8, clarity=0.3))["questions"]] == ["done"]
+assert [q["id"] for q in pf("Rework how the scheduler decides which of the queued jobs runs first", decide=Decide(0.8, clarity=0.9))["questions"]] == ["scope"]
+# prob as confidence in `value`: "not ambiguous, 90% sure" is P(ambiguous) 0.1
+assert not pf("make it better", decide=Decide(0.9, value=False))["pause"]
+# answered: never asked again, the answers reach the agent and the record; unknown ids and blanks are dropped
+ans = pf("make it better", answers={"done": "A draft PR with tests", "scope": "  ", "evil": "x"}, decide=(d := Decide(0.95, clarity=0.1)))
+assert not ans["pause"] and ans["brief"] == "\n\nBefore you started I answered these:\n- What does done look like? A draft PR with tests"
+assert ans["record"]["answers"] == {"What does done look like?": "A draft PR with tests"} and ans["record"]["ok"] is True
+assert "Answers to clarifying questions:\nWhat does done look like? A draft PR with tests" in d.calls[0][1]
+forced = pf("make it better", force=True, decide=(d := Decide(0.95)))
+assert not forced["pause"] and forced["record"]["forced"] and forced["record"]["ok"] is False and not d.calls
+# decide.py missing (until system-one-decide lands) or failing never blocks a start, and says why
+down = pf("make it better", decide=Decide(0.9, fail=TimeoutError("jev timed out")))
+assert not down["pause"] and down["record"]["ok"] is None and "TimeoutError: jev timed out" in down["why"]
+local = pf("make it better", decide=Decide(0.5, clarity=0.5, provider="local"))
+assert not local["pause"] and local["record"]["ok"] is None and "no System One provider" in local["why"]
+if not (greenlight.ROOT / "scripts/decide.py").exists():
+    assert "ModuleNotFoundError" in pf("make it better")["why"]
+
+# checks.done_condition: the verdict saved at launch, while the goal is the one judged
+lifestage.save("preflight", "w1", clear["record"] | {"goal": "add retries"})
+assert lifestage.place(row(None, goal="add retries"))["checks"]["done_condition"]["ok"] is True
+assert lifestage.place(row(None, goal="add retries, and a dashboard"))["checks"]["done_condition"] is None  # goal changed since
+
+# 2.3 Self-test: `lifestage.py selftest -- cmd` in the worktree; no MR + passed on what HEAD holds = 2.4 Propose
+wt = tempfile.mkdtemp()
+g = lambda *a: subprocess.run(["git", "-C", wt, *a], check=True, capture_output=True, text=True).stdout.strip()
+subprocess.run(["git", "init", "-q", "-b", "main", wt], check=True)
+g("config", "user.name", "t"); g("config", "user.email", "t@example.invalid")
+Path = __import__("pathlib").Path
+(Path(wt) / "a.py").write_text("x = 1\n"); g("add", "-A"); g("commit", "-qm", "one")
+st = lambda *cmd: subprocess.run([sys.executable, lifestage.__file__, "selftest", "--", *cmd], cwd=wt, capture_output=True, text=True)
+ws = lambda **kw: row(None, goal="add retries", path=wt, **kw)
+assert life(None, goal="add retries", path=wt)[0] == "2.2" and ws()["life"]["checks"]["self_test"] is None  # nothing on record yet
+out = st(sys.executable, "-c", "print('3 passed')")
+assert out.returncode == 0 and "3 passed" in out.stdout and "exit 0 recorded" in out.stderr, out
+w = ws()["life"]
+assert (w["at"], w["sub_name"], w["suggestion"]["label"]) == ("2.4", "Propose", "Open the draft PR") and w["checks"]["self_test"]["fresh"]
+assert w["do"] == f"Its self-test passed on {g('rev-parse', 'HEAD')[:7]} (`{sys.executable} -c print('3 passed')`). Start an agent to push it and open the draft PR."
+assert ws(agent="working")["life"]["do"].endswith("(`" + sys.executable + " -c print('3 passed')`). Your agent is working on it now.")
+(Path(wt) / "a.py").write_text("x = 2\n")  # an edit not yet committed: HEAD, what a PR would carry, is still the tested tree
+assert life(None, goal="add retries", path=wt)[0] == "2.4"
+g("commit", "-qam", "two")  # committed: HEAD changed since, back to Self-test
+assert life(None, goal="add retries", path=wt)[::3] == ("2.3", "Run the self-test again")
+assert st(sys.executable, "-c", "raise SystemExit(3)").returncode == 3  # its exit code is the command's
+assert life(None, goal="add retries", path=wt)[::3] == ("2.3", "Fix the self-test") and "exit 3" in ws()["life"]["do"]
+# tested before committing: the tree it tested is the tree HEAD holds after the commit, so it counts
+(Path(wt) / "b.py").write_text("y = 1\n"); st("true")
+assert life(None, goal="add retries", path=wt)[0] == "2.3"  # untracked b.py isn't in HEAD yet
+g("add", "-A"); g("commit", "-qm", "three")
+assert life(None, goal="add retries", path=wt)[0] == "2.4"
+assert "a.py" in g("status", "--porcelain", "--untracked-files=all") or not g("status", "--porcelain")  # the real index is untouched
+# undrafting: greenlight's Mark it ready says when the self-test on record is failed or stale; no record, no note
+dr = lambda **kw: row(mr(draft=True), path=wt, **kw)["life"]["do"]
+assert dr() == "!7 is still a draft. Greenlight marks it ready on its next run."
+(Path(wt) / "a.py").write_text("x = 3\n"); g("commit", "-qam", "four")
+assert dr().endswith("Its last self-test is older than its head commit (`true`).")
+assert row(mr(draft=True), path="/nonexistent")["life"]["do"] == "!7 is still a draft. Greenlight marks it ready on its next run."
+assert "selftest" in subprocess.run([sys.executable, lifestage.__file__, "selftest"], capture_output=True, text=True).stderr
+# no commit yet: recorded, but it counts for nothing
+empty = tempfile.mkdtemp(); subprocess.run(["git", "init", "-q", empty], check=True)
+o = subprocess.run([sys.executable, lifestage.__file__, "selftest", "true"], cwd=empty, capture_output=True, text=True)
+assert o.returncode == 0 and "counts for nothing" in o.stderr and lifestage.self_test({"path": empty})["fresh"] is False
+
+# dash.py: New task and New workspace pause on an ambiguous goal before anything is made, and launch on a clear one
+import dash
+from unittest import mock
+REPO = [{"id": "r1", "name": "widgets", "host": "github", "path": "acme/widgets"}]
+def task(payload, decide):
+    calls = []
+    def orca(*a):
+        calls.append(a)
+        return {"worktree": {"id": "w9", "path": "/w/" + a[a.index("--name") + 1]}} if a[:2] == ("worktree", "create") else {}
+    with mock.patch.object(dash, "repos", return_value=REPO), mock.patch.object(dash, "live_agents", return_value={}), \
+            mock.patch.object(dash.greenlight, "orca", side_effect=orca), mock.patch.dict(sys.modules, {"decide": decide}):
+        return dash.task("new", "widgets", json.dumps(payload)), calls
+out, calls = task({"text": "make it better"}, Decide(0.9, clarity=0.2))
+assert out["paused"] and [q["id"] for q in out["questions"]] == ["done", "scope"] and out["p_ambiguous"] == 0.9 and not calls, out
+assert not (dash.TASKS / "make-it-better").exists()  # a dismissed question leaves nothing behind
+out, calls = task({"text": "make it better", "answers": {"done": "A working prototype I can try", "scope": "The smallest change that works"}},
+                  Decide(0.9, clarity=0.2))
+assert out["ok"] and out["name"] == "make-it-better", out
+brief = next(a for a in calls if a[:2] == ("worktree", "create"))
+brief = brief[brief.index("--prompt") + 1]
+assert brief.endswith("- What does done look like? A working prototype I can try\n- How far should it go? The smallest change that works")
+assert "lifestage.py selftest -- <the test command>" in brief
+assert "Follow my request and clarifying answers" in brief
+rec = lifestage.record("preflight", {"name": "make-it-better"})
+assert rec["ok"] and rec["goal"] == "make it better" and len(rec["answers"]) == 2
+assert lifestage.checks({"name": "renamed", "path": "/w/make-it-better", "goal": "make it better"})["done_condition"]["ok"]
+assert "[preflight: answered]" in greenlight.history_file("make-it-better").read_text()
+out, calls = task({"text": "make a plan", "answers": {"done": "A written plan first, no code"}}, Decide(0.9, clarity=0.2))
+brief = next(a for a in calls if a[:2] == ("worktree", "create"))
+brief = brief[brief.index("--prompt") + 1]
+assert "If they ask for a plan or investigation first, stop at that deliverable" in brief and brief.endswith("- What does done look like? A written plan first, no code")
+out, calls = task({"text": "Add retry backoff to the outbound queue, done when test_queue passes"}, Decide(0.05))
+assert out["ok"] and any(a[:2] == ("worktree", "create") for a in calls)  # clear: launched at once
+out, calls = task({"text": "make it worse", "force": True}, Decide(0.99))
+assert out["ok"] and lifestage.record("preflight", {"name": "make-it-worse"})["forced"]
+# New workspace: asked only when an agent would start on a goal
+tcalls = []
+def tree_call(*a):
+    tcalls.append(a)
+    return {"worktree": {"path": "/w/new", "worktreeId": "t1"}} if a[:2] == ("worktree", "create") else {}
+with mock.patch.object(dash, "tree", return_value=(tree_call, {"repoId": "r"})), mock.patch.object(dash, "repo_cfg", return_value={}), \
+        mock.patch.dict(sys.modules, {"decide": Decide(0.9, clarity=0.2)}):
+    p = dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True})
+    assert p["paused"] and len(p["questions"]) == 2 and not tcalls
+    assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": False})["ok"] and tcalls  # no agent: nothing to gate
+    tcalls.clear()
+    assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True, "answers": {"scope": "Investigate and report back first"}})["ok"]
+    launch = next(a for a in tcalls if a[:2] == ("agent", "launch"))
+    assert launch[launch.index("--prompt") + 1].startswith("make it better\n\nBefore you started I answered these:\n- How far should it go? Investigate and report back first")
+    assert "lifestage.py selftest -- <the test command>" in launch[launch.index("--prompt") + 1]
+    assert lifestage.record("preflight", {"path": "/w/new"})["answers"]
+
 # lifestage.py: the piles, from the snapshot; rows from before this file get placed on the way out
 snap = [row(mr(_discussions=[thread("alice", "alice")])) | {"id": "a", "name": "alpha"},
         row(mr(_approvals_left=1)) | {"id": "b", "name": "beta"}, row(mr(state="merged")) | {"id": "c", "name": "gamma"}]
@@ -191,4 +329,9 @@ assert "4.3 Review › Respond" in out and "Resolve 1 thread" in out and "4.5 Re
 one = json.loads(run("beta", "--json"))
 assert len(one) == 1 and (one[0]["workspace"], one[0]["pile"], one[0]["blocker"], one[0]["mr"]) == ("beta", "waiting", "reviewers", "!7")
 assert "no scanned workspace named nope" in run("nope")
+snap = [row(None, goal="add retries", path=wt) | {"id": "d", "name": "delta"}]; del snap[0]["life"]
+(greenlight.STATE / "last.json").write_text(json.dumps({"rows": snap}))
+lifestage.save("preflight", "delta", {"goal": "add retries", "ok": True, "p_ambiguous": 0.1, "clarity": 0.9, "provider": "fake", "answers": {}})
+out = run("delta")
+assert "1.3 done condition: P(ambiguous) 0.1, clarity 0.9 (fake)" in out and "2.3 self-test: `true` exit 0" in out and "stale" in out, out
 print("test_lifestage ok")

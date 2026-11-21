@@ -166,6 +166,36 @@ test("a workspace is in its repo's project wherever its worktree sits, new ones 
   assert.equal((await under())["brand-new"], "Platform", "just made, not listed yet: already under its repo's project");
   assert.deepEqual(page._errs, []);
 });
+test("new workspace: an ambiguous goal pauses before anything is made; chips answer, the same request goes again with them; Start anyway forces it", async page => {
+  await page.click("#shead button[aria-label='New workspace']"); await page.waitForSelector("#dlg:not([hidden]) textarea:focus");
+  await page.fill("#dlg textarea", "make it better"); await page.click("#dlg button.pri");
+  const sent = async () => (await posts(page, "tree")).filter(m => m.op === "new").map(m => ({path: m.path, ...JSON.parse(m.text)}));
+  const [first] = await sent();
+  assert.deepEqual([first.path, first.name, first.goal, first.agent], ["/w/widgets", "make-it-better", "make it better", true]);
+  const Q = {op: "new", path: "/w/widgets", paused: true, p_ambiguous: 0.9, questions: [
+    {id: "done", q: "What does done look like?", options: ["A draft PR with tests", "A working prototype I can try"]},
+    {id: "scope", q: "How far should it go?", options: ["The smallest change that works", "Investigate and report back first"]}]};
+  await page.evaluate(q => term.tree(q), Q);
+  assert.match(await page.textContent("#dlg h3"), /Two questions before Claude starts/);
+  assert.match(await page.textContent("#dlg"), /“make it better”, which reads as ambiguous \(90% sure\)/);
+  await page.click("#dlg button.pri");
+  assert.match(await page.textContent("#dlg .err"), /Pick an answer for each/); assert.equal((await sent()).length, 1, "sent unanswered");
+  await page.click("#dlg .opts button:has-text('A draft PR with tests')");
+  assert.equal(await page.getAttribute("#dlg .opts button:has-text('A draft PR with tests')", "aria-pressed"), "true");
+  await page.fill("#dlg input[aria-label^='How far']", "Only the login page");
+  await page.click("#dlg button.pri");
+  assert.equal(await page.isHidden("#dlg"), true);
+  const again = (await sent())[1];
+  assert.deepEqual({...again, answers: undefined}, {...first, answers: undefined}, "not the same request");
+  assert.deepEqual(again.answers, {done: "A draft PR with tests", scope: "Only the login page"});
+  await page.evaluate(q => term.tree(q), Q);
+  await page.click("#dlg button:has-text('Start anyway')");
+  assert.equal(await page.isHidden("#dlg"), true); assert.equal((await sent())[2].force, true);
+  await page.evaluate(() => term.tree({op: "new", path: "/orca/acme/make-it-better", repo: "/w/widgets", ok: true}));
+  await page.evaluate(q => term.tree(q), Q);  // made: a stray late pause asks nothing
+  assert.equal(await page.isHidden("#dlg"), true);
+  assert.deepEqual(page._errs, []);
+});
 test("new workspace in a project window: the repo offered first is one of the window's", async page => {
   page = await boot(page.context().browser(), null, "?only=" + encodeURIComponent('["p2"]'));
   await page.evaluate(() => { term.projects([{id: "p2", name: "Widgets", repos: ["acme/widgets"], dirs: []}]);

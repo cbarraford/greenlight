@@ -31,13 +31,31 @@ blocking.py's roster says someone is waiting on you for), working (your side hol
 is already on it), waiting (someone else holds it), done, parked.
 
 It reads greenlight's own next step (`next`) and the MR's facts off the row, so a repo's lifecycle file still decides which
-chores apply. Sub-stages a scan can't tell apart yet aren't reported: 1.2-1.4, 2.1, 2.3, 2.4, 5.2.
+chores apply. Sub-stages a scan can't tell apart yet aren't reported: 1.2, 1.4, 2.1, 5.2.
+
+Two sub-stages end on evidence the forge doesn't hold, so greenlight keeps it (~/.greenlight/checks/) and every row carries it
+as `life["checks"]`:
+
+    1.3 Done condition  preflight(): before a new workspace's agent starts (dash.py task_new / tree_new), decide.py says how
+                        likely the goal is ambiguous and how clear its done condition is. Over AMBIGUOUS it pauses and asks 1-2
+                        questions with options; the answers go to the agent. checks.done_condition is that verdict, while the
+                        goal is still the one it judged.
+    2.3 Self-test       `lifestage.py selftest -- <test command>`, run in the worktree, records the exit code against the git tree
+                        that was tested. A workspace with no MR whose HEAD is that tree is at 2.4 Propose when it passed, and 2.3
+                        Self-test when it failed or the code changed since. checks.self_test says which.
+
+    lifestage.py selftest [--] <cmd...>     run the tests in this worktree and put the result on record (exits with theirs)
 
 Stdlib only, and it never imports greenlight.py.
 """
+import collections
+import hashlib
+import importlib
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -80,10 +98,145 @@ def sentence(text):
     return text[:1].upper() + text[1:] + ("" if not text or text[-1] in ".?!" else ".")
 
 
+CHECKS = STATE / "checks"
+AMBIGUOUS = 0.70  # P(ambiguous) over this pauses a new workspace before its agent starts
+AMBIGUITY_Q = ("Is this coding task too ambiguous to start without asking first: would two capable engineers likely build "
+               "noticeably different things from it, or not know when they are done?")
+CLARITY_RUBRIC = ("How clear is this coding task's done condition? 1.0: it says what to build and how anyone can check it is done "
+                  "(a test, a command's output, a behaviour to observe). 0.5: what to build is clear, how to tell it's done is not. "
+                  "0.0: it's unclear what to build.")
+QUESTIONS = {  # id: (question, options); the answer can also be the user's own words
+    "done": ("What does done look like?", ["A draft PR with tests", "A working prototype I can try", "A written plan first, no code"]),
+    "scope": ("How far should it go?", ["The smallest change that works", "The whole feature, edge cases included",
+                                        "Investigate and report back first"]),
+}
+
+
+def _file(kind, where):
+    """A check's record for a workspace: by its worktree path, or by name (a task's workspace before its path is known)."""
+    return CHECKS / f"{kind}-{hashlib.sha1(str(where).encode()).hexdigest()[:16]}.json"
+
+
+def save(kind, where, data):
+    CHECKS.mkdir(parents=True, exist_ok=True)
+    f = _file(kind, where)
+    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data | {"ts": int(time.time())}))
+    tmp.replace(f)
+
+
+def record(kind, r):
+    for where in (r.get("path"), r.get("name")):
+        try:
+            if where and isinstance(o := json.loads(_file(kind, where).read_text()), dict):
+                return o
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _p_true(v):
+    """decide.bool's answer as P(True), whether its prob is P(True) or its confidence in `value`."""
+    p = min(1.0, max(0.0, float(v.get("prob", 0.5))))
+    return 1 - p if not v.get("value") and p > 0.5 else p
+
+
+def preflight(goal, context="", answers=None, force=False, decide=None):
+    """1.3 Done condition, before a new workspace's agent starts. `answers` ({question id: answer}) are the user's replies to an
+    earlier pause; `force` starts it unanswered. Returns {"pause", "questions": [{"id", "q", "options"}], "brief": text for the
+    agent, "record": what checks.done_condition shows, ...}. decide.py missing or failing never blocks a start: this gate is
+    about clarity, not safety, so it opens and says why."""
+    goal = " ".join(str(goal or "").split())
+    answers = {k: " ".join(str(v).split())[:300] for k, v in (answers or {}).items() if k in QUESTIONS and str(v).strip()}
+    said = [(QUESTIONS[k][0], v) for k, v in answers.items()]
+    brief = "\n\nBefore you started I answered these:\n" + "\n".join(f"- {q} {a}" for q, a in said) if said else ""
+    base = {"goal": goal, "answers": dict(said), "forced": bool(force and not said)}
+    if force and not said:
+        return {"pause": False, "questions": [], "brief": "", "why": "started without answering", "record": base | {"ok": False}}
+    ctx = "\n\n".join(x for x in (f"Goal: {goal}", str(context or "")[:4000],
+                                     "Answers to clarifying questions:\n" + "\n".join(f"{q} {a}" for q, a in said) if said else "") if x)
+    try:
+        decide = decide or importlib.import_module("decide")
+        # decide.py's state is the text being judged, and must be JSON serializable for its cache key.
+        amb = decide.bool(ctx, AMBIGUITY_Q)
+        clear = decide.score(ctx, CLARITY_RUBRIC)
+        if amb.get("provider") == "local" or clear.get("provider") == "local":
+            why = "no preflight: " + str(amb.get("error") or clear.get("error") or "no System One provider configured")[:160]
+            return {"pause": False, "questions": [], "brief": brief, "why": why,
+                    "record": base | {"ok": None, "why": why}}
+        p, clarity = _p_true(amb), min(1.0, max(0.0, float(clear.get("score", 0.5))))
+    except Exception as e:  # ImportError until decide.py lands, a backend down, a malformed answer
+        why = f"no preflight: {type(e).__name__}: {str(e)[:160]}"
+        return {"pause": False, "questions": [], "brief": brief, "why": why, "record": base | {"ok": None, "why": why}}
+    verdict = {"p_ambiguous": round(p, 3), "clarity": round(clarity, 3), "provider": amb.get("provider") or clear.get("provider")}
+    if p <= AMBIGUOUS or said:  # answered once: never asked again, whatever the second look says
+        return verdict | {"pause": False, "questions": [], "brief": brief, "why": "clear" if not said else "answered",
+                          "record": base | verdict | {"ok": True}}
+    ids = (["done"] if clarity < 0.6 else []) + (["scope"] if len(goal.split()) < 8 or clarity >= 0.6 else [])
+    qs = [{"id": k, "q": QUESTIONS[k][0], "options": QUESTIONS[k][1]} for k in ids[:2]]
+    return verdict | {"pause": True, "questions": qs, "brief": "", "why": f"P(ambiguous) {p:.2f} > {AMBIGUOUS}", "record": None}
+
+
+def _git(path, *a, env=None):
+    return subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True, timeout=60, env=env, check=True).stdout.strip()
+
+
+def worktree_tree(path):
+    """The git tree of the worktree as it is on disk: HEAD plus every change, untracked files too (not ignored ones)."""
+    with tempfile.TemporaryDirectory() as d:
+        env = os.environ | {"GIT_INDEX_FILE": os.path.join(d, "index")}
+        _git(path, "read-tree", "HEAD", env=env)
+        _git(path, "add", "-A", env=env)
+        return _git(path, "write-tree", env=env)
+
+
+def self_test(r):
+    """checks.self_test: the worktree's last recorded self-test, and whether it tested what HEAD holds now."""
+    rec = record("selftest", {"path": r.get("path")}) if r.get("path") else None
+    if not rec:
+        return None
+    try:
+        fresh = bool(rec.get("tree")) and _git(r["path"], "rev-parse", "HEAD^{tree}") == rec["tree"]
+    except (OSError, subprocess.SubprocessError):
+        fresh = False
+    return {k: rec.get(k) for k in ("sha", "cmd", "exit", "ts")} | {"ok": rec.get("exit") == 0, "fresh": fresh}
+
+
+def checks(r):
+    """Evidence for the sub-stages the forge can't show: 1.3's preflight verdict (while the goal is the one judged), 2.3's self-test."""
+    pf = record("preflight", r)
+    same = pf and pf.get("goal") == " ".join(str(r.get("goal") or "").split())
+    return {"done_condition": pf if same else None, "self_test": self_test(r)}
+
+
+def selftest(cmd, cwd="."):
+    """lifestage.py selftest: run cmd in this worktree, echo its output, and record its exit code against the tested tree."""
+    root = _git(cwd, "rev-parse", "--show-toplevel")
+    try:
+        tree, sha = worktree_tree(root), _git(root, "rev-parse", "HEAD")
+    except subprocess.SubprocessError:  # no commit yet: nothing a PR could hold
+        tree, sha = None, None
+    tail = collections.deque(maxlen=15)
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    for line in p.stdout:
+        sys.stdout.write(line)
+        tail.append(line.rstrip()[:200])
+    code = p.wait()
+    save("selftest", root, {"tree": tree, "sha": sha, "cmd": " ".join(cmd)[:300], "exit": code, "tail": list(tail)})
+    print(f"\nselftest: exit {code} recorded for {(sha or 'no commit')[:7]}" + ("" if tree else " (no commit yet, so it counts for nothing)"),
+          file=sys.stderr)
+    return code
+
+
 def place(r, nxt=None):
     """A scan row's place in the lifecycle. nxt: the row's next step as evaluate() gave it, before the agent overlay
     changed its owner (the row's own `next` otherwise). The agent's state is applied on top by now().
     `do` is the whole move in a sentence or two: what is true, then what to do about it (or who is doing it)."""
+    ck = checks(r)
+    return _place(r, nxt, ck) | {"checks": ck}
+
+
+def _place(r, nxt, ck):
     nxt, mr = nxt or r.get("next") or {}, r.get("mr") or {}
     step, owner, why = nxt.get("step"), nxt.get("owner"), nxt.get("action") or ""
     ref, into = mr.get("ref") or "it", mr.get("target_branch") or "its target"
@@ -105,6 +258,17 @@ def place(r, nxt=None):
     if step == "freeform":
         if owner == "working":  # an Orca automation drives it
             return spot("build", "implement", "author", "automation", do="An Orca automation is running this. Nothing for you to do.", why=why)
+        if st := ck["self_test"]:
+            sha, cmd = (st["sha"] or "")[:7], st["cmd"]
+            if st["fresh"] and st["ok"]:
+                return spot("build", "propose", "author", "agent", "Open the draft PR",
+                            f"Its self-test passed on {sha} (`{cmd}`). Start an agent to push it and open the draft PR.", why)
+            if st["fresh"]:
+                return spot("build", "self-test", "author", "agent", "Fix the self-test",
+                            f"Its self-test failed on {sha} (`{cmd}`, exit {st['exit']}). Start an agent to fix it.", why)
+            return spot("build", "self-test", "author", "agent", "Run the self-test again",
+                        f"The code changed since its last self-test ({'passed' if st['ok'] else 'failed'} on {sha}). "
+                        "Start an agent to finish it and run the tests again.", why)
         return spot("build", "implement", "author", "agent", "Work toward the goal", "There is no MR yet. Start an agent on the goal.", why)
     if step == "review":  # someone else's MR: my part is the review
         if owner == "me" and "re-review" in why:
@@ -136,7 +300,10 @@ def place(r, nxt=None):
         if owner == "me":
             return spot("review", "open-for-review", "author", "you", "Take it out of draft?",
                         f"Everything else on {ref} is green, but your goal says to keep it a draft. Mark it ready for review, or leave it.", why)
-        return spot("review", "open-for-review", "author", "greenlight", "Mark it ready", f"{Ref} is still a draft. Greenlight marks it ready on its next run.", why)
+        st = ck["self_test"]
+        note = "" if not st or st["fresh"] and st["ok"] else \
+            f" Its last self-test {'failed' if st['fresh'] else 'is older than its head commit'} (`{st['cmd']}`)."
+        return spot("review", "open-for-review", "author", "greenlight", "Mark it ready", f"{Ref} is still a draft. Greenlight marks it ready on its next run.{note}", why)
     if step == "threads":
         if owner == "reviewers":
             return spot("review", "re-review", "reviewers", "others",
@@ -255,6 +422,9 @@ def of(r):
 
 
 def main():
+    if sys.argv[1:2] == ["selftest"]:
+        cmd = sys.argv[2:][sys.argv[2:3] == ["--"]:]
+        sys.exit(selftest(cmd) if cmd else "usage: lifestage.py selftest [--] <test command...>")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     found = [(r, of(r)) for r in rows() if not args or r["name"] in args or r["id"] in args]
     if "--json" in sys.argv:
@@ -276,6 +446,20 @@ def main():
             print(f"  {r['name'][:26]:26} {ref:6} {where:30} {(life['holder'] or '-'):14} {move}")
             if args and life.get("do"):
                 print(f"      {life['do']}")
+            for line in (evidence(life.get("checks") or {}) if args else []):
+                print(f"      {line}")
+
+
+def evidence(ck):
+    """checks as lines for `lifestage.py <workspace>`."""
+    out, pf, st = [], ck.get("done_condition"), ck.get("self_test")
+    if pf:
+        how = "started without answering" if pf.get("forced") else pf.get("why") if pf.get("ok") is None else \
+            f"P(ambiguous) {pf.get('p_ambiguous')}, clarity {pf.get('clarity')} ({pf.get('provider')})"
+        out.append(f"1.3 done condition: {how}" + "".join(f"; {q} {a}" for q, a in (pf.get("answers") or {}).items()))
+    if st:
+        out.append(f"2.3 self-test: `{st['cmd']}` exit {st['exit']} on {(st['sha'] or '-')[:7]}" + ("" if st["fresh"] else ", stale: the code changed since"))
+    return out
 
 
 if __name__ == "__main__":

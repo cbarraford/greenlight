@@ -307,6 +307,10 @@ button:focus-visible,.tab:focus-visible{outline:none;box-shadow:0 0 0 2px var(--
 #card .acts small{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums} #card .ft .del{font-weight:500}
 /* New workspace: an icon by the title, two fields a row, the setup as a tile, the branch under Advanced */
 #dlg .dh .hic{flex:0 0 auto;width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:color-mix(in srgb,var(--amb) 18%,transparent);color:var(--amb)} #dlg .dh .stk{display:grid;gap:2px;min-width:0}
+#dlg .nwq .q{display:grid;gap:6px;margin-bottom:10px} #dlg .nwq .q>span{font-weight:600} #dlg .nwq .opts{display:flex;flex-wrap:wrap;gap:6px}
+#dlg .nwq .opts button{height:26px;padding:0 11px;border:0;border-radius:13px;background:color-mix(in srgb,var(--fg) 5%,var(--strip));box-shadow:inset 0 0 0 1px var(--hair);color:var(--fg);font:500 12px -apple-system,sans-serif;cursor:pointer}
+#dlg .nwq .opts button[aria-pressed=true]{background:var(--amb);box-shadow:none;color:#1C1C1F;font-weight:600}
+#dlg .nwq input{height:28px;padding:0 10px;border:0;border-radius:8px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);color:inherit;font:inherit}
 #dlg .nws .two{display:grid;grid-template-columns:1fr 1fr;gap:12px} #dlg .nws .tiles label:first-child{grid-column:auto} #dlg .nws .tile small{white-space:normal}
 #dlg .nws .tile code{display:block;margin:4px 0;padding:3px 6px;border-radius:5px;background:var(--d2);box-shadow:inset 0 0 0 1px var(--ln);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dlg .tile.none{display:flex;gap:11px;padding:11px 12px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--ln);color:var(--dim);cursor:default} #dlg .tile.none[hidden],#dlg .nws [hidden]{display:none} #dlg .dh .stk .sub{white-space:normal} #dlg .big button.danger{background:var(--r);color:#fff;font-weight:650} #dlg .tile.none b{color:var(--mid)}
@@ -1002,6 +1006,8 @@ async function treeDone(o){
   if (o.op === "diff") return diffShow(o);
   if (o.op === "new") {
     if (o.error) return ask({icon: "warn", title: "Couldn't make the workspace", text: esc(o.error), cancel: false});
+    if (o.paused) return newWsAsk(o);
+    newAsk = null;
     if (o.warn) toast(o.warn);
     newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
     made.set(o.path, wsInfo(o.repo)?.project || ""); reveal(o.path); save(); return render();
@@ -1872,6 +1878,32 @@ function toAgent(ws, text){
 }
 // a branch name from the goal: its first five words, lowercase, dashed
 const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 5).join("-").slice(0, 40).replace(/-+$/, "");
+let newAsk = null;  // the last New workspace asked for: sent again with the answers when preflight pauses it
+// preflight (dash.py tree_new) read the goal as ambiguous: nothing is made yet; its 1-2 questions, each with options or your own words
+function newWsAsk(o){
+  const pend = newAsk; if (!pend || pend.path !== o.path) return;
+  const ans = {}, body = el("div", "nwb nwq"), err = el("p", "err");
+  body.append(el("p", "note2", `Claude would start on “${esc(pend.o.goal)}”, which reads as ambiguous${o.p_ambiguous != null ? ` (${Math.round(o.p_ambiguous * 100)}% sure)` : ""}. Your answers go to it with the goal.`));
+  for (const q of o.questions || []) {
+    const box = el("div", "q"), opts = el("div", "opts"), own = Object.assign(el("input"), {type: "text", maxLength: 300, placeholder: "Or in your own words"});
+    own.setAttribute("aria-label", `${q.q} In your own words`); opts.setAttribute("role", "group"); opts.setAttribute("aria-label", q.q);
+    const press = v => opts.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.textContent === v)));
+    for (const v of q.options) { const b = Object.assign(el("button"), {type: "button", textContent: v}); b.setAttribute("aria-pressed", "false");
+      b.onclick = () => { ans[q.id] = v; own.value = ""; press(v); err.textContent = "" }; opts.append(b) }
+    own.oninput = () => { ans[q.id] = own.value; press(null) };
+    box.append(Object.assign(el("span"), {textContent: q.q}), opts, own); body.append(box);
+  }
+  body.append(err);
+  const send = more => { post({cmd: "tree", op: "new", path: pend.path, text: JSON.stringify({...pend.o, ...more})}); toast(`Making ${pend.o.name} in ${pend.project || "the repo"}…`) };
+  const anyway = Object.assign(el("button"), {type: "button", textContent: "Start anyway", title: "Start Claude on the goal as written"});
+  anyway.onclick = () => { send({force: true}); [...$("dlg").querySelectorAll(".btns>button")].find(b => b.textContent === "Cancel")?.click() };  // closes as Cancel does
+  dlgForm(o.questions?.length > 1 ? "Two questions before Claude starts" : "One question before Claude starts", body, "Start with answers", () => {
+    if (!(o.questions || []).every(q => (ans[q.id] || "").trim())) { err.textContent = "Pick an answer for each, or Start anyway"; return false }
+    send({answers: ans}); return true;
+  }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `Nothing is made until you answer: ${pend.o.name}`, left: [anyway]});
+  $("dlg").querySelector("button.pri").innerHTML = "Start with answers<kbd>↩</kbd>";
+  body.querySelector(".opts button")?.focus();
+}
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
   if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
@@ -1909,7 +1941,8 @@ function newWsDialog(){
     if (!ok(n)) return bad("Branch: letters, digits, and . _ - /");
     if (trees.some(w => w.project === repo()?.project && w.branch === n)) return bad(`${repo().project} already has a workspace on ${n}`);
     if (b && !ok(b)) { err.textContent = "From: a branch name, or empty for the default branch"; base.focus(); return false }
-    post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify({name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""})});
+    newAsk = {path: sel.value, o: {name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""}, project: repo()?.project};
+    post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify(newAsk.o)});
     toast(`Making ${n} in ${repo()?.project || "the repo"}…`); return true;
   }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `A worktree on a new branch, on ${host}`, left: [foot]});
   $("dlg").querySelector("button.pri").innerHTML = "Create workspace<kbd>↩</kbd>";
