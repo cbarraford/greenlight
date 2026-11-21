@@ -83,7 +83,6 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     elif name == "gemini":
         cmd = [b, *perms, *(["--output-format", "stream-json"] if stream else []), *opt("-m", model), *opt("--resume", sid)]
     elif name == "agy":
-        import json
         cmd = [b, *perms, "--input-format", "stream-json", "--output-format", "stream-json",
                *opt("--model", model), *opt("--conversation", sid)]
         text = json.dumps({"event": "user", "message": {"role": "user", "content": text}}) + "\n"

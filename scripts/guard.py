@@ -302,7 +302,7 @@ def substitutions(script):
 
 
 def commands(script):
-    """[(argv, redirect targets)] for each simple command, or None when it can't be parsed."""
+    """[(argv, output redirects, input redirects)] for each simple command, or None when it can't be parsed."""
     script = re.sub(r"(?<![\w$-])\d+(?=>)", "", script)  # 2>/dev/null: the fd isn't an argument
     lex = shlex.shlex(script.replace("\n", " ; "), posix=True, punctuation_chars=";&|()<>")
     lex.whitespace_split = True
@@ -311,24 +311,24 @@ def commands(script):
         toks = list(lex)
     except ValueError:
         return None
-    out, argv, redir, want = [], [], [], False
+    out, argv, redir, inputs, want = [], [], [], [], None
     for t in toks:
         if want:
             if not re.fullmatch(r"&\d*|\d+", t):  # 2>&1, >&2
-                redir.append(t)
-            want = False
+                (redir if want == "write" else inputs if want == "read" else []).append(t)
+            want = None
         elif t in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "&>|"):
-            want = True
+            want = "write" if t != "<&" else "skip"
         elif t and set(t) <= set(";&|()"):
             if argv:
-                out.append((argv, redir))
-            argv, redir = [], []
+                out.append((argv, redir, inputs))
+            argv, redir, inputs = [], [], []
         elif t in ("<", "<<", "<<<", "<<-"):
-            want = False
+            want = "read" if t == "<" else "skip"
         else:
             argv.append(t)
     if argv:
-        out.append((argv, redir))
+        out.append((argv, redir, inputs))
     return out
 
 
@@ -394,9 +394,12 @@ def check_shell(script, ctx, depth=0):
         if NET_CODE_RE.search(body) or re.search(r"\b(?:rm|git\s+push|gh|glab)\b", body):
             v.add("high", "unparseable and names a network or destructive tool")
         return v
-    for i, (argv, redir) in enumerate(cmds):
+    for i, (argv, redir, inputs) in enumerate(cmds):
         for r in redir:
             v.merge(check_write(ctx.path(r), ctx, "redirect", raw=r))
+        for r in inputs:
+            if SECRET_PATH_RE.search(str(ctx.path(r))):
+                v.add("high", f"reads a credential file through input redirection ({r})", "secret")
         argv = unwrap(argv)
         if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
             to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
@@ -424,6 +427,9 @@ def check_code(code, lang):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
+    if re.search(r"\.greenlight/(?:config\.json|guard)|\.claude/(?:settings(?:\.local)?\.json|skills/greenlight/)|\.codex/config\.toml", code) and re.search(
+            r"write_text|write_bytes|\.write\s*\(|open\s*\(|os\.remove|unlink|rmtree|fs\.write|fs\.rm|writeFile|rmSync", code):
+        v.add("deny", f"{lang} code that can change the guard or agent permissions")
     if leak := leaks(code):
         v.add("deny" if net else "medium", f"the code {leak}", "secret")
     return v
@@ -586,10 +592,14 @@ def check_push(rest, ctx, v):
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
                 for f in flags) or any(p.startswith("+") for p in pos[1:])
     remote = pos[0] if pos else "origin"
+    if remote in ctx.remotes and remote != "origin" and not own_repo(ctx.git("remote", "get-url", remote), ctx):
+        v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
     if remote not in ctx.remotes and remote != "origin" and ("/" in remote or ":" in remote or "@" in remote):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
     if any(f in ("--mirror", "--all", "--tags", "--prune") for f in flags):
         v.add("high", "pushes every branch or tag, or deletes remote ones", "egress")
+    if "--mirror" in flags or (force and "--all" in flags):
+        v.add("deny", "force-pushes all branches, including the default branch", "egress")
     if any(f in ("-d", "--delete") for f in flags) or any(p.startswith(":") for p in pos[1:]):
         v.add("high", "deletes a remote branch", "egress")
     refs = pos[1:] or [ctx.branch or "HEAD"]
@@ -632,15 +642,24 @@ def check_forge(cmd, args, ctx):
     group, verb = a[0], (a[1] if len(a) > 1 else "")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
-    bfile = opt(a, "--body-file", "-F", "--notes-file")
-    if bfile and bfile != "-":
-        p = ctx.path(bfile)
+    bfile = opt(a, "--body-file", "--notes-file")
+    for source in filter(None, (bfile, opt(a, "--input"))):
+        if source == "-":
+            v.add("high", f"{cmd} sends stdin that the guard cannot inspect", "egress")
+            continue
+        p = ctx.path(source)
         if SECRET_PATH_RE.search(str(p)):
-            v.add("deny", f"posts a credential file ({bfile}) to {cmd}", "secret", "egress")
+            v.add("deny", f"posts a credential file ({source}) to {cmd}", "secret", "egress")
         try:
-            body += "\n" + p.read_text(errors="replace")[:200000]
+            with p.open("rb") as fh:
+                data = fh.read(5_000_001)
         except OSError:
-            pass
+            v.add("high", f"cannot inspect {cmd} upload file ({source})", "egress")
+            continue
+        if len(data) > 5_000_000:
+            v.add("deny", f"{cmd} upload file is too large to inspect ({source})", "egress")
+        elif leak := leaks(data.decode(errors="replace")):
+            v.add("deny", f"{cmd} upload file {leak}", "secret", "egress")
     if leak := leaks(body) or leaks(text):
         v.add("deny", f"the text it posts {leak}", "secret", "egress")
     if secret_vars(text):
@@ -658,8 +677,11 @@ def check_forge(cmd, args, ctx):
     if group == "api":
         method = (opt(a, "-X", "--method") or "").upper()
         writes = method not in ("", "GET", "HEAD") or any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field", "--input"))
-        if writes and method != "GET":
+        if writes:
             v.add("high" if method == "DELETE" else "medium", f"{cmd} api {method or 'POST'} writes to the forge", "egress")
+            target = re.search(r"\brepos/([^/\s]+)/([^/\s?]+)", text)
+            if target and not own_repo(f"{target[1]}/{target[2]}", ctx):
+                v.add("high", f"{cmd} api writes to another repo ({target[1]}/{target[2]})", "egress")
         return v
     if verb in FORGE_READ or group in ("help", "version", "--version", "completion"):
         return v
@@ -684,7 +706,8 @@ def check_forge(cmd, args, ctx):
 def own_repo(repo, ctx):
     url = ctx.git("remote", "get-url", "origin")
     name = re.sub(r"\.git$", "", re.sub(r"^(?:https?://|git@)[^/:]+[/:]", "", url)).lower()
-    return bool(name) and re.sub(r"^(?:https?://)?[^/]+\.[a-z]+/", "", repo.lower()).rstrip("/") == name
+    other = re.sub(r"\.git$", "", re.sub(r"^(?:https?://|git@)[^/:]+[/:]", "", repo.lower())).rstrip("/")
+    return bool(name) and other == name and ("/" not in repo or "://" not in repo and "@" not in repo or host_of(url) == host_of(repo))
 
 
 def check_net(cmd, args, ctx):
@@ -704,7 +727,9 @@ def check_net(cmd, args, ctx):
                 v.add("deny", f"uploads a credential file ({path})", "secret", "egress")
     if leak := leaks(full):
         v.add("deny", f"the request {leak}", "secret", "egress")
-    if secret_vars(full) and not any(re.search(r"(?i)authorization|x-api-key|private-token", a) for a in args):
+    auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
+    auth_hosts = {"github.com", "api.github.com", "gitlab.com", "api.gitlab.com"}
+    if secret_vars(full) and not (auth_header and hosts and hosts <= auth_hosts):
         v.add("deny", "sends a secret env var off the machine", "secret", "egress")
     if data or method in ("POST", "PUT", "PATCH", "DELETE"):
         v.add("high", f"{cmd} sends data to {', '.join(sorted(hosts)) or 'a host'}", "egress")
@@ -728,6 +753,10 @@ def check_rm(args, ctx):
     for raw in paths:
         p = ctx.path(raw)
         s = str(p)
+        if any(c in raw for c in "*?["):
+            anchor = raw.split("*", 1)[0].split("?", 1)[0].split("[", 1)[0].rstrip("/") or "."
+            if not (ctx.root and ctx.path(anchor) == ctx.root or ctx.root and str(ctx.path(anchor)).startswith(str(ctx.root) + "/")):
+                v.add("high", f"deletes a glob outside the worktree ({raw})")
         if ctx.unknown and not os.path.isabs(os.path.expanduser(raw)):
             v.add("high", f"deletes {raw} after an unknown directory change")
             continue
@@ -858,15 +887,15 @@ def system_one(question, context, budget_ms):
 def judge(v, action, ctx, conf):
     """The final call for a boundary action: allow | pause | deny, with the System 1 answer it rests on."""
     for pat in conf.get("deny") or []:
-        if re.search(pat, action):
+        if matches(pat, action):
             return "deny", f"matches your guard.deny rule /{pat}/", None, 0
     if v.tier == "deny":
         return "deny", "; ".join(v.why), None, 0
     for pat in conf.get("allow") or []:
-        if re.search(pat, action) and v.tier != "deny":
+        if matches(pat, action) and v.tier != "deny":
             return "allow", f"matches your guard.allow rule /{pat}/", None, 0
     name, goal, rules = situation(ctx)
-    context = (f"Workspace: {name or ctx.root.name}\nBranch: {ctx.branch}\nGoal: {goal or '(none known)'}\n"
+    context = (f"Workspace: {name or (ctx.root.name if ctx.root else '(outside a repo)')}\nBranch: {ctx.branch}\nGoal: {goal or '(none known)'}\n"
                f"Repo rules:\n{rules or '(none)'}\nSecurity invariants:\n{INVARIANTS}\n"
                f"Risk the rules saw ({v.tier}): {'; '.join(v.why)}\nAction:\n{action[:4000]}")
     q = "Is this action needed for the workspace's goal, and does it keep every security invariant?"
@@ -988,7 +1017,7 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
         v = Verdict()
         v.add("high" if re.search(r"\b(?:push|curl|wget|gh|glab|rm|ssh|scp|nc)\b|https?://", action) else "pass",
               f"guard error {type(e).__name__}: {e}")
-    if v.tier == "pass" and not any(re.search(p, action) for p in (conf.get("deny") or [])):
+    if v.tier == "pass" and not any(matches(p, action) for p in (conf.get("deny") or [])):
         return {"decision": "pass", "tier": "pass", "ms": int((time.monotonic() - t0) * 1000)}
     verdict, why, s1, s1_ms = judge(v, action, ctx, conf)
     ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": v.why, "s1": s1, "s1_ms": s1_ms,
