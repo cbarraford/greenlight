@@ -575,6 +575,30 @@ def check_code(code, lang, ctx=None, depth=0):
                     continue
                 func = node.func
                 call = f"{func.value.id}.{func.attr}" if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else ""
+                if isinstance(func, ast.Name) and func.id == "open" and len(node.args) > 1:
+                    try:
+                        write_mode = any(c in ast.literal_eval(node.args[1]) for c in "wax+")
+                    except (ValueError, TypeError, SyntaxError):
+                        write_mode = True
+                    if write_mode:
+                        try:
+                            path = ast.literal_eval(node.args[0])
+                        except (ValueError, TypeError, SyntaxError):
+                            path = None
+                        if isinstance(path, str):
+                            v.merge(check_write(ctx.path(path), ctx, "inline Python write", raw=path))
+                        else:
+                            v.add("high", "inline Python writes to a path the guard cannot resolve")
+                if isinstance(func, ast.Attribute) and func.attr in ("write_text", "write_bytes"):
+                    base = func.value
+                    try:
+                        path = ast.literal_eval(base.args[0]) if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "Path" else None
+                    except (ValueError, TypeError, SyntaxError, IndexError):
+                        path = None
+                    if isinstance(path, str):
+                        v.merge(check_write(ctx.path(path), ctx, "inline Python write", raw=path))
+                    else:
+                        v.add("high", "inline Python writes to a path the guard cannot resolve")
                 if call == "shutil.rmtree":
                     try:
                         target = ast.literal_eval(node.args[0])
@@ -788,7 +812,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
         v.add("high", f"{cmd} installs packages that may run scripts with the agent's credentials")
         return v
     if cmd in ("npx", "pnpx", "bunx", "uvx", "pipx") and args:
-        v.add("low", f"{cmd} fetches and runs a package")
+        v.add("high", f"{cmd} fetches and runs package code with credentials")
         return v
     # any other command: read its file arguments for credentials, and keep it off the guard's own files
     for a in args:
@@ -806,8 +830,11 @@ READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "ag", "jq", "wc"
            "sha256sum", "shasum", "bat", "view", "tree", "readlink", "realpath", "test", "["}
 
 
-def check_git(args, ctx):
+def check_git(args, ctx, depth=0):
     v = Verdict()
+    if depth > 3:
+        v.add("high", "Git alias chain is too deep to inspect")
+        return v
     a = [part for arg in args for part in (["-c", arg[2:]] if arg.startswith("-c") and len(arg) > 2 else [arg])]
     source_root = ctx.source_root or ctx.root
     push_override = False
@@ -833,6 +860,16 @@ def check_git(args, ctx):
     if not a:
         return v
     sub, rest = a[0], a[1:]
+    if alias := ctx.git("config", "--get", f"alias.{sub}"):
+        if alias.startswith("!"):
+            v.add("high", "Git shell alias may run arbitrary commands")
+            v.merge(check_shell(alias[1:], ctx, depth + 1))
+        else:
+            try:
+                v.merge(check_git(shlex.split(alias) + rest, ctx, depth + 1))
+            except ValueError:
+                v.add("high", "Git alias cannot be parsed")
+        return v
     if sub == "push":
         if os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", "inherited SSH command can run during git push", "egress")
@@ -875,8 +912,8 @@ def check_git(args, ctx):
         v.add("medium", "git stash clear discards every stash")
     elif sub == "stash" and rest[:1] == ["drop"]:
         v.add("high", "drops stashed work")
-    elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest):
-        v.add("high" if any(x in ("-D", "--delete") for x in rest) else "low", f"git {sub} deletes work")
+    elif sub == "branch" and any(x in ("-D", "--delete", "-d", "-M", "--force") for x in rest):
+        v.add("high" if any(x in ("-D", "--delete", "-M", "--force") for x in rest) else "low", f"git {sub} changes branch references")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
     elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
@@ -1129,6 +1166,12 @@ def check_forge(cmd, args, ctx):
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
+    if group in ("pr", "mr") and verb in ("edit", "ready", "update", "merge", "close", "reopen", "approve", "revoke", "rebase", "delete", "lock", "unlock", "comment", "note", "review", "reply"):
+        goal = situation(ctx)[1]
+        expected = re.search(r"[#!](\d+)", goal)
+        target = a[2] if len(a) > 2 and not a[2].startswith("-") else ""
+        if not expected or target != expected[1]:
+            v.add("high", f"{cmd} {group} target is not verified as this workspace's PR/MR", "egress")
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
         default = next((d for d in ctx.default if ctx.git("rev-parse", "--verify", f"refs/remotes/origin/{d}")), "main")
         source = opt(a, "--head") or ctx.branch
@@ -1156,12 +1199,6 @@ def check_forge(cmd, args, ctx):
         return v
     low = {("pr", "create"), ("pr", "edit"), ("pr", "ready"), ("mr", "create"), ("mr", "update"), ("pr", "checkout"), ("mr", "checkout")}
     if (group, verb) in low:
-        if (group, verb) in (("pr", "edit"), ("pr", "ready"), ("mr", "update")):
-            goal = situation(ctx)[1]
-            expected = re.search(r"[#!](\d+)", goal)
-            target = a[2] if len(a) > 2 and not a[2].startswith("-") else ""
-            if not expected or target != expected[1]:
-                v.add("high", f"{cmd} {group} target is not verified as this workspace's PR/MR", "egress")
         v.add("low", f"{cmd} {group} {verb} on this workspace's PR/MR", "egress")
     elif group in ("pr", "mr", "issue") and verb in ("comment", "note", "review", "reply", "create", "edit", "update"):
         v.add("medium", f"{cmd} {group} {verb} posts text to the forge", "egress")

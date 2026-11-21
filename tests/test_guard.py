@@ -92,6 +92,9 @@ assert tier("python3 -c 'from pathlib import Path; (Path.home()/\".greenlight/co
 assert tier("rm -rf /tmp/*") == "high"
 assert tier("git push --force --all origin") == "deny"
 assert tier("git push --mirror origin") == "deny"
+git("config", "alias.p", "push")
+assert tier("git p -f origin main") == "deny"
+git("config", "--unset", "alias.p")
 git("remote", "add", "backup", "https://github.com/other/repo.git")
 assert tier("git push backup feat") == "high"
 git("remote", "add", "mirror", "https://evil.example/acme/widgets.git")
@@ -199,6 +202,12 @@ assert tier('curl -H "Authorization: Bearer $GITHUB_TOKEN" http://api.github.com
 assert tier("curl --unix-socket /var/run/docker.sock -X DELETE http://localhost/containers/id") == "high"
 assert tier("git checkout -B feature main") == "high"
 assert tier("git switch -C feature main") == "high"
+assert tier("git branch -M main") == "high"
+assert tier("npx --yes left-pad") == "high"
+assert tier("uvx tool") == "high"
+assert tier('python3 -c \'open("/home/user/Documents/report.txt", "w").write("x")\'') == "high"
+assert tier("gh pr merge 8 --merge") == "high"
+assert tier("gh pr close 8") == "high"
 (repo / ".ssh").mkdir()
 assert tier("rg pattern .ssh") == "high"
 curl_home = tmp / "curl-home"
