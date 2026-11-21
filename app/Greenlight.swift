@@ -2916,6 +2916,10 @@ final class Core: ObservableObject {
         transcriptFile = session == 0 ? transcript : support.appendingPathComponent("transcript-\(session).json")
         questionsURL = session == 0 ? questionsFile : support.appendingPathComponent("questions-\(session).json")
         msgs = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcriptFile)))?.map(Msg.init)) ?? msgs
+        if session == 0 && ud.string(forKey: "model") == "gemini-4-neon" {
+            ud.set("gemini-4-neon-medium", forKey: "model")
+            msgs.append(Msg(.note, "Gemini chat now uses agy, which starts a new conversation. Your earlier Gemini CLI conversation remains available by selecting Gemini CLI."))
+        }
         questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
         context = ud.integer(forKey: meterKeys.context); window = ud.integer(forKey: meterKeys.window)
     }
@@ -3503,7 +3507,9 @@ final class Core: ObservableObject {
         connected = true
         switch e {
         case "start":
-            r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
+            let engine = j["engine"] as? String ?? "claude"
+            let selected = engine == "agy" ? j["model"] as? String : engine
+            r.status = "Starting \(models.first { $0.1 == selected }?.0 ?? engine.capitalized)"
             log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":
             if !r.stopping { r.status = j["text"] as? String ?? r.status; r.thinking = j["thinking"] as? Bool ?? false; voice.status(byline(r, now: Date(), lead: true)) }

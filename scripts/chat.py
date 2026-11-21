@@ -540,7 +540,7 @@ class Norm:
                 out.append({"e": "text", "delta": delta})
             usage = step.get("usage") or {}
             if usage:
-                self.context = usage.get("input_tokens") or self.context
+                self.context = usage.get("input_tokens", 0) + usage.get("cache_read_tokens", 0) or self.context
                 out.append({"e": "usage", "context": self.context})
         elif event == "step_update" and step.get("step_type") == "tool":
             self.gem_open = False
@@ -552,9 +552,9 @@ class Norm:
             if step.get("state") == "ACTIVE":
                 out.append(self.more({"e": "step", "id": ident, "title": short(title, 80), "detail": short(detail or json.dumps(args)),
                                       "call": call("Bash" if name == "run_command" else name, args)}, input=clip(json.dumps(args))))
-            elif step.get("state") == "DONE":
-                result = str(info.get("output") or "")
-                ok = not info.get("error") and (name != "run_command" or "exited with code 0" in result.lower())
+            elif step.get("state") in ("DONE", "ERROR"):
+                result = str(info.get("output") or info.get("error") or "")
+                ok = step.get("state") == "DONE" and not info.get("error") and (name != "run_command" or "exited with code 0" in result.lower())
                 out.append(self.more({"e": "step_done", "id": ident, "ok": ok,
                                       "out": short(result, 120)}, full=clip(result, tail=True)))
         elif event == "result":
