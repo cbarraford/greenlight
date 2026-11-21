@@ -508,7 +508,7 @@ def score_outbound(state, comments, *, kind="review", diff="", goal=""):
             out["failed"] += [{"comment": i, "contract": b} for b in dict.fromkeys(broken)]
         elif mean >= c["post"] and not guess and (kind == "reply" and
               p_true(ans[f"{i}:thread_truly_addressed"]) >= c["post"] or kind == "review" and
-              (sc["evidence"] >= c["draft"] and sc["severity"] >= 0.5 and sc["non_nitpick"] >= 0.75)):
+              (sc["evidence"] >= 0.75 and sc["severity"] >= 0.5 and sc["non_nitpick"] >= 0.75)):
             out["post"].append(item)
         elif mean >= c["draft"] or (guess and kind == "reply"):
             item["why"] = "a guess (no model answered)" if guess else "medium confidence: keep it local"
@@ -651,7 +651,19 @@ def branch_messages(path, target=None, sha="HEAD"):
     """Messages and author/committer identities of every commit published with the diff."""
     base = base_ref(path, target)
     ancestor = base and git(path, "merge-base", base, sha)
-    return ancestor and git(path, "log", "--format=author: %an <%ae>%ncommitter: %cn <%ce>%n%B", f"{ancestor.strip()}..{sha}")
+    if not ancestor:
+        return None
+    span = f"{ancestor.strip()}..{sha}"
+    messages = git(path, "log", "--format=%B", span)
+    identities = git(path, "log", "--format=author: %an <%ae>%ncommitter: %cn <%ce>", span)
+    if messages is None or identities is None:
+        return None
+    # A forge no-reply address and reserved synthetic addresses are deliberately
+    # public identity placeholders. Apply this only to structured Git metadata;
+    # the same address in a commit message still gets the normal outbound scan.
+    public = {"users.noreply.github.com", "example.invalid", "example.test"}
+    identities = EMAIL_RE.sub(lambda m: "[public Git identity]" if m[0].rsplit("@", 1)[-1].lower() in public else m[0], identities)
+    return messages + "\n" + identities
 
 
 def branch_history(path, target=None, sha="HEAD"):
