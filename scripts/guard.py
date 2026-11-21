@@ -450,7 +450,7 @@ def unwrap(argv):
         elif b == "xargs":
             v = v[1:]
             while v and v[0].startswith("-"):
-                v = v[2:] if v[0] in ("-I", "-n", "-P", "-L", "-d", "-s", "-E") else v[1:]
+                v = v[2:] if v[0] in ("-I", "-n", "-P", "-L", "-d", "-s", "-E", "-a", "--arg-file") else v[1:]
         else:
             break
     return v
@@ -576,7 +576,7 @@ def check_code(code, lang, ctx=None, depth=0):
             tree = None
         if tree:
             for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or not node.args:
+                if not isinstance(node, ast.Call) or not node.args and not (isinstance(node.func, ast.Attribute) and node.func.attr == "unlink"):
                     continue
                 func = node.func
                 call = f"{func.value.id}.{func.attr}" if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else ""
@@ -625,6 +625,20 @@ def check_code(code, lang, ctx=None, depth=0):
                         v.merge(check_rm([target], ctx))
                     else:
                         v.add("high", "shutil.rmtree target cannot be resolved")
+                    continue
+                if call in ("os.remove", "os.unlink") or isinstance(func, ast.Attribute) and func.attr == "unlink":
+                    target_node = node.args[0] if call in ("os.remove", "os.unlink") else func.value
+                    try:
+                        target = ast.literal_eval(target_node)
+                    except (ValueError, TypeError, SyntaxError):
+                        try:
+                            target = ast.literal_eval(target_node.args[0]) if isinstance(target_node, ast.Call) and isinstance(target_node.func, ast.Name) and target_node.func.id == "Path" else None
+                        except (ValueError, TypeError, SyntaxError, IndexError):
+                            target = None
+                    if isinstance(target, str):
+                        v.merge(check_rm([target], ctx))
+                    else:
+                        v.add("high", "inline Python deletion target cannot be resolved")
                     continue
                 if call not in ("os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_call",
                                 "subprocess.check_output", "subprocess.Popen"):
@@ -679,8 +693,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
             for a in args:
                 if a.startswith("-") or a == opt(args, "-e"):
                     continue
-                if GUARD_PATH_RE.search(str(ctx.path(a))):
-                    v.merge(check_write(ctx.path(a), ctx, f"{cmd} in-place", raw=a))
+                v.merge(check_write(ctx.path(a), ctx, f"{cmd} in-place", raw=a))
         return v
     if cmd == "git":
         return check_git(args, ctx)
@@ -916,6 +929,12 @@ def check_git(args, ctx, depth=0):
             except ValueError:
                 v.add("high", "Git alias cannot be parsed")
         return v
+    if sub in ("clone", "fetch", "pull", "ls-remote"):
+        target = next((x for x in rest if not x.startswith("-")), "")
+        if sub != "clone" and (not target or target in ctx.remotes):
+            target = ctx.git("remote", "get-url", target or "origin")
+        if target.startswith("ssh://") or re.match(r"^[^/\s]+@?[^/\s]*:[^/\s]", target) or os.environ.get("GIT_SSH_COMMAND"):
+            v.add("high", f"git {sub} may run local SSH configuration commands", "egress")
     if sub == "push":
         if os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", "inherited SSH command can run during git push", "egress")
@@ -1626,6 +1645,10 @@ def check_tool(tool, inp, ctx):
         return v
     if tool.startswith("mcp__"):
         name = tool.split("__")[-1].lower()
+        if name == "graphql":
+            query = str(inp.get("query") or inp.get("document") or "")
+            if not re.match(r"\s*(?:query\b|\{)", query) or re.search(r"\b(?:mutation|subscription)\b", query):
+                v.add("high", f"{tool} may mutate remote data", "egress")
         if name in ("api", "request", "http"):
             method = str(inp.get("method") or inp.get("http_method") or "").upper()
             if method not in ("GET", "HEAD"):
