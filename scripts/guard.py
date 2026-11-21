@@ -465,7 +465,9 @@ def check_shell(script, ctx, depth=0):
     body, docs = strip_heredocs(script)
     live = expanding(body) + "".join("\n" + d for _, d, expands in docs if expands)
     # a secret var sent in a forge auth header is how agents call the forge API: check_net judges that one
-    for n in secret_vars(re.sub(r"(?i)(?:-H|--header)[ =]*([\"']?)(?:authorization|private-token|x-api-key|job-token)\s*:[^\n\"']*\1", "", live)):
+    auth_arg = re.compile(r"(?i)(?:-H|--header)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;]+)")
+    masked = auth_arg.sub(lambda m: "" if re.search(r"(?i)authorization|private-token|x-api-key|job-token", m[0]) else m[0], live)
+    for n in secret_vars(masked):
         v.add("high", f"reads secret env var ${n}", "secret")
     for line, doc, expands in docs:
         head = commands(line) or []
@@ -1048,17 +1050,12 @@ def check_tag_objects(ctx):
 
 
 def check_outgoing_commits(ctx, remote, source, target):
-    """Inspect objects that a push of one source ref would send."""
+    """Inspect reachable source objects without trusting mutable local remote-tracking refs."""
     v = Verdict()
     source = ctx.branch if source == "HEAD" else source
-    target = ctx.branch if target == "HEAD" else re.sub(r"^refs/heads/", "", target)
-    base = next((ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}") for d in ctx.default
-                 if ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}")), "")
-    if not base:
-        base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{target}")
-    revision = f"{base}..{source}" if base else source
+    revision = source
     try:
-        count = int(ctx.git("rev-list", "--count", revision))
+        count = len(ctx.git("rev-list", "--max-count=101", revision).splitlines())
         if count > 100:
             raise ValueError("too many commits")
         cmd = ["git", "-C", str(ctx.cwd)]
@@ -1211,6 +1208,8 @@ def check_forge(cmd, args, ctx):
         return v
     low = {("pr", "create"), ("pr", "edit"), ("pr", "ready"), ("mr", "create"), ("mr", "update"), ("pr", "checkout"), ("mr", "checkout")}
     if (group, verb) in low:
+        if verb in ("edit", "update") and any(x in a or any(y.startswith(x + "=") for y in a) for x in ("--body", "-b", "--body-file", "--base", "--title")):
+            v.add("medium", f"{cmd} {group} {verb} changes published PR text or base", "egress")
         v.add("low", f"{cmd} {group} {verb} on this workspace's PR/MR", "egress")
     elif group in ("pr", "mr", "issue") and verb in ("comment", "note", "review", "reply", "create", "edit", "update"):
         v.add("medium", f"{cmd} {group} {verb} posts text to the forge", "egress")
@@ -1437,6 +1436,8 @@ def check_rm(args, ctx):
             v.add("high", f"deletes the worktree itself, or a folder above it ({raw})")
         elif GUARD_PATH_RE.search(s):
             v.add("deny", f"deletes the guard or its config ({raw})")
+        elif s in (str(HOME / ".greenlight"), str(HOME / ".claude"), str(HOME / ".claude" / "skills" / "greenlight")):
+            v.add("deny", f"deletes the guard or agent's settings directory ({raw})")
         elif s.endswith("/.git") or "/.git/" in s:
             v.add("high", f"deletes git's own data ({raw})")
         elif not ctx.inside(p):
@@ -1737,9 +1738,10 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": [redact(reason) for reason in v.why], "s1": s1, "s1_ms": s1_ms,
           "session": session}
     routing_env = {k: os.environ.get(k, "") for k in ("GH_REPO", "GH_HOST", "GLAB_REPO", "GITLAB_HOST", "GIT_SSH_COMMAND")}
+    routing_env.update({name: os.environ.get(name, "") for name in SECRET_VAR_RE.findall(inp.get("command", ""))} if tool == "Bash" else {})
     routing_env.update({k: value for k, value in os.environ.items() if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))})
     scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}\0{json.dumps(routing_env, sort_keys=True)}\0{v.tier}\0{approval_files(tool, inp, ctx)}"
-    cacheable = tool != "Bash" or not re.search(r"@[^\s]+|--(?:body-file|notes-file|input|post-file|upload-file|template)\b|\s-[FTK][^\s]*|\bgh\s+(?:gist|release)\s+(?:create|upload)\b", inp.get("command", ""))
+    cacheable = tool != "Bash" or not re.search(r"\$|`|@[^\s]+|--(?:body-file|notes-file|input|post-file|upload-file|template)\b|\s-[FTK][^\s]*|\bgh\s+(?:gist|release)\s+(?:create|upload)\b", inp.get("command", ""))
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
     if verdict == "pause" and cacheable and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
