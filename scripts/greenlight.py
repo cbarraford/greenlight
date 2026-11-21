@@ -1135,6 +1135,8 @@ def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name
     ws = list(dict.fromkeys(mine + list(ws)))
     slug = decisions.slug(kind) if kind else None
+    if proactive and not slug:
+        kind = slug = "proactive"
     if proactive or slug in autonomy.PROACTIVE:
         try:
             g = autonomy.gate(slug or "proactive", text)

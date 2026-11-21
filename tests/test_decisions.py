@@ -106,6 +106,12 @@ main, other = decisions.said("Merge fix-001?" + O), decisions.said("Merge fix-00
 assert decisions.heard("hold", chat="chat-1")["id"] == other and decisions.said("Merge fix-001 now?" + O, chat="chat-1")
 decisions.forget_chat(chat="chat-1")
 assert [r for r in recs() if r["id"] == main][0]["closed"] is None and decisions.heard("merge")["id"] == main
+# Identical wording in two chats: the inbox's dismiss closes only the question from that window.
+same = "Which workspace next?\nOptions: first | second"
+main, other = decisions.said(same), decisions.said(same, chat="chat-1")
+assert decisions.dismiss(same, ping=False, chat=None)["id"] == main
+assert next(r for r in recs() if r["id"] == other)["closed"] is None
+assert decisions.dismiss(same, ping=False, chat="chat-1")["id"] == other
 # Chief's trailing dashboard highlight tag is hidden in the app and cannot hide the Options line from the record.
 tagged = decisions.said("Work on fix-002 next?\nOptions: fix-002 | later\n[hexes: fix-002]", kind="check-in")
 assert tagged and recs()[-1]["kind"] == "check-in" and recs()[-1]["options"] == ["fix-002", "later"]

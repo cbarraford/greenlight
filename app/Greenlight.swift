@@ -3568,7 +3568,7 @@ final class Core: ObservableObject {
         }
         if replyingTo == q.id { replyingTo = nil; replyText = "" }
         if doSend { send(q.ping ? "(Replying to your question: \"\(q.text)\")\n\(text)" : text, shown: text) }
-        if !doSend && text == "(dismissed)" && !selftest, let d = try? JSONSerialization.data(withJSONObject: ["text": q.text, "key": q.key as Any? ?? NSNull(), "ping": q.ping]) {
+        if !doSend && text == "(dismissed)" && !selftest, let d = try? JSONSerialization.data(withJSONObject: ["text": q.text, "key": q.key as Any? ?? NSNull(), "ping": q.ping, "chat": session == 0 ? "" : "chat-\(session)"]) {
             ssh("\(py)/decisions.py dismiss", stdin: String(decoding: d, as: UTF8.self))  // the ✕: autonomy.py's gate counts it against its kind
         }
     }
@@ -3816,7 +3816,12 @@ final class Core: ObservableObject {
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
         gate("watch", text: list) { [weak self] ok in  // score the new workspaces before the watch interrupts
-            guard let self, ok, self.watch else { return }
+            guard let self else { return }
+            guard ok, self.watch else {
+                let current = Dictionary(uniqueKeysWithValues: ask.keys.compactMap { name in self.needs?[name].map { (name, $0) } })
+                self.fresh = current.merging(self.fresh) { $1 }  // a held watch can retry if the gate's history changes
+                return
+            }
             let current = Dictionary(uniqueKeysWithValues: ask.keys.compactMap { name in self.needs?[name].map { (name, $0) } })
             let (visible, deferred) = inScope(current, self.pucks, self.scope())
             self.fresh = deferred.merging(self.fresh) { $1 }  // a scope change must not consume another project's news

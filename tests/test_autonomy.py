@@ -370,6 +370,12 @@ assert r.returncode == 1 and json.loads(r.stdout)["ok"] is False, r
 
 # greenlight.py ping --proactive (or a check-in/watch kind): held when the gate says so, nothing sent, logged
 reset()
+first = greenlight.ping("An optional idea?\nOptions: yes | no", "@generic-1", proactive=True)
+assert first and decisions.load()[-1]["kind"] == "proactive"
+decisions.dismiss("An optional idea?", "@generic-1")
+assert greenlight.ping("Another optional idea?\nOptions: yes | no", "@generic-2", proactive=True)["held"]
+assert len(outbox()) == 1
+reset()
 with decisions.book() as recs:
     for i in range(4):
         r = decisions.record(f"idea {i}\nOptions: do it | no", "ping", kind="check-in")
