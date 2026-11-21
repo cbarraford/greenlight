@@ -127,6 +127,13 @@ removed_path = f"diff --git a/{path_token} b/{path_token}\ndeleted file mode 100
 renamed_path = f"diff --git a/{path_token} b/clean.txt\nrename from {path_token}\nrename to clean.txt\n"
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=removed_path)["ok"]
 assert audit.contracts({}, ("no_secrets_or_pii",), diff=renamed_path)["ok"]
+bearer = "Authorization: " + "Bearer " + "A1" * 24
+jwt = "eyJ" + "A" * 12 + "." + "eyJ" + "B" * 12 + "." + "C" * 24
+for credential in (bearer, jwt):
+    calls.clear()
+    result = audit.contracts({}, ("no_secrets_or_pii",), diff=DIFF + "+" + credential + "\n")
+    assert not result["ok"] and credential not in repr(calls) and credential not in json.dumps(result)
+    assert audit.secrets(credential)
 assert audit.secrets("build_id = 1700000000") == []
 assert audit.secrets("call 202-555-0123") and audit.secrets("call 2025550123")
 empty_spaced_secret_path = "credential file " + tok + ".dat"
