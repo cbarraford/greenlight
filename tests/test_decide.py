@@ -19,6 +19,10 @@ FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
 (Path(HOME) / "config.json").write_text(json.dumps({"harnesses": {"claude": {"bin": str(FAKE_CLAUDE)}}}))
 
 import decide, ade_common, greenlight  # noqa: E402
+for bad in (float("nan"), float("inf"), float("-inf")):
+    try: decide.finish({"type": "bool"}, bad, "jev")
+    except ValueError: pass
+    else: assert False, "nonfinite provider answer must not become a valid verdict"
 
 # ---- a fake server for Jev and the Messages API: records each request, answers with `reply(path, body)` ----
 SEEN, REPLY = [], {}

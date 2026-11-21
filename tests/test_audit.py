@@ -55,6 +55,14 @@ DIFF = """diff --git a/app.py b/app.py
 assert audit.p_true({"value": True, "prob": 0.9}) == 0.9 and audit.p_true({"value": False, "prob": 0.1}) == 0.1  # prob is P(yes)
 assert audit.p_true({"value": True, "prob": 0.05}) == 0.05  # decide's contract: prob, not value, is the answer
 assert audit.p_true({"value": True, "prob": 1.7}) == 1.0
+try: audit.p_true({"prob": float("nan")})
+except ValueError: pass
+else: assert False, "NaN may not become a safe probability"
+with mock.patch.object(fake, "batch", return_value={"safe": {"value": True, "prob": float("nan"), "provider": "jev"}}), \
+     mock.patch.object(fake, "bool", return_value={"value": True, "prob": float("inf"), "provider": "jev"}):
+    try: audit.ask({}, {"safe": {"type": "bool", "question": "Safe?", "context": "ok"}})
+    except ValueError as e: assert "nonfinite" in str(e)
+    else: assert False, "malformed batch and fallback must fail closed"
 
 # ---- every contract holds: one batch, all four checks asked, ok
 res = audit.contracts({}, audit.MERGE_CHECKS, goal="bump x", diff=DIFF)
@@ -540,6 +548,7 @@ print("brief ok")
 
 
 # ---- the CLI an agent runs, in its worktree
+g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 audit.origin_push_url = lambda *_: "https://github.com/o/x.git"  # fake forge destination for this scratch repo
 real_remote_branch_sha = audit.remote_branch_sha
 audit.remote_branch_sha = lambda path, destination, branch: (audit.git(path, "rev-parse", f"origin/{branch}") or "").strip()
@@ -939,4 +948,8 @@ with mock.patch.object(audit, "forge_diff", return_value=rename_diff), mock.patc
 print("cli ok")
 g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 assert audit.default_target(wt) == "main"
+with mock.patch.object(audit, "git", return_value="ref: refs/heads/develop\tHEAD\n"):
+    assert audit.default_target(wt) == "develop"  # remote default wins over local main
+with mock.patch.object(audit, "git", return_value=""):
+    assert audit.default_target(wt) is None  # unknown remote default cannot silently become main
 print("ok")

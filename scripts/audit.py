@@ -28,6 +28,7 @@ answers its thread, and its evidence): weak nits are dropped, medium ones kept a
 import concurrent.futures
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -221,8 +222,11 @@ def _one(dc, state, q):
 def _ok(q, r):
     if not isinstance(r, dict) or "provider" not in r:
         return False
-    return isinstance(r.get("value"), bool) and isinstance(r.get("prob"), (int, float)) if q["type"] == "bool" \
-        else isinstance(r.get("score"), (int, float))
+    field = "prob" if q["type"] == "bool" else "score"
+    number = r.get(field)
+    return (q["type"] != "bool" or isinstance(r.get("value"), bool)) and \
+        isinstance(number, (int, float)) and not isinstance(number, bool) and \
+        math.isfinite(number) and 0 <= number <= 1
 
 
 def ask(state, qs):
@@ -251,12 +255,17 @@ def ask(state, qs):
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(todo))) as ex:
             for k, r in zip(todo, ex.map(lambda k: _one(dc, state, qs[k]), todo)):
                 out[k] = r
+    if any(not _ok(q, out.get(k)) for k, q in qs.items()):
+        raise ValueError("model returned a malformed or nonfinite answer")
     return {k: out[k] for k in qs}
 
 
 def p_true(r):
     """P(the contract holds): decide's prob is P(yes), and every question is phrased so yes means kept."""
-    return max(0.0, min(1.0, float(r["prob"])))
+    p = float(r["prob"])
+    if not math.isfinite(p):
+        raise ValueError("model probability is nonfinite")
+    return max(0.0, min(1.0, p))
 
 
 # ---- evidence
@@ -620,10 +629,15 @@ def base_ref(path, target=None):
 
 def default_target(path):
     """Resolve origin/HEAD to a real branch name before using it in forge or ls-remote calls."""
+    remote = git(path, "ls-remote", "--symref", "origin", "HEAD", timeout=90)
+    if remote is not None:
+        match = re.search(r"^ref:\s+refs/heads/(\S+)\s+HEAD$", remote, re.M)
+        return match[1] if match else None
     base = base_ref(path)
     if base == "origin/HEAD":
         base = (git(path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD") or "").strip()
-    return base.removeprefix("origin/") if base and base.startswith("origin/") and base != "origin/HEAD" else None
+        return base.removeprefix("origin/") if base.startswith("origin/") and base != "origin/HEAD" else None
+    return None
 
 
 def branch_diff(path, target=None, sha="HEAD"):
