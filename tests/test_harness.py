@@ -65,9 +65,10 @@ assert harness.interactive("gemini", "go") == ["gemini", "-i", "go"] and harness
 
 # route: which harness runs a model id (chat's model, dash.py's --model)
 assert harness.route("claude-haiku-5-5") == ("claude", "claude-haiku-5-5") and harness.route(None) == ("claude", None)
-assert harness.route("gemini-4-neon") == ("gemini", "gemini-4-neon") and harness.route("gemini") == ("gemini", None)
+assert harness.route("gemini-4-neon-medium") == ("agy", "gemini-4-neon-medium") and harness.route("gemini") == ("gemini", None)
+assert harness.route("gemini-4-neon") == ("agy", "gemini-4-neon-medium")  # old saved choice
 assert harness.route("codex") == ("codex", None)
-assert harness.route("gemini-4-neon", "codex") == ("gemini", "gemini-4-neon")  # a Gemini pick wins over llm_harness
+assert harness.route("gemini-4-neon-medium", "codex") == ("agy", "gemini-4-neon-medium")  # a Gemini pick wins over llm_harness
 assert harness.route("claude-haiku-5-5", "codex") == ("codex", None)  # a Claude name means nothing to codex: its default
 
 # gemini --output-format stream-json (JsonStreamEvent shapes from gemini-cli-core 0.70's output/types)
@@ -103,4 +104,15 @@ k.gemini({"type": "message", "role": "assistant", "content": "No response reques
 k.text = ""  # turn() before the retry
 k.gemini({"type": "init", "session_id": "uuid-2", "model": "gemini-4-neon"})
 assert k.gemini({"type": "message", "role": "assistant", "content": "real", "delta": True})[0] == {"e": "text_reset"}
+cmd, text = harness.argv("agy", "hi", model="gemini-4-neon-medium", system="SYS", stream=True)
+assert cmd == ["agy", "--print", "SYS\n\nhi", "--mode", "accept-edits", "--output-format", "stream-json", "--model", "gemini-4-neon-medium"] and text == ""
+assert harness.argv("agy", "again", sid="conv-1", system="SYS") == (["agy", "--print", "again", "--mode", "accept-edits", "--conversation", "conv-1"], "")
+a = Norm()
+assert a.agy({"event": "init", "conversation_id": "conv-1"}) == []
+assert a.agy({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "pong"}}) == [{"e": "text_reset"}, {"e": "text", "delta": "pong"}]
+step = {"event": "step_update", "step_update": {"step_index": 2, "step_type": "tool", "state": "ACTIVE", "tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "pwd"}}}}
+assert a.agy(step)[0]["detail"] == "pwd"
+step["step_update"].update(state="DONE", tool_info={"output": "Command exited with code 0.\n/tmp"})
+assert a.agy(step)[0]["ok"]
+assert a.agy({"event": "result", "result": {"status": "SUCCESS", "response": "pong", "duration_seconds": 1.5}})[0] == {"e": "done", "ok": True, "text": "pong", "context": 0, "window": None, "ms": 1500}
 print("test_harness ok")
