@@ -371,6 +371,20 @@ test("hover card button: greyed \"Please wait…\" until the step is written, th
   assert.deepEqual((await posts(page, "run")).map(m => m.prompt), ["Fix the gofmt error in x.go and push."]);
 });
 
+test("hover card footer: one glyph for the agent (a live one outranks a crash), and the MR link only when there is one", async page => {
+  const foot = (agent, state, mr) => page.evaluate(([agent, state, mr]) => { const p = puckOf("plan-a"); p.agent = agent; p.state = state; p.mr = mr;
+    hideCard(); document.body.append(hoverCard(p));
+    const g = document.querySelector("#hcard .hf .gl"), l = document.querySelector("#hcard .hf .lk");
+    return [g && g.getAttribute("class"), l && l.getAttribute("href"), document.querySelector("#hcard .hfx").textContent] }, [agent, state, mr]);
+  const mr = {iid: 12, ref: "!12", state: "opened", title: "x", web_url: "https://gl/12"};
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["gl idle", "https://gl/12", "Claude is idle"]);
+  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["gl working", "https://gl/12", "Claude is working"]);
+  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["gl waiting", null, "Codex is waiting"]);
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["gl crashed", null, "Claude crashed"]);
+  assert.deepEqual(await foot({}, "crashed", null), ["gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
+  assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
+});
+
 test("hover card: the smart button on top replaces the next step; Also runs the rest; Merge asks twice", async page => {
   await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle";
     p.mr = {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12"};
