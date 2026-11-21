@@ -651,6 +651,8 @@ def check_git(args, ctx):
         v.add("medium", "git restore can discard uncommitted work")
     elif sub == "checkout" and "--" in rest:
         v.add("medium", "git checkout -- can discard uncommitted work")
+    elif sub == "checkout" and any(x in ("-f", "--force") for x in rest) or sub == "switch" and "--discard-changes" in rest:
+        v.add("medium", f"git {sub} discards uncommitted work")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
@@ -720,6 +722,20 @@ def check_push(rest, ctx, v):
             source, _, target = ref.lstrip("+").partition(":")
             if source:
                 v.merge(check_outgoing_commits(ctx, remote, source, target or source))
+    if v.tier != "deny" and "--all" in flags:
+        branches = ctx.git("for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines()
+        if len(branches) > 100:
+            v.add("high", "too many branches to inspect for git push --all", "egress")
+        else:
+            for branch in branches:
+                v.merge(check_outgoing_commits(ctx, remote, branch, branch))
+    if v.tier != "deny" and "--tags" in flags:
+        tags = ctx.git("for-each-ref", "--format=%(refname)", "refs/tags").splitlines()
+        if len(tags) > 100:
+            v.add("high", "too many tags to inspect for git push --tags", "egress")
+        else:
+            for tag in tags:
+                v.merge(check_outgoing_commits(ctx, remote, tag, tag))
     if any("refs/tags/" in r or ctx.git("rev-parse", "--verify", f"refs/tags/{r}") for r in pos[1:]):
         v.add("high", "pushes an explicit tag ref", "egress")
         v.merge(check_tag_objects(ctx))
@@ -744,6 +760,15 @@ def check_tag_objects(ctx):
             continue
         if leak := leaks(data):
             v.add("deny", f"pushes a tag that {leak}", "secret", "egress")
+        try:
+            target = subprocess.run(["git", "-C", str(ctx.cwd), "cat-file", "-p", f"{oid}^{{}}"], capture_output=True,
+                                    timeout=2, check=True).stdout[:5_000_001]
+            if len(target) > 5_000_000:
+                v.add("high", "tag target is too large to inspect", "egress")
+            elif leak := leaks(target.decode(errors="replace")):
+                v.add("deny", f"pushes a tag target that {leak}", "secret", "egress")
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            v.add("high", "cannot inspect a tag target", "egress")
     return v
 
 
@@ -756,15 +781,13 @@ def check_outgoing_commits(ctx, remote, source, target):
     if not base:
         base = next((ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}") for d in ctx.default
                      if ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}")), "")
-    if not base:
-        v.add("high", "cannot inspect the commits this push would send", "egress")
-        return v
+    revision = f"{base}..{source}" if base else source
     try:
-        count = int(ctx.git("rev-list", "--count", f"{base}..{source}"))
+        count = int(ctx.git("rev-list", "--count", revision))
         if count > 100:
             raise ValueError("too many commits")
         cmd = ["git", "-C", str(ctx.cwd)]
-        objects = subprocess.run([*cmd, "rev-list", "--objects", f"{base}..{source}"], capture_output=True, text=True,
+        objects = subprocess.run([*cmd, "rev-list", "--objects", revision], capture_output=True, text=True,
                                  timeout=3, check=True).stdout.splitlines()
         if len(objects) > 1000:
             raise ValueError("too many objects")
@@ -855,6 +878,8 @@ def check_forge(cmd, args, ctx):
             target = re.search(r"\brepos/([^/\s]+)/([^/\s?]+)", text)
             if target and not own_repo(f"{target[1]}/{target[2]}", ctx):
                 v.add("high", f"{cmd} api writes to another repo ({target[1]}/{target[2]})", "egress")
+            elif not target:
+                v.add("high", f"{cmd} api write target is not proven to be this workspace's repo", "egress")
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
@@ -911,6 +936,13 @@ def check_net(cmd, args, ctx):
     output = output or next((a[2:] for a in args if a.startswith("-o") and len(a) > 2), None)
     if output:
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
+    if cmd == "curl" and "-O" in args:
+        for url in urls:
+            name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+            if name:
+                v.merge(check_write(ctx.path(name), ctx, "curl remote-name output", raw=name))
+    if cmd == "curl" and any(a in args for a in ("--netrc", "-n", "--netrc-optional")) or opt(args, "--netrc-file"):
+        v.add("deny", f"{cmd} may send credentials from a netrc file", "secret", "egress")
     config_file = opt(args, "-K", "--config") or next((a[2:] for a in args if a.startswith("-K") and len(a) > 2), None)
     if config_file:
         v.add("high", f"{cmd} loads an external request config ({config_file})", "egress")
@@ -945,7 +977,7 @@ def check_net(cmd, args, ctx):
             source = a[2:]
         elif a.startswith("@"):
             source = a
-        if source and ("@" in source or a in ("-T", "--upload-file")):
+        if source and ("@" in source or a in ("-T", "--upload-file") or a.startswith(("-T", "--upload-file="))):
             path = source.split("@", 1)[-1].split(";")[0] if "@" in source else source
             v.merge(check_upload_file(path, ctx, f"{cmd} upload"))
     if leak := leaks(full):
