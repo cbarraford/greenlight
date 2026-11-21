@@ -304,6 +304,11 @@ ans.update({audit.RUBRICS["evidence"][1][0]: 0.3, "STRONG": 1.0})
 o = audit.score_outbound({}, cm[:1])
 assert not o["post"], o  # mean (1+0.3+1)/3 = 0.77 but evidence 0.3 < draft 0.45
 ans.clear()
+ans.update({audit.RUBRICS["evidence"][1][0]: 0.74, "STRONG": 1.0})
+assert not audit.score_outbound({}, cm[:1])["post"]  # high mean cannot mask unproven evidence
+ans[audit.RUBRICS["evidence"][1][0]] = 0.75
+assert audit.score_outbound({}, cm[:1])["post"]
+ans.clear()
 ans["STRONG"] = {"score": 0.95, "provider": "local"}
 o = audit.score_outbound({}, cm[:1])
 assert not o["post"] and o["draft"][0]["why"] == "a guess (no model answered)", o
@@ -335,6 +340,11 @@ gid("checkout", "-qb", "feat")
 gid("commit", "--allow-empty", "-qm", "ordinary change", "--author", "Private User <person@private-mail.test>")
 published_identity = audit.branch_messages(idwt, "main")
 assert "person@private-mail.test" in published_identity and audit.secrets(published_identity)
+gid("update-ref", "refs/remotes/origin/main", gid("rev-parse", "HEAD"))
+gid("config", "user.email", "ci@example.invalid")
+gid("commit", "--allow-empty", "-qm", "ordinary change", "--author", "Dev <123+dev@users.noreply.github.com>")
+public_identity = audit.branch_messages(idwt, "main")
+assert not audit.secrets(public_identity) and "[public Git identity]" in public_identity
 
 # ---- the merge audit: the branch's diff at that head, cached per head; an error blocks and is retried later
 wt = tempfile.mkdtemp()
