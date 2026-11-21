@@ -260,6 +260,7 @@ def suggestion(cached):
 assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready.", "advice": ""}
 assert suggestion({"sig": "stale", "label": "Mark ready", "prompt": "Mark #23 ready."}) is None  # the state moved on since
 assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an old entry without a label gets rewritten
+assert suggestion({"sig": pk["sig"], "label": "", "prompt": "There's an issue with the selected model (gemini-4-hydrogen-medium).", "advice": ""}) is None  # old model errors must be regenerated
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
