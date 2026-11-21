@@ -196,6 +196,9 @@ def grammar(text, pucks, focus=None):
     rest = t
     for p in sorted(pucks, key=lambda p: -len(p.get("name", ""))):
         n = p.get("name", "")
+        if any(r.fullmatch(n) for r, _ in FILTERS.values()) and re.search(rf"\b{re.escape(n)}\s+(?:ones|workspaces|prs|mrs)\b", t, re.I):
+            g["why"] = "a status word also names a workspace"
+            continue
         if len(n) >= 3 and re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", rest, re.I):
             g["names"].append(n)
             rest = re.sub(rf"(?<![\w-]){re.escape(n)}(?![\w-])", " ", rest, flags=re.I)
@@ -229,7 +232,7 @@ def grammar(text, pucks, focus=None):
     for r in VERB_RES.values():
         bare = r.sub(" ", bare)
     g["tokens"] = [w for w in words(bare) if w not in STOP and w not in NUMS and (not w.isdigit() or len(w) >= 3) and len(w) > 1]  # a long number may be part of a name
-    if (g["names"] or g["refs"]) and (re.search(r"\band\b", rest, re.I) or "," in rest) and (g["tokens"] or g["filters"]):
+    if (g["names"] or g["refs"] or g["here"]) and (re.search(r"\band\b", rest, re.I) or "," in rest) and (g["tokens"] or g["filters"]):
         g["why"] = "part of a combined target isn't identified"
     return g
 

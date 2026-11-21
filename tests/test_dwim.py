@@ -62,6 +62,8 @@ assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked exp
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
 assert plan("hold #42 and this", [puck("auth-login", 42), puck("search", 43)], focus="search")["route"] == "chief"
 assert plan("hold #42, red ones", [puck("auth-login", 42, pipeline="failed"), puck("billing", 44, pipeline="failed")])["route"] == "chief"
+assert plan("hold this and the red ones", [puck("auth-login", 42, pipeline="failed"), puck("billing", 44, pipeline="failed")], focus="auth-login")["route"] == "chief"
+assert plan("park the red ones", [puck("red", 42, pipeline="success"), puck("auth-login", 44, pipeline="failed")])["route"] == "chief"
 assert plan("hold #42 and 1", [puck("auth-login", 42), puck("first", 1)])["route"] == "chief"
 assert [a["ws"] for a in plan("hold #42 and #1", [puck("auth-login", 42), puck("first", 1)])["actions"]] == ["auth-login", "first"]
 assert plan("hold #42 and release the hold on #43")["route"] == "chief"
