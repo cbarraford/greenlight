@@ -313,7 +313,7 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .chk li .ow{float:right;margin-left:8px;font-weight:400;color:var(--text2)} #hcard .chk li.sep{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:var(--fs-1);font-weight:600;text-transform:uppercase;letter-spacing:.06em} #hcard .chk li.sep::after{content:"";flex:1;height:1px;background:var(--hair)}
 #hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:var(--card2);font-size:var(--fs-3);line-height:var(--lh-3)}
 #hcard .rec.wait{color:var(--text3)} #hcard .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-#hcard .hacts .btn{flex:1;height:32px} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
+#hcard .hacts .btn{flex:1;height:32px} #hcard .hacts .btn.nx{flex-basis:100%} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
 #hcard .hts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 #hcard .ht{display:flex;flex-direction:column;gap:2px;min-width:0;padding:7px 9px;border-radius:8px;background:var(--card2)}
 #hcard .goal,#hcard .ms{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px 10px;border-radius:8px;background:var(--card2);font-size:var(--fs-3);line-height:var(--lh-3)} #hcard .ms{flex-direction:row;justify-content:space-between;font-weight:600}
@@ -1814,7 +1814,7 @@ function hoverCard(p){
     arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
     ...body,
     h("div", {class: "hf"}, glyph(gs),
-      h("span", {class: "hfx"}, gs === "crashed" ? `${who} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
+      h("span", {class: "hfx"}, gs === "crashed" ? `${a.type ? who : "Agent"} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
         a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · ${ago(a.idle_h)}`) : null),
       mr ? h("a", {class: "lk", href: mr.web_url}, "Open ", h("span", {}, mrRef(mr)), h("span", {"aria-hidden": "true"}, "↗")) : null));
 }
@@ -1845,7 +1845,7 @@ function stepsEl(p){
     h("li", {class: j < i ? "ok" : j === i ? "cur" : null},
       h("span", {"aria-hidden": "true", style: j < i ? `color:${c("--green")}` : j === i ? `color:${col}` : null}, j < i ? "✓" : j === i ? "●" : "○"),
       h("span", {}, h("span", {class: "vh"}, j < i ? "done: " : j === i ? "now: " : "ahead: "), STEP_DONE[k] || cap(k.replace(/_/g, " ")),
-        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, `on ${OWNER_SAY[p.owner]}`) : null))]));
+        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, h("span", {class: "vh"}, " · "), `on ${OWNER_SAY[p.owner]}`) : null))]));
   const box = h("div", {}, bar, ui.stepsOpen ? list() : null);
   return box;
 }

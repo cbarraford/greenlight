@@ -606,7 +606,7 @@ test("workspace card: the recommendation when it's on you, and the lifecycle bar
   await page.click("#card .sbar");
   assert.equal(await page.getAttribute("#card .sbar", "aria-expanded"), "true");
   assert.deepEqual(await page.$$eval("#card .chk li", l => l.map(e => e.className + ":" + e.textContent)),
-    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deployon you"]);
+    ["ok:✓done: Implement & open MR", "ok:✓done: Merged", "sep:After merge", "cur:●now: Deploy · on you"]);
   await page.keyboard.press("Escape");
   // no rule for the step: the suggestion's advice line, asked for on open; none when it's not on you
   await tree({advice: null, step: "qa", steps: ["mr_open", "qa", "merge"], step_index: 1});
