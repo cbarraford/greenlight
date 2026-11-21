@@ -311,7 +311,7 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .chk{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
 #hcard .chk li{display:grid;grid-template-columns:14px minmax(0,1fr);gap:8px;align-items:baseline} #hcard .chk li.ok{color:var(--text2)} #hcard .chk li.cur{color:var(--text);font-weight:600}
 #hcard .chk li .ow{font-weight:400;color:var(--text2)} #hcard .chk li.sep{display:block;margin-top:2px;padding-top:6px;border-top:1px dashed var(--hair);font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.06em}
-#hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:var(--fs-3);line-height:var(--lh-3)}
+#hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:var(--card2);font-size:var(--fs-3);line-height:var(--lh-3)}
 #hcard .rec.wait{color:var(--text3)} #hcard .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 #hcard .hacts .btn{height:28px} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
 #hcard .hts{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;column-gap:10px;padding-top:10px;border-top:1px solid var(--hair)}
@@ -325,11 +325,12 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .kv{display:grid;grid-template-columns:72px minmax(0,1fr);column-gap:var(--sp-2);font-size:var(--fs-2);line-height:var(--lh-2)}
 #hcard .labs{display:flex;flex-wrap:wrap;gap:5px}#hcard .labs span{padding:2px 8px;border-radius:99px;background:var(--fill);color:var(--text2);font-size:11px}
 #hcard .he{border:1px dashed var(--hexline);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
-#hcard .hf{border-top:1px solid var(--hair);padding-top:10px;display:flex;align-items:center;gap:8px;font-size:var(--fs-2);color:var(--text2)}#hcard .hf .av{width:16px;height:16px;border-radius:50%;font-size:9px;flex:none}
+#hcard .hf{border-top:1px solid var(--hair);padding-top:10px;display:flex;align-items:center;gap:8px;font-size:var(--fs-2);color:var(--text2)}#hcard .hf svg{flex:none} #hcard .hf .wk{transform-origin:8px 8px;animation:spin 1s linear infinite}
+#hcard .hf .lk{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:6px;background:var(--card2);box-shadow:inset 0 0 0 1px var(--line);color:var(--text);font-weight:600;font-size:12px;text-decoration:none} #hcard .hf .lk:hover{background:var(--fill)} #hcard .hf .lk span{font-family:var(--mono)}
 #hcard .hf .hm{white-space:nowrap}
 #hcard .hacts{display:flex;flex-wrap:wrap;gap:8px} #hcard .hacts .btn:not(.go):not(.ans){border:1px solid var(--line);background:var(--card);color:var(--text)}
 #hcard .btn.go{background:var(--accent-solid);color:var(--on-accent);font-weight:600}
-#hcard .btn.nx{align-self:flex-start;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--text);font-weight:600} #hcard .btn.nx:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 22%,transparent)}  /* a suggestion: see-through; the moves are solid */
+#hcard .btn.nx{align-self:flex-start;background:var(--card2);box-shadow:inset 0 0 0 1px var(--hair);color:var(--text);font-weight:600} #hcard .btn.nx:hover:not(:disabled){background:var(--fill)}  /* a suggestion: a neutral well; the moves are solid */
 #hcard .btn.nx:disabled{background:var(--fill);color:var(--text2);font-weight:500;cursor:default}
 #hcard .mvs{display:flex;flex-direction:column;gap:8px}
 #hcard .mv{display:flex} #hcard .mv button{border:0;font:inherit;cursor:pointer;color:#fff} #hcard .mv.or button{background:var(--orange);color:#1D1D1F} #hcard .mv.pu button{background:#9B4DDB} #hcard .mv.rd button{background:#D7382D} #hcard .mv.bl button{background:#0071E3}
@@ -341,8 +342,8 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 #hcard .mg .go i{position:absolute;left:0;bottom:0;height:3px;width:100%;background:rgba(0,0,0,.35);animation:drain 5s linear forwards} @keyframes drain{to{width:0}}
 #hcard .mg .lnk{border:0;background:none;color:var(--text2);font:inherit;font-size:var(--fs-2);text-decoration:underline;cursor:pointer}
 #hcard .mg.st,#hcard .mg.ok,#hcard .mg.no{padding:9px 11px;border-radius:8px} #hcard .mg.st{background:color-mix(in srgb,#30D158 16%,transparent);color:var(--green)}
-#hcard .mg.ok{flex-direction:column;align-items:flex-start;gap:2px;background:color-mix(in srgb,#BF5AF2 18%,transparent);color:#A64BD6}
-#hcard .mg.no{flex-direction:column;align-items:flex-start;gap:5px;background:color-mix(in srgb,#FF453A 15%,transparent);color:var(--red)} #hcard .mg.no code{font:11px/1.4 var(--mono);white-space:pre-wrap;word-break:break-word}
+#hcard .mg.ok{flex-direction:column;align-items:flex-start;gap:2px;background:color-mix(in srgb,#BF5AF2 18%,transparent);color:var(--purple-ink)}
+#hcard .mg.no{flex-direction:column;align-items:flex-start;gap:5px;background:color-mix(in srgb,#FF453A 15%,transparent);color:var(--red-ink)} #hcard .mg.no code{font:11px/1.4 var(--mono);white-space:pre-wrap;word-break:break-word}
 #hcard .hf i{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 #hcard .hf .hfx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 div.ghost{position:fixed;left:0;top:0;z-index:50;pointer-events:none;display:flex;align-items:center;gap:8px;filter:drop-shadow(0 8px 16px var(--shadow))}
@@ -1769,8 +1770,15 @@ function drill(name){ ui.drill = name; ui.openStack = null; render() }
 /* ---------- hover card ---------- */
 const CI_SAY = {success: ["Passed", "--green"], failed: ["Failed", "--red"], canceled: ["Canceled", null], skipped: ["Skipped", null], manual: ["Manual", "--yellow"],
   running: ["Running", "--blue"], pending: ["Pending", "--blue"], created: ["Pending", "--blue"], preparing: ["Pending", "--blue"], waiting_for_resource: ["Pending", "--blue"]};
+// the agent's state at a glance: idle a hollow ring, working a turning arc, waiting an amber "?", crashed a red "!"
+const GLYPH = {idle: '<circle cx="8" cy="8" r="6" fill="none" style="stroke:var(--text3)" stroke-width="2"/>',
+  working: '<circle cx="8" cy="8" r="6" fill="none" style="stroke:var(--track)" stroke-width="2"/><path class="wk" d="M8 2a6 6 0 0 1 6 6" fill="none" style="stroke:var(--blue)" stroke-width="2" stroke-linecap="round"/>',
+  waiting: '<circle cx="8" cy="8" r="7" style="fill:var(--orange)"/><text x="8" y="11.6" text-anchor="middle" font-size="10.5" font-weight="800" font-family="-apple-system,sans-serif" fill="#1F1300">?</text>',
+  crashed: '<circle cx="8" cy="8" r="7" style="fill:var(--red)"/><path d="M8 4.5v4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1.1" fill="#fff"/>'};
+function glyph(k){ if (!k) return null; const e = s("svg", {width: 16, height: 16, viewBox: "0 0 16 16", class: "gl " + k, "aria-hidden": "true"}); e.innerHTML = GLYPH[k]; return e }
 function hoverCard(p){
   const mr = p.mr && p.mr.iid ? p.mr : null, col = c(STATE[p.state].color), {n, i} = stepsOf(p), a = p.agent || {};
+  const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", gs = ["working", "waiting"].includes(a.state) ? a.state : p.state === "crashed" ? "crashed" : a.type ? "idle" : null;  // as acard: a live agent outranks the crash
   const sa = ago((Date.now() / 1000 - ui.snap.scanned) / 3600);
   const tile = (k, v, m, tn) => h("div", {class: "ht"}, h("span", {class: "hk"}, k), h("span", {class: "v", style: tn ? `color:${ink(tn)}` : null}, v), m ? h("span", {class: "hm"}, m) : null);
   const branch = mr ? mr.source_branch : p.branch;
@@ -1806,9 +1814,10 @@ function hoverCard(p){
     mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
     arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
     ...body,
-    h("div", {class: "hf"}, a.type ? h("span", {class: "av", "aria-hidden": "true", style: `background:${/codex/i.test(a.type) ? c("--codex") : c("--claude")}`}, icon(/codex/i.test(a.type) ? "openai" : "claude", 10)) : null,
-      h("span", {class: "hfx"}, a.type ? `${/codex/i.test(a.type) ? "Codex" : "Claude"} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
-        a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · idle ${ago(a.idle_h)}`) : null)));
+    h("div", {class: "hf"}, glyph(gs),
+      h("span", {class: "hfx"}, gs === "crashed" ? `${who} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
+        a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · ${ago(a.idle_h)}`) : null),
+      mr ? h("a", {class: "lk", href: mr.web_url}, "Open ", h("span", {}, mrRef(mr)), h("span", {"aria-hidden": "true"}, "↗")) : null));
 }
 // the recommendation: dash.py's rule (p.advice), or when no rule covers the step (null) the suggestion's advice line
 function recEl(p){
