@@ -438,8 +438,11 @@ def main():
     if a.cmd == "apply":
         apply(p)
     items = p["items"]
+    failed = a.cmd == "apply" and any(i.get("created") is False for i in p["create"])
     if a.json:
         print(json.dumps([{k: v for k, v in i.items() if k != "repo"} for i in items], indent=1))
+        if failed:
+            sys.exit(1)
         return
     titles = {"create": "CREATED" if a.cmd == "apply" else "WOULD CREATE", "deferred": "DEFERRED (cap)",
               "busy": "BRANCH BUSY (pinged)", "no-repo": "NO ADE REPO (pinged)", "skip": "SKIPPED"}
@@ -452,6 +455,8 @@ def main():
             mark = "" if verdict != "create" or a.cmd != "apply" else ("✓ " if i.get("created") else "✗ ")
             print(f"- {mark}{i['key']} [{i['role']}{'/' + i['block'] if i.get('block') else ''}] {i['title'][:60]} — {i['reason']}"
                   + (f" — {i['error']}" if i.get("error") else ""))
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

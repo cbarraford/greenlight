@@ -473,6 +473,22 @@ with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Sq
 assert _ran[-1] == mine["next"]["cmd"] + ["--sha", "abc123"], _ran[-1]  # a human click ignores the auto audit receipt
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
 assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 4
+_same_pr = {**mine, "id": "peer-id", "path": "/w/peer", "name": "peer",
+            "mr": {**mine["mr"], "sha": "stale-head", "conflicts": False, "pipeline": "success", "todo_threads": []}}
+_lj.write_text(json.dumps({"scan_id": "before", "scan_started_ns": 1,
+                           "rows": [{**mine, "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}, _same_pr]}))
+_stub_run = dash.greenlight.run
+def concurrent_merge(_cmd, **_kw):
+    snap = json.loads(_lj.read_text())
+    snap["scan_id"] = "other-merge"
+    _lj.write_text(json.dumps(snap))
+    return ""
+dash.greenlight.run = concurrent_merge
+assert dash.tree_merge("/w/b")["ok"]
+assert json.loads(_lj.read_text())["rows"][0]["mr"]["state"] == "merged"
+assert json.loads(_lj.read_text())["rows"][1]["mr"]["state"] == "merged"
+assert json.loads(_lj.read_text())["scan_id"] not in ("before", "other-merge")
+dash.greenlight.run = _stub_run
 # Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off
 import tempfile
 _wt = tempfile.mkdtemp()
@@ -499,6 +515,7 @@ _lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b
 with mock.patch.object(dash, "live_agents", return_value=_live("q", "m", "d")):
     assert dash.board().splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal.",
                                          "(1 more finished)"], dash.board()
+    assert {identity[0] for identity in dash.board(with_ids=True)[1].members} == {"q", "m", "d"}  # finished worktree remains in the window
     os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only (an older app: a bare list of paths)
     assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
     assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]

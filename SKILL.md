@@ -48,6 +48,7 @@ Each row also has `life`: where the change is in its lifecycle and who holds it.
     - fix it with a test, or reply inline with evidence, then resolve the thread (always leave a comment);
     - get CI green;
     - keep drafts as drafts;
+    - refresh cards with `python3 ~/.claude/skills/greenlight/scripts/ws_state.py observe` before the first dispatch after a scan, then end the prompt with `python3 ~/.claude/skills/greenlight/scripts/ws_state.py brief <row.card> --exact` (goal contract, hypothesis, decisions, failed approaches, touched files, open risks, last stage), so a new or failed-over agent starts from what's known;
   - Send: if the row has `agent.terminal` and that terminal is idle with an empty input box, run `greenlight.py ade terminal send --terminal <h> --text "<prompt>" --enter --wait-submit 10`. **Never** type into an unsent draft. Otherwise run `greenlight.py ade agent launch --agent <agent> --worktree id:<id> --prompt "<prompt>" --json`.
   - If the launch or terminal reports a usage/rate limit, re-dispatch that one task with the next of config `agents`.
 - **no workspace yet**: `adopt.py apply` (§1) already created one per open MR of mine or review request, so it's a row above.

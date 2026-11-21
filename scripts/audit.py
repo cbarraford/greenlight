@@ -130,8 +130,8 @@ def scrub_removed_private_keys(diff):
 # otherwise valid token are not evidence that the credential is safe to publish.
 EXAMPLE_VALUES = {'AKIAIOSFODNN7EXAMPLE', 'password = "test-password-123"'}
 LOW = ("local", "fallback", "heuristic", "none", "unavailable")  # providers whose answers are guesses: never block or post on their own
-MAXC = 40000  # context chars per question; a longer diff is asked in parts (every part must pass), up to MAXPARTS
-MAXPARTS = 8  # enough for large multi-file PRs; beyond this, an error (blocks), not a partial pass
+MAXC = 45000  # context chars per question; a longer diff is asked in parts (every part must pass), up to MAXPARTS
+MAXPARTS = 10  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
 DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True}
 CACHE_VERSION = 3  # old merge passes did not scan each commit's added content
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -391,20 +391,42 @@ def parts(diff, n=None):
         return [diff or ""]
     out, cur = [], ""
     for blk in re.split(r"(?m)^(?=diff --git )", diff):
+        first_hunk = re.search(r"(?m)^@@[^\n]*\n", blk)
+        intro = min(n, first_hunk.end() if first_hunk else len(blk.split("\n", 1)[0]) + 1)
+        if cur and len(blk) > n and n - len(cur) < intro:
+            out.append(cur)  # keep the next file's header intact in its first part
+            cur = ""
         while blk:
-            if cur and len(cur) + len(blk) > n:
+            if cur and len(cur) + len(blk) > n and len(blk) <= n:
                 out.append(cur)
                 cur = ""
-            if len(blk) <= n:
+            if len(cur) + len(blk) <= n:
                 cur, blk = cur + blk, ""
-            else:  # one file bigger than a part: cut at the last newline before n
-                cut = blk.rfind("\n", 0, n) + 1 or n
-                out.append(blk[:cut])
+            else:  # fill unused space before splitting a large file at a line
+                space = n - len(cur)
+                cut = blk.rfind("\n", 0, space) + 1 or space
+                cur += blk[:cut]
                 blk = blk[cut:]
+                if blk:
+                    out.append(cur)
+                    cur = ""
     out += [cur] if cur else []
     if len(out) > MAXPARTS:
         raise ValueError(f"diff too large to audit ({len(diff)} chars, over {MAXPARTS} parts of {n})")
     return out
+
+
+def part_context(diff, pieces):
+    """For a piece starting mid-file, name the file and active hunk without changing the lossless pieces."""
+    result, offset = [], 0
+    for piece in pieces:
+        before = diff[:offset]
+        headers = list(re.finditer(r"(?m)^diff --git [^\n]+", before))
+        header = headers[-1] if headers else None
+        hunk = re.findall(r"(?m)^@@[^\n]+", before[header.start():] if header else "")
+        result.append((header.group() + ("\n" + hunk[-1] if hunk else "")) if header and not piece.startswith("diff --git ") else "")
+        offset += len(piece)
+    return result
 
 
 # ---- the contracts
@@ -421,8 +443,10 @@ def contracts(state, checks, *, goal="", diff="", replies=(), outbound=""):
     qs, ev = {}, {}
     model_diff = redact_secrets(safe_old_diff)
     ps = parts(model_diff) if {"diff_matches_goal", "tests_not_weakened"} & set(checks) else [model_diff]
+    contexts = part_context(model_diff, ps)
     sfx = lambda i: f"@{i + 1}" if i else ""  # a part past the first: its own question, key check@<part>
-    dctx = lambda i: f"Goal:\n{goal or '(none given)'}\n\nDiff" + (f" (part {i + 1} of {len(ps)}; judge only this part)" if len(ps) > 1 else "") + f":\n{redact_diff_pii(ps[i])}"
+    dctx = lambda i: f"Goal:\n{goal or '(none given)'}\n\nDiff" + (f" (part {i + 1} of {len(ps)}; judge only this part)" if len(ps) > 1 else "") + \
+        (f"; continuation of {redact_diff_pii(contexts[i])}" if contexts[i] else "") + f":\n{redact_diff_pii(ps[i])}"
     sig = test_signals(safe_old_diff) if "tests_not_weakened" in checks else ""
     ev["tests_not_weakened"] = sig
     for i in range(len(ps)):

@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -202,11 +203,13 @@ def moves(r, blk=None):
 def tree_merge(path, automatic=False):
     """The card's Merge: greenlight's own merge cmd for this workspace's MR, pinned to the head greenlight saw, so a push since
     can't land unseen. The forge still checks everything else; its refusal comes back verbatim."""
-    rows = {r["path"]: r for r in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}
+    original = json.loads((greenlight.STATE / "last.json").read_text())
+    rows = {r["path"]: r for r in original["rows"]}
     r = rows.get(path) or {}
     m = next((x for x in moves(r) if x["kind"] == "merge"), None) if r else None
     if not m or not r["mr"].get("sha") or automatic and not m.get("auto"):
         return {"error": "greenlight doesn't say this can merge now"}
+    mr_identity = (r.get("id"), r.get("forge"), r.get("project"), r["mr"].get("iid"), r["mr"].get("sha"))
     cmd = r["next"]["cmd"]
     # The card is a human Merge click even when an unattended auto action is
     # also available. Keep the source-head pin, but leave semantic target
@@ -231,9 +234,43 @@ def tree_merge(path, automatic=False):
     r["mr"]["state"], r["next"] = "merged", {"step": post[0], "owner": "me", "action": f"merged from Greenlight; next: {post[0].replace('_', ' ')}"} \
         if post else {"step": "done", "owner": "done", "action": "merged from Greenlight"}
     r["life"] = lifestage.place(r)
-    snap = json.loads((greenlight.STATE / "last.json").read_text())
-    snap["rows"] = [r if x["path"] == path else x for x in snap["rows"]]
-    (greenlight.STATE / "last.json").write_text(json.dumps(snap))
+    import ws_state
+    with ws_state.lock():
+        snap = json.loads((greenlight.STATE / "last.json").read_text())
+        current_clock = greenlight.scan_clock_id()
+        if snap.get("scan_clock_id") != current_clock:
+            snap["dashboard_base_started_ns"] = 0
+        else:
+            snap.setdefault("dashboard_base_started_ns", snap.get("scan_started_ns", 0))
+        # The lifecycle and author role are shared by every checkout of this forge request (one global ME).
+        patch = {"request": True, "forge": mr_identity[1], "project": mr_identity[2], "iid": mr_identity[3],
+                 "sha": mr_identity[4], "row": {"next": r["next"]}}
+        snap["dashboard_merges"] = (snap.get("dashboard_merges") or []) + [patch]
+        for peer in snap["rows"]:
+            pmr = peer.get("mr") or {}
+            if (peer.get("forge"), peer.get("project"), pmr.get("iid")) != mr_identity[1:4] or \
+                    pmr.get("state") == "merged":
+                continue
+            peer["mr"] = pmr | {"state": "merged"}
+            peer["next"] = r["next"].copy()
+            peer["life"] = lifestage.place(peer)
+        if snap.get("scan_id"):
+            snap["scan_id"] = uuid.uuid4().hex
+            snap["scan_started_ns"] = time.monotonic_ns()
+            snap["scan_clock_id"] = current_clock
+            for row in snap["rows"]:
+                row["_scan_id"] = snap["scan_id"]
+        tmp = greenlight.STATE / f"last.dashboard.{uuid.uuid4().hex}.json"
+        marker = greenlight.STATE / f"scan_id.dashboard.{uuid.uuid4().hex}"
+        try:
+            tmp.write_text(json.dumps(snap))
+            tmp.replace(greenlight.STATE / "last.json")
+            if snap.get("scan_id"):
+                marker.write_text(f"{snap['scan_id']} {(greenlight.STATE / 'last.json').stat().st_ino}")
+                marker.replace(greenlight.STATE / "scan_id")
+        finally:
+            tmp.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
     return {"ok": True, "ref": r["mr"].get("ref"), "target": r["mr"].get("target_branch"), "how": m["how"]}
 
 
@@ -265,7 +302,11 @@ def tree_signoff(path):
     return {**base, "ok": True, "ran": m["run"]}
 
 
-def board(only=None):
+class BoardAllow(dict):
+    """Card identities plus every displayed worktree ID for scoped session isolation."""
+
+
+def board(only=None, with_ids=False):
     """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
     what to do. Blocks on you first, then your moves, then the rest; finished ones only counted. `only` (else $GREENLIGHT_ONLY,
     JSON the chat sets): the window the user is in, {"paths": its worktrees, "repos": its projects' repos} (a bare list: paths only).
@@ -283,23 +324,43 @@ def board(only=None):
         for r in rows:
             if ag := live[r["id"]][1]:  # the live agent, not the scan's: one started since shows as working
                 r["agent"] = {**r["agent"], "state": ag.get("state", r["agent"]["state"])}
+    if any(not r.get("card") for r in rows):
+        import ws_state
+        rows = ws_state.keyed(rows, migrate=False)  # a pre-upgrade scan still needs stable question targets
+    identity_counts = {}
+    for r in rows:
+        ident = (r["name"], (r.get("mr") or {}).get("ref"), r["project"])
+        identity_counts[ident] = identity_counts.get(ident, 0) + 1
     if only is not None:
         paths, repos = (only, []) if isinstance(only, list) else (only.get("paths") or [], only.get("repos") or [])
         rows = [r for r in rows if r.get("path") in paths or r.get("repo") and r["repo"] in repos]
-    lines, done = [], 0
+    lines, done, allowed = [], 0, BoardAllow()
+    allowed.members = []
     for r in rows:
         st, why = state_of(r, blk)
+        mr = r.get("mr") or {}
+        allowed.members.append((r["id"], r.get("branch"), r.get("forge"), r.get("project"), mr.get("ref"),
+                                mr.get("target_branch")))
         if st == "done":
             done += 1
             continue
+        if r.get("card"):
+            import ws_state
+            allowed[r["card"]] = (r.get("forge") or "", r.get("project") or "", (r.get("mr") or {}).get("ref") or "",
+                                  (r.get("mr") or {}).get("sha") or "", r.get("goal") or "",
+                                  (r.get("mr") or {}).get("target_branch") or "", r.get("id") or "", r.get("branch") or "",
+                                  ws_state.stage_of(r))
         _, steps, i = progress(r)
         mr, nxt, ad = r.get("mr") or {}, r["next"], advice(r)
         ref = f"[{mr['ref']}]({mr['web_url']})" if mr.get("ref") and mr.get("web_url") else mr.get("ref") or "no MR"
         where = f"step {i + 1}/{len(steps)} {nxt['step']}" if steps and i is not None else nxt["step"]
-        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}): {where} · on {nxt['owner']} · {(nxt.get('action') or why)[:110]}"
+        ident = (r["name"], mr.get("ref"), r["project"])
+        location = f", {r['path']}" if identity_counts[ident] > 1 else ""
+        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}{location}): {where} · on {nxt['owner']} · {(nxt.get('action') or why)[:110]}"
                       + (f" · do: {ad}" if ad else "") + (" · agent working" if (r.get("agent") or {}).get("state") == "working" else "")))
     lines.sort(key=lambda x: x[0])
-    return "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
+    result = "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
+    return (result, allowed) if with_ids else result
 
 
 GH_WORK = """query($q: String!) { search(type: ISSUE, first: 50, query: $q) { nodes {

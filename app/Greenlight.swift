@@ -3848,7 +3848,7 @@ final class Core: ObservableObject {
         launchWorks.removeAll()
         for t in toasts where t.pending { toastListeners.removeValue(forKey: t.id) }
         toasts.removeAll { $0.pending }
-        if run != nil { run?.files = []; stop() }  // a new conversation: its files don't come back
+        if run != nil { run?.files = []; stop(); run = nil }  // discard late events from the cleared conversation
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
         clearing += 1
