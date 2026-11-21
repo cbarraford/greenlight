@@ -1029,6 +1029,9 @@ def check_git(args, ctx, depth=0):
                 v.add("high", f"git {a[0]} changes the effective repository")
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
+            if a[0] == "-c" and re.match(r"(?i)include(?:If\..*)?\.path=", a[1]):
+                push_override = True
+                v.add("high", "git -c include.path can change command execution and push routing", "egress")
             if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url|mirror)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.(?:default|recurseSubmodules))=", a[1]):
                 push_override = True
                 v.add("high", f"git -c {a[1].split('=')[0]} changes the effective push target", "egress")
@@ -1074,6 +1077,9 @@ def check_git(args, ctx, depth=0):
         return v
     if sub == "fetch" and any(x in ("--all", "--multiple") for x in rest) or sub == "remote" and rest[:1] == ["update"] or sub == "submodule" and rest[:1] == ["update"]:
         v.add("high", f"git {sub} can contact several uninspected remotes", "egress")
+    if sub == "fetch" and (any(x in ("--prune", "-p", "--prune-tags", "--update-head-ok") for x in rest) or
+                           any(":" in x and not x.startswith("-") for x in rest)):
+        v.add("high", "git fetch can replace or delete local references")
     if sub == "push":
         if os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", "inherited SSH command can run during git push", "egress")
@@ -1619,7 +1625,7 @@ def check_forge(cmd, args, ctx):
     elif group in ("pr", "mr") and verb in ("merge", "close", "reopen", "approve", "revoke", "rebase", "delete", "lock", "unlock"):
         v.add("medium", f"{cmd} {group} {verb}", "egress")
     elif group in ("issue", "label", "run", "workflow", "ci", "milestone", "project", "cache", "schedule", "variable", "job", "pipeline"):
-        v.add("medium", f"{cmd} {group} {verb} changes the forge", "egress")
+        v.add("high" if verb in ("delete", "destroy", "purge") else "medium", f"{cmd} {group} {verb} changes the forge", "egress")
     else:
         v.add("medium", f"{cmd} {group} {verb}", "egress")
     return v
@@ -1818,6 +1824,11 @@ def check_net(cmd, args, ctx):
             v.merge(check_upload_file(path, ctx, f"{cmd} upload"))
     if leak := leaks(full):
         v.add("deny", f"the request {leak}", "secret", "egress")
+    headers = [args[i + 1] for i, a in enumerate(args) if a in ("-H", "--header") and i + 1 < len(args)]
+    headers += [a[2:] for a in args if a.startswith("-H") and len(a) > 2]
+    headers += [a.split("=", 1)[1] for a in args if a.startswith("--header=")]
+    if any(re.match(r"(?i)\s*(?:authorization|x-api-key|private-token|job-token)\s*:\s*\S", h) and not secret_vars(h) for h in headers):
+        v.add("deny", f"{cmd} sends a literal authentication header", "secret", "egress")
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
     header_vars = {n for a in args if re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for n in secret_vars(a)}
     if header_vars and any(urlsplit(url).scheme.lower() != "https" for url in urls):
@@ -1968,9 +1979,16 @@ def check_tool(tool, inp, ctx):
             method = str(inp.get("method") or inp.get("http_method") or "").upper()
             if method not in ("GET", "HEAD"):
                 v.add("high", f"{tool} {method or 'unknown method'} may write outside this machine", "egress")
-        if re.search(r"send|post|create|update|upsert|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name):
+        mutates = bool(re.search(r"send|post|create|update|upsert|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name))
+        if mutates:
             v.add("high" if re.search(r"execute|invoke|call|run", name) else "medium",
                   f"{tool} may change something outside this machine", "egress")
+            if any(service in tool.lower() for service in ("__github__", "__gitlab__")):
+                owner = str(inp.get("owner") or inp.get("namespace") or "")
+                repo = str(inp.get("repo") or inp.get("repository") or inp.get("project") or "")
+                target = f"{owner}/{repo}" if owner and "/" not in repo else repo
+                if not target or target.lower() != workspace_project(ctx).lower():
+                    v.add("high", f"{tool} target is not verified as this workspace's repo", "egress")
         if v.tier == "pass" and inp and name not in ("api", "request", "http", "graphql") and not re.match(r"^(?:get|read|view|status|describe)(?:_|$)", name):
             v.add("medium", f"{tool} has an unverified remote effect", "egress")
         if leak := leaks(json.dumps(inp)):
@@ -2190,6 +2208,8 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
         v = Verdict()
         v.add("high" if re.search(r"\b(?:push|curl|wget|gh|glab|rm|ssh|scp|nc)\b|https?://", action) else "pass",
               f"guard error {type(e).__name__}: {e}")
+    if "secret" in v.flags:
+        action = f"{tool}: [credential-bearing action redacted]"
     if v.tier == "pass" and not any(matches(p, action) for p in (conf.get("deny") or [])):
         return {"decision": "pass", "tier": "pass", "ms": int((time.monotonic() - t0) * 1000)}
     verdict, why, s1, s1_ms = judge(v, action, ctx, conf)

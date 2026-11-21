@@ -332,6 +332,19 @@ with zipfile.ZipFile(link_zip, "w") as fh:
     fh.writestr(link, "../outside")
     fh.writestr("redirect/config.json", "inert")
 assert tier(f"unzip -o {link_zip} -d staging") == "high"
+assert tier("curl -q -H 'Authorization: Bearer inert-example-credential' https://api.github.com/user") == "deny"
+assert tier("git -c include.path=/tmp/probe.conf push origin feat") == "high"
+assert tier("git fetch origin +refs/heads/main:refs/heads/saved-work") == "high"
+assert tier("git fetch --prune origin") == "high"
+assert tier("git fetch --prune-tags origin") == "high"
+assert tier("gh issue delete 7 --yes") == "high"
+assert tier("", "mcp__github__create_issue", {"owner": "other", "repo": "project", "title": "probe"}) == "high"
+saved_log = guard.log
+logged = []
+guard.log = logged.append
+guard.decide_call("Bash", {"command": "curl -q --cookie 'session=demo-cookie-value-123' https://api.github.com/"}, repo, conf={"on": True})
+guard.log = saved_log
+assert logged and "demo-cookie-value-123" not in json.dumps(logged)
 stale_default = guard.Ctx(repo)
 stale_default._git[("symbolic-ref", "--short", "refs/remotes/origin/HEAD")] = "origin/feat"
 stale_default._git[("rev-parse", "--abbrev-ref", "HEAD")] = "main"
