@@ -548,6 +548,9 @@ with mock.patch.object(audit, "forge_refs", return_value=("abc", "main", "base1"
     assert merged.call_args.args[0] == cmd + ["--match-head-commit", "abc"]
     assert audit.checked_merge("github", "o/x", "23", "release", "abc", "base1", cmd) == 4 and merged.call_count == 1
     assert audit.checked_merge("github", "o/x", "23", "main", "abc", "base2", cmd) == 4 and merged.call_count == 1
+    assert audit.checked_merge("github", "o/x", "23", "main", "abc", "base1", ["gh", "pr", "merge", "24", "-R", "o/x", "--merge"]) == 4
+    assert audit.checked_merge("github", "o/x", "23", "main", "abc", "base1", ["gh", "pr", "merge", "23", "-R", "other/x", "--merge"]) == 4
+    assert merged.call_count == 1
     assert audit.same_target({"target_oid": "base1"}, "o/x", 23, "github", "abc", "main")
     assert not audit.same_target({"target_oid": "base2"}, "o/x", 23, "github", "abc", "main")
 print("merge audit ok")

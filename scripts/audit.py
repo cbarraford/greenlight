@@ -948,7 +948,11 @@ def same_target(c, project, iid, forge, sha, target):
 
 def checked_merge(forge, project, iid, target, sha, target_oid, cmd):
     """Run the forge merge only while its head, target and target commit still match the audited pair."""
-    if not cmd or cmd[:3] != (["gh", "pr", "merge"] if forge == "github" else ["glab", "mr", "merge"]):
+    valid = (["gh", "pr", "merge", str(iid), "-R", project] if forge == "github" else
+             ["glab", "mr", "merge", str(iid), "-R", project, "--yes"])
+    methods = {"--merge", "--squash", "--rebase"}
+    tail = cmd[len(valid):] if cmd else []
+    if not cmd or cmd[:len(valid)] != valid or not (len(tail) == 1 and tail[0] in methods or forge == "gitlab" and not tail):
         print("AUDIT ERROR invalid merge command")
         return 4
     refs = forge_refs(project, iid, forge)
