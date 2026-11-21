@@ -49,6 +49,7 @@ import sys
 import tarfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -677,6 +678,30 @@ def check_argv(argv, ctx, depth, piped_from=None):
                             for a in args if not a.startswith("-")):
             v.add("deny", "tar archive would package credentials", "secret")
         return v
+    if cmd in ("unzip", "7z", "7za"):
+        directory = opt(args, "-d", "--output") or "."
+        target_dir = ctx.path(directory)
+        if GUARD_PATH_RE.search(str(target_dir / "config.json")) or GUARD_PATH_RE.search(str(target_dir / "settings.json")):
+            v.add("deny", f"{cmd} extraction can overwrite guarded files in {directory}")
+        else:
+            v.merge(check_write(target_dir, ctx, f"{cmd} extraction", raw=directory))
+        if cmd != "unzip":
+            v.add("high", f"{cmd} archive entries cannot be inspected")
+            return v
+        archive = next((a for a in args if not a.startswith("-") and a != directory), None)
+        if archive:
+            try:
+                with zipfile.ZipFile(ctx.path(archive)) as fh:
+                    for i, name in enumerate(fh.namelist()):
+                        if i >= 1000:
+                            v.add("high", "zip archive has too many entries to inspect")
+                            break
+                        v.merge(check_write(ctx.path(os.path.join(directory, name)), ctx, "unzip extraction", raw=name))
+            except (OSError, zipfile.BadZipFile):
+                v.add("high", "cannot inspect zip extraction contents")
+        else:
+            v.add("high", "zip extraction archive cannot be identified")
+        return v
     if cmd in NET_TOOLS:
         return check_net(cmd, args, ctx)
     if cmd in RAW_NET:
@@ -791,6 +816,8 @@ def check_git(args, ctx):
             ctx = Ctx(ctx.path(a[1]), source_root=source_root)
             a = a[2:]
         elif a[0] in ("-c", "--git-dir", "--work-tree", "--namespace") and len(a) > 1:
+            if a[0] in ("--git-dir", "--work-tree", "--namespace"):
+                v.add("high", f"git {a[0]} changes the effective repository")
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
             if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
@@ -800,6 +827,8 @@ def check_git(args, ctx):
                     v.add("deny", "git -c force refspec can update an uninspected branch", "egress")
             a = a[2:]
         else:
+            if a[0].startswith(("--git-dir=", "--work-tree=", "--namespace=")):
+                v.add("high", "git option changes the effective repository")
             a = a[1:]
     if not a:
         return v
@@ -862,6 +891,8 @@ def check_push(rest, ctx, v):
     flags = [x for x in rest if x.startswith("-")]
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
                 for f in flags) or any(p.startswith("+") for p in pos[1:])
+    if force and not ctx.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+        v.add("deny", "force push cannot prove the default branch without origin/HEAD", "egress")
     remote = pos[0] if pos else (ctx.git("config", "--get", f"branch.{ctx.branch}.pushRemote") or
                                  ctx.git("config", "--get", "remote.pushDefault") or
                                  ctx.git("config", "--get", f"branch.{ctx.branch}.remote") or "origin")
@@ -1604,6 +1635,32 @@ def describe(tool, inp):
     return f"{tool} {json.dumps(inp)[:1000]}"
 
 
+def approval_files(tool, inp, ctx):
+    """Hash readable file arguments so an approval cannot carry over to new payload bytes."""
+    if tool != "Bash":
+        return ""
+    try:
+        tokens = shlex.split(inp.get("command", ""))
+    except ValueError:
+        return "unparseable"
+    found = []
+    for token in tokens:
+        candidate = token.split("@", 1)[1] if "@" in token and not token.startswith(("http:", "https:")) else token
+        candidate = candidate.split("=", 1)[-1] if "=" in candidate else candidate
+        candidate = candidate.split(";", 1)[0]
+        if not candidate or candidate.startswith("-"):
+            continue
+        p = ctx.path(candidate)
+        try:
+            if p.is_file():
+                with p.open("rb") as fh:
+                    data = fh.read(5_000_001)
+                found.append((str(p), hashlib.sha256(data).hexdigest() if len(data) <= 5_000_000 else "too-large"))
+        except OSError:
+            found.append((str(p), "unreadable"))
+    return json.dumps(found, sort_keys=True)
+
+
 def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, record=True, dry_run=False):
     """{decision: pass|allow|ask|deny, reason, tier, ...}. pass: no opinion."""
     t0 = time.monotonic()
@@ -1624,9 +1681,10 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
           "session": session}
     routing_env = {k: os.environ.get(k, "") for k in ("GH_REPO", "GH_HOST", "GLAB_REPO", "GITLAB_HOST", "GIT_SSH_COMMAND")}
     routing_env.update({k: value for k, value in os.environ.items() if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))})
-    scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}\0{json.dumps(routing_env, sort_keys=True)}\0{v.tier}"
+    scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}\0{json.dumps(routing_env, sort_keys=True)}\0{v.tier}\0{approval_files(tool, inp, ctx)}"
+    cacheable = tool != "Bash" or not re.search(r"@[^\s]+|--(?:body-file|notes-file|input|post-file|upload-file|template)\b|\s-[FTK]\b|\bgh\s+(?:gist|release)\s+(?:create|upload)\b", inp.get("command", ""))
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
-    if verdict == "pause" and digest in approvals():
+    if verdict == "pause" and cacheable and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
     if verdict == "pause" and dry_run:
         verdict, why = "ask", f"{why}; dry run would ask for approval"
@@ -1643,7 +1701,7 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
         elif how == "ping":
             verdict, why2 = wait_for_user(action, why, ctx, conf)
             ev["asked"] = redact(why2)
-            if verdict == "allow":
+            if verdict == "allow" and cacheable:
                 approvals(approvals() | {digest: time.time()})
             why = f"{why}; {why2}"
         else:
