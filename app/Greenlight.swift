@@ -169,10 +169,18 @@ func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .d
 /// The chosen chat font: for the conversation's own text (messages, the composer, questions), not the chrome around it.
 func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font { sys(size: size, weight: weight, face: chatFont) }
 let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Haiku 5.5", "claude-haiku-5-5"),
-              ("Fable 5.1", "claude-fable-5-1"), ("Gemini 4 Neon", "gemini-4-neon"),
+              ("Fable 5.1", "claude-fable-5-1"),
+              ("Gemini 4 Neon · Low", "gemini-4-neon-low"), ("Gemini 4 Neon · Medium", "gemini-4-neon-medium"),
+              ("Gemini 4 Neon · High", "gemini-4-neon-high"), ("Gemini 4 Neon · Extra high", "gemini-4-neon-xhigh"),
+              ("Gemini 4 Argon · Medium", "gemini-4-argon-medium"), ("Gemini 4 Hydrogen · Medium", "gemini-4-hydrogen-medium"),
+              ("Gemini 3.8 Flash · Medium", "gemini-3.8-flash-medium"),
               ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
-/// A model id is a Claude model, a Gemini model (Gemini CLI runs it), or another harness's name (it runs that harness's default model).
-func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "gemini" : model }
+/// Gemini model ids run through agy; the Gemini CLI entry still starts that harness's default model.
+func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "agy" : model }
+func savedModel(_ key: String, fallback: String) -> String {
+    let stored = UserDefaults.standard.string(forKey: key) ?? fallback
+    return stored == "gemini-4-neon" ? "gemini-4-neon-medium" : stored
+}
 let efforts = ["low", "medium", "high", "xhigh", "max"]
 func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capitalized }  // display only; the stored value stays
 
@@ -2928,6 +2936,12 @@ final class Core: ObservableObject {
         transcriptFile = session == 0 ? transcript : support.appendingPathComponent("transcript-\(session).json")
         questionsURL = session == 0 ? questionsFile : support.appendingPathComponent("questions-\(session).json")
         msgs = ((try? JSONDecoder().decode([Msg.Saved].self, from: Data(contentsOf: transcriptFile)))?.map(Msg.init)) ?? msgs
+        if session == 0 && ud.string(forKey: "model") == "gemini-4-neon" {
+            ud.set("gemini-4-neon-medium", forKey: "model")
+            msgs.append(Msg(.note, "Gemini chat now uses agy, which starts a new conversation. Your earlier Gemini CLI conversation remains available by selecting Gemini CLI."))
+            try? FileManager.default.createDirectory(at: transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcriptFile, options: .atomic)
+        }
         questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
         context = ud.integer(forKey: meterKeys.context); window = ud.integer(forKey: meterKeys.window)
     }
@@ -3050,7 +3064,7 @@ final class Core: ObservableObject {
     @Published var hq: String?  // the ⌃R query; nil = closed
     @Published var hsel = 0
     var hsaved = "", recalling = false, toEnd = false  // toEnd: the key monitor puts the caret at the end after this key
-    @Published var model = UserDefaults.standard.string(forKey: "model") ?? "claude-opus-5-5" {
+    @Published var model = savedModel("model", fallback: "claude-opus-5-5") {
         didSet {
             UserDefaults.standard.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
@@ -3060,14 +3074,14 @@ final class Core: ObservableObject {
         }
     }
     @Published var effort = UserDefaults.standard.string(forKey: "effort") ?? "medium" { didSet { UserDefaults.standard.set(effort, forKey: "effort") } }
-    // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one on Gemini CLI.
-    @Published var designModel = UserDefaults.standard.string(forKey: "designModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(designModel, forKey: "designModel") } }
+    // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one through agy.
+    @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") { didSet { UserDefaults.standard.set(designModel, forKey: "designModel") } }
     @Published var designEffort = UserDefaults.standard.string(forKey: "designEffort") ?? "low" { didSet { UserDefaults.standard.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
     @Published var termNameModel = UserDefaults.standard.string(forKey: "termNameModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(termNameModel, forKey: "termNameModel") } }
     @Published var termAutoName = UserDefaults.standard.object(forKey: "termAutoName") as? Bool ?? true { didSet { UserDefaults.standard.set(termAutoName, forKey: "termAutoName") } }
     // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
-    @Published var nextModel = UserDefaults.standard.string(forKey: "nextModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(nextModel, forKey: "nextModel") } }
+    @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { UserDefaults.standard.set(nextModel, forKey: "nextModel") } }
     @Published var nextEffort = UserDefaults.standard.string(forKey: "nextEffort") ?? "low" { didSet { UserDefaults.standard.set(nextEffort, forKey: "nextEffort") } }
     @Published var designParallel = UserDefaults.standard.object(forKey: "designParallel") as? Int ?? 3 { didSet { UserDefaults.standard.set(designParallel, forKey: "designParallel") } }
     @Published var context = 0 { didSet { ud.set(context, forKey: meterKeys.context) } }  // init reads this chat's
@@ -3515,7 +3529,9 @@ final class Core: ObservableObject {
         connected = true
         switch e {
         case "start":
-            r.status = "Starting \(models.first { $0.1 == j["engine"] as? String }?.0 ?? "Claude")"
+            let engine = j["engine"] as? String ?? "claude"
+            let selected = engine == "agy" ? j["model"] as? String : engine
+            r.status = "Starting \(models.first { $0.1 == selected }?.0 ?? engine.capitalized)"
             log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":
             if !r.stopping { r.status = j["text"] as? String ?? r.status; r.thinking = j["thinking"] as? Bool ?? false; voice.status(byline(r, now: Date(), lead: true)) }
@@ -4818,7 +4834,7 @@ struct SettingsView: View {
     func claudeModelPicker(_ label: String, _ v: Binding<String>) -> some View {
         Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
     }
-    /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one (it runs on Gemini CLI there).
+    /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one through agy.
     func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
         Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
     }
@@ -4956,7 +4972,7 @@ struct SettingsView: View {
             row("Chat model", "Changes apply from your next message.") {
                 Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
             }
-            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : c.model.hasPrefix("gemini-") ? "Choose the Gemini effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
             toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
         }
@@ -5191,7 +5207,7 @@ struct SettingsView: View {
         box("Background agents") {
             row("Workspace pages", "Builds each workspace's page on the dashboard.") { writerModelPicker("Workspace pages model", $c.designModel) }
             dependent(off: false) {
-                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: harnessOf(c.designModel) == "gemini") }
+                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: harnessOf(c.designModel) == "agy") }
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
                     if c.designParallel > 0 {
                         Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
@@ -5208,7 +5224,7 @@ struct SettingsView: View {
             row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
                 Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "gemini") } }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "agy") } }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
