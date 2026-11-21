@@ -2233,11 +2233,11 @@ function pickProjects(list, only, here = true){
 addEventListener("keydown", e => { if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); post({cmd: "pickNew"}) } });  // ⌘⇧N, as on B1/B2: Open projects, New window
 window.mc = {
   focus: () => ({page: ui.page?.name || "", view: ui.view, paths: viewPaths(), repos: ui.paths && arr(ui.repos)}),  // for Chief: what this window shows (paths: its projects' workspaces, repos: their repos, so a workspace made after this is in it too; null for all)
-  pick(names){  // the hexes Chief's last reply is about; [] clears. Just one on screen: its card opens too
+  pick(names, open){  // the hexes Chief's last reply is about; [] clears. Just one on screen: its card opens too, unless open is false (the app wasn't sure enough)
     const was = ui.picked; ui.picked = new Set(arr(names)); render();
     const on = [...ui.picked].map(n => [document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`), ui.dk[n]]).filter(([e, p]) => e && p && !p.members);
     const card = document.getElementById("hcard");
-    if (on.length === 1) showCard(...on[0]); else if (card && was.has(card.dataset.name)) hideCard();
+    if (on.length === 1 && open !== false) showCard(...on[0]); else if (card && was.has(card.dataset.name)) hideCard();
   },
   paths(r, repos){ ui.paths = r; ui.repos = r && arr(repos); render() },  // the projects picked: their worktrees' paths and their repos, or null for all
   pickProjects,  // L1's project chip
