@@ -39,6 +39,7 @@ and codex's own sandbox blocks the network). It is a gate on the obvious paths, 
 import ast
 import fnmatch
 import hashlib
+import io
 import json
 import math
 import os
@@ -714,6 +715,12 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if any(c in argv[0] for c in ("$", "`")):
         v.add("high", "shell expansion selects a command the guard cannot inspect")
     cmd, args = os.path.basename(argv[0]), argv[1:]
+    if cmd == "busybox":
+        if args and not args[0].startswith("-"):
+            v.merge(check_argv(args, ctx, depth + 1, piped_from=piped_from))
+        else:
+            v.add("high", "BusyBox applet cannot be identified")
+        return v
     if cmd.endswith("greenlight.py") or cmd in ("orca", "orca-ide") or (cmd.startswith("python") and any(a.endswith("greenlight.py") for a in args[:2])):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
         if len(rest) >= 2 and rest[0] == "worktree" and rest[1] in ("rm", "remove", "delete"):
@@ -729,6 +736,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
             v.merge(check_shell(" ".join(args), ctx, depth + 1))
         elif (command_flag := next((i for i, a in enumerate(args) if a == "-c" or re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a)), None)) is not None and command_flag + 1 < len(args):
             v.merge(check_shell(args[command_flag + 1], ctx, depth + 1))
+        elif attached := next((m[1] for a in args if (m := re.match(r"^-[A-Za-z]*c(.+)$", a))), None):
+            v.merge(check_shell(attached, ctx, depth + 1))
         elif piped_from:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         return v
@@ -827,26 +836,38 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in RAW_NET:
         if cmd == "ssh":
             v.add("high", "ssh may run local configuration commands", "egress")
+        if cmd == "scp":
+            v.add("high", "scp may run local SSH configuration commands", "egress")
         if cmd == "ssh" and any(a.startswith(("-oProxyCommand", "-oLocalCommand", "-oPermitLocalCommand", "-F", "-J")) or
                                  a in ("-o", "-F", "-J") for a in args):
             v.add("high", "ssh options can run a local command or change the route", "egress")
-        dest = next((a for a in args if not a.startswith("-")), "")
+        operands, i = [], 0
+        while i < len(args):
+            if cmd == "scp" and args[i] in ("-i", "-F", "-o", "-P", "-J", "-S", "-c", "-l"):
+                i += 2
+            elif cmd == "rsync" and args[i] in ("-e", "--rsh", "--exclude", "--include", "--files-from"):
+                i += 2
+            elif args[i].startswith("-"):
+                i += 1
+            else:
+                operands.append(args[i])
+                i += 1
+        dest = operands[0] if operands else ""
         if cmd == "rsync" and not any(":" in a for a in args if not a.startswith("-")):
             files = [a for a in args if not a.startswith("-")]
             if files:
                 v.merge(check_write(ctx.path(files[-1]), ctx, "rsync", raw=files[-1]))
             return v
-        local_only = cmd == "ssh" or not any(":" in a and host_of(a.split(":")[0]) not in LOCAL_HOSTS
-                                               for a in args if not a.startswith("-"))
+        local_only = cmd == "ssh" or not any(":" in a and host_of(a.split(":")[0]) not in LOCAL_HOSTS for a in operands)
         if local_only and host_of(dest.split(":")[0]) in LOCAL_HOSTS:
             if cmd == "ssh" and len(args) > args.index(dest) + 1:
                 v.merge(check_shell(" ".join(args[args.index(dest) + 1:]), Ctx(ctx.cwd, unknown=True, source_root=ctx.root), depth + 1))
             return v
         v.add("high", f"{cmd} opens a connection off the machine", "egress")
-        if cmd in ("scp", "rsync") and args:
-            target = args[-1]
+        if cmd in ("scp", "rsync") and operands:
+            target = operands[-1]
             if ":" in target or "@" in target:
-                for source in (a for a in args[:-1] if not a.startswith("-") and ":" not in a):
+                for source in (a for a in operands[:-1] if ":" not in a):
                     v.merge(check_upload_file(source, ctx, cmd))
         return v
     if cmd in ("rm", "rmdir", "unlink", "shred", "trash", "srm"):
@@ -857,6 +878,8 @@ def check_argv(argv, ctx, depth, piped_from=None):
             if a.startswith(("-", "(", ")", "!")):
                 break
             roots.append(a)
+        if "-execdir" in args and any(not ctx.inside(ctx.path(r)) for r in roots or ["."]):
+            v.add("high", "find -execdir runs a command outside this workspace")
         if "-delete" in args or re.search(r"\brm\b", " ".join(args)):
             for r in roots or ["."]:  # a root in the worktree only bounds what it deletes, inside it
                 v.merge(check_rm(["-r", r], ctx))
@@ -947,7 +970,7 @@ def check_git(args, ctx, depth=0):
     if depth > 3:
         v.add("high", "Git alias chain is too deep to inspect")
         return v
-    a = [part for arg in args for part in (["-c", arg[2:]] if arg.startswith("-c") and len(arg) > 2 else [arg])]
+    a = [part for arg in args for part in (["-c", arg[2:]] if arg.startswith("-c") and len(arg) > 2 else ["-C", arg[2:]] if arg.startswith("-C") and len(arg) > 2 else [arg])]
     source_root = ctx.source_root or ctx.root
     push_override = False
     while a and a[0].startswith("-"):  # git -C dir -c k=v ...
@@ -975,6 +998,8 @@ def check_git(args, ctx, depth=0):
     if not a:
         return v
     sub, rest = a[0], a[1:]
+    if source_root and ctx.root != source_root and sub not in ("status", "diff", "log", "show", "rev-parse", "ls-files"):
+        v.add("high", f"git {sub} acts in another workspace")
     if alias := ctx.git("config", "--get", f"alias.{sub}"):
         if alias.startswith("!"):
             v.add("high", "Git shell alias may run arbitrary commands")
@@ -1221,6 +1246,7 @@ def check_outgoing_commits(ctx, remote, source, target):
             if " " in line and SECRET_PATH_RE.search(line.split(" ", 1)[1]):
                 v.add("deny", "pushes a credential file", "secret", "egress")
                 return v
+        object_paths = {line.split(" ", 1)[0]: line.split(" ", 1)[1] for line in objects if " " in line}
         ids = list(dict.fromkeys(line.split(" ", 1)[0] for line in objects))
         if not ids:
             return v
@@ -1232,7 +1258,7 @@ def check_outgoing_commits(ctx, remote, source, target):
             raise ValueError("too much object data")
         raw = subprocess.run([*cmd, "cat-file", "--batch"], input=("\n".join(selected) + "\n").encode(),
                              capture_output=True, timeout=3, check=True).stdout if selected else b""
-        offset = 0
+        offset, archives = 0, 0
         for oid, size in zip(selected, sizes):
             end = raw.index(b"\n", offset)
             header = raw[offset:end].decode()
@@ -1244,10 +1270,64 @@ def check_outgoing_commits(ctx, remote, source, target):
             if leak := leaks(data.decode(errors="replace")):
                 v.add("deny", f"pushes a commit that {leak}", "secret", "egress")
                 return v
+            path = object_paths.get(oid, "")
+            archive_path = ".zip" if data.startswith(b"PK\x03\x04") else ".tgz" if data.startswith(b"\x1f\x8b") else path
+            if archive_path.endswith((".zip", ".tar", ".tar.gz", ".tgz")):
+                archives += 1
+                if archives > 20:
+                    v.add("high", "too many outgoing archives to inspect", "egress")
+                    break
+                v.merge(check_outgoing_archive(data, archive_path))
+                if v.tier == "deny":
+                    return v
             offset = end + 1 + size + 1
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
         v.add("high", "cannot fully inspect the commits this push would send", "egress")
         return v
+    return v
+
+
+def check_outgoing_archive(data, path):
+    """Inspect bounded archive members embedded in a Git blob before a push."""
+    v = Verdict()
+    try:
+        stream = io.BytesIO(data)
+        if path.endswith(".zip"):
+            with zipfile.ZipFile(stream) as archive:
+                names = archive.namelist()
+                if len(names) > 100:
+                    v.add("high", "outgoing archive has too many members", "egress")
+                entries = ((name, archive.open(name)) for name in names[:100] if not name.endswith("/"))
+                remaining = 5_000_000
+                for name, member in entries:
+                    with member:
+                        chunk = member.read(remaining + 1)
+                    remaining -= len(chunk)
+                    if SECRET_PATH_RE.search("/" + name) or (leak := leaks(chunk.decode(errors="replace"))):
+                        v.add("deny", "outgoing archive contains a credential", "secret", "egress")
+                    if remaining < 0:
+                        v.add("high", "outgoing archive is too large to inspect", "egress")
+                        break
+        else:
+            with tarfile.open(fileobj=stream, mode="r:*") as archive:
+                members = archive.getmembers()
+                if len(members) > 100:
+                    v.add("high", "outgoing archive has too many members", "egress")
+                remaining = 5_000_000
+                for member in members[:100]:
+                    if SECRET_PATH_RE.search("/" + member.name):
+                        v.add("deny", "outgoing archive contains a credential", "secret", "egress")
+                    if member.isfile() and (fh := archive.extractfile(member)):
+                        with fh:
+                            chunk = fh.read(remaining + 1)
+                        remaining -= len(chunk)
+                        if leak := leaks(chunk.decode(errors="replace")):
+                            v.add("deny", f"outgoing archive member {leak}", "secret", "egress")
+                        if remaining < 0:
+                            v.add("high", "outgoing archive is too large to inspect", "egress")
+                            break
+    except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError):
+        v.add("high", "cannot inspect outgoing archive", "egress")
     return v
 
 
@@ -1340,6 +1420,17 @@ def check_forge(cmd, args, ctx):
         v.add("deny", f"the text it posts {leak}", "secret", "egress")
     if secret_vars(text):
         v.add("deny", "posts a secret env var", "secret", "egress")
+    if verb not in FORGE_READ:
+        for nested in substitutions(text):
+            v.add("high", "forge text uses command output that cannot be verified before posting", "egress")
+            try:
+                nested_args = shlex.split(nested)
+            except ValueError:
+                nested_args = []
+            if nested_args[:1] == ["cat"]:
+                for source in nested_args[1:]:
+                    if not source.startswith("-"):
+                        v.merge(check_upload_file(source, ctx, f"{cmd} command output"))
     other = opt(a, "--repo", "-R") or next((x[2:] for x in a if x.startswith("-R") and len(x) > 2), None)
     if other and not own_repo(other, ctx):
         if verb not in FORGE_READ:
