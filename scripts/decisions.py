@@ -205,12 +205,13 @@ def said(reply, chat=None, kind=None):
     return asked(visible, via="chat", chat=chat, kind=kind) if split_options(visible)[1] else None
 
 
-def dismiss(text, key=None, ping=True):
+def dismiss(text, key=None, ping=True, chat=None):
     """The inbox's ✕ on a question: close its open record as dismissed (autonomy.py's gate counts it against its kind)."""
     question = split_options(text)[0]
     with book() as recs:
         for r in reversed(recs):
-            if is_open(r) and r["via"] == ("ping" if ping else "chat") and r["question"] == question and (not ping or r["key"] == key):
+            if (is_open(r) and r["via"] == ("ping" if ping else "chat") and r["question"] == question
+                    and ((ping and r["key"] == key) or (not ping and r.get("chat") == chat))):
                 r["closed"] = "dismissed"
                 return r
     return None
@@ -316,7 +317,7 @@ def main():
     if cmd == "dismiss":
         try:  # the app's ✕: never in the way
             d = json.loads(sys.stdin.read() or "{}")
-            dismiss(d["text"], d.get("key"), d.get("ping", True))
+            dismiss(d["text"], d.get("key"), d.get("ping", True), d.get("chat") or None)
         except Exception as e:
             print(f"decision record: {e}", file=sys.stderr)
         return
