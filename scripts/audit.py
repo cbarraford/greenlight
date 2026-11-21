@@ -119,8 +119,11 @@ def scrub_removed_private_keys(diff):
                     continue
                 raise ValueError("ambiguous removed private-key block: cannot safely audit")
             removed_key = False
-        elif not line.startswith("\\"):
-            removed_key = False
+        elif removed_key and not line.startswith("\\"):
+            # Removing only the marker leaves the key body in the new file.
+            # Context/addition inside that old PEM span is ambiguous and must
+            # never be sent to a remote model as bare base64.
+            raise ValueError("private-key material remains beside a removed marker: cannot safely audit")
         out.append(line)
     return "".join(out)
 # These complete values are published examples. Substrings such as "test" inside an
@@ -865,7 +868,7 @@ def review_position(diff, path, line, side="RIGHT"):
     raise ValueError("review comment line is not on the requested side of this diff")
 
 
-def post_review_comment(project, iid, forge, sha, cm):
+def post_review_comment(project, iid, forge, sha, cm, expected_refs=None, reviewed_diff=None):
     """Post one approved comment from its scored bytes and pin inline comments to the reviewed commit."""
     body, path, line = cm["body"], cm.get("path"), cm.get("line")
     side = cm.get("side", "RIGHT")
@@ -875,7 +878,9 @@ def post_review_comment(project, iid, forge, sha, cm):
         raise ValueError("review comment line needs a path")
     if forge == "gitlab" and path and line is None:
         raise ValueError("GitLab inline review comments need a line")
-    position = review_position(forge_diff(project, iid, forge, sha), path, line, side) if path and line is not None else None
+    if expected_refs is not None and forge_refs(project, iid, forge) != expected_refs:
+        raise RuntimeError("reviewed MR target changed before comment publication")
+    position = review_position(reviewed_diff if reviewed_diff is not None else forge_diff(project, iid, forge, sha), path, line, side) if path and line is not None else None
     gl_refs = None
     if forge == "gitlab" and path:
         endpoint = f"projects/{quote(project, safe='')}/merge_requests/{iid}"
@@ -893,6 +898,9 @@ def post_review_comment(project, iid, forge, sha, cm):
             json.dump({"project": project, "iid": iid, "sha": sha, "body_digest": hashlib.sha256(body.encode()).hexdigest()}, f)
     except FileExistsError as e:
         raise RuntimeError(f"a review comment may have posted; inspect the forge, then if no comment exists remove {marker} and retry") from e
+    if expected_refs is not None and forge_refs(project, iid, forge) != expected_refs:
+        marker.unlink(missing_ok=True)
+        raise RuntimeError("reviewed MR target changed before comment publication")
     if forge == "github":
         endpoint = f"repos/{project}/pulls/{iid}/comments" if path else f"repos/{project}/issues/{iid}/comments"
         args = ["gh", "api", "-X", "POST", endpoint, "-f", f"body={body}"]
@@ -1089,14 +1097,22 @@ def kick(path, sha, spec=None, escalate=False, tag=""):
     """Start the merge audit for this workspace's head in the background, once (a lock per key; a stale one after RETRY).
     spec: {target, goal, project, iid, forge} when the scan's row isn't in last.json yet; else `merge <path>` reads it there."""
     k = key(path, sha, tag)
-    if not once(state_dir() / f"{k}.lock", stale=RETRY):
+    lock = state_dir() / f"{k}.lock"
+    if not once(lock, stale=RETRY):
         return False
     cmd = [sys.executable, str(HERE / "audit.py"), "merge", path] + ["--escalate"] * escalate
-    if spec is not None:
-        req = state_dir() / f"{k}.req.json"
-        req.write_text(json.dumps({**spec, "path": path, "sha": sha, "tag": tag}))
-        cmd += ["--req", str(req)]
-    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    req = None
+    try:
+        if spec is not None:
+            req = state_dir() / f"{k}.req.json"
+            req.write_text(json.dumps({**spec, "path": path, "sha": sha, "tag": tag}))
+            cmd += ["--req", str(req)]
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        lock.unlink(missing_ok=True)
+        if req is not None:
+            req.unlink(missing_ok=True)
+        raise
     return True
 
 
@@ -1377,7 +1393,7 @@ def main(argv=None):
                         posted.append(tid)
                     else:
                         try:
-                            posted.append(post_review_comment(row["project"], mr["iid"], row["forge"], refs[0], cm))
+                            posted.append(post_review_comment(row["project"], mr["iid"], row["forge"], refs[0], cm, refs, diff))
                         except Exception as e:
                             raise RuntimeError(f"posting review comment failed; already posted: {posted}; inspect forge before retry: {e}") from e
                 res["posted"], res["post"] = posted, []
