@@ -467,6 +467,8 @@ def check_shell(script, ctx, depth=0):
     # a secret var sent in a forge auth header is how agents call the forge API: check_net judges that one
     auth_arg = re.compile(r"(?i)(?:-H|--header)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;]+)")
     masked = auth_arg.sub(lambda m: "" if re.search(r"(?i)authorization|private-token|x-api-key|job-token", m[0]) else m[0], live)
+    if re.search(r"\$\{![A-Za-z_][A-Za-z0-9_]*", masked):
+        v.add("high", "indirect shell expansion may read a secret env var", "secret")
     for n in secret_vars(masked):
         v.add("high", f"reads secret env var ${n}", "secret")
     for line, doc, expands in docs:
@@ -628,6 +630,8 @@ def check_code(code, lang, ctx=None, depth=0):
 
 def check_argv(argv, ctx, depth, piped_from=None):
     v = Verdict()
+    if any(c in argv[0] for c in ("$", "`")):
+        v.add("high", "shell expansion selects a command the guard cannot inspect")
     cmd, args = os.path.basename(argv[0]), argv[1:]
     if cmd.endswith("greenlight.py") or cmd in ("orca", "orca-ide") or (cmd.startswith("python") and any(a.endswith("greenlight.py") for a in args[:2])):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
@@ -741,13 +745,18 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in NET_TOOLS:
         return check_net(cmd, args, ctx)
     if cmd in RAW_NET:
+        if cmd == "ssh" and any(a.startswith(("-oProxyCommand", "-oLocalCommand", "-oPermitLocalCommand", "-F", "-J")) or
+                                 a in ("-o", "-F", "-J") for a in args):
+            v.add("high", "ssh options can run a local command or change the route", "egress")
         dest = next((a for a in args if not a.startswith("-")), "")
         if cmd == "rsync" and not any(":" in a for a in args if not a.startswith("-")):
             files = [a for a in args if not a.startswith("-")]
             if files:
                 v.merge(check_write(ctx.path(files[-1]), ctx, "rsync", raw=files[-1]))
             return v
-        if host_of(dest.split(":")[0]) in LOCAL_HOSTS:
+        local_only = cmd == "ssh" or not any(":" in a and host_of(a.split(":")[0]) not in LOCAL_HOSTS
+                                               for a in args if not a.startswith("-"))
+        if local_only and host_of(dest.split(":")[0]) in LOCAL_HOSTS:
             if cmd == "ssh" and len(args) > args.index(dest) + 1:
                 v.merge(check_shell(" ".join(args[args.index(dest) + 1:]), Ctx(ctx.cwd, unknown=True, source_root=ctx.root), depth + 1))
             return v
@@ -969,16 +978,18 @@ def check_push(rest, ctx, v):
         v.add("high", "pushes every branch or tag, or deletes remote ones", "egress")
     if any(f in ("-o", "--push-option") or f.startswith(("-o", "--push-option=")) for f in flags):
         v.add("high", "git push option can change merge request behavior", "egress")
-    if "--follow-tags" in flags or "--tags" in flags or ctx.git("config", "--bool", "--get", "push.followTags") == "true":
+    refs = pos[1:] or [ctx.branch or "HEAD"]
+    following_tags = "--follow-tags" in flags or ctx.git("config", "--bool", "--get", "push.followTags") == "true"
+    if following_tags or "--tags" in flags:
         v.add("high", "pushes tag objects that need inspection", "egress")
-        v.merge(check_tag_objects(ctx))
+        sources = [r.lstrip("+").partition(":")[0] for r in refs] if following_tags and "--tags" not in flags else None
+        v.merge(check_tag_objects(ctx, reachable=sources))
     if "--mirror" in flags or (force and "--all" in flags):
         v.add("deny", "force-pushes all branches, including the default branch", "egress")
     if ":" in pos[1:]:
         v.add("deny" if force else "high", "matching refspec can update the default branch", "egress")
     if any(f in ("-d", "--delete") for f in flags) or any(p.startswith(":") and p != ":" for p in pos[1:]):
         v.add("high", "deletes a remote branch", "egress")
-    refs = pos[1:] or [ctx.branch or "HEAD"]
     for r in refs:
         dst = r.lstrip("+").split(":")[-1] if ":" in r else r.lstrip("+")
         dst = ctx.branch if dst == "HEAD" else dst
@@ -1015,20 +1026,31 @@ def check_push(rest, ctx, v):
                 v.merge(check_outgoing_commits(ctx, remote, tag, tag))
     if any("refs/tags/" in r or ctx.git("rev-parse", "--verify", f"refs/tags/{r}") for r in pos[1:]):
         v.add("high", "pushes an explicit tag ref", "egress")
-        v.merge(check_tag_objects(ctx))
+        v.merge(check_tag_objects(ctx, only={r.lstrip("+").partition(":")[0].removeprefix("refs/tags/") for r in pos[1:]}))
     return v
 
 
-def check_tag_objects(ctx):
+def check_tag_objects(ctx, only=None, reachable=None):
     v = Verdict()
-    refs = ctx.git("for-each-ref", "--format=%(objectname) %(objecttype)", "refs/tags").splitlines()
+    refs = ctx.git("for-each-ref", "--format=%(refname:short) %(objectname) %(objecttype)", "refs/tags").splitlines()
     if len(refs) > 100:
         v.add("high", "too many tag objects to inspect", "egress")
         return v
     for ref in refs:
-        oid, _, kind = ref.partition(" ")
+        name, oid, kind = (ref.split(" ", 2) + ["", ""])[:3]
+        if only is not None and name not in only:
+            continue
         if kind != "tag":
             continue
+        if reachable is not None:
+            commit = ctx.git("rev-parse", "--verify", f"{oid}^{{commit}}")
+            if not commit:
+                continue
+            if not all(ctx.git("rev-parse", "--verify", source) for source in reachable):
+                v.add("high", "cannot identify commits whose tags would follow", "egress")
+                continue
+            if not any(ctx.git("merge-base", commit, source) == commit for source in reachable):
+                continue
         try:
             data = subprocess.run(["git", "-C", str(ctx.cwd), "cat-file", "-p", oid], capture_output=True, text=True,
                                   timeout=2, check=True).stdout
@@ -1156,6 +1178,11 @@ def check_forge(cmd, args, ctx):
     if not a:
         return v
     group, verb = a[0], (a[1] if len(a) > 1 else "")
+    if verb not in FORGE_READ:
+        project = workspace_project(ctx)
+        origin = ctx.git("remote", "get-url", "origin")
+        if not project or repo_slug(origin) != project.lower() or host_of(origin) not in ("github.com", "gitlab.com"):
+            v.add("high", "forge origin does not match this workspace's project", "egress")
     if (ctx.source_root and ctx.root != ctx.source_root or ctx.unknown) and verb not in FORGE_READ:
         v.add("high", "forge command runs after a workspace change", "egress")
     origin_host = host_of(ctx.git("remote", "get-url", "origin"))
