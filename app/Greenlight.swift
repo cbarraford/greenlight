@@ -991,7 +991,7 @@ func dwimCandidate(_ t: String) -> Bool {
 /// The snapshot facts dwim.py reads, trimmed: the stage card and the router want names, goals, MRs, moves and lifecycle, not pages.
 func dwimPucks(_ pucks: [[String: Any]]) -> [[String: Any]] {
     pucks.map { p in
-        var o = p.filter { ["name", "path", "project", "repo", "goal", "state", "step", "owner", "hidden", "action", "agent", "mr", "life", "moves", "branch"].contains($0.key) }
+        var o = p.filter { ["name", "path", "project", "repo", "goal", "goal_live", "state", "step", "owner", "hidden", "action", "agent", "mr", "life", "moves", "branch"].contains($0.key) }
         if let ag = p["agent"] as? [String: Any] { o["agent"] = ["state": ag["state"] ?? ""] }
         return o
     }

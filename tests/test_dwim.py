@@ -46,6 +46,7 @@ assert r["route"] == "direct" and not r["actions"] and "edit the goal" in r["say
 assert plan("release billing")["route"] == "chief"  # a bare "release" could mean ship it
 assert plan("lift the hold on billing", [puck("billing", 44, goal="Billing page (hold)")])["actions"][0]["verb"] == "release"
 assert plan("unpark old-thing")["actions"][0]["ws"] == "old-thing"
+assert plan("unpark old-thing", [puck("old-thing", 46, goal="stale", goal_live="Old thing (parked)", hidden=True)])["actions"][0]["expected_goal"] == "Old thing (parked)"
 parked = [puck("sleeping-a", 47, goal="A (parked)", hidden=True), puck("sleeping-b", 48, goal="B (parked)", hidden=True), puck("active", 49, goal="Active")]
 assert [a["ws"] for a in plan("unpark the two parked ones", parked)["actions"]] == ["sleeping-a", "sleeping-b"]
 assert [a["ws"] for a in plan("unpark the parked ones", parked)["actions"]] == ["sleeping-a", "sleeping-b"]
@@ -198,7 +199,9 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert dwim.apply({"actions": [{"verb": "hold", "ws": "auth-login"}]})["unchanged"] == ["auth-login"]  # already held: unchanged, no second "(hold)"
     assert goals["id1"].count("(hold)") == 1
     stale_release = plan("release the hold on #42", [puck("auth-login", 42, goal="Fix the auth login flow")])
-    assert stale_release["actions"] and dwim.apply({"actions": stale_release["actions"]})["done"] == ["auth-login"]
+    assert stale_release["actions"] and dwim.apply({"actions": stale_release["actions"]})["errors"] == ["auth-login: goal changed since planning"]
+    fresh_release = plan("release the hold on #42", [puck("auth-login", 42, goal=goals["id1"])])
+    assert dwim.apply({"actions": fresh_release["actions"]})["done"] == ["auth-login"]
     assert goals["id1"] == "Fix the auth login flow"
     with mock.patch.object(dash, "snapshot", return_value={"pucks": []}):
         before_calls = dash.run.call_count
@@ -246,11 +249,18 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     assert dwim.undo(first)["kept"] == ["search"] and (dwim.DWIM / "undo" / f"{first}.json").exists()
     assert dwim.undo(second)["undone"] == ["search"] and goals["id3"] == "Search box (hold)"
     assert dwim.undo(first)["undone"] == ["search"] and goals["id3"] == "Search box"
-    many_undos = [dwim.apply({"actions": [{"verb": "hold" if i % 2 == 0 else "release", "ws": "search"}]})["undo"] for i in range(31)]
+    many_undos = [dwim.apply({"actions": [{"verb": "hold" if i % 2 == 0 else "release", "ws": "search", "expected_goal": goals["id3"]}]})["undo"] for i in range(31)]
     assert all(many_undos) and (dwim.DWIM / "undo" / f"{many_undos[0]}.json").exists()
     for uid in reversed(many_undos):
         assert dwim.undo(uid)["undone"] == ["search"]
     assert goals["id3"] == "Search box"
+    goals["id3"] = "Search box (parked)"
+    stale_unpark = plan("unpark search", [puck("search", 45, goal=goals["id3"], hidden=True)])
+    assert stale_unpark["actions"] and stale_unpark["actions"][0]["expected_goal"] == goals["id3"]
+    goals["id3"] = "Do not unpark until #67 merges (parked)"
+    assert dwim.apply({"actions": stale_unpark["actions"]})["errors"] == ["search: goal changed since planning"]
+    assert goals["id3"] == "Do not unpark until #67 merges (parked)"
+    goals["id3"] = "Search box"
     goals["d1"], goals["d2"] = "First", "Second"
     dupes = {k: ({"worktreeId": k, "displayName": "duplicate", "path": path, "comment": goals[k]}, {})
              for k, path in [("d1", "/one"), ("d2", "/two")]}

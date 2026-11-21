@@ -327,7 +327,9 @@ def plan(o):
     """The route for one command, with timings. See the module doc."""
     t0 = time.monotonic()
     text, src = (o.get("text") or "").strip(), o.get("source") if o.get("source") in SOURCES else "chat"
-    pucks, focus = [p for p in o.get("pucks") or [] if isinstance(p, dict) and p.get("name")], o.get("focus") or None
+    pucks = [p | ({"goal": p["goal_live"]} if isinstance(p.get("goal_live"), str) else {})
+             for p in o.get("pucks") or [] if isinstance(p, dict) and p.get("name")]
+    focus = o.get("focus") or None
     chief = lambda why, **k: {"route": "chief", "why": why, "text": text, "source": src, **k}
     if not text or len(text) > 300 or "\n" in text.strip():
         return chief("too long or empty for the fast path", ms={"total": 0})
@@ -374,6 +376,8 @@ def plan(o):
             skipped.append({"ws": p["name"], "why": w})
             continue
         a = {"verb": verb, "ws": p["name"], "ref": (p.get("mr") or {}).get("ref")}
+        if verb in ("unpark", "release"):
+            a["expected_goal"] = p.get("goal_live", p.get("goal") or "")
         if p.get("path"):
             a["path"] = p["path"]
         if p.get("branch"):
@@ -519,6 +523,8 @@ def apply(o):
             if current_puck(a, fresh[0]) is None:
                 return {"ws": a["ws"], "error": "workspace or MR changed since planning"}
             before = fresh[0].get("comment") or ""
+            if a["verb"] in ("unpark", "release") and (not isinstance(a.get("expected_goal"), str) or before != a["expected_goal"]):
+                return {"ws": a["ws"], "error": "goal changed since planning"}
             after = _goal_after(a["verb"], before)
             if after == before:
                 return {"ws": a["ws"], "unchanged": True}
