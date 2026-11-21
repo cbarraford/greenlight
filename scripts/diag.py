@@ -126,7 +126,9 @@ def h(value):
     if value is None or value == "":
         return None
     try:
-        return hmac.new(salt(), str(value).encode(), hashlib.sha256).hexdigest()[:10]
+        d = hmac.new(salt(), str(value).encode(), hashlib.sha256).hexdigest()
+        # never all digits: ten of them read as a phone number to the export check, which would leave the events out
+        return next((d[i:i + 10] for i in range(len(d) - 9) if not d[i:i + 10].isdigit()), d[:10])
     except OSError:
         return None
 
@@ -316,8 +318,8 @@ def automations(n=10):
     return out
 
 
-def summary(after):
-    events = read(after)
+def summary(after, events=None):
+    events = read(after) if events is None else events
     now = time.time()
     return {
         "version": version(),
@@ -366,7 +368,7 @@ def bundle(after, app_events=(), hit=None):
     hit = hit or gate()
     seen, kept, left_out = set(), [], 0
     for e in sorted([*read(after), *(x for x in app_events if isinstance(x, dict))], key=lambda e: e.get("ts", 0)):
-        key = (e.get("ts"), e.get("pid"), e.get("kind"), e.get("comp"))
+        key = json.dumps(e, sort_keys=True)
         if key in seen:  # the app's events, when it shares this machine, arrive both ways
             continue
         seen.add(key)
@@ -375,8 +377,8 @@ def bundle(after, app_events=(), hit=None):
             left_out += 1
         else:
             kept.append(c)
-    summ = summary(after)
-    summ.pop("top_errors", None)  # computed over unchecked events; errors below are over kept ones
+    summ = summary(after, kept)  # over the checked events only, the app's from a remote host included
+    summ.pop("top_errors", None)  # the same as errors below
     b = {"manifest": {"format": 1, "created": round(time.time()), "version": version(), "since": round(after),
                       "events": len(kept), "left_out": left_out},
          "summary": summ, "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
@@ -386,8 +388,8 @@ def bundle(after, app_events=(), hit=None):
     return b
 
 
-def save(b):
-    f = home() / "diag" / f"bundle-{time.strftime('%Y%m%d-%H%M%S')}.json"
+def save(b, f=None):
+    f = Path(f) if f else home() / "diag" / f"bundle-{time.strftime('%Y%m%d-%H%M%S')}.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as w:
@@ -472,8 +474,7 @@ def main(argv=None):
         if a.out == "-":
             print(json.dumps(bd, indent=1))
         elif a.out:
-            Path(a.out).write_text(json.dumps(bd, indent=1))
-            print(a.out)
+            print(save(bd, a.out))
         else:
             print(save(bd))
     elif a.cmd == "report":
@@ -484,7 +485,12 @@ def main(argv=None):
         else:
             title, app, shown = a.title, [], None
             text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
-        res = report(title, text, app if isinstance(app, list) else [], a.execute, inline=a.json, shown=shown)
+        try:
+            res = report(title, text, app if isinstance(app, list) else [], a.execute, inline=a.json, shown=shown)
+        except ImportError:  # failed closed: say why, as JSON, so the app can show it
+            res = {"ok": False, "reason": "the privacy check (audit.py) couldn't load, so nothing was exported"}
+        except SystemExit as e:
+            res = {"ok": False, "reason": str(e.code)}
         print(json.dumps(res, indent=1))
         sys.exit(0 if res["ok"] else 1)
     else:

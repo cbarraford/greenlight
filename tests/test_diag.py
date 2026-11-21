@@ -43,6 +43,8 @@ assert oct((Path(HOME) / "diag" / "salt").stat().st_mode & 0o777) == "0o600"
 (Path(HOME) / "diag" / "salt").write_bytes(b"other")
 assert diag.h("ws-1") != a
 
+assert not any(diag.h(f"ws-{i}").isdigit() for i in range(3000))  # an all-digit hash looks like a phone number on export
+
 # classify
 assert diag.classify("HTTP 429 Too Many Requests") == "rate_limit"
 assert diag.classify("glab: 401 Unauthorized") == "auth"
@@ -103,7 +105,10 @@ diag.event("probe", name="quokka")
 (Path(HOME) / "leak.re").write_text("zebracorn\nquokka\n")
 diag._leak = False
 app = [{"ts": 1e10, "kind": "js_error", "comp": "app", "name": "TypeError", "line": 3}, {"ts": 1e10, "kind": "x", "comp": "app", "to": "a@b.co"}]
+app += [{"ts": 1e10, "kind": "ssh_exit", "comp": "app", "verb": v, "rc": 2} for v in ("dash.stream", "greenlight.scan")]  # one ms
+app += app[-1:]  # and an exact repeat, as when the app shares this machine
 b = diag.bundle(0, app)
+assert sorted(e["verb"] for e in b["events"] if e["kind"] == "ssh_exit") == ["dash.stream", "greenlight.scan"], b["events"][-4:]
 text = json.dumps(b)
 assert "555-234-5678" not in text and "quokka" not in text and "a@b.co" not in text and "zebracorn" not in text, text[-800:]
 assert b["manifest"]["left_out"] == 1 and any(e.get("name") == "TypeError" for e in b["events"]), b["manifest"]
