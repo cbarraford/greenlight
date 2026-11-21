@@ -1098,11 +1098,11 @@ def kick(path, sha, spec=None, escalate=False, tag=""):
     return True
 
 
-def escalate(row, res):
+def escalate(row, res, tag=None):
     """A blocked auto-merge goes to the user, once per head: the exact contracts that failed."""
     import greenlight
     mr = row.get("mr") or {}
-    seen = state_dir() / f"{key(row['path'], mr.get('sha'), ident(row, mr))}.pinged"
+    seen = state_dir() / f"{key(row['path'], mr.get('sha'), tag if tag is not None else ident(row, mr))}.pinged"
     if not once(seen):
         return False
     try:
@@ -1292,7 +1292,13 @@ def main(argv=None):
             if origin_push_url(path, row["project"], row["forge"]) != destination:
                 print("AUDIT ERROR origin push destination changed during the audit: don't push")
                 return 4
-            code = push_audited(path, sha, source_branch, force, refs[0] if scoped else None, destination=destination)
+            expected = refs[0] if scoped else None
+            if force and not scoped:
+                expected = remote_branch_sha(path, destination, source_branch)
+                if not expected or not tracking_before or expected != tracking_before:
+                    print("AUDIT ERROR pre-PR force push needs a current local source tracking ref; fetch origin before retrying")
+                    return 4
+            code = push_audited(path, sha, source_branch, force, expected, destination=destination)
             if code == 0 and not advance_source_tracking(path, source_branch, sha, tracking_before):
                 print("push completed; local source tracking ref changed concurrently: fetch origin before the next push audit")
             if code == 0:
@@ -1399,7 +1405,7 @@ def main(argv=None):
         finally:
             (state_dir() / f"{key(row['path'], mr['sha'], tag)}.lock").unlink(missing_ok=True)
         if esc and not res["ok"]:
-            escalate(row, res)
+            escalate(row, res, tag=tag)
         print(json.dumps(res))
         return 4 if res.get("error") else 0 if res["ok"] else 3
     if args[:1] == ["publish"] and len(args) == 2:
