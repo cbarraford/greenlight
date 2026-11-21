@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blocking  # noqa: E402
+import diag  # noqa: E402
 import greenlight  # noqa: E402
 
 ME = greenlight.ME
@@ -394,6 +395,8 @@ def log(entry):
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(json.dumps({"ts": int(time.time()), **entry}) + "\n")
+    diag.event("adopt", did=str(entry.get("did") or "").replace(" ", "_"), ws_h=diag.h(entry.get("ws")), mr_h=diag.h(entry.get("mr")),
+               role=entry.get("role"), msg_class=diag.classify(str(entry["error"])) if entry.get("error") else None)
 
 
 def apply(p):
@@ -460,4 +463,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("adopt")
     main()

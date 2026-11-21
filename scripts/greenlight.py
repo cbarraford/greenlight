@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade_common  # noqa: E402
+import diag  # noqa: E402
 import decide  # noqa: E402
 import autonomy  # noqa: E402
 import decisions  # noqa: E402
@@ -111,7 +112,14 @@ OWNERS = ["me", "greenlight", "agent", "working", "ci", "reviewers", "author", "
 
 def run(cmd, timeout=120, tries=1):
     # tries > 1: retry timeouts and transient failures (GitLab blips) with short backoff
+    sub = cmd[1] if len(cmd) > 1 and re.fullmatch(r"[a-z][a-z-]{0,20}", cmd[1]) else None  # "api", "mr": never an argument
+    with diag.span("cmd", tool=Path(cmd[0]).name, sub=sub) as d:
+        return _run(cmd, timeout, tries, d)
+
+
+def _run(cmd, timeout, tries, d):
     for i in range(tries):
+        d["tries"] = i + 1
         last = i == tries - 1
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -122,6 +130,7 @@ def run(cmd, timeout=120, tries=1):
             if p.returncode == 0:
                 return p.stdout
             err = (p.stderr or p.stdout).strip()
+            d.update(rc=p.returncode, msg_class=diag.classify(err))  # the class of stderr, not the message (it has argv)
             if last or not TRANSIENT_RE.search(err):
                 raise RuntimeError(f"{' '.join(cmd)}: {err[:300]}")
         time.sleep(2 * 2 ** i)
@@ -1320,6 +1329,7 @@ def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / "ping.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        diag.event("ping", ping_kind=kind, ws_n=len(ws or ()), proactive=proactive, ask=ask)
         return _ping(text, key, ws, kind, proactive, ask)
 
 
@@ -1577,7 +1587,11 @@ def main():
         f = history_file(sys.argv[2])
         print(f.read_text() if f.exists() else "(no history)")
         return
-    res = scan(save=cmd != "precheck")
+    with diag.span("scan", op=cmd) as d:
+        res = scan(save=cmd != "precheck")
+        d["rows"] = len(res["rows"])
+        for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
+            d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None
     if cmd == "precheck":
         n = sum(r["next"]["owner"] in ("greenlight", "agent") for r in res["rows"])
         try:  # MRs with no workspace yet: adopt.py creates them, so a run should follow
@@ -1603,4 +1617,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("greenlight")
     main()

@@ -80,6 +80,13 @@ Log every mutation as one line: `echo '{"ts":<epoch>,"ws":"<name>","mr":"<!N>","
 
 Reply in 5–10 lines: the report link, counts per owner, what you did (adopted / merged / dispatched / deleted / backfilled), and what needs the user, as clickable MR links.
 
+## Troubleshooting
+
+When greenlight itself misbehaves (a scan or automation failing, the app erroring), run
+`python3 ~/.claude/skills/greenlight/scripts/diag.py summary` and `… diag.py errors --since 24h` before reading code.
+Events are structured and hashed, never text: ask the user for names when you need them. `AGENTS.md` has the field guide
+and the privacy rules.
+
 ## Automations
 
 There are two kinds, and "my automations" means both. Managing them is orchestration, so you do it yourself (no agent needed).

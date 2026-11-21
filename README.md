@@ -96,11 +96,21 @@ Support differs by harness:
 
 A model can only add to what the patterns find: it can add a hold or a draft but never remove one, and it parks a workspace only at P ≥ 0.85. `decide.py test` asks each configured model a question with a known answer.
 
+## Diagnostics & privacy
+
+Greenlight keeps a local diagnostic trail so an AI can troubleshoot it: `scripts/diag.py summary | errors | tail` (JSON).
+It records structured events only (which command ran, how long it took, its exit code, the exception type and a class
+such as `auth` or `timeout`, the code location, the app's menu and button commands) in `~/.greenlight/diag/events.jsonl` and
+`~/Library/Logs/Greenlight/app.jsonl`, each capped at 5 MB × 4. It never records message text, titles, goals, argv,
+stderr, paths, hosts, or workspace, branch and MR names: those appear only as salted hashes, and the salt never leaves
+`~/.greenlight/diag/salt`. Nothing is uploaded. Delete it any time with `rm -r ~/.greenlight/diag ~/Library/Logs/Greenlight`.
+
 ## Layout
 
 | path | what |
 |---|---|
 | `SKILL.md` | the skill: how Claude Code runs Greenlight |
+| `AGENTS.md` | notes for coding agents (Codex, agy; `CLAUDE.md` and `GEMINI.md` point at it): the diagnostic trail and its privacy rules |
 | `scripts/greenlight.py` | scan, next step per workspace, report, pings |
 | `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
 | `scripts/lifestage.py` | where each change is in its lifecycle (stage and sub-stage), who holds it, the suggested move |
@@ -112,6 +122,7 @@ A model can only add to what the patterns find: it can add a hold or a draft but
 | `scripts/ws_state.py` | per-workspace state cards (`~/.greenlight/state/<ws>.json`) carried into every dispatch and failover, and the top-K retrieval the chat uses instead of the whole board |
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
+| `scripts/diag.py` | the diagnostic trail: structured, hashed events and the `summary`/`errors`/`tail` queries (see `AGENTS.md`) |
 | `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
 | `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
 | `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |

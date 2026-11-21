@@ -1014,6 +1014,12 @@ test("All output: another session is labelled from the first paint; a new sessio
   assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
 });
 
+test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
+  await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
+  await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));
+  page._errs.splice(0);  // the rejection is the point
+});
+
 (async () => {
   const browser = await chromium.launch({executablePath: browserPath()});
   let failed = 0;

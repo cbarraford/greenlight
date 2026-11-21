@@ -293,6 +293,64 @@ final class RulesStore: ObservableObject {
     func deleteNote() { let n = note; call("memory-delete", n) { self.gotNotes($0); self.status = "Deleted \(n)." } }
 }
 
+// MARK: diag
+
+/// The app's half of scripts/diag.py's trail (~/Library/Logs/Greenlight/app.jsonl, which diag.py reads when it's on
+/// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
+enum Diag {
+    static let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl")
+    static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
+    static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    static let q = DispatchQueue(label: "greenlight.diag")
+    static func event(_ kind: String, _ f: [String: Any] = [:]) {
+        var e: [String: Any] = ["ts": (Date().timeIntervalSince1970 * 1000).rounded() / 1000, "v": v, "comp": "app", "run": run,
+                                "pid": Int(getpid()), "kind": kind]
+        var dropped = 0
+        for (k, x) in f {
+            if let s = x as? String { if s.range(of: #"^[A-Za-z0-9_.:+-]{1,64}$"#, options: .regularExpression) != nil { e[k] = s } else { dropped += 1 } }
+            else if let n = x as? NSNumber { e[k] = n } else if !(x is NSNull) { dropped += 1 }
+        }
+        if dropped > 0 { e["dropped"] = dropped }
+        let rec = e
+        q.async {
+            guard var d = try? JSONSerialization.data(withJSONObject: rec) else { return }
+            d.append(10)
+            let fm = FileManager.default, path = url.path
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let n = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, n > 5 << 20 {  // ponytail: size rotation, like diag.py
+                for i in stride(from: 2, through: 1, by: -1) { try? fm.removeItem(atPath: "\(path).\(i + 1)"); try? fm.moveItem(atPath: "\(path).\(i)", toPath: "\(path).\(i + 1)") }
+                try? fm.moveItem(atPath: path, toPath: "\(path).1")
+            }
+            let fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+            guard fd >= 0 else { return }
+            _ = d.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            close(fd)
+        }
+    }
+    /// stderr's class (diag.py's names where they match), never its text.
+    static func classify(_ s: String) -> String {
+        for (re, c) in [("Permission denied|publickey|Host key verification", "auth"), ("timed out|Timeout", "timeout"),
+                        ("Could not resolve|Connection refused|No route to host|Network is unreachable|Connection reset|closed by remote", "network"),
+                        ("command not found|No such file", "not_found"), ("rate limit|429", "rate_limit"), ("Traceback", "traceback")]
+        where s.range(of: re, options: [.regularExpression, .caseInsensitive]) != nil { return c }
+        return s.isEmpty ? "none" : "other"
+    }
+    /// "dash.task" for "…/dash.py task …": which backend call, not its arguments.
+    static func verb(_ remote: String) -> String {
+        guard let r = remote.range(of: #"(\w+)\.py( [a-z][\w-]{0,20})?"#, options: .regularExpression) else { return "shell" }
+        return remote[r].replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
+    }
+    /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
+    static let marker = NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")"  // per app: dev copies relaunch on their own
+    static func launched(host: String) {
+        if FileManager.default.fileExists(atPath: marker) { event("prev_crash") }
+        try? FileManager.default.createDirectory(atPath: (marker as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: marker, contents: Data(v.utf8))
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        event("app_start", ["macos": "\(os.majorVersion).\(os.minorVersion)", "host_kind": host.isEmpty || host == "local" ? "local" : "remote"])
+    }
+}
+
 // MARK: ssh
 
 /// Runs <remote> where greenlight lives (remoteArgv), calling onLine (main thread) per stdout line and onExit when it ends.
@@ -306,9 +364,16 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     let inPipe = Pipe(), out = Pipe()
     p.standardInput = inPipe
     p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
     final class Buf { var s = Data() }
-    let buf = Buf()
+    let buf = Buf(), err = Pipe(), tail = Buf(), t0 = Date()
+    // stderr's last 4 KB, in memory only: classified into the diag trail, never written
+    p.standardError = err
+    err.fileHandleForReading.readabilityHandler = { h in
+        let d = h.availableData
+        if d.isEmpty { return }
+        tail.s.append(d)
+        if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
+    }
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
         if d.isEmpty { return }
@@ -321,13 +386,24 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     }
     p.terminationHandler = { p in
         out.fileHandleForReading.readabilityHandler = nil
+        err.fileHandleForReading.readabilityHandler = nil
+        let rc = p.terminationStatus
+        if rc != 0 {  // a fast failure's stderr may not have been read yet: drain it, but never wait long on a pipe a daemon kept
+            let sem = DispatchSemaphore(value: 0), drained = Buf()
+            DispatchQueue.global().async { drained.s = err.fileHandleForReading.readDataToEndOfFile(); sem.signal() }
+            let more = sem.wait(timeout: .now() + 0.3) == .success ? drained.s : Data()  // ponytail: a held pipe leaks that one reader thread
+            Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": Int(rc), "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
+                                    "msg_class": Diag.classify(String(decoding: (tail.s + more).suffix(4096), as: UTF8.self))])
+        } else {
+            Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
+        }
         let rest = out.fileHandleForReading.readDataToEndOfFile()
         DispatchQueue.main.async {
             for l in String(decoding: buf.s + rest, as: UTF8.self).split(separator: "\n") { onLine(String(l)) }
             onExit(p.terminationStatus)
         }
     }
-    do { try p.run() } catch { DispatchQueue.main.async { onExit(-1) }; return p }
+    do { try p.run() } catch { Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": -1, "msg_class": "spawn"]); DispatchQueue.main.async { onExit(-1) }; return p }
     let w = inPipe.fileHandleForWriting, d = Data(stdin.utf8)
     // off the main thread: a pipe holds 16 KB, and ssh reads stdin only once it's connected (attached files are MBs).
     // The throwing write: a dead ssh's EPIPE isn't a crash
@@ -2068,7 +2144,7 @@ final class Voice: NSObject, ObservableObject {
         }
     }
 
-    func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
+    func toggle() { Diag.event("voice", ["on": !(on || starting)]); on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
     @Published var starting = false  // a start (and its retries) under way: the voice button shows it, and a press cancels it
     var startGen = 0  // stopAll() bumps it, which ends a start still under way
     var staleEngine = false  // its restart failed: the next start begins on a new engine
@@ -7230,6 +7306,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if greenlight.engine == "openai" { DispatchQueue.global().async { _ = openAIKey() } }  // the login shell it may run, before dictation waits on it (voice mode: Speech.warm)
         Speech.shared.warm()
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
+        Diag.launched(host: host)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.imagePosition = .imageLeading
         item.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -7611,7 +7688,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if from === web(showing: "hex") { greenlight.attached = [] }  // a reloaded hive starts with an empty dock
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
-        if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
+        if cmd == "error" {
+            NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
+            Diag.event("js_error", ["page": "dashboard", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
+        } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "unpick" { if let l { l.c.light([], false) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
@@ -8260,6 +8340,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
         let session = (b["session"] as? String).flatMap { $0.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil }
+        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "error", "localName", "trees"].contains(c) {
+            Diag.event("action", ["cmd": c, "page": "terminal"])  // the command, never its payload; keystrokes and resizes aren't actions
+        }
         switch b["cmd"] as? String {
         case "ready":
             for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop() }  // a (re)loaded page starts with no tabs: detach, restore reattaches
@@ -8407,7 +8490,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
                 NSWorkspace.shared.open(u)
             }
-        case "error": NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
+        case "error":
+            NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
+            Diag.event("js_error", ["page": "terminal", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
         default: break
         }
     }
@@ -8438,6 +8523,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     @objc func appGoUp() { if !upstairs { ride(up: true) } else { show() } }
     func ride(up: Bool) {
         guard !riding, up != upstairs else { return }
+        Diag.event("floor", ["to": up ? "upstairs" : "basement"])
         let from = orbHost, to = up ? window : termWindow
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
@@ -8771,7 +8857,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
-    func applicationWillTerminate(_ n: Notification) { tunnels.values.forEach { $0.terminate() }; Speech.shared.stop() }  // port tunnels die with the app
+    func applicationWillTerminate(_ n: Notification) {
+        tunnels.values.forEach { $0.terminate() }; Speech.shared.stop()  // port tunnels die with the app
+        try? FileManager.default.removeItem(atPath: Diag.marker)  // a clean quit: no prev_crash next launch
+    }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.

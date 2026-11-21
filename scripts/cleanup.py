@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blocking  # noqa: E402
+import diag  # noqa: E402
 import greenlight  # noqa: E402
 
 ACTIVE_MINUTES = 30
@@ -295,6 +296,8 @@ def log(entry):
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(json.dumps({"ts": int(time.time()), **entry}) + "\n")
+    diag.event("cleanup", ws_h=diag.h(entry.get("name")), ok=entry.get("removed"),  # not reason: it's text with names in it
+               msg_class=diag.classify(str(entry["error"])) if entry.get("error") else None)
 
 
 def main():
@@ -339,4 +342,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("cleanup")
     main()
