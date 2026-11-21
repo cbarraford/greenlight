@@ -38,6 +38,7 @@ and codex's own sandbox blocks the network). It is a gate on the obvious paths, 
 """
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -153,9 +154,10 @@ class Verdict:
 class Ctx:
     """Where the call runs: the worktree, its branch and default branch, the remotes (read lazily, git only when needed)."""
 
-    def __init__(self, cwd, unknown=False):
+    def __init__(self, cwd, unknown=False, source_root=None):
         self.cwd = Path(os.path.realpath(cwd or os.getcwd()))
         self.unknown = unknown  # after a `cd` this can't follow: relative paths could be anywhere
+        self.source_root = source_root
         self._git = {}
 
     def git(self, *args):
@@ -404,9 +406,10 @@ def check_shell(script, ctx, depth=0):
         if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
             to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
             if to is None or to == "-" or "$" in to or "`" in to:
-                ctx = Ctx(ctx.cwd, unknown=True)
+                ctx = Ctx(ctx.cwd, unknown=True, source_root=ctx.source_root or ctx.root)
             else:
-                ctx = Ctx(ctx.path(to), unknown=ctx.unknown and not os.path.isabs(os.path.expanduser(to)))
+                ctx = Ctx(ctx.path(to), unknown=ctx.unknown and not os.path.isabs(os.path.expanduser(to)),
+                          source_root=ctx.source_root or ctx.root)
             continue
         if argv:
             v.merge(check_argv(argv, ctx, depth, piped_from=i > 0 and cmds[i - 1]))
@@ -442,6 +445,11 @@ def check_argv(argv, ctx, depth, piped_from=None):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
         if len(rest) >= 2 and rest[0] == "worktree" and rest[1] in ("rm", "remove", "delete"):
             v.add("medium", "removes a workspace")
+        if cmd in ("orca", "orca-ide") and "terminal" in args:
+            for flag in ("--text", "--command"):
+                payload = opt(args, flag)
+                if payload:
+                    v.merge(check_shell(payload, ctx, depth + 1))
         return v
     if cmd in SHELLS or cmd == "eval":
         if cmd == "eval":
@@ -457,6 +465,12 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 v.merge(check_code(args[args.index(flag) + 1], cmd))
         if piped_from and not any(a.endswith((".py", ".js", ".rb", ".pl", ".ts")) for a in args) and "-m" not in args:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
+        if cmd in ("perl", "ruby") and any(re.fullmatch(r"-\w*i\w*|--in-place.*", a) for a in args):
+            for a in args:
+                if a.startswith("-") or a == opt(args, "-e"):
+                    continue
+                if GUARD_PATH_RE.search(str(ctx.path(a))):
+                    v.merge(check_write(ctx.path(a), ctx, f"{cmd} in-place", raw=a))
         return v
     if cmd == "git":
         return check_git(args, ctx)
@@ -546,9 +560,10 @@ READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "ag", "jq", "wc"
 def check_git(args, ctx):
     v = Verdict()
     a = list(args)
+    source_root = ctx.source_root or ctx.root
     while a and a[0].startswith("-"):  # git -C dir -c k=v ...
         if a[0] == "-C" and len(a) > 1:
-            ctx = Ctx(ctx.path(a[1]))
+            ctx = Ctx(ctx.path(a[1]), source_root=source_root)
             a = a[2:]
         elif a[0] in ("-c", "--git-dir", "--work-tree", "--namespace") and len(a) > 1:
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
@@ -560,6 +575,8 @@ def check_git(args, ctx):
         return v
     sub, rest = a[0], a[1:]
     if sub == "push":
+        if source_root and ctx.root != source_root:
+            v.add("high", "pushes from a different workspace", "egress")
         return check_push(rest, ctx, v)
     if sub == "remote" and rest[:1] and rest[0] in ("add", "set-url"):
         v.add("medium", f"git remote {rest[0]}: a new place to push to", "egress")
@@ -575,7 +592,9 @@ def check_git(args, ctx):
         v.add("medium", "git reset --hard drops uncommitted work")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
-    elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest) or sub == "stash" and rest[:1] and rest[0] in ("drop", "clear"):
+    elif sub == "stash" and rest[:1] == ["clear"]:
+        v.add("medium", "git stash clear discards every stash")
+    elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest) or sub == "stash" and rest[:1] == ["drop"]:
         v.add("low", f"git {sub} deletes work")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("medium", "removes a git worktree")
@@ -618,6 +637,41 @@ def check_push(rest, ctx, v):
             v.add("medium", f"force-pushes {dst}", "egress")
         else:
             v.add("low", f"pushes {dst}", "egress")
+    if v.tier in ("low", "medium"):
+        sources = [r.lstrip("+").split(":", 1)[0] for r in pos[1:]]
+        if any(src not in ("HEAD", ctx.branch, f"refs/heads/{ctx.branch}") for src in sources):
+            v.add("high", "cannot inspect a push of a different source ref", "egress")
+        else:
+            v.merge(check_outgoing_commits(ctx, remote))
+    return v
+
+
+def check_outgoing_commits(ctx, remote):
+    """Inspect commits that a normal push of the current branch would send."""
+    v = Verdict()
+    branch = ctx.branch
+    base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{branch}")
+    if not base:
+        base = next((ctx.git("merge-base", "HEAD", f"refs/remotes/{remote}/{d}") for d in ctx.default
+                     if ctx.git("merge-base", "HEAD", f"refs/remotes/{remote}/{d}")), "")
+    if not base:
+        v.add("high", "cannot inspect the commits this push would send", "egress")
+        return v
+    try:
+        count = int(ctx.git("rev-list", "--count", f"{base}..HEAD"))
+        if count > 100:
+            raise ValueError("too many commits")
+        patch = subprocess.run(["git", "-C", str(ctx.cwd), "log", "--no-ext-diff", "-p", "--binary", "--format=",
+                                f"{base}..HEAD"], capture_output=True, text=True, timeout=3, check=True).stdout
+        if len(patch) > 5_000_000:
+            raise ValueError("too much patch data")
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
+        v.add("high", "cannot fully inspect the commits this push would send", "egress")
+        return v
+    if leak := leaks(patch):
+        v.add("deny", f"pushes a commit that {leak}", "secret", "egress")
+    elif any(SECRET_PATH_RE.search(line) for line in patch.splitlines() if line.startswith("diff --git ")):
+        v.add("deny", "pushes a credential file", "secret", "egress")
     return v
 
 
@@ -714,15 +768,27 @@ def check_net(cmd, args, ctx):
     v = Verdict()
     urls = [a for a in args if re.match(r"(?i)[a-z][a-z0-9+.-]*://", a) or (not a.startswith("-") and re.match(r"[\w.-]+\.[a-z]{2,}(?:[:/]|$)", a))]
     hosts = {host_of(u) for u in urls}
+    output = opt(args, "-o", "--output", "--output-document", "-P", "--directory-prefix")
+    output = output or next((a[2:] for a in args if a.startswith("-o") and len(a) > 2), None)
+    if output:
+        v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
     if hosts and hosts <= LOCAL_HOSTS:
         return v
-    data = [a for a in args if re.match(r"--data|-d$|-F$|--form|--json|-T$|--upload-file|--post-|--body-|--method", a)]
+    data = [a for a in args if re.match(r"--data|-d(?:$|@)|-F$|--form|--json|-T$|--upload-file|--post-|--body-|--method", a)]
     method = (opt(args, "-X", "--request", "--method") or "").upper()
     full = " ".join(args)
     for i, a in enumerate(args):
-        if a.startswith("@") or (i and args[i - 1] in ("-d", "-F", "--data", "--data-binary", "--data-raw", "--form", "-T", "--upload-file")
-                                 and ("@" in a or args[i - 1] in ("-T", "--upload-file"))):
-            path = a.split("@", 1)[-1].split(";")[0] if "@" in a else a
+        source = None
+        if a in ("-d", "-F", "--data", "--data-binary", "--data-urlencode", "--form", "-T", "--upload-file") and i + 1 < len(args):
+            source = args[i + 1]
+        elif a.startswith(("--data=", "--data-binary=", "--data-urlencode=", "--form=", "--upload-file=")):
+            source = a.split("=", 1)[1]
+        elif a.startswith(("-d@", "-F", "-T")) and len(a) > 2:
+            source = a[2:]
+        elif a.startswith("@"):
+            source = a
+        if source and ("@" in source or a in ("-T", "--upload-file")):
+            path = source.split("@", 1)[-1].split(";")[0] if "@" in source else source
             if path != "-" and SECRET_PATH_RE.search(str(ctx.path(path))):
                 v.add("deny", f"uploads a credential file ({path})", "secret", "egress")
     if leak := leaks(full):
@@ -879,6 +945,8 @@ def system_one(question, context, budget_ms):
     try:
         r = {"value": bool(r.get("value")), "prob": float(r.get("prob", 0.5)), "provider": str(r.get("provider") or "local"), **(
             {"error": r["error"]} if r.get("error") else {})}
+        if not math.isfinite(r["prob"]) or not 0 <= r["prob"] <= 1 or r["value"] != (r["prob"] > 0.5):
+            raise ValueError("inconsistent probability")
     except (AttributeError, TypeError, ValueError):
         r = {"value": False, "prob": 0.5, "provider": "local", "error": "bad answer"}
     return r, ms
@@ -1022,12 +1090,13 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     verdict, why, s1, s1_ms = judge(v, action, ctx, conf)
     ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": v.why, "s1": s1, "s1_ms": s1_ms,
           "session": session}
-    digest = hashlib.sha256(f"{session}\0{tool}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
+    scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}"
+    digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
     if verdict == "pause" and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
     if verdict == "pause":
         how = "ping" if not interactive_ok and mode(conf) == "ask" else mode(conf)
-        token = hashlib.sha256(f"{tool}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:10]
+        token = hashlib.sha256(f"{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:10]
         if how == "chat":
             if consented(token):
                 verdict, why = "allow", f"{why}; you allowed it in the chat"
