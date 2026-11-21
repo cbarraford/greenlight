@@ -531,7 +531,7 @@ def check_shell(script, ctx, depth=0):
             part = check_argv(argv, ctx, depth, piped_from=piped)
             parts.append(part)
             v.merge(part)
-    pure_separate_get = len(parts) > 1 and not any(piped for _, _, _, piped in cmds) and not substitutions(body) and all(
+    pure_separate_get = len(parts) > 1 and not any(piped for _, _, _, piped in cmds) and not substitutions(body) and not secret_vars(live) and all(
         "egress" not in part.flags or part.tier == "low" and "secret" not in part.flags for part in parts)
     if "secret" in v.flags and "egress" in v.flags and not pure_separate_get:
         v.add("deny", "reads a secret and sends data off the machine in one command")
@@ -870,6 +870,8 @@ def check_push(rest, ctx, v):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
     if any(f in ("--mirror", "--all", "--tags", "--prune") for f in flags):
         v.add("high", "pushes every branch or tag, or deletes remote ones", "egress")
+    if any(f in ("-o", "--push-option") or f.startswith(("-o", "--push-option=")) for f in flags):
+        v.add("high", "git push option can change merge request behavior", "egress")
     if "--follow-tags" in flags or "--tags" in flags or ctx.git("config", "--bool", "--get", "push.followTags") == "true":
         v.add("high", "pushes tag objects that need inspection", "egress")
         v.merge(check_tag_objects(ctx))
@@ -1031,6 +1033,9 @@ def check_forge(cmd, args, ctx):
     repo_env = os.environ.get("GH_REPO" if cmd == "gh" else "GLAB_REPO", "")
     if repo_env and not own_repo(repo_env, ctx) and verb not in FORGE_READ:
         v.add("high", f"{cmd} repository differs from this workspace's repo", "egress")
+    selected_host = opt(a, "--hostname")
+    if selected_host and host_of(selected_host) != origin_host and verb not in FORGE_READ:
+        v.add("high", f"{cmd} --hostname differs from this workspace's origin", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr", "issue") else []),
@@ -1156,6 +1161,9 @@ def check_net(cmd, args, ctx):
         v.add("high", f"{cmd} can route through a different network destination", "egress")
     if "--expand-url" in args:
         v.add("high", f"{cmd} expands a URL after the guard inspects it", "egress")
+    if cmd == "curl" and ("--location" in args or "--location-trusted" in args or
+                           any(re.fullmatch(r"-[A-Za-z]*L[A-Za-z]*", a) for a in args)):
+        v.add("high", "curl may follow a redirect to another host", "egress")
     if "--location-trusted" in args and any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args):
         v.add("deny", f"{cmd} can forward authentication to a redirected host", "secret", "egress")
     user = opt(args, "-u", "--user") or next((a[2:] for a in args if a.startswith("-u") and len(a) > 2), None)
@@ -1212,6 +1220,10 @@ def check_net(cmd, args, ctx):
         for source in re.findall(r"@([^\s\"']+)", config_text):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if cmd == "wget":
+        input_file = opt(args, "-i", "--input-file") or next((a[2:] for a in args if a.startswith("-i") and len(a) > 2), None)
+        if input_file:
+            v.merge(check_upload_file(input_file, ctx, "wget URL list"))
+            v.add("high", "wget reads network destinations from a file", "egress")
         for flag in ("--post-file", "--body-file"):
             source = opt(args, flag)
             if source:
