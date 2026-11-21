@@ -1000,7 +1000,7 @@ function delDialog(o){
   const y = $("dlg").querySelector("button.pri"); y.className = "danger"; $("dlg").querySelector(".btns button:not(.danger)")?.focus();
 }
 async function treeDone(o){
-  if (o.op === "merge") return mergeDone(o);
+  if (o.op === "merge" || o.op === "auto-merge") return mergeDone(o);
   if (o.op === "ready") return readyDone(o);
   if (o.op === "signoff") return signoffDone(o);
   if (o.op === "diff") return diffShow(o);
@@ -2120,7 +2120,7 @@ function autoRun(){
     const key = x => `${w.path}|${x.kind}|${x.sha}`, x = mv.find(x => x.auto && !autoDone.includes(key(x)));  // the most urgent not yet tried on this head
     if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working") continue;
     autoDone = [...autoDone, key(x)].slice(-300); save();
-    if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "merge", path: w.path}); continue }
+    if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "auto-merge", path: w.path}); continue }
     const was = cur; newTab(w.path, "claude " + ansi(x.auto));
     Object.assign(cur, {name: `${AUTO_NAME[x.kind](x)} · ${w.mr?.ref || wsName(w.path)}`, manual: true, auto: {kind: x.kind, sha: x.sha}});
     if (was) show(was); else render();

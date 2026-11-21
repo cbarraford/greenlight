@@ -199,21 +199,32 @@ def moves(r, blk=None):
     return out
 
 
-def tree_merge(path):
+def tree_merge(path, automatic=False):
     """The card's Merge: greenlight's own merge cmd for this workspace's MR, pinned to the head greenlight saw, so a push since
     can't land unseen. The forge still checks everything else; its refusal comes back verbatim."""
     rows = {r["path"]: r for r in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}
     r = rows.get(path) or {}
     m = next((x for x in moves(r) if x["kind"] == "merge"), None) if r else None
-    if not m or not r["mr"].get("sha"):
+    if not m or not r["mr"].get("sha") or automatic and not m.get("auto"):
         return {"error": "greenlight doesn't say this can merge now"}
     cmd = r["next"]["cmd"]
     # The card is a human Merge click even when an unattended auto action is
     # also available. Keep the source-head pin, but leave semantic target
     # gating on greenlight's separate automatic checked-merge command.
     manual = cmd[9:] if cmd[2:3] == ["checked-merge"] else cmd
-    pin = "--match-head-commit" if manual[0] == "gh" else "--sha"
-    guarded = manual if manual[-2:] == [pin, r["mr"]["sha"]] else manual + [pin, r["mr"]["sha"]]
+    if automatic:
+        mr = r["mr"]
+        if not all((r.get("project"), r.get("forge"), mr.get("iid"), mr.get("target_branch"))):
+            return {"error": "automatic merge needs a scoped PR"}
+        v = audit.cached(path, mr["sha"], audit.ident(r, mr))
+        if not audit.fresh(v) or not v.get("ok") or not v.get("target_oid") or \
+           not audit.same_target(v, r["project"], mr["iid"], r["forge"], mr["sha"], mr["target_branch"]):
+            return {"error": "the semantic merge audit is no longer current"}
+        guarded = [sys.executable, str(audit.HERE / "audit.py"), "checked-merge", r["forge"], r["project"], str(mr["iid"]),
+                   mr["target_branch"], mr["sha"], v["target_oid"], *manual]
+    else:
+        pin = "--match-head-commit" if manual[0] == "gh" else "--sha"
+        guarded = manual if manual[-2:] == [pin, r["mr"]["sha"]] else manual + [pin, r["mr"]["sha"]]
     greenlight.run(guarded, timeout=90)
     # ponytail: mark it merged in the snapshot so the card stops offering it; greenlight's next scan rewrites the row anyway
     post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
@@ -1566,10 +1577,10 @@ def main():
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
         print(json.dumps({"trees": trees()}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "auto-merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]
-            out = tree_info(arg) if op == "info" else tree_merge(arg) if op == "merge" else tree_ready(arg) if op == "ready" else tree_signoff(arg) if op == "signoff" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
+            out = tree_info(arg) if op == "info" else tree_merge(arg, automatic=op == "auto-merge") if op in ("merge", "auto-merge") else tree_ready(arg) if op == "ready" else tree_signoff(arg) if op == "signoff" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
                 else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:

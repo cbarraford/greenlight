@@ -433,13 +433,20 @@ assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
 _auto_row = {**mine, "forge": "gitlab", "mr": {**mine["mr"], **_clean, "iid": 58},
              "next": {**mine["next"], "cmd": [sys.executable, "audit.py", "checked-merge", "gitlab", mine["project"], "58", "main", "abc123", "base1", *mine["next"]["cmd"]]}}
-_lj.write_text(json.dumps({"ts": 1, "rows": [_auto_row]}))
 dash.audit.save("/w/b", "abc123", {"ok": True, "failed": [], "target_oid": "base1"}, dash.audit.ident(_auto_row, _auto_row["mr"]))
+_pending_auto = {**_auto_row, "next": {**_auto_row["next"], "cmd": mine["next"]["cmd"]}}
+_lj.write_text(json.dumps({"ts": 1, "rows": [_pending_auto]}))
+with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]), \
+     mock.patch.object(dash.audit, "same_target", return_value=True):
+    assert dash.tree_merge("/w/b", automatic=True)["ok"]
+assert _ran[-1][2:9] == ["checked-merge", "gitlab", mine["project"], "58", "main", "abc123", "base1"]
+assert _ran[-1][9:] == mine["next"]["cmd"]  # pending snapshot cannot bypass auto guard
+_lj.write_text(json.dumps({"ts": 1, "rows": [_auto_row]}))
 with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]):
     assert dash.tree_merge("/w/b")["ok"]
 assert _ran[-1] == mine["next"]["cmd"] + ["--sha", "abc123"], _ran[-1]  # a human click ignores the auto audit receipt
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
-assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 3
+assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 4
 # Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off
 import tempfile
 _wt = tempfile.mkdtemp()
@@ -448,14 +455,14 @@ _wt = tempfile.mkdtemp()
 _dep = {"path": _wt, "project": "acme/dep", "mr": {"state": "merged", "ref": "!9"}, "next": {"step": "deploy", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/dep", "9", "deploy"]}}
 assert dash.moves(_dep) == [{"kind": "signoff", "step": "deploy", "run": "echo hi > ran.txt"}]
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dep]}))
-assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 4
+assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 5
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
-assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 4 and dash.tree_signoff("/w/x")["error"]
+assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 5 and dash.tree_signoff("/w/x")["error"]
 # a row scanned before greenlight.md dropped deploy: no Deploy button, and a click signs nothing off
 _stale = {**_dep, "project": "cbarraford/greenlight", "next": {**_dep["next"], "cmd": ["python3", "greenlight.py", "signoff", "cbarraford/greenlight", "9", "deploy"]}}
 assert dash.moves(_stale) == []
 _lj.write_text(json.dumps({"ts": 1, "rows": [_stale]}))
-assert "doesn't say" in dash.tree_signoff(_wt)["error"] and len(_ran) == 4
+assert "doesn't say" in dash.tree_signoff(_wt)["error"] and len(_ran) == 5
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "deploy", "done": "signoff"}, {"key": "merge"}]}))
 assert dash.moves(_dep) == []  # a step moved before the merge isn't asked after it either
 # the chat's board: unfinished workspaces, yours first, finished ones counted
