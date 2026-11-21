@@ -398,6 +398,8 @@ def commands(script):
         if want:
             if not re.fullmatch(r"&\d*|\d+", t):  # 2>&1, >&2
                 (redir if want == "write" else inputs if want == "read" else []).append(t)
+                if want == "herestring":
+                    inputs.append("<<<" + t)
             want = None
         elif t in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "&>|"):
             want = "write" if t != "<&" else "skip"
@@ -406,7 +408,7 @@ def commands(script):
                 out.append((argv, redir, inputs, piped))
             argv, redir, inputs, piped = [], [], [], t == "|"
         elif t in ("<", "<<", "<<<", "<<-"):
-            want = "read" if t == "<" else "skip"
+            want = "read" if t == "<" else "herestring" if t == "<<<" else "skip"
         else:
             argv.append(t)
     if argv:
@@ -482,15 +484,20 @@ def check_shell(script, ctx, depth=0):
         if NET_CODE_RE.search(body) or re.search(r"\b(?:rm|git\s+push|gh|glab)\b", body):
             v.add("high", "unparseable and names a network or destructive tool")
         return v
+    parts = []
     for argv, redir, inputs, piped in cmds:
         if any(os.path.basename(x) == "env" for x in argv) and any(x in ("-S", "--split-string") or x.startswith("--split-string=") for x in argv):
             v.add("high", "env split-string runs a command the guard cannot safely parse")
         for r in redir:
             v.merge(check_write(ctx.path(r), ctx, "redirect", raw=r))
         for r in inputs:
+            if r.startswith("<<<"):
+                continue
             if SECRET_PATH_RE.search(str(ctx.path(r))):
                 v.add("high", f"reads a credential file through input redirection ({r})", "secret")
         for item in argv:
+            if item.startswith("GIT_CONFIG_"):
+                v.add("high", "command-local Git configuration may change a push target", "egress")
             if item.startswith(("GH_REPO=", "GLAB_REPO=")) and not own_repo(item.split("=", 1)[1], ctx):
                 v.add("high", "forge variable selects another repository", "egress")
             if item.startswith(("GH_HOST=", "GITLAB_HOST=")) and host_of(item.split("=", 1)[1]) != host_of(ctx.git("remote", "get-url", "origin")):
@@ -498,6 +505,13 @@ def check_shell(script, ctx, depth=0):
         if piped and any(os.path.basename(item) == "xargs" for item in argv):
             v.add("high", "xargs runs a command with file paths from a pipe")
         argv = unwrap(argv)
+        if argv:
+            name = os.path.basename(argv[0])
+            for r in inputs:
+                if r.startswith("<<<") and name in SHELLS:
+                    v.merge(check_shell(r[3:], ctx, depth + 1))
+                elif r.startswith("<<<") and name.rstrip("0123456789.") in INTERPS:
+                    v.merge(check_code(r[3:], name, ctx, depth + 1))
         if argv and argv[0] in ("if", "then", "fi", "for", "do", "done", "while", "until", "case", "esac"):
             v.add("high", "shell control syntax contains commands this parser cannot isolate")
             continue
@@ -510,8 +524,12 @@ def check_shell(script, ctx, depth=0):
                           source_root=ctx.source_root or ctx.root)
             continue
         if argv:
-            v.merge(check_argv(argv, ctx, depth, piped_from=piped))
-    if "secret" in v.flags and "egress" in v.flags:
+            part = check_argv(argv, ctx, depth, piped_from=piped)
+            parts.append(part)
+            v.merge(part)
+    pure_separate_get = len(parts) > 1 and not any(piped for _, _, _, piped in cmds) and not substitutions(body) and all(
+        "egress" not in part.flags or part.tier == "low" and "secret" not in part.flags for part in parts)
+    if "secret" in v.flags and "egress" in v.flags and not pure_separate_get:
         v.add("deny", "reads a secret and sends data off the machine in one command")
     return v
 
@@ -587,6 +605,9 @@ def check_argv(argv, ctx, depth, piped_from=None):
         for flag in ("-c", "-e", "--eval", "-r"):
             if flag in args and args.index(flag) + 1 < len(args):
                 v.merge(check_code(args[args.index(flag) + 1], cmd, ctx, depth + 1))
+        for arg in args:
+            if re.match(r"^-[cer].+", arg) and arg not in ("-c", "-e", "-r"):
+                v.merge(check_code(arg[2:], cmd, ctx, depth + 1))
         if piped_from and not any(a.endswith((".py", ".js", ".rb", ".pl", ".ts")) for a in args) and "-m" not in args:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         if cmd in ("perl", "ruby") and any(re.fullmatch(r"-\w*i\w*|--in-place.*", a) for a in args):
@@ -643,11 +664,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
             roots.append(a)
         if "-delete" in args or re.search(r"\brm\b", " ".join(args)):
             for r in roots or ["."]:  # a root in the worktree only bounds what it deletes, inside it
-                p = ctx.path(r)
-                if ctx.root and p == ctx.root:
-                    v.add("high", "find may delete the worktree root and its .git data")
-                elif not (ctx.root and ctx.inside(p)):
-                    v.merge(check_rm(["-r", r], ctx))
+                v.merge(check_rm(["-r", r], ctx))
         for flag in ("-exec", "-execdir", "-ok"):
             if flag in args:
                 payload = args[args.index(flag) + 1:]
@@ -745,6 +762,9 @@ def check_git(args, ctx):
         return v
     sub, rest = a[0], a[1:]
     if sub == "push":
+        if any(k.startswith("GIT_CONFIG_KEY_") and re.match(r"(?i)(remote\.|branch\.|push\.|url\.)", value)
+               for k, value in os.environ.items()):
+            v.add("high", "inherited Git configuration may change the push target", "egress")
         if push_override and ("--force" in rest or "-f" in rest or any(x.startswith("--force-with-lease") for x in rest)):
             v.add("deny", "force push with command-local routing could update the default branch", "egress")
         if ctx.unknown:
@@ -1100,6 +1120,8 @@ def check_net(cmd, args, ctx):
         v.add("high", f"{cmd} can route through a different network destination", "egress")
     if "--expand-url" in args:
         v.add("high", f"{cmd} expands a URL after the guard inspects it", "egress")
+    if "--location-trusted" in args and any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args):
+        v.add("deny", f"{cmd} can forward authentication to a redirected host", "secret", "egress")
     user = opt(args, "-u", "--user") or next((a[2:] for a in args if a.startswith("-u") and len(a) > 2), None)
     if user:
         v.add("deny" if ":" in user else "high", f"{cmd} sends credentials from --user", "secret", "egress")
