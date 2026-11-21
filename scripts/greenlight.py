@@ -533,35 +533,90 @@ def said(ws, mr):
 
 
 def when(text, today=None):
-    """The first date in a goal's words, as YYYY-MM-DD: 2026-12-01, Dec 3 (2026), 3 December, tomorrow, next week,
-    in 3 days/weeks, next Monday / on Friday. None when there's none (a month-day already past this year means next year)."""
+    """The first date mentioned in a goal, as YYYY-MM-DD. None when it cannot be resolved."""
+    import calendar
     import datetime as dt
     t, today = text.lower(), today or dt.date.today()
-    if m := re.search(r"\b(\d{4})-(\d\d)-(\d\d)\b", t):
-        try:
-            return dt.date(int(m[1]), int(m[2]), int(m[3])).isoformat()
-        except ValueError:
-            return None
+    found = []
+
+    def add(pattern, parse):
+        for m in re.finditer(pattern, t):
+            try:
+                d = parse(m)
+                found.append((m.start(), d.isoformat() if d else None))
+            except ValueError:
+                found.append((m.start(), None))
+
+    add(r"\b(\d{4})-(\d\d)-(\d\d)\b", lambda m: dt.date(int(m[1]), int(m[2]), int(m[3])))
     mon = "|".join(MONTHS)
-    m = re.search(rf"\b({mon})[a-z]*\.? (\d{{1,2}})(?:st|nd|rd|th)?\b(?:,? (\d{{4}}))?", t) or \
-        re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)? ({mon})[a-z]*\b(?:,? (\d{{4}}))?", t)
-    if m:
-        a, b = (m[1], m[2]) if m[1][:3] in MONTHS else (m[2], m[1])
-        try:
-            d = dt.date(int(m[3] or today.year), MONTHS.index(a[:3]) + 1, int(b))
-        except ValueError:
+    absolute = rf"(?:\d{{4}}-\d\d-\d\d|(?:{mon})[a-z]*\.? \d{{1,2}}(?:st|nd|rd|th)?(?:,? \d{{4}})?|\d{{1,2}}(?:st|nd|rd|th)? (?:{mon})[a-z]*(?:,? \d{{4}})?)"
+    def next_after(m):
+        base = when(m[2], today)
+        if not base:
             return None
-        return (d.replace(year=d.year + 1) if d < today and not m[3] else d).isoformat()
-    if re.search(r"\btomorrow\b", t):
-        return (today + dt.timedelta(days=1)).isoformat()
-    if m := re.search(r"\bin (\d{1,3}|a|one|two|three) (day|week|month)s?\b", t):
+        d = dt.date.fromisoformat(base)
+        return d + dt.timedelta(days=(DAYS.index(m[1]) - d.weekday()) % 7 or 7)
+    add(rf"\bnext ({'|'.join(DAYS)}) after (?:the )?({absolute})", next_after)
+    def month_day(m):
+        a, b = (m[1], m[2]) if m[1][:3] in MONTHS else (m[2], m[1])
+        years = [int(m[3])] if m[3] else range(today.year, today.year + 9)
+        for year in years:
+            try:
+                d = dt.date(year, MONTHS.index(a[:3]) + 1, int(b))
+            except ValueError:
+                continue
+            if m[3] or d >= today:
+                return d
+        return None
+    add(rf"\b({mon})[a-z]*\.? (\d{{1,2}})(?:st|nd|rd|th)?\b(?:,? (\d{{4}}))?", month_day)
+    add(rf"\b(\d{{1,2}})(?:st|nd|rd|th)? ({mon})[a-z]*\b(?:,? (\d{{4}}))?", month_day)
+    add(r"\btomorrow\b", lambda m: today + dt.timedelta(days=1))
+    def offset(m):
         n = {"a": 1, "one": 1, "two": 2, "three": 3}.get(m[1]) or int(m[1])
-        return (today + dt.timedelta(days=n * {"day": 1, "week": 7, "month": 30}[m[2]])).isoformat()
-    if re.search(r"\bnext week\b", t):
-        return (today + dt.timedelta(days=7 - today.weekday())).isoformat()  # next Monday
-    if m := re.search(rf"\b(?:next|on|until|till|after) ({'|'.join(DAYS)})\b", t):
+        if m[2] == "month":
+            year, month = today.year + (today.month - 1 + n) // 12, (today.month - 1 + n) % 12 + 1
+            return dt.date(year, month, min(today.day, calendar.monthrange(year, month)[1]))
+        return today + dt.timedelta(days=n * {"day": 1, "week": 7}[m[2]])
+    add(r"\bin (\d{1,3}|a|one|two|three) (day|week|month)s?\b", offset)
+    add(r"\bnext week\b", lambda m: today + dt.timedelta(days=7 - today.weekday()))
+    def weekday(m):
         ahead = (DAYS.index(m[1]) - today.weekday()) % 7 or 7
-        return (today + dt.timedelta(days=ahead)).isoformat()
+        return today + dt.timedelta(days=ahead)
+    add(rf"\b(?:next|on|until|till|after) ({'|'.join(DAYS)})\b", weekday)
+    chosen = min(found, key=lambda item: item[0], default=(len(t), None))[1]
+    if chosen and re.match(r"^\s*(?:until\s+)?after\s+", t):
+        return (dt.date.fromisoformat(chosen) + dt.timedelta(days=1)).isoformat()
+    return chosen
+
+
+def goal_clauses(text):
+    """Split separate instructions, keeping month abbreviations such as `Dec. 3` together."""
+    return re.split(r"[;\n]|(?<=[!?])\s+|(?<=\.)\s+(?!\d)|"
+                    r",\s+(?=(?:and|but|come back|revisit|return to|resume|pick (?:this )?up)\b)|"
+                    r"\band\s+(?=(?:revisit|check|review)\b)", text, flags=re.I)
+
+
+def work_resumes_on(text):
+    """A date that explicitly ends a work pause, rather than a deadline or a status-check date."""
+    mon = "|".join(MONTHS)
+    date_head = rf"(?:\d{{4}}-\d\d-\d\d|\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{mon})|(?:{mon})[a-z]*\.?\s+\d|tomorrow|next\s+\w+|in\s+(?:\d+|a|one|two|three)\s+(?:day|week|month)|{'|'.join(DAYS)})"
+    parts = goal_clauses(text)
+    conditional_pause = False
+    for part in parts:
+        if m := re.search(r"\b(?:pause|park|hold|leave|set (?:this |it |the work )?aside|(?:do not|don['’]t) work on (?:this|it|the work))\b[^.;\n]*?\buntil\b", part, re.I):
+            if re.search(r"\bmerg(?:e|ing)\b", m.group(), re.I):
+                continue  # a merge hold is not a pause of the work
+            tail = part[m.end():].strip()
+            if re.match(rf"^(?:(?:on|after)\s+)?{date_head}", tail, re.I) and (d := when("until " + tail)):
+                return d
+            conditional_pause = True  # an approval/CI condition is not replaced by a later status date
+        if m := re.search(r"\b(?:resume(?: work)?|restart(?: work)?|come back(?: to (?:it|this|work))?|return to (?:it|this|work)|revisit(?: (?:it|this|work))?)\b", part, re.I):
+            status_check = re.search(r"\b(?:to (?:check|review)(?: (?:its|the|our))? (?:status|progress)|for (?:a )?status (?:check|update)|status (?:check|update))\b", part, re.I)
+            if conditional_pause or status_check:
+                continue
+            tail = part[m.end():].strip()
+            if re.match(rf"^(?:on|by|after)\s+{date_head}|^{date_head}", tail, re.I) and (d := when(tail)):
+                return d
     return None
 
 
@@ -573,17 +628,43 @@ def intents(ws, mr=None):
     text = said(ws, mr or {})
     out = {"is_held": bool(HOLD_RE.search(text)), "stay_draft": bool(KEEP_DRAFT_RE.search(text)),
            "is_parked": bool(PARKED_RE.search(text)), "revisit_date": (m := REVISIT_RE.search(text)) and m[1]}
-    if text.strip() and decide.configured() != "local":
+    model_on = decide.configured() != "local"
+    prior = ws.get("_revisit") or {}
+    if model_on and not out["revisit_date"] and prior.get("text") == text:
+        out["revisit_date"] = prior.get("date")
+    if not model_on:
+        ws.pop("_revisit", None)
+    if text.strip() and model_on:
         asked = {k: {"type": "bool", "question": q, "context": "The goal a user wrote for a coding workspace; a PR/MR title in it is a name, not an instruction."}
                  for k, (q, _) in INTENTS.items() if not out.get("revisit_date" if k == "revisit" else k)}
         got = decide.batch(text, asked) if asked else {}
         for k, a in got.items():
             if a["provider"] != "local" and a["prob"] >= INTENTS[k][1]:
                 if k == "revisit":
-                    out["revisit_date"] = when(text)
+                    parts = goal_clauses(text)
+                    cues = [re.search(r"\b(?:revisit|come back|return to|resume|pick (?:this )?up|until)\b", part, re.I) for part in parts]
+                    dated = []
+                    for part, cue in zip(parts, cues):
+                        if not cue:
+                            continue
+                        suffix = part[cue.end():]
+                        d = when(suffix) or when(part[cue.start():])
+                        if not d and not re.search(r"\b(?:later|after|in|next|on|until|by)\b", suffix, re.I):
+                            d = when(part[:cue.start()])
+                        dated.append(d)
+                    out["revisit_date"] = next((d for d in dated if d), None) or (when(text) if not any(cues) and len(parts) == 1 else None)
                 else:
                     out[k] = True
+    if model_on and not out["revisit_date"]:
+        out["revisit_date"] = work_resumes_on(text)  # an explicit dated work pause must not become indefinite on a weak model answer
+    resumes_work = (out["revisit_date"] and work_resumes_on(text) == out["revisit_date"])
+    if prior.get("text") == text and prior.get("date") == out["revisit_date"]:
+        resumes_work = prior.get("resumes_work", resumes_work)
+    if resumes_work and not PARKED_RE.search(text) and not re.search(r"\bindefinitely\b|until (?:I|you) unpark", text, re.I):
+        out["is_parked"] = False  # a dated work pause ends on its date; a dated status check does not unpark work
     ws["_intents"] = out
+    if out["revisit_date"]:
+        ws["_revisit"] = {"text": text, "date": out["revisit_date"], "resumes_work": bool(resumes_work)}
     return out
 
 
@@ -686,12 +767,12 @@ def evaluate(ws, mr, milestone):
     """-> {step, owner, action, cmd}."""
     goal = intents(ws, mr)
     snooze = goal["revisit_date"]
-    if snooze and snooze > time.strftime("%Y-%m-%d") and not (mr and mr["state"] in ("merged", "closed")):
-        return {"step": "parked", "owner": "parked", "action": f"parked until {snooze}"}
     if PLAN_RE.match(ws["goal"]):
         return {"step": "plan", "owner": "parked", "action": "being planned in the Plan view", "hidden": True}
     if goal["is_parked"] and not (mr and mr["state"] in ("merged", "closed")):
         return {"step": "parked", "owner": "parked", "action": "parked until you unpark it", "hidden": True}
+    if snooze and (ws.get("_revisit", {}).get("resumes_work") or REVISIT_RE.search(said(ws, mr or {}))) and snooze > time.strftime("%Y-%m-%d") and not (mr and mr["state"] in ("merged", "closed")):
+        return {"step": "parked", "owner": "parked", "action": f"parked until {snooze}"}
     if not mr:
         if ws.get("branch_gone"):
             return {"step": "done", "owner": "done", "action": "its branch was deleted on the remote, so the change is over: cleanup.py removes it if its commits are on the remote, else delete it yourself"}
@@ -743,7 +824,12 @@ def upstream_gone(r):
 
 def screen(ws, terminals):
     """What the workspace's newest agent terminal shows (ade_common.agent_state over its last 60 lines), or None."""
-    terms = sorted((t for t in terminals.get(ws["id"], []) if t.get("agentIdentity")),
+    agent_type, pane = ws["agent"].get("type"), ws["agent"].get("pane_key")
+    if ws["agent"].get("state") in ("working", "waiting") and not pane:
+        return None  # another same-type session cannot prove this agent is done or has answered its prompt
+    terms = sorted((t for t in terminals.get(ws["id"], []) if
+                    (f"{t.get('tabId')}:{t.get('leafId')}" == pane if pane else
+                     t.get("agentIdentity") and (not agent_type or t["agentIdentity"] == agent_type))),
                    key=lambda t: t.get("lastOutputAt") or 0, reverse=True)
     if not terms:
         return None
@@ -754,6 +840,17 @@ def screen(ws, terminals):
         return None
     lines = tail.splitlines() if isinstance(tail, str) else [str(x) for x in tail]
     seen = ade_common.agent_state(lines, ws["agent"].get("type") or terms[0].get("agentIdentity") or "")
+    visible = [t for x in lines if (t := ade_common.plain(str(x)).strip()) and t.lower() != "? for shortcuts" and
+               (t == "┃" and agent_type == "opencode" or not re.fullmatch(r"[│┃|\s─━═\-–—╭╮╰╯]+", t))]
+    if seen["state"] == "finished" and visible:
+        prompt = visible[-1]
+        inner = ade_common.BOX_RE.sub("", prompt).strip() if ade_common.BOX_RE.search(prompt) else prompt
+        idle_prompt = (prompt == "┃" and agent_type == "opencode") or (inner[:1] in "❯›>" and not ade_common.draft([prompt]))
+        seen["idle_prompt"] = bool(idle_prompt)
+        if len(visible) >= 2:
+            completed = re.match(r"^(?:I )?(?:Done|Fixed|Added|Updated|Implemented|Completed|Resolved|Built|Verified|Repaired|Refactored|Wrote|Ran|Finished|Changes complete|Tests passed|"
+                                 r"(?:The (?:fix|changes|work|task)|Everything) (?:is|are) (?:in place|done|complete|ready))\b", visible[-2], re.I)
+            seen["idle_complete"] = bool(idle_prompt and completed)
     ws["agent"]["screen"] = {k: seen[k] for k in ("state", "prob", "provider")}
     return seen
 
@@ -768,19 +865,46 @@ def agent_overlay(ws, terminals):
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
     if ag["state"] == "waiting":
         seen = screen(ws, terminals)
-        if seen and seen["prob"] >= SURE and seen["state"] in ("working", "finished"):
-            ag["state"] = "working" if seen["state"] == "working" else "done"
+        if seen and seen["prob"] >= SURE and seen["state"] == "working":  # still at it: nobody acts on the workspace meanwhile
+            ag["state"] = "working"
+            if nxt["owner"] in ("agent", "greenlight"):
+                nxt["owner"] = "working"
+            return
+        if seen and seen["prob"] >= SURE and seen["state"] == "unsent_draft":
+            nxt.update(owner="me", action=f"a draft sits unsent in {ag['terminal']}'s input box: send or clear it, then greenlight dispatches")
+            return
+        if seen and seen["prob"] >= SURE and seen["state"] in ("finished", "rate_limited") and nxt["owner"] == "agent":
+            if seen["state"] == "finished":
+                ag["state"] = "done"  # only to dispatch again: a stale "waiting" never lets greenlight merge or mark ready
         elif seen and seen["prob"] >= SURE and seen["state"] == "logged_out":
             nxt.update(owner="me", action=f"agent logged out: /login in {ag['terminal']}, then greenlight re-dispatches")
             return
         else:
             nxt.update(owner="me", action=f"agent is waiting on you: {ag['last'][:200]}")
             return
+    if nxt["owner"] == "greenlight" and ag["state"] == "working":
+        seen = screen(ws, terminals) if seen is False else seen
+        if seen and seen["prob"] >= SURE and seen["state"] in ("logged_out", "rate_limited", "unsent_draft", "waiting_for_user", "stuck_looping"):
+            ag["state"] = "done"
+            action = {"logged_out": f"agent logged out: /login in {ag['terminal']} before greenlight continues",
+                      "rate_limited": f"agent rate limited in {ag['terminal']}: inspect before greenlight continues",
+                      "unsent_draft": f"a draft sits unsent in {ag['terminal']}: send or clear it before greenlight continues",
+                      "waiting_for_user": f"agent is waiting on you in {ag['terminal']} before greenlight continues",
+                      "stuck_looping": f"agent looks stuck in a loop in {ag['terminal']}: inspect before greenlight continues"}[seen["state"]]
+            nxt.update(owner="me", action=action)
+            return
+        if not seen or seen["state"] != "finished" or not seen.get("idle_prompt") or (seen["prob"] < SURE and not seen.get("idle_complete")):
+            nxt["owner"] = "working"  # a mechanical step cannot run while an agent is editing
+        return
     if nxt["owner"] != "agent":
         return
     if ag["state"] == "working":
-        nxt["owner"] = "working"
-        return
+        seen = screen(ws, terminals) if seen is False else seen
+        if seen and seen["state"] == "finished" and seen.get("idle_prompt") and (seen["prob"] >= SURE or seen.get("idle_complete")):
+            ag["state"] = "done"
+        elif not seen or seen["prob"] < SURE or seen["state"] in ("working", "finished"):
+            nxt["owner"] = "working"
+            return
     seen = screen(ws, terminals) if seen is False else seen
     if not seen or seen["prob"] < SURE:
         return
@@ -789,10 +913,14 @@ def agent_overlay(ws, terminals):
         nxt["owner"] = "working"
     elif seen["state"] == "logged_out":
         nxt.update(owner="me", action=f"agent logged out: /login in {h}, then greenlight re-dispatches")
-    elif seen["state"] == "rate_limited" and len(CONFIG["agents"]) > 1:
-        now = ag.get("type") if ag.get("type") in CONFIG["agents"] else CONFIG["agents"][0]
-        nxt["agent"] = next((a for a in CONFIG["agents"] if a != now), CONFIG["agents"][1])
-        nxt["action"] += f" [{now} out of tokens: dispatch with {nxt['agent']}]"
+    elif seen["state"] == "rate_limited":
+        now = ag.get("type") if ag.get("type") in CONFIG["agents"] else (CONFIG["agents"][0] if CONFIG["agents"] else "agent")
+        others = [a for a in CONFIG["agents"] if a != now]
+        if others:
+            nxt["agent"] = others[0]
+            nxt["action"] += f" [{now} out of tokens: dispatch with {nxt['agent']}]"
+        else:
+            nxt.update(owner="me", action=f"{now} out of tokens in {h}: wait for reset or configure another agent")
     elif seen["state"] == "stuck_looping":
         nxt.update(owner="me", action=f"agent looks stuck in a loop in {h}: look at it, then stop or redirect it")
     elif seen["state"] == "unsent_draft":
@@ -824,6 +952,7 @@ def scan(save=True):
             "comment": (w.get("comment") or "").strip(),
             "pinned": w.get("isPinned"), "linked_mr": linked_number(w.get("linkedPR" if forge == "github" else "linkedGitLabMR")),
             "agent": {"state": ag.get("state", "none"), "type": ag.get("agentType"),
+                      "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},
         })
@@ -920,14 +1049,19 @@ def scan(save=True):
         r["life"] = lifestage.now(life, r["agent"]["state"], "logged out" in r["next"].get("action", ""), lifestage.block_of(r, roster))
         return r
 
+    prev_file = STATE / "last.json"
+    prev = json.loads(prev_file.read_text()) if prev_file.exists() else {}
+    prev_rows = {r["id"]: r for r in prev.get("rows", [])}
+    for r in rows:
+        p = prev_rows.get(r["id"])
+        if p and p.get("goal") == r["goal"] and p.get("comment") == r["comment"] and p.get("_revisit"):
+            r["_revisit"] = p["_revisit"]
+
     with ThreadPoolExecutor(8) as ex:
         rows = list(ex.map(one, rows))
     rows.sort(key=lambda r: (OWNERS.index(r["next"]["owner"]), r["project"], r["name"]))
 
     STATE.mkdir(exist_ok=True)
-    prev_file = STATE / "last.json"
-    prev = json.loads(prev_file.read_text()) if prev_file.exists() else {}
-    prev_rows = {r["id"]: r for r in prev.get("rows", [])}
     for r in rows:
         p = prev_rows.get(r["id"])
         if p and (p["next"]["step"], p["next"]["owner"]) != (r["next"]["step"], r["next"]["owner"]):
