@@ -261,6 +261,17 @@ with mock.patch.object(audit, "MAXC", 2000):
     assert len(ps) > 1 and "".join(ps) == big and all(len(p) <= 2000 and p.startswith("diff --git") for p in ps), [len(p) for p in ps]
     one = "diff --git a/g b/g\n" + "+z\n" * 1500  # one file bigger than a part: cut at lines
     assert "".join(audit.parts(one)) == one and all(p.endswith("\n") for p in audit.parts(one))
+    packed = ("diff --git a/a b/a\n" + "+a\n" * 100 +
+              "diff --git a/b b/b\n" + "+b\n" * 3500)
+    assert "".join(audit.parts(packed)) == packed and len(audit.parts(packed)) == 6  # fill the first part before splitting b
+    header = "diff --git a/a b/a\n" + "+x\n" * 18 + "diff --git a/b b/b\n" + "+y\n" * 40
+    pieces = audit.parts(header, 80)
+    assert "".join(pieces) == header and pieces[1].startswith("diff --git a/b b/b\n"), pieces
+    split_file = "diff --git a/long.py b/long.py\n--- a/long.py\n+++ b/long.py\n@@ -1 +1 @@\n" + "+changed\n" * 40
+    split_pieces = audit.parts(split_file, 100)
+    assert "".join(split_pieces) == split_file
+    assert all("diff --git a/long.py b/long.py" in ctx for ctx in audit.part_context(split_file, split_pieces)[1:])
+    assert "@@ -1 +1 @@" in audit.part_context(split_file, split_pieces)[1]
     calls.clear()
     fake.bool = lambda s, q, *, context="": _bool(s, q + context, context=context)
     ans["part 2 of"] = {"value": False, "prob": 0.05, "provider": "jev"}

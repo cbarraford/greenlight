@@ -32,6 +32,9 @@ assert nxt(mr(), ws("hold until release")) == ("merge", "me")
 held = lambda title, goal, **kw: nxt(mr(title=title, **kw), ws(goal))[1] == "me"
 t290 = "code_audit: dedupe against closed security-hold issues"
 assert not held(t290, f"Merge !290: {t290}")  # was once held for its title
+assert nxt(mr(title="Document the (parked) label"), ws("Merge !1: Document the (parked) label")) != ("parked", "parked")
+assert nxt(mr(title="Document the (parked) label"), ws("Merge !1: Document the (parked) label.")) != ("parked", "parked")
+assert nxt(mr(title="Document the (parked) label"), ws("Merge !1: Document the (parked) label. (parked)")) == ("parked", "parked")
 t187 = "Batch: security-hold fixes for #11, #12, #13 (priority::0)"
 assert not held(t187, f"Merge !187: {t187}")  # a batch MR
 for t in ["feat: hold inbounds on solvency-gated chains until a solvent report covers them",
@@ -39,9 +42,27 @@ for t in ["feat: hold inbounds on solvency-gated chains until a solvent report c
           "ci: don't merge-train forks", "fix: keep draft_status in sync"]:
     assert not held(t, f"Merge !5: {t}") and not held(t, f"Merge !5: {t.upper()}"), t
 assert not held("x", "Merge !5: x (security_hold, on-hold-list)")  # joined by - or _: a name, not an instruction
+assert greenlight.intents({"comment": "Hold"}, {"title": "Hold"})["is_held"]  # ambiguous standalone comment stays an explicit safety hold
 for extra in [" (hold)", " hold", " (hold until 3.22)", " — don't merge", " (do not merge)", " (don’t merge)", " (HOLD)"]:
     assert held(t290, f"Merge !290: {t290}{extra}"), extra
 assert held("renamed since", f"Merge !290: {t290} (hold)")  # title edited after the goal was written: still held
+assert held("Hold", "Merge !290: Hold\nHold until #67 merges")  # a second occurrence is an instruction
+assert held("Hold", "Merge !12: Hold until QA signs off")  # a title prefix must not erase an explicit hold
+assert held("Fix parser (hold until QA)", "Merge !66: Fix parser (hold until QA)")  # edited title must not absorb a goal's hold
+assert not greenlight.intents({"goal": "Merge !12: Document the (parked) label (keep draft)", "comment": ""},
+                              {"title": "Document the (parked) label"})["is_parked"]
+assert not greenlight.intents({"goal": "Merge !12: Document the (parked) label (hold until QA)", "comment": ""},
+                              {"title": "Document the (parked) label"})["is_parked"]
+assert not greenlight.intents({"goal": "Merge !1: Hold inbound transactions.\nRun the smoke tests", "comment": ""},
+                              {"title": "Hold inbound transactions"})["is_held"]
+assert not greenlight.intents({"goal": "Merge #12: Document the (parked) label (run smoke tests first)", "comment": ""},
+                              {"title": "Document the (parked) label"})["is_parked"]
+assert not greenlight.intents({"goal": "Merge !12: Document the (parked) label — run smoke tests", "comment": ""},
+                              {"title": "Document the (parked) label"})["is_parked"]
+assert not greenlight.intents({"goal": "Merge !12: Hold inbound transactions — run smoke tests", "comment": ""},
+                              {"title": "Hold inbound transactions"})["is_held"]
+assert not greenlight.said({"goal": "Merge #1: Hold inbound transactions", "comment": "", "_goal_backfill": True},
+                           {"title": "Throttle inbound transactions"}).strip()  # renamed generated title is not the user's hold
 assert nxt(mr(title=t290), ws() | {"comment": f"Merge !290: {t290} (hold) — dispatched 2026-10-17"}) == ("merge", "me")  # old status line
 assert nxt(mr(title="keep draft PRs as drafts", draft=True), ws("Merge !9: keep draft PRs as drafts")) == ("ready", "greenlight")
 assert nxt(mr(title="x", draft=True), ws("Merge !9: x (stay draft)")) == ("ready", "me")
@@ -63,6 +84,22 @@ assert nxt(mr(reviewers=[])) == ("review_bot", "greenlight")
 assert nxt(mr(milestone=None)) == ("milestone", "greenlight")
 assert nxt(mr(draft=True)) == ("ready", "greenlight")
 assert nxt(mr(draft=True), ws("Merge !1 (stay draft)")) == ("ready", "me")
+remembered = {"wid": {"comment": "", "goal": "Merge !1: x (stay draft)"}}
+assert greenlight.goal_with_backfill("", "wid", remembered) == ("Merge !1: x (stay draft)", False)
+assert greenlight.goal_with_backfill("Review !1 — dispatched 2026-11-21", "wid", remembered) == ("Merge !1: x (stay draft)", False)
+assert greenlight.goal_with_backfill("new user goal", "wid", remembered) == ("new user goal", True)
+remembered = {"wid": {"comment": "", "goal": "Merge !12: old", "branch": "feature", "linked_mr": 12}}
+assert greenlight.goal_with_backfill("", "wid", remembered, "feature", 34) == ("", True)
+assert greenlight.goal_with_backfill("", "wid", remembered, "other-branch", 12) == ("", True)
+scoped_backfill = {"wid": remembered["wid"] | {"forge": "github", "project": "octo/a"}}
+assert greenlight.goal_with_backfill("", "wid", scoped_backfill, "feature", 12, "github", "octo/a")[1] is False
+assert greenlight.goal_with_backfill("", "wid", scoped_backfill, "feature", 12, "github", "octo/b")[1] is True
+assert greenlight.goal_with_backfill("", "wid", remembered, "feature", 12, "github", "octo/a")[1] is True
+greenlight.backfills_update(lambda d: d.update({"old": {"goal": "old"}}))
+snapshot = greenlight.backfills_load()["old"]
+greenlight.backfills_update(lambda d: d.update({"new": {"goal": "new"}}))
+greenlight.backfills_update(lambda d: d.pop("old", None) if d.get("old") == snapshot else None)
+assert "new" in greenlight.backfills_load()  # pruning an old snapshot must not lose a concurrent new goal
 assert nxt(mr(blocking_discussions_resolved=False)) == ("threads", "agent")
 assert nxt(mr(detailed_merge_status="not_approved")) == ("approved", "reviewers")
 assert nxt(mr(detailed_merge_status="merge_request_blocked", _approvals_left=2)) == ("approved", "reviewers")  # !5217
@@ -102,6 +139,23 @@ greenlight.ping("blocking: review again?", "@review-x!147")  # back within a day
 greenlight.ping("ws-b: changed again", "ws-b")  # workspace keys always ping: the app replaces the open one
 out = [json.loads(l) for l in (greenlight.STATE / "outbox.jsonl").read_text().splitlines()]
 assert [o.get("text") for o in out[-2:]] == [None, "ws-b: changed again"]
+greenlight.ping("ws-dup: merge?", "ws-dup")
+before = len((greenlight.STATE / "outbox.jsonl").read_text().splitlines())
+greenlight.pinged({k: v for k, v in greenlight.pinged().items() if k != "ws-dup"})  # crash after outbox, before key write
+greenlight.ping("ws-dup: merge?", "ws-dup")
+assert len((greenlight.STATE / "outbox.jsonl").read_text().splitlines()) == before and "ws-dup" in greenlight.pinged()
+greenlight.resolve("ws-dup", "question resolved")
+greenlight.ping("ws-dup: merge?", "ws-dup")
+assert len((greenlight.STATE / "outbox.jsonl").read_text().splitlines()) == before + 2  # resolve plus a new ask
+head_row = row("head-dup", "me") | {"project": "octo/app", "mr": {"ref": "#42", "sha": "head-a"}}
+(greenlight.STATE / "last.json").write_text(json.dumps({"rows": [head_row]}))
+greenlight.ping("head-dup: merge #42?", "head-dup")
+head_row["mr"]["sha"] = "head-b"
+(greenlight.STATE / "last.json").write_text(json.dumps({"rows": [head_row]}))
+greenlight.pinged({k: v for k, v in greenlight.pinged().items() if k != "head-dup"})
+greenlight.ping("head-dup: merge #42?", "head-dup")
+head_events = [e for e in greenlight.outbox_events() if e.get("key") == "head-dup" and e.get("text")]
+assert len(head_events) == 2 and head_events[0]["record"] != head_events[1]["record"]
 
 # ping --ws: the workspaces a ping is about (the app lifts their hexes); names or ids, checked against the last scan
 from unittest import mock
@@ -163,9 +217,70 @@ def precheck(owner, adoptions=0):
             greenlight.main()
         except SystemExit as e:
             return e.code, (greenlight.STATE / "last.json").read_text()
-assert precheck("ci") == (1, json.dumps({"rows": [row("ws-a", "ci")]}))
+code, snapshot = precheck("ci")
+saved = json.loads(snapshot)
+assert code == 1 and saved["rows"][0] == row("ws-a", "ci") | {"_scan_id": saved["scan_id"]}
 assert precheck("agent") == (0, "old")
 assert precheck("ci", adoptions=2) == (0, "old")  # MRs with no workspace wake the automation too
+newer = {"scan_id": "newer", "scan_started_ns": 20, "rows": [row("snapshot", "ci")]}
+assert greenlight.keep(newer) is True
+old_revision = greenlight.backfill_revision()
+greenlight.backfills_update(lambda data: data.__setitem__("snapshot-id", {"goal": "generated"}))
+try:
+    greenlight.keep({"scan_id": "stale-overlay", "scan_started_ns": 21, "rows": [row("stale-overlay", "ci")]},
+                    expected_backfill_revision=old_revision)
+    assert False, "a scan with an old goal overlay must be recomputed"
+except greenlight.BackfillChanged:
+    pass
+assert json.loads((greenlight.STATE / "last.json").read_text())["scan_id"] == "newer"
+assert greenlight.keep({"scan_id": "older", "scan_started_ns": 10, "rows": [row("stale", "ci")]}) is False
+assert json.loads((greenlight.STATE / "last.json").read_text())["scan_id"] == "newer"
+assert greenlight.keep({"scan_id": "clock-a", "scan_started_ns": 100, "scan_clock_id": "boot-a", "rows": [row("clock-a", "ci")]})
+assert not greenlight.keep({"scan_id": "clock-old", "scan_started_ns": 99, "scan_clock_id": "boot-a", "rows": [row("clock-old", "ci")]})
+assert greenlight.keep({"scan_id": "clock-b", "scan_started_ns": 1, "scan_clock_id": "boot-b", "rows": [row("clock-b", "ci")]})
+assert json.loads((greenlight.STATE / "last.json").read_text())["scan_id"] == "clock-b"
+merged_row = row("merged", "done") | {"id": "original", "forge": "github", "project": "octo/app", "path": "/merged",
+                                      "mr": {"iid": 1, "sha": "head", "state": "merged"}}
+open_row = merged_row | {"mr": {"iid": 1, "sha": "head", "state": "opened"}, "next": {"owner": "ci", "action": "wait"}}
+(greenlight.STATE / "last.json").write_text(json.dumps({"scan_id": "dashboard", "scan_started_ns": 30, "rows": [merged_row],
+    "dashboard_base_started_ns": 10, "dashboard_merges": [{"request": True, "path": "/merged", "id": "original", "forge": "github",
+        "project": "octo/app", "iid": 1, "sha": "head", "row": merged_row}]}))
+assert not greenlight.keep({"scan_id": "too-old", "scan_started_ns": 5, "rows": [open_row]})
+peer = open_row | {"id": "peer", "path": "/peer", "mr": open_row["mr"] | {"sha": "stale-head"}}
+assert greenlight.keep({"scan_id": "older-but-useful", "scan_started_ns": 20, "rows": [open_row, peer, row("unrelated", "ci")]})
+reconciled = json.loads((greenlight.STATE / "last.json").read_text())
+assert len(reconciled["rows"]) == 3 and all(x["mr"]["state"] == "merged" for x in reconciled["rows"][:2])
+assert reconciled["dashboard_base_started_ns"] == 10 and reconciled["accepted_scan_started_ns"] == 20
+other_fork = open_row | {"id": "replacement", "project": "other/app"}
+assert greenlight.keep({"scan_id": "other-fork", "scan_started_ns": 21, "rows": [other_fork]})
+assert json.loads((greenlight.STATE / "last.json").read_text())["rows"][0]["mr"]["state"] == "opened"
+fresher = open_row | {"agent": {"state": "working"}, "mr": open_row["mr"] | {"pipeline": "success"}}
+assert greenlight.keep({"scan_id": "fresher", "scan_started_ns": 25, "rows": [fresher]})
+reconciled = json.loads((greenlight.STATE / "last.json").read_text())
+assert reconciled["accepted_scan_started_ns"] == 25 and reconciled["rows"][0]["mr"] == fresher["mr"] | {"state": "merged"}
+assert reconciled["rows"][0]["agent"] == {"state": "working"}
+assert not greenlight.keep({"scan_id": "stale-after-merge", "scan_started_ns": 22, "rows": [open_row]})
+post_merge = merged_row | {"next": {"owner": "me", "step": "deploy", "action": "deploy now"}, "life": {"at": "9.1"}}
+assert greenlight.keep({"scan_id": "post-merge", "scan_started_ns": 27, "rows": [post_merge]})
+assert json.loads((greenlight.STATE / "last.json").read_text())["rows"][0]["next"] == post_merge["next"]
+with mock.patch.object(greenlight.decisions, "asked", return_value="record-id") as record, mock.patch.object(greenlight, "outbox", side_effect=OSError("outbox stopped")):
+    try:
+        greenlight.ping("Fix it?\nOptions: retry | leave it", "@stuck:test", kind="agent-stuck")
+        assert False
+    except OSError:
+        assert record.called  # persist the keyed question before publishing its answerable notification
+with mock.patch.object(greenlight.decisions, "asked", return_value="record-id") as record, mock.patch.object(greenlight, "outbox"):
+    greenlight.ping("Coordinate these workspaces?", "workspace-a", ws=["workspace-b"], ask=True)
+    assert record.call_args.args[3] == ["workspace-a", "workspace-b"]
+greenlight.ping("Agent stuck?\nOptions: retry | leave it", "@stuck:snapshot:one", ws=["snapshot-id"], kind="agent-stuck")
+greenlight.close_stale([row("renamed", "me") | {"id": "snapshot-id"}])
+assert "@stuck:snapshot:one" in greenlight.pinged()
+greenlight.close_stale([])
+assert "@stuck:snapshot:one" not in greenlight.pinged()
+with (greenlight.STATE / "outbox.jsonl").open("ab") as interrupted:
+    interrupted.write(b'{"text":"incomplete"')
+greenlight.outbox({"text": "after partial append"})
+assert greenlight.outbox_events()[-1]["text"] == "after partial append"
 
 # --- GitHub repos: projectId forms, the PR → MR-shape adapter, gh commands, stacked PRs, lookup, cleanup ---
 assert greenlight.forge_project("github:octo/greenlight") == ("github", "octo/greenlight")
@@ -322,6 +437,17 @@ with mock.patch.object(greenlight, "orca", side_effect=fake_orca), mock.patch.ob
         mock.patch.object(greenlight, "mr_details", side_effect=fake_pr), mock.patch.object(greenlight, "gh", side_effect=fake_gh), \
         mock.patch.object(greenlight, "gl", side_effect=AssertionError("GitHub rows must not call GitLab")):
     res = greenlight.scan(save=False)
+    WTS[2]["comment"] = ""
+    greenlight.backfills_update(lambda d: d.__setitem__("ws-branch", {"comment": "", "branch": "ws-branch", "linked_mr": None,
+                                                            "resolved_mr": 21, "goal": "Merge #21: old PR", "forge": "github", "project": "octo/greenlight"}))
+    replaced = greenlight.scan(save=False)
+    assert next(r for r in replaced["rows"] if r["name"] == "ws-branch")["goal"] == ""
+    (greenlight.STATE / "last.json").write_text(json.dumps({"scan_started_ns": 9999999999999999999, "rows": []}))
+    with mock.patch.object(greenlight, "keep", return_value=False):
+        greenlight.scan(save=True)
+    assert greenlight.backfills_load()["ws-branch"]["resolved_mr"] == 21  # rejected stale scan cannot prune it
+    WTS[2]["comment"] = "Merge MR for #21"
+    greenlight.backfills_update(lambda d: d.pop("ws-branch", None))
 by = {r["name"]: r for r in res["rows"]}
 assert res["skipped"] == 1 and set(by) == {"ws-linked", "ws-linked-obj", "ws-branch", "ws-issue", "ws-old", "ws-none"}
 assert {n: r["mr"] and r["mr"]["ref"] for n, r in by.items()} == {"ws-linked": "#17", "ws-linked-obj": "#39", "ws-branch": "#22", "ws-issue": "#23",

@@ -5,6 +5,7 @@ import json, stat, subprocess, sys
 from pathlib import Path
 from unittest import mock
 import chat, decisions, greenlight
+import dash
 
 recs = decisions.load
 by_q = lambda q: [r for r in recs() if r["question"] == q]
@@ -23,7 +24,7 @@ greenlight.ping("fix-001: mergeable, but the goal says hold. Merge !101?" + O, "
 [r] = recs()
 assert (r["via"], r["key"], r["kind"], r["options"]) == ("ping", "fix-001", "merge-held", ["merge", "hold"]), r
 assert r["question"] == "fix-001: mergeable, but the goal says hold. Merge !101?"
-assert {f: r[f] for f in decisions.FIELDS} == {"workspace": "fix-001", "repo": "acme/widgets", "role": "author", "step": "merge", "owner": "me", "mr": "!101"}, r
+assert {f: r[f] for f in decisions.FIELDS} == {"workspace": "fix-001", "worktree_id": "fix-001-id", "repo": "acme/widgets", "forge": None, "branch": None, "role": "author", "step": "merge", "owner": "me", "mr": "!101", "goal": None, "sha": None, "target_branch": None}, r
 assert r["answer"] is None and r["closed"] is None and "workspaces" not in r
 
 # the answer the app sends back (an inbox chip, the reply field, a banner reply) lands in that same record
@@ -80,11 +81,30 @@ greenlight.ping("fyi: nothing to do")
 greenlight.ping("2 held merges are mergeable. Merge them?" + O, "@held-merges", ["fix-001", "fix-002"])
 assert len(recs()) == n + 1 and recs()[-1]["options"] == []
 
-# the record can fail (a full disk, a bad line): the ping still goes out
+# A failed record write must not expose a question with no durable decision.
 with mock.patch.object(decisions, "book", side_effect=OSError("disk full")), mock.patch.object(sys, "stderr"):
-    greenlight.ping("fix-002: still sent" + O, "fix-002")
-assert json.loads((greenlight.STATE / "outbox.jsonl").read_text().splitlines()[-1])["text"].startswith("fix-002: still sent")
+    try:
+        greenlight.ping("fix-002: still sent" + O, "fix-002")
+        assert False, "failed record write should surface"
+    except OSError:
+        pass
+assert not json.loads((greenlight.STATE / "outbox.jsonl").read_text().splitlines()[-1])["text"].startswith("fix-002: still sent")
 assert len(recs()) == n + 1
+
+# A question asked before Greenlight generates an MR goal keeps its later answer in the handoff.
+rid = decisions.asked("Review this?\nOptions: yes | no", key="fix-002", ws=["fix-002"])
+with decisions.book() as records:
+    next(r for r in records if r["id"] == rid)["goal"] = ""
+decisions.backfilled_goal("fix-002-id", "!102", "Review #102: generated")
+assert next(r for r in recs() if r["id"] == rid)["goal"] == "Review #102: generated"
+other_rid = decisions.asked("Deploy this?\nOptions: yes | no", key="other-repo", ws=["fix-002"])
+with decisions.book() as records:
+    target = next(r for r in records if r["id"] == other_rid)
+    target.update(goal="", repo="org/a", forge="github")
+decisions.backfilled_goal("fix-002-id", "!102", "Review !102: B", "org/b", "github")
+assert next(r for r in recs() if r["id"] == other_rid)["goal"] == ""
+decisions.backfilled_goal("fix-002-id", "!102", "Review !102: A", "org/a", "github")
+assert next(r for r in recs() if r["id"] == other_rid)["goal"] == "Review !102: A"
 
 # the menubar chat: a reply ending in an Options line is a question; the next message answers it (a chip or typed)
 assert decisions.heard("what's the status of fix-001?") is None  # plain chat with nothing open: not an answer
@@ -177,6 +197,14 @@ fake.write_text(FAKE)
 fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 chat.harness.binary = lambda n: str(fake)
 chat.DIR, chat.PIDFILE, chat.emit = str(tmp), str(tmp / "pid"), lambda **e: None
+# The chat must verify the board before recording a new question. Supply the same
+# two workspace identities as the synthetic scan instead of relying on a live ADE.
+allowed = dash.BoardAllow({
+    name: ("gitlab", "acme/widgets", ref, "", "", "", name + "-id", "")
+    for name, ref in (("fix-001", "!101"), ("fix-002", "!102"))
+})
+board = mock.patch.object(dash, "board", return_value=("- fix-001\n- fix-002", allowed))
+board.start()
 (greenlight.STATE / "decisions.jsonl").unlink()
 greenlight.ping("fix-001: approved and green, held by its goal. Merge !101?" + O, "fix-001", kind="merge-held")
 chat.turn('(Replying to your question: "fix-001: approved and green, held by its goal. Merge !101?")\nmerge ASK', "claude-haiku-5-5", None)
@@ -190,4 +218,17 @@ assert (two["answer"], two["choice"], two["answer_via"]) == ("hold", 1, "chat") 
 with mock.patch.object(sys, "argv", ["chat.py", "new"]):  # Clear: nothing open, nothing lost
     chat.main()
 assert [r["closed"] for r in recs()] == [None, None]
+with (greenlight.STATE / "decisions.jsonl").open("a") as f:
+    f.write("{partial record\n")
+assert len(decisions.load()) == 2
+decisions.asked("Can continue?" + O, key="after-partial")
+assert len(decisions.load()) == 3  # an interrupted final line does not block a new answer
+head_row = row("head-bound", "merge", "me", "!42")
+head_row["mr"]["sha"] = "head-a"
+(greenlight.STATE / "last.json").write_text(json.dumps({"rows": [head_row]}))
+old_id = decisions.asked("Merge this?" + O, key="head-bound", ws=["head-bound"])
+head_row["mr"]["sha"] = "head-b"
+(greenlight.STATE / "last.json").write_text(json.dumps({"rows": [head_row]}))
+new_id = decisions.asked("Merge this?" + O, key="head-bound", ws=["head-bound"])
+assert old_id != new_id and next(r for r in decisions.load() if r["id"] == old_id)["closed"] == "superseded"
 print("test_decisions ok")

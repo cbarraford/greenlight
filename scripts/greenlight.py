@@ -31,11 +31,14 @@ import fcntl
 import html
 import importlib
 import json
+import contextlib
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -537,9 +540,13 @@ def said(ws, mr):
     "Merge !N: <title>" goals copy in. A title like "hold inbounds on ..." is never an instruction.
     If the title was edited since, the old copy stays in, so it can still ask me (never merge by mistake)."""
     title = (mr.get("title") or "").strip()
-    texts = dict.fromkeys(t for t in (ws.get("goal", ""), ws.get("comment", "")) if t)
-    if title:
-        texts = [re.sub(re.escape(title), " ", t, flags=re.I) for t in texts]
+    texts = dict.fromkeys(t for t in ((ws.get("comment", ""),) if ws.get("_goal_backfill") else
+                                      (ws.get("goal", ""), ws.get("comment", ""))) if t)
+    # An edited title can absorb an explicit hold from an older goal. Keep the
+    # hold in that ambiguous case; a false hold is safer than an automatic merge.
+    if title and not re.search(r"(?:\(|[—–-]\s*)\s*(?:hold|do ?n[o'’]t merge)\b", title, re.I):
+        header = re.compile(rf"^((?:Merge|Review)\s+[#!]\d+:\s*){re.escape(title)}(?=[.!?]?(?:$|\n)|\s+\((?!until\b)|\s+[—–-]\s+)", re.I)
+        texts = [header.sub(r"\1", t, count=1) for t in texts]
     return "\n".join(texts)
 
 
@@ -950,7 +957,68 @@ def agent_overlay(ws, terminals):
         nxt.update(owner="me", action=f"agent is waiting on you in {h}")
 
 
-def scan(save=True):
+def backfills_load():
+    try:
+        return json.loads((STATE / "goal_backfill.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def backfill_revision():
+    try:
+        stat = (STATE / "goal_backfill.json").stat()
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+@contextlib.contextmanager
+def backfill_lock():
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "goal_backfill.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+class BackfillChanged(Exception):
+    """A scan must recompute against the goal overlay it publishes with."""
+
+
+ANY_BACKFILL_REVISION = object()
+
+
+def backfills_update(change):
+    """Serialize goal overlay edits from ticks and standalone reports."""
+    with backfill_lock():
+        data = backfills_load()
+        change(data)
+        backfills_write_unlocked(data)
+
+
+def backfills_write_unlocked(data):
+    tmp = STATE / "goal_backfill.tmp"
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, STATE / "goal_backfill.json")
+
+
+def goal_with_backfill(comment, worktree_id, backfills, branch=None, linked_mr=None, forge=None, project=None):
+    """A generated goal applies only while the user's Orca comment still matches the original one."""
+    goal = "" if STATUS_LINE_RE.search(comment) else comment
+    remembered = backfills.get(worktree_id)
+    if not remembered:
+        return goal, False
+    if ((comment != remembered.get("comment") and not (not remembered.get("comment") and not goal))
+            or branch is not None and remembered.get("branch", branch) != branch
+            or forge is not None and remembered.get("forge") != forge
+            or project is not None and remembered.get("project") != project
+            or "linked_mr" in remembered and remembered["linked_mr"] != linked_mr):
+        return goal, True  # the user has superseded this generated goal
+    return goal or remembered.get("goal") or "", False
+
+
+def scan(save=True, _backfill_retries=0):
+    scan_started_ns = time.monotonic_ns()
+    clock_id = scan_clock_id()
     wts = orca("worktree", "ps", "--limit", "10000")["worktrees"]
     full = {w["id"]: w for w in orca("worktree", "list", "--limit", "10000")["worktrees"]}
     terminals = {}
@@ -958,6 +1026,14 @@ def scan(save=True):
         terminals.setdefault(t["worktreeId"], []).append(t)
 
     projects = {w["repoId"]: fp for w in full.values() if (fp := forge_project(w.get("projectId")))}
+    backfill_before = backfill_revision()
+    backfills = backfills_load()
+    backfill_read = backfill_revision()
+    if backfill_before != backfill_read:
+        if _backfill_retries >= 2:
+            raise OSError("goal backfill changed repeatedly during scan")
+        return scan(save=save, _backfill_retries=_backfill_retries + 1)
+    superseded_backfills = {}
     rows, skipped = [], 0
     for w in wts:
         branch = (w.get("branch") or "").removeprefix("refs/heads/")
@@ -966,16 +1042,40 @@ def scan(save=True):
             continue
         forge, project = projects[w["repoId"]]
         ag = primary_agent(w.get("agents"))
+        comment = (w.get("comment") or "").strip()
+        linked = linked_number(w.get("linkedPR" if forge == "github" else "linkedGitLabMR"))
+        goal, superseded = goal_with_backfill(comment, w["worktreeId"], backfills, branch, linked, forge, project)
+        if superseded:
+            superseded_backfills[w["worktreeId"]] = backfills[w["worktreeId"]]
         rows.append({
             "id": w["worktreeId"], "name": w["displayName"], "path": w["path"], "branch": branch,
-            "project": project, "forge": forge, "goal": "" if STATUS_LINE_RE.search(w.get("comment") or "") else (w.get("comment") or "").strip(),
-            "comment": (w.get("comment") or "").strip(),
-            "pinned": w.get("isPinned"), "linked_mr": linked_number(w.get("linkedPR" if forge == "github" else "linkedGitLabMR")),
+            "project": project, "forge": forge, "goal": goal,
+            "_goal_backfill": bool(not superseded and backfills.get(w["worktreeId"]) and
+                                   goal == backfills[w["worktreeId"]].get("goal") and (not comment or STATUS_LINE_RE.search(comment))),
+            "comment": comment,
+            "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": ag.get("agentType"),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},
         })
+    if superseded_backfills and save:
+        def prune(current):
+            fresh = {w["worktreeId"]: w for w in orca("worktree", "ps", "--limit", "10000")["worktrees"]}
+            for wid, old in superseded_backfills.items():
+                live = fresh.get(wid)
+                if not live or current.get(wid) != old:
+                    continue
+                identity = projects.get(live.get("repoId"))
+                if not identity:
+                    continue
+                live_forge, live_project = identity
+                link = linked_number(live.get("linkedPR" if live_forge == "github" else "linkedGitLabMR"))
+                if goal_with_backfill((live.get("comment") or "").strip(), wid, current,
+                                      (live.get("branch") or "").removeprefix("refs/heads/"), link,
+                                      live_forge, live_project)[1]:
+                    current.pop(wid, None)
+        backfills_update(prune)
 
     # One open-MR/PR listing per project resolves most branches without per-branch lookups.
     open_by_branch, closes, milestones = {}, {}, {}
@@ -1038,9 +1138,16 @@ def scan(save=True):
     face = lambda u: {"name": u.get("login") or u["username"], "avatar": u.get("avatar_url")}
     roster = lifestage.blocks()  # blocking.py's last scan: the MRs someone is waiting on me for
 
+    prune_candidates = []
+
     def one(r):
         try:
             mr = find_mr(r)
+            remembered = backfills.get(r["id"])
+            if remembered and "resolved_mr" in remembered and remembered["resolved_mr"] != (mr or {}).get("iid"):
+                r["goal"] = "" if STATUS_LINE_RE.search(r["comment"]) else r["comment"]
+                if save:
+                    prune_candidates.append((r["id"], remembered, (mr or {}).get("iid")))
             r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft")} | {
                 "ref": ref(r["forge"], mr["iid"]), "forge": r["forge"],
                 "author": mr["author"].get("login") or mr["author"]["username"], "role": "author" if mr["author"]["username"] == ME else "review",
@@ -1049,6 +1156,7 @@ def scan(save=True):
                 # hex signals (dashboard): as of this scan
                 "pipeline": (mr.get("head_pipeline") or {}).get("status"), "conflicts": bool(mr.get("has_conflicts")),
                 "threads": len(unresolved(mr)), "approvals": len(mr.get("_approved_by", [])),
+                "threads_fingerprint": hashlib.sha1(json.dumps(sorted(thread_line(d) for d in unresolved(mr))).encode()).hexdigest()[:12],
                 "approvals_required": mr.get("_approvals_required", 0), "mergeable": mr.get("detailed_merge_status") == "mergeable", "rebase": mr.get("detailed_merge_status") == "need_rebase",
                 # hover card (dashboard)
                 "source_branch": mr.get("source_branch"), "target_branch": mr.get("target_branch"), "labels": mr.get("labels", []),
@@ -1061,6 +1169,7 @@ def scan(save=True):
                 "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable"))}
             r["branch_gone"] = not mr and upstream_gone(r)
             r["next"] = evaluate(r, mr, milestones.get(r["project"]))
+            r["_base_next"] = r["next"].copy()  # agent overlay may append failover instructions to the visible action
             life = lifestage.place(r)  # before the overlay: who the step itself is waiting on
             agent_overlay(r, terminals)
         except Exception as e:
@@ -1080,6 +1189,8 @@ def scan(save=True):
     with ThreadPoolExecutor(8) as ex:
         rows = list(ex.map(one, rows))
     rows.sort(key=lambda r: (OWNERS.index(r["next"]["owner"]), r["project"], r["name"]))
+    import ws_state
+    ws_state.keyed(rows, migrate=save)  # previews resolve legacy identities without writing owner pointers
 
     STATE.mkdir(exist_ok=True)
     for r in rows:
@@ -1087,21 +1198,113 @@ def scan(save=True):
         if p and (p["next"]["step"], p["next"]["owner"]) != (r["next"]["step"], r["next"]["owner"]):
             r["changed"] = f"{p['next']['step']}/{p['next']['owner']} → {r['next']['step']}/{r['next']['owner']}"
     gone = [p["name"] for i, p in prev_rows.items() if i not in {r["id"] for r in rows}]
-    result = {"ts": int(time.time()), "prev_ts": prev.get("ts"), "skipped": skipped, "gone": gone, "rows": rows}
+    scan_id = uuid.uuid4().hex
+    if save:
+        for r in rows:
+            r["_scan_id"] = scan_id
+    result = {"scan_id": scan_id, "scan_started_ns": scan_started_ns, "scan_clock_id": clock_id,
+              "ts": int(time.time()), "prev_ts": prev.get("ts"), "skipped": skipped, "gone": gone, "rows": rows}
     if save:  # an actionable precheck mustn't overwrite the snapshot the run's report diffs against
-        keep(result)
+        try:
+            accepted = keep(result, expected_backfill_revision=backfill_read)
+        except BackfillChanged:
+            if _backfill_retries >= 2:
+                raise OSError("goal backfill changed repeatedly during scan")
+            return scan(save=save, _backfill_retries=_backfill_retries + 1)
+        if not accepted:
+            return json.loads((STATE / "last.json").read_text())
+        result = json.loads((STATE / "last.json").read_text())
+        if prune_candidates:
+            with backfill_lock(), ws_state.lock():
+                accepted = {r["id"]: (r.get("mr") or {}).get("iid") for r in json.loads((STATE / "last.json").read_text())["rows"]}
+                current = backfills_load()
+                for wid, remembered, iid in prune_candidates:
+                    if wid in accepted and accepted[wid] == iid and current.get(wid) == remembered:
+                        current.pop(wid, None)
+                backfills_write_unlocked(current)
+        for r in rows:
+            if r.get("_goal_backfill") and (r.get("mr") or {}).get("ref"):
+                decisions.backfilled_goal(r["id"], r["mr"]["ref"], r["goal"], r.get("project"), r.get("forge"))
     return result
 
 
-def keep(result):
-    (STATE / "last.json").write_text(json.dumps(result))
-    close_stale(result["rows"])
+def scan_clock_id():
+    """Identify a boot so monotonic scan starts are comparable across processes, not across reboots."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        try:
+            return subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True,
+                                  timeout=2, check=True).stdout.strip() or "unknown"
+        except (OSError, subprocess.SubprocessError):
+            return "unknown"
+
+
+def keep(result, expected_backfill_revision=ANY_BACKFILL_REVISION):
+    STATE.mkdir(exist_ok=True)
+    import ws_state
+    with backfill_lock(), ws_state.lock():
+        if expected_backfill_revision is not ANY_BACKFILL_REVISION and backfill_revision() != expected_backfill_revision:
+            raise BackfillChanged()
+        saved = STATE / "last.json"
+        try:
+            previous = json.loads(saved.read_text())
+            previous_started = previous.get("scan_started_ns", 0)
+        except (OSError, ValueError):
+            previous = {}
+            previous_started = 0
+        same_clock = result.get("scan_clock_id") == previous.get("scan_clock_id")
+        if same_clock and result.get("scan_started_ns", 0) < previous_started:
+            patches = previous.get("dashboard_merges") or []
+            baseline = previous.get("accepted_scan_started_ns", previous.get("dashboard_base_started_ns", previous_started))
+            if not patches or result.get("scan_started_ns", 0) < baseline:
+                return False
+            rows = [row.copy() for row in result["rows"]]
+            for patch in patches:
+                for i, row in enumerate(rows):
+                    mr = row.get("mr") or {}
+                    same_request = (row.get("forge"), row.get("project"), mr.get("iid")) == \
+                                   (patch.get("forge"), patch.get("project"), patch["iid"]) and \
+                                   (patch.get("request") or mr.get("sha") == patch["sha"])
+                    same_worktree = patch.get("request") or row.get("path") == patch.get("path") and row.get("id") == patch.get("id")
+                    if same_request and same_worktree and mr.get("state") in ("opened", "open"):
+                        merged = row.copy()
+                        merged["mr"] = mr | {"state": "merged"}
+                        if "next" in patch["row"]:
+                            merged["next"] = patch["row"]["next"]
+                        merged["life"] = lifestage.place(merged) if patch.get("request") else patch["row"].get("life", merged.get("life"))
+                        rows[i] = merged
+            result = result | {"rows": rows, "scan_started_ns": previous_started, "dashboard_merges": patches,
+                               "dashboard_base_started_ns": previous.get("dashboard_base_started_ns", previous_started),
+                               "accepted_scan_started_ns": result.get("scan_started_ns", 0)}
+        result = result | {"rows": [row.copy() for row in result["rows"]]}
+        scan_id = result.setdefault("scan_id", uuid.uuid4().hex)
+        for row in result["rows"]:
+            row["_scan_id"] = scan_id
+        tmp = STATE / f"last.{uuid.uuid4().hex}.json"
+        marker = STATE / f"scan_id.{uuid.uuid4().hex}"
+        try:
+            tmp.write_text(json.dumps(result))
+            tmp.replace(STATE / "last.json")
+            marker.write_text(f"{scan_id} { (STATE / 'last.json').stat().st_ino }")
+            marker.replace(STATE / "scan_id")
+        finally:
+            tmp.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
+        close_stale(result["rows"])
+    return True
 
 
 def outbox(ev):
     STATE.mkdir(exist_ok=True)
-    with (STATE / "outbox.jsonl").open("a") as fh:
-        fh.write(json.dumps({"ts": int(time.time())} | ev) + "\n")
+    path = STATE / "outbox.jsonl"
+    with path.open("ab+") as fh:
+        fh.seek(0, os.SEEK_END)
+        if fh.tell():
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                fh.write(b"\n")  # keep a killed append from swallowing the next event
+        fh.write((json.dumps({"ts": int(time.time())} | ev) + "\n").encode())
 
 
 def pinged(update=None):
@@ -1147,8 +1350,11 @@ def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
                                for e in outbox_events()):
         print(f"skipped: {key} was answered for you in the last {FLAP // 3600}h")
         return
-    mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name
-    ws = list(dict.fromkeys(mine + list(ws)))
+    names = scanned_names()
+    raw_ws = list(ws)
+    mine = [names.get(key, key)] if key and not key.startswith("@") else []
+    display_ws = list(dict.fromkeys(mine + [names.get(w, w) for w in raw_ws]))
+    decision_ws = list(dict.fromkeys(([key] if key and not key.startswith("@") else []) + raw_ws))
     slug = decisions.slug(kind) if kind else None
     if proactive and not slug:
         kind = slug = "proactive"
@@ -1164,15 +1370,15 @@ def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
                   f"{g['waiting']} waiting); nothing sent")
             return {"held": g}
     prop = None if ask or not slug else autonomy.quiet_propose(slug, text)
-    ev = {"text": text} | ({"key": key} if key else {}) | ({"ws": ws} if ws else {})
+    ev = {"text": text} | ({"key": key} if key else {}) | ({"ws": display_ws} if display_ws else {})
     if prop and prop["tier"] == 1:
-        rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
+        rid = decisions.asked(text, "ping", key, decision_ws, kind, proposal=prop)
         try:
-            a = autonomy.act(rid, prop, text, key, ws)
+            a = autonomy.act(rid, prop, text, key, display_ws)
         except Exception as e:  # couldn't log it: ask instead
             print(f"autonomy: {e}", file=sys.stderr)
         else:
-            outbox({"auto": {"id": a["id"], "choice": prop["choice"], "prob": prop["prob"], "count": prop["count"], "agree": prop["agree"]}} | ev)
+            outbox({"record": rid, "auto": {"id": a["id"], "choice": prop["choice"], "prob": prop["prob"], "count": prop["count"], "agree": prop["agree"]}} | ev)
             print(f"auto: {prop['choice']}  (P {prop['prob']}, {prop['agree']} of {prop['count']} past {slug} answers; "
                   f"undo: autonomy.py undo {a['id']}). Act on it now as the user's answer.")
             return {"auto": prop["choice"], "id": a["id"]}
@@ -1180,13 +1386,17 @@ def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
         ev["suggest"] = {f: prop[f] for f in ("choice", "index", "prob", "count", "agree")}
     if ask:
         # Undo must be able to link the user's eventual answer before the app sees this re-ask.
-        rid = decisions.asked(text, "ping", key, ws, kind)
-        outbox(ev)
+        rid = decisions.asked(text, "ping", key, decision_ws, kind)
+        outbox({"record": rid} | ev)
         if key:
             pinged(pinged() | {key: int(time.time())})
         return {"asked": rid}
-    outbox(ev)
-    rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
+    rid = decisions.asked(text, "ping", key, decision_ws, kind, proposal=prop)
+    if key and not key.startswith("@") and any(e.get("record") == rid and e.get("key") == key and e.get("text") == text and
+                                                   e.get("ts", 0) > time.time() - FLAP for e in outbox_events()):
+        pinged(pinged() | {key: int(time.time())})  # recover a crash after this exact decision was already delivered
+        return {"asked": rid}
+    outbox({"record": rid} | ev)
     if key:
         pinged(pinged() | {key: int(time.time())})
     return {"asked": rid} if rid else None
@@ -1197,7 +1407,11 @@ FLAP = 24 * 3600
 
 def outbox_events():
     f = STATE / "outbox.jsonl"
-    return [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
+    events = []
+    for line in f.read_text(errors="replace").splitlines() if f.exists() else []:
+        with contextlib.suppress(ValueError):
+            events.append(json.loads(line))
+    return events
 
 
 def recent_keys():
@@ -1233,20 +1447,31 @@ def ping_cli(args):
     names = scanned_names()
     if unknown := [w for w in ws if w not in names]:
         sys.exit(f"greenlight.py ping: unknown workspace {', '.join(unknown)} (not in the last scan); nothing sent")
-    ping(" ".join(args), key, [names[w] for w in ws], kind, proactive)
+    ping(" ".join(args), key, ws, kind, proactive)
 
 
 def resolve(key, why):
-    outbox({"resolve": key, "why": why})
-    decisions.quiet("resolve", key, why)
-    pinged({k: t for k, t in pinged().items() if k != key})
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "ping.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        outbox({"resolve": key, "why": why})
+        decisions.quiet("resolve", key, why)
+        pinged({k: t for k, t in pinged().items() if k != key})
 
 
 def close_stale(rows):
     """Questions about a workspace close once it's gone or no longer waiting on me."""
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
     undo_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@undo:") and e.get("ws")}
+    stuck_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@stuck:") and e.get("ws")}
+    stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
+                 for r in decisions.load() if str(r.get("key", "")).startswith("@stuck:")}
     for key in pinged():
+        if key.startswith("@stuck:"):
+            names = stuck_ids.get(key) or stuck_ws.get(key, [])
+            if names and not any(name in by_key for name in names):
+                resolve(key, "workspace removed")
+            continue
         if key.startswith("@undo:"):
             names = undo_ws.get(key, [])
             if names and not any((r := by_key.get(name)) and r["next"]["owner"] == "me" for name in names):

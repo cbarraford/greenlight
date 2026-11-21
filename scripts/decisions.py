@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 STATE = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
-FIELDS = ("workspace", "repo", "role", "step", "owner", "mr")
+FIELDS = ("workspace", "worktree_id", "repo", "forge", "branch", "role", "step", "owner", "mr", "goal", "sha", "target_branch")
 # what the app sends for an answer to a ping: Greenlight.swift answer() and reply(to:)
 REPLY = {"inbox": '(Replying to your question: "', "notification": '(Replying to your notification: "'}
 REPLY_RE = re.compile(r'\(Replying to your (?:question|notification): "(.*)"\)\n(.*)', re.S)
@@ -43,7 +43,14 @@ def file():
 
 def load():
     f = file()
-    return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+    if not f.exists():
+        return []
+    records = []
+    for line in f.read_text().splitlines():
+        if line.strip():
+            with contextlib.suppress(ValueError):  # an interrupted append must not hide earlier valid answers
+                records.append(json.loads(line))
+    return records
 
 
 @contextlib.contextmanager
@@ -79,8 +86,9 @@ def rows():
 def situation(r):
     """A scan row as the situation a question was asked in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
-    return {"workspace": r["name"], "repo": r.get("project"), "role": mr.get("role"), "step": nxt.get("step"),
-            "owner": nxt.get("owner"), "mr": mr.get("ref")}
+    return {"workspace": r["name"], "worktree_id": r["id"], "repo": r.get("project"), "role": mr.get("role"), "step": nxt.get("step"),
+            "owner": nxt.get("owner"), "mr": mr.get("ref"), "goal": r.get("goal"), "sha": mr.get("sha"),
+            "target_branch": mr.get("target_branch"), "forge": r.get("forge"), "branch": r.get("branch")}
 
 
 def situations(names=(), text=""):
@@ -141,7 +149,8 @@ def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None
         for r in recs:
             if not is_open(r) or r["via"] != via:
                 continue
-            if via == "ping" and r["question"] == rec["question"] and r["key"] == key and r["options"] == rec["options"]:
+            if via == "ping" and r["question"] == rec["question"] and r["key"] == key and r["options"] == rec["options"] and \
+                    all(r.get(f) == rec.get(f) for f in FIELDS) and r.get("workspaces") == rec.get("workspaces"):
                 r["kind"] = rec["kind"]
                 if proposal:
                     r["proposal"] = proposal
@@ -152,6 +161,22 @@ def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None
                 r["closed"] = "superseded"
         recs.append(rec)
     return rec["id"]
+
+
+def backfilled_goal(worktree_id, mr_ref, goal, repo=None, forge=None):
+    """Keep questions asked during a goal-less scan attached to its generated MR goal."""
+    def matches(t, parent):
+        return t.get("worktree_id") == worktree_id and t.get("mr") == mr_ref and t.get("goal") == "" and \
+            (repo is None or t.get("repo", parent.get("repo")) == repo) and \
+            (forge is None or t.get("forge", parent.get("forge")) == forge)
+    if not any(any(matches(t, r) for t in [r] + (r.get("workspaces") or [])) for r in load()):
+        return
+    with book() as recs:
+        for r in recs:
+            targets = [r] + (r.get("workspaces") or [])
+            for t in targets:
+                if matches(t, r):
+                    t["goal"] = goal
 
 
 def settle(r, text, via):
