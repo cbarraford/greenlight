@@ -432,6 +432,9 @@ def check_shell(script, ctx, depth=0):
         for r in inputs:
             if SECRET_PATH_RE.search(str(ctx.path(r))):
                 v.add("high", f"reads a credential file through input redirection ({r})", "secret")
+        for item in argv:
+            if item.startswith("GH_REPO=") and not own_repo(item.split("=", 1)[1], ctx):
+                v.add("high", "GH_REPO selects another repository", "egress")
         argv = unwrap(argv)
         if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
             to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
@@ -515,6 +518,11 @@ def check_argv(argv, ctx, depth, piped_from=None):
         if host_of(dest.split(":")[0]) in LOCAL_HOSTS:
             return v
         v.add("high", f"{cmd} opens a connection off the machine", "egress")
+        if cmd in ("scp", "rsync") and args:
+            target = args[-1]
+            if ":" in target or "@" in target:
+                for source in (a for a in args[:-1] if not a.startswith("-") and ":" not in a):
+                    v.merge(check_upload_file(source, ctx, cmd))
         return v
     if cmd in ("rm", "rmdir", "unlink", "shred", "trash", "srm"):
         return check_rm(args, ctx)
@@ -529,7 +537,13 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 p = ctx.path(r)
                 if not (ctx.root and (p == ctx.root or ctx.inside(p))):
                     v.merge(check_rm(["-r", r], ctx))
-            return v
+        for flag in ("-exec", "-execdir", "-ok"):
+            if flag in args:
+                payload = args[args.index(flag) + 1:]
+                payload = [a for a in payload if a not in ("{}", "+", ";")]
+                if payload:
+                    v.merge(check_argv(payload, ctx, depth + 1))
+        return v
     if cmd in ("dd", "mkfs", "diskutil", "fdisk", "parted") or cmd.startswith("mkfs."):
         v.add("high", f"{cmd} writes disks")
         return v
@@ -622,6 +636,8 @@ def check_git(args, ctx):
             v.add("low", f"clones from {host_of(url)}", "egress")
     elif sub == "reset" and "--hard" in rest:
         v.add("medium", "git reset --hard drops uncommitted work")
+    elif sub == "restore":
+        v.add("medium", "git restore can discard uncommitted work")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
@@ -659,6 +675,9 @@ def check_push(rest, ctx, v):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
     if any(f in ("--mirror", "--all", "--tags", "--prune") for f in flags):
         v.add("high", "pushes every branch or tag, or deletes remote ones", "egress")
+    if "--follow-tags" in flags or "--tags" in flags:
+        v.add("high", "pushes tag objects that need inspection", "egress")
+        v.merge(check_tag_objects(ctx))
     if "--mirror" in flags or (force and "--all" in flags):
         v.add("deny", "force-pushes all branches, including the default branch", "egress")
     if any(f in ("-d", "--delete") for f in flags) or any(p.startswith(":") for p in pos[1:]):
@@ -685,6 +704,27 @@ def check_push(rest, ctx, v):
             v.add("high", "cannot inspect a push of a different source ref", "egress")
         else:
             v.merge(check_outgoing_commits(ctx, remote))
+    return v
+
+
+def check_tag_objects(ctx):
+    v = Verdict()
+    refs = ctx.git("for-each-ref", "--format=%(objectname) %(objecttype)", "refs/tags").splitlines()
+    if len(refs) > 100:
+        v.add("high", "too many tag objects to inspect", "egress")
+        return v
+    for ref in refs:
+        oid, _, kind = ref.partition(" ")
+        if kind != "tag":
+            continue
+        try:
+            data = subprocess.run(["git", "-C", str(ctx.cwd), "cat-file", "-p", oid], capture_output=True, text=True,
+                                  timeout=2, check=True).stdout
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            v.add("high", "cannot inspect an annotated tag", "egress")
+            continue
+        if leak := leaks(data):
+            v.add("deny", f"pushes a tag that {leak}", "secret", "egress")
     return v
 
 
@@ -786,7 +826,7 @@ def check_forge(cmd, args, ctx):
             v.add("high", f"{cmd} auth {verb} changes who the agent is")
         return v
     if group == "api":
-        method = (opt(a, "-X", "--method") or "").upper()
+        method = (opt(a, "-X", "--method") or next((x[2:] for x in a if x.startswith("-X") and len(x) > 2), "")).upper()
         writes = method not in ("", "GET", "HEAD") or any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field", "--input"))
         if writes:
             v.add("high" if method == "DELETE" else "medium", f"{cmd} api {method or 'POST'} writes to the forge", "egress")
@@ -796,6 +836,10 @@ def check_forge(cmd, args, ctx):
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
+    if group == "gist" and verb == "create" or group == "release" and verb == "upload":
+        for source in a[2:]:
+            if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
+                v.merge(check_upload_file(source, ctx, f"{cmd} {group} upload"))
     if verb in FORGE_READ or group in ("help", "version", "--version", "completion"):
         return v
     if group in ("secret", "variable", "ssh-key", "gpg-key", "extension", "alias", "config") or group == "repo" and verb in (
@@ -857,6 +901,11 @@ def check_net(cmd, args, ctx):
             v.add("deny", f"{cmd} request config {leak}", "secret", "egress")
         for source in re.findall(r"@([^\s\"']+)", config_text):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
+    if cmd == "wget":
+        for flag in ("--post-file", "--body-file"):
+            source = opt(args, flag)
+            if source:
+                v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     if hosts and hosts <= LOCAL_HOSTS:
         return v
     data = [a for a in args if re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-|--body-|--method", a)]
@@ -878,8 +927,9 @@ def check_net(cmd, args, ctx):
     if leak := leaks(full):
         v.add("deny", f"the request {leak}", "secret", "egress")
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
+    header_vars = {n for a in args if re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for n in secret_vars(a)}
     auth_hosts = {"github.com", "api.github.com", "gitlab.com", "api.gitlab.com"}
-    if secret_vars(full) and not (auth_header and hosts and hosts <= auth_hosts):
+    if secret_vars(full) and (set(secret_vars(full)) - header_vars or not (auth_header and hosts and hosts <= auth_hosts)):
         v.add("deny", "sends a secret env var off the machine", "secret", "egress")
     if data or method in ("POST", "PUT", "PATCH", "DELETE"):
         v.add("high", f"{cmd} sends data to {', '.join(sorted(hosts)) or 'a host'}", "egress")
@@ -1163,7 +1213,7 @@ def describe(tool, inp):
     return f"{tool} {json.dumps(inp)[:1000]}"
 
 
-def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, record=True):
+def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, record=True, dry_run=False):
     """{decision: pass|allow|ask|deny, reason, tier, ...}. pass: no opinion."""
     t0 = time.monotonic()
     conf = conf if conf is not None else (config() or {})
@@ -1184,6 +1234,8 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
     if verdict == "pause" and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
+    if verdict == "pause" and dry_run:
+        verdict, why = "ask", f"{why}; dry run would ask for approval"
     if verdict == "pause":
         how = "ping" if not interactive_ok and mode(conf) == "ask" else mode(conf)
         token = hashlib.sha256(f"{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:10]
@@ -1251,7 +1303,7 @@ def main(argv):
         if cmd == "run" and conf is None:
             os.execvp(rest[0], rest)
         r = decide_call("Bash", {"command": line}, os.getcwd(), os.environ.get("GREENLIGHT_SESSION", "cli"), conf,
-                        interactive_ok=cmd == "check", record=cmd == "run")
+                        interactive_ok=cmd == "check", record=cmd == "run", dry_run=cmd == "check")
         if cmd == "check":
             print(json.dumps(r) if as_json else f"{r['decision']}: {r.get('reason', 'no boundary crossed')} ({r['ms']} ms)")
             return {"pass": 0, "allow": 0, "ask": 1, "deny": 2}[r["decision"]]
