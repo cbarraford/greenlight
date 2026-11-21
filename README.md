@@ -103,6 +103,7 @@ A model can only add to what the patterns find: it can add a hold or a draft but
 | `scripts/greenlight.py` | scan, next step per workspace, report, pings |
 | `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
 | `scripts/lifestage.py` | where each change is in its lifecycle (stage and sub-stage), who holds it, the suggested move |
+| `scripts/dwim.py` | the fast path for board commands said, typed in the chat or in ⌘J (“park the two auth ones”, “hold #42”, “fix CI on the red ones”): done in under a second with an Undo toast, or handed to Chief when it’s ambiguous or destructive; and the voice stage’s instant table / timeline / diff / lifecycle card |
 | `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |
 | `scripts/decisions.py` | the decision record: every question Greenlight asked you, the situation, and your answer (`~/.greenlight/decisions.jsonl`) |
 | `scripts/auto.py` | Greenlight's own cron-style automations |

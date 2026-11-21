@@ -475,7 +475,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         mr = r.get("mr") or {}
         page = cached_page(r["name"])
         pucks.append({
-            "name": r["name"], "path": r["path"], "project": r["project"], "repo": r["repo"], "goal": r["goal"], "state": state, "why": why,
+            "name": r["name"], "path": r["path"], "project": r["project"], "repo": r["repo"], "goal": r["goal"], "goal_live": w.get("comment") or "", "state": state, "why": why,
             "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"],
             # the live goal, not last.json's: a park from the dock shows up before the next scan
             "owner": r["next"]["owner"], "hidden": bool(greenlight.PARKED_RE.search(w.get("comment") or "")
@@ -962,9 +962,10 @@ def park(name, on):
     return {"ok": True, "goal": goal}
 
 
-def run(name, prompt):
+def run(name, prompt, worktree_id=None):
     """Launch an agent in the workspace with `prompt`. Refuses while its agent is working or waiting on an answer."""
-    w, ag = next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
+    w, ag = next(((w, ag) for w, ag in live_agents().values() if w["worktreeId"] == worktree_id), (None, None)) if worktree_id else \
+        next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
     if not w:
         return {"error": f"no workspace {name}"}
     if ag.get("state") == "working":
