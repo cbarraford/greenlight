@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import diag  # noqa: E402
 import harness  # noqa: E402
 from greenlight import CONFIG, LIMIT_RE, STATE, ping  # noqa: E402
 
@@ -205,6 +206,8 @@ def execute(name):
                     break
             rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:]}
     rec["secs"] = int(time.time() - start)
+    diag.event("automation", name_h=diag.h(name), status=rec["status"], engine=rec.get("engine"), secs=time.time() - start,
+               msg_class=diag.classify(rec.get("summary", "")) if rec["status"] == "failed" else None)
     with (DIR / "runs.jsonl").open("a") as fh:
         fh.write(json.dumps(rec) + "\n")
     (DIR / f"{name}.pid").unlink(missing_ok=True)
@@ -321,4 +324,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("auto")
     main()

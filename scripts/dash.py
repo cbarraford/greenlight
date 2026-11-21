@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade_common  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
+import diag  # noqa: E402
 import greenlight  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
@@ -1575,6 +1576,11 @@ def settings(op, arg, stdin):
     return {"error": f"no task op {op}"}
 
 
+
+def oops(a, e):
+    """A dash op's caught failure, for diag: the op, the exception type and class, never the message."""
+    diag.event("dash_error", op=a[0], sub=a[1] if a[0] in ("task", "tree") else None, **diag.failure(e))
+
 def main():
     a = sys.argv[1:]
     if a[:1] == ["snapshot"]:
@@ -1587,6 +1593,7 @@ def main():
                 record(s["pucks"])
                 print(json.dumps(s), flush=True)
             except Exception as e:
+                oops(a, e)
                 print(json.dumps({"error": str(e)[:300]}), flush=True)
             time.sleep(every)
     elif a[:1] == ["page"] and len(a) > 1 and NAME_RE.match(a[1]):
@@ -1601,6 +1608,7 @@ def main():
         try:
             print(json.dumps(suggest(a[1], **opt)))
         except Exception as e:
+            oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["run"] and len(a) > 1 and NAME_RE.match(a[1]):
         prompt = sys.stdin.read().strip()[:8000]
@@ -1616,16 +1624,19 @@ def main():
                 text = sys.stdin.read().strip()[:4000]
                 print(json.dumps({"name": a[1], **(answer(a[1], text) if text else {"error": "empty answer"})}))
         except Exception as e:
+            oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["park"] and len(a) == 3 and NAME_RE.match(a[1]) and a[2] in ("on", "off"):
         try:
             print(json.dumps({"name": a[1], **park(a[1], a[2] == "on")}))
         except Exception as e:
+            oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["task"] and len(a) == 3 and NAME_RE.match(a[2]):
         try:
             print(json.dumps({"op": a[1], "arg": a[2], **task(a[1], a[2], sys.stdin.read().strip()[:20 << 20])}))
         except Exception as e:
+            oops(a, e)
             print(json.dumps({"op": a[1], "arg": a[2], "error": str(e)[:300]}))
     elif a[:1] == ["transcript"] and len(a) > 1 and NAME_RE.match(a[1]):
         before = a[a.index("--before") + 1] if "--before" in a[:-1] else None
@@ -1645,6 +1656,7 @@ def main():
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
                 else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:
+            oops(a, e)
             out = {"error": str(e)[:300]}
         print(json.dumps({"op": a[1], "path": a[2], **out}))
     else:
@@ -1652,4 +1664,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("dash")
     main()

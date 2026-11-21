@@ -17,6 +17,7 @@ import contextlib, fcntl, glob, hashlib, json, os, random, re, signal, subproces
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import attach  # noqa: E402
 import decisions  # noqa: E402
+import diag  # noqa: E402
 import harness  # noqa: E402
 import auto  # noqa: E402
 
@@ -331,8 +332,15 @@ THINK_STATUS = {"Thinking", "Reasoning"}  # claude/pi/opencode thinking, codex's
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
 
 
+TURN = {}  # this process's turn, for its diag event: {harness, model, t}
+
+
 def emit(**e):
     print(json.dumps(e), flush=True)
+    if e.get("e") == "done":  # one chat_turn per answered message: harness, timing, context size; never the text
+        diag.event("chat_turn", ok=bool(e.get("ok")), harness=TURN.get("harness"), model=TURN.get("model"),
+                   context=e.get("context") if isinstance(e.get("context"), int) else None, ms=e.get("ms"),
+                   secs=time.monotonic() - TURN["t"] if "t" in TURN else None)
 
 
 def short(s, n=160):
@@ -1465,6 +1473,7 @@ def discard_session_for_turn(reservation):
 
 def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
     engine, model = harness.route(model)
+    TURN.update(harness=engine, model=model, t=time.monotonic())
     stored = []
     if files:
         try:
@@ -1751,4 +1760,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("chat")
     main()

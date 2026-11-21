@@ -49,6 +49,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import diag
+
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 HAIKU = "claude-haiku-5-5"
@@ -402,14 +404,19 @@ def batch(state, questions):
             break
         k = _cache_key(p, c, state, qs)
         if (hit := _cache_get(k)) and set(hit) == set(qs):
+            diag.event("decide", provider=p, cache_hit=True, n=len(qs), fallback=len(errors))
             return hit
+        t = time.monotonic()
         try:
             out = BACKENDS[p](state, qs, c)
         except Exception as e:  # any failure (network, key, a malformed reply) moves on: a decision never crashes its caller
             errors.append(f"{p}: {str(e)[:200]}")
+            diag.event("decide", provider=p, secs=time.monotonic() - t, **diag.failure(e))
             continue
         _cache_put(k, out)
+        diag.event("decide", provider=p, ok=True, cache_hit=False, n=len(qs), fallback=len(errors), secs=time.monotonic() - t)
         return out
+    diag.event("decide", provider="local", n=len(qs), fallback=len(errors))
     why = "; ".join(errors) or None
     return {n: local(q, why) for n, q in qs.items()}
 
@@ -515,4 +522,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    diag.install("decide")
     sys.exit(main(sys.argv[1:]))
