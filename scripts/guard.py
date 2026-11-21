@@ -233,6 +233,29 @@ def leaks(text):
     return None
 
 
+def check_upload_file(source, ctx, how):
+    """Inspect a file an outbound command will send; an uninspectable file cannot be silently allowed."""
+    v = Verdict()
+    if source == "-":
+        v.add("high", f"{how} sends stdin that the guard cannot inspect", "egress")
+        return v
+    p = ctx.path(source)
+    if SECRET_PATH_RE.search(str(p)):
+        v.add("deny", f"{how} sends a credential file ({source})", "secret", "egress")
+        return v
+    try:
+        with p.open("rb") as fh:
+            data = fh.read(5_000_001)
+    except OSError:
+        v.add("high", f"cannot inspect {how} file ({source})", "egress")
+        return v
+    if len(data) > 5_000_000:
+        v.add("deny", f"{how} file is too large to inspect ({source})", "egress")
+    elif leak := leaks(data.decode(errors="replace")):
+        v.add("deny", f"{how} file {leak}", "secret", "egress")
+    return v
+
+
 def secret_vars(text):
     return [n for n in SECRET_VAR_RE.findall(text or "") if SECRET_NAME_RE.search(n)]
 
@@ -313,7 +336,7 @@ def commands(script):
         toks = list(lex)
     except ValueError:
         return None
-    out, argv, redir, inputs, want = [], [], [], [], None
+    out, argv, redir, inputs, want, piped = [], [], [], [], None, False
     for t in toks:
         if want:
             if not re.fullmatch(r"&\d*|\d+", t):  # 2>&1, >&2
@@ -323,14 +346,14 @@ def commands(script):
             want = "write" if t != "<&" else "skip"
         elif t and set(t) <= set(";&|()"):
             if argv:
-                out.append((argv, redir, inputs))
-            argv, redir, inputs = [], [], []
+                out.append((argv, redir, inputs, piped))
+            argv, redir, inputs, piped = [], [], [], t == "|"
         elif t in ("<", "<<", "<<<", "<<-"):
             want = "read" if t == "<" else "skip"
         else:
             argv.append(t)
     if argv:
-        out.append((argv, redir, inputs))
+        out.append((argv, redir, inputs, piped))
     return out
 
 
@@ -396,7 +419,7 @@ def check_shell(script, ctx, depth=0):
         if NET_CODE_RE.search(body) or re.search(r"\b(?:rm|git\s+push|gh|glab)\b", body):
             v.add("high", "unparseable and names a network or destructive tool")
         return v
-    for i, (argv, redir, inputs) in enumerate(cmds):
+    for argv, redir, inputs, piped in cmds:
         for r in redir:
             v.merge(check_write(ctx.path(r), ctx, "redirect", raw=r))
         for r in inputs:
@@ -412,7 +435,7 @@ def check_shell(script, ctx, depth=0):
                           source_root=ctx.source_root or ctx.root)
             continue
         if argv:
-            v.merge(check_argv(argv, ctx, depth, piped_from=i > 0 and cmds[i - 1]))
+            v.merge(check_argv(argv, ctx, depth, piped_from=piped))
     if "secret" in v.flags and "egress" in v.flags:
         v.add("deny", "reads a secret and sends data off the machine in one command")
     return v
@@ -445,7 +468,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
         if len(rest) >= 2 and rest[0] == "worktree" and rest[1] in ("rm", "remove", "delete"):
             v.add("medium", "removes a workspace")
-        if cmd in ("orca", "orca-ide") and "terminal" in args:
+        if "terminal" in rest:
             for flag in ("--text", "--command"):
                 payload = opt(args, flag)
                 if payload:
@@ -610,9 +633,17 @@ def check_push(rest, ctx, v):
     flags = [x for x in rest if x.startswith("-")]
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
                 for f in flags) or any(p.startswith("+") for p in pos[1:])
-    remote = pos[0] if pos else "origin"
-    if remote in ctx.remotes and remote != "origin" and not own_repo(ctx.git("remote", "get-url", remote), ctx):
-        v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
+    remote = pos[0] if pos else (ctx.git("config", "--get", f"branch.{ctx.branch}.pushRemote") or
+                                 ctx.git("config", "--get", "remote.pushDefault") or
+                                 ctx.git("config", "--get", f"branch.{ctx.branch}.remote") or "origin")
+    push_default = ctx.git("config", "--get", "push.default") or "simple"
+    if not pos and push_default not in ("simple", "current"):
+        v.add("high", f"bare git push with push.default={push_default} may send other refs", "egress")
+    if remote in ctx.remotes:
+        dest = ctx.git("remote", "get-url", "--push", remote)
+        project = workspace_project(ctx)
+        if project and repo_slug(dest) != project.lower() or not project and remote != "origin" and not own_repo(dest, ctx):
+            v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
     if remote not in ctx.remotes and remote != "origin" and ("/" in remote or ":" in remote or "@" in remote):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
     if any(f in ("--mirror", "--all", "--tags", "--prune") for f in flags):
@@ -698,22 +729,7 @@ def check_forge(cmd, args, ctx):
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file")
     for source in filter(None, (bfile, opt(a, "--input"))):
-        if source == "-":
-            v.add("high", f"{cmd} sends stdin that the guard cannot inspect", "egress")
-            continue
-        p = ctx.path(source)
-        if SECRET_PATH_RE.search(str(p)):
-            v.add("deny", f"posts a credential file ({source}) to {cmd}", "secret", "egress")
-        try:
-            with p.open("rb") as fh:
-                data = fh.read(5_000_001)
-        except OSError:
-            v.add("high", f"cannot inspect {cmd} upload file ({source})", "egress")
-            continue
-        if len(data) > 5_000_000:
-            v.add("deny", f"{cmd} upload file is too large to inspect ({source})", "egress")
-        elif leak := leaks(data.decode(errors="replace")):
-            v.add("deny", f"{cmd} upload file {leak}", "secret", "egress")
+        v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     if leak := leaks(body) or leaks(text):
         v.add("deny", f"the text it posts {leak}", "secret", "egress")
     if secret_vars(text):
@@ -736,6 +752,8 @@ def check_forge(cmd, args, ctx):
             target = re.search(r"\brepos/([^/\s]+)/([^/\s?]+)", text)
             if target and not own_repo(f"{target[1]}/{target[2]}", ctx):
                 v.add("high", f"{cmd} api writes to another repo ({target[1]}/{target[2]})", "egress")
+            if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
+                v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
     if verb in FORGE_READ or group in ("help", "version", "--version", "completion"):
         return v
@@ -759,9 +777,21 @@ def check_forge(cmd, args, ctx):
 
 def own_repo(repo, ctx):
     url = ctx.git("remote", "get-url", "origin")
-    name = re.sub(r"\.git$", "", re.sub(r"^(?:https?://|git@)[^/:]+[/:]", "", url)).lower()
-    other = re.sub(r"\.git$", "", re.sub(r"^(?:https?://|git@)[^/:]+[/:]", "", repo.lower())).rstrip("/")
+    name, other = repo_slug(url), repo_slug(repo)
     return bool(name) and other == name and ("/" not in repo or "://" not in repo and "@" not in repo or host_of(url) == host_of(repo))
+
+
+def repo_slug(repo):
+    return re.sub(r"\.git$", "", re.sub(r"^(?:https?://|git@)[^/:]+[/:]", "", repo.lower())).rstrip("/")
+
+
+def workspace_project(ctx):
+    try:
+        rows = json.loads((STATE / "last.json").read_text()).get("rows", [])
+    except (OSError, ValueError):
+        return ""
+    return next((r.get("project", "") for r in rows if r.get("path") and ctx.root and
+                 os.path.realpath(r["path"]) == str(ctx.root)), "")
 
 
 def check_net(cmd, args, ctx):
@@ -772,6 +802,20 @@ def check_net(cmd, args, ctx):
     output = output or next((a[2:] for a in args if a.startswith("-o") and len(a) > 2), None)
     if output:
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
+    config_file = opt(args, "-K", "--config") or next((a[2:] for a in args if a.startswith("-K") and len(a) > 2), None)
+    if config_file:
+        v.add("high", f"{cmd} loads an external request config ({config_file})", "egress")
+        try:
+            with ctx.path(config_file).open("r", errors="replace") as fh:
+                config_text = fh.read(1_000_001)
+        except OSError:
+            config_text = ""
+        if len(config_text) > 1_000_000:
+            v.add("deny", f"{cmd} request config is too large to inspect", "egress")
+        if leak := leaks(config_text):
+            v.add("deny", f"{cmd} request config {leak}", "secret", "egress")
+        for source in re.findall(r"@([^\s\"']+)", config_text):
+            v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if hosts and hosts <= LOCAL_HOSTS:
         return v
     data = [a for a in args if re.match(r"--data|-d(?:$|@)|-F$|--form|--json|-T$|--upload-file|--post-|--body-|--method", a)]
@@ -789,8 +833,7 @@ def check_net(cmd, args, ctx):
             source = a
         if source and ("@" in source or a in ("-T", "--upload-file")):
             path = source.split("@", 1)[-1].split(";")[0] if "@" in source else source
-            if path != "-" and SECRET_PATH_RE.search(str(ctx.path(path))):
-                v.add("deny", f"uploads a credential file ({path})", "secret", "egress")
+            v.merge(check_upload_file(path, ctx, f"{cmd} upload"))
     if leak := leaks(full):
         v.add("deny", f"the request {leak}", "secret", "egress")
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
@@ -890,13 +933,19 @@ def check_tool(tool, inp, ctx):
         else:
             v.add("medium", f"fetches {host}", "egress")
         return v
+    if tool == "WebSearch":
+        if leak := leaks(json.dumps(inp)):
+            v.add("deny", f"the search query {leak}", "secret", "egress")
+        else:
+            v.add("medium", "searches the web with the supplied query", "egress")
+        return v
     if tool.startswith("mcp__"):
         name = tool.split("__")[-1].lower()
-        if re.search(r"send|post|create|update|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke", name):
-            v.add("medium", f"{tool} changes something outside this machine", "egress")
-            blob = json.dumps(inp)
-            if leak := leaks(blob):
-                v.add("deny", f"what it sends {leak}", "secret", "egress")
+        if re.search(r"send|post|create|update|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name):
+            v.add("high" if re.search(r"execute|invoke|call|run", name) else "medium",
+                  f"{tool} may change something outside this machine", "egress")
+        if leak := leaks(json.dumps(inp)):
+            v.add("deny", f"what it sends {leak}", "secret", "egress")
         return v
     return v
 
