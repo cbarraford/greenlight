@@ -149,10 +149,14 @@ func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .d
 /// The chosen chat font: for the conversation's own text (messages, the composer, questions), not the chrome around it.
 func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font { sys(size: size, weight: weight, face: chatFont) }
 let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Haiku 5.5", "claude-haiku-5-5"),
-              ("Fable 5.1", "claude-fable-5-1"), ("Gemini 4 Neon", "gemini-4-neon"),
+              ("Fable 5.1", "claude-fable-5-1"),
+              ("Gemini 4 Neon · Low", "gemini-4-neon-low"), ("Gemini 4 Neon · Medium", "gemini-4-neon-medium"),
+              ("Gemini 4 Neon · High", "gemini-4-neon-high"), ("Gemini 4 Neon · Extra high", "gemini-4-neon-xhigh"),
+              ("Gemini 4 Argon · Medium", "gemini-4-argon-medium"), ("Gemini 4 Hydrogen · Medium", "gemini-4-hydrogen-medium"),
+              ("Gemini 3.8 Flash · Medium", "gemini-3.8-flash-medium"),
               ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
-/// A model id is a Claude model, a Gemini model (Gemini CLI runs it), or another harness's name (it runs that harness's default model).
-func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "gemini" : model }
+/// Gemini model ids run through agy; the Gemini CLI entry still starts that harness's default model.
+func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "agy" : model }
 let efforts = ["low", "medium", "high", "xhigh", "max"]
 func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capitalized }  // display only; the stored value stays
 
@@ -3030,7 +3034,7 @@ final class Core: ObservableObject {
     @Published var hq: String?  // the ⌃R query; nil = closed
     @Published var hsel = 0
     var hsaved = "", recalling = false, toEnd = false  // toEnd: the key monitor puts the caret at the end after this key
-    @Published var model = UserDefaults.standard.string(forKey: "model") ?? "claude-opus-5-5" {
+    @Published var model = (UserDefaults.standard.string(forKey: "model") == "gemini-4-neon" ? "gemini-4-neon-medium" : UserDefaults.standard.string(forKey: "model")) ?? "claude-opus-5-5" {
         didSet {
             UserDefaults.standard.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
@@ -3040,7 +3044,7 @@ final class Core: ObservableObject {
         }
     }
     @Published var effort = UserDefaults.standard.string(forKey: "effort") ?? "medium" { didSet { UserDefaults.standard.set(effort, forKey: "effort") } }
-    // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one on Gemini CLI.
+    // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one through agy.
     @Published var designModel = UserDefaults.standard.string(forKey: "designModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(designModel, forKey: "designModel") } }
     @Published var designEffort = UserDefaults.standard.string(forKey: "designEffort") ?? "low" { didSet { UserDefaults.standard.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
@@ -4936,7 +4940,7 @@ struct SettingsView: View {
             row("Chat model", "Changes apply from your next message.") {
                 Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
             }
-            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : c.model.hasPrefix("gemini-") ? "Choose the Gemini effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
             toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
         }

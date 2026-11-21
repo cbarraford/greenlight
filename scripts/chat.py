@@ -5,7 +5,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
-                                     # M: a claude or gemini model, or a harness name (codex|opencode|pi|gemini) for its default model
+                                     # M: a Claude or agy Gemini model, or a harness name for its default model
   chat.py compact [--model M]       # claude only
   chat.py new                        # forget every harness's session (Clear)
   chat.py stop                       # kill the running turn
@@ -257,7 +257,7 @@ def codex_usage(thread, total=None):
 
 
 class Norm:
-    """Each harness's JSON lines (claude/gemini stream-json, codex/opencode/pi json) → the app's events."""
+    """Each harness's JSON lines → the app's events."""
 
     def __init__(self, verbose=False):
         self.verbose = verbose  # chat.py send --verbose: whole inputs/outputs on steps, and think events
@@ -524,6 +524,50 @@ class Norm:
             out.append({"e": "done", "ok": ok, "text": text, "context": self.context, "window": None, "ms": st.get("duration_ms")})
         return out
 
+    def agy(self, d):
+        """`agy --print --output-format stream-json`: streamed reply deltas and a final result."""
+        event, out = d.get("event"), []
+        step = d.get("step_update") or {}
+        if event == "init":
+            self.gem_open = False
+        elif event == "step_update" and step.get("step_type") == "agent_response":
+            delta = step.get("text_delta") or ""
+            if delta:
+                if not self.gem_open:
+                    self.text, self.gem_open = "", True
+                    out.append({"e": "text_reset"})
+                self.text += delta
+                out.append({"e": "text", "delta": delta})
+            usage = step.get("usage") or {}
+            if usage:
+                self.context = usage.get("input_tokens") or self.context
+                out.append({"e": "usage", "context": self.context})
+        elif event == "step_update" and step.get("step_type") == "tool":
+            self.gem_open = False
+            info = step.get("tool_info") or {}
+            name, args = step.get("tool_name") or info.get("name") or "tool", info.get("parameters") or {}
+            args = {"command": args.get("CommandLine", "")} if name == "run_command" else args
+            title, detail = step_title("Bash" if name == "run_command" else name, args)
+            ident = f"agy-{step.get('step_index')}"
+            if step.get("state") == "ACTIVE":
+                out.append(self.more({"e": "step", "id": ident, "title": short(title, 80), "detail": short(detail or json.dumps(args)),
+                                      "call": call("Bash" if name == "run_command" else name, args)}, input=clip(json.dumps(args))))
+            elif step.get("state") == "DONE":
+                result = str(info.get("output") or "")
+                ok = not info.get("error") and (name != "run_command" or "exited with code 0" in result.lower())
+                out.append(self.more({"e": "step_done", "id": ident, "ok": ok,
+                                      "out": short(result, 120)}, full=clip(result, tail=True)))
+        elif event == "result":
+            result = d.get("result") or {}
+            ok = result.get("status") == "SUCCESS"
+            reply = result.get("response") or self.text
+            duration = result.get("duration_seconds")
+            out.append({"e": "done", "ok": ok, "text": reply if ok else result.get("error") or reply or "agy failed",
+                        "context": self.context, "window": None, "ms": round(duration * 1000) if isinstance(duration, (int, float)) else None})
+        elif event == "error":
+            out.append({"e": "status", "text": short(str(d.get("message") or d.get("error") or "agy error"), 80)})
+        return out
+
     def pi(self, d):
         """`pi --mode json`: agent session events."""
         t, out = d.get("type"), []
@@ -583,7 +627,9 @@ def run(cmd, engine, text, norm, check=False, guard=None):
             d = json.loads(line)
         except ValueError:
             continue
-        sid = d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
+        init = d.get("init") if isinstance(d.get("init"), dict) else {}
+        result = d.get("result") if isinstance(d.get("result"), dict) else {}
+        sid = d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id") or d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
         raw = getattr(norm, engine)(d)
         for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
             if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
