@@ -67,7 +67,7 @@ jobs:
         run: |
           mkdir -p /tmp/pw && cd /tmp/pw
           npm init -y >/dev/null 2>&1
-          npm install --no-save playwright-core
+          npm install --no-save "playwright-core@^1.65.1"
           npx playwright-core install --with-deps ${{ matrix.browser }}
       - name: Run JS UI & security tests (${{ matrix.browser }})
         env:
@@ -98,6 +98,18 @@ jobs:
           GREENLIGHT_CODE: ${{ github.workspace }}
           GREENLIGHT_HOME: /tmp/gl-ci-home
         run: |
-          mkdir -p /tmp/gl-ci-home
+          mkdir -p /tmp/gl-ci-home /tmp/gl-ci-bin
+          cat > /tmp/gl-ci-bin/claude <<'PY'
+          #!/usr/bin/env python3
+          import json, sys, time
+          prompt = sys.stdin.read()
+          if "Say one word." in prompt:
+              time.sleep(2.0)
+          reply = "Codeword is FENNEL-4821, square.png is red, got it."
+          print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}), flush=True)
+          print(json.dumps({"type": "result", "is_error": False, "result": reply, "duration_ms": 10}), flush=True)
+          PY
+          chmod +x /tmp/gl-ci-bin/claude
+          printf '{"harnesses":{"claude":{"bin":"/tmp/gl-ci-bin/claude"}}}\n' > /tmp/gl-ci-home/config.json
           /tmp/Greenlight-ci --vimtest
           /tmp/Greenlight-ci --attachtest
