@@ -2919,6 +2919,8 @@ final class Core: ObservableObject {
         if session == 0 && ud.string(forKey: "model") == "gemini-4-neon" {
             ud.set("gemini-4-neon-medium", forKey: "model")
             msgs.append(Msg(.note, "Gemini chat now uses agy, which starts a new conversation. Your earlier Gemini CLI conversation remains available by selecting Gemini CLI."))
+            try? FileManager.default.createDirectory(at: transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcriptFile, options: .atomic)
         }
         questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
         context = ud.integer(forKey: meterKeys.context); window = ud.integer(forKey: meterKeys.window)
