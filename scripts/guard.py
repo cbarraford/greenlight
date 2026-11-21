@@ -877,6 +877,10 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 v.merge(check_write(ctx.path(files[-1]), ctx, "rsync", raw=files[-1]))
             return v
         local_only = cmd == "ssh" or not any(":" in a and host_of(a.split(":")[0]) not in LOCAL_HOSTS for a in operands)
+        if cmd in ("scp", "rsync") and operands and any(":" in a for a in operands):
+            v.add("high", f"{cmd} remote transfer may run SSH configuration", "egress")
+            if ":" not in operands[-1]:
+                v.merge(check_write(ctx.path(operands[-1]), ctx, f"{cmd} download", raw=operands[-1]))
         if local_only and host_of(dest.split(":")[0]) in LOCAL_HOSTS:
             if cmd == "ssh" and len(args) > args.index(dest) + 1:
                 v.merge(check_shell(" ".join(args[args.index(dest) + 1:]), Ctx(ctx.cwd, unknown=True, source_root=ctx.root), depth + 1))
@@ -1090,7 +1094,7 @@ def check_git(args, ctx, depth=0):
         if separate := opt(rest, "--separate-git-dir"):
             v.merge(check_write(ctx.path(separate), ctx, "git clone separate git dir", raw=separate))
         url = next((x for x in rest if not x.startswith("-")), "")
-        if host_of(url) not in HOSTS | LOCAL_HOSTS and re.match(r"[\w+.-]+://|[^/]+@[^/]+:", url):
+        if re.match(r"[\w+.-]+://|[^/]+@[^/]+:", url):
             v.add("low", f"clones from {host_of(url)}", "egress")
     elif sub in ("fetch", "pull", "ls-remote") and any(re.match(r"[\w+.-]+://|[^/]+@[^/]+:", x) for x in rest):
         v.add("low", f"git {sub} reaches an explicit network URL", "egress")
@@ -1491,7 +1495,8 @@ def check_forge(cmd, args, ctx):
         return v
     if group == "api":
         method = (opt(a, "-X", "--method") or next((x[2:] for x in a if x.startswith("-X") and len(x) > 2), "")).upper()
-        writes = method not in ("", "GET", "HEAD") or any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field", "--input")) or any(x.startswith(("-f", "-F")) and len(x) > 2 for x in a)
+        fields = any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field")) or any(x.startswith(("-f", "-F")) and len(x) > 2 for x in a)
+        writes = method not in ("", "GET", "HEAD") or method == "" and fields or bool(opt(a, "--input"))
         if writes:
             v.add("high" if method == "DELETE" else "medium", f"{cmd} api {method or 'POST'} writes to the forge", "egress")
             target = re.search(r"\brepos/([^/\s]+)/([^/\s?]+)", text)
@@ -1511,10 +1516,11 @@ def check_forge(cmd, args, ctx):
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
         default = next((d for d in ctx.default if ctx.git("rev-parse", "--verify", f"refs/remotes/origin/{d}")), "main")
         source = opt(a, "--head") or ctx.branch
+        base = opt(a, "--base", "-B") or next((x[2:] for x in a if x.startswith("-B") and len(x) > 2), None) or ctx.git("config", "--get", f"branch.{source}.gh-merge-base") or default
         if ":" in source or not ctx.git("rev-parse", "--verify", source):
             v.add("high", "cannot inspect the head branch used to fill the PR", "egress")
         else:
-            v.merge(check_outgoing_commits(ctx, "origin", source, default))
+            v.merge(check_outgoing_commits(ctx, "origin", source, base))
     if group in ("pr", "mr") and verb == "create":
         source = opt(a, "--head", "--source-branch")
         if source and source != ctx.branch:
