@@ -509,7 +509,7 @@ def check_shell(script, ctx, depth=0):
     live = expanding(body) + "".join("\n" + d for _, d, expands in docs if expands)
     # a secret var sent in a forge auth header is how agents call the forge API: check_net judges that one
     auth_arg = re.compile(r"(?i)(?:-H|--header)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;]+)")
-    masked = auth_arg.sub(lambda m: "" if re.search(r"(?i)authorization|private-token|x-api-key|job-token", m[0]) else m[0], live)
+    masked = auth_arg.sub(lambda m: "" if re.match(r"\s*(?:curl|gh|glab)\b", live) and re.search(r"(?i)authorization|private-token|x-api-key|job-token", m[0]) else m[0], live)
     if re.search(r"\$\{![A-Za-z_][A-Za-z0-9_]*", masked):
         v.add("high", "indirect shell expansion may read a secret env var", "secret")
     for n in secret_vars(masked):
@@ -909,10 +909,14 @@ def check_argv(argv, ctx, depth, piped_from=None):
         if "-delete" in args or re.search(r"\brm\b", " ".join(args)):
             for r in roots or ["."]:  # a root in the worktree only bounds what it deletes, inside it
                 v.merge(check_rm(["-r", r], ctx))
-        for flag in ("-exec", "-execdir", "-ok"):
-            if flag in args:
-                payload = args[args.index(flag) + 1:]
-                payload = [a for a in payload if a not in ("{}", "+", ";")]
+        for i, flag in enumerate(args):
+            if flag in ("-exec", "-execdir", "-ok"):
+                payload = []
+                for a in args[i + 1:]:
+                    if a in ("+", ";"):
+                        break
+                    if a != "{}":
+                        payload.append(a)
                 if payload:
                     v.merge(check_argv(payload, ctx, depth + 1))
         return v
@@ -1080,6 +1084,10 @@ def check_git(args, ctx, depth=0):
     if sub == "fetch" and (any(x in ("--prune", "-p", "--prune-tags", "--update-head-ok") for x in rest) or
                            any(":" in x and not x.startswith("-") for x in rest)):
         v.add("high", "git fetch can replace or delete local references")
+    if sub == "rebase" and any(x in ("--skip", "--abort", "--quit") for x in rest):
+        v.add("high", "git rebase can discard an in-progress commit or work")
+    if sub == "remote" and rest[:1] == ["prune"]:
+        v.add("high", "git remote prune deletes tracking references")
     if sub == "push":
         if os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", "inherited SSH command can run during git push", "egress")
@@ -1460,6 +1468,13 @@ def opt(args, *names):
     return None
 
 
+def auth_headers(args):
+    headers = [args[i + 1] for i, a in enumerate(args) if a in ("-H", "--header") and i + 1 < len(args)]
+    headers += [a[2:] for a in args if a.startswith("-H") and len(a) > 2]
+    headers += [a.split("=", 1)[1] for a in args if a.startswith("--header=")]
+    return headers
+
+
 def check_forge(cmd, args, ctx):
     v = Verdict()
     a = [x for x in args]
@@ -1536,6 +1551,8 @@ def check_forge(cmd, args, ctx):
             v.add("high", f"{cmd} auth {verb} changes who the agent is")
         return v
     if group == "api":
+        if any(re.match(r"(?i)\s*(?:authorization|x-api-key|private-token|job-token)\s*:\s*\S", h) and not secret_vars(h) for h in auth_headers(a)):
+            v.add("deny", f"{cmd} api sends a literal authentication header", "secret", "egress")
         method = (opt(a, "-X", "--method") or next((x[2:] for x in a if x.startswith("-X") and len(x) > 2), "")).upper()
         fields = any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field")) or any(x.startswith(("-f", "-F")) and len(x) > 2 for x in a)
         writes = method not in ("", "GET", "HEAD") or method == "" and fields or bool(opt(a, "--input"))
@@ -1731,6 +1748,10 @@ def check_net(cmd, args, ctx):
             name = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1] or "index.html"
             target = os.path.join(directory, name)
             v.merge(check_write(ctx.path(target), ctx, "wget output", raw=target))
+    if cmd == "wget":
+        for flag in ("--output-file", "--append-output", "-a"):
+            if target := opt(args, flag):
+                v.merge(check_write(ctx.path(target), ctx, f"wget {flag} output", raw=target))
     if cmd == "curl" and ("--remote-name" in args or any(re.fullmatch(r"-[A-Za-z]*O[A-Za-z]*", a) for a in args)):
         directory = opt(args, "--output-dir") or "."
         for url in urls:
@@ -1824,10 +1845,7 @@ def check_net(cmd, args, ctx):
             v.merge(check_upload_file(path, ctx, f"{cmd} upload"))
     if leak := leaks(full):
         v.add("deny", f"the request {leak}", "secret", "egress")
-    headers = [args[i + 1] for i, a in enumerate(args) if a in ("-H", "--header") and i + 1 < len(args)]
-    headers += [a[2:] for a in args if a.startswith("-H") and len(a) > 2]
-    headers += [a.split("=", 1)[1] for a in args if a.startswith("--header=")]
-    if any(re.match(r"(?i)\s*(?:authorization|x-api-key|private-token|job-token)\s*:\s*\S", h) and not secret_vars(h) for h in headers):
+    if any(re.match(r"(?i)\s*(?:authorization|x-api-key|private-token|job-token)\s*:\s*\S", h) and not secret_vars(h) for h in auth_headers(args)):
         v.add("deny", f"{cmd} sends a literal authentication header", "secret", "egress")
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
     header_vars = {n for a in args if re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for n in secret_vars(a)}
