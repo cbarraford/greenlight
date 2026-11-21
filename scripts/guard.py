@@ -269,8 +269,35 @@ def check_upload_file(source, ctx, how):
         v.add("high", f"{how} sends stdin that the guard cannot inspect", "egress")
         return v
     p = ctx.path(source)
-    if SECRET_PATH_RE.search(str(p)):
+    if SECRET_PATH_RE.search(str(p)) or SECRET_DIR_RE.search(str(p)):
         v.add("deny", f"{how} sends a credential file ({source})", "secret", "egress")
+        return v
+    if p.is_dir():
+        remaining, count = 5_000_000, 0
+        walk_errors = []
+        for base, dirs, files in os.walk(p, onerror=walk_errors.append):
+            for name in dirs + files:
+                count += 1
+                member = Path(base) / name
+                if count > 1000 or member.is_symlink():
+                    v.add("deny", f"{how} directory cannot be safely inspected", "egress")
+                    return v
+                if SECRET_PATH_RE.search(str(member)) or SECRET_DIR_RE.search(str(member)):
+                    v.add("deny", f"{how} directory contains credentials", "secret", "egress")
+                    return v
+            for name in files:
+                try:
+                    with (Path(base) / name).open("rb") as fh:
+                        data = fh.read(remaining + 1)
+                except OSError:
+                    v.add("deny", f"{how} directory cannot be safely inspected", "egress")
+                    return v
+                remaining -= len(data)
+                if remaining < 0 or leaks(data.decode(errors="replace")):
+                    v.add("deny", f"{how} directory may contain credentials", "secret", "egress")
+                    return v
+        if walk_errors:
+            v.add("deny", f"{how} directory cannot be safely inspected", "egress")
         return v
     try:
         with p.open("rb") as fh:
@@ -509,7 +536,10 @@ def check_shell(script, ctx, depth=0):
     live = expanding(body) + "".join("\n" + d for _, d, expands in docs if expands)
     # a secret var sent in a forge auth header is how agents call the forge API: check_net judges that one
     auth_arg = re.compile(r"(?i)(?:-H|--header)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;]+)")
-    masked = auth_arg.sub(lambda m: "" if re.match(r"\s*(?:curl|gh|glab)\b", live) and re.search(r"(?i)authorization|private-token|x-api-key|job-token", m[0]) else m[0], live)
+    def mask_auth(match):
+        segment = re.split(r"&&|\|\||[;|&]", live[:match.start()])[-1]
+        return "" if re.match(r"\s*(?:curl|gh|glab)\b", segment) and re.search(r"(?i)authorization|private-token|x-api-key|job-token", match[0]) else match[0]
+    masked = auth_arg.sub(mask_auth, live)
     if re.search(r"\$\{![A-Za-z_][A-Za-z0-9_]*", masked):
         v.add("high", "indirect shell expansion may read a secret env var", "secret")
     for n in secret_vars(masked):
@@ -898,6 +928,9 @@ def check_argv(argv, ctx, depth, piped_from=None):
         return v
     if cmd in ("rm", "rmdir", "unlink", "shred", "trash", "srm"):
         return check_rm(args, ctx)
+    if cmd in ("kill", "killall", "pkill", "fuser"):
+        v.add("high", f"{cmd} can stop processes outside this workspace")
+        return v
     if cmd == "find" and ("-delete" in args or any(a in ("-exec", "-execdir", "-ok") for a in args)):
         roots = []
         for a in args:  # the starting points come before the first expression
@@ -962,6 +995,10 @@ def check_argv(argv, ctx, depth, piped_from=None):
             p = ctx.path(src, follow=cmd != "ln")
             if cmd == "mv":  # moving a file away deletes it where it was
                 v.merge(check_rm([src], ctx))
+            elif cmd == "ln" and any(p == protected or p in protected.parents for protected in (
+                    (STATE / "config.json").resolve(), (HOME / ".greenlight/config.json").resolve(),
+                    (HOME / ".claude/settings.json").resolve(), (HOME / ".codex/config.toml").resolve())):
+                v.add("deny", f"links to {src}: later writes could change the guard or agent permissions")
             elif GUARD_PATH_RE.search(str(p)) and cmd == "ln":
                 v.add("deny", f"links to {src}: a write through the link would change the guard")
             if SECRET_PATH_RE.search(str(p)):
@@ -1068,6 +1105,10 @@ def check_git(args, ctx, depth=0):
         target = next((x for x in rest if not x.startswith("-")), "")
         if sub != "clone" and (not target or target in ctx.remotes):
             target = ctx.git("remote", "get-url", target or "origin")
+        if re.match(r"[\w+.-]+://|[^/]+@[^/]+:", target):
+            host = host_of(target)
+            v.add("low" if host in HOSTS | extra_hosts() else "high",
+                  f"git {sub} reaches {host or 'an unverified host'}", "egress")
         if any(x.startswith("ssh://") or re.match(r"^[^/\s]+@?[^/\s]*:[^/\s]", x) for x in (target, *rest)) or os.environ.get("GIT_SSH_COMMAND"):
             v.add("high", f"git {sub} may run local SSH configuration commands", "egress")
     if sub == "send-pack":
