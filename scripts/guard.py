@@ -240,6 +240,16 @@ def redact(text):
     return text
 
 
+def scrub(value):
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [scrub(item) for item in value]
+    if isinstance(value, dict):
+        return {key: scrub(item) for key, item in value.items()}
+    return value
+
+
 def check_upload_file(source, ctx, how):
     """Inspect a file an outbound command will send; an uninspectable file cannot be silently allowed."""
     v = Verdict()
@@ -515,7 +525,10 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in RAW_NET:
         dest = next((a for a in args if not a.startswith("-")), "")
         if cmd == "rsync" and not any(":" in a for a in args if not a.startswith("-")):
-            return v  # a local copy
+            files = [a for a in args if not a.startswith("-")]
+            if files:
+                v.merge(check_write(ctx.path(files[-1]), ctx, "rsync", raw=files[-1]))
+            return v
         if host_of(dest.split(":")[0]) in LOCAL_HOSTS:
             return v
         v.add("high", f"{cmd} opens a connection off the machine", "egress")
@@ -932,8 +945,22 @@ def check_net(cmd, args, ctx):
     v = Verdict()
     urls = [a for a in args if re.match(r"(?i)[a-z][a-z0-9+.-]*://", a) or (not a.startswith("-") and re.match(r"[\w.-]+\.[a-z]{2,}(?:[:/]|$)", a))]
     hosts = {host_of(u) for u in urls}
-    output = opt(args, "-o", "--output", "--output-document", "-P", "--directory-prefix")
-    output = output or next((a[2:] for a in args if a.startswith("-o") and len(a) > 2), None)
+    for url in urls:
+        userinfo = re.match(r"(?i)[a-z][a-z0-9+.-]*://([^/@]+)@", url)
+        if userinfo and ":" in userinfo[1]:
+            v.add("deny", "URL contains a username and password", "secret", "egress")
+    routed = any(a in ("--connect-to", "--proxy", "-x", "--resolve") or a.startswith(("--connect-to=", "--proxy=", "--resolve=", "-x"))
+                 for a in args)
+    if routed:
+        v.add("high", f"{cmd} can route through a different network destination", "egress")
+    if "--expand-url" in args:
+        v.add("high", f"{cmd} expands a URL after the guard inspects it", "egress")
+    for i, arg in enumerate(args):
+        value = args[i + 1] if arg == "--variable" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--variable=") else ""
+        if "@" in value:
+            v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} variable"))
+    output = opt(args, "-o", "-O" if cmd == "wget" else "-o", "--output", "--output-document", "-P", "--directory-prefix")
+    output = output or next((a[2:] for a in args if a.startswith(("-o", "-O" if cmd == "wget" else "-o")) and len(a) > 2), None)
     if output:
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
     if cmd == "curl" and "-O" in args:
@@ -962,7 +989,7 @@ def check_net(cmd, args, ctx):
             source = opt(args, flag)
             if source:
                 v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
-    if hosts and hosts <= LOCAL_HOSTS:
+    if hosts and hosts <= LOCAL_HOSTS and not routed:
         return v
     data = [a for a in args if re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-|--body-|--method", a)]
     method = (opt(args, "-X", "--request", "--method") or next((a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")).upper()
@@ -1009,6 +1036,9 @@ def check_rm(args, ctx):
     for raw in paths:
         p = ctx.path(raw)
         s = str(p)
+        if s in temp_dirs():
+            v.add("deny", f"deletes an entire temp root ({raw}) that can contain other workspaces")
+            continue
         if any(c in raw for c in "*?["):
             anchor = raw.split("*", 1)[0].split("?", 1)[0].split("[", 1)[0].rstrip("/") or "."
             if not (ctx.root and ctx.path(anchor) == ctx.root or ctx.root and str(ctx.path(anchor)).startswith(str(ctx.root) + "/")):
@@ -1159,9 +1189,10 @@ def judge(v, action, ctx, conf):
         if matches(pat, action) and v.tier != "deny":
             return "allow", f"matches your guard.allow rule /{pat}/", None, 0
     name, goal, rules = situation(ctx)
+    safe_reasons = [redact(reason) for reason in v.why]
     context = (f"Workspace: {name or (ctx.root.name if ctx.root else '(outside a repo)')}\nBranch: {ctx.branch}\nGoal: {goal or '(none known)'}\n"
                f"Repo rules:\n{rules or '(none)'}\nSecurity invariants:\n{INVARIANTS}\n"
-               f"Risk the rules saw ({v.tier}): {'; '.join(v.why)}\nAction:\n{action[:4000]}")
+               f"Risk the rules saw ({v.tier}): {'; '.join(safe_reasons)}\nAction:\n{action[:4000]}")
     q = "Is this action needed for the workspace's goal, and does it keep every security invariant?"
     s1, ms = system_one(q, context, int(conf.get("budget_ms", 200)))
     real = s1["provider"] not in ("local", "timeout") and "error" not in s1
@@ -1172,7 +1203,7 @@ def judge(v, action, ctx, conf):
         verdict = "allow" if real and p >= 0.9 else "pause"
     else:
         verdict = "pause"
-    why = "; ".join(v.why) + (f" (System 1 {s1['provider']}: {p:.2f} aligned)" if real else f" (System 1 unavailable: {s1['provider']})")
+    why = "; ".join(safe_reasons) + (f" (System 1 {s1['provider']}: {p:.2f} aligned)" if real else f" (System 1 unavailable: {s1['provider']})")
     return verdict, why, s1, ms
 
 
@@ -1227,7 +1258,7 @@ def wait_for_user(summary, why, ctx, conf):
             f"Goal: {goal[:200] or '(none known)'}\nDenied in {timeout // 60 or 1} min if unanswered. [{key}]\nOptions: allow | deny")
     try:
         import greenlight
-        greenlight.ping(text, key=key, ws=[name] if name else [], kind="guard")
+        greenlight.ping(redact(text), key=key, ws=[name] if name else [], kind="guard")
     except Exception as e:  # noqa: BLE001 - no app, no ping: deny now
         return "deny", f"couldn't ask you ({type(e).__name__}: {e}); denied"
     end = time.time() + timeout
@@ -1252,7 +1283,7 @@ def log(ev):
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         with (STATE / "guard.jsonl").open("a") as fh:
-            fh.write(json.dumps({"ts": int(time.time())} | ev) + "\n")
+            fh.write(json.dumps(scrub({"ts": int(time.time())} | ev)) + "\n")
     except OSError:
         pass
 
@@ -1284,7 +1315,8 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     if v.tier == "pass" and not any(matches(p, action) for p in (conf.get("deny") or [])):
         return {"decision": "pass", "tier": "pass", "ms": int((time.monotonic() - t0) * 1000)}
     verdict, why, s1, s1_ms = judge(v, action, ctx, conf)
-    ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": v.why, "s1": s1, "s1_ms": s1_ms,
+    why = redact(why)
+    ev = {"tool": tool, "action": action[:500], "cwd": str(ctx.cwd), "tier": v.tier, "rules": [redact(reason) for reason in v.why], "s1": s1, "s1_ms": s1_ms,
           "session": session}
     scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}"
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
@@ -1304,7 +1336,7 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
                        f"in the question and the line `Options: allow | deny` last; if they answer allow, run the exact same call again")
         elif how == "ping":
             verdict, why2 = wait_for_user(action, why, ctx, conf)
-            ev["asked"] = why2
+            ev["asked"] = redact(why2)
             if verdict == "allow":
                 approvals(approvals() | {digest: time.time()})
             why = f"{why}; {why2}"
