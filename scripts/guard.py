@@ -57,10 +57,10 @@ HOME = Path.home()
 
 INVARIANTS = """\
 - No secret (token, key, password, credential file, env var holding one) leaves this machine: not in a URL, a request body, a PR/MR/issue comment, a commit pushed, a gist.
-- Nothing is pushed to the default branch, and no branch but the workspace's own is force-pushed.
+- No unattended push to the default branch or a different repo; force pushes to the default branch are denied.
 - Writes go to the workspace's own repo on its forge, never another repo or an arbitrary host.
-- Nothing outside the worktree and the temp dirs is deleted or overwritten; the guard, its config and the agent's settings are never edited.
-- No other workspace is removed; this one only when its goal is done."""
+- No unattended delete or overwrite outside the worktree and temp dirs; the guard, its config and the agent's settings are never edited.
+- No workspace is removed without human approval."""
 
 # Hosts a plain GET may reach without asking: the forges and package indexes agents fetch from.
 HOSTS = {"github.com", "api.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "codeload.github.com",
@@ -471,14 +471,16 @@ def check_shell(script, ctx, depth=0):
             v.add("high", "unparseable and names a network or destructive tool")
         return v
     for argv, redir, inputs, piped in cmds:
+        if any(os.path.basename(x) == "env" for x in argv) and any(x in ("-S", "--split-string") or x.startswith("--split-string=") for x in argv):
+            v.add("high", "env split-string runs a command the guard cannot safely parse")
         for r in redir:
             v.merge(check_write(ctx.path(r), ctx, "redirect", raw=r))
         for r in inputs:
             if SECRET_PATH_RE.search(str(ctx.path(r))):
                 v.add("high", f"reads a credential file through input redirection ({r})", "secret")
         for item in argv:
-            if item.startswith("GH_REPO=") and not own_repo(item.split("=", 1)[1], ctx):
-                v.add("high", "GH_REPO selects another repository", "egress")
+            if item.startswith(("GH_REPO=", "GLAB_REPO=")) and not own_repo(item.split("=", 1)[1], ctx):
+                v.add("high", "forge variable selects another repository", "egress")
             if item.startswith(("GH_HOST=", "GITLAB_HOST=")) and host_of(item.split("=", 1)[1]) != host_of(ctx.git("remote", "get-url", "origin")):
                 v.add("high", "forge host differs from this workspace's origin", "egress")
         if piped and any(os.path.basename(item) == "xargs" for item in argv):
@@ -797,7 +799,9 @@ def check_push(rest, ctx, v):
         v.merge(check_tag_objects(ctx))
     if "--mirror" in flags or (force and "--all" in flags):
         v.add("deny", "force-pushes all branches, including the default branch", "egress")
-    if any(f in ("-d", "--delete") for f in flags) or any(p.startswith(":") for p in pos[1:]):
+    if ":" in pos[1:]:
+        v.add("deny" if force else "high", "matching refspec can update the default branch", "egress")
+    if any(f in ("-d", "--delete") for f in flags) or any(p.startswith(":") and p != ":" for p in pos[1:]):
         v.add("high", "deletes a remote branch", "egress")
     refs = pos[1:] or [ctx.branch or "HEAD"]
     for r in refs:
@@ -1149,10 +1153,13 @@ def check_rm(args, ctx):
     if "--" in args:
         paths = args[args.index("--") + 1:]
     for raw in paths:
-        p = ctx.path(raw)
+        p = ctx.path(raw, follow=False)
         s = str(p)
         if "$(" in raw or "`" in raw:
             v.add("high", f"deletes a path from command substitution ({raw})")
+            continue
+        if re.search(r"\$\{[^}]*[:-][^}]*\}", raw):
+            v.add("high", f"deletes a path with shell parameter expansion ({raw})")
             continue
         if s in temp_dirs():
             v.add("deny", f"deletes an entire temp root ({raw}) that can contain other workspaces")
@@ -1167,7 +1174,9 @@ def check_rm(args, ctx):
         if s in ("/", str(HOME), "/home", "/Users", "/root") or str(HOME).startswith(s + "/") or raw in ("~", "~/", "/*", "~/*"):
             v.add("deny", f"deletes {raw}: the home folder or above")
         elif re.search(r"\$\{?(?!HOME\b|PWD\b|TMPDIR\b)\w", raw):
-            v.add("medium", f"deletes {raw}: a path from a variable that may be empty")
+            v.add("high", f"deletes {raw}: a path from a variable that may be empty")
+        elif "$" in raw and "$" in s:
+            v.add("high", f"deletes {raw}: an unresolved variable")
         elif ctx.root and (str(ctx.root).startswith(s + "/") or s == str(ctx.root)):
             v.add("high", f"deletes the worktree itself, or a folder above it ({raw})")
         elif GUARD_PATH_RE.search(s):
@@ -1189,6 +1198,10 @@ def check_write(p, ctx, how="write", raw=None):
     s = str(p)
     if s in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty") or s.startswith("/dev/fd/"):
         return v
+    if raw and re.search(r"\$\{[^}]*[:-][^}]*\}", raw):
+        v.add("high", f"{how} uses shell parameter expansion ({raw})")
+    if raw and "$" in raw and "$" in s:
+        v.add("high", f"{how} uses an unresolved variable ({raw})")
     if ctx.unknown and raw and not os.path.isabs(os.path.expanduser(raw)):
         v.add("medium", f"{how} to {raw} after an unknown directory change")
     if GUARD_PATH_RE.search(s):
@@ -1197,7 +1210,7 @@ def check_write(p, ctx, how="write", raw=None):
         v.add("high", f"{how} to {s}: runs code outside the agent's turn")
     elif SECRET_PATH_RE.search(s):
         v.add("high", f"{how} to a credential file ({s})", "secret")
-    elif not ctx.inside(p) and not re.search(r"/\.claude/projects/[^/]+/memory/|/\.greenlight/(?!config\.json)", s):
+    elif not ctx.inside(p) and not re.search(r"/\.claude/projects/[^/]+/memory/", s):
         v.add("high", f"{how} to {s}, outside the worktree")
     return v
 
