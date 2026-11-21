@@ -536,7 +536,9 @@ def check_argv(argv, ctx, depth, piped_from=None):
         if "-delete" in args or re.search(r"\brm\b", " ".join(args)):
             for r in roots or ["."]:  # a root in the worktree only bounds what it deletes, inside it
                 p = ctx.path(r)
-                if not (ctx.root and (p == ctx.root or ctx.inside(p))):
+                if ctx.root and p == ctx.root:
+                    v.add("high", "find may delete the worktree root and its .git data")
+                elif not (ctx.root and ctx.inside(p)):
                     v.merge(check_rm(["-r", r], ctx))
         for flag in ("-exec", "-execdir", "-ok"):
             if flag in args:
@@ -606,6 +608,7 @@ def check_git(args, ctx):
     v = Verdict()
     a = list(args)
     source_root = ctx.source_root or ctx.root
+    push_override = False
     while a and a[0].startswith("-"):  # git -C dir -c k=v ...
         if a[0] == "-C" and len(a) > 1:
             ctx = Ctx(ctx.path(a[1]), source_root=source_root)
@@ -613,6 +616,11 @@ def check_git(args, ctx):
         elif a[0] in ("-c", "--git-dir", "--work-tree", "--namespace") and len(a) > 1:
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
+            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
+                push_override = True
+                v.add("high", f"git -c {a[1].split('=')[0]} changes the effective push target", "egress")
+                if a[1].split("=", 1)[1].startswith("+"):
+                    v.add("deny", "git -c force refspec can update an uninspected branch", "egress")
             a = a[2:]
         else:
             a = a[1:]
@@ -620,6 +628,8 @@ def check_git(args, ctx):
         return v
     sub, rest = a[0], a[1:]
     if sub == "push":
+        if push_override and ("--force" in rest or "-f" in rest or any(x.startswith("--force-with-lease") for x in rest)):
+            v.add("deny", "force push with command-local routing could update the default branch", "egress")
         if ctx.unknown:
             v.add("high", "pushes after an unknown directory change", "egress")
         if source_root and ctx.root != source_root:
@@ -700,7 +710,7 @@ def check_push(rest, ctx, v):
             else:
                 v.add("high", f"pushes straight to the default branch ({dst})", "egress")
         elif dst != ctx.branch and dst:
-            v.add("medium", f"pushes {dst}, not this workspace's branch ({ctx.branch})", "egress")
+            v.add("deny" if force else "medium", f"{'force-pushes' if force else 'pushes'} {dst}, not this workspace's branch ({ctx.branch})", "egress")
         elif force:
             v.add("medium", f"force-pushes {dst}", "egress")
         else:
@@ -710,6 +720,9 @@ def check_push(rest, ctx, v):
             source, _, target = ref.lstrip("+").partition(":")
             if source:
                 v.merge(check_outgoing_commits(ctx, remote, source, target or source))
+    if any("refs/tags/" in r or ctx.git("rev-parse", "--verify", f"refs/tags/{r}") for r in pos[1:]):
+        v.add("high", "pushes an explicit tag ref", "egress")
+        v.merge(check_tag_objects(ctx))
     return v
 
 
@@ -846,11 +859,7 @@ def check_forge(cmd, args, ctx):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
-        message = ctx.git("log", "-1", "--format=%B")
-        if not message:
-            v.add("high", "cannot inspect the commit message used to fill the PR", "egress")
-        elif leak := leaks(message):
-            v.add("deny", f"PR fill would publish a commit message that {leak}", "secret", "egress")
+        v.merge(check_outgoing_commits(ctx, "origin", ctx.branch, ctx.branch))
     if group == "gist" and verb == "create" or group == "release" and verb == "upload":
         for source in a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):

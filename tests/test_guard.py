@@ -183,6 +183,15 @@ scan_git("checkout", "-q", "main")
 scan_git("add", "main-secret.txt")
 scan_git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "secret on main")
 assert guard.check_tool("Bash", {"command": "git push origin main"}, guard.Ctx(scan_repo)).tier == "deny"
+assert tier("git push --force origin feat:other") == "deny"
+assert tier("git -c remote.origin.push=+main:main push origin") == "deny"
+assert tier("git -c push.default=matching push -f origin") == "deny"
+assert guard.check_tool("Bash", {"command": "git push origin refs/tags/v1"}, guard.Ctx(scan_repo)).tier == "deny"
+assert tier("find . -delete") == "high"
+scan_git("checkout", "-q", "feat")
+scan_git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "clean newer message")
+for fill_flag in ("--fill", "--fill-first", "--fill-verbose"):
+    assert guard.check_tool("Bash", {"command": f"gh pr create {fill_flag}"}, guard.Ctx(scan_repo)).tier == "deny"
 saved_greenlight = sys.modules.get("greenlight")
 sys.modules["greenlight"] = types.SimpleNamespace(ping=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no app")))
 try:
