@@ -218,14 +218,18 @@ assert any(r["key"] == f"@undo:{old_auto['id']}" and r["closed"] == "resolved: w
 reset()
 past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
 autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})
-original_quiet = decisions.quiet
-decisions.quiet = lambda *a, **kw: None
+original_asked = decisions.asked
+decisions.asked = lambda *a, **kw: (_ for _ in ()).throw(OSError("decision record unavailable"))
 try:
-    with contextlib.redirect_stdout(io.StringIO()):
-        greenlight.ping("write failed?" + KD, "@write-failed", kind="keep-draft")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            greenlight.ping("write failed?" + KD, "@write-failed", kind="keep-draft")
+        assert False, "failed decision write must surface"
+    except OSError:
+        pass
 finally:
-    decisions.quiet = original_quiet
-assert "auto" not in outbox()[-1] and not autonomy.audit_log()
+    decisions.asked = original_asked
+assert not outbox() and not autonomy.audit_log()
 reset()
 past("keep-draft", "keep draft", ["mark ready", "keep draft"], 25)
 autonomy.save_settings({"auto": ["keep-draft"], "gate": 0.35})

@@ -4,6 +4,10 @@
   auto.py list
   auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
               [--provider claude|codex|opencode|pi|gemini] [--model M] [--effort E] [--timeout MIN]
+  auto.py add <name> --schedule "<cron>" --orchestrator [--precheck CMD] [--timeout MIN]
+                            # a greenlight run with no LLM session: orchestrate.py tick (adopt, scan, next.cmd,
+                            # goal backfill, templated dispatch, cleanup; decide.py only at ambiguous forks)
+  auto.py edit <name> --orchestrator | --agentic   # switch an automation between the two
   auto.py edit <name> [any add option] [--enabled | --disabled]
   auto.py rm <name>
   auto.py show <name>       # its JSON
@@ -17,12 +21,15 @@ Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday
 A precheck that exits non-zero means "nothing to do": the run is skipped.
 The provider (default: config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
 Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
+An --orchestrator automation ("kind": "orchestrator") runs orchestrate.py tick instead of an agent; its prompt is optional.
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -89,6 +96,88 @@ def agent(a, engine, log):
     return out, code
 
 
+def orchestrator(a, log):
+    """orchestrate.py tick, logged like an agent run."""
+    nonce = uuid.uuid4().hex
+    p = subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent / "orchestrate.py"), "tick"], text=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+                         env={**os.environ, "GREENLIGHT_TICK_NONCE": nonce})
+    try:
+        out, _ = p.communicate(timeout=int(a.get("timeout") or 30) * 60)
+        code = p.returncode
+    except subprocess.TimeoutExpired as e:
+        kill_process_tree(p.pid, nonce=nonce)
+        try:
+            tail, _ = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired as drain:
+            if p.poll() is None:
+                p.kill()
+            tail = drain.output or ""  # a surviving orphan must not hold the scheduler indefinitely
+            if isinstance(tail, bytes):
+                tail = tail.decode(errors="replace")
+        out, code = (tail or "") + "\n[timed out]", 124
+    log.write(f"$ orchestrate.py tick\n{out}\n[exit {code}]\n")
+    return out, code
+
+
+def process_start(pid):
+    """Process birth identity for verifying a phase marker despite PID reuse."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+    except (OSError, IndexError):
+        try:
+            return subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True,
+                                  text=True, timeout=2, check=True).stdout.strip() or None
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+
+def kill_process_tree(root, nonce=None):
+    """Stop child phase groups before the timed-out tick releases its lock."""
+    if root != os.getpgrp():
+        try:
+            os.killpg(root, signal.SIGSTOP)  # freeze the tick before it can start another phase
+        except ProcessLookupError:
+            pass
+    marker = STATE / f"orchestrator-phase-{root}.pid"
+    try:
+        record = json.loads(marker.read_text())
+        phase = int(record["phase"])
+    except (OSError, ValueError, KeyError, TypeError):
+        record, phase = {}, None
+    descendants = []
+    try:
+        listing = subprocess.run(["ps", "-e", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True, timeout=5).stdout
+        children, groups = {}, {}
+        for line in listing.splitlines():
+            pid, parent, group = map(int, line.split()[:3])
+            children.setdefault(parent, []).append(pid)
+            groups[pid] = group
+        pending = [root]
+        while pending:
+            pid = pending.pop()
+            descendants.append(pid)
+            pending.extend(children.get(pid, []))
+        targets = [groups[pid] for pid in reversed(descendants) if pid in groups]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        targets = [root]
+    verified_birth = phase and record.get("root_start") and record.get("phase_start") and \
+        process_start(root) == record["root_start"] and process_start(phase) == record["phase_start"]
+    try:
+        verified_nonce = bool(verified_birth and nonce and record.get("nonce") == nonce and os.getpgid(phase) == phase)
+    except ProcessLookupError:
+        verified_nonce = False
+    if phase not in descendants and not verified_nonce:
+        phase = None  # a stale marker cannot authorize killing a reused process group
+    for group in dict.fromkeys([*([phase] if phase else []), *targets, root]):
+        if group != os.getpgrp():
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    marker.unlink(missing_ok=True)
+
+
 def execute(name):
     """One run, start to finish: precheck, agent (the next of config agents on a limit), log, record."""
     a = load()[name]
@@ -106,6 +195,9 @@ def execute(name):
             log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
             if p.returncode:
                 rec |= {"status": "skipped", "summary": (p.stdout or p.stderr).strip()[-200:]}
+        if "status" not in rec and a.get("kind") == "orchestrator":
+            out, code = orchestrator(a, log)
+            rec |= {"status": "ok" if code == 0 else "failed", "engine": "orchestrator", "summary": out.strip()[-300:]}
         if "status" not in rec:
             for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
                 out, code = agent(a, engine, log)
@@ -171,16 +263,21 @@ def main():
     autos = load()
     if cmd == "list":
         for n, a in autos.items():
-            print(f"{n:24} {'on ' if a.get('enabled', True) else 'off'}  {a['schedule']:15} {provider(a):8}"
-                  f" {'running' if alive(n) else ''}\n    {a['prompt'][:100]}")
+            orch = a.get("kind") == "orchestrator"
+            print(f"{n:24} {'on ' if a.get('enabled', True) else 'off'}  {a['schedule']:15} {'tick' if orch else provider(a):8}"
+                  f" {'running' if alive(n) else ''}\n    {'orchestrate.py tick' if orch else a['prompt'][:100]}")
     elif cmd in ("add", "edit"):
         if (cmd == "add") == (name in autos):
             sys.exit(f"{name}: {'already exists' if cmd == 'add' else 'no such automation'}")
         a = autos.get(name, {"enabled": True}) | {k: opt(k) for k in OPTS if opt(k) is not None}
         if "--enabled" in args or "--disabled" in args:
             a["enabled"] = "--enabled" in args
-        if not a.get("schedule") or not a.get("prompt"):
-            sys.exit("--schedule and --prompt are required")
+        if "--orchestrator" in args:
+            a["kind"] = "orchestrator"
+        elif "--agentic" in args:
+            a.pop("kind", None)
+        if not a.get("schedule") or not (a.get("prompt") or a.get("kind") == "orchestrator"):
+            sys.exit("--schedule and --prompt (or --orchestrator) are required")
         due(a["schedule"], time.localtime())  # fails loudly on a bad cron
         autos[name] = a
         save(autos)
