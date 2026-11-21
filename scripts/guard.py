@@ -233,6 +233,13 @@ def leaks(text):
     return None
 
 
+def redact(text):
+    text = SECRET_RE.sub("[credential redacted]", text)
+    for value in secret_values():
+        text = text.replace(value, "[credential redacted]")
+    return text
+
+
 def check_upload_file(source, ctx, how):
     """Inspect a file an outbound command will send; an uninspectable file cannot be silently allowed."""
     v = Verdict()
@@ -598,6 +605,8 @@ def check_git(args, ctx):
         return v
     sub, rest = a[0], a[1:]
     if sub == "push":
+        if ctx.unknown:
+            v.add("high", "pushes after an unknown directory change", "egress")
         if source_root and ctx.root != source_root:
             v.add("high", "pushes from a different workspace", "egress")
         return check_push(rest, ctx, v)
@@ -637,8 +646,10 @@ def check_push(rest, ctx, v):
                                  ctx.git("config", "--get", "remote.pushDefault") or
                                  ctx.git("config", "--get", f"branch.{ctx.branch}.remote") or "origin")
     push_default = ctx.git("config", "--get", "push.default") or "simple"
-    if not pos and push_default not in ("simple", "current"):
-        v.add("high", f"bare git push with push.default={push_default} may send other refs", "egress")
+    if len(pos) < 2 and push_default not in ("simple", "current"):
+        v.add("high", f"git push with push.default={push_default} may send other refs", "egress")
+    if len(pos) < 2 and ctx.git("config", "--get-all", f"remote.{remote}.push"):
+        v.add("high", f"git push uses configured refspecs for {remote}", "egress")
     if remote in ctx.remotes:
         dest = ctx.git("remote", "get-url", "--push", remote)
         project = workspace_project(ctx)
@@ -692,17 +703,42 @@ def check_outgoing_commits(ctx, remote):
         count = int(ctx.git("rev-list", "--count", f"{base}..HEAD"))
         if count > 100:
             raise ValueError("too many commits")
-        patch = subprocess.run(["git", "-C", str(ctx.cwd), "log", "--no-ext-diff", "-p", "--binary", "--format=",
-                                f"{base}..HEAD"], capture_output=True, text=True, timeout=3, check=True).stdout
-        if len(patch) > 5_000_000:
-            raise ValueError("too much patch data")
+        cmd = ["git", "-C", str(ctx.cwd)]
+        objects = subprocess.run([*cmd, "rev-list", "--objects", f"{base}..HEAD"], capture_output=True, text=True,
+                                 timeout=3, check=True).stdout.splitlines()
+        if len(objects) > 1000:
+            raise ValueError("too many objects")
+        for line in objects:
+            if " " in line and SECRET_PATH_RE.search(line.split(" ", 1)[1]):
+                v.add("deny", "pushes a credential file", "secret", "egress")
+                return v
+        ids = list(dict.fromkeys(line.split(" ", 1)[0] for line in objects))
+        if not ids:
+            return v
+        infos = subprocess.run([*cmd, "cat-file", "--batch-check"], input="\n".join(ids) + "\n", capture_output=True,
+                               text=True, timeout=3, check=True).stdout.splitlines()
+        selected = [oid for oid, info in zip(ids, infos) if info.split()[1] in ("blob", "commit")]
+        sizes = [int(info.split()[2]) for info in infos if info.split()[1] in ("blob", "commit")]
+        if len(infos) != len(ids) or sum(sizes) > 5_000_000:
+            raise ValueError("too much object data")
+        raw = subprocess.run([*cmd, "cat-file", "--batch"], input=("\n".join(selected) + "\n").encode(),
+                             capture_output=True, timeout=3, check=True).stdout if selected else b""
+        offset = 0
+        for oid, size in zip(selected, sizes):
+            end = raw.index(b"\n", offset)
+            header = raw[offset:end].decode()
+            if not header.startswith(oid + " "):
+                raise ValueError("unexpected git object")
+            data = raw[end + 1:end + 1 + size]
+            if len(data) != size:
+                raise ValueError("incomplete git object")
+            if leak := leaks(data.decode(errors="replace")):
+                v.add("deny", f"pushes a commit that {leak}", "secret", "egress")
+                return v
+            offset = end + 1 + size + 1
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
         v.add("high", "cannot fully inspect the commits this push would send", "egress")
         return v
-    if leak := leaks(patch):
-        v.add("deny", f"pushes a commit that {leak}", "secret", "egress")
-    elif any(SECRET_PATH_RE.search(line) for line in patch.splitlines() if line.startswith("diff --git ")):
-        v.add("deny", "pushes a credential file", "secret", "egress")
     return v
 
 
@@ -730,6 +766,11 @@ def check_forge(cmd, args, ctx):
     bfile = opt(a, "--body-file", "--notes-file")
     for source in filter(None, (bfile, opt(a, "--input"))):
         v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
+    for i, field in enumerate(a):
+        value = (a[i + 1] if i + 1 < len(a) else "") if field in ("-F", "--field") else (
+            field.split("=", 1)[1] if field.startswith("--field=") else field[2:] if field.startswith("-F") else "")
+        if "@" in value:
+            v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} field upload"))
     if leak := leaks(body) or leaks(text):
         v.add("deny", f"the text it posts {leak}", "secret", "egress")
     if secret_vars(text):
@@ -818,8 +859,8 @@ def check_net(cmd, args, ctx):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if hosts and hosts <= LOCAL_HOSTS:
         return v
-    data = [a for a in args if re.match(r"--data|-d(?:$|@)|-F$|--form|--json|-T$|--upload-file|--post-|--body-|--method", a)]
-    method = (opt(args, "-X", "--request", "--method") or "").upper()
+    data = [a for a in args if re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-|--body-|--method", a)]
+    method = (opt(args, "-X", "--request", "--method") or next((a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")).upper()
     full = " ".join(args)
     for i, a in enumerate(args):
         source = None
@@ -1127,7 +1168,7 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     t0 = time.monotonic()
     conf = conf if conf is not None else (config() or {})
     ctx = Ctx(cwd)
-    action = describe(tool, inp)
+    action = redact(describe(tool, inp))
     try:
         v = check_tool(tool, inp, ctx)
     except Exception as e:  # noqa: BLE001 - a crash on a call that names a boundary tool can't wave it through
