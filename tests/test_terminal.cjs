@@ -633,7 +633,7 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   // byline: forge avatars titled with the username; a dead image leaves the initial
   assert.deepEqual(await page.$$eval("#card .by .av", a => a.map(x => x.title)), ["sam", "me", "review-bot"]);
   assert.match(await page.$eval("#card .by", d => d.textContent), /^by s · assigned mr$/);
-  assert.match(await page.$eval("#card .goal", d => d.innerHTML), /<circle/);
+  assert.match(await page.$eval("#card .goal", d => d.innerHTML), /^<span><em class="lb">Goal<\/em>/);  // a well: the caps label over the goal
   assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "info", path: "/w/sidebar"});
   await page.evaluate(() => term.tree({op: "info", path: "/w/sidebar", dirty: 3, unpushed: 0, commit: Date.now() - 7200e3}));
   assert.equal(await page.$eval("#card .st", d => d.textContent), "3uncommitted0unpushed2hlast commit");

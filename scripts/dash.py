@@ -648,6 +648,8 @@ def trees():
                 out[-1]["state"], out[-1]["why"] = state_of(r, blk)
                 _, out[-1]["steps"], out[-1]["step_index"] = progress(r)  # the card's lifecycle checklist
                 out[-1]["step"], out[-1]["owner"], out[-1]["advice"] = r["next"]["step"], r["next"]["owner"], advice(r)  # and what to do, when it's on you
+                if r.get("life"):
+                    out[-1]["life"] = r["life"]  # the stage, for the step line
                 if mv := moves(r, blk):
                     out[-1]["moves"] = mv
                     if any("auto" in m for m in mv):  # auto-run: has greenlight's scan caught up with what's pushed? (the tab's "needs you")

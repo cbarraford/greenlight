@@ -291,58 +291,58 @@ body.parkhot #park .dslot .sock polygon{stroke:var(--text2)}
 body.parkhot #park .dslot.target .sock polygon{fill:var(--gray-tint)}
 .dslot.more{color:var(--text2);font:700 var(--fs-2) var(--font);height:24px}
 /* hover card: a hex's MR facts, or its branch and goal when there's no MR yet */
-#hcard{position:fixed;z-index:40;width:300px;max-height:calc(100vh - var(--foot-h) - 16px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;
-  box-shadow:var(--elev);padding:14px 16px 12px;display:flex;flex-direction:column;gap:10px;-webkit-user-select:text;user-select:text;animation:hcin .12s ease-out}
+#hcard{position:fixed;z-index:40;width:320px;box-sizing:border-box;max-height:calc(100vh - var(--foot-h) - 16px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  box-shadow:var(--elev);padding:14px;display:flex;flex-direction:column;gap:12px;-webkit-user-select:text;user-select:text;animation:hcin .12s ease-out}
 @keyframes hcin{from{opacity:0;transform:translateY(3px)}}
 #hcard .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #hcard .hm{font-size:var(--fs-2);color:var(--text3)}
 #hcard .id{display:flex;align-items:center;gap:8px;min-width:0}
-#hcard .id a{display:inline-flex;align-items:center;gap:4px;font:600 12px var(--mono);white-space:nowrap;color:var(--text);text-decoration:none}#hcard .id a .ic{color:var(--text3)}
+#hcard .id b{font:600 12px var(--mono);white-space:nowrap;color:var(--text)}
 #hcard .hhd{display:flex;flex-direction:column;gap:3px}
 #hcard .tt{font-size:14px;line-height:20px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #hcard .say{font-size:var(--fs-3);line-height:var(--lh-3);font-weight:500}
 #hcard .br{font:11.5px var(--mono);color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #hcard .steps{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:3px;margin-bottom:6px}
-#hcard .sl{font-size:var(--fs-2);color:var(--text2)}#hcard .sl b{font-weight:600}
+#hcard .sl{display:flex;flex-wrap:wrap;column-gap:4px;font-size:var(--fs-2);color:var(--text2)}#hcard .sl b{font-weight:600}#hcard .sl .lf{order:1;margin-left:auto;color:var(--text3)}#hcard .sl .lf b{color:inherit;font-weight:400}
 #hcard .lf{font-size:var(--fs-2);color:var(--text2)}#hcard .lf b{font-weight:600;color:var(--text)}
 #hcard .steps{align-items:center} #hcard .steps i{height:4px;border-radius:2px;background:var(--track)} #hcard .steps i.cur{height:8px;border-radius:3px}  /* where it is, without color */
-#hcard .sbar{all:unset;display:block;cursor:pointer;border-radius:6px} #hcard .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#hcard .sbar{all:unset;display:block;width:100%;box-sizing:border-box;cursor:pointer;border-radius:6px} #hcard .sbar:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 #hcard .sbar .sl::after{content:" ▸";color:var(--text3)} #hcard .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
 #hcard .chk{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
 #hcard .chk li{display:grid;grid-template-columns:14px minmax(0,1fr);gap:8px;align-items:baseline} #hcard .chk li.ok{color:var(--text2)} #hcard .chk li.cur{color:var(--text);font-weight:600}
-#hcard .chk li .ow{font-weight:400;color:var(--text2)} #hcard .chk li.sep{display:block;margin-top:2px;padding-top:6px;border-top:1px dashed var(--hair);font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.06em}
-#hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:var(--fs-3);line-height:var(--lh-3)}
+#hcard .chk li .ow{float:right;margin-left:8px;font-weight:400;color:var(--text2)} #hcard .chk li.sep{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:var(--fs-1);font-weight:600;text-transform:uppercase;letter-spacing:.06em} #hcard .chk li.sep::after{content:"";flex:1;height:1px;background:var(--hair)}
+#hcard .rec{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;background:var(--card2);font-size:var(--fs-3);line-height:var(--lh-3)}
 #hcard .rec.wait{color:var(--text3)} #hcard .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-#hcard .hacts .btn{height:28px} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
-#hcard .hts{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;column-gap:10px;padding-top:10px;border-top:1px solid var(--hair)}
-#hcard .ht{display:contents}
-#hcard .ht .hk{text-transform:none;letter-spacing:0;font-size:var(--fs-3);line-height:var(--lh-3)}
-#hcard .goal{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:var(--fs-2)}
+#hcard .hacts .btn{flex:1;height:32px} #hcard .hacts .btn.nx{flex-basis:100%} #hcard .hacts .btn.ans{border:0;background:var(--orange);color:#1D1D1F;font-weight:600}
+#hcard .hts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+#hcard .ht{display:flex;flex-direction:column;gap:2px;min-width:0;padding:7px 9px;border-radius:8px;background:var(--card2)}
+#hcard .goal,#hcard .ms{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px 10px;border-radius:8px;background:var(--card2);font-size:var(--fs-3);line-height:var(--lh-3)} #hcard .ms{flex-direction:row;justify-content:space-between;font-weight:600}
 #hcard .hk{font-size:var(--fs-1);color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
 #hcard .v{font-size:var(--fs-3);line-height:var(--lh-3);font-weight:500;color:var(--text);display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;overflow-wrap:anywhere}
-#hcard .v .ic{flex:none}
 #hcard .ht .hm{display:none}
 #hcard .kv{display:grid;grid-template-columns:72px minmax(0,1fr);column-gap:var(--sp-2);font-size:var(--fs-2);line-height:var(--lh-2)}
 #hcard .labs{display:flex;flex-wrap:wrap;gap:5px}#hcard .labs span{padding:2px 8px;border-radius:99px;background:var(--fill);color:var(--text2);font-size:11px}
 #hcard .he{border:1px dashed var(--hexline);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
-#hcard .hf{border-top:1px solid var(--hair);padding-top:10px;display:flex;align-items:center;gap:8px;font-size:var(--fs-2);color:var(--text2)}#hcard .hf .av{width:16px;height:16px;border-radius:50%;font-size:9px;flex:none}
+#hcard .hf{border-top:1px solid var(--hair);padding-top:10px;display:flex;align-items:center;gap:8px;font-size:var(--fs-2);color:var(--text2)}#hcard .hf svg{flex:none} #hcard .hf .wk{transform-origin:8px 8px;animation:spin 1s linear infinite}
+#hcard .hf .lk{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:6px;background:var(--card2);box-shadow:inset 0 0 0 1px var(--line);color:var(--text);font-weight:600;font-size:12px;text-decoration:none} #hcard .hf .lk:hover{background:var(--fill)} #hcard .hf .lk span{font-family:var(--mono)}
 #hcard .hf .hm{white-space:nowrap}
 #hcard .hacts{display:flex;flex-wrap:wrap;gap:8px} #hcard .hacts .btn:not(.go):not(.ans){border:1px solid var(--line);background:var(--card);color:var(--text)}
 #hcard .btn.go{background:var(--accent-solid);color:var(--on-accent);font-weight:600}
-#hcard .btn.nx{align-self:flex-start;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--text);font-weight:600} #hcard .btn.nx:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 22%,transparent)}  /* a suggestion: see-through; the moves are solid */
-#hcard .btn.nx:disabled{background:var(--fill);color:var(--text2);font-weight:500;cursor:default}
+#hcard .btn.nx{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;row-gap:2px;width:100%;height:auto;padding:8px 10px;border:0;background:var(--card2);color:var(--text);font-weight:500;text-align:left}
+#hcard .btn.nx::before{content:"Next step";grid-row:1;grid-column:1;font-size:var(--fs-1);font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em} #hcard .btn.nx::after{content:"›";grid-row:1/3;grid-column:2;color:var(--text3)} #hcard .btn.nx:hover:not(:disabled){background:var(--fill)}  /* a suggestion: a neutral well; the moves are solid */
+#hcard .btn.nx:disabled{color:var(--text3);cursor:default}
 #hcard .mvs{display:flex;flex-direction:column;gap:8px}
 #hcard .mv{display:flex} #hcard .mv button{border:0;font:inherit;cursor:pointer;color:#fff} #hcard .mv.or button{background:var(--orange);color:#1D1D1F} #hcard .mv.pu button{background:#9B4DDB} #hcard .mv.rd button{background:#D7382D} #hcard .mv.bl button{background:#0071E3}
 #hcard .mv .go{flex:1;display:flex;align-items:center;gap:10px;min-width:0;padding:9px 11px;border-radius:8px 0 0 8px;text-align:left} #hcard .mv .go svg{flex:none} #hcard .mv .go span{display:grid;gap:1px;min-width:0}
 #hcard .mg .go{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;padding:9px 11px;text-align:left} #hcard .mv .ed{width:32px;border-radius:0 8px 8px 0;display:flex;align-items:center;justify-content:center;box-shadow:inset 1px 0 0 rgba(0,0,0,.2)}
-#hcard .mv b,#hcard .mg b{font-size:12.5px;font-weight:650} #hcard .mv b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #hcard .mv small,#hcard .mg small{font-size:11px;line-height:1.35;opacity:.85} #hcard .mv button:hover:not(:disabled){filter:brightness(1.08)} #hcard .mv button:disabled{opacity:.5;cursor:default}
+#hcard .mv b,#hcard .mg b{font-size:12.5px;font-weight:650} #hcard .mv b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #hcard .mv small,#hcard .mg small{font-size:11px;line-height:1.35;opacity:.85} #hcard .mv button:hover:not(:disabled){filter:brightness(1.08)} #hcard .mv button:disabled{cursor:default} #hcard .mv.busy button{background:var(--card2);color:var(--text2)} #hcard .mv.busy{border-radius:8px;box-shadow:inset 0 0 0 1px var(--hair)} #hcard .mv.busy .ed{box-shadow:inset 1px 0 0 var(--hair)}
 #hcard .also{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:var(--fs-2);color:var(--text3)} #hcard .also .btn{display:inline-flex;align-items:center;gap:5px;height:24px;border:1px solid var(--line);background:var(--card);color:var(--text)} #hcard .also i{width:6px;height:6px;border-radius:50%}
 #hcard .mg{display:flex;align-items:center;gap:10px} #hcard .mg .go{position:relative;overflow:hidden;border:0;border-radius:8px;background:#30D158;color:#0B1F10;font:inherit;cursor:pointer}
 #hcard .mg .go i{position:absolute;left:0;bottom:0;height:3px;width:100%;background:rgba(0,0,0,.35);animation:drain 5s linear forwards} @keyframes drain{to{width:0}}
 #hcard .mg .lnk{border:0;background:none;color:var(--text2);font:inherit;font-size:var(--fs-2);text-decoration:underline;cursor:pointer}
 #hcard .mg.st,#hcard .mg.ok,#hcard .mg.no{padding:9px 11px;border-radius:8px} #hcard .mg.st{background:color-mix(in srgb,#30D158 16%,transparent);color:var(--green)}
-#hcard .mg.ok{flex-direction:column;align-items:flex-start;gap:2px;background:color-mix(in srgb,#BF5AF2 18%,transparent);color:#A64BD6}
-#hcard .mg.no{flex-direction:column;align-items:flex-start;gap:5px;background:color-mix(in srgb,#FF453A 15%,transparent);color:var(--red)} #hcard .mg.no code{font:11px/1.4 var(--mono);white-space:pre-wrap;word-break:break-word}
+#hcard .mg.ok{flex-direction:column;align-items:flex-start;gap:2px;background:color-mix(in srgb,#BF5AF2 18%,transparent);color:var(--purple-ink)}
+#hcard .mg.no{flex-direction:column;align-items:flex-start;gap:5px;background:color-mix(in srgb,#FF453A 15%,transparent);color:var(--red-ink)} #hcard .mg.no code{font:11px/1.4 var(--mono);white-space:pre-wrap;word-break:break-word}
 #hcard .hf i{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 #hcard .hf .hfx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 div.ghost{position:fixed;left:0;top:0;z-index:50;pointer-events:none;display:flex;align-items:center;gap:8px;filter:drop-shadow(0 8px 16px var(--shadow))}
@@ -1769,24 +1769,31 @@ function drill(name){ ui.drill = name; ui.openStack = null; render() }
 /* ---------- hover card ---------- */
 const CI_SAY = {success: ["Passed", "--green"], failed: ["Failed", "--red"], canceled: ["Canceled", null], skipped: ["Skipped", null], manual: ["Manual", "--yellow"],
   running: ["Running", "--blue"], pending: ["Pending", "--blue"], created: ["Pending", "--blue"], preparing: ["Pending", "--blue"], waiting_for_resource: ["Pending", "--blue"]};
+// the agent's state at a glance: idle a hollow ring, working a turning arc, waiting an amber "?", crashed a red "!"
+const GLYPH = {idle: '<circle cx="8" cy="8" r="6" fill="none" style="stroke:var(--text3)" stroke-width="2"/>',
+  working: '<circle cx="8" cy="8" r="6" fill="none" style="stroke:var(--track)" stroke-width="2"/><path class="wk" d="M8 2a6 6 0 0 1 6 6" fill="none" style="stroke:var(--blue)" stroke-width="2" stroke-linecap="round"/>',
+  waiting: '<circle cx="8" cy="8" r="7" style="fill:var(--orange)"/><text x="8" y="11.6" text-anchor="middle" font-size="10.5" font-weight="800" font-family="-apple-system,sans-serif" fill="#1F1300">?</text>',
+  crashed: '<circle cx="8" cy="8" r="7" style="fill:var(--red)"/><path d="M8 4.5v4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1.1" fill="#fff"/>'};
+function glyph(k){ if (!k) return null; const e = s("svg", {width: 16, height: 16, viewBox: "0 0 16 16", class: "gl " + k, "aria-hidden": "true"}); e.innerHTML = GLYPH[k]; return e }
 function hoverCard(p){
   const mr = p.mr && p.mr.iid ? p.mr : null, col = c(STATE[p.state].color), {n, i} = stepsOf(p), a = p.agent || {};
+  const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", gs = ["working", "waiting"].includes(a.state) ? a.state : p.state === "crashed" ? "crashed" : a.type ? "idle" : null;  // as acard: a live agent outranks the crash
   const sa = ago((Date.now() / 1000 - ui.snap.scanned) / 3600);
   const tile = (k, v, m, tn) => h("div", {class: "ht"}, h("span", {class: "hk"}, k), h("span", {class: "v", style: tn ? `color:${ink(tn)}` : null}, v), m ? h("span", {class: "hm"}, m) : null);
   const branch = mr ? mr.source_branch : p.branch;
   let body;
   if (!mr) body = [p.goal ? h("div", {class: "goal"}, h("span", {class: "hk"}, "Goal"), h("span", {}, short(p.goal, 220))) : null,
     h("div", {class: "he"}, h("b", {}, "No merge request yet"), h("span", {class: "hm"}, p.action || "CI, approvals, threads, labels and milestone show up once one is open."))];
-  else if (mr.state !== "opened") body = [h("div", {class: "he"}, h("b", {}, `MR ${mr.state}`))];
+  else if (mr.state !== "opened") body = [h("div", {class: "ms"}, h("span", {class: "hm"}, mrRef(mr)), h("span", {style: `color:${ink(STATE[p.state].color)}`}, `MR ${mr.state}`))];
   else {
-    const [ct, ci] = CI_SAY[mr.pipeline] || [mr.pipeline || "No pipeline", null], [cn, , cic] = ciSay({}, mr);
+    const [ct, ci] = CI_SAY[mr.pipeline] || [mr.pipeline || "No pipeline", null];
     const appr = mr.approvals || 0, need = Math.max(mr.approvals_required || 0, appr), by = arr(mr.approved_by);
     body = [h("div", {class: "hts"},  // what a human owes first: threads and approvals, then CI and merge
-      tile("Threads", [icon("threads", 14), mr.threads ? `${mr.threads}${mr.threads_total ? ` of ${mr.threads_total}` : ""} unresolved` : "none"], null, mr.threads ? "--orange" : null),
+      tile("Threads", mr.threads ? `${mr.threads}${mr.threads_total ? ` of ${mr.threads_total}` : ""} unresolved` : "none", null, mr.threads ? "--orange" : null),
       tile("Approvals", h("span", {}, (need ? `${appr} of ${need}` : `${appr}`) + (by.length ? ` · ${by.join(", ")}` : "")), null,  // who approved, not how many pips
         mr.mergeable || need && appr >= need ? "--green" : need > appr ? "--orange" : null),
-      tile("CI", [icon(cic, 14), ct], null, ci),
-      tile(mr.mergeable && !mr.conflicts ? "Merge" : "Conflicts", [icon("conflict", 14), mr.conflicts ? "Has conflicts" : mr.mergeable ? "Mergeable" : "None"], null, mr.conflicts ? "--orange" : mr.mergeable ? "--green" : null))];
+      tile("CI", ct, null, ci),
+      tile(mr.mergeable && !mr.conflicts ? "Merge" : "Conflicts", mr.conflicts ? "Has conflicts" : mr.mergeable ? "Mergeable" : "None", null, mr.conflicts ? "--orange" : mr.mergeable ? "--green" : null))];
   }
   const mv = mr ? arr(p.moves) : [];  // open MRs' moves, and a merged one's step after the merge (dash.py moves)  // dash.py moves: the smart button replaces the next step
   const open = h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, "Open workspace");
@@ -1797,18 +1804,19 @@ function hoverCard(p){
   return h("div", {id: "hcard", role: "dialog", "aria-modal": "false", "aria-label": `${mr ? mrRef(mr) + " " : ""}${mr ? mr.title : p.name}`, "data-name": p.name},
     h("div", {class: "row"}, h("span", {class: "pill " + STATE[p.state].color.slice(2)}, STATE[p.state].label),
       h("span", {class: "hm"}, sa === "now" ? "scanned just now" : `scanned ${sa} ago`)),
-    h("div", {class: "hhd"}, mr ? h("div", {class: "id"}, h("a", {href: mr.web_url}, mrRef(mr), icon("external", 12)), h("span", {class: "hm"}, [p.project, mr.author].filter(Boolean).join(" · "))) : h("span", {class: "hm"}, p.project),
+    h("div", {class: "hhd"}, mr ? h("div", {class: "id"}, h("b", {}, mrRef(mr)), h("span", {class: "hm"}, [p.project, mr.author].filter(Boolean).join(" · "))) : h("span", {class: "hm"}, p.project),
       h("div", {class: "tt"}, mr ? mr.title : p.name),
       sayOf(p) ? h("div", {class: "say", style: `color:${ink(STATE[p.state].color)}`}, short(sayOf(p), 140)) : null,  // what it's waiting on, in a line
-      lifeLine(p),  // where it is in its life, and who holds it
+      arr(p.steps).length ? null : lifeLine(p),  // where it is in its life, and who holds it (on the step line when there is one)
       branch ? h("div", {class: "br"}, branch, mr && mr.target_branch ? h("span", {class: "hm"}, ` → ${mr.target_branch}`) : null) : null),
     recEl(p),  // what to do about it, when that's you (or an agent step nobody's on)
     mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
     arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
     ...body,
-    h("div", {class: "hf"}, a.type ? h("span", {class: "av", "aria-hidden": "true", style: `background:${/codex/i.test(a.type) ? c("--codex") : c("--claude")}`}, icon(/codex/i.test(a.type) ? "openai" : "claude", 10)) : null,
-      h("span", {class: "hfx"}, a.type ? `${/codex/i.test(a.type) ? "Codex" : "Claude"} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
-        a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · idle ${ago(a.idle_h)}`) : null)));
+    h("div", {class: "hf"}, glyph(gs),
+      h("span", {class: "hfx"}, gs === "crashed" ? `${a.type ? who : "Agent"} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
+        a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · ${ago(a.idle_h)}`) : null),
+      mr ? h("a", {class: "lk", href: mr.web_url}, "Open ", h("span", {}, mrRef(mr)), h("span", {"aria-hidden": "true"}, "↗")) : null));
 }
 // the recommendation: dash.py's rule (p.advice), or when no rule covers the step (null) the suggestion's advice line
 function recEl(p){
@@ -1831,13 +1839,13 @@ function stepsEl(p){
         const card = document.getElementById("hcard");
         if (card) { const r = card.getBoundingClientRect(); card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - card.offsetHeight))}px` } }},  // taller: keep it on screen
     h("div", {class: "steps", style: `--n:${n}`}, Array.from({length: n}, (_, k) => h("i", {class: k === i ? "cur" : null, style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))),  // done green, here in its state color, ahead on the track
-    h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || "")));
+    h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || ""), lifeLine(p)));
   const list = () => h("ol", {class: "chk"}, st.flatMap((k, j) => [
     j === after + 1 && after >= 0 ? h("li", {class: "sep", "aria-hidden": "true"}, "After merge") : null,
     h("li", {class: j < i ? "ok" : j === i ? "cur" : null},
       h("span", {"aria-hidden": "true", style: j < i ? `color:${c("--green")}` : j === i ? `color:${col}` : null}, j < i ? "✓" : j === i ? "●" : "○"),
       h("span", {}, h("span", {class: "vh"}, j < i ? "done: " : j === i ? "now: " : "ahead: "), STEP_DONE[k] || cap(k.replace(/_/g, " ")),
-        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, ` · on ${OWNER_SAY[p.owner]}`) : null))]));
+        j === i && OWNER_SAY[p.owner] ? h("span", {class: "ow"}, h("span", {class: "vh"}, " · "), `on ${OWNER_SAY[p.owner]}`) : null))]));
   const box = h("div", {}, bar, ui.stepsOpen ? list() : null);
   return box;
 }
@@ -1858,10 +1866,10 @@ function movesEl(p, mv){
   const run = y => () => { hideCard(); runFor(p.name, y.prompt) };  // as a new agent in that workspace, like the Next step
   let top = null;
   if (x) { const [l, sub] = MOVE[x.kind](p.mr, x);
-    top = h("div", {class: "mv " + (mv.length > 1 ? "bl" : MTONE[x.kind])},
+    top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
       h("button", {class: "go", disabled: !!busy, title: busy || x.prompt, onclick: run(x)},
         s("svg", {width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true"}, s("path", {d: MI[x.kind]})),
-        h("span", {}, h("b", {}, l), h("small", {}, sub))),
+        h("span", {}, h("b", {}, l), h("small", {}, busy ? "Unlocks when the agent stops" : sub))),
       h("button", {class: "ed", title: `Edit ${x.repo}'s ${l.split(" ")[0]} prompt`, "aria-label": `Edit ${x.repo}'s prompt`, onclick: () => { hideCard(); post({cmd: "editPrompt", repo: x.repo, kind: x.kind}) }}, icon("edit", 13))) }
   return h("div", {class: "mvs"}, top, rest.length ? h("div", {class: "also"}, h("span", {}, "Also"),
     rest.map(y => h("button", {class: "btn sm", disabled: !!busy, title: busy || y.prompt, onclick: run(y)}, h("i", {style: "background:" + DOT[y.kind]}), MOVE[y.kind](p.mr, y)[2]))) : null,
@@ -1906,7 +1914,7 @@ function merged(o){
 function lifeLine(p){
   const l = p.life;
   if (!l || !l.stage_name) return null;
-  return h("div", {class: "lf"}, h("b", {}, l.stage_name), l.sub_name ? ` › ${l.sub_name}` : "",
+  return h("span", {class: "lf"}, h("b", {}, l.stage_name), l.sub_name ? ` › ${l.sub_name}` : "",
     l.holder ? h("span", {class: "hm"}, ` · held by ${l.holder}`) : null);
 }
 // the button names the step in 1-4 words (dash.py suggest's label: what the prompt a click sends will do; the full prompt on hover).
