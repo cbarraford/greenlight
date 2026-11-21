@@ -69,12 +69,12 @@ TIERS = ["pass", "low", "medium", "high", "deny"]
 SECRET_RE = re.compile(r"ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|gh[osu]_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20,}"
                        r"|sk-(?:ant-|proj-)?[A-Za-z0-9_-]{24,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}"
                        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
-SECRET_NAME_RE = re.compile(r"(?:KEY|TOKEN|SECRET|PASSW(?:OR)?D|CREDENTIALS?|AUTH|COOKIE|SESSION)(?:_|$)|^PAT$", re.I)
+SECRET_NAME_RE = re.compile(r"(?:KEY|TOKEN|SECRET|PASSW(?:OR)?D|CREDENTIALS?|COOKIE)(?:_|$)|(?:AUTH|SESSION)$|^PAT$", re.I)
 SECRET_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 # Files whose contents are credentials. Matched against the resolved path.
 SECRET_PATH_RE = re.compile(r"(?:^|/)(?:\.ssh/|\.aws/|\.gnupg/|\.kube/config|\.docker/config\.json|\.netrc|\.git-credentials|\.npmrc|\.pypirc"
                             r"|\.config/gh/hosts\.yml|\.config/glab-cli/|\.config/gcloud/|Library/Keychains/|\.password-store/"
-                            r"|\.env(?:\.[\w.-]+)?$|[^/]*credentials[^/]*\.json$|id_(?:rsa|ed25519|ecdsa|dsa)[^/]*$|[^/]+\.(?:pem|p12|pfx|key)$)")
+                            r"|\.env(?:\.(?!(?:example|sample|template|dist)$)[\w.-]+)?$|[^/]*credentials[^/]*\.json$|id_(?:rsa|ed25519|ecdsa|dsa)[^/]*$|[^/]+\.(?:pem|p12|pfx|key)$)")
 # Writing these would switch the guard off or run code outside the agent's turn: refused.
 GUARD_PATH_RE = re.compile(r"(?:^|/)\.claude/(?:settings(?:\.local)?\.json|skills/greenlight/)|(?:^|/)\.greenlight/(?:config\.json|guard)"
                            r"|(?:^|/)\.codex/config\.toml$")
@@ -91,13 +91,41 @@ NET_CODE_RE = re.compile(r"urllib|requests\.|http\.client|httpx|aiohttp|socket\.
 
 
 def config():
+    """The guard's settings, or None when it's off. A config.json that's there but unreadable runs the guard on its
+    defaults: a typo must not switch it off."""
     try:
-        c = json.loads((STATE / "config.json").read_text()).get("guard")
-    except (FileNotFoundError, ValueError):
-        c = None
+        c = json.loads((STATE / "config.json").read_text())
+        c = c.get("guard") if isinstance(c, dict) else {}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        c = {}
+    return enabled(c)
+
+
+def enabled(c):
+    """config.json's `guard` value as settings, or None when it's off."""
     if c is True:
         c = {}
-    return c if isinstance(c, dict) and c.get("on", True) else None
+    if not isinstance(c, dict) or not c.get("on", True):
+        return None
+    out = dict(c)
+    for k, d in (("timeout", 240), ("budget_ms", 200)):
+        try:
+            out[k] = max(1, int(c.get(k, d)))
+        except (TypeError, ValueError):
+            out[k] = d
+    for k in ("allow", "deny", "hosts"):
+        out[k] = [x for x in (c.get(k) or []) if isinstance(x, str)] if isinstance(c.get(k), list) else []
+    return out
+
+
+def matches(pat, text):
+    """A user regex; a broken one matches nothing (so a bad allow rule can't allow and a bad deny rule is logged)."""
+    try:
+        return re.search(pat, text) is not None
+    except re.error:
+        return False
 
 
 # ---------------------------------------------------------------- the deterministic part
@@ -125,8 +153,9 @@ class Verdict:
 class Ctx:
     """Where the call runs: the worktree, its branch and default branch, the remotes (read lazily, git only when needed)."""
 
-    def __init__(self, cwd):
-        self.cwd = Path(cwd or os.getcwd())
+    def __init__(self, cwd, unknown=False):
+        self.cwd = Path(os.path.realpath(cwd or os.getcwd()))
+        self.unknown = unknown  # after a `cd` this can't follow: relative paths could be anywhere
         self._git = {}
 
     def git(self, *args):
@@ -140,8 +169,9 @@ class Ctx:
 
     @property
     def root(self):
+        """The worktree, or None outside a git repo (then only the temp dirs count as inside)."""
         top = self.git("rev-parse", "--show-toplevel")
-        return Path(top) if top else self.cwd
+        return Path(os.path.realpath(top)) if top else None
 
     @property
     def branch(self):
@@ -150,24 +180,39 @@ class Ctx:
     @property
     def default(self):
         head = self.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-        return {head.split("/", 1)[-1]} if head else {"main", "master"}
+        return {head.split("/", 1)[-1]} if head else {"main", "master", "trunk", "develop", "production", "release"}
 
     @property
     def remotes(self):
         return set(self.git("remote").split())
 
-    def path(self, p):
+    def path(self, p, follow=True):
+        """p resolved against cwd, symlinks followed (follow=False keeps the last part: rm deletes a link, not its target)."""
         p = os.path.expandvars(os.path.expanduser(p))
-        return Path(os.path.normpath(p if os.path.isabs(p) else self.cwd / p))
+        p = os.path.normpath(p if os.path.isabs(p) else self.cwd / p)
+        if follow:
+            return Path(os.path.realpath(p))
+        head, tail = os.path.split(p)
+        return Path(os.path.join(os.path.realpath(head), tail))
 
     def inside(self, p):
-        """In the worktree (not its .git) or a temp dir."""
-        s = str(p)
-        tmps = [os.environ.get("TMPDIR", ""), "/tmp", "/private/tmp", "/var/folders", str(HOME / ".cache")]
-        if any(t and (s == t.rstrip("/") or s.startswith(t.rstrip("/") + "/")) for t in tmps):
-            return True
-        root = str(self.root)
-        return s.startswith(root + "/") and "/.git/" not in s[len(root):] + "/" and not s.endswith("/.git")
+        """In the worktree (not its .git) or a temp dir that isn't another repo (a sibling worktree under /tmp)."""
+        s, root = str(p), self.root and str(self.root)
+        if root and s.startswith(root + "/"):
+            return "/.git/" not in s[len(root):] + "/" and not s.endswith("/.git")
+        if any(s == t or s.startswith(t + "/") for t in temp_dirs()):
+            near = Path(s)
+            while not near.exists() and near != near.parent:
+                near = near.parent
+            top = Ctx(near if near.is_dir() else near.parent).git("rev-parse", "--show-toplevel")
+            return not top or (root is not None and os.path.realpath(top) == root)
+        return False
+
+
+def temp_dirs():
+    t = os.environ.get("TMPDIR", "")
+    return {os.path.realpath(d).rstrip("/") for d in (t, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders",
+                                                      "/private/var/folders", str(HOME / ".cache")) if d}
 
 
 def secret_values():
@@ -201,20 +246,49 @@ def strip_heredocs(script):
     while i < len(lines):
         line = lines[i]
         out.append(line)
-        tags = re.findall(r"<<-?\s*(['\"]?)([A-Za-z_][\w-]*)\1", line)
+        tags = re.findall(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][\w-]*)\1(?!<)", line)
         i += 1
-        for _, tag in tags:
+        for quote, tag in tags:
             body = []
             while i < len(lines) and lines[i].strip() != tag:
                 body.append(lines[i])
                 i += 1
             i += 1
-            docs.append((line, "\n".join(body)))
+            docs.append((line, "\n".join(body), not quote))  # an unquoted tag's body expands $VAR and $(...)
     return "\n".join(out), docs
 
 
+def expanding(script):
+    """The script with what the shell never expands blanked out: single-quoted spans and comments."""
+    out, i, dq = [], 0, False
+    while i < len(script):
+        c = script[i]
+        if c == "\\" and i + 1 < len(script):
+            out.append(script[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            dq = not dq
+        elif c == "'" and not dq:
+            j = script.find("'", i + 1)
+            j = len(script) if j < 0 else j
+            out.append(" " * (j + 1 - i))
+            i = j + 1
+            continue
+        elif c == "#" and not dq and (i == 0 or script[i - 1] in " \t\n;&|("):
+            j = script.find("\n", i)
+            j = len(script) if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def substitutions(script):
-    """The bodies of $(...) and `...`, which run even inside double quotes."""
+    """The bodies of $(...) and `...`, which run even inside double quotes (not single ones)."""
+    script = expanding(script)
     subs, i = [], 0
     while (j := script.find("$(", i)) >= 0:
         depth, k = 1, j + 2
@@ -243,7 +317,7 @@ def commands(script):
             if not re.fullmatch(r"&\d*|\d+", t):  # 2>&1, >&2
                 redir.append(t)
             want = False
-        elif t in (">", ">>", ">|", "&>", "&>>"):
+        elif t in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "&>|"):
             want = True
         elif t and set(t) <= set(";&|()"):
             if argv:
@@ -296,10 +370,12 @@ def check_shell(script, ctx, depth=0):
         return v
     if leak := leaks(script):
         v.add("medium", f"the command {leak}", "secret")
-    for n in secret_vars(script):
-        v.add("high", f"reads secret env var ${n}", "secret")
     body, docs = strip_heredocs(script)
-    for line, doc in docs:
+    live = expanding(body) + "".join("\n" + d for _, d, expands in docs if expands)
+    # a secret var sent in a forge auth header is how agents call the forge API: check_net judges that one
+    for n in secret_vars(re.sub(r"(?i)(?:-H|--header)[ =]*([\"']?)(?:authorization|private-token|x-api-key|job-token)\s*:[^\n\"']*\1", "", live)):
+        v.add("high", f"reads secret env var ${n}", "secret")
+    for line, doc, expands in docs:
         head = commands(line) or []
         first = unwrap(head[0][0]) if head and head[0][0] else []
         name = os.path.basename(first[0]) if first else ""
@@ -307,6 +383,9 @@ def check_shell(script, ctx, depth=0):
             v.merge(check_shell(doc, ctx, depth + 1))
         elif name.rstrip("0123456789.") in INTERPS:
             v.merge(check_code(doc, name))
+        elif expands:
+            for sub in substitutions(doc):
+                v.merge(check_shell(sub, ctx, depth + 1))
     for sub in substitutions(body):
         v.merge(check_shell(sub, ctx, depth + 1))
     cmds = commands(body)
@@ -317,8 +396,15 @@ def check_shell(script, ctx, depth=0):
         return v
     for i, (argv, redir) in enumerate(cmds):
         for r in redir:
-            v.merge(check_write(ctx.path(r), ctx, "redirect"))
+            v.merge(check_write(ctx.path(r), ctx, "redirect", raw=r))
         argv = unwrap(argv)
+        if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
+            to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
+            if to is None or to == "-" or "$" in to or "`" in to:
+                ctx = Ctx(ctx.cwd, unknown=True)
+            else:
+                ctx = Ctx(ctx.path(to), unknown=ctx.unknown and not os.path.isabs(os.path.expanduser(to)))
+            continue
         if argv:
             v.merge(check_argv(argv, ctx, depth, piped_from=i > 0 and cmds[i - 1]))
     if "secret" in v.flags and "egress" in v.flags:
@@ -331,7 +417,10 @@ def check_code(code, lang):
     net = NET_CODE_RE.search(code)
     if net:
         v.add("medium", f"{lang} code that reaches the network ({net[0]})", "egress")
-    if SECRET_PATH_RE.search(code) or secret_vars(code) or re.search(r"os\.environ\b(?!\.get\(\s*['\"](?:HOME|PATH|PWD|USER)\b)|process\.env\b(?!\.(?:HOME|PATH|PWD))", code):
+    named = re.findall(r"(?:environ(?:\.get)?\s*[\[(]\s*|getenv\(\s*|process\.env\.|ENV\[\s*)['\"]?([A-Za-z_]\w*)", code)
+    dump = re.search(r"os\.environ\b(?!\s*[\[.])|process\.env\b(?!\.)|dict\(os\.environ|environ\.(?:items|copy|values)\(", code)
+    env_read = re.search(r"os\.environ\b|os\.getenv\s*\(|process\.env\b|ENV\s*\[", code)
+    if SECRET_PATH_RE.search(code) or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named) or (net and env_read):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
@@ -380,22 +469,40 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in ("rm", "rmdir", "unlink", "shred", "trash", "srm"):
         return check_rm(args, ctx)
     if cmd == "find" and ("-delete" in args or any(a in ("-exec", "-execdir", "-ok") for a in args)):
-        roots = [a for a in args if not a.startswith(("-", "(", ")", "!"))][:1] or ["."]
+        roots = []
+        for a in args:  # the starting points come before the first expression
+            if a.startswith(("-", "(", ")", "!")):
+                break
+            roots.append(a)
         if "-delete" in args or re.search(r"\brm\b", " ".join(args)):
-            return check_rm(["-r", *roots], ctx)
+            for r in roots or ["."]:  # a root in the worktree only bounds what it deletes, inside it
+                p = ctx.path(r)
+                if not (ctx.root and (p == ctx.root or ctx.inside(p))):
+                    v.merge(check_rm(["-r", r], ctx))
+            return v
     if cmd in ("dd", "mkfs", "diskutil", "fdisk", "parted") or cmd.startswith("mkfs."):
         v.add("high", f"{cmd} writes disks")
         return v
-    if cmd in ("tee", "cp", "mv", "install", "ln", "truncate", "chmod", "chown"):
-        targets = [a for a in args if not a.startswith("-")]
-        if cmd in ("cp", "mv", "install", "ln"):
-            targets = targets[-1:]
+    if cmd in ("tee", "cp", "mv", "install", "ln", "truncate", "chmod", "chown", "touch", "mkdir", "rsync"):
+        files = [a for a in args if not a.startswith("-")]
+        targets, sources = (files[-1:], files[:-1]) if cmd in ("cp", "mv", "install", "ln", "rsync") else (files, [])
         for t in targets:
-            v.merge(check_write(ctx.path(t), ctx, cmd))
-        if cmd in ("cp", "mv") and any(SECRET_PATH_RE.search(str(ctx.path(a))) for a in args[:-1] if not a.startswith("-")):
-            v.add("high", f"{cmd} copies a credential file", "secret")
+            v.merge(check_write(ctx.path(t), ctx, cmd, raw=t))
+        for src in sources:
+            p = ctx.path(src, follow=cmd != "ln")
+            if cmd == "mv":  # moving a file away deletes it where it was
+                v.merge(check_rm([src], ctx))
+            elif GUARD_PATH_RE.search(str(p)) and cmd == "ln":
+                v.add("deny", f"links to {src}: a write through the link would change the guard")
+            if SECRET_PATH_RE.search(str(p)):
+                v.add("high", f"{cmd} copies a credential file", "secret")
         return v
-    if cmd in ("env", "printenv", "export", "set", "declare") and (not args or args in (["-p"], ["-x"])):
+    if cmd in ("sed", "gsed", "perl", "ruby") and any(re.fullmatch(r"-\w*i.*|--in-place.*", a) for a in args):
+        for a in args[1:]:
+            if not a.startswith("-") and (os.path.exists(ctx.path(a)) or "/" in a):
+                v.merge(check_write(ctx.path(a), ctx, f"{cmd} -i", raw=a))
+        return v
+    if cmd == "set" and not args or cmd in ("env", "printenv", "export", "declare") and (not args or args in (["-p"], ["-x"])):
         v.add("high", f"`{cmd}` dumps the environment, secrets included", "secret")
         return v
     if cmd == "printenv" and any(SECRET_NAME_RE.search(a) for a in args):
@@ -414,11 +521,20 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in ("npx", "pnpx", "bunx", "uvx", "pipx") and args:
         v.add("low", f"{cmd} fetches and runs a package")
         return v
-    # any other command: read its file arguments for credentials
+    # any other command: read its file arguments for credentials, and keep it off the guard's own files
     for a in args:
-        if not a.startswith("-") and SECRET_PATH_RE.search(str(ctx.path(a))):
+        if a.startswith("-"):
+            continue
+        p = ctx.path(a.split("=", 1)[-1] if a.startswith("--") else a)
+        if SECRET_PATH_RE.search(str(p)):
             v.add("high", f"reads a credential file ({a})", "secret")
+        elif GUARD_PATH_RE.search(str(p)) and cmd not in READERS:
+            v.add("deny", f"{cmd} on {a}: it could change the guard or the agent's own permissions")
     return v
+
+
+READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "ag", "jq", "wc", "diff", "cmp", "ls", "stat", "file", "md5sum",
+           "sha256sum", "shasum", "bat", "view", "tree", "readlink", "realpath", "test", "["}
 
 
 def check_git(args, ctx):
@@ -612,11 +728,14 @@ def check_rm(args, ctx):
     for raw in paths:
         p = ctx.path(raw)
         s = str(p)
+        if ctx.unknown and not os.path.isabs(os.path.expanduser(raw)):
+            v.add("high", f"deletes {raw} after an unknown directory change")
+            continue
         if s in ("/", str(HOME), "/home", "/Users", "/root") or str(HOME).startswith(s + "/") or raw in ("~", "~/", "/*", "~/*"):
             v.add("deny", f"deletes {raw}: the home folder or above")
         elif re.search(r"\$\{?(?!HOME\b|PWD\b|TMPDIR\b)\w", raw):
             v.add("medium", f"deletes {raw}: a path from a variable that may be empty")
-        elif str(ctx.root).startswith(s + "/") or s == str(ctx.root):
+        elif ctx.root and (str(ctx.root).startswith(s + "/") or s == str(ctx.root)):
             v.add("high", f"deletes the worktree itself, or a folder above it ({raw})")
         elif GUARD_PATH_RE.search(s):
             v.add("deny", f"deletes the guard or its config ({raw})")
@@ -627,11 +746,13 @@ def check_rm(args, ctx):
     return v
 
 
-def check_write(p, ctx, how="write"):
+def check_write(p, ctx, how="write", raw=None):
     v = Verdict()
     s = str(p)
     if s in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty") or s.startswith("/dev/fd/"):
         return v
+    if ctx.unknown and raw and not os.path.isabs(os.path.expanduser(raw)):
+        v.add("medium", f"{how} to {raw} after an unknown directory change")
     if GUARD_PATH_RE.search(s):
         v.add("deny", f"{how} to {s}: that would change the guard or the agent's own permissions")
     elif ESCAPE_PATH_RE.search(s):
