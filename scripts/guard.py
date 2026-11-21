@@ -419,7 +419,10 @@ def unwrap(argv):
         elif b == "env":
             rest = v[1:]
             while rest and (rest[0].startswith("-") or "=" in rest[0]):
+                takes_value = rest[0] in ("-u", "--unset")
                 rest = rest[1:]
+                if takes_value:
+                    rest = rest[1:]
             if not rest:  # bare `env` dumps the environment
                 return ["env"]
             v = rest
@@ -476,6 +479,8 @@ def check_shell(script, ctx, depth=0):
         for item in argv:
             if item.startswith("GH_REPO=") and not own_repo(item.split("=", 1)[1], ctx):
                 v.add("high", "GH_REPO selects another repository", "egress")
+            if item.startswith(("GH_HOST=", "GITLAB_HOST=")) and host_of(item.split("=", 1)[1]) != host_of(ctx.git("remote", "get-url", "origin")):
+                v.add("high", "forge host differs from this workspace's origin", "egress")
         if piped and any(os.path.basename(item) == "xargs" for item in argv):
             v.add("high", "xargs runs a command with file paths from a pipe")
         argv = unwrap(argv)
@@ -544,7 +549,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd.endswith("greenlight.py") or cmd in ("orca", "orca-ide") or (cmd.startswith("python") and any(a.endswith("greenlight.py") for a in args[:2])):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
         if len(rest) >= 2 and rest[0] == "worktree" and rest[1] in ("rm", "remove", "delete"):
-            v.add("medium", "removes a workspace")
+            v.add("high", "removes a workspace")
         if "terminal" in rest:
             for flag in ("--text", "--command"):
                 payload = opt(args, flag)
@@ -576,6 +581,21 @@ def check_argv(argv, ctx, depth, piped_from=None):
         return check_git(args, ctx)
     if cmd in ("gh", "glab"):
         return check_forge(cmd, args, ctx)
+    if cmd == "tar":
+        flags = "".join(a.lstrip("-") for a in args if a.startswith("-") and not a.startswith("--"))
+        extracting = "x" in flags or "--extract" in args
+        creating = "c" in flags or "--create" in args
+        dest = opt(args, "-C", "--directory")
+        if extracting and dest:
+            p = ctx.path(dest)
+            if GUARD_PATH_RE.search(str(p / "config.json")) or GUARD_PATH_RE.search(str(p / "settings.json")):
+                v.add("deny", f"tar extraction can overwrite guarded files in {dest}")
+            else:
+                v.merge(check_write(p, ctx, "tar extraction", raw=dest))
+        if creating and any(SECRET_PATH_RE.search(str(ctx.path(a))) or str(ctx.path(a)).startswith(str(HOME / ".ssh"))
+                            for a in args if not a.startswith("-")):
+            v.add("deny", "tar archive would package credentials", "secret")
+        return v
     if cmd in NET_TOOLS:
         return check_net(cmd, args, ctx)
     if cmd in RAW_NET:
@@ -924,6 +944,13 @@ def check_forge(cmd, args, ctx):
     group, verb = a[0], (a[1] if len(a) > 1 else "")
     if (ctx.source_root and ctx.root != ctx.source_root or ctx.unknown) and verb not in FORGE_READ:
         v.add("high", "forge command runs after a workspace change", "egress")
+    origin_host = host_of(ctx.git("remote", "get-url", "origin"))
+    host = os.environ.get("GH_HOST" if cmd == "gh" else "GITLAB_HOST", "")
+    if host and host_of(host) != origin_host and verb not in FORGE_READ:
+        v.add("high", f"{cmd} host differs from this workspace's origin", "egress")
+    repo_env = os.environ.get("GH_REPO" if cmd == "gh" else "GLAB_REPO", "")
+    if repo_env and not own_repo(repo_env, ctx) and verb not in FORGE_READ:
+        v.add("high", f"{cmd} repository differs from this workspace's repo", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
@@ -1165,7 +1192,7 @@ def check_write(p, ctx, how="write", raw=None):
     elif SECRET_PATH_RE.search(s):
         v.add("high", f"{how} to a credential file ({s})", "secret")
     elif not ctx.inside(p) and not re.search(r"/\.claude/projects/[^/]+/memory/|/\.greenlight/(?!config\.json)", s):
-        v.add("medium", f"{how} to {s}, outside the worktree")
+        v.add("high", f"{how} to {s}, outside the worktree")
     return v
 
 
