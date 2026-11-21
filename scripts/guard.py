@@ -280,6 +280,11 @@ def secret_vars(text):
 
 
 def host_of(url):
+    if "://" in url:
+        try:
+            return (urlsplit(url).hostname or "").lower()
+        except ValueError:
+            return ""
     m = re.match(r"(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]*@)?(\[[^\]]+\]|[^:/?#\s]+)", url, re.I)
     return (m[1] if m else "").lower()
 
@@ -514,6 +519,8 @@ def check_code(code, lang, ctx=None, depth=0):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
+    if re.search(r"child_process|execSync|spawnSync|\.exec\s*\(|\.spawn\s*\(", code):
+        v.add("high", f"{lang} code launches a command the guard cannot fully inspect")
     if re.search(r"\.greenlight.{0,100}(?:config\.json|guard)|\.claude.{0,100}(?:settings(?:\.local)?\.json|skills/greenlight/)|\.codex.{0,100}config\.toml", code, re.S) and re.search(
             r"write_text|write_bytes|\.write\s*\(|open\s*\(|os\.remove|unlink|rmtree|fs\.write|fs\.rm|writeFile|rmSync", code):
         v.add("deny", f"{lang} code that can change the guard or agent permissions")
@@ -716,7 +723,7 @@ def check_git(args, ctx):
         elif a[0] in ("-c", "--git-dir", "--work-tree", "--namespace") and len(a) > 1:
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
-            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
+            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
                 push_override = True
                 v.add("high", f"git -c {a[1].split('=')[0]} changes the effective push target", "egress")
                 if a[1].split("=", 1)[1].startswith("+"):
@@ -760,7 +767,7 @@ def check_git(args, ctx):
     elif sub == "branch" and any(x in ("-D", "--delete", "-d") for x in rest) or sub == "stash" and rest[:1] == ["drop"]:
         v.add("low", f"git {sub} deletes work")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
-        v.add("medium", "removes a git worktree")
+        v.add("high", "removes a git worktree")
     elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
         v.add("medium", f"git {sub} rewrites history")
     elif sub == "send-email" or sub == "credential" or sub == "archive" and "--remote" in " ".join(rest):
@@ -788,7 +795,8 @@ def check_push(rest, ctx, v):
     if remote in ctx.remotes:
         dest = ctx.git("remote", "get-url", "--push", remote)
         project = workspace_project(ctx)
-        if not project or repo_slug(dest) != project.lower():
+        origin_host = host_of(ctx.git("remote", "get-url", "origin"))
+        if not project or repo_slug(dest) != project.lower() or host_of(dest) != origin_host or origin_host not in ("github.com", "gitlab.com"):
             v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
     if remote not in ctx.remotes and remote != "origin" and ("/" in remote or ":" in remote or "@" in remote):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
@@ -974,6 +982,13 @@ def check_forge(cmd, args, ctx):
     if other and not own_repo(other, ctx):
         if verb not in FORGE_READ:
             v.add("high", f"writes to {other}, not this workspace's repo", "egress")
+    if verb not in FORGE_READ:
+        for value in a[2:]:
+            if value.startswith(("https://", "http://")):
+                parsed = urlsplit(value)
+                parts = parsed.path.strip("/").split("/")
+                if parsed.hostname != host_of(ctx.git("remote", "get-url", "origin")) or len(parts) < 2 or not own_repo("/".join(parts[:2]), ctx):
+                    v.add("high", f"{cmd} target URL is outside this workspace's repo", "egress")
     if group == "auth":
         if verb == "token" or "--show-token" in a or "-t" in a:
             v.add("high", f"{cmd} auth prints the token", "secret")
@@ -1105,13 +1120,23 @@ def check_net(cmd, args, ctx):
     if hosts and hosts <= LOCAL_HOSTS and not routed:
         return v
     data = [a for a in args if re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-|--body-|--method", a)]
+    if cmd in ("http", "https", "xh", "httpie"):
+        data += [a for a in args if re.match(r"^[A-Za-z_][\w.-]*[:=@].+", a)]
     method = (opt(args, "-X", "--request", "--method") or next((a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")).upper()
+    if cmd in ("http", "https", "xh", "httpie"):
+        method = next((a.upper() for a in args if a.upper() in ("POST", "PUT", "PATCH", "DELETE")), method)
     full = " ".join(args)
     for i, a in enumerate(args):
         source = None
         if a.startswith("-H@") or a.startswith("--header=@"):
             source = a.split("@", 1)[1]
             v.merge(check_upload_file(source, ctx, f"{cmd} header"))
+        if a in ("-F", "--form") and i + 1 < len(args):
+            form = args[i + 1]
+            if "=<" in form:
+                v.merge(check_upload_file(form.split("=<", 1)[1].split(";", 1)[0], ctx, f"{cmd} form upload"))
+        elif a.startswith(("-F", "--form=")) and "=<" in a:
+            v.merge(check_upload_file(a.split("=<", 1)[1].split(";", 1)[0], ctx, f"{cmd} form upload"))
         if a in ("-d", "-F", "--data", "--data-binary", "--data-urlencode", "--form", "-T", "--upload-file") and i + 1 < len(args):
             source = args[i + 1]
         elif a.startswith(("--data=", "--data-binary=", "--data-urlencode=", "--form=", "--upload-file=")):
