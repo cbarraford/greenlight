@@ -459,7 +459,8 @@ def check_code(code, lang):
     named = re.findall(r"(?:environ(?:\.get)?\s*[\[(]\s*|getenv\(\s*|process\.env\.|ENV\[\s*)['\"]?([A-Za-z_]\w*)", code)
     dump = re.search(r"os\.environ\b(?!\s*[\[.])|process\.env\b(?!\.)|dict\(os\.environ|environ\.(?:items|copy|values)\(", code)
     env_read = re.search(r"os\.environ\b|os\.getenv\s*\(|process\.env\b|ENV\s*\[", code)
-    if SECRET_PATH_RE.search(code) or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named) or (net and env_read):
+    literal_secret_path = any(SECRET_PATH_RE.search(s) for s in re.findall(r"['\"]([^'\"]+)['\"]", code))
+    if SECRET_PATH_RE.search(code) or literal_secret_path or secret_vars(code) or dump or any(SECRET_NAME_RE.search(n) for n in named) or (net and env_read):
         v.add("medium" if not net else "deny", "code that reads secrets or the environment" + (" and sends data out" if net else ""), "secret")
     if re.search(r"rmtree|os\.remove|unlink|rm -rf|fs\.rm", code):
         v.add("medium", f"{lang} code that deletes files")
@@ -638,6 +639,8 @@ def check_git(args, ctx):
         v.add("medium", "git reset --hard drops uncommitted work")
     elif sub == "restore":
         v.add("medium", "git restore can discard uncommitted work")
+    elif sub == "checkout" and "--" in rest:
+        v.add("medium", "git checkout -- can discard uncommitted work")
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
@@ -664,8 +667,12 @@ def check_push(rest, ctx, v):
     push_default = ctx.git("config", "--get", "push.default") or "simple"
     if len(pos) < 2 and push_default not in ("simple", "current"):
         v.add("high", f"git push with push.default={push_default} may send other refs", "egress")
+        if force:
+            v.add("deny", "force push may update the default branch through push.default", "egress")
     if len(pos) < 2 and ctx.git("config", "--get-all", f"remote.{remote}.push"):
         v.add("high", f"git push uses configured refspecs for {remote}", "egress")
+        if force:
+            v.add("deny", "force push uses configured refspecs that may include the default branch", "egress")
     if remote in ctx.remotes:
         dest = ctx.git("remote", "get-url", "--push", remote)
         project = workspace_project(ctx)
@@ -698,12 +705,11 @@ def check_push(rest, ctx, v):
             v.add("medium", f"force-pushes {dst}", "egress")
         else:
             v.add("low", f"pushes {dst}", "egress")
-    if v.tier in ("low", "medium"):
-        sources = [r.lstrip("+").split(":", 1)[0] for r in pos[1:]]
-        if any(src not in ("HEAD", ctx.branch, f"refs/heads/{ctx.branch}") for src in sources):
-            v.add("high", "cannot inspect a push of a different source ref", "egress")
-        else:
-            v.merge(check_outgoing_commits(ctx, remote))
+    if v.tier != "deny" and "--all" not in flags and "--mirror" not in flags:
+        for ref in refs:
+            source, _, target = ref.lstrip("+").partition(":")
+            if source:
+                v.merge(check_outgoing_commits(ctx, remote, source, target or source))
     return v
 
 
@@ -728,23 +734,24 @@ def check_tag_objects(ctx):
     return v
 
 
-def check_outgoing_commits(ctx, remote):
-    """Inspect commits that a normal push of the current branch would send."""
+def check_outgoing_commits(ctx, remote, source, target):
+    """Inspect objects that a push of one source ref would send."""
     v = Verdict()
-    branch = ctx.branch
-    base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{branch}")
+    source = ctx.branch if source == "HEAD" else source
+    target = ctx.branch if target == "HEAD" else re.sub(r"^refs/heads/", "", target)
+    base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{target}")
     if not base:
-        base = next((ctx.git("merge-base", "HEAD", f"refs/remotes/{remote}/{d}") for d in ctx.default
-                     if ctx.git("merge-base", "HEAD", f"refs/remotes/{remote}/{d}")), "")
+        base = next((ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}") for d in ctx.default
+                     if ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}")), "")
     if not base:
         v.add("high", "cannot inspect the commits this push would send", "egress")
         return v
     try:
-        count = int(ctx.git("rev-list", "--count", f"{base}..HEAD"))
+        count = int(ctx.git("rev-list", "--count", f"{base}..{source}"))
         if count > 100:
             raise ValueError("too many commits")
         cmd = ["git", "-C", str(ctx.cwd)]
-        objects = subprocess.run([*cmd, "rev-list", "--objects", f"{base}..HEAD"], capture_output=True, text=True,
+        objects = subprocess.run([*cmd, "rev-list", "--objects", f"{base}..{source}"], capture_output=True, text=True,
                                  timeout=3, check=True).stdout.splitlines()
         if len(objects) > 1000:
             raise ValueError("too many objects")
@@ -801,6 +808,8 @@ def check_forge(cmd, args, ctx):
     if not a:
         return v
     group, verb = a[0], (a[1] if len(a) > 1 else "")
+    if (ctx.source_root and ctx.root != ctx.source_root or ctx.unknown) and verb not in FORGE_READ:
+        v.add("high", "forge command runs after a workspace change", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
     bfile = opt(a, "--body-file", "--notes-file")
@@ -836,6 +845,12 @@ def check_forge(cmd, args, ctx):
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
+    if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
+        message = ctx.git("log", "-1", "--format=%B")
+        if not message:
+            v.add("high", "cannot inspect the commit message used to fill the PR", "egress")
+        elif leak := leaks(message):
+            v.add("deny", f"PR fill would publish a commit message that {leak}", "secret", "egress")
     if group == "gist" and verb == "create" or group == "release" and verb == "upload":
         for source in a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
@@ -1166,7 +1181,7 @@ def wait_for_user(summary, why, ctx, conf):
     timeout = int(conf.get("timeout", 240))
     name, goal, _ = situation(ctx)
     key = f"@guard-{int(time.time() * 1000):x}-{os.getpid():x}"
-    ws = name or ctx.root.name
+    ws = name or (ctx.root.name if ctx.root else ctx.cwd.name)
     text = (f"{ws}: an unattended agent wants to run\n{summary[:600]}\nWhy it asks: {why[:400]}\n"
             f"Goal: {goal[:200] or '(none known)'}\nDenied in {timeout // 60 or 1} min if unanswered. [{key}]\nOptions: allow | deny")
     try:
