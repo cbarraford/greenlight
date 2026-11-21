@@ -279,6 +279,44 @@ def check_upload_file(source, ctx, how):
         v.add("deny", f"{how} file is too large to inspect ({source})", "egress")
     elif leak := leaks(data.decode(errors="replace")):
         v.add("deny", f"{how} file {leak}", "secret", "egress")
+    if p.name.endswith((".tar.gz", ".tgz", ".tar", ".zip")) and v.tier != "deny":
+        try:
+            remaining = 5_000_000
+            if p.name.endswith(".zip"):
+                with zipfile.ZipFile(p) as archive:
+                    count = len(archive.namelist())
+                    for name in archive.namelist()[:100]:
+                        if SECRET_PATH_RE.search("/" + name):
+                            v.add("deny", f"{how} archive contains a credential ({name})", "secret", "egress")
+                        if not name.endswith("/"):
+                            with archive.open(name) as stream:
+                                data = stream.read(remaining + 1)
+                            if len(data) > remaining:
+                                v.add("high", f"{how} archive content is too large to inspect", "egress")
+                                break
+                            remaining -= len(data)
+                            if leak := leaks(data.decode(errors="replace")):
+                                v.add("deny", f"{how} archive member {leak}", "secret", "egress")
+            else:
+                with tarfile.open(p, "r:*") as archive:
+                    members = archive.getmembers()
+                    count = len(members)
+                    for member in members[:100]:
+                        if SECRET_PATH_RE.search("/" + member.name):
+                            v.add("deny", f"{how} archive contains a credential ({member.name})", "secret", "egress")
+                        if member.isfile() and (stream := archive.extractfile(member)):
+                            with stream:
+                                data = stream.read(remaining + 1)
+                            if len(data) > remaining:
+                                v.add("high", f"{how} archive content is too large to inspect", "egress")
+                                break
+                            remaining -= len(data)
+                            if leak := leaks(data.decode(errors="replace")):
+                                v.add("deny", f"{how} archive member {leak}", "secret", "egress")
+            if count > 100:
+                v.add("high", f"{how} archive has too many entries to inspect", "egress")
+        except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError):
+            v.add("high", f"cannot inspect {how} archive ({source})", "egress")
     return v
 
 
@@ -372,10 +410,11 @@ def expanding(script):
 
 
 def substitutions(script):
-    """The bodies of $(...) and `...`, which run even inside double quotes (not single ones)."""
+    """The bodies of shell command and process substitutions, which execute nested commands."""
     script = expanding(script)
     subs, i = [], 0
-    while (j := script.find("$(", i)) >= 0:
+    while match := re.search(r"\$\(|<\(|>\(", script[i:]):
+        j = i + match.start()
         depth, k = 1, j + 2
         while k < len(script) and depth:
             depth += {"(": 1, ")": -1}.get(script[k], 0)
@@ -958,6 +997,9 @@ def check_git(args, ctx, depth=0):
         else:
             v.add("high", "git send-pack writes remote refs without push inspection", "egress")
         return v
+    if sub == "lfs" and rest[:1] == ["push"]:
+        v.add("high", "git lfs push sends objects not covered by Git commit scanning", "egress")
+        return v
     if sub == "fetch" and any(x in ("--all", "--multiple") for x in rest) or sub == "remote" and rest[:1] == ["update"] or sub == "submodule" and rest[:1] == ["update"]:
         v.add("high", f"git {sub} can contact several uninspected remotes", "egress")
     if sub == "push":
@@ -1006,13 +1048,15 @@ def check_git(args, ctx, depth=0):
     elif sub == "clean" and any(re.match(r"-\w*f", x) or x == "--force" for x in rest):
         v.add("medium", "git clean deletes untracked files")
     elif sub == "stash" and rest[:1] == ["clear"]:
-        v.add("medium", "git stash clear discards every stash")
+        v.add("high", "git stash clear discards every stash")
     elif sub == "stash" and rest[:1] == ["drop"]:
         v.add("high", "drops stashed work")
     elif sub == "branch" and any(x in ("-D", "--delete", "-d", "-M", "--force") for x in rest):
         v.add("high" if any(x in ("-D", "--delete", "-M", "--force") for x in rest) else "low", f"git {sub} changes branch references")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("high", "removes a git worktree")
+    elif sub == "prune" or sub == "reflog" and rest[:1] in (["delete"], ["expire"]):
+        v.add("high", f"git {sub} can erase recovery history")
     elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
         v.add("medium", f"git {sub} rewrites history")
     elif sub == "send-email" or sub == "credential" or sub == "archive" and "--remote" in " ".join(rest):
@@ -1339,6 +1383,10 @@ def check_forge(cmd, args, ctx):
             v.add("high", "cannot inspect the head branch used to fill the PR", "egress")
         else:
             v.merge(check_outgoing_commits(ctx, "origin", source, default))
+    if group in ("pr", "mr") and verb == "create":
+        source = opt(a, "--head", "--source-branch")
+        if source and source != ctx.branch:
+            v.add("high", f"{cmd} {group} create uses an unverified source branch", "egress")
     if group == "gist" and verb == "create" or group == "release" and verb in ("upload", "create"):
         for source in a[3:] if group == "release" and verb == "create" else a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
@@ -1361,6 +1409,9 @@ def check_forge(cmd, args, ctx):
     if (group, verb) in low:
         if verb == "checkout" and any(x in a for x in ("--force", "-f")):
             v.add("high", f"{cmd} {group} checkout resets a local branch")
+        if verb == "checkout" and (ctx.git("remote", "get-url", "origin").startswith("ssh://") or
+                                   re.match(r"^[^/\s]+@[^/\s]+:", ctx.git("remote", "get-url", "origin"))):
+            v.add("high", f"{cmd} {group} checkout may run SSH configuration", "egress")
         if verb in ("edit", "update") and any(x in a or any(y.startswith(x + "=") for y in a) for x in ("--body", "-b", "--body-file", "--base", "--title")):
             v.add("medium", f"{cmd} {group} {verb} changes published PR text or base", "egress")
         v.add("low", f"{cmd} {group} {verb} on this workspace's PR/MR", "egress")
@@ -1484,6 +1535,8 @@ def check_net(cmd, args, ctx):
         for source in re.findall(r"@([^\s\"']+)", config_text):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if cmd == "wget":
+        if opt(args, "--max-redirect") != "0":
+            v.add("high", "wget may follow a redirect to an unapproved host", "egress")
         wgetrc = Path(os.environ.get("WGETRC") or HOME / ".wgetrc")
         try:
             if wgetrc.is_file() and wgetrc.stat().st_size:
@@ -1662,7 +1715,9 @@ def check_tool(tool, inp, ctx):
     if tool == "WebFetch":
         url = inp.get("url", "")
         host = host_of(url)
-        if leak := leaks(url):
+        if re.match(r"(?i)[a-z][a-z0-9+.-]*://[^/@]+:[^/@]+@", url):
+            v.add("deny", "URL contains a username and password", "secret", "egress")
+        elif leak := leaks(url):
             v.add("deny", f"the URL {leak}", "secret", "egress")
         elif "?" in url and len(url.split("?", 1)[1]) > 200:
             v.add("high", f"fetches {host} with a long query (data can ride in it)", "egress")
