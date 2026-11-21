@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -289,7 +290,7 @@ def strip_heredocs(script):
     while i < len(lines):
         line = lines[i]
         out.append(line)
-        tags = re.findall(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][\w-]*)\1(?!<)", line)
+        tags = heredoc_tags(line)
         i += 1
         for quote, tag in tags:
             body = []
@@ -299,6 +300,35 @@ def strip_heredocs(script):
             i += 1
             docs.append((line, "\n".join(body), not quote))  # an unquoted tag's body expands $VAR and $(...)
     return "\n".join(out), docs
+
+
+def heredoc_tags(line):
+    """Heredoc operators outside quoted shell text and comments."""
+    tags, quote, i = [], None, 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+            break
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if line.startswith("<<", i) and not line.startswith("<<<", i):
+            m = re.match(r"<<-?\s*(['\"]?)([A-Za-z_][\w-]*)\1(?![\w<])", line[i:])
+            if m:
+                tags.append((m[1], m[2]))
+                i += len(m[0])
+                continue
+        i += 1
+    return tags
 
 
 def expanding(script):
@@ -597,6 +627,10 @@ def check_argv(argv, ctx, depth, piped_from=None):
             targets = [str(ctx.path(target_dir) / os.path.basename(src)) for src in sources]
         else:
             targets, sources = (files[-1:], files[:-1]) if cmd in ("cp", "mv", "install", "ln", "rsync") else (files, [])
+            if targets and cmd in ("cp", "mv", "install", "ln", "rsync"):
+                dest = targets[0]
+                if dest.endswith("/") or ctx.path(dest).is_dir():
+                    targets = [str(ctx.path(dest) / os.path.basename(src.rstrip("/"))) for src in sources]
         for t in targets:
             v.merge(check_write(ctx.path(t), ctx, cmd, raw=t))
         for src in sources:
@@ -892,7 +926,7 @@ def check_forge(cmd, args, ctx):
         v.add("high", "forge command runs after a workspace change", "egress")
     text = " ".join(a)
     body = " ".join(filter(None, [opt(a, "--body", "-b", "--message", "-m", "--description", "-d", "--title", "-t", "--notes")]))
-    bfile = opt(a, "--body-file", "--notes-file")
+    bfile = opt(a, "--body-file", "--notes-file", *(["-F"] if group in ("pr", "mr") and verb in ("create", "edit", "update") else []))
     for source in filter(None, (bfile, opt(a, "--input"))):
         v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     for i, field in enumerate(a):
@@ -928,7 +962,8 @@ def check_forge(cmd, args, ctx):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
-        v.merge(check_outgoing_commits(ctx, "origin", ctx.branch, ctx.branch))
+        default = next((d for d in ctx.default if ctx.git("rev-parse", "--verify", f"refs/remotes/origin/{d}")), "main")
+        v.merge(check_outgoing_commits(ctx, "origin", ctx.branch, default))
     if group == "gist" and verb == "create" or group == "release" and verb == "upload":
         for source in a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
@@ -990,10 +1025,19 @@ def check_net(cmd, args, ctx):
         value = args[i + 1] if arg == "--variable" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--variable=") else ""
         if "@" in value:
             v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} variable"))
-    output = opt(args, "-o", "-O" if cmd == "wget" else "-o", "--output", "--output-document", "-P", "--directory-prefix")
+        value = args[i + 1] if arg == "--url-query" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--url-query=") else ""
+        if "@" in value:
+            v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} URL query"))
+    output = opt(args, "-o", "-O" if cmd == "wget" else "-o", "--output", "--output-document")
     output = output or next((a[2:] for a in args if a.startswith(("-o", "-O" if cmd == "wget" else "-o")) and len(a) > 2), None)
     if output:
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
+    if cmd == "wget" and not output:
+        directory = opt(args, "-P", "--directory-prefix") or "."
+        for url in urls:
+            name = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1] or "index.html"
+            target = os.path.join(directory, name)
+            v.merge(check_write(ctx.path(target), ctx, "wget output", raw=target))
     if cmd == "curl" and "-O" in args:
         for url in urls:
             name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
