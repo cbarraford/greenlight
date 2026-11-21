@@ -554,6 +554,12 @@ with mock.patch.object(greenlight, "ping", side_effect=OSError("outbox")):
         pass
 with mock.patch.object(greenlight, "ping") as pg:
     assert audit.escalate(row2, blk) and pg.call_count == 1  # a ping that failed isn't counted as told
+same_mr = {"sha": "8" * 40, "ref": "#8", "web_url": "https://gh/8", "title": "Agent title"}
+scan_row = {"name": "feat", "path": wt, "goal": "Original goal", "mr": same_mr}
+worker_row = {**scan_row, "goal": audit.goal_of(scan_row, same_mr)}
+with mock.patch.object(greenlight, "ping") as pg:
+    assert audit.escalate(worker_row, blk, tag=audit.ident(scan_row, same_mr))
+    assert not audit.escalate(scan_row, blk) and pg.call_count == 1
 print("kick/escalate ok")
 
 # ---- what an unattended run is told, per Auto-run gate
@@ -607,7 +613,12 @@ code, out = cli("gate", "push", "--path", wt)
 assert code == 0 and out == "audit passed: push", out
 with mock.patch.object(audit, "push_audited", return_value=0) as pushed:
     code, out = cli("gate", "push", "--path", wt, "--execute", "--force-with-lease")
-assert code == 0 and pushed.call_args.args == (wt, g("rev-parse", "HEAD"), "feat", True, None), (code, out, pushed.call_args)
+assert code == 0 and pushed.call_args.args == (wt, g("rev-parse", "HEAD"), "feat", True, g("rev-parse", "refs/remotes/origin/feat")), (code, out, pushed.call_args)
+with mock.patch.object(audit, "row_for", return_value={"path": wt, "goal": "Merge #1", "branch": "feat", "project": "o/x", "forge": "github"}), \
+     mock.patch.object(audit, "remote_branch_sha", side_effect=lambda path, dest, branch: g("rev-parse", "refs/remotes/origin/main") if branch == "main" else "a" * 40), \
+     mock.patch.object(audit, "push_audited") as pushed:
+    code, out = cli("gate", "push", "--path", wt, "--execute", "--force-with-lease")
+assert code == 4 and "current local source tracking ref" in out and not pushed.called, (code, out)
 initial_receipt = audit.cached(wt, g("rev-parse", "HEAD"), action="push")
 assert initial_receipt["new_sha"] == g("rev-parse", "HEAD") and initial_receipt["source"] == "feat"
 secret_branch = "feature/ghp_" + "A" * 35
