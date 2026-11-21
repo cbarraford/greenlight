@@ -162,17 +162,20 @@ def clip(text, n=MAXC):
     return text if len(text) <= n else text[:n] + f"\n… ({len(text) - n} more chars elided)"
 
 
-def comment_diff(diff, path=None, line=None, limit=MAXC // 2):
-    """Give a reviewer the named file and, for large files, the changed lines near its new-side line."""
+def comment_diff(diff, path=None, line=None, limit=MAXC // 2, side="RIGHT"):
+    """Give a reviewer the named side of a file and nearby changed lines in large diffs."""
     if not path:
         return clip(diff, limit)
     blocks = re.split(r"(?=^diff --git )", diff or "", flags=re.M)
     for block in blocks:
-        first = block.splitlines()[0] if block else ""
-        if not first.startswith("diff --git "):
+        if not block.startswith("diff --git "):
             continue
-        names = shlex.split(first)
-        if len(names) != 4 or names[3].removeprefix("b/") != path:
+        header = re.split(r"(?=^@@ )", block, maxsplit=1, flags=re.M)[0]
+        prefix = "--- a/" if side == "LEFT" else "+++ b/"
+        header_match = any(row.startswith(prefix) and row[len(prefix):] == path for row in header.splitlines())
+        names = shlex.split(block.splitlines()[0])
+        fallback_match = len(names) == 4 and names[2 if side == "LEFT" else 3].removeprefix("a/" if side == "LEFT" else "b/") == path
+        if not (header_match or fallback_match):
             continue
         if len(block) <= limit:
             return block
@@ -183,16 +186,19 @@ def comment_diff(diff, path=None, line=None, limit=MAXC // 2):
             except (TypeError, ValueError):
                 wanted = None
             for hunk in pieces[1:]:
-                m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", hunk)
-                if not m or wanted is None:
+                if wanted is None:
                     continue
-                new, count = int(m[1]), int(m[2] or 1)
-                if not new <= wanted < new + count:
+                old_match = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", hunk)
+                if not old_match:
                     continue
-                lines, pos = hunk.splitlines(), new
+                start, count = ((int(old_match[1]), int(old_match[2] or 1)) if side == "LEFT" else
+                                (int(old_match[3]), int(old_match[4] or 1)))
+                if not start <= wanted < start + count:
+                    continue
+                lines, pos = hunk.splitlines(), start
                 center = 1
                 for i, row in enumerate(lines[1:], 1):
-                    if row.startswith(("+", " ")):
+                    if row.startswith(("-", " ") if side == "LEFT" else ("+", " ")):
                         if pos == wanted:
                             center = i
                             break
@@ -481,7 +487,7 @@ def score_outbound(state, comments, *, kind="review", diff="", goal=""):
     for i, cm in enumerate(comments):
         where = f"{cm['path']}:{cm.get('line') or ''}".rstrip(":") if cm.get("path") else ""
         ctx = (f"Thread being answered:\n{cm['thread']}\n\n" if cm.get("thread") else "") + (f"At {where}\n" if where else "") \
-            + f"Comment:\n{cm.get('body', '')}\n\nThe diff under review:\n{redact_diff_pii(comment_diff(redact_secrets(safe_old_diff), cm.get('path'), cm.get('line')))}"
+            + f"Comment:\n{cm.get('body', '')}\n\nThe diff under review:\n{redact_diff_pii(comment_diff(redact_secrets(safe_old_diff), cm.get('path'), cm.get('line'), side=cm.get('side', 'RIGHT')))}"
         for r, (what, levels) in rub.items():
             qs[f"{i}:{r}"] = {"type": "score", "question": what, "rubric": levels, "context": ctx}
         qs[f"{i}:no_secrets_or_pii"] = {"type": "bool", "question": CONTRACTS["no_secrets_or_pii"][1],

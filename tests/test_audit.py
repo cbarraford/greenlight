@@ -297,6 +297,12 @@ assert private_mail not in repr(calls) and private_mail not in json.dumps(held)
 late = "diff --git a/early.py b/early.py\n@@ -0,0 +1 @@\n+" + "x" * 22000 + "\n"
 late += "diff --git a/late.py b/late.py\n@@ -0,0 +1 @@\n+LATE_SENTINEL = 1\n"
 assert "LATE_SENTINEL = 1" in audit.comment_diff(late, "late.py", 1)
+renamed_late = late + "diff --git a/old.py b/new.py\n--- a/old.py\n+++ b/new.py\n@@ -1 +1 @@\n-LEFT_SENTINEL = 1\n+replacement = 2\n"
+assert "LEFT_SENTINEL = 1" in audit.comment_diff(renamed_late, "old.py", 1, side="LEFT")
+assert "LATE_SENTINEL" not in audit.comment_diff(renamed_late, "old.py", 1, side="LEFT")
+calls.clear()
+audit.score_outbound({}, [{"body": "Old line defect", "path": "old.py", "line": 1, "side": "LEFT"}], diff=renamed_late)
+assert any("LEFT_SENTINEL = 1" in c[2] for c in calls if c[0] == "score")
 big_file = "diff --git a/big.py b/big.py\n@@ -0,0 +1,3000 @@\n" + "\n".join(f"+row_{i} = {i}" for i in range(1, 3000)) + "\n+TAIL_SENTINEL = 3000\n"
 assert "TAIL_SENTINEL = 3000" in audit.comment_diff(big_file, "big.py", 3000)
 calls.clear()
