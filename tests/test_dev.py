@@ -114,4 +114,9 @@ assert runs.read_text().count("x") == 2 and len(banners) == 1, (runs.read_text()
 for _ in range(2):
     dev.make({}, r, {})
 assert runs.read_text().count("x") == 3 and len(banners) == 1, (runs.read_text(), banners)  # the same sources aren't built again
+
+# guard against merge-conflict regressions dropping dev-copy tunneling/live pages from Greenlight.swift
+swift = (pathlib.Path(__file__).resolve().parent.parent / "app/Greenlight.swift").read_text()
+for needle in ('forInfoDictionaryKey: "GreenlightDev"', "func devSsh(", "ProxyCommand=/usr/bin/nc -U", "devSsh(host)", "devSsh(at.host)", "func watchPages(", 'page("dashboard")', 'page("terminal")', 'page("stage")', '.init(name: "dev", value: devName ?? "")'):
+    assert needle in swift, f"Greenlight.swift is missing dev-copy hook: {needle}"
 print("test_dev ok")
