@@ -4,6 +4,8 @@ import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(
 import tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
 import json, shutil, subprocess
 import greenlight, lifestage
+import audit
+audit.merge_verdict = lambda ws, mr: {"ok": True, "failed": [], "target_oid": "base1"}  # lifecycle placement assumes a completed merge audit
 
 greenlight.BOT = "review-bot"
 (greenlight.STATE / "lifecycles").mkdir()
@@ -22,7 +24,8 @@ def mr(**kw):
     base = {"iid": 7, "state": "opened", "author": U(greenlight.ME), "draft": False, "has_conflicts": False,
             "assignees": [U(greenlight.BOT)], "reviewers": [U(greenlight.BOT)], "milestone": {"title": "R"},
             "head_pipeline": {"status": "success", "web_url": "u"}, "blocking_discussions_resolved": True,
-            "detailed_merge_status": "mergeable", "_discussions": [], "_approved_by": ["alice"]}
+            "detailed_merge_status": "mergeable", "_discussions": [], "_approved_by": ["alice"],
+            "sha": "abc", "target_branch": "main", "_default_branch": "main"}
     return base | kw
 
 
@@ -285,7 +288,8 @@ out, calls = task({"text": "make it better", "answers": {"done": "A working prot
 assert out["ok"] and out["name"] == "make-it-better", out
 brief = next(a for a in calls if a[:2] == ("worktree", "create"))
 brief = brief[brief.index("--prompt") + 1]
-assert brief.endswith("- What does done look like? A working prototype I can try\n- How far should it go? The smallest change that works")
+assert "- What does done look like? A working prototype I can try\n- How far should it go? The smallest change that works" in brief
+assert "gate push --execute" in brief and "gate pr <metadata.json> --execute" in brief
 assert "lifestage.py selftest -- <the test command>" in brief
 assert "Follow my request and clarifying answers" in brief
 rec = lifestage.record("preflight", {"name": "make-it-better"})
@@ -295,7 +299,8 @@ assert "[preflight: answered]" in greenlight.history_file("make-it-better").read
 out, calls = task({"text": "make a plan", "answers": {"done": "A written plan first, no code"}}, Decide(0.9, clarity=0.2))
 brief = next(a for a in calls if a[:2] == ("worktree", "create"))
 brief = brief[brief.index("--prompt") + 1]
-assert "If they ask for a plan or investigation first, stop at that deliverable" in brief and brief.endswith("- What does done look like? A written plan first, no code")
+assert "If they ask for a plan or investigation first, stop at that deliverable" in brief and "- What does done look like? A written plan first, no code" in brief
+assert "gate push --execute" in brief and "gate pr <metadata.json> --execute" in brief
 out, calls = task({"text": "Add retry backoff to the outbound queue, done when test_queue passes"}, Decide(0.05))
 assert out["ok"] and any(a[:2] == ("worktree", "create") for a in calls)  # clear: launched at once
 out, calls = task({"text": "make it worse", "force": True}, Decide(0.99))

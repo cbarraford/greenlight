@@ -17,4 +17,4 @@ Open threads:
 
 5. Show me, per thread: the verdict, the diff, and the reply you'd post.
 
-When I say so: push, post the replies, and resolve only the threads you fixed. Leave the rest open for the reviewer.
+When I say so: run `python3 ~/.claude/skills/greenlight/scripts/greenlight.py scan`, then `python3 ~/.claude/skills/greenlight/scripts/audit.py gate push --execute` from the clean worktree; it pushes the audited commit. Write each reply as JSON with its live forge `thread_id` and body; run `python3 ~/.claude/skills/greenlight/scripts/audit.py gate post <file> --kind reply --execute`. The gate posts and resolves only the approved thread IDs; do not post or resolve them separately. Leave the rest open for the reviewer.

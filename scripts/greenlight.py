@@ -738,16 +738,26 @@ def check(step, mr, ws, milestone):
             if mr.get("_base_mr"):
                 return "dependency", f"targets {base}: waiting on {ref(ws.get('forge'), mr['_base_mr'])} to merge first", None
             return "me", f"mergeable into {base}, not {default}: merge it by hand?", None
+        keys = [s["key"] for s in lifecycle_doc(proj)["stages"]]
+        checks = [k for k in (keys[:keys.index("merge")] if "merge" in keys else keys) if k not in BUILTIN]
+        auto_approval = "automerge" in opts and bool(checks)
         if st == "mergeable" and CONFIG["require_human_approval"] and not set(mr.get("_approved_by", [])) - {ME, BOT}:
-            keys = [s["key"] for s in lifecycle_doc(proj)["stages"]]
-            checks = [k for k in (keys[:keys.index("merge")] if "merge" in keys else keys) if k not in BUILTIN]
-            if "automerge" in opts and checks:  # the lifecycle's own steps (the agent's reviews, its try-out) stand in for a human approval; none, no automerge
-                return "greenlight", "merge (automerge: every step before it passed)", merge
-            if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
-                return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
-            return "reviewers", "mergeable but no human approval yet (repo doesn't require one)", None
+            if not auto_approval:
+                if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
+                    return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
+                return "reviewers", "mergeable but no human approval yet (repo doesn't require one)", None
         if st == "mergeable":
-            return "greenlight", "merge", merge
+            import audit  # every unattended merge goes through the semantic audit, regardless of approval route
+            v = audit.merge_verdict(ws, mr)
+            pin = ([sys.executable, str(Path(__file__).with_name("audit.py")), "checked-merge", "github" if github else "gitlab",
+                    proj, str(iid), base, mr["sha"], v["target_oid"], *merge]
+                   if mr.get("sha") and base and v.get("target_oid") else None)
+            if v.get("pending"):
+                return "ci", f"automerge waits on the semantic audit of {(mr.get('sha') or '')[:8]}", merge  # the user can still click Merge
+            if not v.get("ok") or not pin:
+                manual_pin = merge + ["--match-head-commit" if github else "--sha", mr["sha"]] if mr.get("sha") else merge
+                return "me", f"automerge held by the semantic audit: {audit.summary(v)}. Merge anyway?", pin or manual_pin
+            return "greenlight", "merge (semantic audit passed)", pin
         if st == "need_rebase":
             # user rule: rebase only on a real conflict, so ask rather than dispatch
             return "me", "GitLab needs a rebase to merge (no conflict): rebase it?", None

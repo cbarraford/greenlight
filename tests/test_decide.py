@@ -19,6 +19,10 @@ FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
 (Path(HOME) / "config.json").write_text(json.dumps({"harnesses": {"claude": {"bin": str(FAKE_CLAUDE)}}}))
 
 import decide, ade_common, greenlight  # noqa: E402
+for bad in (float("nan"), float("inf"), float("-inf")):
+    try: decide.finish({"type": "bool"}, bad, "jev")
+    except ValueError: pass
+    else: assert False, "nonfinite provider answer must not become a valid verdict"
 
 # ---- a fake server for Jev and the Messages API: records each request, answers with `reply(path, body)` ----
 SEEN, REPLY = [], {}
@@ -381,7 +385,7 @@ assert nxt(mr(), ws("Merge !1: Add a widget (hold until 3.2)"))[:2] == ("merge",
 asked = {ins(q) for q in SEEN[-1]["body"]["questions"].values()}
 assert greenlight.INTENTS["is_held"][0] not in asked  # already held: not asked again
 probs.update(is_held=0.59)
-assert nxt(mr(), ws("Merge !1: Add a widget soonish"))[1] == "greenlight"  # under the bar: merge as before
+assert nxt(mr(), ws("Merge !1: Add a widget soonish"))[:2] == ("merge", "ci")  # under the hold bar: wait for the semantic merge audit
 probs.update(is_held=0, stay_draft=0.8)
 assert nxt(mr(draft=True), ws("Merge !1: Add a widget, leave it in draft for now"))[:2] == ("ready", "me")
 probs.update(stay_draft=0, is_parked=0.8)
@@ -392,7 +396,7 @@ assert nxt(mr(state="merged"), ws("Merge !1: Add a widget; on ice for now"))[1] 
 probs.update(is_parked=0, revisit=0.9)
 step = nxt(mr(), ws("Merge !1: Add a widget, come back to it on Dec 3 2099"))
 assert step[:2] == ("parked", "parked") and step[2] == "parked until 2099-12-03", step
-assert nxt(mr(), ws("Merge !1: Add a widget, come back to it some day"))[1] == "greenlight"  # no date found: not parked
+assert nxt(mr(), ws("Merge !1: Add a widget, come back to it some day"))[1] == "ci"  # no date found: not parked, audit pending
 assert greenlight.intents(ws("Finish by 2026-11-21; come back to this on 2026-12-03"), mr())["revisit_date"] == "2026-12-03"
 assert greenlight.intents(ws("Finish by 2026-11-21 and come back to this on Dec 3, 2099"), mr())["revisit_date"] == "2099-12-03"
 assert greenlight.intents(ws("Shipped 2026-10-01; revisit Dec 3"), mr())["revisit_date"] != "2026-10-01"
@@ -468,7 +472,7 @@ greenlight.when = lambda text, today=None: "2099-12-31"
 assert greenlight.intents(second, mr())["revisit_date"] == first_date  # tomorrow stays anchored across scans
 greenlight.when = old_when
 probs.clear()
-assert nxt(mr(), ws("Merge !1: Add a widget"))[1] == "greenlight"
+assert nxt(mr(), ws("Merge !1: Add a widget"))[1] == "ci"  # unattended merge awaits the semantic audit
 t = "Add a widget, hold the line"  # the MR's own title is never read as an instruction, by the patterns or the model
 assert greenlight.intents(ws(f"Merge !1: {t}"), mr(title=t)) == {"is_held": False, "stay_draft": False, "is_parked": False, "revisit_date": None}
 assert t not in SEEN[-1]["body"]["state"]

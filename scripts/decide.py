@@ -37,6 +37,7 @@ import builtins
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -181,7 +182,11 @@ def local(q, why=None):
 
 def finish(q, raw, provider):
     """A provider's raw numbers → the contract's answer: probabilities clamped and normalised."""
-    clamp = lambda x: min(1.0, max(0.0, float(x)))
+    def clamp(x):
+        value = float(x)
+        if not math.isfinite(value):
+            raise ValueError("nonfinite model probability or score")
+        return min(1.0, max(0.0, value))
     if q["type"] == "bool":
         p = round(clamp(raw), 4)
         return {"value": p > 0.5, "prob": p, "provider": provider}

@@ -3,6 +3,9 @@ import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(
 import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
 import shutil, sys
 import greenlight
+import audit
+real_merge_verdict = audit.merge_verdict
+audit.merge_verdict = lambda ws, mr: {"ok": True, "failed": [], "target_oid": "base1"}
 
 greenlight.BOT = "review-bot"  # the release-train example has a review bot step
 (greenlight.STATE / "lifecycles").mkdir()
@@ -13,7 +16,8 @@ def mr(**kw):
     base = {"iid": 1, "state": "opened", "author": U(greenlight.ME), "draft": False, "has_conflicts": False,
             "assignees": [U(greenlight.BOT)], "reviewers": [U(greenlight.BOT)], "milestone": {"title": "R"},
             "head_pipeline": {"status": "success", "web_url": "u"}, "blocking_discussions_resolved": True,
-            "detailed_merge_status": "mergeable", "_discussions": [], "_approved_by": ["alice"]}
+            "detailed_merge_status": "mergeable", "_discussions": [], "_approved_by": ["alice"],
+            "sha": "abc", "target_branch": "main", "_default_branch": "main"}
     return base | kw
 ws = lambda goal="": {"project": "acme/widgets", "goal": goal, "branch": "b"}
 nxt = lambda m, w=None: (lambda r: (r["step"], r["owner"]))(greenlight.evaluate(w or ws(), m, {"title": "Release-9.9.9"}))
@@ -79,6 +83,7 @@ assert nxt(None, ws("nightly loop (automation)")) == ("freeform", "working")
 assert nxt(mr(), ws("Merge !5131 (parked)")) == ("parked", "parked")
 assert nxt(mr(state="merged"), ws("Merge !5131 (parked)")) != ("parked", "parked")  # a finished MR still gets cleaned up
 print("ok")
+audit.merge_verdict = real_merge_verdict
 
 # stale questions: a pinged workspace closes once it's gone or no longer waiting on me
 import json
@@ -222,8 +227,32 @@ e = ev(gh_pr(isDraft=True))
 assert (e["step"], e["owner"], e["cmd"]) == ("ready", "greenlight", ["gh", "pr", "ready", "23", "-R", "octo/greenlight"])
 assert e["lifecycle"] == "greenlight.md"
 assert (ev(gh_pr(isDraft=True), gws("Merge MR for #20 (stay draft)"))["owner"]) == "me"
-e = ev(gh_pr())
-assert (e["step"], e["owner"], e["cmd"]) == ("merge", "greenlight", ["gh", "pr", "merge", "23", "-R", "octo/greenlight", "--merge"])  # automerge
+import audit
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}) as mv:
+    e = ev(gh_pr())
+assert (e["step"], e["owner"], e["cmd"][2:9], e["cmd"][9:]) == ("merge", "greenlight", ["checked-merge", "github", "octo/greenlight", "23", "main", "abc", "base1"],
+                                                                          ["gh", "pr", "merge", "23", "-R", "octo/greenlight", "--merge"])  # live target checked, head pinned by wrapper
+assert mv.call_count == 1 and mv.call_args.args[1]["sha"] == "abc"  # after the semantic audit of the head passed
+approved = gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]})
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}) as mv:
+    assert ev(approved)["cmd"][2] == "checked-merge" and mv.call_count == 1  # approval does not bypass semantic audit
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "pending": True}):
+    assert ev(approved)["owner"] == "ci"
+old_config = greenlight.CONFIG
+greenlight.CONFIG = {**old_config, "require_human_approval": False}
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "pending": True}):
+    assert ev(gh_pr())["owner"] == "ci"  # disabling approval still keeps the audit gate
+greenlight.CONFIG = old_config
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "pending": True}):
+    e = ev(gh_pr())  # the audit runs in the background: the scan doesn't wait on it, and nothing merges meanwhile
+assert (e["owner"], e["cmd"][:3]) == ("ci", ["gh", "pr", "merge"]) and e["action"] == "automerge waits on the semantic audit of abc", e
+_blk = {"ok": False, "failed": [{"check": "tests_not_weakened", "contract": "GenuineFix", "p_broken": 0.93}]}
+with mock.patch.object(audit, "merge_verdict", return_value=_blk):
+    e = ev(gh_pr())  # a broken contract holds the automerge for the user, with the merge cmd attached and the contract named
+assert (e["owner"], e["cmd"][:3], e["cmd"][-2:]) == ("me", ["gh", "pr", "merge"], ["--match-head-commit", "abc"]) \
+    and "GenuineFix (tests_not_weakened, p=0.93)" in e["action"], e
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "error": "RuntimeError: no diff"}):
+    assert ev(gh_pr())["owner"] == "me"  # an audit that couldn't run holds it too
 e = ev(gh_pr(labels={"nodes": [{"name": "tried"}]}))
 assert (e["step"], e["owner"]) == ("reviewed", "agent") and "`reviewed`" in e["action"]  # no merge before the three reviews
 assert ev(gh_pr(labels={"nodes": [{"name": "reviewed"}]}))["step"] == "tried"
@@ -232,14 +261,20 @@ with mock.patch.object(greenlight, "lifecycle_opts", return_value={"solo"}):
 with mock.patch.object(greenlight, "lifecycle_opts", return_value={"automerge"}):
     assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # automerge with no checking steps (default.md) merges nothing
 assert ev(gh_pr(), gws("Merge MR for #20 (hold)"))["action"].endswith("merge now?")
-e = ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))
-assert (e["owner"], e["cmd"][:3], e["lifecycle"]) == ("greenlight", ["gh", "pr", "merge"], "default.md")  # default lifecycle: approved → greenlight merges
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    e = ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))
+assert (e["owner"], e["cmd"][2], e["lifecycle"]) == ("greenlight", "checked-merge", "default.md")  # approved default merge is audited too
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "pending": True}):
+    assert ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))["owner"] == "ci"
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "error": "model unavailable"}):
+    assert ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))["owner"] == "me"
 assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # no human approval, not solo
 stacked = gh_pr(baseRefName="plan-view") | {"_base_mr": 13}
 assert (ev(stacked)["owner"], ev(stacked)["action"]) == ("dependency", "targets plan-view: waiting on #13 to merge first")
 assert ev(gh_pr(baseRefName="plan-view"))["owner"] == "me" and not ev(gh_pr(baseRefName="plan-view")).get("cmd")
 with mock.patch.object(greenlight, "lifecycle_opts", return_value={"merge_any_base"}):
-    assert ev(gh_pr(baseRefName="plan-view", latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "a"}}]}))["owner"] == "greenlight"
+    with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+        assert ev(gh_pr(baseRefName="plan-view", latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "a"}}]}))["owner"] == "greenlight"
 assert (ev(gh_pr(commits=roll("FAILURE")))["step"], ev(gh_pr(commits=roll("FAILURE")))["owner"]) == ("ci_green", "agent")
 assert ev(gh_pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY"))["step"] == "no_conflicts"
 assert ev(gh_pr(reviewThreads={"nodes": [th("alice", "alice")]}))["step"] == "threads"
@@ -331,11 +366,14 @@ print("github ok")
 (greenlight.STATE / "config.json").write_text('{"merge_method": "squash"}')
 assert greenlight.config()["merge_method"] == "squash" and greenlight.config()["agents"] == ["claude", "codex"]
 cfg, greenlight.CONFIG = greenlight.CONFIG, greenlight.config()
-assert greenlight.evaluate(ws(), mr(), None)["cmd"][-1] == "--squash"
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    assert greenlight.evaluate(ws(), mr(), None)["cmd"][-1] == "--squash"
 greenlight.BOT = None  # no review bot: the step passes
-assert nxt(mr(assignees=[], reviewers=[])) == ("merge", "greenlight")
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    assert nxt(mr(assignees=[], reviewers=[])) == ("merge", "greenlight")
 greenlight.CONFIG = {**greenlight.CONFIG, "require_human_approval": False}
-assert nxt(mr(_approved_by=[])) == ("merge", "greenlight")
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    assert nxt(mr(_approved_by=[])) == ("merge", "greenlight")
 greenlight.CONFIG, greenlight.BOT = cfg, "review-bot"
 (greenlight.STATE / "lifecycles/opts.md").write_text("Options: `solo` `milestone=v`\n")
 assert greenlight.lifecycle_opts("x/opts") == {"solo": "", "milestone": "v"}

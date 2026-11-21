@@ -12,4 +12,4 @@ Fix the merge conflicts on {mr} ({url}), {branch} → {target}. Follow this repo
 
 6. Show me each resolution: the file, what each side wanted, what you kept.
 
-When I say so: git push --force-with-lease. If someone pushed to {branch} since {sha}, stop and tell me instead.
+When I say so: run `python3 ~/.claude/skills/greenlight/scripts/greenlight.py scan`, then `python3 ~/.claude/skills/greenlight/scripts/audit.py gate push --execute --force-with-lease` from the clean worktree. The gate pushes the audited commit; do not run a separate git push. If someone pushed to {branch} since {sha}, stop and tell me instead.
