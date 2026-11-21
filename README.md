@@ -89,7 +89,7 @@ Support differs by harness:
 "system_one": {"provider": "jev", "fallback": "haiku"}
 ```
 
-- `jev`: TypeSafe's System One API. Key: `TYPESAFE_API_KEY`, the macOS login Keychain (service `greenlight`, account `typesafe`), or `decide.py key` (stdin; Settings' Set key… uses it).
+- `jev`: TypeSafe's System One API. Key: `TYPESAFE_API_KEY`, then `decide.py key` (stdin; Settings' Set key… uses it), then the macOS login Keychain (service `greenlight`, account `typesafe`).
 - `haiku`: Claude Haiku 5.5 with structured output, over the Messages API when `ANTHROPIC_API_KEY` is set, else through `claude -p`.
 - `local` (the default): no model. Every answer comes back uninformative (provider `local`), so Greenlight's own patterns decide, as before. Any failure falls back to this.
 

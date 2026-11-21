@@ -309,6 +309,29 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
 
 // MARK: model
 
+struct SystemOneSaveQueue {
+    private var commands: [String] = []
+    private(set) var busy = false
+    var empty: Bool { commands.isEmpty }
+    mutating func enqueue(_ command: String) -> String? {
+        commands.append(command)
+        return start()
+    }
+    mutating func finished() -> String? {
+        busy = false
+        return start()
+    }
+    private mutating func start() -> String? {
+        guard !busy && !commands.isEmpty else { return nil }
+        busy = true
+        return commands.removeFirst()
+    }
+}
+
+func fallbackAfterPrimaryChange(from old: String, to new: String, fallback: String) -> String {
+    new != "local" && new == fallback ? (old == "local" ? "" : old) : fallback
+}
+
 struct Step: Identifiable, Codable {
     let id: String
     var title: String, detail: String
@@ -1101,6 +1124,15 @@ func asksToShow(_ s: String) -> Bool {
 /// How sure System One must be that a reply is about a workspace before its hex lights, and before its card opens by itself.
 let lightAt = 0.70, openAt = 0.85
 
+func hexCandidates(_ reply: String, _ pucks: [[String: Any]], named: [String]) -> [[String: Any]] {
+    var seen = Set(named)
+    return Array(pucks.filter { p in
+        guard let n = p["name"] as? String, !seen.contains(n), grounded(reply, p) else { return false }
+        seen.insert(n)
+        return true
+    }.prefix(12))
+}
+
 /// The hexes a reply is about, and whether the dashboard should open the one lit hex's card (`open`: it's that sure).
 /// The ones it names outright are certain. The others it points at (grounded: a name, an MR number, title words) go to System One
 /// (`decide.py batch` where greenlight runs, one yes/no each): P > 0.70 lights, a lone hex at P > 0.85 opens. With no System One model
@@ -1108,11 +1140,7 @@ let lightAt = 0.70, openAt = 0.85
 /// `asked`: the user asked to see some (asksToShow): the questions say so, and the on-device picker skips its "particular ones?" gate.
 func pickHexes(_ reply: String, _ pucks: [[String: Any]], asked: Bool = false, done: @escaping ([String], Bool) -> Void) {
     let named = namedHexes(reply, pucks)
-    var seen = Set(named)
-    let cands = pucks.filter { p in  // ponytail: 12 at most; a reply grounded in more is about the board, not particular ones
-        guard let n = p["name"] as? String, seen.insert(n).inserted else { return false }
-        return grounded(reply, p)
-    }.prefix(12)
+    let cands = hexCandidates(reply, pucks, named: named)  // ponytail: 12 at most; more is about the board
     guard !cands.isEmpty else { return done(named, named.count == 1) }
     var qs: [String: Any] = [:]
     for (i, p) in cands.enumerated() {
@@ -3245,28 +3273,59 @@ final class Core: ObservableObject {
     @Published var s1Loading = false
     @Published var s1Note = ""  // why the last read or save failed
     @Published var s1Test = ""  // the last Test's result
+    private var s1Saves = SystemOneSaveQueue()
+    private var s1Pending = 0
+    private var s1Version = 0
+    private var s1WriteError = false
 
-    func loadSystemOne() { systemOne("config") }
+    func loadSystemOne() {
+        guard !s1Saves.busy && s1Saves.empty else { return }  // the final queued save reads the result
+        systemOne("config", readConfig: true)
+    }
     func setSystemOne(provider: String? = nil, fallback: String? = nil) {
-        if let provider { s1Provider = provider }
+        var saveFallback = fallback
+        if let provider {
+            let adjusted = fallbackAfterPrimaryChange(from: s1Provider, to: provider, fallback: s1Fallback)
+            if fallback == nil && adjusted != s1Fallback { s1Fallback = adjusted; saveFallback = adjusted }
+            s1Provider = provider
+        }
         if let fallback { s1Fallback = fallback }
-        systemOne("config" + (provider.map { " --provider \(shellQuote($0))" } ?? "") + (fallback.map { " --fallback \($0.isEmpty ? "none" : shellQuote($0))" } ?? ""))
+        s1Version += 1
+        let cmd = "config" + (provider.map { " --provider \(shellQuote($0))" } ?? "") + (saveFallback.map { " --fallback \($0.isEmpty ? "none" : shellQuote($0))" } ?? "")
+        if let first = s1Saves.enqueue(cmd) { saveSystemOne(first) }
+    }
+    private func saveSystemOne(_ cmd: String) {
+        systemOne(cmd, finished: { [weak self] in
+            guard let self else { return }
+            if let next = self.s1Saves.finished() { self.saveSystemOne(next) }
+            else { self.loadSystemOne() }
+        })
     }
     /// The TypeSafe key goes to decide.py on greenlight's host (its secrets file, 0600) over stdin: never on a command line.
     func setSystemOneKey(_ v: String) { systemOne(v.isEmpty ? "key --clear" : "key", stdin: v) }
-    func systemOne(_ cmd: String, stdin: String = "") {
+    func systemOne(_ cmd: String, stdin: String = "", readConfig: Bool = false, finished: (() -> Void)? = nil) {
         var out = ""
+        let version = s1Version
+        s1Pending += 1
         s1Loading = true
         ssh("\(py)/decide.py \(cmd)", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
-            self.s1Loading = false
+            self.s1Pending -= 1
+            self.s1Loading = self.s1Pending > 0
+            defer { finished?() }
             guard code == 0, let a = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] else {
+                if cmd.hasPrefix("config --") { self.s1WriteError = true }
                 self.s1Note = "Couldn't reach decide.py on \(host)."; return
             }
-            if let p = a["provider"] as? String { self.s1Provider = p }
-            if a.keys.contains("fallback") { self.s1Fallback = a["fallback"] as? String ?? "" }
+            if readConfig && version == self.s1Version {
+                if let p = a["provider"] as? String { self.s1Provider = p }
+                if a.keys.contains("fallback") { self.s1Fallback = a["fallback"] as? String ?? "" }
+            }
             if let k = a["key"] as? Bool { self.s1Key = k }
-            self.s1Note = ""
+            if readConfig {
+                self.s1Note = self.s1WriteError ? "Couldn't save a System One setting on \(host)." : ""
+                self.s1WriteError = false
+            } else if !cmd.hasPrefix("config --") { self.s1Note = "" }
         })
     }
     /// `decide.py test`: each model in the chain asked a question with a known answer; the result in a line.
@@ -8442,6 +8501,18 @@ func selfTest() {
           && resolveHexes(["selkie", "!5339", "mr-5339", "nope"], hp) == ["selkie", "acme/mr-5339"]
           && grounded("re-review merge request 5339", hp[0]) && grounded("the pending liquidity receipts change", hp[0])
           && grounded("I'd highlight selkie", hp[1]) && !grounded("Okay, let me know what's next.", hp[2]) && !grounded("about 18020 things", hp[2]))
+    let duplicates: [[String: Any]] = [["name": "same", "mr": ["title": "unrelated title"]],
+                                      ["name": "same", "mr": ["title": "pending liquidity receipts"]]]
+    check("hexes: a later workspace with the same name can be grounded by its MR title",
+          (hexCandidates("the pending liquidity receipts change", duplicates, named: []).first?["mr"] as? [String: Any])?["title"] as? String == "pending liquidity receipts")
+    var s1q = SystemOneSaveQueue()
+    let saveFirst = s1q.enqueue("provider"), saveEarly = s1q.enqueue("fallback")
+    let saveSecond = s1q.finished(), saveLast = s1q.finished()
+    check("System One: rapid Settings saves run in selection order, then refresh",
+          saveFirst == "provider" && saveEarly == nil && saveSecond == "fallback" && saveLast == nil && s1q.empty && !s1q.busy)
+    check("System One: changing primary to its fallback swaps the old primary into fallback",
+          fallbackAfterPrimaryChange(from: "jev", to: "haiku", fallback: "haiku") == "jev"
+          && fallbackAfterPrimaryChange(from: "jev", to: "local", fallback: "haiku") == "haiku")
     let p0: [[String: Any]] = [["name": "a", "state": "working", "step": "ci", "owner": "agent", "action": "fix CI", "agent": ["state": "working", "type": "claude", "tool": "Bash", "input": "make", "last": "On it."]],
                                ["name": "z", "state": "done", "step": "merged", "owner": "nobody"]]
     let p1: [[String: Any]] = [["name": "a", "state": "needs", "step": "review", "owner": "me", "action": "approve it", "agent": ["state": "waiting", "type": "claude", "tool": "Bash", "input": "make", "last": "CI is green. Merge?"]],

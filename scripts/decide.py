@@ -14,8 +14,9 @@ Extra keys: choice/score answers also carry `confidence`, and a fallback carries
 
 Providers, from config.json's "system_one" ({"provider": "jev"|"haiku"|"local", "fallback": "haiku"|null, "model": "jev-latest",
 "url": ..., "haiku_model": "claude-haiku-5-5", "timeout": 20}; a bare string names the provider):
-  jev    TypeSafe's System One API (https://api.typesafe.ai/v1/systemone). Key: TYPESAFE_API_KEY, else the macOS login Keychain
-         (service greenlight, account typesafe), else $GREENLIGHT_HOME/secrets/typesafe (`decide.py key` writes it from stdin).
+  jev    TypeSafe's System One API (https://api.typesafe.ai/v1/systemone). Key: TYPESAFE_API_KEY, else
+         $GREENLIGHT_HOME/secrets/typesafe (`decide.py key` writes it from stdin), else the macOS login Keychain
+         (service greenlight, account typesafe).
   haiku  Claude Haiku with structured JSON output: the Messages API when ANTHROPIC_API_KEY (or the Keychain's greenlight/anthropic)
          is set, else `claude -p --json-schema`.
   local  No model: every answer is uninformative (bool 0.5, uniform choice, score 0.5) and says provider "local", so callers
@@ -33,12 +34,14 @@ Answers from a model are cached in $GREENLIGHT_HOME/decide-cache.json (same stat
 Stdlib only, Python 3.10+.
 """
 import builtins
+import fcntl
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -69,6 +72,8 @@ def conf():
 def chain(c=None):
     """The providers to try, in order, ending with local."""
     c = c or conf()
+    if c.get("provider") not in ("jev", "haiku"):  # off is off: a fallback left set doesn't turn a model back on
+        return ["local"]
     out = [p for p in (c.get("provider"), c.get("fallback")) if p in ("jev", "haiku")]
     return list(dict.fromkeys(out)) + ["local"]
 
@@ -87,45 +92,50 @@ def keychain(account):
 def jev_key():
     if k := os.environ.get("TYPESAFE_API_KEY", "").strip():
         return k
-    if k := keychain("typesafe"):
-        return k
     try:
-        return (HOME / "secrets" / "typesafe").read_text().strip() or None
+        return (HOME / "secrets" / "typesafe").read_text().strip() or None  # empty file explicitly clears a legacy Keychain key
     except OSError:
-        return None
+        return keychain("typesafe")
 
 
 def set_key(value):
     f = HOME / "secrets" / "typesafe"
-    if not value:
-        f.unlink(missing_ok=True)
-        return
     f.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(f.parent, 0o700)
-    tmp = f.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as h:
-        h.write(value.strip() + "\n")
-    os.replace(tmp, f)
+    fd = os.open(f.with_suffix(".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with tempfile.NamedTemporaryFile("w", dir=f.parent, prefix="typesafe-", delete=False) as tmp:
+            tmp.write(value.strip() + ("\n" if value.strip() else ""))
+        try:
+            os.replace(tmp.name, f)
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
 
 
 def set_conf(**kw):
     """Changes config.json's system_one keys (None removes one), keeping everything else in the file."""
     f = HOME / "config.json"
-    try:
-        d = json.loads(f.read_text())
-    except FileNotFoundError:
-        d = {}
-    cur = d.get("system_one")
-    cur = {"provider": cur} if isinstance(cur, str) else dict(cur or {})
-    for k, v in kw.items():
-        cur.pop(k, None) if v is None else cur.update({k: v})
-    d["system_one"] = cur
     f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, indent=2) + "\n")
-    os.replace(tmp, f)
-    return conf()
+    fd = os.open(f.with_suffix(".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            d = json.loads(f.read_text())
+        except FileNotFoundError:
+            d = {}
+        cur = d.get("system_one")
+        cur = {"provider": cur} if isinstance(cur, str) else dict(cur or {})
+        for k, v in kw.items():
+            cur.pop(k, None) if v is None else cur.update({k: v})
+        d["system_one"] = cur
+        with tempfile.NamedTemporaryFile("w", dir=f.parent, prefix="config-", delete=False) as tmp:
+            tmp.write(json.dumps(d, indent=2) + "\n")
+        try:
+            os.replace(tmp.name, f)
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+        return conf()
 
 
 # ---- questions ----
@@ -177,6 +187,8 @@ def finish(q, raw, provider):
         return {"value": p > 0.5, "prob": p, "provider": provider}
     if q["type"] == "choice":
         names = list(q["options"])
+        if any(n not in raw for n in names):
+            raise ValueError("choice probabilities are incomplete")
         ps = [clamp(raw.get(n, 0) or 0) for n in names]
         t = sum(ps)
         ps = [x / t for x in ps] if t > 0 else [1 / len(names)] * len(names)
@@ -236,7 +248,7 @@ def jev(state, qs, c):
             out[n] = finish(q, a["probabilities"], "jev")
         else:
             p = a.get("probabilities")
-            if not isinstance(p, dict):
+            if not isinstance(p, dict) or any(str(i) not in p for i in range(len(q["levels"]))):
                 raise RuntimeError(f"jev: no answer for {n}")
             out[n] = finish(q, [p.get(str(i), 0) for i in range(len(q["levels"]))], "jev")
     return out
@@ -276,11 +288,17 @@ def haiku_parse(qs, keys, d):
         if not isinstance(a, dict):
             raise RuntimeError(f"haiku: no answer for {n}")
         if q["type"] == "bool":
-            out[n] = finish(q, a.get("p_yes", 0.5), "haiku")
+            if not isinstance(a.get("p_yes"), (int, float)):
+                raise RuntimeError(f"haiku: no answer for {n}")
+            out[n] = finish(q, a["p_yes"], "haiku")
         elif q["type"] == "choice":
-            out[n] = finish(q, {name: a.get(f"o{j}", 0) for j, name in enumerate(q["options"])}, "haiku")
+            if any(f"o{j}" not in a for j in range(len(q["options"]))):
+                raise RuntimeError(f"haiku: incomplete answer for {n}")
+            out[n] = finish(q, {name: a[f"o{j}"] for j, name in enumerate(q["options"])}, "haiku")
         else:
-            out[n] = finish(q, [a.get(f"o{j}", 0) for j in range(len(q["levels"]))], "haiku")
+            if any(f"o{j}" not in a for j in range(len(q["levels"]))):
+                raise RuntimeError(f"haiku: incomplete answer for {n}")
+            out[n] = finish(q, [a[f"o{j}"] for j in range(len(q["levels"]))], "haiku")
     return out
 
 
@@ -327,7 +345,10 @@ def _cache_file():
 
 def _cache_key(provider, c, state, qs):
     model = c["model"] if provider == "jev" else c["haiku_model"]
-    blob = json.dumps([provider, model, state, qs], sort_keys=True, ensure_ascii=False)
+    url = c["url"] if provider == "jev" else c["anthropic_url"]
+    key = jev_key() if provider == "jev" else None
+    fingerprint = hashlib.sha256(key.encode()).hexdigest() if key else None
+    blob = json.dumps([provider, model, url, fingerprint, state, qs], sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode()).hexdigest()[:32]
 
 
@@ -343,20 +364,22 @@ def _cache_put(k, answers):
     with _lock:
         f = _cache_file()
         try:
-            d = json.loads(f.read_text())
-            d = d if isinstance(d, dict) else {}
-        except (OSError, ValueError):
-            d = {}
-        now = time.time()
-        d = {x: e for x, e in d.items() if now - e.get("t", 0) < CACHE_TTL}
-        d[k] = {"t": now, "a": answers}
-        if len(d) > CACHE_MAX:
-            d = dict(sorted(d.items(), key=lambda kv: kv[1]["t"])[-CACHE_MAX:])
-        try:
             f.parent.mkdir(parents=True, exist_ok=True)
-            tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-            tmp.write_text(json.dumps(d))
-            os.replace(tmp, f)
+            with f.with_name(f.name + ".lock").open("a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                try:
+                    d = json.loads(f.read_text())
+                    d = d if isinstance(d, dict) else {}
+                except (OSError, ValueError):
+                    d = {}
+                now = time.time()
+                d = {x: e for x, e in d.items() if now - e.get("t", 0) < CACHE_TTL}
+                d[k] = {"t": now, "a": answers}
+                if len(d) > CACHE_MAX:
+                    d = dict(sorted(d.items(), key=lambda kv: kv[1]["t"])[-CACHE_MAX:])
+                tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                tmp.write_text(json.dumps(d))
+                os.replace(tmp, f)
         except OSError:
             pass
 
