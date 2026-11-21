@@ -554,6 +554,8 @@ def check_shell(script, ctx, depth=0):
                 v.add("high", "forge host differs from this workspace's origin", "egress")
         if piped and any(os.path.basename(item) == "xargs" for item in argv):
             v.add("high", "xargs runs a command with file paths from a pipe")
+        if any(os.path.basename(item) == "xargs" for item in argv) and any(a in ("-a", "--arg-file") or a.startswith(("-a", "--arg-file=")) for a in argv):
+            v.add("high", "xargs reads command arguments from a file")
         argv = unwrap(argv)
         if argv:
             name = os.path.basename(argv[0])
@@ -720,6 +722,9 @@ def check_argv(argv, ctx, depth, piped_from=None):
             v.merge(check_argv(args, ctx, depth + 1, piped_from=piped_from))
         else:
             v.add("high", "BusyBox applet cannot be identified")
+        return v
+    if cmd == "openssl" and args[:1] == ["s_client"]:
+        v.add("high", "openssl s_client opens a network connection", "egress")
         return v
     if cmd.endswith("greenlight.py") or cmd in ("orca", "orca-ide") or (cmd.startswith("python") and any(a.endswith("greenlight.py") for a in args[:2])):
         rest = args[args.index("ade") + 1:] if "ade" in args else args
@@ -907,6 +912,22 @@ def check_argv(argv, ctx, depth, piped_from=None):
                     targets = [str(ctx.path(dest) / os.path.basename(src.rstrip("/"))) for src in sources]
         for t in targets:
             v.merge(check_write(ctx.path(t), ctx, cmd, raw=t))
+        if cmd == "cp" and any(a in ("-R", "-r", "-a", "--recursive", "--archive") or re.fullmatch(r"-[A-Za-z]*[Rra][A-Za-z]*", a) for a in args):
+            for src, target in zip(sources, targets if len(targets) == len(sources) else targets * len(sources)):
+                source_dir = ctx.path(src)
+                if not source_dir.is_dir():
+                    continue
+                count = 0
+                for base, dirs, files in os.walk(source_dir):
+                    for name in dirs + files:
+                        count += 1
+                        if count > 1000:
+                            v.add("high", "cp source tree is too large to inspect")
+                            break
+                        member = Path(base).relative_to(source_dir) / name
+                        v.merge(check_write(ctx.path(str(Path(target) / member)), ctx, "cp recursive", raw=str(member)))
+                    if count > 1000:
+                        break
         for src in sources:
             p = ctx.path(src, follow=cmd != "ln")
             if cmd == "mv":  # moving a file away deletes it where it was
@@ -1825,6 +1846,8 @@ def check_tool(tool, inp, ctx):
         return v
     if tool.startswith("mcp__"):
         name = tool.split("__")[-1].lower()
+        if re.search(r"search|query|find|list", name):
+            v.add("medium", f"{tool} sends query data to an external service", "egress")
         if name == "graphql":
             query = str(inp.get("query") or inp.get("document") or "")
             if not re.match(r"\s*(?:query\b|\{)", query) or re.search(r"\b(?:mutation|subscription)\b", query):
