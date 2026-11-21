@@ -431,12 +431,13 @@ _lj.write_text(json.dumps({"ts": 1, "rows": [{**mine, "mr": {**mine["mr"], "conf
 assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "target": "main", "how": "Squash"}
 assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
-_auto_row = {**mine, "forge": "gitlab", "mr": {**mine["mr"], **_clean, "iid": 58}}
+_auto_row = {**mine, "forge": "gitlab", "mr": {**mine["mr"], **_clean, "iid": 58},
+             "next": {**mine["next"], "cmd": [sys.executable, "audit.py", "checked-merge", "gitlab", mine["project"], "58", "main", "abc123", "base1", *mine["next"]["cmd"]]}}
 _lj.write_text(json.dumps({"ts": 1, "rows": [_auto_row]}))
 dash.audit.save("/w/b", "abc123", {"ok": True, "failed": [], "target_oid": "base1"}, dash.audit.ident(_auto_row, _auto_row["mr"]))
 with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]):
     assert dash.tree_merge("/w/b")["ok"]
-assert _ran[-1][2:9] == ["checked-merge", _auto_row["forge"], _auto_row["project"], str(_auto_row["mr"]["iid"]), "main", "abc123", "base1"], _ran[-1]
+assert _ran[-1] == mine["next"]["cmd"] + ["--sha", "abc123"], _ran[-1]  # a human click ignores the auto audit receipt
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
 assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 3
 # Deploy: a merged MR's step after the merge runs its lifecycle Run command in the worktree, then signs off; a failure signs nothing off

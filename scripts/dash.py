@@ -208,17 +208,12 @@ def tree_merge(path):
     if not m or not r["mr"].get("sha"):
         return {"error": "greenlight doesn't say this can merge now"}
     cmd = r["next"]["cmd"]
-    if cmd[2:3] == ["checked-merge"]:
-        guarded = cmd
-    elif m.get("auto"):
-        mr = r["mr"]
-        v = audit.cached(path, mr["sha"], audit.ident(r, mr))
-        if not v or not v.get("ok") or not v.get("target_oid"):
-            return {"error": "the audited target commit is unavailable"}
-        guarded = [sys.executable, str(audit.HERE / "audit.py"), "checked-merge", r["forge"], r["project"], str(mr["iid"]),
-                   mr["target_branch"], mr["sha"], v["target_oid"], *cmd]
-    else:
-        guarded = cmd + ["--match-head-commit" if cmd[0] == "gh" else "--sha", r["mr"]["sha"]]
+    # The card is a human Merge click even when an unattended auto action is
+    # also available. Keep the source-head pin, but leave semantic target
+    # gating on greenlight's separate automatic checked-merge command.
+    manual = cmd[9:] if cmd[2:3] == ["checked-merge"] else cmd
+    pin = "--match-head-commit" if manual[0] == "gh" else "--sha"
+    guarded = manual if manual[-2:] == [pin, r["mr"]["sha"]] else manual + [pin, r["mr"]["sha"]]
     greenlight.run(guarded, timeout=90)
     # ponytail: mark it merged in the snapshot so the card stops offering it; greenlight's next scan rewrites the row anyway
     post = greenlight.post_merge(r["project"])  # steps after merge: the next scan asks for them; until then it's not done
