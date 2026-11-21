@@ -698,9 +698,19 @@ def check_argv(argv, ctx, depth, piped_from=None):
                     v.add("high", "cannot inspect tar extraction contents")
             else:
                 v.add("high", "tar extraction archive cannot be identified")
-        if creating and any(SECRET_PATH_RE.search(str(ctx.path(a))) or str(ctx.path(a)).startswith(str(HOME / ".ssh"))
-                            for a in args if not a.startswith("-")):
-            v.add("deny", "tar archive would package credentials", "secret")
+        if creating:
+            sources = [ctx.path(a) for a in args if not a.startswith("-") and a != opt(args, "-f", "--file")]
+            for source in sources:
+                if SECRET_PATH_RE.search(str(source)) or str(source).startswith(str(HOME / ".ssh")):
+                    v.add("deny", "tar archive would package credentials", "secret")
+                elif source.is_dir():
+                    for count, (base, _, files) in enumerate(os.walk(source)):
+                        if count >= 1000:
+                            v.add("high", "tar input tree is too large to inspect")
+                            break
+                        if any(SECRET_PATH_RE.search(str(Path(base) / name)) for name in files):
+                            v.add("deny", "tar archive would package a nested credential file", "secret")
+                            break
         return v
     if cmd in ("unzip", "7z", "7za"):
         directory = opt(args, "-d", "--output") or "."
@@ -847,7 +857,7 @@ def check_git(args, ctx, depth=0):
                 v.add("high", f"git {a[0]} changes the effective repository")
             if a[0] == "-c" and re.match(r"(?i)(core\.(sshCommand|hooksPath|fsmonitor|pager|editor)|credential\.|url\.|alias\.)", a[1]):
                 v.add("high", f"git -c {a[1].split('=')[0]} runs or routes things outside the repo")
-            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
+            if a[0] == "-c" and re.match(r"(?i)(remote\..*\.(?:push|pushurl|url|mirror)|remote\.pushDefault|branch\..*\.(?:remote|pushRemote|merge)|push\.default)=", a[1]):
                 push_override = True
                 v.add("high", f"git -c {a[1].split('=')[0]} changes the effective push target", "egress")
                 if a[1].split("=", 1)[1].startswith("+"):
@@ -943,6 +953,8 @@ def check_push(rest, ctx, v):
         if force:
             v.add("deny", "force push uses configured refspecs that may include the default branch", "egress")
     if remote in ctx.remotes:
+        if ctx.git("config", "--bool", "--get", f"remote.{remote}.mirror") == "true":
+            v.add("deny", "configured mirror push can force-update the default branch", "egress")
         destinations = ctx.git("remote", "get-url", "--push", "--all", remote).splitlines()
         project = workspace_project(ctx)
         origin_host = host_of(ctx.git("remote", "get-url", "origin"))
@@ -1283,6 +1295,11 @@ def check_net(cmd, args, ctx):
         if cmd == "curl" and (directory := opt(args, "--output-dir")):
             output = os.path.join(directory, output)
         v.merge(check_write(ctx.path(output), ctx, f"{cmd} output", raw=output))
+    if cmd == "curl":
+        for flag in ("-D", "--dump-header", "-c", "--cookie-jar"):
+            target = opt(args, flag) or next((a[len(flag):] for a in args if len(flag) == 2 and a.startswith(flag) and len(a) > 2), None)
+            if target:
+                v.merge(check_write(ctx.path(target), ctx, f"curl {flag} output", raw=target))
     if cmd == "wget" and not output:
         directory = opt(args, "-P", "--directory-prefix") or "."
         for url in urls:
@@ -1391,6 +1408,9 @@ def check_rm(args, ctx):
         s = str(p)
         if "$(" in raw or "`" in raw:
             v.add("high", f"deletes a path from command substitution ({raw})")
+            continue
+        if "{" in raw and "}" in raw:
+            v.add("high", f"deletes a path with brace expansion ({raw})")
             continue
         if re.search(r"\$\{[^}]*[:-][^}]*\}", raw):
             v.add("high", f"deletes a path with shell parameter expansion ({raw})")
@@ -1719,7 +1739,7 @@ def decide_call(tool, inp, cwd, session="", conf=None, interactive_ok=True, reco
     routing_env = {k: os.environ.get(k, "") for k in ("GH_REPO", "GH_HOST", "GLAB_REPO", "GITLAB_HOST", "GIT_SSH_COMMAND")}
     routing_env.update({k: value for k, value in os.environ.items() if k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))})
     scope = f"{ctx.cwd}\0{ctx.root}\0{ctx.branch}\0{ctx.git('remote', 'get-url', 'origin')}\0{json.dumps(routing_env, sort_keys=True)}\0{v.tier}\0{approval_files(tool, inp, ctx)}"
-    cacheable = tool != "Bash" or not re.search(r"@[^\s]+|--(?:body-file|notes-file|input|post-file|upload-file|template)\b|\s-[FTK]\b|\bgh\s+(?:gist|release)\s+(?:create|upload)\b", inp.get("command", ""))
+    cacheable = tool != "Bash" or not re.search(r"@[^\s]+|--(?:body-file|notes-file|input|post-file|upload-file|template)\b|\s-[FTK][^\s]*|\bgh\s+(?:gist|release)\s+(?:create|upload)\b", inp.get("command", ""))
     digest = hashlib.sha256(f"{session}\0{tool}\0{scope}\0{json.dumps(inp, sort_keys=True)}".encode()).hexdigest()[:24]
     if verdict == "pause" and cacheable and digest in approvals():
         verdict, why = "allow", "you allowed this exact call in this session within the hour"
