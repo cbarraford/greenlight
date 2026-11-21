@@ -231,6 +231,15 @@ def ask(state, qs):
     # The model may run remotely. Never send credential shapes found in goals,
     # removed diff lines, comments, paths, or threads to it.
     qs = {k: {**q, "context": redact_diff_pii(redact_secrets(q.get("context", "")))} for k, q in qs.items()}
+    def safe_state(value):
+        if isinstance(value, str):
+            return redact_diff_pii(redact_secrets(value))
+        if isinstance(value, dict):
+            return {safe_state(k): safe_state(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [safe_state(v) for v in value]
+        return value
+    state = safe_state(state)
     dc, out = _decide(), {}
     if dc is not None and hasattr(dc, "batch") and qs:
         try:
@@ -267,7 +276,18 @@ def published_lines(diff):
             # Only the destination leaves this branch; an old secret-bearing
             # filename may be removed or renamed away.
             names = shlex.split(line)
-            dest = names[3] if len(names) == 4 else None
+            if len(names) == 4 and names[:2] == ["diff", "--git"] and names[3].startswith("b/"):
+                dest = names[3]
+            else:
+                # Git leaves spaces unquoted in ordinary diff headers. For a
+                # same-path add (including an empty file) locate the boundary
+                # by matching the complete a/ and b/ path, not word count.
+                raw = line[len("diff --git "):]
+                matches = ["b/" + raw[2:i] for i in range(2, len(raw))
+                           if raw.startswith("a/") and raw[i:] == " b/" + raw[2:i]]
+                dest = matches[0] if len(matches) == 1 else ("b/" + raw.rsplit(" b/", 1)[-1] if " b/" in raw else None)
+                if dest is None:
+                    raise ValueError("ambiguous diff destination path: cannot safely audit")
         elif line.startswith("deleted file mode ") or line == "+++ /dev/null":
             dest = None
         elif line.startswith("@@"):
