@@ -60,6 +60,7 @@ assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"
 assert plan("park auth-login and old-thing")["route"] == "chief"  # a parked explicit target cannot be silently dropped
 assert plan("hold #42 or #43")["route"] == "chief"  # don't treat a choice as two actions
 assert plan("hold #42 and this", [puck("auth-login", 42), puck("search", 43)], focus="search")["route"] == "chief"
+assert plan("hold #42, red ones", [puck("auth-login", 42, pipeline="failed"), puck("billing", 44, pipeline="failed")])["route"] == "chief"
 assert plan("hold #42 and 1", [puck("auth-login", 42), puck("first", 1)])["route"] == "chief"
 assert [a["ws"] for a in plan("hold #42 and #1", [puck("auth-login", 42), puck("first", 1)])["actions"]] == ["auth-login", "first"]
 assert plan("hold #42 and release the hold on #43")["route"] == "chief"
@@ -302,6 +303,7 @@ os.system(f"cd {d} && git init -q -b main && git commit -q --allow-empty -m init
           f"&& printf 'a\\nb\\n' > x.py && git add x.py && git -c user.email=t@t -c user.name=t commit -q -m x")
 c = dwim.stage({"text": "what changed in auth-login", "pucks": [puck("auth-login", 42, path=d)]})
 assert c["kind"] == "diff" and c["files"] == [{"path": "x.py", "add": 2, "del": 0}] and c["add"] == 2, c
+assert c["title"] == "1 tracked file changed"
 Path(d, "x.py").write_text("a\nb\nc\n")
 Path(d, "y.py").write_text("z\n")
 subprocess.run(["git", "-C", d, "add", "y.py"], check=True)

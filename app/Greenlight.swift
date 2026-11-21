@@ -1020,6 +1020,7 @@ func keepingToast(_ toasts: [DwimToast], _ t: DwimToast) -> [DwimToast] {
     if let i = out.firstIndex(where: { $0.id == t.id }) { out[i] = t } else { out.append(t) }
     return out
 }
+func canBeginDwimUndo(_ t: DwimToast) -> Bool { !t.undoing }
 struct DwimPlans {
     private var pending = [UUID: String]()
     mutating func begin(_ text: String) -> UUID { let id = UUID(); pending[id] = text; return id }
@@ -3876,7 +3877,7 @@ final class Core: ObservableObject {
 
     /// The toast's Undo (and "undo" said in voice mode): cancels a launch still in its grace, or puts the edited goals back.
     func undoToast(_ id: UUID? = nil) {
-        guard let target = id ?? latestUndoableToast?.id, var t = toasts.first(where: { $0.id == target }) else { return }
+        guard let target = id ?? latestUndoableToast?.id, var t = toasts.first(where: { $0.id == target }), canBeginDwimUndo(t) else { return }
         if t.pending {
             launchWorks.removeValue(forKey: t.id)?.cancel()
             msgs.append(Msg(.note, "Cancelled: \(t.text)"))
@@ -8702,6 +8703,8 @@ func selfTest() {
     toastCore.show(secondToast, for: nil, onToast: { _ in secondSeen += 1 })
     toastCore.show(finishedFirst, for: nil)
     check("dwim: concurrent palette actions keep separate toast listeners", firstSeen == 2 && secondSeen == 1)
+    var inFlightUndo = finishedFirst; inFlightUndo.undoing = true
+    check("dwim: repeated Undo waits for the first request", canBeginDwimUndo(finishedFirst) && !canBeginDwimUndo(inFlightUndo))
     var planGate = DwimPlans(); let cancelledPlan = planGate.begin("hold #42"); let cancelledText = planGate.cancel(); let activePlan = planGate.begin("park #42")
     check("dwim: Stop and Clear invalidate an in-flight plan", cancelledText == ["hold #42"] && !planGate.finish(cancelledPlan) && planGate.finish(activePlan))
     check("dwim: failed Undo reply keeps its retry control", dwimUndoReply("", 1) == nil && dwimUndoReply("{}", 0) == nil
