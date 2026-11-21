@@ -781,7 +781,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in ("gh", "glab"):
         return check_forge(cmd, args, ctx)
     if cmd == "tar":
-        flags = "".join(a.lstrip("-") for a in args if a.startswith("-") and not a.startswith("--"))
+        flags = (args[0] if args and re.fullmatch(r"[A-Za-z]+", args[0]) else "") + "".join(a.lstrip("-") for a in args if a.startswith("-") and not a.startswith("--"))
         extracting = "x" in flags or "--extract" in args
         creating = "c" in flags or "--create" in args
         dest = opt(args, "-C", "--directory") or "."
@@ -793,7 +793,7 @@ def check_argv(argv, ctx, depth, piped_from=None):
                 v.merge(check_write(p, ctx, "tar extraction", raw=dest))
             if "P" in flags or "--absolute-names" in args:
                 v.add("high", "tar extraction preserves absolute and parent paths")
-            archive = opt(args, "-f", "--file") or next((a[2:] for a in args if a.startswith("-f") and len(a) > 2), None)
+            archive = opt(args, "-f", "--file") or (args[1] if args and re.fullmatch(r"[A-Za-z]*f[A-Za-z]*", args[0]) and len(args) > 1 else None) or next((a[2:] for a in args if a.startswith("-f") and len(a) > 2), None)
             archive = archive or next((args[i + 1] for i, a in enumerate(args)
                                        if re.fullmatch(r"-[A-Za-z]*f[A-Za-z]*", a) and i + 1 < len(args)), None)
             if archive:
@@ -1386,10 +1386,10 @@ def advertised_default(ctx, remote):
         return ""
     if parsed.scheme != "https" or parsed.username or parsed.password:
         return ""
-    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k != "GIT_SSH_COMMAND"}
+    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k not in ("GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS")}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        output = subprocess.run(["git", "-C", str(ctx.cwd), "ls-remote", "--symref", urls[0], "HEAD"],
+        output = subprocess.run(["git", "-C", str(ctx.cwd), "-c", "credential.helper=", "-c", "core.askPass=", "ls-remote", "--symref", urls[0], "HEAD"],
                                 capture_output=True, text=True, timeout=2, env=env, check=True).stdout
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
         return ""
@@ -1411,10 +1411,10 @@ def advertised_base(ctx, remote, source, target):
     target = ctx.branch if target == "HEAD" else re.sub(r"^refs/heads/", "", target)
     defaults = sorted(ctx.default)
     refs = list(dict.fromkeys([target, *defaults]))
-    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k != "GIT_SSH_COMMAND"}
+    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k not in ("GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS")}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        output = subprocess.run(["git", "-C", str(ctx.cwd), "ls-remote", "--refs", urls[0],
+        output = subprocess.run(["git", "-C", str(ctx.cwd), "-c", "credential.helper=", "-c", "core.askPass=", "ls-remote", "--refs", urls[0],
                                  *(f"refs/heads/{ref}" for ref in refs)], capture_output=True, text=True,
                                 timeout=2, env=env, check=True).stdout
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
@@ -1534,6 +1534,27 @@ def check_forge(cmd, args, ctx):
                 v.add("high", f"{cmd} api write target is not proven to be this workspace's repo", "egress")
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
+            ref = re.search(r"\brepos/[^/\s]+/[^/\s]+/git/refs/heads/([^\s?]+)", text)
+            if ref:
+                default = advertised_default(ctx, "origin")
+                if not default:
+                    v.add("deny" if re.search(r"\bforce\s*=\s*(?:true|1)\b", text, re.I) else "high",
+                          "cannot verify default branch for a direct ref update", "egress")
+                elif ref[1] == default and method == "PATCH":
+                    v.add("deny", "direct API ref update can force the default branch", "egress")
+                else:
+                    v.add("high", "direct API ref update bypasses ordinary push inspection", "egress")
+        return v
+    if group == "repo" and verb == "sync":
+        target = a[2] if len(a) > 2 and not a[2].startswith("-") else ""
+        if target and not own_repo(target, ctx):
+            v.add("high", f"{cmd} repo sync targets another repository", "egress")
+        branch = opt(a, "--branch", "-b")
+        default = advertised_default(ctx, "origin")
+        if "--force" in a and (not branch or not default or branch == default):
+            v.add("deny", "repo sync can force-update the default branch", "egress")
+        else:
+            v.add("high", "repo sync changes remote branch history", "egress")
         return v
     if group in ("pr", "mr") and verb in ("edit", "ready", "update", "merge", "close", "reopen", "approve", "revoke", "rebase", "delete", "lock", "unlock", "comment", "note", "review", "reply", "checkout"):
         goal = situation(ctx)[1]
@@ -1542,11 +1563,12 @@ def check_forge(cmd, args, ctx):
         if not expected or target != expected[1]:
             v.add("high", f"{cmd} {group} target is not verified as this workspace's PR/MR", "egress")
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
-        default = next((d for d in ctx.default if ctx.git("rev-parse", "--verify", f"refs/remotes/origin/{d}")), "main")
         source = opt(a, "--head") or ctx.branch
-        base = opt(a, "--base", "-B") or next((x[2:] for x in a if x.startswith("-B") and len(x) > 2), None) or ctx.git("config", "--get", f"branch.{source}.gh-merge-base") or default
+        base = opt(a, "--base", "-B") or next((x[2:] for x in a if x.startswith("-B") and len(x) > 2), None) or ctx.git("config", "--get", f"branch.{source}.gh-merge-base") or advertised_default(ctx, "origin")
         if ":" in source or not ctx.git("rev-parse", "--verify", source):
             v.add("high", "cannot inspect the head branch used to fill the PR", "egress")
+        elif not base:
+            v.add("high", "cannot verify PR base before filling commit messages", "egress")
         else:
             v.merge(check_outgoing_commits(ctx, "origin", source, base))
     if group in ("pr", "mr") and verb == "create":
@@ -1653,6 +1675,11 @@ def check_net(cmd, args, ctx):
         value = args[i + 1] if arg == "--variable" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--variable=") else ""
         if "@" in value:
             v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} variable"))
+        if value.startswith("%") and (name := re.match(r"%([A-Za-z_][A-Za-z0-9_]*)", value)) and SECRET_NAME_RE.search(name[1]):
+            if any(a.startswith("--expand-") for a in args):
+                v.add("deny", f"{cmd} expands secret env var {name[1]} into a request", "secret", "egress")
+            else:
+                v.add("high", f"{cmd} imports secret env var {name[1]}", "secret")
         value = args[i + 1] if arg == "--url-query" and i + 1 < len(args) else arg.split("=", 1)[1] if arg.startswith("--url-query=") else ""
         if "@" in value:
             v.merge(check_upload_file(value.split("@", 1)[1], ctx, f"{cmd} URL query"))
@@ -1917,9 +1944,11 @@ def check_tool(tool, inp, ctx):
             method = str(inp.get("method") or inp.get("http_method") or "").upper()
             if method not in ("GET", "HEAD"):
                 v.add("high", f"{tool} {method or 'unknown method'} may write outside this machine", "egress")
-        if re.search(r"send|post|create|update|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name):
+        if re.search(r"send|post|create|update|upsert|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name):
             v.add("high" if re.search(r"execute|invoke|call|run", name) else "medium",
                   f"{tool} may change something outside this machine", "egress")
+        if v.tier == "pass" and inp and name not in ("api", "request", "http", "graphql") and not re.match(r"^(?:get|read|view|status|describe)(?:_|$)", name):
+            v.add("medium", f"{tool} has an unverified remote effect", "egress")
         if leak := leaks(json.dumps(inp)):
             v.add("deny", f"what it sends {leak}", "secret", "egress")
         return v
