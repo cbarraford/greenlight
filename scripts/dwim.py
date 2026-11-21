@@ -531,14 +531,26 @@ def apply(o):
             after = _goal_after(a["verb"], before)
             if after == before:
                 return {"ws": a["ws"], "unchanged": True}
+            edit = {"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after}
             with journal_lock:
-                record["edits"].append({"ws": a["ws"], "id": w["worktreeId"], "before": before, "after": after})
+                record["edits"].append(edit)
                 try:
                     _write_undo(journal, record)
                 except OSError:
                     record["edits"].pop()
                     raise
-            greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
+            try:
+                greenlight.orca("worktree", "set", "--worktree", f"id:{w['worktreeId']}", "--comment", after)
+            except Exception:
+                try:
+                    now = dash.live_agents().get(w["worktreeId"])
+                except Exception:
+                    now = None
+                if now and (now[0].get("comment") or "") == before:  # definite non-write: don't let its WAL undo a later identical edit
+                    with journal_lock:
+                        record["edits"].remove(edit)
+                        _write_undo(journal, record)
+                raise
             try:
                 _note(a["ws"], f"{a['verb']} from {o.get('source') or 'the chat'}: “{said}”")
             except OSError as e:

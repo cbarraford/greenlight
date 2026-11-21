@@ -228,6 +228,19 @@ with mock.patch.dict(sys.modules, dash=dash, greenlight=gl):
     with mock.patch.object(dwim, "_write_undo", side_effect=OSError("disk full")):
         r = dwim.apply({"actions": [{"verb": "hold", "ws": "search"}]})
     assert not r["ok"] and goals["id3"] == "Search box" and "can't record Undo" in r["errors"][0]
+    with mock.patch.object(gl, "orca", side_effect=RuntimeError("set failed")):
+        r = dwim.apply({"undo": "def456def456", "actions": [{"verb": "hold", "ws": "search"}]})
+    assert not r["ok"] and r["undo"] is None and goals["id3"] == "Search box"
+    goals["id3"] = "Search box (hold)"  # a later independent edit must not become undoable by the failed command
+    assert dwim.undo("def456def456")["error"] == "nothing to undo"
+    goals["id3"] = "Search box"
+    def set_then_fail(*a, **k):
+        orca(*a, **k)
+        raise RuntimeError("reply lost")
+    with mock.patch.object(gl, "orca", side_effect=set_then_fail):
+        r = dwim.apply({"undo": "fed654fed654", "actions": [{"verb": "hold", "ws": "search"}]})
+    assert not r["ok"] and r["undo"] == "fed654fed654" and goals["id3"] == "Search box (hold)"
+    assert dwim.undo(r["undo"])["undone"] == ["search"] and goals["id3"] == "Search box"
     def journaled_orca(*a, **k):
         if a[3] == "id:id3":
             records = [json.loads(f.read_text()) for f in (dwim.DWIM / "undo").glob("*.json")]
