@@ -5,7 +5,7 @@
                                                     3 blocked (each failed contract on its own line), 4 the audit couldn't run
     audit.py gate post <comments.json> [--path DIR] [--kind review|reply] [--execute]
                                                     before posting review comments or thread replies: one JSON line {post, draft,
-                                                    drop, failed}. `--execute` posts/resolves approved replies; otherwise post only `post`
+                                                    drop, failed}. `--execute` posts approved comments and resolves approved replies
     audit.py gate pr <metadata.json> [--path DIR] --execute
                                                     audit {title, body}, then create a draft PR/MR with those exact bytes
     audit.py merge <worktree path>                  the merge audit for that workspace's MR at the head the last scan saw (cached
@@ -597,6 +597,14 @@ def base_ref(path, target=None):
     return None
 
 
+def default_target(path):
+    """Resolve origin/HEAD to a real branch name before using it in forge or ls-remote calls."""
+    base = base_ref(path)
+    if base == "origin/HEAD":
+        base = (git(path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD") or "").strip()
+    return base.removeprefix("origin/") if base and base.startswith("origin/") and base != "origin/HEAD" else None
+
+
 def branch_diff(path, target=None, sha="HEAD"):
     """The branch's own changes: base...sha (merge-base diff), as plain text whatever the worktree's config says: no external diff
     driver or textconv, and a file marked binary (`-diff`) shown anyway. None when there's no base or git fails."""
@@ -691,40 +699,48 @@ def forge_refs(project, iid, forge):
     return d.get("sha"), target, oid
 
 
+def live_thread_snapshot(project, iid, forge, tid):
+    """One unresolved discussion: text and note IDs, bound to this MR."""
+    if not isinstance(tid, str) or not tid:
+        raise ValueError("reply needs a nonempty thread_id")
+    if forge == "github":
+        query = ("query($id:ID!){node(id:$id){... on PullRequestReviewThread{"
+                 "id isResolved pullRequest{number repository{nameWithOwner}} "
+                 "comments(first:100){pageInfo{hasNextPage}nodes{id body}}}}}")
+        out = _run(["gh", "api", "graphql", "-f", f"query={query}", "-F", f"id={tid}"], timeout=90)
+        d = json.loads(out or "null")
+        thread = ((d or {}).get("data") or {}).get("node") or {}
+        comments = thread.get("comments") or {}
+        pr = thread.get("pullRequest") or {}
+        if thread.get("id") != tid or pr.get("number") != int(iid) or \
+           (pr.get("repository") or {}).get("nameWithOwner") != project or \
+           not comments or comments.get("pageInfo", {}).get("hasNextPage"):
+            raise RuntimeError("reply thread is missing or outside this PR")
+        if thread.get("isResolved") is not False:
+            raise RuntimeError("reply thread is resolved")
+        notes = comments["nodes"]
+    elif forge == "gitlab":
+        out = _run(["glab", "api", f"projects/{quote(project, safe='')}/merge_requests/{iid}/discussions/{quote(tid, safe='')}"], timeout=90)
+        thread = json.loads(out or "null") or {}
+        notes = thread.get("notes") or []
+        if thread.get("id") != tid or not any(n.get("resolvable") and not n.get("resolved") for n in notes):
+            raise RuntimeError("reply thread is missing or resolved")
+    else:
+        raise ValueError(f"unsupported forge: {forge}")
+    return {"text": "\n\n".join(n["body"] for n in notes if n.get("body")),
+            "ids": [str(n["id"]) for n in notes]}
+
+
 def live_threads(project, iid, forge, ids):
-    """Fetch only requested unresolved discussions and their full text, bound to this MR."""
-    result = {}
-    for tid in set(ids):
-        if not isinstance(tid, str) or not tid:
-            raise ValueError("reply needs a nonempty thread_id")
-        if forge == "github":
-            query = ("query($id:ID!){node(id:$id){... on PullRequestReviewThread{"
-                     "id isResolved pullRequest{number repository{nameWithOwner}} "
-                     "comments(first:100){pageInfo{hasNextPage}nodes{body}}}}}")
-            out = _run(["gh", "api", "graphql", "-f", f"query={query}", "-F", f"id={tid}"], timeout=90)
-            d = json.loads(out or "null")
-            thread = ((d or {}).get("data") or {}).get("node") or {}
-            notes = thread.get("comments") or {}
-            pr = thread.get("pullRequest") or {}
-            if thread.get("id") != tid or thread.get("isResolved") is not False or \
-               pr.get("number") != int(iid) or (pr.get("repository") or {}).get("nameWithOwner") != project or \
-               not notes or notes.get("pageInfo", {}).get("hasNextPage"):
-                raise RuntimeError("reply thread is missing, resolved, or outside this PR")
-            result[tid] = "\n\n".join(n["body"] for n in notes["nodes"] if n.get("body"))
-        elif forge == "gitlab":
-            out = _run(["glab", "api", f"projects/{quote(project, safe='')}/merge_requests/{iid}/discussions/{quote(tid, safe='')}"], timeout=90)
-            thread = json.loads(out or "null") or {}
-            notes = thread.get("notes") or []
-            if thread.get("id") != tid or not any(n.get("resolvable") and not n.get("resolved") for n in notes):
-                raise RuntimeError("reply thread is missing or resolved")
-            result[tid] = "\n\n".join(n["body"] for n in notes if n.get("body"))
-        else:
-            raise ValueError(f"unsupported forge: {forge}")
-    return result
+    """Fetch only requested unresolved discussions and their full text."""
+    return {tid: live_thread_snapshot(project, iid, forge, tid)["text"] for tid in set(ids)}
 
 
-def post_reply(project, iid, forge, thread_id, body):
+def post_reply(project, iid, forge, thread_id, body, baseline_text):
     """Post the audited reply to its verified thread, then resolve only that thread."""
+    before = live_thread_snapshot(project, iid, forge, thread_id)
+    if before["text"] != baseline_text:
+        raise RuntimeError("review thread changed before reply publication")
     marker = state_dir() / ("reply-" + hashlib.sha256(f"{forge}|{project}|{iid}|{thread_id}".encode()).hexdigest()[:24] + ".pending")
     try:
         with marker.open("x") as f:
@@ -739,8 +755,12 @@ def post_reply(project, iid, forge, thread_id, body):
         resolve = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}"
         out = _run(["gh", "api", "graphql", "-f", f"query={add}", "-F", f"id={thread_id}", "-f", f"body={body}"], timeout=90)
         d = json.loads(out or "null") or {}
-        if d.get("errors") or not (((d.get("data") or {}).get("addPullRequestReviewThreadReply") or {}).get("comment") or {}).get("id"):
+        note_id = (((d.get("data") or {}).get("addPullRequestReviewThreadReply") or {}).get("comment") or {}).get("id")
+        if d.get("errors") or not note_id:
             raise RuntimeError("forge did not confirm the review-thread reply")
+        after = live_thread_snapshot(project, iid, forge, thread_id)
+        if after["ids"] != before["ids"] + [str(note_id)] or after["text"] != baseline_text + "\n\n" + body:
+            raise RuntimeError("reply posted but new reviewer feedback arrived; thread left unresolved")
         out = _run(["gh", "api", "graphql", "-f", f"query={resolve}", "-F", f"id={thread_id}"], timeout=90)
         d = json.loads(out or "null") or {}
         thread = ((d.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}
@@ -754,6 +774,9 @@ def post_reply(project, iid, forge, thread_id, body):
         d = json.loads(out or "null") or {}
         if not d.get("id") or d.get("body") != body:
             raise RuntimeError("forge did not confirm the discussion reply")
+        after = live_thread_snapshot(project, iid, forge, thread_id)
+        if after["ids"] != before["ids"] + [str(d["id"])] or after["text"] != baseline_text + "\n\n" + body:
+            raise RuntimeError("reply posted but new reviewer feedback arrived; thread left unresolved")
         out = _run(["glab", "api", "-X", "PUT", endpoint, "-f", "resolved=true"], timeout=90)
         d = json.loads(out or "null") or {}
         if d.get("id") != thread_id or not any(n.get("resolved") for n in d.get("notes") or []):
@@ -761,6 +784,62 @@ def post_reply(project, iid, forge, thread_id, body):
         marker.unlink()
         return
     raise ValueError(f"unsupported forge: {forge}")
+
+
+def post_review_comment(project, iid, forge, sha, cm):
+    """Post one approved comment from its scored bytes and pin inline comments to the reviewed commit."""
+    body, path, line = cm["body"], cm.get("path"), cm.get("line")
+    if path and line is not None and (not isinstance(line, int) or line < 1):
+        raise ValueError("review comment line must be a positive integer")
+    if line is not None and not path:
+        raise ValueError("review comment line needs a path")
+    if forge == "gitlab" and path and line is None:
+        raise ValueError("GitLab inline review comments need a line")
+    gl_refs = None
+    if forge == "gitlab" and path:
+        endpoint = f"projects/{quote(project, safe='')}/merge_requests/{iid}"
+        mr = json.loads(_run(["glab", "api", endpoint], timeout=90) or "null") or {}
+        gl_refs = mr.get("diff_refs") or {}
+        if mr.get("sha") != sha or not all(gl_refs.get(k) for k in ("base_sha", "start_sha", "head_sha")) or gl_refs["head_sha"] != sha:
+            raise RuntimeError("GitLab diff refs changed before review comment publication")
+    ident = hashlib.sha256(json.dumps([forge, project, iid, sha, body, path, line], sort_keys=True).encode()).hexdigest()[:24]
+    marker = state_dir() / f"review-{ident}.pending"
+    done = marker.with_suffix(".posted")
+    if done.exists():
+        raise RuntimeError("this exact review comment was already posted")
+    try:
+        with marker.open("x") as f:
+            json.dump({"project": project, "iid": iid, "sha": sha, "body_digest": hashlib.sha256(body.encode()).hexdigest()}, f)
+    except FileExistsError as e:
+        raise RuntimeError(f"a review comment may have posted; inspect the forge, then if no comment exists remove {marker} and retry") from e
+    if forge == "github":
+        endpoint = f"repos/{project}/pulls/{iid}/comments" if path else f"repos/{project}/issues/{iid}/comments"
+        args = ["gh", "api", "-X", "POST", endpoint, "-f", f"body={body}"]
+        if path:
+            args += ["-f", f"commit_id={sha}", "-f", f"path={path}"]
+            args += (["-F", f"line={line}", "-f", "side=RIGHT"] if line is not None else ["-f", "subject_type=file"])
+        out = _run(args, timeout=90)
+        result = json.loads(out or "null") or {}
+        if not result.get("id") or result.get("body") != body or (path and
+            (result.get("path") != path or result.get("commit_id") != sha)):
+            raise RuntimeError("forge did not confirm the exact review comment; inspect before retrying")
+    elif forge == "gitlab":
+        endpoint = f"projects/{quote(project, safe='')}/merge_requests/{iid}"
+        args = ["glab", "api", "-X", "POST", endpoint + "/discussions", "-f", f"body={body}"]
+        if path:
+            args += ["-f", "position[position_type]=text", "-f", f"position[base_sha]={gl_refs['base_sha']}",
+                     "-f", f"position[start_sha]={gl_refs['start_sha']}", "-f", f"position[head_sha]={sha}",
+                     "-f", f"position[old_path]={path}", "-f", f"position[new_path]={path}",
+                     "-F", f"position[new_line]={line}"]
+        out = _run(args, timeout=90)
+        result = json.loads(out or "null") or {}
+        if not result.get("id") or not any(n.get("body") == body for n in result.get("notes") or []):
+            raise RuntimeError("forge did not confirm the exact review discussion; inspect before retrying")
+    else:
+        raise ValueError(f"unsupported forge: {forge}")
+    marker.write_text(json.dumps({"id": result["id"], "sha": sha}))
+    marker.rename(done)
+    return str(result["id"])
 
 
 def same_target(c, project, iid, forge, sha, target):
@@ -970,8 +1049,8 @@ def brief(kind, gate, audit=None):
         k = "reply" if kind == "threads" else "review"
         out.append(f"Before posting anything, write each {'reply' if k == 'reply' else 'comment'} you'd post to a JSON file as "
                    f"[{{\"body\": ..., \"path\": ..., \"line\": ...{', \"thread_id\": <live forge discussion ID>' if k == 'reply' else ''}}}] "
-                   f"and run `{a} gate post <file> --kind {k}{' --execute' if k == 'reply' else ''}`. "
-                   + ("The gate posts and resolves only the `posted` thread_ids" if k == "reply" else "Post only the ones under `post`")
+                   f"and run `{a} gate post <file> --kind {k} --execute`. "
+                   + ("The gate posts and resolves only the `posted` thread_ids" if k == "reply" else "The gate posts only approved review comments and returns their IDs under `posted`")
                    + "; list the `draft` ones in your final message "
                    "as drafts, unposted; drop the `drop` ones. Exit 4 means the audit couldn't run: post nothing.")
     return " ".join(out)
@@ -1090,7 +1169,7 @@ def main(argv=None):
                 raise RuntimeError("origin push destination does not match the scanned forge project")
             tracking_before = ((git(path, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{mr.get('source_branch') or row.get('branch')}") or "").strip()
                                if execute else None)
-            target = mr.get("target_branch") or requested_target or (base_ref(path) or "").removeprefix("origin/")
+            target = mr.get("target_branch") or requested_target or default_target(path)
             if not target or (requested_target and mr.get("target_branch") and requested_target != target):
                 raise RuntimeError("no valid target branch for the push audit")
             target_oid = (git(path, "rev-parse", f"origin/{target}") or "").strip()
@@ -1154,6 +1233,10 @@ def main(argv=None):
                 ids = [cm.get("thread_id") for cm in comments]
                 if len(ids) != len(set(ids)):
                     raise ValueError("duplicate thread_id in reply batch; give each discussion one reply")
+            if execute and kind == "review":
+                keys = [(cm["body"], cm.get("path"), cm.get("line")) for cm in comments]
+                if len(keys) != len(set(keys)):
+                    raise ValueError("duplicate review comment in batch; submit each comment once")
             row = row_for(path) or {}
             mr = row.get("mr") or {}
             scoped = row.get("project") and mr.get("iid") and row.get("forge") and mr.get("sha") and mr.get("target_branch")
@@ -1187,18 +1270,23 @@ def main(argv=None):
             if scoped and forge_refs(row["project"], mr["iid"], row["forge"]) != refs:
                 raise RuntimeError("the reviewed MR changed while comments were scored")
             if execute:
-                if kind != "reply":
-                    raise ValueError("--execute is supported only for replies")
                 for cm in res["post"]:
-                    tid = cm["thread_id"]
-                    if live_threads(row["project"], mr["iid"], row["forge"], [tid]).get(tid) != cm["thread"] or \
-                       forge_refs(row["project"], mr["iid"], row["forge"]) != refs:
-                        raise RuntimeError(f"thread {tid} or MR changed before posting; already posted: {posted}")
-                    try:
-                        post_reply(row["project"], mr["iid"], row["forge"], tid, cm["body"])
-                    except Exception as e:
-                        raise RuntimeError(f"posting thread {tid} failed; already posted: {posted}; inspect forge before retry: {e}") from e
-                    posted.append(tid)
+                    if forge_refs(row["project"], mr["iid"], row["forge"]) != refs:
+                        raise RuntimeError(f"MR changed before posting; already posted: {posted}")
+                    if kind == "reply":
+                        tid = cm["thread_id"]
+                        if live_threads(row["project"], mr["iid"], row["forge"], [tid]).get(tid) != cm["thread"]:
+                            raise RuntimeError(f"thread {tid} changed before posting; already posted: {posted}")
+                        try:
+                            post_reply(row["project"], mr["iid"], row["forge"], tid, cm["body"], cm["thread"])
+                        except Exception as e:
+                            raise RuntimeError(f"posting thread {tid} failed; already posted: {posted}; inspect forge before retry: {e}") from e
+                        posted.append(tid)
+                    else:
+                        try:
+                            posted.append(post_review_comment(row["project"], mr["iid"], row["forge"], refs[0], cm))
+                        except Exception as e:
+                            raise RuntimeError(f"posting review comment failed; already posted: {posted}; inspect forge before retry: {e}") from e
                 res["posted"], res["post"] = posted, []
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"error": f"{type(e).__name__}: {e}", "post": [], "draft": [], "drop": [], "posted": posted}))

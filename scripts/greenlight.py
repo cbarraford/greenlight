@@ -7,9 +7,12 @@
     greenlight.py precheck        Orca automation gate: exit 0 when something is actionable, else 1
     greenlight.py note <ws> <text>  append a dated line to ~/.greenlight/history/<ws>.md
     greenlight.py history <ws>      print that workspace's history
-    greenlight.py ping [--key <ws>|@k] [--kind <kind>] [--ws <ws>]... <text>  question for the Greenlight menubar app
+    greenlight.py ping [--key <ws>|@k] [--kind <kind>] [--ws <ws>]... [--proactive] <text>  question for the Greenlight menubar app
                                        (outbox.jsonl); --ws names a workspace it's about (its hex is lifted until answered);
-                                       --kind names the sort of question for the decision record (decisions.py)
+                                       --kind names the sort of question for the decision record (decisions.py). A known kind gets
+                                       autonomy.py's proposal: preselected in the app, or (opted-in, sure, inert) answered for
+                                       you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
+                                       autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
     greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out
 
@@ -24,6 +27,7 @@ normalised into the GitLab MR shape (gh_pr), so the lifecycle steps, report and 
 State and config live in $GREENLIGHT_HOME (default ~/.greenlight). config.json there overrides DEFAULTS below.
 """
 
+import fcntl
 import html
 import importlib
 import json
@@ -40,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade_common  # noqa: E402
 import decide  # noqa: E402
+import autonomy  # noqa: E402
 import decisions  # noqa: E402
 import lifestage  # noqa: E402
 
@@ -1102,27 +1107,98 @@ def pinged(update=None):
     f.write_text(json.dumps(update))
 
 
-def ping(text, key=None, ws=(), kind=None):
+def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
+    """Serialize the decision, audit and outbox path across concurrent scans."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "ping.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _ping(text, key, ws, kind, proactive, ask)
+
+
+def _ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     """ws: the workspaces (names) it's about; a workspace key counts as one. The app lifts their hexes until it's answered.
-    kind: the sort of question, for the decision record (decisions.py); guessed from the key or the lifecycle step when not given."""
-    if key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list
+    kind: the sort of question, for the decision record (decisions.py); guessed from the key or the lifecycle step when not given.
+    A kind autonomy.py knows gets its proposal (tier 1: answered for you and returned as {"auto": option, "id": audit id};
+    tier 2: preselected in the app). proactive: only when autonomy.gate() lets it interrupt; held: returns {"held": gate}.
+    ask: always ask, no proposal (an undo asking again)."""
+    if not ask and key:
+        # Recover a committed auto answer whose outbox append failed, without making another decision.
+        records = {r["id"]: r for r in decisions.load()}
+        for a in reversed(autonomy.audit_log()):
+            r = records.get(a.get("record"))
+            if (a.get("act") == "auto" and not a.get("undone") and not a.get("cancelled") and a.get("key") == key and a.get("text") == text
+                    and a.get("ts", 0) > time.time() - FLAP and r and r.get("answer_via") == "auto"):
+                if not any(e.get("auto", {}).get("id") == a["id"] for e in outbox_events()):
+                    outbox({"text": text, "key": key, "ws": a.get("ws") or [],
+                            "auto": {"id": a["id"], "choice": a["choice"], "prob": a["prob"]}})
+                    print(f"auto: {a['choice']}  (recovered; undo: autonomy.py undo {a['id']}). Act on it now as the user's answer.")
+                    return {"auto": a["choice"], "id": a["id"]}
+                break
+    if not ask and key and key.startswith("@") and key in recent_keys():  # puck blocks flap in and out of its list (an undo asks regardless)
         print(f"skipped: {key} was pinged in the last {FLAP // 3600}h")
+        return
+    # A scan may ask the same workspace question again; don't repeatedly answer it for the user.
+    if not ask and key and any(e.get("key") == key and e.get("text") == text and e.get("auto") and e.get("ts", 0) > time.time() - FLAP
+                               for e in outbox_events()):
+        print(f"skipped: {key} was answered for you in the last {FLAP // 3600}h")
         return
     mine = [scanned_names().get(key, key)] if key and not key.startswith("@") else []  # an id key lifts that workspace by name
     ws = list(dict.fromkeys(mine + list(ws)))
-    outbox({"text": text} | ({"key": key} if key else {}) | ({"ws": ws} if ws else {}))
-    decisions.quiet("asked", text, "ping", key, ws, kind)
+    slug = decisions.slug(kind) if kind else None
+    if proactive and not slug:
+        kind = slug = "proactive"
+    if proactive or slug in autonomy.PROACTIVE:
+        try:
+            g = autonomy.gate(slug or "proactive", text)
+        except Exception as e:  # a broken gate never swallows a question
+            print(f"autonomy: {e}", file=sys.stderr)
+            g = {"ok": True}
+        if not g["ok"]:
+            autonomy.audit({"act": "held", "kind": g["kind"], "score": g["score"], "threshold": g["threshold"], "text": text, "key": key})
+            print(f"held: {g['kind']} scores {g['score']} < {g['threshold']} (acted on {g['acted']}, dismissed {g['dismissed']}, "
+                  f"{g['waiting']} waiting); nothing sent")
+            return {"held": g}
+    prop = None if ask or not slug else autonomy.quiet_propose(slug, text)
+    ev = {"text": text} | ({"key": key} if key else {}) | ({"ws": ws} if ws else {})
+    if prop and prop["tier"] == 1:
+        rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
+        try:
+            a = autonomy.act(rid, prop, text, key, ws)
+        except Exception as e:  # couldn't log it: ask instead
+            print(f"autonomy: {e}", file=sys.stderr)
+        else:
+            outbox({"auto": {"id": a["id"], "choice": prop["choice"], "prob": prop["prob"], "count": prop["count"], "agree": prop["agree"]}} | ev)
+            print(f"auto: {prop['choice']}  (P {prop['prob']}, {prop['agree']} of {prop['count']} past {slug} answers; "
+                  f"undo: autonomy.py undo {a['id']}). Act on it now as the user's answer.")
+            return {"auto": prop["choice"], "id": a["id"]}
+    if prop and prop["tier"] == 2:
+        ev["suggest"] = {f: prop[f] for f in ("choice", "index", "prob", "count", "agree")}
+    if ask:
+        # Undo must be able to link the user's eventual answer before the app sees this re-ask.
+        rid = decisions.asked(text, "ping", key, ws, kind)
+        outbox(ev)
+        if key:
+            pinged(pinged() | {key: int(time.time())})
+        return {"asked": rid}
+    outbox(ev)
+    rid = decisions.quiet("asked", text, "ping", key, ws, kind, proposal=prop)
     if key:
         pinged(pinged() | {key: int(time.time())})
+    return {"asked": rid} if rid else None
 
 
 FLAP = 24 * 3600
 
 
+def outbox_events():
+    f = STATE / "outbox.jsonl"
+    return [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
+
+
 def recent_keys():
     """Keys pinged within FLAP, read from the outbox itself."""
-    f, cut = STATE / "outbox.jsonl", time.time() - FLAP
-    return {e["key"] for e in map(json.loads, f.read_text().splitlines() if f.exists() else [])
+    cut = time.time() - FLAP
+    return {e["key"] for e in outbox_events()
             if "text" in e and e.get("key") and e["ts"] > cut}
 
 
@@ -1134,9 +1210,12 @@ def scanned_names():
 
 
 def ping_cli(args):
-    """greenlight.py ping [--key K] [--kind KIND] [--ws W]... <text>: --ws takes a workspace name or id; an unknown one sends nothing."""
-    key, kind, ws = None, None, []
-    while len(args) > 1 and args[0] in ("--key", "--kind", "--ws"):
+    """greenlight.py ping [--key K] [--kind KIND] [--ws W]... [--proactive] <text>: --ws takes a workspace name or id; an unknown one sends nothing."""
+    key, kind, ws, proactive = None, None, [], False
+    while len(args) > 1 and args[0] in ("--key", "--kind", "--ws", "--proactive"):
+        if args[0] == "--proactive":
+            proactive, args = True, args[1:]
+            continue
         flag, val, args = args[0], args[1], args[2:]
         if flag == "--key":
             key = val
@@ -1149,7 +1228,7 @@ def ping_cli(args):
     names = scanned_names()
     if unknown := [w for w in ws if w not in names]:
         sys.exit(f"greenlight.py ping: unknown workspace {', '.join(unknown)} (not in the last scan); nothing sent")
-    ping(" ".join(args), key, [names[w] for w in ws], kind)
+    ping(" ".join(args), key, [names[w] for w in ws], kind, proactive)
 
 
 def resolve(key, why):
@@ -1161,8 +1240,14 @@ def resolve(key, why):
 def close_stale(rows):
     """Questions about a workspace close once it's gone or no longer waiting on me."""
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
+    undo_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@undo:") and e.get("ws")}
     for key in pinged():
-        if key.startswith("@"):  # not a workspace: closed by hand with `greenlight.py resolve`
+        if key.startswith("@undo:"):
+            names = undo_ws.get(key, [])
+            if names and not any((r := by_key.get(name)) and r["next"]["owner"] == "me" for name in names):
+                resolve(key, "workspaces no longer waiting on you")
+            continue
+        if key.startswith("@"):  # other grouped questions are closed by hand with `greenlight.py resolve`
             continue
         r = by_key.get(key)
         if r is None:

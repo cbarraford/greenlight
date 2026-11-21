@@ -524,7 +524,7 @@ assert "gate push" in b and "gate post" not in b  # push, draft replies: nothing
 b = audit.brief("threads", 2, audit="A")
 assert "gate push" in b and "`python3 A gate post <file> --kind reply --execute`" in b and "gate posts and resolves" in b and '"thread_id"' in b
 b = audit.brief("review", 1, audit="A")
-assert "gate push" not in b and "--kind review" in b and '"thread"' not in b
+assert "gate push" not in b and "--kind review --execute" in b and '"thread"' not in b
 print("brief ok")
 
 
@@ -661,7 +661,7 @@ with mock.patch.object(audit, "row_for", return_value=previous_scan), \
     with mock.patch.object(audit, "post_reply") as posted:
         code, out = cli("gate", "post", str(reply_file), "--path", wt, "--kind", "reply", "--execute")
     assert code == 0 and json.loads(out)["posted"] == ["thread-1"] and not json.loads(out)["post"], (code, out)
-    assert posted.call_args.args == ("o/x", 23, "github", "thread-1", "Fixed the boundary in commit " + scanned_source)
+    assert posted.call_args.args == ("o/x", 23, "github", "thread-1", "Fixed the boundary in commit " + scanned_source, "Boundary is wrong")
     code, out = cli("gate", "post", str(reply_file), "--path", wt, "--kind", "review")
     assert code == 4 and "rescan before posting" in json.loads(out)["error"], (code, out, old_source, scanned_source, previous_scan)
 with mock.patch.object(audit, "row_for", return_value=previous_scan), mock.patch.object(audit, "live_threads", return_value={}):
@@ -738,6 +738,16 @@ with mock.patch.object(audit, "row_for", return_value=scanned), mock.patch.objec
      mock.patch.object(audit, "forge_diff", return_value=DIFF) as fd, mock.patch.object(audit, "branch_diff", side_effect=AssertionError("wrong checkout")):
     code, out = cli("gate", "post", str(cf), "--path", wt, "--kind", "review")
 assert code == 0 and len(json.loads(out)["post"]) == 1 and fd.call_args.args == ("o/x", 23, "github", "abc"), out
+with mock.patch.object(audit, "row_for", return_value=scanned), mock.patch.object(audit, "forge_refs", return_value=("abc", "main", "base1")), \
+     mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "post_review_comment", return_value="C1") as posted:
+    code, out = cli("gate", "post", str(cf), "--path", wt, "--kind", "review", "--execute")
+assert code == 0 and json.loads(out)["posted"] == ["C1"] and not json.loads(out)["post"], out
+assert posted.call_args.args[:4] == ("o/x", 23, "github", "abc") and posted.call_args.args[4]["body"] == "STRONG: crash on empty input"
+with mock.patch.object(audit, "row_for", return_value=scanned), \
+     mock.patch.object(audit, "forge_refs", side_effect=[("abc", "main", "base1")] * 3 + [("changed", "main", "base1")]), \
+     mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "post_review_comment") as posted:
+    code, out = cli("gate", "post", str(cf), "--path", wt, "--kind", "review", "--execute")
+assert code == 4 and "MR changed before posting" in json.loads(out)["error"] and not posted.called, out
 with mock.patch.object(audit, "row_for", return_value=scanned), mock.patch.object(audit, "forge_refs", side_effect=[("abc", "main", "base1"),
                                                                                                              ("abc", "main", "base1"), ("new-head", "main", "base1")]), \
      mock.patch.object(audit, "forge_diff", return_value=DIFF):
@@ -853,7 +863,7 @@ assert body == "Closes #1\nSafe description"
 gh_threads = {"data": {"node": {"id": "T1", "isResolved": False,
                                "pullRequest": {"number": 23, "repository": {"nameWithOwner": "o/x"}},
                                "comments": {"pageInfo": {"hasNextPage": False},
-                                            "nodes": [{"body": "Fix null case"}, {"body": "Still failing"}]}}}}
+                                            "nodes": [{"id": "N0", "body": "Fix null case"}, {"id": "N1", "body": "Still failing"}]}}}}
 with mock.patch.object(audit, "_run", return_value=json.dumps(gh_threads)):
     assert audit.live_threads("o/x", 23, "github", ["T1"]) == {"T1": "Fix null case\n\nStill failing"}
 gh_threads["data"]["node"]["comments"]["pageInfo"]["hasNextPage"] = True
@@ -861,24 +871,48 @@ with mock.patch.object(audit, "_run", return_value=json.dumps(gh_threads)):
     try: audit.live_threads("o/x", 23, "github", ["T1"])
     except RuntimeError: pass
     else: assert False, "partial note page must block"
-gl_threads = {"id": "abc", "notes": [{"body": "Fix null case", "resolvable": True, "resolved": False}, {"body": "Still failing"}]}
+gl_threads = {"id": "abc", "notes": [{"id": 1, "body": "Fix null case", "resolvable": True, "resolved": False}, {"id": 2, "body": "Still failing"}]}
 with mock.patch.object(audit, "_run", return_value=json.dumps(gl_threads)):
     assert audit.live_threads("o/x", 23, "gitlab", ["abc"]) == {"abc": "Fix null case\n\nStill failing"}
-with mock.patch.object(audit, "_run", side_effect=[json.dumps({"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "N1"}}}}),
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[{"text": "Original", "ids": ["N0"]}, {"text": "Original\n\nExact audited reply", "ids": ["N0", "N1"]}]), \
+     mock.patch.object(audit, "_run", side_effect=[json.dumps({"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "N1"}}}}),
                                                   json.dumps({"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})]) as ran:
-    audit.post_reply("o/x", 23, "github", "T1", "Exact audited reply")
+    audit.post_reply("o/x", 23, "github", "T1", "Exact audited reply", "Original")
     assert "body=Exact audited reply" in ran.call_args_list[0].args[0]
-with mock.patch.object(audit, "_run", side_effect=[json.dumps({"id": 42, "body": "Exact audited reply"}),
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[{"text": "Original", "ids": ["1"]}, {"text": "Original\n\nExact audited reply", "ids": ["1", "42"]}]), \
+     mock.patch.object(audit, "_run", side_effect=[json.dumps({"id": 42, "body": "Exact audited reply"}),
                                                   json.dumps({"id": "abc", "notes": [{"resolved": True}]})]) as ran:
-    audit.post_reply("o/x", 23, "gitlab", "abc", "Exact audited reply")
+    audit.post_reply("o/x", 23, "gitlab", "abc", "Exact audited reply", "Original")
     assert "body=Exact audited reply" in ran.call_args_list[0].args[0]
-with mock.patch.object(audit, "_run", return_value=None) as ran:
-    try: audit.post_reply("o/x", 23, "github", "uncertain-T", "Exact audited reply")
+with mock.patch.object(audit, "live_thread_snapshot", return_value={"text": "Original", "ids": ["N0"]}), mock.patch.object(audit, "_run", return_value=None) as ran:
+    try: audit.post_reply("o/x", 23, "github", "uncertain-T", "Exact audited reply", "Original")
     except (ValueError, RuntimeError): pass
     else: assert False, "lost POST response must fail closed"
-    try: audit.post_reply("o/x", 23, "github", "uncertain-T", "Exact audited reply")
+    try: audit.post_reply("o/x", 23, "github", "uncertain-T", "Exact audited reply", "Original")
     except RuntimeError as e: assert "may have posted" in str(e) and ".pending" in str(e) and "if no reply exists" in str(e)
     else: assert False, "uncertain reply must not be sent twice"
     assert ran.call_count == 1
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[{"text": "Original", "ids": ["N0"]}, {"text": "Original\n\nNew reviewer note\n\nExact audited reply", "ids": ["N0", "N2", "N3"]}]), \
+     mock.patch.object(audit, "_run", return_value=json.dumps({"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "N3"}}}})) as ran:
+    try: audit.post_reply("o/x", 23, "github", "changed-T", "Exact audited reply", "Original")
+    except RuntimeError as e: assert "new reviewer feedback" in str(e)
+    else: assert False, "new feedback must remain unresolved"
+    assert ran.call_count == 1
+review_cm = {"body": "Exact review point", "path": "app.py", "line": 1}
+with mock.patch.object(audit, "_run", return_value=json.dumps({"id": 99, "body": "Exact review point", "path": "app.py", "commit_id": "abc"})) as ran:
+    assert audit.post_review_comment("o/x", 23, "github", "abc", review_cm) == "99"
+    args = ran.call_args.args[0]
+    assert "body=Exact review point" in args and "commit_id=abc" in args and "line=1" in args
+with mock.patch.object(audit, "_run") as ran:
+    try: audit.post_review_comment("o/x", 23, "github", "abc", review_cm)
+    except RuntimeError as e: assert "already posted" in str(e)
+    else: assert False, "confirmed review comment must not post twice"
+    assert not ran.called
+with mock.patch.object(audit, "_run", side_effect=[json.dumps({"sha": "abc", "diff_refs": {"base_sha": "base", "start_sha": "start", "head_sha": "abc"}}),
+                                                  json.dumps({"id": "D1", "notes": [{"body": "Exact review point"}]})]) as ran:
+    assert audit.post_review_comment("o/x", 23, "gitlab", "abc", review_cm) == "D1"
+    assert "position[head_sha]=abc" in ran.call_args_list[1].args[0] and "body=Exact review point" in ran.call_args_list[1].args[0]
 print("cli ok")
+g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+assert audit.default_target(wt) == "main"
 print("ok")
