@@ -739,7 +739,7 @@ def check_git(args, ctx):
         v.add("low", f"git {sub} deletes work")
     elif sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
         v.add("medium", "removes a git worktree")
-    elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and "-d" in rest or sub == "reflog" and "expire" in rest:
+    elif sub in ("filter-branch", "filter-repo") or sub == "update-ref" and ("-d" in rest or any("refs/remotes/" in x for x in rest)) or sub == "reflog" and "expire" in rest:
         v.add("medium", f"git {sub} rewrites history")
     elif sub == "send-email" or sub == "credential" or sub == "archive" and "--remote" in " ".join(rest):
         v.add("high", f"git {sub} reaches outside the repo", "egress")
@@ -766,7 +766,7 @@ def check_push(rest, ctx, v):
     if remote in ctx.remotes:
         dest = ctx.git("remote", "get-url", "--push", remote)
         project = workspace_project(ctx)
-        if project and repo_slug(dest) != project.lower() or not project and remote != "origin" and not own_repo(dest, ctx):
+        if not project or repo_slug(dest) != project.lower():
             v.add("high", f"pushes to {remote}, which points outside this workspace's repo", "egress")
     if remote not in ctx.remotes and remote != "origin" and ("/" in remote or ":" in remote or "@" in remote):
         v.add("high", f"pushes to {remote}, not one of the repo's remotes", "egress")
@@ -855,10 +855,10 @@ def check_outgoing_commits(ctx, remote, source, target):
     v = Verdict()
     source = ctx.branch if source == "HEAD" else source
     target = ctx.branch if target == "HEAD" else re.sub(r"^refs/heads/", "", target)
-    base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{target}")
+    base = next((ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}") for d in ctx.default
+                 if ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}")), "")
     if not base:
-        base = next((ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}") for d in ctx.default
-                     if ctx.git("merge-base", source, f"refs/remotes/{remote}/{d}")), "")
+        base = ctx.git("rev-parse", "--verify", f"refs/remotes/{remote}/{target}")
     revision = f"{base}..{source}" if base else source
     try:
         count = int(ctx.git("rev-list", "--count", revision))
@@ -938,7 +938,7 @@ def check_forge(cmd, args, ctx):
         v.add("deny", f"the text it posts {leak}", "secret", "egress")
     if secret_vars(text):
         v.add("deny", "posts a secret env var", "secret", "egress")
-    other = opt(a, "--repo", "-R")
+    other = opt(a, "--repo", "-R") or next((x[2:] for x in a if x.startswith("-R") and len(x) > 2), None)
     if other and not own_repo(other, ctx):
         if verb not in FORGE_READ:
             v.add("high", f"writes to {other}, not this workspace's repo", "egress")
@@ -950,7 +950,7 @@ def check_forge(cmd, args, ctx):
         return v
     if group == "api":
         method = (opt(a, "-X", "--method") or next((x[2:] for x in a if x.startswith("-X") and len(x) > 2), "")).upper()
-        writes = method not in ("", "GET", "HEAD") or any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field", "--input"))
+        writes = method not in ("", "GET", "HEAD") or any(x in a or any(y.startswith(x + "=") for y in a) for x in ("-f", "-F", "--field", "--raw-field", "--input")) or any(x.startswith(("-f", "-F")) and len(x) > 2 for x in a)
         if writes:
             v.add("high" if method == "DELETE" else "medium", f"{cmd} api {method or 'POST'} writes to the forge", "egress")
             target = re.search(r"\brepos/([^/\s]+)/([^/\s?]+)", text)
@@ -963,7 +963,11 @@ def check_forge(cmd, args, ctx):
         return v
     if group in ("pr", "mr") and verb == "create" and any(x in a for x in ("--fill", "--fill-first", "--fill-verbose")):
         default = next((d for d in ctx.default if ctx.git("rev-parse", "--verify", f"refs/remotes/origin/{d}")), "main")
-        v.merge(check_outgoing_commits(ctx, "origin", ctx.branch, default))
+        source = opt(a, "--head") or ctx.branch
+        if ":" in source or not ctx.git("rev-parse", "--verify", source):
+            v.add("high", "cannot inspect the head branch used to fill the PR", "egress")
+        else:
+            v.merge(check_outgoing_commits(ctx, "origin", source, default))
     if group == "gist" and verb == "create" or group == "release" and verb == "upload":
         for source in a[2:]:
             if not source.startswith("-") and ("/" in source or Path(source).exists() or SECRET_PATH_RE.search(source)):
@@ -1038,7 +1042,7 @@ def check_net(cmd, args, ctx):
             name = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1] or "index.html"
             target = os.path.join(directory, name)
             v.merge(check_write(ctx.path(target), ctx, "wget output", raw=target))
-    if cmd == "curl" and "-O" in args:
+    if cmd == "curl" and ("-O" in args or "--remote-name" in args):
         for url in urls:
             name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
             if name:
@@ -1114,6 +1118,9 @@ def check_rm(args, ctx):
     for raw in paths:
         p = ctx.path(raw)
         s = str(p)
+        if "$(" in raw or "`" in raw:
+            v.add("high", f"deletes a path from command substitution ({raw})")
+            continue
         if s in temp_dirs():
             v.add("deny", f"deletes an entire temp root ({raw}) that can contain other workspaces")
             continue
@@ -1136,6 +1143,11 @@ def check_rm(args, ctx):
             v.add("high", f"deletes git's own data ({raw})")
         elif not ctx.inside(p):
             v.add("high", f"deletes {raw}, outside the worktree")
+        elif p.is_dir() and not (ctx.root and str(p).startswith(str(ctx.root) + "/")):
+            for count, (base, dirs, files) in enumerate(os.walk(p)):
+                if ".git" in dirs or ".git" in files or count >= 1000:
+                    v.add("high", f"deletes a temp directory that may contain another worktree ({raw})")
+                    break
     return v
 
 
