@@ -408,7 +408,7 @@ def commands(script):
         elif t and set(t) <= set(";&|()"):
             if argv or redir or inputs:
                 out.append((argv, redir, inputs, piped))
-            argv, redir, inputs, piped = [], [], [], t == "|"
+            argv, redir, inputs, piped = [], [], [], t in ("|", "|&")
         elif t in ("<", "<<", "<<<", "<<-"):
             want = "read" if t == "<" else "herestring" if t == "<<<" else "skip"
         else:
@@ -1050,10 +1050,14 @@ def check_tag_objects(ctx):
 
 
 def check_outgoing_commits(ctx, remote, source, target):
-    """Inspect reachable source objects without trusting mutable local remote-tracking refs."""
+    """Inspect objects after a freshly advertised remote ref, never a mutable tracking ref."""
     v = Verdict()
     source = ctx.branch if source == "HEAD" else source
-    revision = source
+    base = advertised_base(ctx, remote, source, target)
+    if not base:
+        v.add("high", "cannot verify the remote ref before scanning outgoing commits", "egress")
+        return v
+    revision = f"{base}..{source}"
     try:
         count = len(ctx.git("rev-list", "--max-count=101", revision).splitlines())
         if count > 100:
@@ -1095,6 +1099,42 @@ def check_outgoing_commits(ctx, remote, source, target):
         v.add("high", "cannot fully inspect the commits this push would send", "egress")
         return v
     return v
+
+
+def advertised_base(ctx, remote, source, target):
+    """Advertised branch tip (or default-branch merge base for a new branch)."""
+    urls = ctx.git("remote", "get-url", "--push", "--all", remote).splitlines()
+    if len(urls) != 1 or host_of(urls[0]) not in ("github.com", "gitlab.com") or leaks(urls[0]):
+        return ""
+    try:
+        secure = urlsplit(urls[0]).scheme == "https"
+    except ValueError:
+        secure = False
+    if not secure:
+        return ""
+    target = ctx.branch if target == "HEAD" else re.sub(r"^refs/heads/", "", target)
+    defaults = sorted(ctx.default)
+    refs = list(dict.fromkeys([target, *defaults]))
+    env = {k: value for k, value in os.environ.items() if not k.startswith("GIT_CONFIG_") and k != "GIT_SSH_COMMAND"}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        output = subprocess.run(["git", "-C", str(ctx.cwd), "ls-remote", "--refs", urls[0],
+                                 *(f"refs/heads/{ref}" for ref in refs)], capture_output=True, text=True,
+                                timeout=2, env=env, check=True).stdout
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return ""
+    advertised = {name.removeprefix("refs/heads/"): oid for oid, name in
+                  (line.split("\t", 1) for line in output.splitlines() if "\t" in line)
+                  if re.fullmatch(r"[0-9a-f]{40,64}", oid)}
+    for name in refs:
+        oid = advertised.get(name)
+        if not oid or not ctx.git("rev-parse", "--verify", f"{oid}^{{commit}}"):
+            continue
+        if name == target:
+            return oid
+        if base := ctx.git("merge-base", source, oid):
+            return base
+    return ""
 
 
 FORGE_READ = {"view", "list", "status", "diff", "checks", "search", "ls", "browse", "watch", "download", "show", "ci-status"}
@@ -1175,7 +1215,7 @@ def check_forge(cmd, args, ctx):
             if cmd == "glab" and re.search(r"\bprojects/[^/\s]+", text):
                 v.add("high", "glab api project target cannot be verified against this workspace", "egress")
         return v
-    if group in ("pr", "mr") and verb in ("edit", "ready", "update", "merge", "close", "reopen", "approve", "revoke", "rebase", "delete", "lock", "unlock", "comment", "note", "review", "reply"):
+    if group in ("pr", "mr") and verb in ("edit", "ready", "update", "merge", "close", "reopen", "approve", "revoke", "rebase", "delete", "lock", "unlock", "comment", "note", "review", "reply", "checkout"):
         goal = situation(ctx)[1]
         expected = re.search(r"[#!](\d+)", goal)
         target = a[2] if len(a) > 2 and not a[2].startswith("-") else ""
@@ -1208,6 +1248,8 @@ def check_forge(cmd, args, ctx):
         return v
     low = {("pr", "create"), ("pr", "edit"), ("pr", "ready"), ("mr", "create"), ("mr", "update"), ("pr", "checkout"), ("mr", "checkout")}
     if (group, verb) in low:
+        if verb == "checkout" and any(x in a for x in ("--force", "-f")):
+            v.add("high", f"{cmd} {group} checkout resets a local branch")
         if verb in ("edit", "update") and any(x in a or any(y.startswith(x + "=") for y in a) for x in ("--body", "-b", "--body-file", "--base", "--title")):
             v.add("medium", f"{cmd} {group} {verb} changes published PR text or base", "egress")
         v.add("low", f"{cmd} {group} {verb} on this workspace's PR/MR", "egress")
@@ -1338,7 +1380,7 @@ def check_net(cmd, args, ctx):
             if source:
                 v.merge(check_upload_file(source, ctx, f"{cmd} upload"))
     if hosts and hosts <= LOCAL_HOSTS and not routed:
-        local_method = (opt(args, "-X", "--request", "--method") or "").upper()
+        local_method = (opt(args, "-X", "--request", "--method") or next((a[2:] for a in args if a.startswith("-X") and len(a) > 2), "")).upper()
         if local_method in ("POST", "PUT", "PATCH", "DELETE") or any(re.match(r"--data|-d|-[FT](?:$|.)|--form|--json|--upload-file|--post-", a) for a in args):
             v.add("high", f"{cmd} writes to a local service", "egress")
         return v
