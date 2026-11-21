@@ -12,15 +12,29 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bg                         # one JSON line: this chat's background shells + working Orca agents
   chat.py bgstop <task_id>           # kill one background shell
 """
-import glob, json, os, random, re, signal, subprocess, sys, time
+import contextlib, fcntl, glob, hashlib, json, os, random, re, signal, subprocess, sys, threading, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import attach  # noqa: E402
 import decisions  # noqa: E402
 import harness  # noqa: E402
+import auto  # noqa: E402
 
 DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "chat"))  # CHAT_DIR: tests use a scratch session
 CHAT = os.path.basename(DIR.rstrip("/")) if os.environ.get("CHAT_DIR") else None  # a second L1 window's Chief (CHAT_DIR=chat-<n>): its questions are its own in the decision record
+
+
+def scope_suffix():
+    scope = os.environ.get("GREENLIGHT_ONLY")
+    return "_scope-" + hashlib.sha1(scope.encode()).hexdigest()[:12] if scope else ""
+
+
+def asked_path():
+    return os.path.join(DIR, "asked" + scope_suffix())
+
+
+def chat_identity():
+    return (CHAT or "main") + scope_suffix() if scope_suffix() else CHAT
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_SESSIONS = os.path.join(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions")
@@ -72,21 +86,233 @@ PROMPT = (
 )
 
 
-def board_note():
-    """The BOARD line ahead of the user's message, or "" when the session already has this one (or there's no scan)."""
+BOARD_FULL = 12  # a board this short goes whole; a longer one is cut to what needs the user and what the message is about
+BOARD_NEEDS = 6   # lines of a long board kept from its top (blocks on the user, then their moves)
+BOARD_FOCUS_MAX = 20
+CONTEXT_K = 5     # state cards and memory notes picked for the message (ws_state.top)
+
+
+def chat_config():
+    try:
+        return json.load(open(os.path.join(os.path.expanduser(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight"), "config.json")))
+    except (OSError, ValueError):
+        return {}
+
+
+def board_name(line):
+    m = re.match(r"- (.+?) \((?:\[[#!]\d+\]\(.+?\)|[#!]\d+|no MR), .+?\): ", line)
+    return m[1] if m else None
+
+
+def focus(board, query, hits=()):
+    """A long board cut to its top BOARD_NEEDS lines (the board sorts what needs the user first), the lines the message
+    names (a workspace, an MR ref) and the workspaces of the cards picked for it, and a count of the rest. Short boards whole."""
+    lines = board.splitlines()
+    tail = [l for l in lines if l.startswith("(") and l.endswith("finished)")]
+    rows = [l for l in lines if l not in tail]
+    if len(rows) <= BOARD_FULL or chat_config().get("chat_context") == "board":
+        return board
+    q = query.lower()
+    refs = re.findall(r"[#!]\d+", q)
+    named = lambda l: bool(board_name(l)) and re.search(rf"(?<![\w-]){re.escape(board_name(l).lower())}(?![\w-])", q)
+    reference = lambda l: (m[1] or m[2] if (m := re.match(r"- .+? \((?:\[([#!]\d+)\]\(.+?\)|([#!]\d+)|no MR), ", l)) else None)
+    exact_ref = lambda l: reference(l) in refs
+    referenced = lambda l: any(re.search(rf"(?<![\w#!]){re.escape(x)}(?!\d)", l) for x in refs)  # "#3" isn't "#33"
+    keep = set(range(min(BOARD_NEEDS, len(rows))))
+    for matches in (lambda l: named(l), lambda l: board_name(l) in hits, exact_ref, referenced):
+        for i, line in enumerate(rows):
+            if len(keep) >= BOARD_FOCUS_MAX:
+                break
+            if i not in keep and matches(line):
+                keep.add(i)
+    shown = [l for i, l in enumerate(rows) if i in keep]
+    more = len(rows) - len(shown)
+    return "\n".join(shown + [f"({more} more unfinished: `python3 {SCRIPTS}/dash.py board` prints them all)"] * bool(more) + tail)
+
+
+SEEN = "seen.json"  # what the session in use has been sent: {"key": "<engine>:<sid>", "board", "lines", "context"}
+
+
+def seen_load(key):
+    """The seen record for this session; another session's (an engine switch, a new or lost session) counts as nothing seen."""
+    try:
+        s = json.load(open(os.path.join(DIR, SEEN)))
+    except (OSError, ValueError):
+        s = {}
+    return s if s.get("key") == key and isinstance(s.get("lines"), dict) else {"key": key, "board": None, "lines": {}, "context": {}}
+
+
+def seen_save(s):
+    try:
+        with scope_lock():
+            if scope_current_unlocked():
+                with open(os.path.join(DIR, SEEN), "w") as f:
+                    json.dump(s, f)
+    except OSError:
+        pass  # session context is a cache; a full disk must not abort a delivered chat turn
+
+
+def seen_rekey(old, new):
+    """A new session's sid is known only after its first turn: what that turn sent is now that session's."""
+    s = seen_load(old)
+    if s.get("board") is not None or s.get("context"):
+        seen_save(s | {"key": new})
+
+
+def seen_forget(force=False):
+    with scope_lock():
+        if force or scope_current_unlocked():
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(DIR, SEEN))
+
+
+def window_allow(board):
+    """Exact card keys in this window. Display names alone cannot distinguish same-name worktrees in other windows."""
+    try:
+        import ws_state
+        lines_by_name = {}
+        for line in board.splitlines():
+            if name := board_name(line):
+                lines_by_name.setdefault(name, []).append(line)
+        rows = json.load(open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")))["rows"]
+        selected = []
+        for r in rows:
+            if r["name"] not in lines_by_name:
+                continue
+            mr = r.get("mr") or {}
+            ref = mr.get("ref") or "no MR"
+            refs = [ref, f"[{ref}]({mr['web_url']})"] if mr.get("web_url") and mr.get("ref") else [ref]
+            exact = any(line.startswith(f"- {r['name']} ({shown_ref}, {r['project']}, {r.get('path')}): ")
+                        for shown_ref in refs for line in lines_by_name[r["name"]])
+            if exact or any(line.startswith(f"- {r['name']} ({shown_ref}, {r['project']}): ")
+                            for shown_ref in refs for line in lines_by_name[r["name"]]):
+                selected.append((r, exact))
+        counts = {}
+        for r, _ in selected:
+            ident = (r["name"], r["project"], (r.get("mr") or {}).get("ref"))
+            counts[ident] = counts.get(ident, 0) + 1
+        selected = [r for r, exact in selected if exact or counts[(r["name"], r["project"], (r.get("mr") or {}).get("ref"))] == 1]
+        import ws_state
+        return {r["card"]: (r.get("forge") or "", r.get("project") or "", (r.get("mr") or {}).get("ref") or "",
+                           (r.get("mr") or {}).get("sha") or "", r.get("goal") or "",
+                           (r.get("mr") or {}).get("target_branch") or "", r.get("id") or "", r.get("branch") or "",
+                           ws_state.stage_of(r))
+                for r in selected if r.get("card")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def context_k():
+    return int(chat_config().get("context_k") or CONTEXT_K)
+
+
+def context_note(query, board="", seen=None, allow=None):
+    """CONTEXT ahead of the message: the context_k state cards and memory notes most relevant to it (ws_state.top), each
+    sent once per session until it changes. Cards are limited to the board's workspaces (the window's, when scoped)."""
+    if chat_config().get("chat_context") == "board":
+        return ""
+    try:
+        import ws_state
+        hits = ws_state.top(query, context_k(), allow=window_allow(board) if allow is None else allow)
+    except Exception:  # ponytail: no index yet, or it's locked: the chat goes on without it
+        return ""
+    own = seen is None
+    seen = seen_load("") if own else seen
+    fresh = [h for h in hits if seen["context"].get(h["id"]) != ws_state.digest(h["text"])]
+    if not fresh:
+        return ""
+    seen["context"] |= {h["id"]: ws_state.digest(h["text"]) for h in fresh}
+    if own:
+        seen_save(seen)
+    body = "\n".join(f"- {'workspace' if h['kind'] == 'card' else 'memory note'} {h['name']}: {h['text']}" for h in fresh)
+    return (f"CONTEXT (the workspace state cards and memory notes most relevant to this message; `python3 {SCRIPTS}/ws_state.py show <card-key> --exact` "
+            f"for a whole card; ask about a specific workspace for more context):\n{body}\n\n")
+
+
+def board_note(query="", key="", seen=None, snapshot=None):
+    """The BOARD ahead of the user's message, or "" when the session (key: "<engine>:<sid>") already has it (or there's no
+    scan). A long board is focused on the message (focus). The same scan isn't sent again: a later message only adds the
+    lines it's about that the session hasn't seen. CONTEXT cards and notes follow (context_note)."""
+    own = seen is None
+    seen = seen_load(key) if own else seen
     try:
         import dash
-        b = dash.board()
+        b, allow = snapshot if snapshot is not None else dash.board(with_ids=True)
     except Exception:  # ponytail: no scan yet, or it's mid-write: the chat goes on without the board
-        return ""
+        ctx = context_note(query, "", seen)
+        if own:
+            seen_save(seen)
+        return ctx
     if not b and os.environ.get("GREENLIGHT_ONLY"):
         b = "(no workspaces in this window)"  # not nothing: the session would go on with the last window's
-    f = os.path.join(DIR, "board")  # the board the session last saw: an unchanged one isn't sent again
-    if not b or (os.path.exists(f) and open(f).read() == b):
-        return ""
-    open(f, "w").write(b)
+    full = b
+    finished = next((int(m[1]) for line in full.splitlines() if (m := re.fullmatch(r"\((\d+) more finished\)", line))), 0)
+    try:
+        import ws_state
+        hits = {h.get("display_name") or h["name"].split("@id-")[0] for h in ws_state.top(query, context_k(), kinds=("card",), allow=allow)} if b else set()
+    except Exception:
+        hits = set()
+    import ws_state
+    scope_key = ws_state.digest(json.dumps(sorted((allow or {}).keys()))) if os.environ.get("GREENLIGHT_ONLY") else "all"
+    if seen.get("scope") not in (None, scope_key):
+        seen.update(board=None, lines={}, context={}, heads={})
+    seen["scope"] = scope_key
+    focused = focus(b, query, hits) if b else b
+    digest = ws_state.digest(full)
     scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
-    return f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{b}\n\n"
+    note = ""
+    heads = {name: identity[3] for name, identity in (allow or {}).items() if isinstance(identity, tuple) and len(identity) > 3 and identity[3]}
+    changed_heads = [name for name, sha in heads.items() if (seen.get("heads") or {}).get(name) not in (None, sha)]
+    if changed_heads:
+        note += "BOARD head update: " + ", ".join(changed_heads[:10]) + ". Earlier head-specific approvals and card facts may be stale; verify this commit again.\n\n"
+    previous_heads = seen.get("heads") or {}
+    seen["heads"] = heads | {name: previous_heads[name] for name in changed_heads[10:]}
+    if focused and seen["board"] is None:
+        note += f"BOARD (greenlight's latest scan, {time.strftime('%H:%M')}{scope}):\n{focused}\n\n"
+    elif focused:
+        extra = [l for l in focused.splitlines() if board_name(l) and seen["lines"].get(l) != ws_state.digest(l)]
+        if extra:
+            note += f"BOARD (more lines from the same scan, for this message):\n" + "\n".join(extra) + "\n\n"
+    if seen["board"] is not None and seen.get("finished", 0) != finished:
+        note += f"BOARD update: {finished} more finished\n\n"
+    seen["finished"] = finished
+    current_keys = {l for l in full.splitlines() if board_name(l)}
+    removed = [k for k in seen["lines"] if k not in current_keys]
+    # A changed status line is an update to the same workspace, not a removal.
+    prefix = lambda line: (m[1] if (m := re.match(r"(- .+? \((?:\[[#!]\d+\]\(.+?\)|[#!]\d+|no MR), .+?\)): ", line)) else line)
+    old_by_prefix = {}
+    new_by_prefix = {}
+    for line in removed:
+        old_by_prefix.setdefault(prefix(line), []).append(line)
+    for line in current_keys:
+        new_by_prefix.setdefault(prefix(line), []).append(line)
+    updated = [(old[0], new_by_prefix[key][0]) for key, old in old_by_prefix.items()
+               if len(old) == len(new_by_prefix.get(key, [])) == 1][:20]
+    for old, new in updated:
+        del seen["lines"][old]
+        if new not in focused.splitlines():
+            note += f"BOARD update: {new}\n\n"
+        seen["lines"][new] = ws_state.digest(new)
+    removed = [line for line in removed if line not in {old for old, _ in updated} and prefix(line) not in new_by_prefix]
+    if len(removed) > 20:
+        note += f"BOARD reset (current workspaces in this window):\n{focused or '(no workspaces)'}\n\n"
+        seen["lines"].clear()
+    elif removed:
+        note += "BOARD update (no longer on this board): " + ", ".join(removed[:20]) + (f" and {len(removed)-20} more" if len(removed) > 20 else "") + "\n\n"
+        for k in removed:
+            del seen["lines"][k]
+    if focused and not current_keys and seen["board"] is not None and seen["board"] != digest:
+        note += f"BOARD update: {focused}\n\n"
+    for line in focused.splitlines():
+        if board_name(line):
+            seen["lines"][line] = ws_state.digest(line)
+    seen["board"] = digest
+    note += context_note(query, full, seen, allow)
+    if own:
+        seen_save(seen)
+    return note
+
+
 WRAP = "USER MESSAGE (reply to this): "
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # greenlight's (not imported: its import reads config and may call the forge)
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
@@ -602,22 +828,401 @@ class Norm:
         return out
 
 
+def session_path(engine):
+    base = "session" if engine == "claude" else f"session_{engine}"
+    return os.path.join(DIR, base + scope_suffix())
+
+
+SCOPE_EXPECTED = None
+SCOPE_SNAPSHOT = None
+SCOPE_DIR = None
+SCOPE_SCAN_MARKER = None
+SCOPE_TURN_TOKEN = None
+GENERATION = "conversation.gen"
+ACTIVE_TURN = "turn.active"
+RESETTING = "conversation.reset"
+QUESTION_DELIVERY = "question.delivery"
+
+
+def generation_unlocked():
+    path = os.path.join(DIR, GENERATION)
+    try:
+        return open(path).read()
+    except OSError:
+        value = hashlib.sha1(os.urandom(32)).hexdigest()
+        open(path, "w").write(value)
+        return value
+
+
+def rotate_generation_unlocked():
+    value = hashlib.sha1(os.urandom(32)).hexdigest()
+    open(os.path.join(DIR, GENERATION), "w").write(value)
+    return value
+
+
+def cancel_running_unlocked():
+    rec = pid_record()
+    if pid_matches(rec, group=True):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(rec["pid"], signal.SIGTERM)
+    with contextlib.suppress(OSError):
+        os.remove(PIDFILE)
+    with contextlib.suppress(OSError):
+        os.remove(BGFILE)
+
+
+def pid_record():
+    try:
+        raw = json.load(open(PIDFILE))
+        if isinstance(raw, int):  # old marker: readable for cleanup, never trusted for signaling
+            return {"pid": raw, "birth": None}
+        return {"pid": int(raw["pid"]), "birth": raw["birth"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def pid_matches(rec, group=False):
+    if not rec or not rec.get("birth") or auto.process_start(rec["pid"]) != rec["birth"]:
+        return False
+    try:
+        return not group or os.getpgid(rec["pid"]) == rec["pid"]
+    except ProcessLookupError:
+        return False
+
+
+@contextlib.contextmanager
+def scope_lock():
+    os.makedirs(DIR, exist_ok=True)
+    with open(os.path.join(DIR, "conversation.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def scope_current_unlocked():
+    global SCOPE_SCAN_MARKER
+    if os.path.exists(os.path.join(DIR, RESETTING)):
+        return False
+    if SCOPE_TURN_TOKEN and SCOPE_DIR == DIR:
+        try:
+            active = json.load(open(os.path.join(DIR, ACTIVE_TURN)))
+            if active.get("id") != SCOPE_TURN_TOKEN or active.get("cancelled"):
+                return False
+        except (OSError, ValueError):
+            return False
+    if SCOPE_EXPECTED is None or SCOPE_DIR != DIR:
+        return True
+    expected_generation, expected_members = SCOPE_EXPECTED
+    if expected_members is not None and not os.environ.get("GREENLIGHT_ONLY"):
+        return True  # this process has since left the scoped window
+    if generation_unlocked() != expected_generation:
+        return False
+    if expected_members is None:
+        return True
+    try:
+        if open(os.path.join(DIR, "members" + scope_suffix())).read() != expected_members:
+            return False
+        latest = published_scan_marker()
+        if latest != SCOPE_SCAN_MARKER:
+            import dash
+            fresh = dash.board(with_ids=True)
+            allow = fresh[1]
+            current = sorted(json.dumps(m, sort_keys=True) for m in getattr(allow, "members", allow.keys()))
+            if not all(member_still_present(old, current) for old in json.loads(expected_members)):
+                return False
+            SCOPE_SCAN_MARKER = latest
+        return True
+    except Exception:
+        return False
+
+
+def published_scan_marker():
+    try:
+        stat = os.stat(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json"))
+        return (stat.st_ino, stat.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def member_still_present(old, current):
+    if old in current:
+        return True
+    try:
+        member = json.loads(old)
+        return len(member) == 6 and member[4] is None and member[5] is None and any(
+            (new_member := json.loads(new))[:4] == member[:4] and len(new_member) == 6 and new_member[4] and new_member[5]
+            for new in current)
+    except (TypeError, ValueError):
+        return False
+
+
+def check_session_scope(engine, snapshot=None):
+    global SCOPE_EXPECTED, SCOPE_SNAPSHOT, SCOPE_DIR, SCOPE_SCAN_MARKER
+    with scope_lock():
+        SCOPE_DIR = DIR
+        if not os.environ.get("GREENLIGHT_ONLY"):
+            SCOPE_EXPECTED = (generation_unlocked(), None)
+            SCOPE_SNAPSHOT = None
+            return False
+        import dash
+        marker_before = published_scan_marker()
+        fresh = dash.board(with_ids=True)
+        marker_after = published_scan_marker()
+        if marker_after != marker_before:
+            raise OSError("scan changed during scope check")
+        if snapshot is not None:
+            def members(value):
+                allow = value[1]
+                return sorted(json.dumps(m, sort_keys=True) for m in getattr(allow, "members", (allow or {}).keys()))
+            if members(snapshot) != members(fresh):
+                raise OSError("board changed before scope check")
+        snapshot = fresh
+        SCOPE_SNAPSHOT = fresh
+        changed = _check_session_scope(engine, snapshot)
+        if changed:
+            rotate_generation_unlocked()
+        SCOPE_EXPECTED = (generation_unlocked(), open(os.path.join(DIR, "members" + scope_suffix())).read())
+        SCOPE_SCAN_MARKER = marker_after
+        return changed
+
+
+def stale_pending_question(snapshot):
+    """A yes/no answer may only settle a chat question about the current request head and target."""
+    if snapshot is None:
+        return False
+    allow = snapshot[1]
+    current = {identity[6]: identity for identity in allow.values() if isinstance(identity, tuple) and len(identity) > 6}
+    backfilled = set()
+    try:
+        rows = json.load(open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")))["rows"]
+        for row in rows:
+            mr = row.get("mr") or {}
+            if row.get("_goal_backfill"):
+                backfilled.add(row.get("id"))
+            current.setdefault(row.get("id"), (row.get("forge") or "", row.get("project") or "", mr.get("ref") or "",
+                                               mr.get("sha") or "", row.get("goal") or "", mr.get("target_branch") or "",
+                                               row.get("id"), row.get("branch") or ""))
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    for rec in decisions.load():
+        if rec.get("via") != "chat" or rec.get("chat") != chat_identity() or not decisions.is_open(rec):
+            continue
+        for target in [rec] + (rec.get("workspaces") or []):
+            if not target.get("worktree_id"):
+                continue
+            identity = current.get(target.get("worktree_id"))
+            if identity is None or (target.get("mr") or "") != identity[2] or \
+                    (target.get("sha") or "") != identity[3] or \
+                    (target.get("target_branch") or "") != identity[5] or \
+                    target.get("repo") not in (None, identity[1]) or target.get("forge") not in (None, identity[0]) or \
+                    (target.get("goal") is not None and target.get("goal") != identity[4] and
+                     not (target.get("goal") == "" and target.get("worktree_id") in backfilled)) or \
+                    (target.get("branch") is not None and len(identity) > 7 and target["branch"] != identity[7]):
+                return True
+    return False
+
+
+def has_request_question():
+    return any(rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec) and
+               any(t.get("worktree_id") for t in [rec] + (rec.get("workspaces") or []))
+               for rec in decisions.load())
+
+
+def discard_sessions_unlocked():
+    """A rejected question must not survive in a resumable model transcript."""
+    suffix = scope_suffix()
+    for path in glob.glob(os.path.join(DIR, "session*")):
+        name = os.path.basename(path)
+        if name.endswith(suffix) and (suffix or "_scope-" not in name):
+            os.remove(path)
+    with contextlib.suppress(OSError):
+        os.remove(os.path.join(DIR, SEEN))
+
+
+def reject_stale_question_unlocked():
+    """Close the old approval and discard sessions that still contain its question."""
+    decisions.forget_chat(chat=chat_identity())
+    with contextlib.suppress(OSError):
+        os.remove(asked_path())
+    discard_sessions_unlocked()
+
+
+def question_targets(question, allow):
+    """Select the cards explicitly named by a question; a generic question covers the window."""
+    hits = {}
+    for name, identity in allow.items():
+        ref = identity[2] if isinstance(identity, tuple) and len(identity) > 2 else ""
+        if (ref and re.search(rf"(?<![\w#!]){re.escape(ref)}(?!\d)", question)) or \
+                (len(name) > 3 and re.search(rf"(?<![\w/.-]){re.escape(name)}(?![\w/-])", question)):
+            hits[name] = identity
+    return hits or dict(allow)
+
+
+def live_question_status(snapshot):
+    """Check head-bound questions against the forge, including pushes since the last scan."""
+    allow = snapshot[1]
+    current = {identity[6]: identity for identity in allow.values() if isinstance(identity, tuple) and len(identity) > 6}
+    open_questions = [rec for rec in decisions.load() if rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)]
+    live_targets = [target for rec in open_questions for target in [rec] + (rec.get("workspaces") or [])
+                    if target.get("worktree_id") and (target.get("branch") is not None or target.get("goal") is not None)]
+    if live_targets:
+        try:
+            import greenlight
+            live = {w["worktreeId"]: w for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]}
+        except Exception:
+            return "unavailable"
+        for target in live_targets:
+            w = live.get(target["worktree_id"])
+            if w is None or target.get("branch") is not None and \
+                    (w.get("branch") or "").removeprefix("refs/heads/") != target["branch"]:
+                return "stale"
+            comment = (w.get("comment") or "").strip()
+            if target.get("goal") is not None and comment and not greenlight.STATUS_LINE_RE.search(comment) and comment != target["goal"]:
+                return "stale"
+            if target.get("goal") and not comment:
+                try:
+                    scan_rows = json.load(open(greenlight.STATE / "last.json"))["rows"]
+                except Exception:
+                    return "unavailable"
+                if not any(r.get("id") == target["worktree_id"] and r.get("_goal_backfill") for r in scan_rows):
+                    return "stale"
+            link_key = "linkedPR" if target.get("forge") == "github" else "linkedGitLabMR"
+            if target.get("mr") and link_key in w:
+                linked = greenlight.linked_number(w[link_key])
+                if (f"#{linked}" if link_key == "linkedPR" else f"!{linked}") != target["mr"]:
+                    return "stale"
+    for rec in open_questions:
+        for target in [rec] + (rec.get("workspaces") or []):
+            if not target.get("sha") or not target.get("mr"):
+                continue
+            identity = current.get(target.get("worktree_id"))
+            forge = target.get("forge") or (identity or (None,))[0]
+            project = target.get("repo") or (identity or (None, None))[1]
+            ref = target["mr"]
+            if forge not in ("github", "gitlab") or not project or not re.fullmatch(r"[#!]\d+", ref):
+                return "unavailable"
+            try:
+                import greenlight
+                live = greenlight.mr_details(project, int(ref[1:]), forge)
+            except Exception:
+                return "unavailable"
+            if live.get("sha") != target["sha"] or (live.get("target_branch") or "") != (target.get("target_branch") or "") or \
+                    live.get("state") not in ("opened", "open"):
+                return "stale"
+    return "valid"
+
+
+def _check_session_scope(engine, snapshot=None):
+    """A scoped window must not resume a transcript after a workspace leaves its effective board."""
+    if not os.environ.get("GREENLIGHT_ONLY"):
+        return False
+    marker = os.path.join(DIR, "members" + scope_suffix())
+    resetting = marker + ".reset"
+    sessions = [p for p in glob.glob(os.path.join(DIR, "session*" + scope_suffix())) if not p.endswith(".members")]
+    try:
+        if snapshot is None:
+            import dash
+            snapshot = dash.board(with_ids=True)
+        _, allow = snapshot
+        current = sorted(json.dumps(member, sort_keys=True) for member in getattr(allow, "members", (allow or {}).keys()))
+    except Exception:
+        current = None  # an unreadable board cannot authorize resuming a scoped transcript
+    if current is None:
+        raise OSError("scoped board unavailable")
+    try:
+        previous = json.load(open(marker))
+    except (OSError, ValueError):
+        previous = None
+    departed = os.path.exists(resetting) or previous is None and bool(sessions) or \
+        previous is not None and not all(member_still_present(old, current) for old in previous)
+    if departed:
+        cancel_running_unlocked()
+        with open(resetting, "w") as out:
+            out.write("resetting")  # survive failure after a session file was already deleted
+        for f in sessions:
+            os.remove(f)  # fail closed: never advance the marker while an old transcript survives
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(DIR, SEEN))
+        if os.path.exists(asked_path()):
+            os.remove(asked_path())  # fail closed before advancing the membership marker
+        decisions.forget_chat(chat=chat_identity())  # do not advance membership until old questions are closed
+    if previous != current:
+        with open(marker, "w") as out:
+            json.dump(current, out)
+    if departed:
+        os.remove(resetting)
+        return True
+    return False
+
+
 def session(engine, val=None):
-    f = os.path.join(DIR, "session" if engine == "claude" else f"session_{engine}")
+    f = session_path(engine)
     if val is not None:
-        open(f, "w").write(val)
+        with scope_lock():
+            if scope_current_unlocked():
+                open(f, "w").write(val)
     return open(f).read().strip() if os.path.exists(f) else None
 
 
-def run(cmd, engine, text, norm, check=False, guard=None):
+def cleanup_run(pid, birth=None):
+    """Only the process registered in this chat may remove the shared PID marker."""
+    with scope_lock():
+        rec = pid_record()
+        owned = bool(rec and rec["pid"] == pid and (birth is None or rec["birth"] == birth))
+        if owned:
+            os.remove(PIDFILE)
+            with contextlib.suppress(OSError):
+                os.remove(BGFILE)
+
+
+def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, request_guard=None):
     """Run one turn, stream events. Returns (sid or None, error or None or "retry").
     check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         text=True, cwd=DIR, start_new_session=True)
-    open(PIDFILE, "w").write(str(p.pid))
-    p.stdin.write(text)
-    p.stdin.close()
-    sid, done, private = None, False, set()
+    with scope_lock():
+        if not scope_current_unlocked():
+            return None, "window changed"
+        if pid_matches(pid_record()):
+            return None, "another turn running"
+        with contextlib.suppress(OSError):
+            os.remove(PIDFILE)
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, cwd=DIR, start_new_session=True)
+        birth = auto.process_start(p.pid)
+        if not birth:
+            p.terminate()
+            p.wait()
+            return None, "harness process identity unavailable"
+        open(PIDFILE, "w").write(json.dumps({"pid": p.pid, "birth": birth}))
+    try:
+        p.stdin.write(text)
+        p.stdin.close()
+    except (OSError, ValueError):  # Clear may terminate the registered child before it reads the prompt
+        with contextlib.suppress(OSError):
+            p.stdin.close()
+        p.wait()
+        cleanup_run(p.pid, birth)
+        return None, "window changed"
+    request_stale = threading.Event()
+    request_status = ["valid"]
+    if os.environ.get("GREENLIGHT_ONLY") or request_guard is not None:
+        def watch_scope():
+            next_request_check = 0.0
+            while p.poll() is None:
+                with scope_lock():
+                    stale = not scope_current_unlocked()
+                if request_guard is not None and time.monotonic() >= next_request_check:
+                    status = live_question_status(request_guard)
+                    if status != "valid":
+                        request_status[0] = status
+                        request_stale.set()
+                        stale = True
+                    next_request_check = time.monotonic() + 0.5
+                if stale:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(p.pid, signal.SIGTERM)
+                    return
+                time.sleep(0.1)
+        threading.Thread(target=watch_scope, daemon=True).start()
+    sid, done, private, failed_done = None, False, set(), None
     for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
         emit(e="step_done", id=sid_, ok=False, out="interrupted")
     if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
@@ -625,6 +1230,14 @@ def run(cmd, engine, text, norm, check=False, guard=None):
     norm.plan_t0, norm.plan_keys, norm.running = None, None, []
     hiding, needles = guard or watch_for_attachments()
     for line in p.stdout:
+        with scope_lock():
+            stale = not scope_current_unlocked()
+        if stale:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(p.pid, signal.SIGTERM)
+            p.wait()
+            cleanup_run(p.pid, birth)
+            return sid, "window changed"
         try:
             d = json.loads(line)
         except ValueError:
@@ -648,8 +1261,7 @@ def run(cmd, engine, text, norm, check=False, guard=None):
             except ProcessLookupError:
                 pass
             p.wait()
-            if os.path.exists(PIDFILE):
-                os.remove(PIDFILE)
+            cleanup_run(p.pid, birth)
             return sid, "retry"
         for e in evs:
             if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
@@ -659,24 +1271,38 @@ def run(cmd, engine, text, norm, check=False, guard=None):
                 continue
             if e["e"] == "done" and done:  # opencode can report one failure twice
                 continue
-            if e["e"] == "done" and sid:  # saved before the app hears done: a Clear right after must not be undone by a late save
+            if e["e"] == "done" and e["ok"] and sid:  # save only successful turns before the app hears done
                 session(engine, sid)
             if e["e"] == "done":
                 done, norm.reply = True, e["text"] if e["ok"] else None
-            emit(**e)
+                if not e["ok"]:
+                    failed_done = e
+            if defer_done and e["e"] == "done":
+                norm.pending_done = e
+            else:
+                emit(**e)
     p.wait()
+    cleanup_run(p.pid, birth)
+    if request_stale.is_set():
+        return sid, "request unavailable" if request_status[0] == "unavailable" else "request changed"
+    with scope_lock():
+        if not scope_current_unlocked():
+            return sid, "window changed"
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
         if sid:
             session(engine, sid)
-        emit(e="done", ok=True, text=norm.text, context=norm.context, window=norm.window, ms=None)
+        event = {"e": "done", "ok": True, "text": norm.text, "context": norm.context, "window": norm.window, "ms": None}
+        if defer_done:
+            norm.pending_done = event
+        else:
+            emit(**event)
         done, norm.reply = True, norm.text
-    for f in (PIDFILE, BGFILE):  # the process is gone, and its shells with it
-        if os.path.exists(f):
-            os.remove(f)
     if not done and p.returncode:
         if p.returncode in (-15, 143):  # SIGTERM from `chat.py stop`
             return sid, "Stopped"
         return sid, p.stderr.read().strip() or f"exit {p.returncode}"
+    if failed_done:
+        return sid, "model failed"
     return (None if done else sid), None  # done: its session is saved already
 
 
@@ -715,7 +1341,8 @@ def stop_shell(task_id):
     shells = json.load(open(BGFILE)) if os.path.exists(BGFILE) else []
     cmd = next((s["cmd"] for s in shells if s["id"] == task_id), "")
     key = max(re.split(r"['\"\\]", cmd), key=len).strip()  # ponytail: longest quote-free chunk, quoting is rewritten on the way to the shell
-    if not key or not os.path.exists(PIDFILE):
+    parent = pid_record()
+    if not key or not pid_matches(parent):
         return False
     rows = [l.split(None, 2) for l in subprocess.run(["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True).stdout.splitlines()]
     kids = {}
@@ -725,7 +1352,7 @@ def stop_shell(task_id):
     args = {pid: a for v in kids.values() for pid, a in v}
     def tree(pid):
         return [pid] + [x for k, _ in kids.get(pid, []) for x in tree(k)]
-    hits = [p for p in tree(int(open(PIDFILE).read()))[1:] if key in args.get(p, "")]
+    hits = [p for p in tree(parent["pid"])[1:] if key in args.get(p, "")]
     for p in {x for h in hits for x in tree(h)}:
         try:
             os.kill(p, signal.SIGTERM)
@@ -746,31 +1373,202 @@ def asked_question(reply):
 
 
 def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
+    """Reserve this chat through answer handling, harness work, and pending-question commit."""
+    global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
+    path = os.path.join(DIR, ACTIVE_TURN)
+    token = uuid.uuid4().hex
+    with scope_lock():
+        if os.path.exists(os.path.join(DIR, RESETTING)):
+            return emit(e="done", ok=False, text="This chat's Clear was interrupted; clear it again before sending.",
+                        context=0, window=None, ms=None)
+        delivery = os.path.join(DIR, QUESTION_DELIVERY + scope_suffix())
+        try:
+            active = json.load(open(path))
+            if active.get("birth") and auto.process_start(int(active["pid"])) == active["birth"]:
+                return emit(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if os.path.exists(delivery):
+            try:
+                reject_stale_question_unlocked()
+                os.remove(delivery)
+            except OSError as e:
+                return emit(e="done", ok=False, text=f"The interrupted question could not be closed ({e}); clear this chat.",
+                            context=0, window=None, ms=None)
+            return emit(e="done", ok=False, text="An interrupted question was discarded; review the current state and ask again.",
+                        context=0, window=None, ms=None)
+        birth = auto.process_start(os.getpid())
+        if not birth:
+            return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
+                        context=0, window=None, ms=None)
+        open(path, "w").write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
+        reserved_gen = generation_unlocked()
+        SCOPE_EXPECTED, SCOPE_DIR = (reserved_gen, None), DIR
+        SCOPE_TURN_TOKEN = token
+    terminal = None
+    try:
+        terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
+                               reservation=(token, reserved_gen))
+    finally:
+        with scope_lock():
+            owned = False
+            try:
+                active = json.load(open(path))
+                if active.get("id") == token:
+                    owned = not active.get("cancelled", False)
+                    os.remove(path)
+            except (OSError, ValueError):
+                pass
+            if SCOPE_TURN_TOKEN == token:
+                SCOPE_TURN_TOKEN = None
+            if terminal:
+                if terminal.get("ok") and not owned:
+                    terminal = {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.",
+                                "context": 0, "window": None, "ms": None}
+                emit(**terminal)
+                try:
+                    if open(delivery).read() == token:
+                        os.remove(delivery)
+                except OSError:
+                    pass
+
+
+def reservation_current(token, generation):
+    with scope_lock():
+        return reservation_current_unlocked(token, generation)
+
+
+def reservation_current_unlocked(token, generation):
+    try:
+        return scope_current_unlocked() and generation_unlocked() == generation and \
+            json.load(open(os.path.join(DIR, ACTIVE_TURN))).get("id") == token
+    except (OSError, ValueError):
+        return False
+
+
+def reject_stale_for_turn(reservation):
+    with scope_lock():
+        if reservation and not reservation_current_unlocked(*reservation):
+            return False
+        reject_stale_question_unlocked()
+        return True
+
+
+def discard_session_for_turn(reservation):
+    """Keep the approval retryable without resuming a transcript that already used it."""
+    with scope_lock():
+        if reservation and not reservation_current_unlocked(*reservation):
+            return False
+        discard_sessions_unlocked()
+        return True
+
+
+def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
     engine, model = harness.route(model)
     stored = []
     if files:
         try:
-            stored = attach.store(DIR, attach.check(files))
+            checked = attach.check(files)
+            with scope_lock():
+                if reservation and not scope_current_unlocked():
+                    return dict(e="done", ok=False, text="The workspace window changed; retry this message.",
+                                context=0, window=None, ms=None)
+                stored = attach.store(DIR, checked)
+                attach.prune(DIR)
         except attach.Rejected as e:
-            return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+            return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
         except OSError as e:
-            return emit(e="done", ok=False, text=f"The attached files couldn't be saved where greenlight runs ({e.strerror or e}).", context=0, window=None, ms=None)
-        attach.prune(DIR)
+            return dict(e="done", ok=False, text=f"The attached files couldn't be saved where greenlight runs ({e.strerror or e}).", context=0, window=None, ms=None)
     prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
     if os.path.exists(rules):  # the user's standing instructions (Settings → Model), read every turn
         prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
+    snapshot = None
+    if os.environ.get("GREENLIGHT_ONLY"):
+        try:
+            import dash
+            snapshot = dash.board(with_ids=True)
+        except Exception as e:
+            return dict(e="done", ok=False, text=f"Scoped board unavailable: {e}", context=0, window=None, ms=None)
+    request_snapshot = snapshot
+    if request_snapshot is None:
+        try:
+            import dash
+            request_snapshot = dash.board(with_ids=True)
+        except Exception:
+            pass
+    if reservation and not reservation_current(*reservation):
+        return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.", "context": 0, "window": None, "ms": None}
+    try:
+        scope_changed = check_session_scope(engine, snapshot)
+    except OSError as e:
+        return dict(e="done", ok=False, text=f"Scoped chat could not reset: {e}", context=0, window=None, ms=None)
+    if snapshot is not None:
+        snapshot = SCOPE_SNAPSHOT
+        request_snapshot = snapshot
+    if scope_changed and reservation:
+        with scope_lock():
+            try:
+                if json.load(open(os.path.join(DIR, ACTIVE_TURN))).get("id") == reservation[0]:
+                    reservation = (reservation[0], generation_unlocked())
+            except (OSError, ValueError):
+                pass
+    if reservation and not reservation_current(*reservation):
+        return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.", "context": 0, "window": None, "ms": None}
+    if scope_changed:
+        return dict(e="done", ok=bool(compact), text="The window changed; this chat will start fresh." if compact else
+                    "The workspace window changed; review it and retry this message.", context=0, window=None, ms=None)
     sid = session(engine)
+    key = f"{engine}:{sid or 'new'}"  # what's been sent is per session: another engine's, or a new one, has seen nothing
+    seen = seen_load(key) if not compact else None
+    msg = text
+    answer_text = text
     kind = decisions.turn_kind(text)  # the app's idle check-in or watch: its question is that kind (autonomy.py gates them)
+    request_guard = None
     if not compact:
-        if not sid and os.path.exists(os.path.join(DIR, "board")):
-            os.remove(os.path.join(DIR, "board"))  # a new session hasn't seen any board
-        decisions.quiet("heard", text, chat=CHAT)  # an answer to a ping or to the chat's open question goes into that question's record
+        needs_request_check = snapshot is not None or has_request_question()
+        with scope_lock():
+            if not scope_current_unlocked():
+                return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+            if needs_request_check:
+                import dash
+                try:
+                    fresh = dash.board(with_ids=True)
+                except Exception:
+                    return dict(e="done", ok=False, text="The current request could not be checked; retry this message.", context=0, window=None, ms=None)
+                if snapshot is not None:
+                    members_now = sorted(json.dumps(m, sort_keys=True) for m in getattr(fresh[1], "members", fresh[1].keys()))
+                    if json.dumps(members_now) != SCOPE_EXPECTED[1]:
+                        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+                if stale_pending_question(fresh):
+                    reject_stale_question_unlocked()
+                    return dict(e="done", ok=False, text="That question referred to an earlier request or commit. Review the current state and answer again.", context=0, window=None, ms=None)
+                snapshot = fresh
+                request_snapshot = fresh
+        live_status = live_question_status(snapshot) if needs_request_check else "valid"
+        with scope_lock():
+            if not scope_current_unlocked():
+                return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+            if needs_request_check:
+                if live_status == "unavailable":
+                    return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
+                if live_status == "stale":
+                    reject_stale_question_unlocked()
+                    return dict(e="done", ok=False, text="That question referred to an earlier commit or target. Review the current state and answer again.", context=0, window=None, ms=None)
+            asked = asked_path()
+            if os.path.exists(asked) and not any(rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)
+                                                 for rec in decisions.load()):
+                os.remove(asked)
+                return dict(e="done", ok=False, text="The previous question could not be verified; ask again.",
+                            context=0, window=None, ms=None)
+            question_context = open(asked).read() if os.path.exists(asked) else None
+        if question_context and needs_request_check:
+            request_guard = snapshot
         # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
         # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
-        asked = os.path.join(DIR, "asked")
-        os.environ["GREENLIGHT_REQUEST"] = open(asked).read() + ANSWER + text if os.path.exists(asked) else text
-        text = board_note() + WRAP + text + ("\n\n" + attach.note(stored) if stored else "")
+        os.environ["GREENLIGHT_REQUEST"] = question_context + ANSWER + text if question_context else text
+        wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
+        text = wrap(board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
@@ -778,30 +1576,121 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     norm, guard = Norm(verbose), watch_for_attachments()
     try:
         cmd, t = mk(sid, text)
-        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard)
+        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True, request_guard=request_guard)
     except (ValueError, OSError) as e:  # unknown harness, pi without bypass, binary missing
-        return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+        seen_forget()
+        return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
+    if err == "window changed":
+        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+    if err == "another turn running":
+        return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
+    if err == "model failed":
+        return norm.pending_done
+    if err == "request unavailable":
+        discard_session_for_turn(reservation)
+        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
+    if err == "request changed":
+        if not reject_stale_for_turn(reservation):
+            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
         cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-        new_sid, err = run(cmd, engine, t, norm, guard=guard)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
         sid = None  # don't fall into the session-lost retry below
+    if err == "window changed":
+        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+    if err == "another turn running":
+        return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
+    if err == "model failed":
+        return norm.pending_done
+    if err == "request unavailable":
+        discard_session_for_turn(reservation)
+        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
+    if err == "request changed":
+        if not reject_stale_for_turn(reservation):
+            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
     if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
         emit(e="status", text="Session lost, starting a new one")
+        key = f"{engine}:new"
+        seen_forget()
+        seen = seen_load(key)
+        text = wrap(board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         cmd, t = mk(None, text)
-        new_sid, err = run(cmd, engine, t, norm, guard=guard)
-    if new_sid:
-        session(engine, new_sid)
-    if not compact and not err:
-        decisions.quiet("said", norm.reply, chat=CHAT, kind=kind)  # a reply ending in an Options line is a question: record it
-        asked, question = os.path.join(DIR, "asked"), asked_question(norm.reply)
-        if question:  # the next message answers it: judged with this request (greenlight.read_only)
-            open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
-        elif os.path.exists(asked):
-            os.remove(asked)
+        new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+    if err == "model failed":
+        return norm.pending_done
+    if err == "request unavailable":
+        discard_session_for_turn(reservation)
+        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
+    if err == "request changed":
+        if not reject_stale_for_turn(reservation):
+            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+    post_status = live_question_status(request_guard) if request_guard is not None and not err else "valid"
+    if post_status == "unavailable":
+        discard_session_for_turn(reservation)
+        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
+    if post_status == "stale":
+        if not reject_stale_for_turn(reservation):
+            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+    with scope_lock():
+        if reservation and not reservation_current_unlocked(*reservation) or not scope_current_unlocked():
+            return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.",
+                    "context": 0, "window": None, "ms": None}
+        if new_sid:
+            open(session_path(engine), "w").write(new_sid)
+        if err and not compact or compact and not err:
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(DIR, SEEN))
+        elif not compact and (actual_sid := new_sid or session(engine)):
+            with contextlib.suppress(OSError):  # a cache failure cannot lose the reply's pending question
+                with open(os.path.join(DIR, SEEN), "w") as f:
+                    json.dump(seen | {"key": f"{engine}:{actual_sid}"}, f)
+        if not compact and not err:
+            decisions.quiet("heard", answer_text, chat=chat_identity())
+            asked, question = asked_path(), asked_question(norm.reply)
+            if question:
+                if request_snapshot is None:
+                    discard_sessions_unlocked()
+                    return {"e": "done", "ok": False, "text": "The current request could not be checked; retry this message.",
+                            "context": 0, "window": None, "ms": None}
+                try:
+                    import dash
+                    fresh = dash.board(with_ids=True)
+                    targets = question_targets(question, request_snapshot[1])
+                    if any(fresh[1].get(name) != identity for name, identity in targets.items()):
+                        discard_sessions_unlocked()
+                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again.",
+                                "context": 0, "window": None, "ms": None}
+                    open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w").write(reservation[0] if reservation else "pending")
+                    open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
+                    decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=list(targets))
+                    if stale_pending_question(request_snapshot):
+                        decisions.forget_chat(chat=chat_identity())
+                        os.remove(asked)
+                        discard_sessions_unlocked()
+                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again.",
+                                "context": 0, "window": None, "ms": None}
+                except Exception as e:
+                    with contextlib.suppress(OSError):
+                        os.remove(asked)
+                    try:
+                        decisions.forget_chat(chat=chat_identity())
+                    except OSError:
+                        open(os.path.join(DIR, RESETTING), "w").write("question recovery needed")
+                    discard_sessions_unlocked()
+                    return {"e": "done", "ok": False, "text": f"The question could not be saved ({e}); ask again.",
+                            "context": 0, "window": None, "ms": None}
+            elif os.path.exists(asked):
+                os.remove(asked)
     if err:
-        emit(e="done", ok=False, text=short(err, 500), context=norm.context, window=norm.window, ms=None)
+        return {"e": "done", "ok": False, "text": short(err, 500), "context": norm.context, "window": norm.window, "ms": None}
+    elif getattr(norm, "pending_done", None):
+        return norm.pending_done
 
 
 def main():
@@ -810,17 +1699,35 @@ def main():
     cmd = args[0] if args else "send"
     opt = lambda k: args[args.index(k) + 1] if k in args else None
     if cmd == "new":
-        for f in ["session", "board", "asked"] + [f"session_{h}" for h in harness.H]:
-            if os.path.exists(os.path.join(DIR, f)):
-                os.remove(os.path.join(DIR, f))
-        attach.clear(DIR)
-        decisions.quiet("forget_chat", chat=CHAT)
+        # Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR.
+        with scope_lock():
+            open(os.path.join(DIR, RESETTING), "w").write("resetting")
+            scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
+                glob.glob(os.path.join(DIR, "session*_scope-*"))
+            for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
+                decisions.forget_chat(chat=(CHAT or "main") + suffix)
+            decisions.forget_chat(chat=CHAT)
+            cancel_running_unlocked()
+            rotate_generation_unlocked()
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(DIR, ACTIVE_TURN))
+            for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
+                                                            glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
+                                                            glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
+                if os.path.exists(os.path.join(DIR, f)):
+                    os.remove(os.path.join(DIR, f))
+            attach.clear(DIR)
+            os.remove(os.path.join(DIR, RESETTING))
     elif cmd == "stop":
-        if os.path.exists(PIDFILE):
+        with scope_lock():
             try:
-                os.killpg(int(open(PIDFILE).read()), signal.SIGTERM)
-            except (ProcessLookupError, ValueError):
+                active_path = os.path.join(DIR, ACTIVE_TURN)
+                active = json.load(open(active_path))
+                active["cancelled"] = True
+                open(active_path, "w").write(json.dumps(active))
+            except (OSError, ValueError):
                 pass
+            cancel_running_unlocked()
     elif cmd == "bg":
         print(json.dumps(background()))
     elif cmd == "bgstop":

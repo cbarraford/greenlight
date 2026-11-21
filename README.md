@@ -24,7 +24,8 @@ python3 scripts/auto.py install        # the scheduler (systemd user timer, or l
 app/build.sh                           # optional: ~/Applications/Greenlight.app
 ```
 
-Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add` (see `SKILL.md`).
+Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add` (see `SKILL.md`). For a scheduled run
+with no LLM session, `auto.py add greenlight --schedule "*/30 * * * *" --orchestrator` runs `orchestrate.py tick`.
 
 Greenlight can run on another machine (a dev box that's always on): put the checkout there, and pick it in the app's **Settings › Hosts** (any `Host` in `~/.ssh/config`; **Test** checks it, then relaunch), or set `GREENLIGHT_HOST`. `scripts/sync.sh` copies a local checkout to that host.
 
@@ -106,7 +107,9 @@ A model can only add to what the patterns find: it can add a hold or a draft but
 | `scripts/dwim.py` | the fast path for board commands said, typed in the chat or in ⌘J (“park the two auth ones”, “hold #42”, “fix CI on the red ones”): done in under a second with an Undo toast, or handed to Chief when it’s ambiguous or destructive; and the voice stage’s instant table / timeline / diff / lifecycle card |
 | `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |
 | `scripts/decisions.py` | the decision record: every question Greenlight asked you, the situation, and your answer (`~/.greenlight/decisions.jsonl`) |
-| `scripts/auto.py` | Greenlight's own cron-style automations |
+| `scripts/auto.py` | Greenlight's own cron-style automations (`--orchestrator`: the deterministic tick instead of an agent) |
+| `scripts/orchestrate.py` | a greenlight run with no LLM session: adopt, scan, `next.cmd`, goal backfill, templated dispatch with state cards, cleanup; `decide.py` only at ambiguous forks (`plan` shows what a tick would do) |
+| `scripts/ws_state.py` | per-workspace state cards (`~/.greenlight/state/<ws>.json`) carried into every dispatch and failover, and the top-K retrieval the chat uses instead of the whole board |
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
 | `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
