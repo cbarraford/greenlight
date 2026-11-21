@@ -241,6 +241,7 @@ def leaks(text):
 
 def redact(text):
     text = SECRET_RE.sub("[credential redacted]", text)
+    text = re.sub(r"(?i)(--oauth2-bearer(?:=|\s+))[^\s]+", r"\1[credential redacted]", text)
     text = re.sub(r"(?:^|\s)(?:-u\s*|--user(?:=|\s+))([^\s:]+):([^\s]+)",
                   lambda m: m[0].replace(m[2], "[password redacted]"), text)
     for value in secret_values():
@@ -603,6 +604,18 @@ def check_code(code, lang, ctx=None, depth=0):
                         v.merge(check_write(ctx.path(path), ctx, "inline Python write", raw=path))
                     else:
                         v.add("high", "inline Python writes to a path the guard cannot resolve")
+                if call in ("os.replace", "os.rename", "shutil.move") and len(node.args) > 1:
+                    destination = node.args[1]
+                    if isinstance(destination, ast.Call) and ast.unparse(destination.func) == "os.path.expanduser" and destination.args:
+                        destination = destination.args[0]
+                    try:
+                        path = ast.literal_eval(destination)
+                    except (ValueError, TypeError, SyntaxError):
+                        path = None
+                    if isinstance(path, str):
+                        v.merge(check_write(ctx.path(path), ctx, "inline Python move", raw=path))
+                    else:
+                        v.add("high", "inline Python move destination cannot be resolved")
                 if call == "shutil.rmtree":
                     try:
                         target = ast.literal_eval(node.args[0])
@@ -883,6 +896,9 @@ def check_git(args, ctx, depth=0):
                 if a[1].split("=", 1)[1].startswith("+"):
                     v.add("deny", "git -c force refspec can update an uninspected branch", "egress")
             a = a[2:]
+        elif a[0] == "--config-env" and len(a) > 1 or a[0].startswith("--config-env="):
+            v.add("high", "git --config-env can change command routing or execution", "egress")
+            a = a[2:] if a[0] == "--config-env" else a[1:]
         else:
             if a[0].startswith(("--git-dir=", "--work-tree=", "--namespace=")):
                 v.add("high", "git option changes the effective repository")
@@ -958,6 +974,8 @@ def check_git(args, ctx, depth=0):
 def check_push(rest, ctx, v):
     pos = [x for x in rest if not x.startswith("-")]
     flags = [x for x in rest if x.startswith("-")]
+    if not ctx.git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+        v.add("high", "cannot verify the remote default branch before pushing", "egress")
     if any(f == "--recurse-submodules" or f.startswith("--recurse-submodules=") and f != "--recurse-submodules=no" for f in flags) or ctx.git("config", "--get", "push.recurseSubmodules") not in ("", "no", "false"):
         v.add("high", "push may also send uninspected submodule commits", "egress")
     force = any(f in ("-f", "--force") or f.startswith("--force-with-lease") or f == "--force-if-includes" or re.fullmatch(r"-\w*f\w*", f)
@@ -1396,6 +1414,8 @@ def check_net(cmd, args, ctx):
                 v.merge(check_write(ctx.path(target), ctx, "curl remote-name output", raw=target))
     if cmd == "curl" and any(a in args for a in ("--netrc", "-n", "--netrc-optional")) or opt(args, "--netrc-file"):
         v.add("deny", f"{cmd} may send credentials from a netrc file", "secret", "egress")
+    if cmd == "curl" and (opt(args, "--oauth2-bearer") or any(a.startswith("--oauth2-bearer=") for a in args)):
+        v.add("deny", "curl sends a bearer credential supplied on the command line", "secret", "egress")
     config_file = opt(args, "-K", "--config") or next((a[2:] for a in args if a.startswith("-K") and len(a) > 2), None)
     if config_file:
         v.add("high", f"{cmd} loads an external request config ({config_file})", "egress")
@@ -1411,6 +1431,19 @@ def check_net(cmd, args, ctx):
         for source in re.findall(r"@([^\s\"']+)", config_text):
             v.merge(check_upload_file(source, ctx, f"{cmd} config upload"))
     if cmd == "wget":
+        wgetrc = Path(os.environ.get("WGETRC") or HOME / ".wgetrc")
+        try:
+            if wgetrc.is_file() and wgetrc.stat().st_size:
+                v.add("high", "wget loads a default config the guard cannot safely infer", "egress")
+        except OSError:
+            v.add("high", "cannot inspect wget's default config", "egress")
+        directives = [opt(args, "-e", "--execute")]
+        directives += [a.split("=", 1)[1] for a in args if a.startswith("--execute=")]
+        directives += [a[2:] for a in args if a.startswith("-e") and len(a) > 2]
+        for directive in filter(None, directives):
+            v.add("high", "wget --execute changes request behavior", "egress")
+            if match := re.search(r"(?i)\bpost_file\s*=\s*([^\s;]+)", directive):
+                v.merge(check_upload_file(match[1], ctx, "wget upload"))
         input_file = opt(args, "-i", "--input-file") or next((a[2:] for a in args if a.startswith("-i") and len(a) > 2), None)
         if input_file:
             v.merge(check_upload_file(input_file, ctx, "wget URL list"))
@@ -1593,6 +1626,10 @@ def check_tool(tool, inp, ctx):
         return v
     if tool.startswith("mcp__"):
         name = tool.split("__")[-1].lower()
+        if name in ("api", "request", "http"):
+            method = str(inp.get("method") or inp.get("http_method") or "").upper()
+            if method not in ("GET", "HEAD"):
+                v.add("high", f"{tool} {method or 'unknown method'} may write outside this machine", "egress")
         if re.search(r"send|post|create|update|delete|comment|reply|forward|share|upload|write|publish|merge|push|trash|move|invite|cancel|invoke|execute|call|run", name):
             v.add("high" if re.search(r"execute|invoke|call|run", name) else "medium",
                   f"{tool} may change something outside this machine", "egress")
