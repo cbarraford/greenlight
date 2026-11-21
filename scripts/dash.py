@@ -1027,8 +1027,11 @@ def design(f, model="claude-haiku-5-5", effort="low"):
         "\"tiles\": [{\"widget\": w, \"title\": 2-4 words, \"props\": {...}}], \"wide\": {\"widget\": w, \"title\": 2-4 words, \"props\": {...}} or null}.\n"
         "0 to 3 tiles, most useful first. Fewer is better than filler. Build every value from the facts; never invent data.\n\nFacts:\n"
         + json.dumps(f)[:30000])
-    m = re.search(r"\{.*\}", ask(prompt, model, effort), re.S)
-    return validate(json.loads(m[0]) if m else {})
+    answer = ask(prompt, model, effort)
+    m = re.search(r"\{.*\}", answer, re.S)
+    if not m:
+        raise ValueError("designer returned no layout")
+    return validate(json.loads(m[0]))
 
 
 def ask(prompt, model, effort):
