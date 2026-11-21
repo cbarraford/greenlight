@@ -71,7 +71,8 @@ DESTRUCTIVE = re.compile(r"\b(?:merge[sd]?|merging|close[sd]?|closing|delete[sd]
                          r"abandon(?:ed)?|force|reset|revert(?:ed)?|wipe|discard|deploy(?:ed)?|ship|approve[sd]?|undraft|ready|push|"
                          r"cancel(?:led)?|stop|restart|rename|retarget|squash|cherry-?pick)\b", re.I)
 REASONING = re.compile(r"\?\s*$|^\s*(?:why|what|how|which|who|when|where|should|could|would|can|is|are|does|do you|tell|explain|"
-                       r"show|summari[sz]e|compare|list)\b|\b(?:if|when|unless|until|after|before|once|then|instead|because|except|but|or)\b", re.I)
+                       r"show|summari[sz]e|compare|list)\b|\b(?:if|when|unless|until|after|before|once|then|instead|because|except|but|or|temporarily)\b|"
+                       r"\bfor\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?)\b", re.I)
 NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop|not)\b(?! merge)", re.I)
 REQUEST_PREFIX = re.compile(r"^\s*(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you\b|please\b|go ahead and\b|let'?s\b)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
@@ -275,8 +276,12 @@ def pick_targets(g, pool, answers):
     if g["tokens"]:
         lex = lexical(g, pool)
         sem = {i: sure_bool(answers.get(f"is:{i}")) for i, _ in enumerate(pool) if f"is:{i}" in answers}
-        if any(v is not None for v in sem.values()):  # System One read the phrase: its yes/no beats the substring match
-            pool = [p for i, p in enumerate(pool) if sem.get(i) or (sem.get(i) is None and p in lex)]
+        if lex and any((v is True and p not in lex) or (v is False and p in lex) for i, p in enumerate(pool) if (v := sem.get(i)) is not None):
+            return None, "System One and the workspace words disagree"
+        if lex:
+            pool = lex
+        elif any(v is not None for v in sem.values()):  # no literal match: System One can still read an indirect description
+            pool = [p for i, p in enumerate(pool) if sem.get(i)]
         else:
             pool = lex
     if not pool:

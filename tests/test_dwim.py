@@ -65,6 +65,7 @@ assert [a["ws"] for a in plan("hold #42 and #1", [puck("auth-login", 42), puck("
 assert plan("hold #42 and release the hold on #43")["route"] == "chief"
 assert plan("park #42 and unpark #46")["route"] == "chief"
 assert plan("hold #42 when CI fails", [puck("auth-login", 42, goal="CI fails when tests run")])["route"] == "chief"
+assert plan("park #42 for 5 minutes", [puck("auth-login", 42, goal="Fix auth in 5 minutes")])["route"] == "chief"
 assert "it says 0 but 1 match" in plan("park 0 red ones", [puck("auth-login", 42, pipeline="failed")])["why"]
 assert "it says 0 but 1 match" in plan("park zero red ones", [puck("zero-tests", 42, goal="zero regressions", pipeline="failed")])["why"]
 assert plan("hold #42 not #43")["route"] == "chief"  # don't treat an excluded target as another action
@@ -117,6 +118,12 @@ all_yes = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "pro
 with mock.patch.object(dwim, "decide", fake(all_yes)):
     assert plan("park auth-login and billing-api", [puck("auth-login", 42)])["route"] == "chief"
     assert plan("park auth-login and the red ones", [puck("auth-login", 42), puck("api", 43, pipeline="failed")])["route"] == "chief"
+wrong_target = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
+                             {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else
+                             {"value": q["context"].startswith("billing"), "prob": .95, "provider": "jev"})
+with mock.patch.object(dwim, "decide", fake(wrong_target)):
+    r = plan("park the auth ones")
+    assert r["route"] == "chief" and "disagree" in r["why"], r
 twins = [puck("search", 42, path="/one", goal="Login auth"), puck("search", 43, path="/two", goal="Billing")]
 twin_pick = lambda k, q: ({"choice": "direct_board_action", "confidence": .9, "provider": "jev"} if k == "route" else
                           {"choice": "park", "confidence": .9, "provider": "jev"} if k == "verb" else
