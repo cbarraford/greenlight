@@ -5,9 +5,11 @@
 //
 // The browser is $CHROME, else the newest Playwright headless shell under ~/.cache/ms-playwright.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-let chromium;
-try { ({chromium} = require("playwright-core")) } catch { try { ({chromium} = require("playwright")) } catch {
+let pw;
+try { pw = require("playwright-core") } catch { try { pw = require("playwright") } catch {
   console.error("needs playwright-core: npm i playwright-core, then run with NODE_PATH=<that>/node_modules"); process.exit(2) } }
+const {chromium, webkit} = pw;
+const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
 
 function browserPath(){
   if (process.env.CHROME) return process.env.CHROME;
@@ -345,13 +347,15 @@ test("toast: the dismiss button closes it", async page => {
   assert.equal(await page.$(".toast"), null);
 });
 
-test("Basement: a page's button and a ⌘-click on a hex send B1 that worktree; no console is left", async page => {
+test("Basement: a page's button sends B1 that worktree; ⌘-click on a hex docks it into chat context; no console is left", async page => {
   assert.equal(await page.$("#con"), null);
   await page.evaluate(() => openPage("plan-a"));
   await page.click("#bar button:has-text('Basement')");
   await page.evaluate(() => closePage());
   await page.click("#main .cell[data-name='plan-b']", {modifiers: ["Meta"]});
-  assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-a", "/w/plan-b"]);
+  assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-a"]);
+  const ctx = (await posts(page, "context")).pop();
+  assert.ok(ctx && ctx.items.some(i => i.key === "plan-b"), "⌘-click on a hex docks it in chat context");
 });
 
 test("hover card button: greyed \"Please wait…\" until the step is written, then says it and runs it; none while the agent works or waits", async page => {
@@ -1029,7 +1033,7 @@ test("All output: another session is labelled from the first paint; a new sessio
 });
 
 (async () => {
-  const browser = await chromium.launch({executablePath: browserPath()});
+  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch({executablePath: browserPath()});
   let failed = 0;
   for (const t of tests) {
     const page = await boot(browser);

@@ -168,7 +168,7 @@ def moves(r, blk=None):
         if on[kind]:
             text, own = prompt_of(repo, kind)
             ok = set(COMMON + KINDS[kind])
-            text = re.sub(r"\{(\w+)\}", lambda m: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
+            text = re.sub(r"\{(\w+)\}", lambda m, ok=ok: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
     fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
     if not fix and nxt.get("step") == "merge" and (cmd[:1] in (["gh"], ["glab"]) or cmd[2:3] == ["checked-merge"]):
@@ -777,7 +777,7 @@ def main_of(path):
 def hook(cmd, path):
     """.greenlight.json's setup or teardown: one shell command, run in the worktree. None when it passed, else why not."""
     try:
-        p = subprocess.run(cmd, shell=True, cwd=path, capture_output=True, text=True, timeout=600)
+        p = subprocess.run(cmd, shell=True, cwd=path, capture_output=True, text=True, timeout=600)  # noqa: S602
     except subprocess.TimeoutExpired:
         return "it ran over 10 minutes"
     return None if p.returncode == 0 else f"exit {p.returncode}: " + (p.stderr or p.stdout).strip()[-300:]
@@ -879,7 +879,8 @@ def under(pairs, roots):
 def ports(path):
     """[(port, command)] listening from processes started in this worktree's Basement terminals (tmux panes whose folder is in it)."""
     run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=10).stdout
-    roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run("tmux", "-L", "greenlight", "list-panes", "-a", "-F",
+    sock = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
+    roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run("tmux", "-L", sock, "list-panes", "-a", "-F",
              "#{pane_pid} #{pane_current_path}").splitlines()) if pid.isdigit() and (cwd == path or cwd.startswith(path + "/"))]
     if not roots:
         return []
