@@ -36,6 +36,7 @@ Known limits: this reads the command line, not what a program does. A script fil
 or code it decodes at run time, is opaque here (Write/Edit content is scanned for a secret-plus-network combination,
 and codex's own sandbox blocks the network). It is a gate on the obvious paths, not a sandbox.
 """
+import ast
 import hashlib
 import json
 import math
@@ -424,7 +425,7 @@ def check_shell(script, ctx, depth=0):
         if name in SHELLS:
             v.merge(check_shell(doc, ctx, depth + 1))
         elif name.rstrip("0123456789.") in INTERPS:
-            v.merge(check_code(doc, name))
+            v.merge(check_code(doc, name, ctx, depth + 1))
         elif expands:
             for sub in substitutions(doc):
                 v.merge(check_shell(sub, ctx, depth + 1))
@@ -445,6 +446,8 @@ def check_shell(script, ctx, depth=0):
         for item in argv:
             if item.startswith("GH_REPO=") and not own_repo(item.split("=", 1)[1], ctx):
                 v.add("high", "GH_REPO selects another repository", "egress")
+        if piped and any(os.path.basename(item) == "xargs" for item in argv):
+            v.add("high", "xargs runs a command with file paths from a pipe")
         argv = unwrap(argv)
         if argv and os.path.basename(argv[0]) in ("cd", "pushd", "popd"):
             to = argv[1] if len(argv) > 1 and argv[0] != "popd" else ("~" if argv[0] == "cd" else None)
@@ -461,7 +464,7 @@ def check_shell(script, ctx, depth=0):
     return v
 
 
-def check_code(code, lang):
+def check_code(code, lang, ctx=None, depth=0):
     v = Verdict()
     net = NET_CODE_RE.search(code)
     if net:
@@ -479,6 +482,29 @@ def check_code(code, lang):
         v.add("deny", f"{lang} code that can change the guard or agent permissions")
     if leak := leaks(code):
         v.add("deny" if net else "medium", f"the code {leak}", "secret")
+    if lang.startswith("python") and ctx and depth <= 4:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            tree = None
+        if tree:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                func = node.func
+                call = f"{func.value.id}.{func.attr}" if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else ""
+                if call not in ("os.system", "os.popen", "subprocess.run", "subprocess.call", "subprocess.check_call",
+                                "subprocess.check_output", "subprocess.Popen"):
+                    continue
+                try:
+                    command = ast.literal_eval(node.args[0])
+                except (ValueError, TypeError, SyntaxError):
+                    v.add("high", f"{call} runs a command the guard cannot inspect")
+                    continue
+                if isinstance(command, str):
+                    v.merge(check_shell(command, ctx, depth + 1))
+                elif isinstance(command, (list, tuple)) and all(isinstance(x, str) for x in command):
+                    v.merge(check_shell(shlex.join(command), ctx, depth + 1))
     return v
 
 
@@ -498,15 +524,15 @@ def check_argv(argv, ctx, depth, piped_from=None):
     if cmd in SHELLS or cmd == "eval":
         if cmd == "eval":
             v.merge(check_shell(" ".join(args), ctx, depth + 1))
-        elif "-c" in args and args.index("-c") + 1 < len(args):
-            v.merge(check_shell(args[args.index("-c") + 1], ctx, depth + 1))
+        elif (command_flag := next((i for i, a in enumerate(args) if a == "-c" or re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a)), None)) is not None and command_flag + 1 < len(args):
+            v.merge(check_shell(args[command_flag + 1], ctx, depth + 1))
         elif piped_from:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         return v
     if cmd.rstrip("0123456789.") in INTERPS:
         for flag in ("-c", "-e", "--eval", "-r"):
             if flag in args and args.index(flag) + 1 < len(args):
-                v.merge(check_code(args[args.index(flag) + 1], cmd))
+                v.merge(check_code(args[args.index(flag) + 1], cmd, ctx, depth + 1))
         if piped_from and not any(a.endswith((".py", ".js", ".rb", ".pl", ".ts")) for a in args) and "-m" not in args:
             v.add("high", f"pipes into {cmd}: runs code this can't read")
         if cmd in ("perl", "ruby") and any(re.fullmatch(r"-\w*i\w*|--in-place.*", a) for a in args):
@@ -565,7 +591,12 @@ def check_argv(argv, ctx, depth, piped_from=None):
         return v
     if cmd in ("tee", "cp", "mv", "install", "ln", "truncate", "chmod", "chown", "touch", "mkdir", "rsync"):
         files = [a for a in args if not a.startswith("-")]
-        targets, sources = (files[-1:], files[:-1]) if cmd in ("cp", "mv", "install", "ln", "rsync") else (files, [])
+        target_dir = opt(args, "-t", "--target-directory") if cmd in ("cp", "mv", "install", "ln") else None
+        if target_dir:
+            sources = [a for a in files if a != target_dir]
+            targets = [str(ctx.path(target_dir) / os.path.basename(src)) for src in sources]
+        else:
+            targets, sources = (files[-1:], files[:-1]) if cmd in ("cp", "mv", "install", "ln", "rsync") else (files, [])
         for t in targets:
             v.merge(check_write(ctx.path(t), ctx, cmd, raw=t))
         for src in sources:
@@ -1012,7 +1043,10 @@ def check_net(cmd, args, ctx):
     auth_header = any(re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for a in args)
     header_vars = {n for a in args if re.search(r"(?i)authorization|x-api-key|private-token|job-token", a) for n in secret_vars(a)}
     auth_hosts = {"github.com", "api.github.com", "gitlab.com", "api.gitlab.com"}
-    if secret_vars(full) and (set(secret_vars(full)) - header_vars or not (auth_header and hosts and hosts <= auth_hosts)):
+    allowed_header = {n for n in header_vars if
+                      (hosts <= {"github.com", "api.github.com"} and n.upper().startswith(("GITHUB_", "GH_"))) or
+                      (hosts <= {"gitlab.com", "api.gitlab.com"} and n.upper().startswith(("GITLAB_", "GLAB_", "CI_JOB_TOKEN")))}
+    if secret_vars(full) and (set(secret_vars(full)) - allowed_header or not (auth_header and hosts and hosts <= auth_hosts)):
         v.add("deny", "sends a secret env var off the machine", "secret", "egress")
     if data or method in ("POST", "PUT", "PATCH", "DELETE"):
         v.add("high", f"{cmd} sends data to {', '.join(sorted(hosts)) or 'a host'}", "egress")
