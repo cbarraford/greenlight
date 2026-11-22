@@ -245,7 +245,7 @@ with tempfile.TemporaryDirectory() as td:
     (repo / "scripts").mkdir(parents=True)
     (repo / "tests").mkdir()
     (repo / "app").mkdir()
-    (repo / "scripts" / "check_safety.py").write_text("import sys\nsys.exit(0)\n")
+    (repo / "scripts" / "check_safety.py").write_text("import sys\n\nsys.exit(0)\n")
     bad_py = repo / "scripts" / "bad.py"
     bad_py.write_text("x = undefined_var\n")
     # Relative path resolved against cwd, and files outside cwd are ignored
