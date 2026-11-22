@@ -88,7 +88,7 @@ def test_session_start_and_stop_lifecycle(tmp_path):
     with (
         mock.patch.object(uitest.subprocess, "Popen", side_effect=fake_popen),
         mock.patch.object(uitest, "rpc", return_value={"ok": True}),
-        mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0)),
+        mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0, stdout="", stderr="")),
     ):
         assert sess.start() is sess
         assert (sess.root / "meta.json").is_file()
@@ -108,7 +108,7 @@ def test_cli_subcommands(tmp_path, monkeypatch, capsys):
 
     with (
         mock.patch.object(uitest, "rpc", return_value={"ok": True, "result": True}) as m_rpc,
-        mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0)),
+        mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0, stdout="", stderr="")),
     ):
         for cmd in (
             ("ping", "--socket", str(sock)),
