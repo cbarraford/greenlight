@@ -1473,7 +1473,7 @@ def main(argv=None):
         print("\n".join(lines(res)) or "audit passed: publish")
         return 0 if res["ok"] else 3
     if args[:1] == ["review"]:
-        det_only = "--deterministic-only" in sys.argv
+        det_only = "--deterministic-only" in args and not args.remove("--deterministic-only")
         root = Path(path or ".").resolve()
         errs = []
         for label, cmd in (
@@ -1493,7 +1493,7 @@ def main(argv=None):
             print("audit review passed (deterministic checks)")
             return 0
         try:
-            tgt = target or default_target(str(root))
+            tgt = requested_target or default_target(str(root))
             sha = (git(str(root), "rev-parse", "HEAD") or "").strip()
             diff = branch_diff(str(root), tgt, sha) or ""
             res = contracts({"action": "review", "target": tgt, "diff": clip(diff, 24000)},

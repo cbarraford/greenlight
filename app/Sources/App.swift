@@ -1363,7 +1363,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         DispatchQueue.global().async {
             let p = Process(), inPipe = Pipe(), out = Pipe()
-            p.executableURL = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
+            p.executableURL = URL(fileURLWithPath: ud.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
             p.arguments = ["-p", "--model", model, "--effort", "low"]
             p.currentDirectoryURL = FileManager.default.temporaryDirectory
             var env = ProcessInfo.processInfo.environment
@@ -1844,7 +1844,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         p.message = "Pick a whisper.cpp ggml model (.bin)"
         p.directoryURL = URL(fileURLWithPath: whisperModel()).deletingLastPathComponent()
         NSApp.activate(ignoringOtherApps: true)
-        if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "whisperModel") }
+        if p.runModal() == .OK, let u = p.url { ud.set(u.path, forKey: "whisperModel") }
     }
 
     /// Jev's key: stored by decide.py where greenlight runs (it reads it there), not in this Mac's Keychain.
