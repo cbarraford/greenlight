@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -114,7 +115,12 @@ Path(HOME, "auto").mkdir(exist_ok=True)
 dead = subprocess.Popen(["true"]); dead.wait()
 Path(HOME, "auto", "nightly.pid").write_text(str(dead.pid))
 Path(HOME, "orchestrator-phase-1.pid").write_text("{}")  # no pid in it: skipped, not a crash
-d = {c["check"]: c for c in diag.doctor()["checks"]}
+_which = shutil.which  # a codex installed in /usr/bin would pass agent_codex: hide it so the check sees none
+shutil.which = lambda c, *a, **k: None if c == "codex" else _which(c, *a, **k)
+try:
+    d = {c["check"]: c for c in diag.doctor()["checks"]}
+finally:
+    shutil.which = _which
 assert d["glab_auth"] == {"check": "glab_auth", "ok": False, "rc": 1, "msg_class": "auth"}, d
 assert d["gh_auth"]["ok"] and d["agent_codex"]["ok"] is False and d["disk"]["ok"] and d["home_writable"]["ok"], d
 assert d["auto_timer"] == {"check": "auto_timer", "ok": False, "state": "missing"} and d["stale_pids"]["n"] == 1, d

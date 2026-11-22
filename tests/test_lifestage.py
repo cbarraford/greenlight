@@ -34,7 +34,7 @@ def row(m, goal="", agent="idle", project="acme/widgets", branch="b", **ws):
     r = {"id": "w1", "name": "w1", "project": project, "goal": goal, "branch": branch, "agent": {"state": agent}} | ws
     r["mr"] = m and {"iid": m["iid"], "ref": f"!{m['iid']}", "state": m["state"], "role": "author" if m["author"]["username"] == greenlight.ME else "review",
                      "threads": len(greenlight.unresolved(m)), "approvals": len(m.get("_approved_by", [])),
-                     "todo_threads": [1 for d in greenlight.unresolved(m) if d["notes"][-1]["author"]["username"] not in (greenlight.ME, greenlight.BOT)],
+                     "todo_threads": [1 for d in greenlight.unresolved(m) if greenlight.awaiting_me(d)],
                      "threads_total": len(m.get("_discussions", [])), "rebase": m.get("detailed_merge_status") == "need_rebase"}
     r["next"] = greenlight.evaluate(r, m, {"title": "Release-9.9.9"})
     r["life"] = lifestage.now(lifestage.place(r), agent)
