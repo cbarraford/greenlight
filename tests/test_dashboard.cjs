@@ -1057,6 +1057,37 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
   page._errs.splice(0);  // the rejection is the point
 });
 
+test("workspace page: Branch row shows p.branch (not p.name) and long h1 wraps inside its column", async page => {
+  const longName = "ws-" + "x".repeat(120);
+  const p = {...puck(longName, "Long title check", "idle"), mr: null, branch: "feat/real-branch-name"};
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [p]});
+  await page.evaluate(n => window.mc.openPage(n), longName);
+  const branchText = await page.locator(".facts dt:has-text('Branch') + dd").textContent();
+  assert.equal(branchText, "feat/real-branch-name", "Branch row should render p.branch, not p.name");
+  const box = await page.evaluate(() => {
+    const h1 = document.querySelector(".ht h1"), ht = document.querySelector(".ht");
+    return {h1Right: h1.getBoundingClientRect().right, htRight: ht.getBoundingClientRect().right};
+  });
+  assert.ok(box.h1Right <= box.htRight + 2, `long h1 overflowed container: ${JSON.stringify(box)}`);
+});
+
+test("empty state: .empty clears the Context rail gutter and does not clip at narrow width", async page => {
+  await page.setViewportSize({width: 440, height: 520});
+  await page.evaluate(s => window.mc.update({...s, pucks: []}), SNAP);
+  const geom = await page.evaluate(() => {
+    const emp = document.querySelector("#main .empty"), ep = emp.querySelector(".ep"), dock = document.getElementById("dock");
+    return {
+      dockHidden: dock.hidden,
+      dockLeft: dock.getBoundingClientRect().left,
+      empRight: emp.getBoundingClientRect().right,
+      epRight: ep.getBoundingClientRect().right,
+    };
+  });
+  assert.equal(geom.dockHidden, false, "Context rail should be visible");
+  assert.ok(geom.empRight <= geom.dockLeft + 1, `.empty extended under #dock: ${JSON.stringify(geom)}`);
+  assert.ok(geom.epRight <= geom.dockLeft + 1, `.empty paragraph clipped under #dock: ${JSON.stringify(geom)}`);
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
