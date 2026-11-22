@@ -194,3 +194,17 @@ def test_agy_argv_and_norm_events(harness_env):
     }
     denied = Norm().agy({"event": "result", "result": {"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}})[0]
     assert not denied["ok"] and "command" in denied["text"]
+
+
+def test_harness_default_model(harness_env):
+    # a harness's default model (harnesses.<name>.model): headless runs, and Orca launches (agy is Orca's "antigravity")
+    harness_env["agy"] = {"model": "gemini-4-neon-high"}
+    cmd = harness.argv("agy", "hi")[0]
+    assert cmd[cmd.index("--model") + 1] == "gemini-4-neon-high", cmd
+    assert harness.argv("agy", "hi", model="gemini-3.8-flash-medium")[0][-1] == "gemini-3.8-flash-medium"  # asked for wins
+    assert "--model" not in harness.argv("codex", "hi")[0]  # none set: the CLI's own
+    assert greenlight.orca_agent(("agent", "launch", "--agent", "agy", "--prompt", "p")) == [
+        "agent", "launch", "--agent", "antigravity", "--prompt", "p", "--model", "gemini-4-neon-high"]
+    assert greenlight.orca_agent(("agent", "launch", "--agent", "agy", "--model", "x"))[-2:] == ["--model", "x"]
+    assert greenlight.orca_agent(("agent", "launch", "--agent", "claude")) == ["agent", "launch", "--agent", "claude"]
+    assert greenlight.orca_agent(("worktree", "ps")) == ["worktree", "ps"]
