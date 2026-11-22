@@ -927,6 +927,19 @@ func selfTest() {
             c.answer(c.waiting.first { $0.text == "ws-a: merge !1?" }!, "dismissed", send: false)
             c.answer(w[1], "(dismissed)", send: false)
             check("dismissing clears the bell without sending", c.waiting.isEmpty && c.run == nil)
+            for t in [#"ws-k: one?\nOptions: a | b"#, #"ws-l: two?\nOptions: c | d"#, "ws-m: three?"] { c.ping("{\"text\": \"\(t)\"}") }
+            func key(_ code: Int, _ ch: String, _ m: NSEvent.ModifierFlags = []) -> Bool {
+                c.inboxKey(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: m, timestamp: 0, windowNumber: 0, context: nil,
+                                            characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: UInt16(code))!)
+            }
+            check("the inbox opens the oldest; ↓ moves down", c.inboxFocus?.text == "ws-k: one?" && key(kVK_DownArrow, "") && c.inboxFocus?.text == "ws-l: two?")
+            check("⌫ dismisses the open one and opens the next", key(kVK_Delete, "\u{7f}") && c.waiting.count == 2 && c.inboxFocus?.text == "ws-m: three?")
+            check("a digit past its choices, or a letter, isn't taken", !key(kVK_ANSI_1, "1") && !key(kVK_ANSI_X, "x") && c.waiting.count == 2)
+            c.ping(#"{"text": "ws-n: four?"}"#)
+            check("⇧⌫ asks first; Esc cancels", key(kVK_Delete, "\u{7f}", .shift) && c.inboxConfirm && key(kVK_Escape, "\u{1b}") && !c.inboxConfirm && c.waiting.count == 3)
+            _ = key(kVK_Delete, "\u{7f}", .shift)
+            check("Return clears all without sending, answered history kept", key(kVK_Return, "\r") && c.waiting.isEmpty && c.run == nil && !c.inboxConfirm
+                  && c.questions.filter { $0.text.hasPrefix("ws-m") || $0.text.hasPrefix("ws-n") }.allSatisfy { $0.answer == "(dismissed)" })
             c.ping(#"{"text": "ws-e: choose?\nOptions: old | later"}"#)
             c.ping(#"{"text": "ws-e: choose?\nOptions: new | later"}"#)
             check("unkeyed changed options replace old chips", c.waiting.filter { $0.text == "ws-e: choose?" }.map(\.options) == [["new", "later"]])

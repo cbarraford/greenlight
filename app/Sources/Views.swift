@@ -681,35 +681,38 @@ struct Tip: ViewModifier {
     }
 }
 
-/// The bell's panel: questions waiting for an answer, newest last, then the last few answered.
+/// The bell's panel, a triage list: one line per waiting question, the open one (Core.inboxFocus) expanded with its choices,
+/// then the last few answered, and a footer of keys and Clear all.
 struct Inbox: View {
     @ObservedObject var c: Core
     var body: some View {
-        let w = c.waiting
+        let w = c.waiting, open = c.inboxFocus?.id
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("\(Text("Questions waiting").fontWeight(.semibold))\(Text(" · \(w.count)").foregroundColor(dim))")
+            HStack(spacing: Theme.sp2) {
+                Text("Inbox").fontWeight(.semibold)
+                if !w.isEmpty {
+                    Text("\(w.count)").font(sys(size: Theme.fs1, weight: .bold)).foregroundColor(.black.opacity(0.8))
+                        .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16).background(Capsule().fill(Theme.needs))
+                        .accessibilityLabel("\(w.count) waiting")
+                }
                 Spacer()
-                if let o = w.map(\.ts).min() { Text("oldest \(ago(o))").font(sys(size: Theme.fs1)).foregroundColor(dim) }
                 Button { c.inboxOpen = false } label: {
-                    Image(systemName: "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(dim).frame(width: 24, height: 24).contentShape(Rectangle())
+                    Image(systemName: "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(dim).frame(width: 28, height: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain).help("Close (Esc)").accessibilityLabel("Close inbox")
-            }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp2).padding(.vertical, Theme.sp2)
+            }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp2).padding(.vertical, Theme.sp1).background(card)
             Divider().overlay(line)
             if w.isEmpty {
-                VStack(spacing: Theme.sp2) {
-                    Image(systemName: "checkmark.circle").font(sys(size: Theme.fs6)).foregroundColor(Theme.done)
-                    Text("Nothing waiting on you").fontWeight(.semibold)
-                    Text("\(c.name) keeps working and lights the bell when it needs a decision.")
-                        .font(sys(size: Theme.fs2)).foregroundColor(dim).multilineTextAlignment(.center)
-                }.frame(maxWidth: .infinity).padding(.vertical, Theme.sp5).padding(.horizontal, Theme.sp4)
+                HStack(alignment: .top, spacing: Theme.sp3) {
+                    Image(systemName: "checkmark.circle.fill").font(sys(size: Theme.fs5)).foregroundColor(Theme.done)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Nothing waiting on you").fontWeight(.semibold)
+                        Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: Theme.fs2)).foregroundColor(dim)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(Theme.sp4)
             } else {
                 let rows = VStack(spacing: 0) {
-                    ForEach(Array(w.enumerated()), id: \.element.id) { i, q in
-                        if i > 0 { Divider().overlay(line) }
-                        QuestionRow(c: c, q: q)
-                    }
-                }
+                    ForEach(w) { q in if q.id == open { QuestionRow(c: c, q: q) } else { InboxLine(c: c, q: q) } }
+                }.padding(.vertical, Theme.sp1)
                 ViewThatFits(in: .vertical) { rows; ScrollView { rows } }
             }
             // the last few answered, and every answer greenlight gave for you in the last day (each with its Undo)
@@ -721,19 +724,40 @@ struct Inbox: View {
                     Text("ANSWERED").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(dim)
                     ForEach(Array(done)) { q in
                         HStack(spacing: Theme.sp2) {
-                            Text(q.text).foregroundColor(dim).lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text(q.answer ?? "").lineLimit(1).layoutPriority(1)
+                            let dismissed = q.answer == "(dismissed)"
+                            Image(systemName: q.auto != nil ? "sparkles" : dismissed ? "xmark" : "checkmark").font(sys(size: Theme.fs1, weight: .semibold))
+                                .foregroundColor(q.auto != nil ? accent : dismissed ? dim : Theme.done).frame(width: 12)
+                            Text(q.title(c.name)).foregroundColor(sub).lineLimit(1).frame(width: 92, alignment: .leading)
+                            Text(dismissed ? "Dismissed" : q.answer ?? "").foregroundColor(dim).lineLimit(1).help(q.text)
+                            Spacer(minLength: Theme.sp2)
                             if q.auto != nil {
-                                Button("Ask me again") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
+                                Button("Ask again") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
                                     .help("Greenlight will ask again. This does not reverse an action already taken.")
                             }
                         }.font(sys(size: Theme.fs2))
                     }
                 }.padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3)
             }
+            if !w.isEmpty {
+                Divider().overlay(line)
+                HStack(spacing: Theme.sp2) {
+                    if c.inboxConfirm {
+                        Text("Dismiss all \(w.count) without answering?").foregroundColor(sub)
+                        Spacer(minLength: Theme.sp2)
+                        Button("Cancel") { c.inboxConfirm = false }.buttonStyle(.plain).foregroundColor(dim).help("Esc")
+                        Button("Clear all", action: c.clearInbox).buttonStyle(.plain).fontWeight(.semibold).foregroundColor(fg)
+                            .padding(.horizontal, Theme.sp3).frame(minHeight: 26).background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge)).help("Return")
+                    } else {
+                        Group { kbd("↑↓"); Text("move"); kbd("⌫"); Text("dismiss"); kbd("esc"); Text("close") }.foregroundColor(dim)
+                        Spacer(minLength: Theme.sp2)
+                        Button { c.inboxConfirm = true } label: { HStack(spacing: 6) { Text("Clear all"); kbd("⇧⌫") } }.buttonStyle(.plain).foregroundColor(sub)
+                            .help("Dismiss every waiting question without answering. Nothing is sent.")
+                    }
+                }.font(sys(size: Theme.fs1)).padding(.horizontal, Theme.sp4).frame(minHeight: 38).background(card)
+            }
         }
-        .background(RoundedRectangle(cornerRadius: Theme.r3).fill(card))
+        .background(RoundedRectangle(cornerRadius: Theme.r3).fill(bg))
         .overlay(RoundedRectangle(cornerRadius: Theme.r3).stroke(edge))
         .clipShape(RoundedRectangle(cornerRadius: Theme.r3))
         .shadow(color: .black.opacity(theme.dark ? 0.5 : 0.12), radius: theme.dark ? 20 : 12, y: theme.dark ? 10 : 4)
@@ -741,53 +765,64 @@ struct Inbox: View {
     }
 }
 
+/// A key, as the inbox shows it: "1", "R", "⇧⌫".
+func kbd(_ k: String) -> some View {
+    Text(k).font(sys(size: 10, weight: .medium)).foregroundColor(dim).padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(edge)).accessibilityHidden(true)
+}
+
+/// A waiting question, folded to a line: which workspace, what it asks, how long ago. Click opens it.
+struct InboxLine: View {
+    @ObservedObject var c: Core
+    let q: Question
+    @StateObject private var hover = Flag()  // not @State: see the top of the file
+    var body: some View {
+        Button { c.inboxPick = q.id } label: {
+            HStack(spacing: Theme.sp2) {
+                Circle().fill(Theme.needs).frame(width: 6, height: 6)
+                Text(q.title(c.name)).font(sys(size: Theme.fs2, weight: .semibold)).lineLimit(1).frame(width: 92, alignment: .leading)
+                Text(q.label.1).font(sys(size: Theme.fs2)).foregroundColor(sub).lineLimit(1)
+                Spacer(minLength: Theme.sp1)
+                Text(ago(q.ts)).font(sys(size: Theme.fs1)).foregroundColor(dim)
+            }.padding(.horizontal, Theme.sp4).frame(height: 32).background(hover.on ? surface : .clear).contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hover.on = $0 }.accessibilityLabel("\(q.title(c.name)): \(q.label.1)").accessibilityHint("Opens the question")
+    }
+}
+
+/// The open question: all of it, its answers (1–9), Other… (R), and where it came from, Open and Dismiss (⌫).
 struct QuestionRow: View {
     @ObservedObject var c: Core
     let q: Question
+    @FocusState private var typing: Bool
     var body: some View {
-        let (mr, said) = label
-        HStack(alignment: .top, spacing: Theme.sp2) {
-            Circle().fill(Theme.needs)  // ping or chat, it waits on you
-                .frame(width: 6, height: 6).padding(.top, 7)
-            VStack(alignment: .leading, spacing: Theme.sp2) {  // question and choices line up with the title
-            VStack(alignment: .leading, spacing: 2) {  // which task and MR, once; then where it came from and what else to do
-                HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                    Text(about ?? q.ws.map { $0.joined(separator: ", ") } ?? (q.ping ? "\(c.name) ping" : "Your chat with \(c.name)"))
-                        .font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    if let mr { Text(mr).font(sys(size: Theme.fs2)).foregroundColor(sub) }
-                    Spacer(minLength: 0)
-                    Button { c.answer(q, "(dismissed)", send: false) } label: {  // drop this one, top-right, like the panel's own ✕
-                        Image(systemName: "xmark").font(sys(size: Theme.glyph, weight: .bold)).foregroundColor(dim).frame(width: 20, height: 20).contentShape(Rectangle())
-                    }.buttonStyle(.plain).help("Dismiss without answering").accessibilityLabel("Dismiss")
-                }
-                HStack(spacing: Theme.sp1) {
-                    Text("\(q.ping ? "Ping" : "Asked in the chat") · \(ago(q.ts))")
-                    if let ws = about {
-                        Text("·")
-                        Button("Open workspace") { c.openPage(ws) }.buttonStyle(.plain).foregroundColor(sub).help("Show \(ws) in the dashboard")
-                    }
-                }.font(sys(size: Theme.fs1)).foregroundColor(dim)
+        let (mr, said) = q.label
+        VStack(alignment: .leading, spacing: Theme.sp2) {
+            HStack(spacing: Theme.sp2) {
+                Circle().fill(Theme.needs).frame(width: 6, height: 6)  // ping or chat, it waits on you
+                Text(q.title(c.name)).font(sys(size: Theme.fs2, weight: .semibold)).lineLimit(1)
+                if let mr { Text(mr).font(sys(size: Theme.fs2)).foregroundColor(sub) }
+                Spacer(minLength: 0)
+                Text(ago(q.ts)).font(sys(size: Theme.fs1)).foregroundColor(dim)
             }
             Text(md(said)).font(chatFace(size: Theme.fs3)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            if !q.options.isEmpty { Text("Choose to send").font(sys(size: Theme.fs1)).foregroundColor(dim) }
             let chips = Group {  // equal weight, unless autonomy.py's past answers make one likely (tier 2): that one is preselected
-                ForEach(q.options, id: \.self) { o in AnswerChip(title: o, likely: q.suggest?.choice == o) { c.answer(q, o) } }
+                ForEach(Array(q.options.enumerated()), id: \.element) { i, o in
+                    AnswerChip(title: o, key: i < 9 ? "\(i + 1)" : nil, likely: q.suggest?.choice == o) { c.answer(q, o) }
+                }
                 if c.replyingTo != q.id {
-                    Button(q.options.isEmpty ? "Reply" : "Other…") { c.replyText = ""; c.replyingTo = q.id }.buttonStyle(.plain).font(sys(size: Theme.fs2)).foregroundColor(sub)
-                        .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
+                    Button { c.replyText = ""; c.replyingTo = q.id } label: { HStack(spacing: 6) { kbd("R"); Text(q.options.isEmpty ? "Reply" : "Other…") } }
+                        .buttonStyle(.plain).font(sys(size: Theme.fs2)).foregroundColor(sub)
+                        .padding(.horizontal, Theme.sp3).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
                 }
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: Theme.sp2) { chips }
                 VStack(alignment: .leading, spacing: Theme.sp2) { chips }
             }
-            if let s = q.suggest {
-                Label(likelyNote(s), systemImage: "sparkles").font(sys(size: Theme.fs1)).foregroundColor(dim)
-                    .help("Greenlight's guess from your past answers to this sort of question. Nothing is sent until you choose.")
-            }
             if c.replyingTo == q.id {
                 HStack(spacing: Theme.sp2) {
-                    TextField("Reply to \(c.name)…", text: $c.replyText).textFieldStyle(.plain).onSubmit(send)
+                    TextField("Reply to \(c.name)…", text: $c.replyText).textFieldStyle(.plain).onSubmit(send).focused($typing)
+                        .onAppear { DispatchQueue.main.async { typing = true } }
                     Button(action: send) {
                         Image(systemName: "arrow.up").font(sys(size: Theme.fs1, weight: .bold)).frame(width: 24, height: 24)
                             .background(RoundedRectangle(cornerRadius: Theme.r1).fill(accent)).foregroundColor(bg)
@@ -795,23 +830,43 @@ struct QuestionRow: View {
                 }.padding(.leading, Theme.sp3).padding(.trailing, 2).padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: Theme.r1).fill(bg)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(accent))
             }
-            }
+            HStack(spacing: Theme.sp1) {
+                if let s = q.suggest {
+                    Label(likelyNote(s), systemImage: "sparkles").lineLimit(1)
+                        .help("Greenlight's guess from your past answers to this sort of question. Nothing is sent until you choose.")
+                    Text("·")
+                }
+                Text(q.ping ? "Ping" : "Asked in the chat")
+                Spacer(minLength: Theme.sp2)
+                if let ws = q.about {
+                    Button("Open") { c.openPage(ws) }.buttonStyle(.plain).foregroundColor(sub).help("Show \(ws) in the dashboard")
+                }
+                Button("Dismiss") { c.dismiss(q) }.buttonStyle(.plain).foregroundColor(sub).padding(.leading, Theme.sp2)
+                    .help("Dismiss without answering (⌫)")
+            }.font(sys(size: Theme.fs1)).foregroundColor(dim)
         }.padding(Theme.sp3)
-    }
-    /// The MR a ping names as "<workspace> (!N)", and its text without that when it's only a label ("<workspace> (!N): …").
-    var label: (String?, String) {
-        guard let ws = about, q.text.hasPrefix(ws + " (!") else { return (nil, q.text) }
-        let from = q.text.index(q.text.startIndex, offsetBy: ws.count + 2)
-        guard let close = q.text[from...].firstIndex(of: ")") else { return (nil, q.text) }
-        let rest = q.text[q.text.index(after: close)...]
-        return (String(q.text[from..<close]), rest.hasPrefix(": ") ? String(rest.dropFirst(2)) : q.text)
+            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
+            .padding(.horizontal, Theme.sp2).padding(.vertical, Theme.sp1)
     }
     func send() {
         let t = c.replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { c.answer(q, t) }
     }
+}
+
+extension Question {
     /// The workspace a ping is about (its key; "@…" keys are groups, so their one named workspace if any).
-    var about: String? { q.key.flatMap { $0.hasPrefix("@") ? nil : $0 } ?? (q.ws?.count == 1 ? q.ws?.first : nil) }
+    var about: String? { key.flatMap { $0.hasPrefix("@") ? nil : $0 } ?? (ws?.count == 1 ? ws?.first : nil) }
+    /// What the inbox calls it: its workspace(s), else where it came from.
+    func title(_ name: String) -> String { about ?? ws.map { $0.joined(separator: ", ") } ?? (ping ? "\(name) ping" : "Your chat with \(name)") }
+    /// The MR a ping names as "<workspace> (!N)", and its text without that when it's only a label ("<workspace> (!N): …").
+    var label: (String?, String) {
+        guard let ws = about, text.hasPrefix(ws + " (!") else { return (nil, text) }
+        let from = text.index(text.startIndex, offsetBy: ws.count + 2)
+        guard let close = text[from...].firstIndex(of: ")") else { return (nil, text) }
+        let rest = text[text.index(after: close)...]
+        return (String(text[from..<close]), rest.hasPrefix(": ") ? String(rest.dropFirst(2)) : text)
+    }
 }
 
 /// One answer greenlight gave for you, in Settings › Autonomy: what, when, how sure, and reconsideration.
@@ -840,12 +895,14 @@ func likelyNote(_ s: Suggest) -> String {
 /// An inbox answer: a restrained amber outline, filled on hover; choosing sends it. likely: preselected (filled, a check).
 struct AnswerChip: View {
     let title: String
+    var key: String?  // its number key, shown as a badge
     var likely = false
     let action: () -> Void
     @StateObject private var hover = Flag()  // not @State: see the top of the file
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
+                if let key { kbd(key) }
                 if likely { Image(systemName: "checkmark").font(sys(size: Theme.fs1, weight: .bold)) }
                 Text(title)
             }
