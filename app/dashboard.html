@@ -1089,15 +1089,17 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => p.agent.state === "waiting" ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
   : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only a waiting agent has a question
-function agentsStrip(asked){  // asked: the overview lists the human requests above, so their agents aren't repeated here
-  const all = shown(), live = all.filter(p => (["working", "waiting"].includes(p.agent.state) || !asked && p.state === "crashed") && matches(p) && !(asked && ["needs", "raised"].includes(p.state)));  // detached, the crashed ones too: the chip below shows them
-  const crashed = all.filter(p => p.state === "crashed").length, idle = all.filter(p => p.agent.type && !["working", "waiting"].includes(p.agent.state)).length;
-  const working = live.filter(p => p.agent.state === "working" && p.state !== "quiet").length;
+function agentsStrip(docked){  // docked: the overview's strip, where idle crashed workspaces show only in the "N crashed" chip; every live agent shows, whatever its workspace's state
+  const busy = p => ["working", "waiting"].includes(p.agent.state), all = shown();
+  const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, idle ones show only in the chip); hid: the search hides some
+  const crashed = all.filter(p => p.state === "crashed").length;  // crashed workspaces, as the footer, the hexes and the chip's own filter count them
+  const idle = all.filter(p => p.agent.type && !busy(p) && p.state !== "crashed").length;  // as the hover card: an idle agent on a crashed workspace reads "crashed"
+  const working = live.filter(p => p.agent.state === "working").length;  // the pills count the cards below them
   const waiting = live.filter(p => p.agent.state === "waiting").length;
   const pills = [working ? h("span", {class:"pill blue"}, `Working ${working}`) : null, waiting ? h("span", {class:"pill orange", title:"Agents waiting on your answer"}, `${waiting} awaiting answer`) : null];  // agents only: waiting-on-others and done sit on the shelf
   return h("section", {class:"agents"},
     h("div", {class:"shead"}, h("h2", {}, "Agents"), ...pills, crashed ? h("button", {class:"crash", onclick: () => { ui.q = "Crashed"; render() }}, `${crashed} crashed`) : null,
-      live.length || ui.agentsFolded && !ui.only ? null : h("span", {class:"muted", style:"font-size:var(--fs-2)"}, `No agents working · ${idle} idle`),
+      live.length || ui.agentsFolded && !ui.only ? null : h("span", {class:"muted", style:"font-size:var(--fs-2)"}, hid ? "No agents match the search" : `No agents working · ${idle} idle`),
       h("span", {class:"sp"}), ui.only || !live.length ? null : h("button", {class:"fold", "aria-expanded": String(!ui.agentsFolded), title: ui.agentsFolded ? "Show agents" : "Hide agents",
             onclick: () => { ui.agentsFolded = !ui.agentsFolded; localSet("agentsFolded", ui.agentsFolded ? "1" : ""); renderMain() }},
           ui.agentsFolded ? `Show ${live.length} agent${live.length === 1 ? "" : "s"}` : "Hide", h("span", {class:"chev"},
