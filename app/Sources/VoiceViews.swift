@@ -1373,7 +1373,7 @@ func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) 
 struct HeaderTips {
     var on = false, starting = false, transcript = false, captions = false, out = false
     var name = "Chief", look = "Orb", next = "Conversation"
-    var attach: (help: String, label: String) { ("Attach images, PDFs or text files to what you say next (or drop or paste them)", "Attach files") }
+    var attach: (help: String, label: String) { ("Attach \(ChatFile.supported) to what you say next", "Attach files") }
     var view: (help: String, label: String) {
         transcript ? ("Show the stage: what \(name) draws as it talks", "Show the stage") : ("Show the transcript: the conversation as text", "Show the transcript")
     }
@@ -1395,10 +1395,9 @@ struct VoiceButtons: View, Looked {
     @ObservedObject var c: Core
     var out = false  // the chat is in its own window
     var pop: (() -> Void)? = nil  // the chat header's pop-out (or put back), drawn as one more knob
+    var nextLook: Look { looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
     var tips: HeaderTips {
-        let i = looks.firstIndex { $0.id == v.look.id } ?? 0
-        return HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out,
-                          name: c.name, look: v.look.name, next: looks[(i + 1) % looks.count].name)
+        HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out, name: c.name, look: v.look.name, next: nextLook.name)
     }
     var body: some View {
         let t = tips
@@ -1411,7 +1410,7 @@ struct VoiceButtons: View, Looked {
                 knob(v.captions ? "captions.bubble.fill" : "captions.bubble", t.caption) { v.captions.toggle() }
             }
             // one style for live and standard chat
-            knob("paintpalette", t.style) { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
+            knob("paintpalette", t.style) { v.look = nextLook }
             Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
                 .buttonStyle(.plain).modifier(Tip(c: c, text: t.voice.help)).accessibilityLabel(t.voice.label)
             if let pop { knob(out ? "rectangle.righthalf.inset.filled" : "arrow.up.forward.square", t.pop, pop) }

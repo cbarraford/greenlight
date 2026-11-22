@@ -672,14 +672,15 @@ struct MDText: View, Looked {
     }
 }
 
-/// Instant hover hint in a tab under the chat pane, plus the native tooltip (which shows only while Greenlight is the front app).
+/// Instant hover hint by the cursor (App.showTab), in place of the native tooltip: that one waits ~1 s, shows only while
+/// Greenlight is the front app, and would double this one. VoiceOver reads the text as the control's hint.
 /// A click that changes what the control does (captions on, the next style) updates the hint in place; one that removes the
 /// control (voice mode off) drops it, as its hover-exit never comes.
 struct Tip: ViewModifier {
     @ObservedObject var c: Core
     let text: String
     func body(content: Content) -> some View {
-        content.help(text).onHover { c.hint = $0 ? text : (c.hint == text ? "" : c.hint) }
+        content.accessibilityHint(text).onHover { c.hint = $0 ? text : (c.hint == text ? "" : c.hint) }
             .onChange(of: text) { old, new in if c.hint == old { c.hint = new } }
             .onDisappear { if c.hint == text { c.hint = "" } }
     }
@@ -921,17 +922,26 @@ struct AnswerChip: View {
 }
 final class Flag: ObservableObject { @Published var on = false }
 
+/// The hover hint, by the cursor (App.showTab).
 struct HintTab: View {
     let text: String
     var body: some View {
-        let shape = UnevenRoundedRectangle(bottomLeadingRadius: Theme.r2, bottomTrailingRadius: Theme.r2)
+        let shape = RoundedRectangle(cornerRadius: Theme.r1)
         HStack(spacing: Theme.sp2) {
             Circle().fill(accent).frame(width: 6, height: 6)
             Text(text).font(sys(size: Theme.fs1)).foregroundColor(fg).fixedSize()
-        }.padding(.horizontal, Theme.sp3).padding(.top, Theme.sp1).padding(.bottom, Theme.sp2)
+        }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
             .background(shape.fill(bg)).overlay(shape.stroke(edge))
             .preferredColorScheme(theme.dark ? .dark : .light)
     }
+}
+/// Where the hint goes: just below and right of the cursor (clear of the arrow), as a tooltip does; above it near the
+/// screen's bottom, and shifted left near its right edge, so it's never off screen.
+func hintFrame(_ size: NSSize, mouse m: NSPoint, screen v: NSRect) -> NSRect {
+    var r = NSRect(x: m.x + 10, y: m.y - 22 - size.height, width: size.width, height: size.height)
+    if r.minY < v.minY + 4 { r.origin.y = m.y + 8 }
+    r.origin.x = max(v.minX + 4, min(r.origin.x, v.maxX - size.width - 4))
+    return r
 }
 
 /// Settings over the whole window (dashboard and chat), not just the chat pane.
