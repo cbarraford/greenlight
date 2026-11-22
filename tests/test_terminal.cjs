@@ -4,7 +4,8 @@
 //
 // The browser is $CHROME, else Playwright's own. No ptys: the app's side is a stub that records what the page posts.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-const {chromium} = require("playwright-core");
+const {chromium, webkit} = require("playwright-core");
+const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
 
 // the page loads ghostty-web.js beside it, as the app bundle has it
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "term-"));
@@ -21,7 +22,7 @@ const TREES = {trees: [
   {ade: "cmux", project: "octo/greenlight", name: "review", path: "/w/review", branch: "review", main: false, agent: "none", state: "quiet", why: "waiting on bob"}]};
 
 async function boot(browser, saved = null, query = "", trees = TREES){
-  const page = await browser.newPage({viewport: {width: 1200, height: 800}});
+  const page = await browser.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await page.addInitScript(() => {
     window.__posts = [];
     window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}};
@@ -488,7 +489,7 @@ test("⌘J: MR number, title, description and people match; > lists actions; Esc
   await page.keyboard.type("split dow"); assert.equal(await page.$eval("#pres .sel .m", m => m.textContent), "Split down");
   await page.keyboard.press("Enter"); assert.equal(await page.evaluate(() => paneOf(cur).length), 2, "the action ran");
   await page.keyboard.press("Meta+j");
-  assert.deepEqual([...new Set(await page.$$eval("#pres .r-ws .ic svg", d => d.map(x => x.getBoundingClientRect().height + (x.getAttribute("aria-label") ? "" : " unlabeled"))))], [15], "every workspace row has a 15px, labelled state glyph (no stretched sidebar dots)");
+  assert.deepEqual([...new Set(await page.$$eval("#pres .r-ws .ic svg", d => d.map(x => parseFloat(getComputedStyle(x).height) + (x.getAttribute("aria-label") ? "" : " unlabeled"))))], [15], "every workspace row has a 15px, labelled state glyph (no stretched sidebar dots)");
   assert.equal(await page.$eval("#pv", p => getComputedStyle(p).display !== "none" && p.getBoundingClientRect().width), 290, "the preview pane stays beside the results");
   await page.keyboard.press("Tab");
   assert.deepEqual(await page.$$eval("#pres .r", r => [...new Set(r.map(x => x.classList[1]))]), ["r-tab"], "⇥: Terminals only");
@@ -885,8 +886,8 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 0);
   assert.match((await posts(page, "notify")).pop().title, /^Done: Fix CI · !7$/);
   await page.evaluate(t => term.workspaces(t), w([{kind: "merge", auto: true, sha: "s2"}], "none", "s2"));
-  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "merge", path: "/w/ar"});
-  await page.evaluate(() => term.tree({op: "merge", path: "/w/ar", ok: true, ref: "!7", target: "main", how: "Squash"}));
+  assert.deepEqual((await posts(page, "tree")).pop(), {cmd: "tree", op: "auto-merge", path: "/w/ar"});
+  await page.evaluate(() => term.tree({op: "auto-merge", path: "/w/ar", ok: true, ref: "!7", target: "main", how: "Squash"}));
   assert.equal((await posts(page, "notify")).pop().title, "Merged !7 into main", "a notification, not a dialog");
   assert.deepEqual((await lastSave(page)).autoDone, ["/w/ar|ci|s1", "/w/ar|merge|s2"]);
 }, "?main=1");
@@ -906,7 +907,7 @@ test("auto-run: only the main window runs it", async page => {
 });
 
 (async () => {
-  const browser = await chromium.launch(process.env.CHROME ? {executablePath: process.env.CHROME} : {});
+  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch(process.env.CHROME ? {executablePath: process.env.CHROME} : {});
   let failed = 0;
   for (const t of tests.filter(t => t.name.includes(process.env.ONLY || ""))) {
     const page = await boot(browser, null, t.query);

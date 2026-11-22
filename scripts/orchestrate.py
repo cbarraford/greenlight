@@ -356,7 +356,7 @@ def plan(rows, cards, judge=True):
     acts, n, records = [], 0, None
     for r in keyed(rows, migrate=False):
         nxt, card = r["next"], cards.get(r["card"]) or ws_state.load(r["card"])
-        act = lambda **a: acts.append({"ws": r["name"], "id": r["id"]} | a)
+        act = lambda r=r, **a: acts.append({"ws": r["name"], "id": r["id"]} | a)
         if r.get("_mr_inconclusive") or r.get("_card_error"):
             act(do="skip", why="MR lookup or card refresh is inconclusive; preserving the previous handoff")
             continue

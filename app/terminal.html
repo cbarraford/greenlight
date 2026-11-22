@@ -1,5 +1,7 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Terminal</title>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src https: data: blob:; connect-src data: blob:; font-src data:">
+<title>Terminal</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px -apple-system,BlinkMacSystemFont,sans-serif}
 body{display:flex}
@@ -762,9 +764,9 @@ const IC = {
   warn: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>', 17),
 };
 // forge avatar, username on hover; the initial shows through if the image fails (bots, offline)
-const face = u => `<span class="av" title="${esc(u.name)}">${esc(u.name[0] || "?")}${u.avatar ? `<img src="${esc(u.avatar)}" alt="" onerror="this.remove()">` : ""}</span>`;
+const face = u => { const av = typeof u.avatar === "string" && /^https?:\/\//i.test(u.avatar) ? u.avatar : ""; return `<span class="av" title="${esc(u.name)}">${esc(u.name[0] || "?")}${av ? `<img src="${esc(av)}" alt="" onerror="this.remove()">` : ""}</span>` };
 const stats = o => [[o?.dirty, "uncommitted", o?.dirty ? "k-o" : ""], [o?.unpushed, "unpushed", ""], [o?.commit && dur(o.commit), "last commit", "", o?.commit && new Date(o.commit).toLocaleString()]]
-  .map(([v, l, k, t]) => `<div class="${k}"${t ? ` title="${t}"` : ""}><b>${!o ? "·" : v ?? "–"}</b><span>${l}</span></div>`).join("");
+  .map(([v, l, k, t]) => `<div class="${k}"${t ? ` title="${esc(t)}"` : ""}><b>${!o ? "·" : esc(v ?? "–")}</b><span>${l}</span></div>`).join("");
 const meta = (w, o) => [w.why && esc(w.why), w.created && "Created " + when(w.created), w.active && "last output " + when(w.active), o?.error && `<span class="k-r">Git: ${esc(o.error)}</span>`].filter(Boolean).join(" · ");
 function renameLocal(){
   const inp = Object.assign(el("input"), {type: "text", value: LOCALNAME, maxLength: 60}); inp.setAttribute("aria-label", "This Mac's name");
@@ -960,7 +962,7 @@ function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, canc
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
   f.innerHTML = (icon ? `<span class="ic ${icon === "trash" ? "k-r" : "k-o"}">${icon === "trash" ? IC.trash(17) : IC.warn}</span>` : "")
     + `<div><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}</div>` + (note ? `<div class="note k-g">${g16(G.ok)}${note}</div>` : "")
-    + (rows.length ? `<ul>${rows.map(([k, s, x]) => `<li><i class="k-${k}"></i><span>${esc(s)}</span>${x ? `<em class="k-${k === "r" ? "r" : "dim"}">${x}</em>` : ""}</li>`).join("")}</ul>` : "");
+    + (rows.length ? `<ul>${rows.map(([k, s, x]) => `<li><i class="k-${esc(k)}"></i><span>${esc(s)}</span>${x ? `<em class="k-${k === "r" ? "r" : "dim"}">${esc(x)}</em>` : ""}</li>`).join("")}</ul>` : "");
   const cb = check && Object.assign(el("input"), {type: "checkbox"});
   if (cb) { const l = el("label"); l.append(cb, check); f.append(l) }
   const no = Object.assign(el("button", safe ? "pri" : ""), {type: "button", textContent: cancel}), yes = Object.assign(el("button", danger ? "danger" : "pri"), {type: "submit", textContent: ok});
@@ -1114,7 +1116,7 @@ function openWs(ws){
   const latest = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0], q = ws.toLowerCase();
   const t = latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
     || latest(t => (t.name || "").toLowerCase().includes(q));
-  t ? show(t) : ws.startsWith("/") && newTab(ws) }
+  t ? show(t) : (ws === "" || ws.startsWith("/") || ws.startsWith("@")) && newTab(ws) }
 // status glyphs (16-unit grid, 1.5 stroke, as the design)
 const g16 = (d, cls = "", label = "", w = 12) => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ${label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"'}>${d}</svg>`;
 const G = {
@@ -1305,7 +1307,7 @@ function repoIn(ps, r){ return ps.find(p => p.repos.includes(r)) ?? ps.find(p =>
 function reposOf(ps, p){ return [...new Set(trees.filter(w => w.project && repoIn(ps, w.project) === p).map(w => w.project))] }  // hoisted: setTitle runs first
 const nRepos = n => `${n} repo${n === 1 ? "" : "s"}`;
 // a project's color square, by its place in the list (ponytail: moves when projects reorder; store one per project if that bothers)
-const pcol = i => i < 0 ? "color-mix(in srgb,var(--fg) 30%,var(--bg))" : `var(--${"obgptyr"[i % 7]})`, sq = c => `<i class="sq" style="background:${c}"></i>`;
+const pcol = i => i < 0 ? "color-mix(in srgb,var(--fg) 30%,var(--bg))" : `var(--${"obgptyr"[i % 7]})`, sq = c => `<i class="sq" style="background:${esc(c)}"></i>`;
 const tilde = p => HOME && under(p, HOME) ? "~" + p.slice(HOME.length) : p;
 // Open projects: in a new window (the app opens one, to put on any display) or this one (its shells stay); all projects, or the ones you tick
 // (No Man's Land: repos in none)
