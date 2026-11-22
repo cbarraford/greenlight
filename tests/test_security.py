@@ -102,12 +102,16 @@ for sf in check_safety.swift_files():
             allowed = (sf.name == "Config.swift" and "let ud:" in line) or (sf.name == "App.swift" and "removePersistentDomain" in line)
             assert allowed, f"stray UserDefaults.standard in {sf.name}:{i}: {line.strip()}"
 
-# 6. audit.py review handles argv cleanly without UnboundLocalError
+# 6. audit.py review handles argv cleanly and passes diff= (not outbound=) to contracts()
 import audit
 from unittest import mock
 assert audit.main(["review", "--path", str(ROOT), "--deterministic-only"]) == 0
-with mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
+sample_diff = "diff --git a/scripts/foo.py b/scripts/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
+with mock.patch.object(audit, "branch_diff", return_value=sample_diff), \
+     mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 0
     assert mc.called
+    assert mc.call_args.kwargs.get("diff") == sample_diff, f"expected diff= kwarg, got {mc.call_args}"
+    assert "outbound" not in mc.call_args.kwargs, f"raw diff must not be passed as outbound=: {mc.call_args}"
 
 print("ok  test_security.py passed")

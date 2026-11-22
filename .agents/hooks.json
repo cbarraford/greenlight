@@ -1,0 +1,11 @@
+{
+  "greenlight-quality-guards": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 ../scripts/agent_hook.py --agy-stop",
+        "timeout": 30
+      }
+    ]
+  }
+}

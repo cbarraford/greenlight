@@ -126,7 +126,14 @@ def save(kind, where, data):
 
 
 def record(kind, r):
-    for where in (r.get("path"), r.get("name")):
+    p = r.get("path")
+    candidates = [p]
+    if p:
+        rp = os.path.realpath(p)
+        if rp != p:
+            candidates.append(rp)
+    candidates.append(r.get("name"))
+    for where in candidates:
         try:
             if where and isinstance(o := json.loads(_file(kind, where).read_text()), dict):
                 return o
