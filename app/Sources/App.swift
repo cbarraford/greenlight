@@ -1153,11 +1153,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var chatShown: Bool { greenlight.chatOut ? chatWindow.isVisible : window.isVisible && !chatSlot.isHidden }
 
     func setChat(hidden: Bool) {
+        if !greenlight.keying { greenlight.hint = "" }  // a hovered control going away sends no hover-exit
         chatHidden = hidden
         if !hidden { greenlight.inboxOpen = false }  // asking for the chat closes the inbox
         placeChat()
     }
     func popChat(out: Bool) {
+        if !greenlight.keying { greenlight.hint = "" }  // the pop knob moves out from under the cursor: no hover-exit comes
         greenlight.chatOut = out
         if !out { chatWindow.orderOut(nil) }
         chatHidden = false
@@ -1966,7 +1968,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
-        if chat.window?.isVisible != true, tab.isVisible { greenlight.hint = "" }  // the chat's window hidden mid-hover: drop the tab
+        if hintStale { greenlight.hint = "" }  // a window hidden or moved mid-hover: drop the hint
         if window.title != greenlight.name { window.title = greenlight.name }
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
@@ -2219,7 +2221,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         else if upstairs { show() } else { basement() }
     }
 
-    /// Hover hint as a tab hanging off the window's bottom-right corner, so nothing inside moves.
+    /// Hover hint as a tooltip by the cursor, at once (the native one waits ~1 s, and only while Greenlight is the front app).
     lazy var tab: NSPanel = {
         let w = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         w.isOpaque = false
@@ -2227,20 +2229,23 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.hasShadow = true
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        w.level = .popUpMenu  // over Settings and the chat's own window, like a tooltip
         return w
     }()
     var hintSink: AnyCancellable?
 
     func showTab(_ text: String) {
-        guard !text.isEmpty, let pw = chat.window, pw.isVisible else {  // the chat's window: the main one, or its own when popped out
-            tab.parent?.removeChildWindow(tab); tab.orderOut(nil); return
-        }
+        guard !text.isEmpty else { tab.orderOut(nil); return }
         let host = NSHostingView(rootView: HintTab(text: text))
-        let size = host.fittingSize
-        let r = pw.convertToScreen(chat.convert(chat.bounds, to: nil))
+        let m = NSEvent.mouseLocation, screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
         tab.contentView = host
-        tab.setFrame(NSRect(x: r.maxX - size.width - 14, y: r.minY - size.height + 1, width: size.width, height: size.height), display: true)
-        if tab.parent !== pw { tab.parent?.removeChildWindow(tab); pw.addChildWindow(tab, ordered: .above) }  // child windows follow the window; the chat may have moved
+        tab.setFrame(hintFrame(host.fittingSize, mouse: m, screen: screen?.visibleFrame ?? .infinite), display: true)
+        tab.orderFront(nil)
+    }
+    /// The cursor left every Greenlight window while a hint showed (a control moved or went away under it): drop the hint.
+    var hintStale: Bool {
+        let m = NSEvent.mouseLocation
+        return tab.isVisible && !greenlight.keying && !NSApp.windows.contains { $0 !== tab && $0.isVisible && NSMouseInRect(m, $0.frame, false) }
     }
 
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,
