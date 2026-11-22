@@ -45,7 +45,14 @@ final class Core: ObservableObject {
         }
         both(\.model, \.$model); both(\.effort, \.$effort); both(\.name, \.$name); both(\.verbose, \.$verbose)
         both(\.liveLine, \.$liveLine); both(\.vim, \.$vim); both(\.vimStart, \.$vimStart); both(\.look, \.$look); both(\.sent, \.$sent)
-        both(\.hint, \.$hint); both(\.keying, \.$keying)  // hover hints show by the cursor from any window (App.showTab reads the main chat's)
+        both(\.keying, \.$keying)  // the voice-shortcut prompt holds off this window's hover hints too
+        // Hover hints: this window's go to the main chat's, which App.showTab shows by the cursor. Back come only its clears and the
+        // voice-shortcut prompt, never another window's hover text: a highlight that reads `hint` lights only where the cursor is.
+        $hint.dropFirst().sink { [weak self, weak m] v in guard let self, !self.mirroring else { return }; self.mirroring = true; m?.hint = v; self.mirroring = false }.store(in: &subs)
+        m.$hint.dropFirst().sink { [weak self] v in
+            guard let self, !self.mirroring, v != self.hint else { return }
+            self.mirroring = true; self.hint = v == Core.keyPrompt ? v : ""; self.mirroring = false
+        }.store(in: &subs)
         $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
     }
     lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
