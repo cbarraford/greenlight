@@ -487,7 +487,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             f.1(order[(i + (e.keyCode == kVK_UpArrow ? n - 1 : 1)) % n])
             return nil
         }
-        hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
+        hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in guard let self else { return }; self.hint($0, from: self.greenlight) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
         if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
@@ -1314,6 +1314,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.minSize = NSSize(width: 480, height: 520); w.delegate = self; w.appearance = window.appearance
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
         c.follow(greenlight)
+        c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
         c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
         c.popoverShown = { [weak w] in NSApp.isActive && w?.isKeyWindow == true }
         c.light = { [weak self, weak l] names, open in
@@ -1376,7 +1377,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
-        if !l.c.hint.isEmpty, l.c.hint == greenlight.hint, !greenlight.prompting { greenlight.hint = "" }  // closed mid-hover: its hover-exit can't reach the main hint now
+        if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
         l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
@@ -1969,7 +1970,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
-        if hintStale { greenlight.hint = "" }  // a window hidden or moved mid-hover: drop the hint
+        if hintStale { (hintCore ?? greenlight).hint = "" }  // a window hidden or moved mid-hover: drop the hint
         if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
         if window.title != greenlight.name { window.title = greenlight.name }
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
@@ -2237,6 +2238,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }()
     var hintSink: AnyCancellable?
 
+    /// Each window's chat has its own hover hint (its highlights read it); the cursor shows the one that spoke last. A clear counts
+    /// only from that one (a late hover-exit elsewhere doesn't drop a fresh hint), and moving on drops the last one's, so its
+    /// highlight goes too. While the menu's voice-shortcut prompt is up, only it shows.
+    weak var hintCore: Core?
+    func hint(_ text: String, from c: Core) {
+        if greenlight.prompting && c !== greenlight { return }
+        if text.isEmpty { if hintCore === c || hintCore == nil { showTab("") }; return }  // nil: that window has closed
+        if let o = hintCore, o !== c, !o.hint.isEmpty { o.hint = "" }
+        hintCore = c; showTab(text)
+    }
     func showTab(_ text: String) {
         guard !text.isEmpty else { tab.orderOut(nil); return }
         let host = NSHostingView(rootView: HintTab(text: text)), size = hintSize(text)
