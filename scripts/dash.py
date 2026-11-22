@@ -1080,19 +1080,26 @@ def design(f, model="claude-haiku-5-5", effort="low"):
         "\"tiles\": [{\"widget\": w, \"title\": 2-4 words, \"props\": {...}}], \"wide\": {\"widget\": w, \"title\": 2-4 words, \"props\": {...}} or null}.\n"
         "0 to 3 tiles, most useful first. Fewer is better than filler. Build every value from the facts; never invent data.\n\nFacts:\n"
         + json.dumps(f)[:30000])
-    m = re.search(r"\{.*\}", ask(prompt, model, effort), re.S)
-    return validate(json.loads(m[0]) if m else {})
+    answer = ask(prompt, model, effort)
+    m = re.search(r"\{.*\}", answer, re.S)
+    if not m:
+        raise ValueError("designer returned no layout")
+    return validate(json.loads(m[0]))
 
 
 def ask(prompt, model, effort):
     """One headless answer: a gemini-* model runs on agy, anything else on config llm_harness
     (a Claude model name means nothing to another harness, so that one uses its default).
-    Runs toolless/sandboxed in an empty tempdir so untrusted PR/commit/agent text cannot execute tools."""
-    import tempfile
+    Runs toolless/sandboxed in an empty tempdir so untrusted PR/commit/agent text cannot execute tools.
+    A failed run answers "": `claude -p` prints its errors ("There's an issue with the selected model ...", a usage limit)
+    on stdout and exits 1, and that text must not become a suggestion the console sends to an agent as its task."""
     h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
     cmd, text = harness.argv(h, prompt, model=model, effort=effort, tools=False)
     with tempfile.TemporaryDirectory(prefix="greenlight-llm-") as empty_cwd:
-        output = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180, cwd=empty_cwd).stdout
+        p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180, cwd=empty_cwd)
+    if p.returncode:
+        return ""
+    output = p.stdout
     if h == "agy":
         for line in reversed(output.splitlines()):
             try:
@@ -1130,10 +1137,11 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
          "puck.action, they see it), " if want else "") +
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
+    if not text:  # the model run failed: an error makes the card's button a retry instead of "Please wait…" for this state
+        return {"name": name, "sig": s, "error": f"{model} gave no answer (a usage limit, or a model this host can't run)"}
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
-    if text:
-        _write_json(cache, out)
+    _write_json(cache, out | {"ok": True})  # ask() succeeded: a one-line reply (no label) is real too
     return out
 
 
@@ -1145,8 +1153,10 @@ def cached_suggest(name):
 
 
 def fresh_suggest(sg, p):
-    """The cached suggestion is for this state, and has an advice line if this puck needs one (older ones have neither)."""
-    return sg.get("sig") == p["sig"] and "label" in sg and (p.get("advice") is not None or "advice" in sg)  # "" is the model's answer: don't ask again
+    """The cached suggestion is complete for this state. An entry from before ask() rejected failed runs (no "ok")
+    with an empty label may be a cached model error ("There's an issue with the selected model ..."): ask again."""
+    return (sg.get("sig") == p["sig"] and "label" in sg and (bool(sg["label"]) or sg.get("ok") is True)
+            and (p.get("advice") is not None or "advice" in sg))
 
 
 def split_advice(text):
