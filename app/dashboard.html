@@ -1089,11 +1089,11 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
 const askLabel = p => p.agent.state === "waiting" ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
   : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only a waiting agent has a question
 function agentsStrip(docked){  // docked: the overview's strip, where the "N crashed" chip stands in for crashed cards; every live agent shows, whatever its workspace's state
-  const all = shown(), live = all.filter(p => (["working", "waiting"].includes(p.agent.state) || !docked && p.state === "crashed") && matches(p));  // detached, the crashed ones too: the chip below shows them
-  const crashed = all.filter(p => p.state === "crashed").length, idle = all.filter(p => p.agent.type && !["working", "waiting"].includes(p.agent.state)).length;
+  const busy = p => ["working", "waiting"].includes(p.agent.state), all = shown();
+  const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached, the crashed ones too: the chip below shows them; hid: a search hides some
+  const crashed = all.filter(p => p.state === "crashed").length, idle = all.filter(p => p.agent.type && !busy(p) && p.state !== "crashed").length;  // as the hover card: an idle agent on a crashed workspace reads "crashed"
   const working = live.filter(p => p.agent.state === "working").length;  // the pills count the cards below them
   const waiting = live.filter(p => p.agent.state === "waiting").length;
-  const hid = all.some(p => ["working", "waiting"].includes(p.agent.state) && !matches(p));  // a search can hide agents that are working
   const pills = [working ? h("span", {class:"pill blue"}, `Working ${working}`) : null, waiting ? h("span", {class:"pill orange", title:"Agents waiting on your answer"}, `${waiting} awaiting answer`) : null];  // agents only: waiting-on-others and done sit on the shelf
   return h("section", {class:"agents"},
     h("div", {class:"shead"}, h("h2", {}, "Agents"), ...pills, crashed ? h("button", {class:"crash", onclick: () => { ui.q = "Crashed"; render() }}, `${crashed} crashed`) : null,
