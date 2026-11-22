@@ -672,14 +672,20 @@ struct MDText: View, Looked {
     }
 }
 
-/// Instant hover hint shown above the footer, plus the native tooltip.
+/// Instant hover hint in a tab under the chat pane, plus the native tooltip (which shows only while Greenlight is the front app).
+/// A click that changes what the control does (captions on, the next style) updates the hint in place; one that removes the
+/// control (voice mode off) drops it, as its hover-exit never comes.
 struct Tip: ViewModifier {
     @ObservedObject var c: Core
     let text: String
     func body(content: Content) -> some View {
         content.help(text).onHover { c.hint = $0 ? text : (c.hint == text ? "" : c.hint) }
+            .onChange(of: text) { old, new in if c.hint == old { c.hint = new } }
+            .onDisappear { if c.hint == text { c.hint = "" } }
     }
 }
+/// The context readout's hover hint: how full it is, and that a click opens the totals and Compact.
+func ctxTip(_ c: Core) -> String { "Context: \(c.ctxSpoken). Click for the totals and Compact" }
 
 /// The bell's panel, a triage list: one line per waiting question, the open one (Core.inboxFocus) expanded with its choices,
 /// then the last few answered, and a footer of keys and Clear all.
@@ -2222,7 +2228,7 @@ struct ChatView: View, Looked {
                 title
                 Spacer(minLength: Theme.sp2)
                 ViewThatFits { HStack(spacing: Theme.sp2) { meta }.fixedSize(); EmptyView() }.layoutPriority(-1)  // a narrow pane drops the host, never clips
-                if c.session == 0 { VoiceButtons(v: c.voice, out: c.chatOut, pop: { c.popChat(!c.chatOut) }) }  // voice and its own window: the main chat's
+                if c.session == 0 { VoiceButtons(v: c.voice, c: c, out: c.chatOut, pop: { c.popChat(!c.chatOut) }) }  // voice and its own window: the main chat's
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
             if lk.id == "editorial" { masthead }
@@ -2648,7 +2654,7 @@ struct ContextButton: View, Looked {
             }.foregroundColor(high ? needsInk : lk.id == "phosphor" ? fg : sub).padding(.horizontal, bare ? 0 : Theme.sp2).frame(height: 24)
                 .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "onair" ? card : c.ctxOpen ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber
                 .overlay(RoundedRectangle(cornerRadius: r).stroke(high ? needs.opacity(0.6) : c.ctxOpen && lk.id == "onair" ? fg : bare ? .clear : line)).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
+        }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
 }
 
