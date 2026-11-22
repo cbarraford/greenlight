@@ -404,6 +404,18 @@ def doctor():
     return {"ok": all(c.get("ok") is not False for c in out), "checks": out}
 
 
+def usage(events):
+    """Chat turns per harness.model: count, output tokens, cost (the harnesses that report one, Claude's)."""
+    out = {}
+    for e in events:
+        if e.get("kind") == "chat_turn":
+            u = out.setdefault(f"{e.get('harness', '?')}.{e.get('model', 'default')}", {"turns": 0, "out_tokens": 0, "cost_usd": 0.0})
+            u["turns"] += 1
+            u["out_tokens"] += e.get("out_tokens") or 0
+            u["cost_usd"] = round(u["cost_usd"] + (e.get("cost_cents") or 0) / 100, 5)
+    return out
+
+
 def summary(after, events=None):
     events = read(after) if events is None else events
     now = time.time()
@@ -418,6 +430,7 @@ def summary(after, events=None):
         "errors_24h": sum(failed(e) for e in events if e.get("ts", 0) > now - 86400),
         "top_errors": errors(events)[:10],
         "spans": spans(events),
+        "usage": usage(events),
         "automations": automations(),
         "crashes": crashes(after),
     }
