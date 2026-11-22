@@ -141,21 +141,37 @@ def merge_how(cmd):
     return next((f[2:].capitalize() for f in cmd if f in ("--squash", "--rebase")), "Merge")
 
 
+def _signoff_move(r):
+    """Sign-off move for a custom stage waiting on `me` (pre-MR, pre-merge, or post-merge), or None."""
+    mr, nxt = r.get("mr") or {}, r.get("next") or {}
+    if nxt.get("owner") != "me" or "signoff" not in (nxt.get("cmd") or []):
+        return None
+    step = nxt.get("step")
+    if mr.get("state") == "merged" and step not in greenlight.post_merge(r["project"]):
+        return None  # a row from before the lifecycle dropped the step: the next scan says done
+    st = next((s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == step), None)
+    if not st or st["done"] != "signoff":
+        return None
+    return {"kind": "signoff", "step": step, "run": st["run"]}
+
+
 def moves(r, blk=None):
     """Both hover cards' (and the page's) buttons for this row's open MR, most urgent first: conflicts › ci › threads (the MR's fixes) ›
     review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
-    draft, when that waits on you). None → the card
+    draft, when that waits on you) › signoff (a custom sign-off stage). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
-    if mr.get("state") == "merged" and nxt.get("owner") == "me" and "signoff" in (nxt.get("cmd") or []):  # your step after the merge: deploy, verify
-        if nxt["step"] not in greenlight.post_merge(r["project"]):
-            return []  # a row from before the lifecycle dropped the step (greenlight.md's old deploy): the next scan says done
-        st = next(s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == nxt["step"])
-        return [{"kind": "signoff", "step": nxt["step"], "run": st["run"]}]
+    if mr.get("state") == "merged":
+        sm = _signoff_move(r)
+        return [sm] if sm else []
+    if not mr:
+        sm = _signoff_move(r)
+        return [sm] if sm else []
     if mr.get("state") != "opened":
         return []
     mine = mr.get("role") == "author"
-    review = nxt.get("owner") == "me" and (nxt.get("step") == "review" or "signoff" in (nxt.get("cmd") or []) or "review it" in nxt.get("action", ""))
+    sm = _signoff_move(r)
+    review = nxt.get("owner") == "me" and not sm and (nxt.get("step") == "review" or "review it" in nxt.get("action", ""))
     on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
@@ -177,8 +193,10 @@ def moves(r, blk=None):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
     if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "ready"})
+    if not fix and sm:
+        out.append(sm)
     for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
-        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) \
+        g = on_auto.get(m["kind"]) if m["kind"] not in ("ready", "signoff") and not (m["kind"] == "merge" and len(out) > 1) \
             and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
         if not (isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1]))):
             continue
@@ -286,13 +304,13 @@ def tree_ready(path):
 
 
 def tree_signoff(path):
-    """The card's Deploy (any step after merge): runs the step's `Run:` command from your lifecycle on this host, in the
+    """The card's Sign-off / Deploy button: runs the step's `Run:` command from the lifecycle on this host, in the
     worktree, then signs the step off. No Run: just signs it off. A failed command signs nothing off; its output comes back."""
     r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
     m = next((x for x in moves(r) if x["kind"] == "signoff"), None) if r else None
-    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref"), "step": m and m["step"]}
+    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref") or r.get("name"), "step": m and m["step"]}
     if not m:
-        return {**base, "error": "greenlight doesn't say a step after the merge waits on you"}
+        return {**base, "error": "greenlight doesn't say a sign-off step waits on you"}
     if m["run"]:
         try:
             p = subprocess.run(["bash", "-lc", m["run"]], cwd=path if os.path.isdir(path) else None, capture_output=True, text=True, timeout=600)
@@ -476,7 +494,8 @@ def progress(r):
     if step in steps:
         return steps.index(step) / len(steps), steps, steps.index(step)
     if steps and not r.get("mr") and step in ("freeform", "goal", "automation"):
-        return 0.0, steps, 0
+        i = steps.index("mr_open") if step == "freeform" and "mr_open" in steps else 0
+        return i / len(steps), steps, i
     return None, steps, None
 
 
@@ -497,7 +516,7 @@ def _advice_me(r):
         return f"CI {mr['pipeline']}, so read the diff, then approve or leave threads for what has to change." \
             if mr.get("pipeline") not in (None, "success") else "Read the diff, then approve or leave threads for what has to change."
     if "signoff" in cmd:
-        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this MR."
+        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this {'MR' if mr else 'branch'}."
     if step == "ready":
         return "If the reason to keep it a draft is gone, take it out of draft; otherwise leave it."
     if step == "milestone":
@@ -577,11 +596,14 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
         state, why = state_of(r, blk)
         prog, steps, idx = progress(r)
+        step_meta = {s["key"]: {k: s[k] for k in ("req", "done", "run", "owner", "phase") if s.get(k)}
+                     for s in (greenlight.lifecycle_doc(r["project"])["stages"] if r.get("forge") else [])
+                     if s["key"] not in greenlight.BUILTIN}
         mr = r.get("mr") or {}
         page = cached_page(r["name"])
         pucks.append({
             "name": r["name"], "path": r["path"], "project": r["project"], "repo": r["repo"], "goal": r["goal"], "goal_live": w.get("comment") or "", "state": state, "why": why,
-            "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"],
+            "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"], **({"step_meta": step_meta} if step_meta else {}),
             # the live goal, not last.json's: a park from the dock shows up before the next scan
             "owner": r["next"]["owner"], "hidden": bool(greenlight.PARKED_RE.search(w.get("comment") or "")
                                                         and (r.get("mr") or {}).get("state") not in ("merged", "closed")),
@@ -1537,6 +1559,16 @@ def task(op, arg, stdin):
 MEMORY = greenlight.ROOT / "memory"
 
 
+def _lifecycle_key(arg):
+    """Validate a lifecycle repo or org/repo arg and return its safe filename stem, or None."""
+    if not arg or len(arg) > 100 or not re.fullmatch(r"[\w.-]+(?:/[\w.-]+)*", arg):
+        return None
+    parts = arg.split("/")
+    if any(p.startswith(".") for p in parts):
+        return None
+    return "__".join(parts)
+
+
 def settings(op, arg, stdin):
     """The app's Settings: a repo's lifecycle, greenlight's standing instructions, and greenlight's memory notes."""
     if op.startswith("prompt-"):  # the hover card's prompts: arg <repo>/<kind>; yours in ~/.greenlight/prompts/<repo>/<kind>.md
@@ -1562,10 +1594,11 @@ def settings(op, arg, stdin):
             a[arg] = {k: g for k, g in on.items() if k in AUTO and isinstance(g, int) and 0 <= g < max(1, len(AUTO[k][1]))}
             (greenlight.STATE / "autorun.json").write_text(json.dumps(a, indent=1))
         return {"on": a.get(arg, {}), "kinds": [{"kind": k, "when": w, "gates": [g for g, _ in gs]} for k, (w, gs) in AUTO.items()]}
-    if op.startswith("lifecycle-") and (not re.fullmatch(r"[\w.-]{1,100}", arg) or arg.startswith(".")):
-        return {"error": "bad repo"}
     if op.startswith("lifecycle-"):
-        f = greenlight.STATE / "lifecycles" / f"{arg}.md"
+        stem = _lifecycle_key(arg)
+        if not stem:
+            return {"error": "bad repo"}
+        f = greenlight.STATE / "lifecycles" / f"{stem}.md"
         if op == "lifecycle-set":
             md = greenlight.lifecycle_md(arg, json.loads(stdin))
             f.parent.mkdir(parents=True, exist_ok=True)

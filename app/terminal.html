@@ -923,17 +923,17 @@ function readyBtn(ws, m){
 // Deploy (any step after the merge): runs the step's Run command from the lifecycle on the host, then signs it off. One click.
 const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function signoffBtn(ws, m, x){
-  const box = el("div", "mg"), b = el("button", "go"), t = stepTitle(x.step); b.type = "button";
-  b.innerHTML = I.check + `<span><b>${x.run ? esc(t) + " " + esc(m.ref || "") : "Sign off " + esc(x.step.replace(/_/g, " "))}</b><small>${x.run ? "Runs " + esc(x.run.length > 60 ? x.run.slice(0, 59) + "…" : x.run) + ", then signs it off" : "Done: marks the step finished"}</small></span>`;
+  const box = el("div", "mg"), b = el("button", "go"), t = stepTitle(x.step), ref = (m && m.ref) || wsName(ws); b.type = "button";
+  b.innerHTML = I.check + `<span><b>${x.run ? esc(t) + " " + esc(ref) : "Sign off " + esc(x.step.replace(/_/g, " "))}</b><small>${x.run ? "Runs " + esc(x.run.length > 60 ? x.run.slice(0, 59) + "…" : x.run) + ", then signs it off" : "Done: marks the step finished"}</small></span>`;
   b.title = x.run || "";
   b.onclick = () => { box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>${x.run ? esc(t) + "ing" : "Signing off"}…</b></span>`; post({cmd: "tree", op: "signoff", path: ws}) };
   box.append(b); box.dataset.ws = ws; return box;
 }
 function signoffDone(o){
-  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st"), t = stepTitle(o.step || "step");
-  if (!box) return o.error ? ask({icon: "warn", title: `${t} didn't finish for ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`${t}: signed off ${o.ref}`);
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st"), t = stepTitle(o.step || "step"), ref = o.ref || wsName(o.path);
+  if (!box) return o.error ? ask({icon: "warn", title: `${t} didn't finish for ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`${t}: signed off ${ref}`);
   box.className = "mg " + (o.error ? "no" : "ok");
-  box.innerHTML = o.error ? `<b>${esc(t)} didn't finish</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(t)} signed off</b><small>${o.ran ? "Ran " + esc(o.ran) : esc(o.ref || "")}</small></span>`;
+  box.innerHTML = o.error ? `<b>${esc(t)} didn't finish</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(t)} signed off</b><small>${o.ran ? "Ran " + esc(o.ran) : esc(ref)}</small></span>`;
 }
 function readyDone(o){
   const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st");
