@@ -50,7 +50,7 @@ final class Core: ObservableObject {
         // voice-shortcut prompt, never another window's hover text: a highlight that reads `hint` lights only where the cursor is.
         $hint.dropFirst().sink { [weak self, weak m] v in guard let self, !self.mirroring else { return }; self.mirroring = true; m?.hint = v; self.mirroring = false }.store(in: &subs)
         m.$hint.dropFirst().sink { [weak self] v in
-            guard let self, !self.mirroring, v != self.hint else { return }
+            guard let self, !self.mirroring else { return }
             self.mirroring = true; self.hint = v == Core.keyPrompt ? v : ""; self.mirroring = false
         }.store(in: &subs)
         $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
