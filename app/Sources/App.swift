@@ -487,7 +487,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             f.1(order[(i + (e.keyCode == kVK_UpArrow ? n - 1 : 1)) % n])
             return nil
         }
-        hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in self?.showTab($0) }
+        hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in guard let self else { return }; self.hint($0, from: self.greenlight) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
         if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
@@ -672,7 +672,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         settingsSub = greenlight.$settingsOpen.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
-            if open { self.greenlight.hint = ""; self.presentWindow(self.settingsWindow); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
+            if open { (self.hintCore ?? self.greenlight).hint = ""; self.presentWindow(self.settingsWindow); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
             else if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
         }
         split.isVertical = true
@@ -903,8 +903,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "rescan" { rescan() }
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
+        let isWsName: (String) -> Bool = { $0.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil }
+        let badNameErr = "Unsupported characters in workspace name."
         if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
-        if cmd == "page", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "page", let name = b["name"] as? String {
+            guard isWsName(name) else { from.callJS("window.mc && mc.page", [["name": name, "error": badNameErr]]); return }
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
             ssh("\(py)/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
@@ -913,9 +916,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // The agent card's All output: a page of the workspace's agent conversation (newest, or the one before a cursor), polled while it's open.
-        if cmd == "transcript", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "transcript", let name = b["name"] as? String {
             let before = b["before"] as? String ?? ""
-            if !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil { return }
+            let badBefore = !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil
+            guard isWsName(name), !badBefore else {
+                let err: [String: Any] = ["name": name, "before": before.isEmpty ? NSNull() : before, "error": badNameErr]
+                from.callJS("window.mc && mc.transcript", [err])
+                return
+            }
             var out = ""
             ssh("\(py)/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", onLine: { out += $0 }, onExit: { code in
                 let js = safeJSON(out, fallback: ["name": name, "before": before.isEmpty ? NSNull() : before, "error": "\(host) didn't answer (exit \(code))"])
@@ -923,9 +931,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // A waiting agent's question (ask) and your reply to it (answer), from the Answer button or the page.
-        if cmd == "ask" || cmd == "answer", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "ask" || cmd == "answer", let name = b["name"] as? String {
             let text = b["text"] as? String ?? ""
             if cmd == "answer" && text.isEmpty { return }
+            guard isWsName(name) else {
+                from.callJS(cmd == "ask" ? "window.mc && mc.asked" : "window.mc && mc.answered", [["name": name, "error": badNameErr]])
+                return
+            }
             let remote = cmd == "answer" ? "\(py)/dash.py answer '\(name)'"
                 : "\(py)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
@@ -937,7 +949,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // The hover card's Next step: greenlight's next-step prompt for a workspace, and running a prompt there as a new agent.
-        if cmd == "park", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil, let on = b["on"] as? Bool {
+        if cmd == "park", let name = b["name"] as? String, let on = b["on"] as? Bool {
+            guard isWsName(name) else { from.callJS("window.mc && mc.parked", [["name": name, "error": badNameErr]]); return }
             var out = ""
             greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
             ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
@@ -948,14 +961,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
-           let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+           let arg = b["arg"] as? String, isWsName(arg) {
             var out = ""
             ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
                 let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
         }
-        if cmd == "suggest", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "suggest", let name = b["name"] as? String {
+            guard isWsName(name) else { from.callJS("window.mc && mc.suggest", [["name": name, "error": badNameErr]]); return }
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
@@ -973,9 +987,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = b["kind"] as? String ?? "", kind = RulesStore.kinds.contains { $0.0 == k } ? "/" + k : ""
             greenlight.settingsTab = "Repositories"; greenlight.settingsRepo = r + kind; appSettings()
         }
-        if cmd == "run", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "run", let name = b["name"] as? String {
             let prompt = b["prompt"] as? String ?? ""
             if prompt.isEmpty { return }
+            guard isWsName(name) else { from.callJS("window.mc && mc.ran", [["name": name, "error": badNameErr]]); return }
             var out = ""
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
             ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
@@ -1153,11 +1168,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var chatShown: Bool { greenlight.chatOut ? chatWindow.isVisible : window.isVisible && !chatSlot.isHidden }
 
     func setChat(hidden: Bool) {
+        if !greenlight.prompting { greenlight.hint = "" }  // a hovered control going away sends no hover-exit
         chatHidden = hidden
         if !hidden { greenlight.inboxOpen = false }  // asking for the chat closes the inbox
         placeChat()
     }
     func popChat(out: Bool) {
+        if !greenlight.prompting { greenlight.hint = "" }  // the pop knob moves out from under the cursor: no hover-exit comes
         greenlight.chatOut = out
         if !out { chatWindow.orderOut(nil) }
         chatHidden = false
@@ -1312,6 +1329,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.minSize = NSSize(width: 480, height: 520); w.delegate = self; w.appearance = window.appearance
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
         c.follow(greenlight)
+        c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
         c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
         c.popoverShown = { [weak w] in NSApp.isActive && w?.isKeyWindow == true }
         c.light = { [weak self, weak l] names, open in
@@ -1374,6 +1392,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
+        if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
         l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
@@ -1966,7 +1985,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
-        if !window.isVisible, tab.isVisible { greenlight.hint = "" }  // window hidden mid-hover: drop the tab
+        if hintStale { (hintCore ?? greenlight).hint = "" }  // a window hidden or moved mid-hover: drop the hint
+        if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
         if window.title != greenlight.name { window.title = greenlight.name }
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
@@ -2130,8 +2150,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var vimMonitor: Any?, orbMonitor: Any?, floorMonitor: Any?
     @objc func setShortcut() {
         show()
-        greenlight.hint = "Press the new voice shortcut, with ⌃, ⌥ or ⌘ (Esc cancels)"
         recordShortcut()
+        greenlight.hint = Core.keyPrompt  // after keying is on: showTab centres it on the window
     }
     /// Settings' Change…: the recorder shows in place of the keys there, not in the chat's hint.
     func recordShortcut() {
@@ -2219,7 +2239,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         else if upstairs { show() } else { basement() }
     }
 
-    /// Hover hint as a tab hanging off the window's bottom-right corner, so nothing inside moves.
+    /// Hover hint as a tooltip by the cursor, at once (the native one waits ~1 s, and only while Greenlight is the front app).
     lazy var tab: NSPanel = {
         let w = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         w.isOpaque = false
@@ -2227,20 +2247,41 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.hasShadow = true
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        w.level = .popUpMenu  // over Settings and the chat's own window, like a tooltip
+        w.hidesOnDeactivate = false  // a panel hides with the app by default: hovering Greenlight from another app still hints
         return w
     }()
     var hintSink: AnyCancellable?
 
+    /// Each window's chat has its own hover hint (its highlights read it); the cursor shows the one that spoke last. A clear counts
+    /// only from that one (a late hover-exit elsewhere doesn't drop a fresh hint), and moving on drops the last one's, so its
+    /// highlight goes too. While the menu's voice-shortcut prompt is up, only it shows.
+    weak var hintCore: Core?
+    func hint(_ text: String, from c: Core) {
+        if greenlight.prompting && c !== greenlight { return }
+        if text.isEmpty { if hintCore === c || hintCore == nil { showTab("") }; return }  // nil: that window has closed
+        if let o = hintCore, o !== c, !o.hint.isEmpty { o.hint = "" }
+        hintCore = c; showTab(text)
+    }
     func showTab(_ text: String) {
-        guard !text.isEmpty, window.isVisible, let pw = chat.window else {
-            tab.parent?.removeChildWindow(tab); tab.orderOut(nil); return
-        }
-        let host = NSHostingView(rootView: HintTab(text: text))
-        let size = host.fittingSize
-        let r = pw.convertToScreen(chat.convert(chat.bounds, to: nil))
+        guard !text.isEmpty else { tab.orderOut(nil); return }
+        let host = NSHostingView(rootView: HintTab(text: text)), size = hintSize(text)
+        host.sizingOptions = []  // the frame is hintSize's (wrapped), not the view's one-line ideal
+        // by the cursor; the voice-shortcut prompt (from the menu bar's menu) in the middle of the window it brought up
+        let m = greenlight.prompting && window.isVisible ? NSPoint(x: window.frame.midX - size.width / 2 - 10, y: window.frame.midY) : NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
         tab.contentView = host
-        tab.setFrame(NSRect(x: r.maxX - size.width - 14, y: r.minY - size.height + 1, width: size.width, height: size.height), display: true)
-        if tab.parent == nil { pw.addChildWindow(tab, ordered: .above) }  // child windows follow the window
+        tab.setFrame(hintFrame(size, mouse: m, screen: screen?.visibleFrame ?? .infinite), display: true)
+        tab.orderFront(nil)
+    }
+    /// A hint whose control the cursor can't be on any more: the topmost window under the cursor isn't Greenlight's (it left,
+    /// or another app or Space came to the front mid-hover). Never the voice-shortcut prompt: tick hides it while Greenlight's away.
+    var hintStale: Bool {
+        guard tab.isVisible, !greenlight.prompting else { return false }
+        let p = NSEvent.mouseLocation
+        var n = NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: 0)
+        if n == tab.windowNumber { n = NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: n) }  // the cursor slid onto the hint: judge the window under it
+        return !NSApp.windows.contains { $0 !== tab && $0.isVisible && $0.windowNumber == n }
     }
 
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,
