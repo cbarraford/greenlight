@@ -17,6 +17,7 @@ jobs:
       - run: pip install pytest "ruff==0.17.6" "mypy<2" coverage
       - run: ruff check scripts/ tests/ app/kokoro.py
       - run: python3 scripts/check_safety.py
+      - run: python3 scripts/js_lint.py
       - run: shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
       - run: |
           git config --global user.name ci && git config --global user.email ci@localhost
