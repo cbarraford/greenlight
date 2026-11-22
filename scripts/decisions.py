@@ -230,14 +230,15 @@ def said(reply, chat=None, kind=None):
     return asked(visible, via="chat", chat=chat, kind=kind) if split_options(visible)[1] else None
 
 
-def dismiss(text, key=None, ping=True, chat=None):
-    """The inbox's ✕ on a question: close its open record as dismissed (autonomy.py's gate counts it against its kind)."""
+def dismiss(text, key=None, ping=True, chat=None, reason="dismissed"):
+    """The inbox's ✕ on a question: close its open record as dismissed (autonomy.py's gate counts it against its kind).
+    reason "cleared": the inbox's Clear all, which the gate doesn't count."""
     question = split_options(text)[0]
     with book() as recs:
         for r in reversed(recs):
             if (is_open(r) and r["via"] == ("ping" if ping else "chat") and r["question"] == question
                     and ((ping and r["key"] == key) or (not ping and r.get("chat") == chat))):
-                r["closed"] = "dismissed"
+                r["closed"] = reason
                 return r
     return None
 
@@ -342,7 +343,8 @@ def main():
     if cmd == "dismiss":
         try:  # the app's ✕: never in the way
             d = json.loads(sys.stdin.read() or "{}")
-            dismiss(d["text"], d.get("key"), d.get("ping", True), d.get("chat") or None)
+            for q in d if isinstance(d, list) else [d]:  # a list: Clear all
+                dismiss(q["text"], q.get("key"), q.get("ping", True), q.get("chat") or None, "cleared" if q.get("reason") == "cleared" else "dismissed")
         except Exception as e:
             print(f"decision record: {e}", file=sys.stderr)
         return

@@ -417,5 +417,16 @@ decisions.said("Work on fix-5 next.\nOptions: fix-5 | later", kind="check-in")
 assert decisions.load()[-1]["kind"] == "check-in" and decisions.load()[-1]["via"] == "chat"
 assert decisions.dismiss("Work on fix-5 next.", ping=False)["closed"] == "dismissed"
 assert decisions.dismiss("nothing like it", "k") is None
+# Clear all: a list, closed as "cleared", which the gate doesn't hold against the kind
+reset()
+with decisions.book() as recs:
+    for i in range(4):
+        r = decisions.record(f"idea {i}?\nOptions: do it | no", "ping", key=f"@c{i}", kind="check-in")
+        r["id"] += f"-c{i}"
+        recs.append(r)
+r = subprocess.run([sys.executable, str(SCRIPT.parent / "decisions.py"), "dismiss"], capture_output=True, text=True,
+                   input=json.dumps([{"text": f"idea {i}?", "key": f"@c{i}", "reason": "cleared"} for i in range(4)]))
+assert r.returncode == 0 and [x["closed"] for x in decisions.load()] == ["cleared"] * 4, (r, decisions.load())
+assert not greenlight.ping("You could tidy fix-1's commits.\nOptions: do it | no", "@tidy", kind="check-in").get("held")
 
 print("ok")

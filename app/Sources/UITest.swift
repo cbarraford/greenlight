@@ -279,6 +279,20 @@ final class UITestServer {
                 app.greenlight.settingsOpen = false
                 app.settingsWindow.orderOut(nil)
                 done(["ok": true, "settingsOpen": false])
+            case "inboxPing":  // --text "<question>\nOptions: a | b" [--path <workspace>]; not Core.ping, whose banner needs a bundle
+                guard let text = req["text"] as? String else { return done(["ok": false, "error": "missing text"]) }
+                let (said, options) = splitOptions(text), ws = req["path"] as? String
+                app.greenlight.questions.append(Question(text: said, options: options, ping: true, key: ws, ws: ws.map { [$0] }))
+                done(["ok": true, "waiting": app.greenlight.waiting.count])
+            case "inboxConfirm":  // Clear all's question in the footer, as ⇧⌫ asks it
+                app.greenlight.inboxConfirm = true
+                done(["ok": true])
+            case "clearInbox":
+                app.greenlight.clearInbox()
+                done(["ok": true, "waiting": app.greenlight.waiting.count])
+            case "openInbox", "closeInbox":
+                app.greenlight.inboxOpen = name == "openInbox"
+                done(["ok": true, "waiting": app.greenlight.waiting.count])
             case "rescan":
                 app.rescan()
                 done(["ok": true])

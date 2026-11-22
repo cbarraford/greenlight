@@ -306,7 +306,7 @@ def gate(kind, text="", recs=None, s=None, now=None):
     acted = dismissed = 0.0
     waiting = 0
     for r in recs:
-        if r.get("kind") != kind:
+        if r.get("kind") != kind or r.get("closed") == "cleared":  # the inbox's Clear all is housekeeping, not a verdict
             continue
         o = outcome(r, now)
         w = 0.5 ** (max(0, now - r["ts"]) / HALF_LIFE)
