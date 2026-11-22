@@ -184,7 +184,7 @@ final class UITestServer {
         case "dashboard", "mc", "center": return app.fluid
         case "terminal", "term", "basement", "pipe": return app.termWindow.contentView as? WKWebView
         case "stage": return app.greenlight.voice.stageWeb
-        default: return nil
+        default: return l1(target, app: app)?.web ?? view(target, app: app)?.contentView as? WKWebView
         }
     }
 
@@ -193,8 +193,30 @@ final class UITestServer {
         case "dashboard", "mc", "center": return app.window
         case "terminal", "term", "basement", "pipe": return app.termWindow
         case "settings": return app.settingsWindow
-        default: return app.upstairs ? app.window : app.termWindow
+        default: return l1(target, app: app)?.w ?? view(target, app: app) ?? (target.contains(":") ? nil : app.upstairs ? app.window : app.termWindow)
         }
+    }
+
+    /// "l1:<id>": another Greenlight Center window (File › New Greenlight Center Window, or Open projects › New window).
+    private func l1(_ target: String, app: App) -> App.L1? {
+        guard target.hasPrefix("l1:"), let id = Int(target.dropFirst(3)) else { return nil }
+        return app.l1s[id]
+    }
+
+    /// "view:<name>": a view the main window gave its own window (its pop-out button).
+    private func view(_ target: String, app: App) -> NSWindow? { target.hasPrefix("view:") ? app.viewWindows[String(target.dropFirst(5))] : nil }
+
+    /// Every Greenlight Center window as the app holds it: its projects, title-bar chip, title, frame, and what's saved for a relaunch.
+    static func l1State(_ app: App) -> [String: Any] {
+        func frame(_ w: NSWindow) -> [Int] { [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height)] }
+        let screens = NSScreen.screens.map { s in [Int(s.visibleFrame.minX), Int(s.visibleFrame.minY), Int(s.visibleFrame.width), Int(s.visibleFrame.height)] }
+        let others: [[String: Any]] = app.l1s.values.sorted { $0.id < $1.id }.map { l in
+            ["id": l.id, "only": l.only ?? NSNull(), "chip": l.floor.project, "title": l.w.title, "visible": l.w.isVisible, "frame": frame(l.w),
+             "scope": app.scope(l) ?? NSNull()]
+        }
+        return ["main": ["only": app.sharedOnly ?? NSNull(), "chip": app.l1Floor.project, "title": app.window.title, "visible": app.window.isVisible,
+                         "frame": frame(app.window)] as [String: Any],
+                "others": others, "saved": ud.array(forKey: "l1Windows") ?? [], "projectsLoaded": app.projectsLoaded, "screens": screens]
     }
 
     private func dispatch(_ req: [String: Any], app: App, done: @escaping ([String: Any]) -> Void) {
@@ -342,6 +364,31 @@ final class UITestServer {
                 f.size = NSSize(width: w, height: h)
                 win.setFrame(f, display: true)
                 done(["ok": true, "width": Int(win.frame.width), "height": Int(win.frame.height)])
+            case "newL1":  // File › New Greenlight Center Window from the main one: --only a,b (omit: its projects)
+                let only = req["only"] as? [String]
+                app.newL1(req["only"] == nil ? app.sharedOnly : only, from: app.window)
+                done(["ok": true, "id": app.l1s.keys.max() ?? 0, "l1": UITestServer.l1State(app)])
+            case "newWindow":  // File › New Window (⌘N) with --window (dashboard, terminal, l1:<id>) as the key window
+                let before = Set(app.l1s.keys), terms = app.termWins.count
+                app.newWindow(in: window(for: req["window"] as? String ?? "dashboard", app: app))
+                done(["ok": true, "newL1": Array(Set(app.l1s.keys).subtracting(before)), "newTerminals": app.termWins.count - terms, "l1": UITestServer.l1State(app)])
+            case "openProjects":  // in --window (dashboard, l1:<id>, view:<name>, terminal): the title-bar chip (--here), else File › Open Projects… (⌘⇧N)
+                let t = req["window"] as? String ?? "dashboard"
+                if req["here"] as? Bool ?? true { app.l1Pick(here: true, in: l1(t, app: app)) } else { app.openProjects(in: window(for: t, app: app)) }
+                done(["ok": true])
+            case "setFrame":  // --window l1:<id> --x --y --width --height: a frame as a monitor's layout left it
+                guard let win = window(for: req["window"] as? String ?? "", app: app) else { return done(["ok": false, "error": "no window"]) }
+                win.setFrame(NSRect(x: req["x"] as? Double ?? 0, y: req["y"] as? Double ?? 0, width: req["width"] as? Double ?? 900, height: req["height"] as? Double ?? 600), display: true)
+                win.saveFrame(usingName: win.frameAutosaveName)
+                done(["ok": true, "l1": UITestServer.l1State(app)])
+            case "close":  // --window l1:<id>, view:<name> or dashboard (the main one hides): its close button
+                let t = req["window"] as? String ?? ""
+                guard t.contains(":") || t == "dashboard", let w = window(for: t, app: app) else { return done(["ok": false, "error": "no window"]) }
+                w.performClose(nil)
+                done(["ok": true, "l1": UITestServer.l1State(app)])
+            case "l1State":
+                app.tick()  // titles follow the chips on the tick
+                done(["ok": true, "l1": UITestServer.l1State(app)])
             case "quit":
                 done(["ok": true])
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { NSApp.terminate(nil) }

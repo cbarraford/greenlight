@@ -37,7 +37,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN_CACHE = Path(tempfile.gettempdir()) / f"greenlight-uitest-bin-{os.getuid()}"
-FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt")
+FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt", "projects")
 
 
 def swift_sources(include_tests: bool = True):
@@ -251,7 +251,7 @@ def _make_fixture(root: Path, fixture: str):
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "wt-ok.json").write_text("{truncated json")
         (state_dir / "ghost-dir.json").write_text("[]")
-    else:  # default or chaos
+    else:  # default, chaos or projects
         ws_a = str(wsdir / "fix-auth")
         ws_b = str(wsdir / "add-metrics")
         Path(ws_a).mkdir(exist_ok=True)
@@ -284,6 +284,14 @@ def _make_fixture(root: Path, fixture: str):
                 "next": {"step": "ci", "owner": "agent", "action": "Wait for CI", "cmd": []},
             },
         ]
+
+    if fixture == "projects":  # default's two workspaces, each in its own project (by folder), for per-window project picks
+        support = home / "app-support"
+        support.mkdir(parents=True, exist_ok=True)
+        (support / "projects.json").write_text(json.dumps([
+            {"id": "pauth", "name": "Auth", "repos": [], "dirs": [ws_a]},
+            {"id": "pmetrics", "name": "Metrics", "repos": [], "dirs": [ws_b]},
+        ]))
 
     _install_stub_harnesses(bindir)
     stub_harnesses = {n: {"bin": str(bindir / n)} for n in ("claude", "codex", "gemini", "opencode", "pi", "agy")}
@@ -446,7 +454,7 @@ def _reap_session_processes(root_dir: Path, pgid: int | None = None) -> None:
 class UITestSession:
     """Context manager for an isolated background Greenlight --uitest instance."""
 
-    def __init__(self, fixture="default", binary=None, timeout=20.0, record_trace=True):
+    def __init__(self, fixture="default", binary=None, timeout=20.0, record_trace=True, keep_defaults=False):
         self.fixture = fixture
         self.binary = Path(binary) if binary else None
         self.timeout = timeout
@@ -458,10 +466,23 @@ class UITestSession:
         self.tmux_socket = f"gl-uitest-{self.id}"
         self.proc = None
         self.home = None
+        # keep_defaults: one UserDefaults suite for every launch of this session, so relaunch() sees what the last run saved
+        self.suite = f"dev.greenlight.uitest.s{self.id}" if keep_defaults else None
 
     def start(self):
-        binary = self.binary or build_test_binary()
+        binary = self.binary = self.binary or build_test_binary()
         self.home, bindir, webdir = _make_fixture(self.root, self.fixture)
+        return self._launch(binary, bindir, webdir)
+
+    def relaunch(self):
+        """Quit the app (its windows save what they show) and start it again on the same home, fixture and defaults."""
+        assert self.suite, "relaunch needs keep_defaults=True"
+        self._quit()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
+        return self._launch(self.binary, self.root / "bin", self.root / "web")
+
+    def _launch(self, binary, bindir, webdir):
         env = {
             **os.environ,
             "GREENLIGHT_HOST": "local",
@@ -473,8 +494,11 @@ class UITestSession:
             "ORCA_CLI_COMMAND": str(bindir / "orca"),
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
         }
-        log = open(self.root / "app.log", "wb")
-        self._log = log
+        env.pop("GREENLIGHT_UITEST_SUITE", None)  # never one inherited from the caller's shell: that would share its defaults
+        if self.suite:
+            env["GREENLIGHT_UITEST_SUITE"] = self.suite
+        log = open(self.root / "app.log", "ab")  # noqa: SIM115 -- the app's stdout for its whole run; _quit() closes it
+        self._log: Any = log
         self.proc = subprocess.Popen(
             [str(binary), "--uitest", "--uitest-socket", str(self.socket_path)],
             env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -582,6 +606,13 @@ class UITestSession:
         _reap_session_processes(self.root, pgid)
 
     def stop(self):
+        self._quit()
+        subprocess.run(["tmux", "-L", self.tmux_socket, "kill-server"], capture_output=True, timeout=5)
+        if self.suite:  # the kept defaults: macOS keeps a plist per suite
+            subprocess.run(["defaults", "delete", self.suite], capture_output=True, timeout=5)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _quit(self):
         pgid = self.proc.pid if self.proc is not None else None
         if self.socket_path.exists():
             try:
@@ -601,8 +632,7 @@ class UITestSession:
                 self._log.close()
             except OSError:
                 pass
-        subprocess.run(["tmux", "-L", self.tmux_socket, "kill-server"], capture_output=True, timeout=5)
-        shutil.rmtree(self.root, ignore_errors=True)
+            self._log = None
 
     def __enter__(self):
         return self.start()

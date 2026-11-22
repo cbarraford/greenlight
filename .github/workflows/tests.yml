@@ -24,7 +24,7 @@ jobs:
           fi
           if ! changed="$(git diff --name-only "$range" 2>/dev/null)"; then
             echo "app=true" >> "$GITHUB_OUTPUT"
-          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$|scripts/(dash|chat|attach|uitest|diag)\.py$|tests/test_uitest\.py$)'; then
+          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$|scripts/(dash|chat|attach|uitest|diag)\.py$|tests/test_uitest(_l1)?\.py$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
@@ -141,6 +141,7 @@ jobs:
         run: |
           command -v tmux >/dev/null 2>&1 || brew install tmux
           UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest.py
+          UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest_l1.py
 
   ci-gate:
     needs: [changes, python-and-lint, js-playwright, macos-swift]

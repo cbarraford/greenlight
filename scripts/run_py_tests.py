@@ -4,7 +4,7 @@
 Prevents the silent-pass trap where an agent writes a pytest-style `def test_*()` file
 that exits 0 without running any assertions when executed as `python3 tests/test_foo.py`.
 
-For every `tests/test_*.py` (excluding `test_uitest.py` unless `--include-ui`):
+For every `tests/test_*.py` (excluding the app-launching `test_uitest*.py` suites unless `--include-ui`):
   - If the file defines top-level `def test_*` functions or `class Test*` / `unittest.TestCase`,
     execute it with `pytest -q` (and only run it as a standalone script too if it has
     top-level executable assertions outside `if __name__ == "__main__"`).
@@ -27,6 +27,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+
+UI_SUITES = ("test_uitest.py", "test_uitest_l1.py")  # they build and launch the app (macOS); make test-ui and CI's macOS job run them
 
 def _is_main_guard(node):
     return isinstance(node, ast.If) and "__main__" in ast.unparse(node.test)
@@ -136,7 +138,7 @@ def _collect_suites(tests_dir, include_ui):
     pytests: list[Path] = []
     bad: list[tuple[Path, str]] = []
     for path in sorted(Path(tests_dir).glob("test_*.py")):
-        if path.name == "test_uitest.py" and not include_ui:
+        if path.name in UI_SUITES and not include_ui:
             continue
         try:
             kind = classify_test_file(path)
@@ -203,7 +205,7 @@ def _emit_coverage(xml_path, env, json_path=None, fail_under=None, min_file=None
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Run all Greenlight Python test suites (scripts + pytest).")
-    ap.add_argument("--include-ui", action="store_true", help="Also run tests/test_uitest.py")
+    ap.add_argument("--include-ui", action="store_true", help="Also run the app-launching tests/test_uitest*.py suites")
     ap.add_argument("--tests-dir", default=str(ROOT / "tests"), help="Directory containing test_*.py files")
     ap.add_argument("--coverage", default=None, help="Write combined Cobertura XML coverage report to this path")
     ap.add_argument("--json", default=None, help="Write coverage summary JSON to this path (requires --coverage)")

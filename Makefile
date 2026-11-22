@@ -57,6 +57,7 @@ test-swift: ## compile and run offline Swift unit + vim tests (macOS)
 
 test-ui: ## parallel background macOS --uitest end-to-end suite
 	$(PY) tests/test_uitest.py
+	$(PY) tests/test_uitest_l1.py
 
 bughunt: ## dry-run nightly bug hunter locally (fast Track A fuzz + ranking)
 	$(PY) scripts/bughunt.py run --dry-run --skip-baseline --skip-llm --soak-secs 15 --fuzz-steps 25
