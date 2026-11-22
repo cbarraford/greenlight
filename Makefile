@@ -3,6 +3,7 @@ PY ?= uv run --no-project python
 NATIVE := $(shell [ "$$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arch -arm64)
 SWIFTC = DEVELOPER_DIR=/Library/Developer/CommandLineTools $(NATIVE) swiftc
 SWIFT_SRCS = $(wildcard app/Sources/*.swift)
+SWIFT_TEST_SRCS = $(wildcard app/Tests/*.swift)
 
 .PHONY: help test lint check-diff coverage coverage-py coverage-js coverage-swift coverage-all setup-hooks test-py test-js test-webkit test-swift test-ui bughunt typecheck build restart report sync dev-status
 
@@ -11,9 +12,10 @@ help: ## list targets
 
 test: lint test-py test-js typecheck ## lint, test-py, test-js and typecheck
 
-lint: ## ruff bug/security lint, static safety checks, and shellcheck
+lint: ## ruff bug/security lint, static safety checks, JS static lint, and shellcheck
 	ruff check scripts/ tests/ app/kokoro.py
 	$(PY) scripts/check_safety.py
+	$(PY) scripts/js_lint.py
 	shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
 
 check-diff: ## diff-scoped quality ratchet (stricter lint, mypy, function size, Swift evalJS)
@@ -49,7 +51,7 @@ test-webkit: ## page tests on WebKit (matches macOS WKWebView)
 
 test-swift: ## compile and run offline Swift unit + vim tests (macOS)
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-	$(SWIFTC) -Onone $(SWIFT_SRCS) -o "$$tmp/Greenlight-test" && \
+	$(SWIFTC) -Onone -DGREENLIGHT_TESTS $(SWIFT_SRCS) $(SWIFT_TEST_SRCS) -o "$$tmp/Greenlight-test" && \
 	"$$tmp/Greenlight-test" --unittest && \
 	"$$tmp/Greenlight-test" --vimtest
 
@@ -59,8 +61,9 @@ test-ui: ## parallel background macOS --uitest end-to-end suite
 bughunt: ## dry-run nightly bug hunter locally (fast Track A fuzz + ranking)
 	$(PY) scripts/bughunt.py run --dry-run --skip-baseline --skip-llm --soak-secs 15 --fuzz-steps 25
 
-typecheck: ## compile-check Swift app sources (strict concurrency, warnings as errors)
+typecheck: ## compile-check Swift app and test sources (strict concurrency, warnings as errors)
 	$(SWIFTC) -typecheck -warnings-as-errors -strict-concurrency=targeted $(SWIFT_SRCS)
+	$(SWIFTC) -typecheck -warnings-as-errors -strict-concurrency=targeted -DGREENLIGHT_TESTS $(SWIFT_SRCS) $(SWIFT_TEST_SRCS)
 
 build: ## build and install ~/Applications/Greenlight.app
 	$(NATIVE) app/build.sh
