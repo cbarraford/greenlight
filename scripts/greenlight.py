@@ -608,9 +608,8 @@ def unresolved(mr):
 
 def awaiting_me(d):
     """An unresolved thread whose last word isn't mine: whoever spoke last, a person or the review bot,
-    waits on a fix or a reply. Only my reply hands it back to the reviewer (system notes don't count)."""
-    notes = [n for n in d["notes"] if not n.get("system")] or d["notes"]
-    return notes[-1]["author"]["username"] != ME
+    waits on a fix or a reply. Only my note (a reply, or GitLab's note for my push to the line) hands it back."""
+    return d["notes"][-1]["author"]["username"] != ME
 
 
 def thread_line(d):
@@ -956,7 +955,7 @@ def evaluate(ws, mr, milestone):
             return {"step": "review", "owner": "reviewers", "action": "your commits are in it: you can't approve, waiting on others"}
         if not mine:
             return {"step": "review", "owner": "me", "action": "review it"}
-        if any(d["notes"][-1]["author"]["username"] != ME for d in mine):
+        if any(awaiting_me(d) for d in mine):
             return {"step": "review", "owner": "me", "action": "author replied on your threads: re-review"}
         return {"step": "review", "owner": "author", "action": f"{len(mine)} of your threads open, waiting on author"}
     for step in pre:

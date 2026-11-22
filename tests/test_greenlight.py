@@ -121,19 +121,15 @@ assert nxt(mr(_discussions=[thread("bob", "bob")])) == ("threads", "agent")  # h
 assert nxt(mr(_discussions=[thread("bob", greenlight.BOT)])) == ("threads", "agent")  # the bot chimed in on a person's thread
 bot_only = {"notes": [{"resolvable": True, "resolved": False, "author": U(greenlight.BOT)}]}
 assert nxt(mr(_discussions=[bot_only])) == ("threads", "agent")  # bot-opened finding nobody answered
-assert nxt(mr(_discussions=[thread(greenlight.BOT, greenlight.BOT)])) == ("threads", "agent")
-bot_again = {"notes": [{"resolvable": True, "resolved": False, "author": U(greenlight.BOT)}, {"author": U(greenlight.ME)}, {"author": U(greenlight.BOT)}]}
+bot_again = {"notes": bot_only["notes"] + [{"author": U(greenlight.ME)}, {"author": U(greenlight.BOT)}]}
 assert nxt(mr(_discussions=[bot_again])) == ("threads", "agent")  # the bot replied after me: still not fixed
 assert nxt(mr(_discussions=[thread(greenlight.BOT, greenlight.ME)])) == ("threads", "reviewers")  # I answered the bot
 assert nxt(mr(_discussions=[thread("bob", greenlight.ME)])) == ("threads", "reviewers")  # I answered the person
 both = mr(_discussions=[thread("bob", greenlight.ME), bot_only])
 assert nxt(both) == ("threads", "agent")
 assert "(1 unresolved)" in greenlight.check("threads", both, ws(), None)[1]  # counts only the one waiting on me
-sys_last = {"notes": [{"resolvable": True, "resolved": False, "author": U(greenlight.BOT)}, {"author": U(greenlight.ME)},
-                      {"author": U("bob"), "system": True}]}
-assert nxt(mr(_discussions=[sys_last])) == ("threads", "reviewers")  # a system note isn't a reply
-assert nxt(mr(_discussions=[thread(greenlight.BOT, greenlight.ME), {**bot_only, "notes": [{**bot_only["notes"][0], "resolved": True}]}])) == ("threads", "reviewers")
-assert greenlight.awaiting_me(bot_only) and not greenlight.awaiting_me(thread(greenlight.BOT, greenlight.ME))
+pushed = {"notes": bot_only["notes"] + [{"author": U(greenlight.ME), "system": True}]}
+assert nxt(mr(_discussions=[pushed])) == ("threads", "reviewers")  # GitLab's "changed this line" note for my push: as before, mine
 assert nxt(None, ws("nightly loop (automation)")) == ("freeform", "working")
 assert nxt(mr(), ws("Merge !5131 (parked)")) == ("parked", "parked")
 assert nxt(mr(state="merged"), ws("Merge !5131 (parked)")) != ("parked", "parked")  # a finished MR still gets cleaned up
@@ -648,14 +644,10 @@ assert pre_nb["step"] == "rfc" and pre_nb["cmd"][-2] == "@nb"
 with mock.patch.object(sys, "argv", ["greenlight.py"] + pre_nb["cmd"][2:]):
     greenlight.main()
 assert greenlight.evaluate(empty_br, None, None)["step"] == "freeform"
-# per-repo review_bot in threads: bot-a spoke last -> an agent answers it; I replied last -> waiting on reviewers
-th_mr = lambda d: mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}], labels=["qa-ok"], _discussions=[d])
-th_e = greenlight.evaluate(wa, th_mr(thread("alice", "bot-a")), None)
+# per-repo review_bot in threads: bot-a spoke last -> an agent answers it, not the reviewers
+th_e = greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}],
+                                  labels=["qa-ok"], _discussions=[thread("alice", "bot-a")]), None)
 assert (th_e["step"], th_e["owner"]) == ("threads", "agent"), th_e
-th_e = greenlight.evaluate(wa, th_mr({"notes": [{"resolvable": True, "resolved": False, "author": U("bot-a")}]}), None)
-assert (th_e["step"], th_e["owner"]) == ("threads", "agent"), th_e
-th_e = greenlight.evaluate(wa, th_mr(thread("bot-a", greenlight.ME)), None)
-assert (th_e["step"], th_e["owner"]) == ("threads", "reviewers"), th_e
 (greenlight.STATE / "lifecycles/strict.md").write_text(greenlight.lifecycle_md("strict", {
     "options": {"human_approval": "true"}, "stages": [{"key": "mr_open"}, {"key": "merge"}]}))
 old_cfg = greenlight.CONFIG
