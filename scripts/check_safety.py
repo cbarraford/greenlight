@@ -9,7 +9,9 @@ Run locally (`make lint`) and in CI to prevent AI-introduced regressions:
   5. `stageWeb` stays handler-less (no WKScriptMessageHandler on untrusted voice stage).
   6. No inline event handlers inside app/*.html (except avatar fallback).
   7. Valid JS syntax across inline `<script>` blocks in app/*.html and `tests/*.cjs` / `tests/*.js`.
+  8. No dynamic JS execution (`eval`, `new Function`, `document.write`) or `debugger` in app/*.html.
 """
+import os
 import re
 import shutil
 import subprocess
@@ -30,33 +32,72 @@ def swift_files(root=ROOT):
     return [single] if single.is_file() else []
 
 
+def _extract_swift_call_arg(text, open_paren_idx):
+    """Return the argument slice inside `(...)` starting at `open_paren_idx`, respecting Swift string literals."""
+    i = open_paren_idx + 1
+    n = len(text)
+    depth = 1
+    in_str = False
+    in_triple = False
+    while i < n and depth > 0:
+        if in_triple:
+            if text.startswith('"""', i):
+                in_triple = False
+                i += 3
+                continue
+            i += 2 if text[i] == "\\" else 1
+            continue
+        if in_str:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == '"':
+                in_str = False
+            i += 1
+            continue
+        if text.startswith('"""', i):
+            in_triple = True
+            i += 3
+        elif text[i] == '"':
+            in_str = True
+            i += 1
+        elif text[i] == "(":
+            depth += 1
+            i += 1
+        elif text[i] == ")":
+            depth -= 1
+            i += 1
+        else:
+            i += 1
+    return text[open_paren_idx:i], i
+
+
+def _has_quoted_swift_interp(call_text):
+    """Detect quoted Swift interpolation (`\"\\(`, `'\\(`, or unescaped `\"\\(` inside multiline `\"\"\"...\"\"\"`)."""
+    if re.search(r'(?:\\"|(?<!\\)\')\\\(', call_text):
+        return True
+    for m in re.finditer(r'"""(.*?)"""', call_text, re.S):
+        if re.search(r'["\']\\\(', m.group(1)):
+            return True
+    return False
+
+
 def check_swift_eval_js(root=ROOT):
     errs = []
-    # Disallow quoted Swift string interpolation inside evaluateJavaScript(...), e.g.
-    # evaluateJavaScript("mc.openPage(\"\(name)\")") or evaluateJavaScript("term.opens('\(f)')"),
-    # across both single-line and multi-line calls.
-    bad_quoted = re.compile(r'evaluateJavaScript\([^)]*(?:\\"|(?<!\\)\')\\\(', re.S)
     root = Path(root)
+    call_re = re.compile(r"evaluateJavaScript\(")
     for path in swift_files(root):
-        lines = path.read_text().splitlines()
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.lstrip()
-            if stripped.startswith("//") or "evaluateJavaScript(" not in line:
-                i += 1
+        text = path.read_text()
+        for m in call_re.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            if text[line_start:m.start()].lstrip().startswith("//"):
                 continue
-            start = i
-            chunk = [line]
-            depth = line.count("(") - line.count(")")
-            while depth > 0 and i + 1 < len(lines) and len(chunk) < 12:
-                i += 1
-                chunk.append(lines[i])
-                depth += lines[i].count("(") - lines[i].count(")")
-            joined = "\n".join(chunk)
-            if bad_quoted.search(joined) and "// safety-ok" not in joined:
-                errs.append(f"{path.relative_to(root)}:{start + 1}: raw quoted interpolation in evaluateJavaScript (use callJS)")
-            i += 1
+            call_text, end_idx = _extract_swift_call_arg(text, m.end() - 1)
+            line_end = text.find("\n", end_idx)
+            tail = text[end_idx : len(text) if line_end == -1 else line_end]
+            if _has_quoted_swift_interp(call_text) and "// safety-ok" not in (call_text + tail):
+                lineno = text[: m.start()].count("\n") + 1
+                errs.append(f"{path.relative_to(root)}:{lineno}: raw quoted interpolation in evaluateJavaScript (use callJS)")
     return errs
 
 
@@ -119,9 +160,8 @@ def check_html_csp_and_handlers(root=ROOT):
         if '<meta http-equiv="Content-Security-Policy"' not in text:
             errs.append(f"{path.relative_to(root)}: missing Content-Security-Policy meta tag")
         for i, line in enumerate(text.splitlines(), 1):
-            if 'onerror="this.remove()"' in line and line.count("onerror=") == 1:
-                continue
-            if inline_ev.search(line):
+            cleaned = line.replace('onerror="this.remove()"', "")
+            if inline_ev.search(cleaned):
                 errs.append(f"{path.relative_to(root)}:{i}: inline HTML event handler detected")
     return errs
 
@@ -130,7 +170,7 @@ def check_js_syntax(root=ROOT):
     """Verify inline <script> blocks in app/*.html and JS test files parse cleanly with `node --check`."""
     node = shutil.which("node")
     if not node:
-        return []
+        return ["node is required in CI to check JS syntax"] if os.environ.get("CI") == "true" else []
     errs = []
     root = Path(root)
     script_re = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
@@ -147,7 +187,6 @@ def check_js_syntax(root=ROOT):
                     continue
                 is_module = bool(re.search(r'\btype\s*=\s*["\']module["\']', attrs, re.I))
                 line_offset = text[:m.start(2)].count("\n")
-                # Pad leading newlines so node --check reports exact HTML line numbers
                 probe = tmp_dir / f"{path.stem}_{idx}.{'mjs' if is_module else 'js'}"
                 probe.write_text("\n" * line_offset + body)
                 p = subprocess.run([node, "--check", str(probe)], capture_output=True, text=True, timeout=15)

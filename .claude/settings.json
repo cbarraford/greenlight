@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/agent_hook.py --claude-pre-bash"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/agent_hook.py\" --claude-pre-bash"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/agent_hook.py --claude-post-edit"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/agent_hook.py\" --claude-post-edit"
           }
         ]
       }

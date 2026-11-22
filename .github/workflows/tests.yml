@@ -24,7 +24,7 @@ jobs:
           fi
           if ! changed="$(git diff --name-only "$range" 2>/dev/null)"; then
             echo "app=true" >> "$GITHUB_OUTPUT"
-          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$)'; then
+          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$|scripts/(dash|chat|attach|uitest|diag)\.py$|tests/test_uitest\.py$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
@@ -39,13 +39,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest ruff mypy coverage diff-cover
+      - run: pip install pytest "ruff==0.17.6" "mypy<2" coverage diff-cover
       - name: ruff lint & security
         run: ruff check scripts/ tests/ app/kokoro.py
       - name: static safety & JS syntax checks
         run: python3 scripts/check_safety.py
       - name: shellcheck
-        run: shellcheck -S warning app/build.sh scripts/*.sh
+        run: shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
       - name: diff quality ratchet (PRs)
         if: github.event_name == 'pull_request'
         run: python3 scripts/check_diff_quality.py --base "origin/${{ github.base_ref }}"
@@ -127,10 +127,16 @@ jobs:
           printf '{"harnesses":{"claude":{"bin":"/tmp/gl-ci-bin/claude"}}}\n' > /tmp/gl-ci-home/config.json
           /tmp/Greenlight-ci --vimtest
           /tmp/Greenlight-ci --attachtest
+      - name: Run parallel background macOS --uitest E2E suite
+        env:
+          UITEST_BINARY: /tmp/Greenlight-ci
+        run: |
+          command -v tmux >/dev/null 2>&1 || brew install tmux
+          python3 tests/test_uitest.py
 
   ci-gate:
     needs: [changes, python-and-lint, js-playwright, macos-swift]
-    if: always()
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required checks passed
