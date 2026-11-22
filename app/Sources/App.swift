@@ -1153,13 +1153,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var chatShown: Bool { greenlight.chatOut ? chatWindow.isVisible : window.isVisible && !chatSlot.isHidden }
 
     func setChat(hidden: Bool) {
-        if !prompting { greenlight.hint = "" }  // a hovered control going away sends no hover-exit
+        if !greenlight.prompting { greenlight.hint = "" }  // a hovered control going away sends no hover-exit
         chatHidden = hidden
         if !hidden { greenlight.inboxOpen = false }  // asking for the chat closes the inbox
         placeChat()
     }
     func popChat(out: Bool) {
-        if !prompting { greenlight.hint = "" }  // the pop knob moves out from under the cursor: no hover-exit comes
+        if !greenlight.prompting { greenlight.hint = "" }  // the pop knob moves out from under the cursor: no hover-exit comes
         greenlight.chatOut = out
         if !out { chatWindow.orderOut(nil) }
         chatHidden = false
@@ -1969,7 +1969,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
         if hintStale { greenlight.hint = "" }  // a window hidden or moved mid-hover: drop the hint
-        if prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
+        if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
         if window.title != greenlight.name { window.title = greenlight.name }
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
@@ -2131,13 +2131,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
     var capture: Any?
     var vimMonitor: Any?, orbMonitor: Any?, floorMonitor: Any?
-    static let keyPrompt = "Press the new voice shortcut, with ⌃, ⌥ or ⌘ (Esc cancels)"
-    /// The menu's voice-shortcut prompt is up (Settings' Change… shows its own): no hover hint, it stays until a key comes.
-    var prompting: Bool { greenlight.keying && greenlight.hint == Self.keyPrompt }
     @objc func setShortcut() {
         show()
         recordShortcut()
-        greenlight.hint = Self.keyPrompt  // after keying is on: showTab centres it on the window
+        greenlight.hint = Core.keyPrompt  // after keying is on: showTab centres it on the window
     }
     /// Settings' Change…: the recorder shows in place of the keys there, not in the chat's hint.
     func recordShortcut() {
@@ -2244,7 +2241,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let host = NSHostingView(rootView: HintTab(text: text)), size = hintSize(text)
         host.sizingOptions = []  // the frame is hintSize's (wrapped), not the view's one-line ideal
         // by the cursor; the voice-shortcut prompt (from the menu bar's menu) in the middle of the window it brought up
-        let m = prompting && window.isVisible ? NSPoint(x: window.frame.midX - size.width / 2 - 10, y: window.frame.midY) : NSEvent.mouseLocation
+        let m = greenlight.prompting && window.isVisible ? NSPoint(x: window.frame.midX - size.width / 2 - 10, y: window.frame.midY) : NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
         tab.contentView = host
         tab.setFrame(hintFrame(size, mouse: m, screen: screen?.visibleFrame ?? .infinite), display: true)
@@ -2253,7 +2250,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// A hint whose control the cursor can't be on any more: the topmost window under the cursor isn't Greenlight's (it left,
     /// or another app or Space came to the front mid-hover). Never the voice-shortcut prompt: tick hides it while Greenlight's away.
     var hintStale: Bool {
-        guard tab.isVisible, !prompting else { return false }
+        guard tab.isVisible, !greenlight.prompting else { return false }
         let n = NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
         return !NSApp.windows.contains { $0 !== tab && $0.isVisible && $0.windowNumber == n }
     }
