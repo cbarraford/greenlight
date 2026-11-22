@@ -715,6 +715,19 @@ test("a workspace `ade worktree create` just started is a puck at once, never in
   await page.evaluate(() => mc.paths(null, null));
   assert.equal(await page.evaluate(() => mc.focus().repos), null, "all projects: no scope");
 });
+test("mc.paths before mc.update keeps Connecting until the snapshot arrives and draws only the picked project on first paint", async page => {
+  const fresh = await page.context().browser().newPage({viewport: {width: 1300, height: 900}});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {mc: {postMessage: m => window.__posts.push(m)}}} });
+  await fresh.goto(PAGE);
+  const a = {...SNAP.pucks[0], repo: "greenlight"}, b = {...SNAP.pucks[1], repo: "widgets"};
+  const snap = {...SNAP, pucks: [a, b], trees: [{path: a.path, project: "greenlight"}, {path: b.path, project: "widgets"}]};
+  await fresh.evaluate(p => mc.paths([p], ["greenlight"]), a.path);
+  assert.equal(await fresh.locator("#main .empty").count(), 1, "still Connecting before snapshot");
+  assert.equal(await fresh.locator("#main .cell, #main .lrow").count(), 0, "no hexes before snapshot");
+  await fresh.evaluate(s => mc.update(s), snap);
+  assert.deepEqual(await fresh.locator("#main .cell").evaluateAll(els => els.map(e => e.dataset.name)), [a.name], "only greenlight drawn on first paint");
+  await fresh.close();
+});
 test("L1's Open projects: the terminal page's tiles; ticking a project posts it, All projects unticks", async page => {
   const L = [{id: "a", name: "Alpha", color: "#FF9F0A", repos: ["x/a"], busy: 1}, {id: "", name: "No Man's Land", color: "#8E8E93", repos: [], busy: 0}];
   await page.evaluate(L => mc.pickProjects(L, null), L);
