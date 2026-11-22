@@ -57,7 +57,14 @@ PR_LABEL = "nightly-bug-hunter"
 LAUNCHD_LABEL = "greenlight-bughunt"
 LLM_MAX_COMMITS = 15
 DEFAULT_FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt")
-DEFAULT_VIEWPORTS = ((760, 520), (1300, 900), (1680, 1020), (1100, 480))
+DEFAULT_VIEWPORTS = ((682, 520), (700, 600), (900, 600), (1300, 900), (1680, 1020))
+_LLM_FOCUS_AREAS = (
+    "Basement & Pipe (`terminal.html`): PTY tabs, splits, `⌘J` palette search/actions, Look dialog, sidebar collapse/expand.",
+    "Greenlight Center workspace pages (`dashboard.html`): open pages, Insights tiles, All Output modal, hover cards, Answer & Reply flows.",
+    "Narrow & minimum window sizes (`682x520`, `700x600`, `900x600`): empty states, Context/Park rail gutters, chat header truncation, overflow.",
+    "Settings window tabs, Chief chat composer/DWIM commands, and `adversarial`/`corrupt` resilience (XSS, unicode, missing fields).",
+    "High-cardinality `scale` fixture (50 workspaces): Overview vs List switching, search filtering, scrolling, and responsiveness.",
+)
 _CRASH_HEADER_RE = re.compile(
     r"(?:\*\*\* Terminating app due to uncaught exception|"
     r"Fatal error:|Assertion failed:|Precondition failed:|"
@@ -386,23 +393,113 @@ def _python_cmd() -> list[str]:
     return ["uv", "run", "--no-project", "python"] if shutil.which("uv") else [sys.executable]
 
 
-def _has_playwright() -> bool:
+def fetch_open_pr_titles(repo_dir: Path = ROOT) -> list[str]:
+    """Return titles of open nightly-bug-hunter PRs so Track B skips already-tracked issues."""
+    if not shutil.which("gh"):
+        return []
+    try:
+        p = subprocess.run(
+            ["gh", "pr", "list", *_gh_repo_args(repo_dir), "--state", "open", "--label", PR_LABEL, "--json", "title"],
+            cwd=str(repo_dir), capture_output=True, text=True, timeout=20,
+        )
+        if p.returncode != 0 or not p.stdout.strip():
+            return []
+        return [str(pr.get("title") or "").strip() for pr in json.loads(p.stdout) if pr.get("title")]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+
+
+def _get_recent_diff_stat(repo_dir: Path, commits: list[dict], limit: int = 5) -> str:
+    """Return compact `git show --stat` summaries for the newest commits to save Track B exploration turns."""
+    chunks: list[str] = []
+    for c in commits[:limit]:
+        sha = str(c.get("sha") or "")
+        if not sha:
+            continue
+        try:
+            p = subprocess.run(
+                ["git", "-C", str(repo_dir), "show", "--stat", "--format=%h %s", sha],
+                capture_output=True, text=True, timeout=10,
+            )
+            if p.returncode == 0 and p.stdout.strip():
+                chunks.append("\n".join(p.stdout.strip().splitlines()[:8]))
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return "\n\n".join(chunks)
+
+
+def _pull_repo_if_clean(repo_dir: Path, base_ref: str) -> str:
+    """Fast-forward `repo_dir` to `origin/<branch>` when clean and on the target branch."""
+    branch = base_ref.split("/", 1)[1] if base_ref.startswith("origin/") else base_ref
+    if branch in ("HEAD", ""):
+        return "skip_head"
+    try:
+        cur = subprocess.run(["git", "-C", str(repo_dir), "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True, timeout=10)
+        if cur.returncode != 0 or cur.stdout.strip() != branch:
+            return "skip_branch"
+        st = subprocess.run(["git", "-C", str(repo_dir), "status", "--porcelain"], capture_output=True, text=True, timeout=10)
+        if st.returncode != 0 or st.stdout.strip():
+            return "skip_dirty"
+        pull = subprocess.run(["git", "-C", str(repo_dir), "pull", "--ff-only", "origin", branch], capture_output=True, text=True, timeout=30)
+        return "pulled" if pull.returncode == 0 else "pull_failed"
+    except (OSError, subprocess.SubprocessError):
+        return "pull_failed"
+
+
+def _detect_playwright_node_path(repo_dir: Path = ROOT) -> str | None:
+    """Locate a `node_modules` directory providing `playwright-core` if not already on default NODE_PATH."""
+    if not shutil.which("node"):
+        return None
+    env_np = os.environ.get("NODE_PATH")
+    if env_np and subprocess.run(["node", "-e", "require.resolve('playwright-core')"], capture_output=True).returncode == 0:
+        return env_np
+    candidates: list[Path] = [repo_dir / "node_modules", Path.home() / "node_modules"]
+    workshop = Path.home() / "workshop"
+    if workshop.is_dir():
+        candidates.extend(sorted(p / "node_modules" for p in workshop.iterdir() if p.is_dir()))
+    for cand in candidates:
+        if (cand / "playwright-core").is_dir():
+            return str(cand)
+    return None
+
+
+def _playwright_env(repo_dir: Path = ROOT) -> dict[str, str]:
+    env = dict(os.environ)
+    if not env.get("NODE_PATH"):
+        found = _detect_playwright_node_path(repo_dir)
+        if found:
+            env["NODE_PATH"] = found
+    return env
+
+
+def _has_playwright(repo_dir: Path = ROOT) -> bool:
     if not shutil.which("node"):
         return False
-    p = subprocess.run(["node", "-e", "require.resolve('playwright-core')"], capture_output=True)
+    p = subprocess.run(["node", "-e", "require.resolve('playwright-core')"], env=_playwright_env(repo_dir), capture_output=True)
+    return p.returncode == 0
+
+
+def _has_playwright_browser(browser: str, repo_dir: Path = ROOT) -> bool:
+    if browser not in ("chromium", "webkit") or not shutil.which("node"):
+        return False
+    js = f"const fs=require('fs'), p=require('playwright-core')[{json.dumps(browser)}].executablePath(); process.exit(fs.existsSync(p)?0:1)"
+    p = subprocess.run(["node", "-e", js], env=_playwright_env(repo_dir), capture_output=True)
     return p.returncode == 0
 
 
 def run_baseline(repo_dir: Path = ROOT) -> list[dict]:
-    """Run existing lint, safety, unit, JS, typecheck, and UI tests to catch direct regressions."""
+    """Run existing lint, safety, unit, JS (Chromium + WebKit), typecheck, and UI tests to catch direct regressions."""
     findings = []
+    env = _playwright_env(repo_dir)
     checks = []
     if shutil.which("ruff"):
         checks.append(("ruff-lint", ["ruff", "check", "scripts/", "tests/"], 120))
     checks.append(("safety-check", [*_python_cmd(), "scripts/check_safety.py"], 60))
     checks.append(("test-py", ["make", "test-py"], 300))
-    if _has_playwright():
+    if _has_playwright(repo_dir):
         checks.append(("test-js", ["make", "test-js"], 300))
+        if sys.platform == "darwin" and _has_playwright_browser("webkit", repo_dir):
+            checks.append(("test-webkit", ["make", "test-webkit"], 420))
     if sys.platform == "darwin":
         checks.append(("swift-typecheck", ["make", "typecheck"], 180))
         checks.append(("test-ui", ["make", "test-ui"], 240))
@@ -410,7 +507,7 @@ def run_baseline(repo_dir: Path = ROOT) -> list[dict]:
     with diag.span("bughunt", phase="baseline"):
         for name, cmd, timeout in checks:
             try:
-                p = subprocess.run(cmd, cwd=str(repo_dir), capture_output=True, text=True, timeout=timeout)
+                p = subprocess.run(cmd, cwd=str(repo_dir), env=env, capture_output=True, text=True, timeout=timeout)
                 rc, out = p.returncode, (p.stdout + "\n" + p.stderr).strip()
             except subprocess.TimeoutExpired as e:
                 rc = 124
@@ -484,7 +581,34 @@ _LAYOUT_CHECK_JS = """(() => {
     const r = main.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) issues.push(`collapsed root container ${main.id || 'body'}`);
   }
+  const dock = document.getElementById('dock');
+  if (dock && !dock.hidden) {
+    const dr = dock.getBoundingClientRect();
+    if (dr.width > 0) {
+      const ep = document.querySelector('#main .empty .ep');
+      if (ep && ep.getBoundingClientRect().right > dr.left + 2) {
+        issues.push(`empty state clipped under #dock: right=${Math.round(ep.getBoundingClientRect().right)} > dockLeft=${Math.round(dr.left)}`);
+      }
+    }
+  }
+  const h1 = document.querySelector('.ht h1'), ht = document.querySelector('.ht');
+  if (h1 && ht && h1.getBoundingClientRect().right > ht.getBoundingClientRect().right + 4) {
+    issues.push(`workspace title h1 overflow: right=${Math.round(h1.getBoundingClientRect().right)} > container=${Math.round(ht.getBoundingClientRect().right)}`);
+  }
   return issues;
+})()"""
+
+_SPINNER_STUCK_JS = """(() => {
+  const stuck = [];
+  if (window.ui && ui.page && ui.page.loading) stuck.push('workspace page still loading');
+  if (window.ui && ui.ask) {
+    for (const [k, st] of Object.entries(ui.ask)) {
+      if (st && st.loading) stuck.push(`ask(${k}) still loading`);
+      if (st && st.sending) stuck.push(`answer(${k}) still sending`);
+    }
+  }
+  if (window.ui && ui.out && !ui.out.loaded) stuck.push('all-output transcript still loading');
+  return stuck;
 })()"""
 
 
@@ -714,6 +838,70 @@ def _maybe_snap(sess: uitest.UITestSession, shot_dir: Path | None, name: str, wi
         return None
 
 
+def _collect_layout_issues(
+    sess: uitest.UITestSession, page: str, fixture: str, tag: str, seen_keys: set[str], shot_dir: Path | None,
+) -> list[dict[str, Any]]:
+    r = sess.eval(page, _LAYOUT_CHECK_JS, record=False)
+    issues = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
+    hits: list[dict[str, Any]] = []
+    for iss in issues:
+        key = f"layout:{page}:{iss}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            shot = _maybe_snap(sess, shot_dir, f"{fixture}-{page}-layout-{tag}.png", page)
+            hits.append(make_finding(
+                oracle="layout_issue", track="fuzz", fixture=fixture,
+                title=f"Layout anomaly in `{page}` ({fixture}): {iss[:80]}",
+                summary=f"[{page}] {iss}", where=f"app/{page}.html",
+                files=[f"app/{page}.html"], screenshot_path=shot, reproducible=False,
+            ))
+    return hits
+
+
+def _run_scripted_flows(
+    sess: uitest.UITestSession, fixture: str, seen_keys: set[str], shot_dir: Path | None,
+) -> list[dict[str, Any]]:
+    """Deterministic UI journeys (workspace page load + stuck-spinner check + narrow-width layout) before monkey fuzzing."""
+    hits: list[dict[str, Any]] = []
+    try:
+        # 1. Narrow viewport layout check (catches empty-state / rail overlap deterministically)
+        sess.action("resize", window="dashboard", width=700, height=600)
+        time.sleep(0.15)
+        hits.extend(_collect_layout_issues(sess, "dashboard", fixture, "narrow700", seen_keys, shot_dir))
+        sess.action("resize", window="dashboard", width=1300, height=900)
+
+        # 2. Open first workspace page (if any) and verify loading spinners resolve cleanly
+        first = sess.eval("dashboard", "(window.ui && ui.snap && ui.snap.pucks && ui.snap.pucks[0]) ? ui.snap.pucks[0].name : null", record=False)
+        ws_name = first.get("result") if first.get("ok") else None
+        if isinstance(ws_name, str) and ws_name:
+            sess.eval("dashboard", f"openPage({json.dumps(ws_name)})")
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                st_r = sess.eval("dashboard", _SPINNER_STUCK_JS, record=False)
+                if st_r.get("ok") and st_r.get("result") == []:
+                    break
+                time.sleep(0.2)
+            st_end = sess.eval("dashboard", _SPINNER_STUCK_JS, record=False)
+            stuck = st_end.get("result") if st_end.get("ok") and isinstance(st_end.get("result"), list) else []
+            for msg in stuck:
+                key = f"hang:spinner:{msg}"
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    shot = _maybe_snap(sess, shot_dir, f"{fixture}-stuck-spinner.png", "dashboard")
+                    hits.append(make_finding(
+                        oracle="hang", track="fuzz", fixture=fixture,
+                        title=f"Unresolved UI spinner on `{fixture}`: {msg}",
+                        summary=f"Workspace page spinner remained stuck >5s ({msg})",
+                        where="app/Sources/App.swift", files=["app/Sources/App.swift", "app/dashboard.html"],
+                        screenshot_path=shot, reproducible=False,
+                    ))
+            hits.extend(_collect_layout_issues(sess, "dashboard", fixture, "page", seen_keys, shot_dir))
+            sess.eval("dashboard", "window.closePage && closePage()")
+    except (OSError, ValueError):
+        pass
+    return hits
+
+
 def _run_fuzz_step(
     sess: uitest.UITestSession, rng: random.Random, active_page: str,
     fixture: str, step_idx: int, seen_keys: set[str], shot_dir: Path | None,
@@ -745,19 +933,7 @@ def _run_fuzz_step(
         if sels:
             sess.type_text(active_page, rng.choice(sels), rng.choice(FUZZ_INPUTS))
     else:
-        r = sess.eval(active_page, _LAYOUT_CHECK_JS, record=False)
-        issues = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
-        for iss in issues:
-            key = f"layout:{active_page}:{iss}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                shot = _maybe_snap(sess, shot_dir, f"{fixture}-{active_page}-layout-{step_idx}.png", active_page)
-                layout_hits.append(make_finding(
-                    oracle="layout_issue", track="fuzz", fixture=fixture,
-                    title=f"Layout anomaly in `{active_page}` ({fixture}): {iss[:80]}",
-                    summary=f"[{active_page}] {iss}", where=f"app/{active_page}.html",
-                    files=[f"app/{active_page}.html"], screenshot_path=shot, reproducible=False,
-                ))
+        layout_hits.extend(_collect_layout_issues(sess, active_page, fixture, str(step_idx), seen_keys, shot_dir))
     return active_page, layout_hits
 
 
@@ -806,6 +982,8 @@ def fuzz_session(
         findings.extend(f0)
         if m0:
             metrics_samples.append(m0)
+        if steps > 0 and sess.is_alive():
+            findings.extend(_run_scripted_flows(sess, fixture, seen_keys, shot_dir))
 
         active_page = "dashboard"
         for i in range(steps):
@@ -1318,20 +1496,100 @@ def _classify_llm_explorer_run(
     return {**base, "status": "ok", "detail": detail}
 
 
-def _build_llm_explorer_prompt(commit_lines: str, shots_dir: Path) -> str:
+def _backend_fuzz_cases(rng: random.Random) -> list[tuple[str, Any, Any]]:
+    """Build deterministic realistic adversarial inputs for pure Python parser/validator functions."""
+    import dash
+    import dwim
+    import lifestage
+
+    strings = ["", "   ", "Advice: do it", "Label\nBody line", '"\'nested\'"', "\u202e\U0001f680" + ("a" * 300), "1. One\n2. Two\n❯"]
+    layouts: list[dict[str, Any]] = [
+        {},
+        {"puck": None, "tiles": None, "wide": None},
+        {"puck": {"widget": "meter", "props": {}}, "tiles": [{"widget": "note", "title": None, "props": {}}], "wide": {"widget": "files", "props": {}}},
+        {"puck": {"widget": "bad", "props": []}, "tiles": ["not-a-dict", {"widget": "stat", "props": "bad"}], "wide": 123},
+    ]
+    pucks: list[dict[str, Any]] = [
+        {"name": "fix-auth", "project": "acme/w", "repo": "w", "goal": "Fix auth", "state": "needs", "step": "review", "owner": "me", "branch": "fix-auth", "agent": {"state": "waiting"}},
+        {"name": "empty-fields", "project": "", "repo": "", "goal": "", "state": "quiet", "step": "freeform", "owner": "parked", "branch": "", "agent": {}},
+    ]
+    cases: list[tuple[str, Any, Any]] = [("dash.py:validate", dash.validate, (lay,)) for lay in layouts]
+    for s in strings:
+        cases.append(("dash.py:split_label", dash.split_label, (s,)))
+        cases.append(("dash.py:split_advice", dash.split_advice, (s,)))
+        cases.append(("lifestage.py:sentence", lifestage.sentence, (s,)))
+        cases.append(("dwim.py:grammar", dwim.grammar, (s, pucks, "fix-auth")))
+    for tail in ([], ["❯ 1. A", "  2. B"], ["☐ Plan", "│ Q?", "❯ 1. X", "   desc", "────"], [s for s in strings[:4]]):
+        cases.append(("dash.py:menu", dash.menu, (tail,)))
+        cases.append(("dash.py:picker", dash.picker, (tail,)))
+    # Seeded random combinations of board commands
+    verbs = ("park", "unpark", "merge", "open", "retry", "status", "focus", "")
+    for _ in range(12):
+        cmd = f"{rng.choice(verbs)} {rng.choice(strings[:5])}"
+        cases.append(("dwim.py:grammar", dwim.grammar, (cmd, pucks, rng.choice(("fix-auth", "", None)))))
+    return cases
+
+
+def run_backend_fuzz(seed: int = 42) -> list[dict[str, Any]]:
+    """Fast deterministic fuzz pass over pure Python parsers & validators (zero filesystem I/O)."""
+    rng = random.Random(seed)
+    findings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    with diag.span("bughunt", phase="backend_fuzz"):
+        for where, fn, call_args in _backend_fuzz_cases(rng):
+            try:
+                fn(*call_args)
+            except Exception as e:
+                key = f"{where}:{type(e).__name__}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                mod_file = f"scripts/{where.split(':', 1)[0]}"
+                findings.append(make_finding(
+                    oracle="python_exception",
+                    track="backend_fuzz",
+                    fixture="backend",
+                    title=f"Backend parser crash in `{where}`: {type(e).__name__}",
+                    summary=f"{where} raised {type(e).__name__}: {str(e)[:200]}",
+                    details=f"args={call_args!r}",
+                    where=where,
+                    files=[mod_file],
+                    reproducible=True,
+                ))
+    return findings
+
+
+def _daily_llm_focus(today: dt.date | None = None) -> str:
+    d = today or dt.date.today()
+    return _LLM_FOCUS_AREAS[d.toordinal() % len(_LLM_FOCUS_AREAS)]
+
+
+def _build_llm_explorer_prompt(
+    commit_lines: str,
+    shots_dir: Path,
+    diff_stat: str = "",
+    known_titles: list[str] | None = None,
+    focus_area: str = "",
+) -> str:
+    diff_block = f"\nRecent diff summary (top commits):\n```\n{diff_stat}\n```\n" if diff_stat else ""
+    focus_block = f"\nTonight's rotating deep-dive focus (in addition to recent commits):\n- {focus_area}\n" if focus_area else ""
+    known_block = ""
+    if known_titles:
+        items = "\n".join(f"- {t}" for t in known_titles[:12])
+        known_block = f"\nAlready tracked open bug-hunter PRs (skip unless regressed further):\n{items}\n"
     return f"""You are Greenlight's nightly QA & regression hunter running in READ-ONLY exploration mode.
 Do NOT modify any repository files. Run simple direct commands (`python3 scripts/uitest.py ...`, `git show ...`, `git diff ...`) rather than complex chained subshells.
 
 Recent commits to scrutinize for regressions:
 {commit_lines}
-
+{diff_block}{focus_block}{known_block}
 Instructions:
 1. Launch an isolated background app instance with:
-   `python3 scripts/uitest.py start --fixture default` (and optionally `--fixture scale` or `--fixture adversarial`).
+   `python3 scripts/uitest.py start --fixture default` (and optionally `--fixture scale`, `--fixture adversarial`, `--fixture corrupt`, or `--fixture empty`).
    Save the returned socket path. NEVER touch the real `~/.greenlight`.
 2. Drive the app through `scripts/uitest.py` (`action`, `click`, `type`, `eval`, `state`, `screenshot`) to thoroughly test:
    - The UI/backend features touched by the recent commits above.
-   - Edge cases (empty states, resizing, switching Pipe <-> Basement <-> Greenlight Center <-> Settings, opening/closing dialogs).
+   - Tonight's deep-dive focus area and edge cases (empty states, narrow resizing, switching Pipe <-> Basement <-> Greenlight Center <-> Settings, opening/closing dialogs).
 3. Capture screenshots into `{shots_dir}` when you spot visual/layout issues or after key state transitions.
 4. ALWAYS stop every started instance cleanly with `python3 scripts/uitest.py stop --socket <SOCK>` before finishing.
 5. Report ONLY concrete, observed bugs (zero speculation). End your response with a single fenced JSON object:
@@ -1371,6 +1629,7 @@ def run_llm_explorer(
     recent_files: set[str],
     run_dir: Path,
     status_out: dict[str, Any] | None = None,
+    known_titles: list[str] | None = None,
 ) -> list[dict]:
     """Ask a headless coding agent to exercise recently changed flows against a live --uitest app."""
     if sys.platform != "darwin":
@@ -1383,11 +1642,15 @@ def run_llm_explorer(
     if not commit_lines:
         commit_lines = "- (No commits in window — focus on long-tail interactive UI flows: look dialog, palette, diff, settings, chat)"
 
+    diff_stat = _get_recent_diff_stat(repo_dir, commits, limit=5)
+    focus_area = _daily_llm_focus()
     shots_dest = run_dir / "screenshots" / "llm"
     shots_dest.mkdir(parents=True, exist_ok=True)
     shots_stage = Path(tempfile.mkdtemp(prefix="gl-bughunt-shots-"))
     try:
-        prompt = _build_llm_explorer_prompt(commit_lines, shots_stage)
+        prompt = _build_llm_explorer_prompt(
+            commit_lines, shots_stage, diff_stat=diff_stat, known_titles=known_titles, focus_area=focus_area,
+        )
         with diag.span("bughunt", phase="llm_explorer"):
             out, rc, eng = run_agent_with_fallback(
                 prompt, cwd=repo_dir, timeout_mins=15, mode="explore", add_dirs=[shots_stage],
@@ -1540,9 +1803,10 @@ def verify_patch_worktree(wt_dir: Path, finding: dict[str, Any], base_ref: str =
         return False, f"Repro-first gate failed: no test file modified/added in tests/ (touched: {all_touched})."
     notes.append(f"Touched files ({len(all_touched)}): {', '.join(all_touched[:10])}")
 
+    env = _playwright_env(wt_dir)
     for gname, cmd, timeout in _verification_gates(all_touched):
         try:
-            p = subprocess.run(cmd, cwd=str(wt_dir), capture_output=True, text=True, timeout=timeout)
+            p = subprocess.run(cmd, cwd=str(wt_dir), env=env, capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.SubprocessError) as e:
             return False, f"Verification gate `{gname}` crashed: {e}"
         if p.returncode != 0:
@@ -1833,23 +2097,34 @@ def write_report(
 # Mac mini / Remote macOS scheduling (launchd + caffeinate)
 # ---------------------------------------------------------------------------
 
-def build_launchd_plist(repo: Path, hour: int = 2, minute: int = 30, max_prs: int = 2, with_vm: bool = False) -> str:
+def build_launchd_plist(
+    repo: Path,
+    hour: int = 2,
+    minute: int = 30,
+    max_prs: int = 2,
+    with_vm: bool = False,
+    node_path: str | None = None,
+) -> str:
     if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
         raise ValueError(f"invalid schedule time {hour}:{minute}")
     if int(max_prs) < 0:
         raise ValueError(f"max_prs must be >= 0 (got {max_prs})")
     py = sys.executable
-    args = ["/usr/bin/caffeinate", "-i", py, str(repo / "scripts" / "bughunt.py"), "run", "--max-prs", str(int(max_prs))]
+    args = ["/usr/bin/caffeinate", "-i", py, str(repo / "scripts" / "bughunt.py"), "run", "--pull", "--max-prs", str(int(max_prs))]
     if with_vm:
         args.append("--with-vm")
     gl_home = str(Path(os.environ.get("GREENLIGHT_HOME") or (Path.home() / ".greenlight")).expanduser())
     log_dir = str(bughunt_home())
     env_path = os.environ.get("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    env_vars: dict[str, str] = {"PATH": env_path, "GREENLIGHT_HOME": gl_home}
+    resolved_np = node_path if node_path is not None else _detect_playwright_node_path(repo)
+    if resolved_np:
+        env_vars["NODE_PATH"] = resolved_np
     obj = {
         "Label": LAUNCHD_LABEL,
         "ProgramArguments": args,
         "WorkingDirectory": str(repo),
-        "EnvironmentVariables": {"PATH": env_path, "GREENLIGHT_HOME": gl_home},
+        "EnvironmentVariables": env_vars,
         "StartCalendarInterval": {"Hour": int(hour), "Minute": int(minute)},
         "StandardOutPath": f"{log_dir}/launchd.out.log",
         "StandardErrorPath": f"{log_dir}/launchd.err.log",
@@ -2022,7 +2297,7 @@ def run_nightly(args) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Resolve base ref (refresh origin/main if present)
+        # Resolve base ref (refresh origin/main if present, and fast-forward when --pull is enabled)
         base_ref = args.base
         if base_ref.startswith("origin/"):
             subprocess.run(["git", "-C", str(ROOT), "fetch", "origin", base_ref.split("/", 1)[1], "--quiet"],
@@ -2030,6 +2305,8 @@ def run_nightly(args) -> int:
             chk = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", base_ref], capture_output=True)
             if chk.returncode != 0:
                 base_ref = "HEAD"
+        if getattr(args, "pull", False):
+            _pull_repo_if_clean(ROOT, base_ref)
 
         commits, recent_files = get_recent_commits(ROOT, since_hours=args.since_hours)
         history = load_perf_history(home)
@@ -2043,6 +2320,9 @@ def run_nightly(args) -> int:
                 track_status["baseline"] = {"status": "skipped", "detail": "--skip-baseline"}
             else:
                 raw_findings.extend(_run_track_isolated(track_status, "baseline", lambda: run_baseline(ROOT), []))
+
+            # Track A0: Fast deterministic Python backend parser/state fuzzer
+            raw_findings.extend(_run_track_isolated(track_status, "backend_fuzz", lambda: run_backend_fuzz(args.seed), []))
 
             # Track A: Parallel chaos fuzzer + scale perf soak
             fuzz_findings, fuzz_metrics = _run_track_isolated(
@@ -2069,10 +2349,11 @@ def run_nightly(args) -> int:
             else:
                 llm_status: dict[str, Any] = {}
                 commits_inspected = min(LLM_MAX_COMMITS, len(commits))
+                known_titles = fetch_open_pr_titles(ROOT)
                 llm_hits = _run_track_isolated(
                     track_status,
                     "llm_diff",
-                    lambda: run_llm_explorer(ROOT, commits, recent_files, run_dir, status_out=llm_status),
+                    lambda: run_llm_explorer(ROOT, commits, recent_files, run_dir, status_out=llm_status, known_titles=known_titles),
                     [],
                 )
                 if llm_status:
@@ -2146,6 +2427,7 @@ def main():
     rn.add_argument("--skip-baseline", action="store_true", help="Skip Track 0 baseline suite")
     rn.add_argument("--skip-llm", action="store_true", help="Skip Track B diff-aware LLM explorer")
     rn.add_argument("--with-vm", action="store_true", help="Also run optional Tier-2 VM HID smoke")
+    rn.add_argument("--pull", action="store_true", help="Fast-forward repo to origin/<base> when clean before running")
     rn.add_argument("--base", default="origin/main", help="Base git ref for fix worktrees")
 
     fz = sub.add_parser("fuzz", help="Run standalone Track A fuzzer on one fixture")
