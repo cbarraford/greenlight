@@ -1213,6 +1213,14 @@ auto.agent = lambda *a: (_ for _ in ()).throw(AssertionError("no agent for an or
 auto.orchestrator = lambda a, log: ("dispatched claude to x", 0)
 auto.execute("g")
 rec = json.loads((auto.DIR / "runs.jsonl").read_text().splitlines()[-1])
+# orchestrate.brief adapts rules and hints to the repo's actual lifecycle instead of hardcoding one cycle
+(HOME / "lifecycles").mkdir(exist_ok=True)
+(HOME / "lifecycles/minimal.md").write_text(
+    "# minimal\n\n1. `mr_open` — open\n2. `qa` — QA ok. Done: `label=qa-ok`\n"
+    "3. `legal` — Legal signoff. Done: `signoff`\n4. `sec` — Sec review. Done: `label=sec-ok` Owner: `reviewers`\n5. `merge` — merge\n")
+min_row = row("min-ws", step="qa", owner="agent", action="qa: QA ok") | {"project": "acme/minimal"}
+min_brief = orchestrate.brief(min_row, ws_state.observe(min_row)[0])
+assert "`qa`" in min_brief and "`legal`" not in min_brief and "`sec`" not in min_brief and "refuting subagent" not in min_brief and "get CI green" not in min_brief, min_brief
 assert rec["status"] == "ok" and rec["engine"] == "orchestrator", rec
 print("auto ok")
 

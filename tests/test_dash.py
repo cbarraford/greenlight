@@ -623,3 +623,34 @@ with mock.patch.object(dash.os, "replace", side_effect=OSError("fail")), _cl.sup
     dash._write_json(dash.DASH / "fail.json", {"a": 1})
 assert not list(dash.DASH.glob(".fail.json.*.tmp"))
 print("resilience ok")
+
+# per-repo qualified lifecycles (org/repo) and pre-merge / pre-MR custom signoff moves
+_org = dash.settings("lifecycle-set", "team-a/shared", json.dumps({
+    "stages": [{"key": "rfc", "req": "RFC ready.", "done": "signoff"}, {"key": "mr_open", "req": ""},
+               {"key": "legal", "req": "Legal ok.", "done": "signoff", "run": "echo ok > legal.txt"}, {"key": "merge", "req": ""}],
+    "options": {"merge_method": "squash"}, "rules": "", "intro": ""}))
+assert _org["source"] == "yours" and _org["options"]["merge_method"] == "squash"
+assert (dash.greenlight.STATE / "lifecycles" / "team-a__shared.md").exists()
+assert dash.settings("lifecycle-get", "team-a/../x", "")["error"]
+assert dash.settings("lifecycle-reset", "team-a/shared", "")["source"] == "default"
+(dash.greenlight.STATE / "lifecycles/pre.md").write_text(dash.greenlight.lifecycle_md("pre", {
+    "stages": [{"key": "rfc", "req": "RFC.", "done": "signoff"}, {"key": "mr_open", "req": ""},
+               {"key": "legal", "req": "Legal.", "done": "signoff", "run": "echo yes > pre.txt"}, {"key": "merge", "req": ""}]}))
+_open_so = {"path": "/w/pre", "project": "acme/pre", "mr": {"state": "opened", "role": "author", "ref": "!3", "conflicts": False, "pipeline": "success", "todo_threads": []},
+            "next": {"step": "legal", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/pre", "3", "legal"]}}
+assert dash.moves(_open_so) == [{"kind": "signoff", "step": "legal", "run": "echo yes > pre.txt"}]
+# urgent fix suppresses pre-merge signoff without misrouting to review
+assert [m["kind"] for m in dash.moves({**_open_so, "mr": {**_open_so["mr"], "pipeline": "failed"}})] == ["ci"]
+_pre_mr_so = {"name": "pre-ws", "path": "/w/pre", "project": "acme/pre", "forge": "github", "mr": None,
+              "next": {"step": "rfc", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/pre", "@b", "rfc"]}}
+assert dash.moves(_pre_mr_so) == [{"kind": "signoff", "step": "rfc", "run": ""}]
+# after pre-MR stage passes, progress sits at mr_open (index 1), not back at index 0
+assert dash.progress({**_pre_mr_so, "next": {"step": "freeform", "owner": "agent"}}) == (0.25, ["rfc", "mr_open", "legal", "merge"], 1)
+# tree_signoff for pre-MR row returns workspace name as ref (never None)
+_lj2 = dash.greenlight.STATE / "last.json"
+_prev_lj2 = _lj2.read_text() if _lj2.exists() else None
+_lj2.write_text(json.dumps({"ts": 1, "rows": [_pre_mr_so]}))
+with mock.patch.object(dash.greenlight, "run", return_value=""):
+    assert dash.tree_signoff("/w/pre") == {"op": "signoff", "path": "/w/pre", "ref": "pre-ws", "step": "rfc", "ok": True, "ran": ""}
+_lj2.write_text(_prev_lj2) if _prev_lj2 is not None else _lj2.unlink()
+print("per-repo lifecycle ok")
