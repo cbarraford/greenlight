@@ -216,8 +216,8 @@ def verify_chat_and_inbox(ui1: uitest.UITestSession, shot_dir: Path) -> None:
 
 def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path) -> None:
     """Verify dashboard viewport resize (small -> large), rescan, and Settings open/screenshot/close."""
-    r_small = ui1.action("resize", window="dashboard", width=860, height=580)
-    assert r_small["ok"] and r_small["width"] <= 900 and r_small["height"] <= 620, r_small
+    r_small = ui1.action("resize", window="dashboard", width=860, height=520)
+    assert r_small["ok"] and r_small["width"] <= 900 and r_small["height"] <= 560, r_small
     time.sleep(0.15)
     s_small = shot_dir / "center-small.png"
     r_ss = ui1.screenshot(s_small, window="dashboard")
@@ -225,7 +225,8 @@ def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path)
     assert_png(s_small)
 
     r_large = ui1.action("resize", window="dashboard", width=1360, height=900)
-    assert r_large["ok"] and r_large["width"] >= 1300 and r_large["height"] >= 850, r_large
+    # Headless macOS CI displays clamp window height to the visible screen (~674px on 1024x768).
+    assert r_large["ok"] and r_large["width"] >= 1300 and r_large["height"] > r_small["height"], r_large
     time.sleep(0.15)
 
     assert ui1.action("rescan")["ok"]
