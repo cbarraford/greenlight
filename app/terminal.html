@@ -779,6 +779,7 @@ function renameLocal(){
   inp.select();
 }
 function wsMenu(e, ws, w){
+  clearTimeout(hoverT);
   const closeAll = ["Close all terminals here", "", () => wsTabs(ws).forEach(closeTab), wsTabs(ws).length ? {} : {off: "No terminals open here"}];
   if (!ws || ws[0] === "@") return showMenu(e, [["New terminal here", "", () => newTab(ws)], ...hostOf(ws) === "local" ? [["Rename…", "", renameLocal]] : [], null, closeAll]);
   if (!w?.ade) return showMenu(e, [["New terminal here", "", () => newTab(ws)], ["Copy path", "", () => post({cmd: "copy", text: ws})], null, closeAll]);  // gone from every ADE
@@ -1040,7 +1041,7 @@ async function treeDone(o){
   } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
   else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
 }
-addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) $("card").hidden = true; else cardHover = false }, true);
+addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) { clearTimeout(hoverT); $("card").hidden = true } else cardHover = false }, true);
 // hover: resting on a workspace row opens its card (sooner when one is already up); leaving both row and card closes a card that hover opened.
 // Using the card (any click in it) or a right-click keeps it until Esc or a click outside.
 let hoverT = 0, hoverRow = null, pt = [0, 0], was = [0, 0];
@@ -1767,7 +1768,7 @@ $("pal").onmousedown = e => { if (e.target === $("pal")) { e.preventDefault(); p
 // ⌘⇧P actions, ⌘B sidebar; tabs and ⌘1–9 count within the workspace
 addEventListener("keydown", e => {
   if (e.target.closest?.("#card textarea")) return;  // the goal box keeps its own keys (this listener captures)
-  if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { e.preventDefault(); e.stopPropagation(); $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
+  if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { e.preventDefault(); e.stopPropagation(); clearTimeout(hoverT); $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
   const free = cur && !editing && $("pal").hidden && $("dlg").hidden;
   if (free && e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) { const ws = setTabs(cur); show(ws[(ws.indexOf(cur) + (e.shiftKey ? -1 : 1) + ws.length) % ws.length]); e.preventDefault(); e.stopPropagation(); return }
   if (!e.metaKey || !free) return;
