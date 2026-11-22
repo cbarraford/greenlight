@@ -6,6 +6,7 @@
     diag.py summary [--since 24h]                           version, environment, config shape, span timings, recent automations
     diag.py bundle [--since 7d] [--out F|-]                 a bug-report bundle (summary, errors, recent events), re-checked for leaks
     diag.py report --title T [--body-file F|-] [--execute]  preview the GitHub issue for a bug; --execute files it (gh)
+    diag.py doctor                                          setup checks: forge auth, agent CLIs, disk, the automations timer
 
 Events go to $GREENLIGHT_HOME/diag/events.jsonl, and the app's own events go to ~/Library/Logs/Greenlight/app.jsonl.
 Both files rotate at 5 MB and keep three old copies. Nothing is uploaded.
@@ -42,7 +43,7 @@ HASH = re.compile(r"[0-9a-f]{10}")
 # string-valued keys. An identifier (a workspace, repo, MR or automation) goes under a key ending in _h, from h().
 KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "name", "gate", "verdict", "provider",
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
-        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role"}
+        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey"),
@@ -107,18 +108,24 @@ def version():
 
 def salt():
     f = home() / "diag" / "salt"
+    with contextlib.suppress(OSError):
+        s = f.read_bytes()
+        if len(s) >= 16:
+            return s
+    # written whole, then linked in: a reader never sees it half-written, and two first runs agree on one salt
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f"salt.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as w:
+        w.write(secrets.token_bytes(32))
     try:
-        return f.read_bytes()
-    except OSError:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        s = secrets.token_bytes(32)
-        try:
-            fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:  # another process just wrote it
-            return f.read_bytes()
-        with os.fdopen(fd, "wb") as w:
-            w.write(s)
-        return s
+        os.link(tmp, f)
+    except FileExistsError:  # another process won, or an empty one is left from a crash mid-write
+        if len(f.read_bytes()) < 16:
+            os.replace(tmp, f)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return f.read_bytes()
 
 
 def h(value):
@@ -251,7 +258,7 @@ def read(after=0):
                 for line in f.read_text(errors="replace").splitlines():
                     with contextlib.suppress(ValueError):
                         e = json.loads(line)
-                        if isinstance(e, dict) and e.get("ts", 0) >= after:
+                        if isinstance(e, dict) and isinstance(e.get("ts", 0), (int, float)) and e.get("ts", 0) >= after:
                             out.append(e)
     return sorted(out, key=lambda e: e.get("ts", 0))
 
@@ -280,9 +287,9 @@ def spans(events):
     """Timing and failure rate per span kind (cmd split by tool, phase by name, audit by gate)."""
     groups = {}
     for e in events:
-        if "secs" not in e:
+        if not isinstance(e.get("secs"), (int, float)) or isinstance(e.get("secs"), bool):
             continue
-        label = e["kind"] + "".join(f".{e[k]}" for k in ("tool", "name", "gate") if k in e)
+        label = str(e.get("kind")) + "".join(f".{e[k]}" for k in ("tool", "name", "gate") if k in e)
         groups.setdefault(label, []).append(e)
     return {k: {"n": len(v), "p50": pct([e["secs"] for e in v], .5), "p95": pct([e["secs"] for e in v], .95),
                 "fail": round(sum(failed(e) for e in v) / len(v), 3)} for k, v in sorted(groups.items())}
@@ -313,8 +320,107 @@ def automations(n=10):
         for line in (home() / "auto" / "runs.jsonl").read_text().splitlines()[-n:]:
             with contextlib.suppress(ValueError):
                 r = json.loads(line)
-                out.append(clean({"ts": r.get("ts"), "name_h": h(r.get("name")), "status": r.get("status"),
-                                  "engine": r.get("engine"), "secs": r.get("secs")}))
+                out.append(clean({"ts": r.get("ts"), "name_h": h(r.get("name")), "status": r.get("status"), "engine": r.get("engine"),
+                                  "secs": r.get("secs"), **{k: r.get(k) for k in ("in_tokens", "out_tokens", "cost_cents")}}))
+    return out
+
+
+def crash_dir():
+    return Path.home() / "Library" / "Logs" / "DiagnosticReports"
+
+
+def crashes(after, n=5):
+    """The app's macOS crash reports since `after`: exception, signal and the crashed thread's frames as image:symbol.
+    Images by name, never path; a frame with a slash in it is dropped, and the export gate checks the rest.
+    Only this machine's: with a remote host the bundle is built there, so the Mac's reports aren't in it."""
+    out = []
+    for f in sorted(crash_dir().glob("[Gg]reenlight*.ips"), key=lambda f: f.stat().st_mtime)[-n:]:
+        try:
+            if f.stat().st_mtime < after:
+                continue
+            head, body = f.read_text(errors="replace").split("\n", 1)
+            hd, b = json.loads(head), json.loads(body)
+            if not str(b.get("codeSigningID") or "").startswith("dev.greenlight."):
+                continue  # another app whose name starts with Greenlight
+            imgs = [i.get("name") or "?" for i in b.get("usedImages", [])]
+            th = b.get("threads", [])[b.get("faultingThread", 0)]
+            frames = []
+            for fr in th.get("frames", [])[:12]:
+                i = fr.get("imageIndex")
+                x = f"{imgs[i] if isinstance(i, int) and i < len(imgs) else '?'}:{fr.get('symbol', hex(fr.get('imageOffset', 0)))}"[:160]
+                if "/" not in x:
+                    frames.append(x)
+            ex = b.get("exception") or {}
+            out.append({"ts": round(f.stat().st_mtime), "v": str(hd.get("build_version") or "")[:12], "exc": ex.get("type"),
+                        "signal": ex.get("signal"), "frames": frames})
+        except (OSError, ValueError, IndexError, AttributeError, TypeError):
+            continue  # ponytail: an unreadable report is skipped, not reported
+    return out
+
+
+def doctor():
+    """Setup checks an AI can read: each {check, ok, ...}, numbers and enums only."""
+    out = []
+
+    def add(check, ok, **kw):
+        out.append(clean({"check": check, "ok": ok, **kw}))
+    for tool in ("glab", "gh"):
+        if not shutil.which(tool):
+            add(f"{tool}_auth", None, state="missing")
+            continue
+        try:
+            p = subprocess.run([tool, "auth", "status"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+            add(f"{tool}_auth", p.returncode == 0, rc=p.returncode, msg_class=classify(p.stderr + p.stdout) if p.returncode else None)
+        except (OSError, subprocess.SubprocessError) as e:
+            add(f"{tool}_auth", False, **{k: v for k, v in failure(e).items() if k != "ok"})
+    try:
+        agents = json.loads((home() / "config.json").read_text()).get("agents") or ["claude"]
+    except (OSError, ValueError, AttributeError):
+        agents = ["claude"]
+    for a in agents if isinstance(agents, list) else []:
+        if a in ("claude", "codex", "opencode", "pi", "gemini"):
+            add(f"agent_{a}", bool(shutil.which(a)))
+    with contextlib.suppress(OSError):
+        free = shutil.disk_usage(home() if home().exists() else Path.home()).free / 1e9
+        add("disk", free > 1, free_gb=round(free, 1))
+    add("home_writable", os.access(home(), os.W_OK) if home().exists() else os.access(home().parent, os.W_OK))
+    try:
+        autos = json.loads((home() / "automations.json").read_text())
+    except (OSError, ValueError):
+        autos = {}
+    if any(isinstance(a, dict) and a.get("enabled", True) for a in autos.values()):
+        tick = home() / "auto" / "last_tick"
+        age = time.time() - tick.stat().st_mtime if tick.exists() else None
+        add("auto_timer", age is not None and age < 600, state="missing" if age is None else "stale" if age >= 600 else "fresh",
+            age_secs=round(age) if age is not None else None)
+    dead = 0
+    for f in [*(home() / "auto").glob("*.pid"), *home().glob("orchestrator-phase-*.pid")]:
+        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+            t = f.read_text()
+            pid = int(json.loads(t).get("phase") if t.lstrip().startswith("{") else t)
+            if pid <= 0:
+                continue
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                dead += 1
+            except PermissionError:
+                pass
+    add("stale_pids", dead == 0, n=dead)
+    return {"ok": all(c.get("ok") is not False for c in out), "checks": out}
+
+
+def usage(events):
+    """Chat turns and automation runs per harness.model: counts, tokens in and out, cost (Claude's; the others report none)."""
+    out = {}
+    for e in events:
+        if e.get("kind") in ("chat_turn", "automation") and (e["kind"] == "chat_turn" or e.get("engine") not in (None, "orchestrator")):
+            key = f"{e.get('harness') or e.get('engine') or '?'}.{e.get('model') or 'default'}"
+            u = out.setdefault(key, {"turns": 0, "runs": 0, "in_tokens": 0, "out_tokens": 0, "cost_usd": 0.0})
+            u["turns" if e["kind"] == "chat_turn" else "runs"] += 1
+            u["in_tokens"] += e.get("in_tokens") or 0
+            u["out_tokens"] += e.get("out_tokens") or 0
+            u["cost_usd"] = round(u["cost_usd"] + (e.get("cost_cents") or 0) / 100, 5)
     return out
 
 
@@ -332,7 +438,9 @@ def summary(after, events=None):
         "errors_24h": sum(failed(e) for e in events if e.get("ts", 0) > now - 86400),
         "top_errors": errors(events)[:10],
         "spans": spans(events),
+        "usage": usage(events),
         "automations": automations(),
+        "crashes": crashes(after),
     }
 
 
@@ -379,10 +487,11 @@ def bundle(after, app_events=(), hit=None):
             kept.append(c)
     summ = summary(after, kept)  # over the checked events only, the app's from a remote host included
     summ.pop("top_errors", None)  # the same as errors below
+    summ["crashes"] = [c for c in summ["crashes"] if not any(hit(x) for x in strings(c))]
     b = {"manifest": {"format": 1, "created": round(time.time()), "version": version(), "since": round(after),
                       "events": len(kept), "left_out": left_out},
-         "summary": summ, "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
-    why = next((w for w in map(hit, strings({"summary": b["summary"], "errors": b["errors"]})) if w), None)
+         "summary": summ, "doctor": doctor(), "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
+    why = next((w for w in map(hit, strings({k: b[k] for k in ("summary", "doctor", "errors")})) if w), None)
     if why:
         raise SystemExit(f"diag: the summary would export {why}; nothing written")
     return b
@@ -403,14 +512,17 @@ def issue_body(text, b):
         f" ({b['manifest']['events']} events, {b['manifest']['left_out']} left out by the privacy check).\n\n"
 
     def render(ev):
-        d = {"summary": b["summary"], "errors": b["errors"][:20], "events": ev}
+        d = {"summary": b["summary"], "doctor": b.get("doctor"), "errors": b["errors"][:20], "events": ev}
         return head + "<details><summary>Diagnostics</summary>\n\n```json\n" + json.dumps(d, indent=1) + "\n```\n</details>\n"
     ev = b["events"][-200:]
     out = render(ev)
     while len(out) > ISSUE_MAX and ev:  # ponytail: drops events in halves, oldest first; fine at 200
         ev = ev[len(ev) // 2 + 1:]
         out = render(ev)
-    return out[:ISSUE_MAX]
+    if len(out) > ISSUE_MAX:  # still too long without events: cut the JSON, and keep the fence and details closed
+        tail = "\n…(cut: the full data is in `diag.py bundle`)\n```\n</details>\n"
+        out = out[:ISSUE_MAX - len(tail)] + tail
+    return out
 
 
 def report(title, text, app_events=(), execute=False, inline=False, shown=None):
@@ -425,14 +537,14 @@ def report(title, text, app_events=(), execute=False, inline=False, shown=None):
         return {"ok": False, "blocked": "title", "reason": "a bug report needs a title"}
     b = bundle(since("7d"), app_events, hit)
     out = {"ok": True, "repo": REPO, "title": title.strip(), "body": shown[:ISSUE_MAX] if execute and shown else issue_body(text or "", b),
-           "bundle": str(save(b))}
+           "bundle": str(save(b, home() / "diag" / "bundle-report.json"))}  # one file, overwritten: previews don't pile up
     if inline:
         out["data"] = b
     if not execute:
         return {**out, "preview": True}
     if not shutil.which("gh"):
         import urllib.parse
-        q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip() + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
+        q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip()[:4000] + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
         return {**out, "filed": False, "url": f"https://github.com/{REPO}/issues/new?{q}"}
     with span("report", tool="gh") as d:
         p = subprocess.run(["gh", "issue", "create", "--repo", REPO, "--title", out["title"], "--body-file", "-"],
@@ -457,6 +569,7 @@ def main(argv=None):
     b = sub.add_parser("bundle")
     b.add_argument("--since", default="7d")
     b.add_argument("--out", help="a file, or - for stdout (default: a new file in $GREENLIGHT_HOME/diag)")
+    sub.add_parser("doctor")
     r = sub.add_parser("report")
     r.add_argument("--title", default="")
     r.add_argument("--body-file", help="the description: a file, or - for stdin")
@@ -469,6 +582,10 @@ def main(argv=None):
             print(json.dumps(e))
     elif a.cmd == "errors":
         print(json.dumps(errors(read(since(a.since))), indent=1))
+    elif a.cmd == "doctor":
+        d = doctor()
+        print(json.dumps(d, indent=1))
+        sys.exit(0 if d["ok"] else 1)
     elif a.cmd == "bundle":
         bd = bundle(since(a.since))
         if a.out == "-":
@@ -480,11 +597,16 @@ def main(argv=None):
     elif a.cmd == "report":
         if a.json:
             j = json.loads(sys.stdin.read() or "{}")
+            j = j if isinstance(j, dict) else {}
             title, text, app = str(j.get("title") or ""), str(j.get("body") or ""), j.get("app_events") or []
             shown = j.get("shown") if isinstance(j.get("shown"), str) else None
         else:
             title, app, shown = a.title, [], None
-            text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
+            try:
+                text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
+            except OSError as e:
+                print(json.dumps({"ok": False, "reason": f"can't read the description: {e.strerror or type(e).__name__}"}))
+                sys.exit(1)
         try:
             res = report(title, text, app if isinstance(app, list) else [], a.execute, inline=a.json, shown=shown)
         except ImportError:  # failed closed: say why, as JSON, so the app can show it

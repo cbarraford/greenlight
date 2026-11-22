@@ -83,7 +83,8 @@ Reply in 5–10 lines: the report link, counts per owner, what you did (adopted 
 ## Troubleshooting
 
 When greenlight itself misbehaves (a scan or automation failing, the app erroring), run
-`python3 ~/.claude/skills/greenlight/scripts/diag.py summary` and `… diag.py errors --since 24h` before reading code.
+`python3 ~/.claude/skills/greenlight/scripts/diag.py summary` and `… diag.py errors --since 24h` before reading code;
+`… diag.py doctor` checks the setup (forge logins, agent CLIs, disk, whether the automations timer still fires).
 Events are structured and hashed, never text: ask the user for names when you need them. `AGENTS.md` has the field guide
 and the privacy rules.
 
