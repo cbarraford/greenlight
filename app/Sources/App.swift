@@ -672,7 +672,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         settingsSub = greenlight.$settingsOpen.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
-            if open { self.greenlight.hint = ""; self.presentWindow(self.settingsWindow); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
+            if open { (self.hintCore ?? self.greenlight).hint = ""; self.presentWindow(self.settingsWindow); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
             else if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
         }
         split.isVertical = true
