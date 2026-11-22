@@ -212,6 +212,7 @@ final class FloatHost<V: View>: NSHostingView<V> {
 final class Pty {
     private(set) var pid: pid_t = 0
     private var fd: Int32 = -1, src: DispatchSourceRead?
+    private let writeQ = DispatchQueue(label: "greenlight.pty.write")
     var onOutput: (Data) -> Void = { _ in }
     var onExit: (Int32) -> Void = { _ in }  // the exit status: 255 is ssh's "couldn't connect / connection lost"
 
@@ -221,15 +222,22 @@ final class Pty {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", home = NSHomeDirectory()
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"; env["COLORTERM"] = "truecolor"; env["TERM_PROGRAM"] = "Greenlight"
-        // Everything the child needs is built before the fork: after it, the child only chdirs and execs.
+        // Everything the child needs is built before the fork: after it, the child only chdirs and execs (async-signal-safe).
+        let cHome = strdup(home), cShell = strdup(shell)
         let argv = [strdup("-" + (shell as NSString).lastPathComponent)] + (cmd.map { [strdup("-c"), strdup($0)] } ?? []) + [nil]
         let envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
-        defer { argv.forEach { free($0) }; envp.forEach { free($0) } }
-        var ws = winsize(ws_row: UInt16(max(rows, 2)), ws_col: UInt16(max(cols, 10)), ws_xpixel: 0, ws_ypixel: 0)
+        defer { free(cHome); free(cShell); argv.forEach { free($0) }; envp.forEach { free($0) } }
+        var ws = winsize(ws_row: UInt16(min(max(rows, 2), Int(UInt16.max))), ws_col: UInt16(min(max(cols, 10), Int(UInt16.max))), ws_xpixel: 0, ws_ypixel: 0)
         var master: Int32 = -1
         let p = forkpty(&master, nil, nil, &ws)
-        if p == 0 { _ = home.withCString { chdir($0) }; execve(shell, argv, envp); _exit(127) }
+        if p == 0 {
+            if let cHome { _ = chdir(cHome) }
+            if let cShell { execve(cShell, argv, envp) }
+            _exit(127)
+        }
         guard p > 0 else { return }
+        let fl = fcntl(master, F_GETFL)
+        if fl >= 0 { _ = fcntl(master, F_SETFL, fl | O_NONBLOCK) }
         pid = p; fd = master
         let s = DispatchSource.makeReadSource(fileDescriptor: master, queue: .main)
         s.setEventHandler { [weak self] in
@@ -237,27 +245,61 @@ final class Pty {
             var buf = [UInt8](repeating: 0, count: 65536)
             let n = read(self.fd, &buf, buf.count)
             if n > 0 { self.onOutput(Data(buf[0..<n])); return }
-            // EIO: the shell is gone; reap it for its status (pid cleared first, so nothing signals a reused pid)
-            var st: Int32 = 0; let code = waitpid(self.pid, &st, 0) == self.pid ? (st >> 8) & 0xff : -1
-            self.pid = 0; self.src?.cancel(); self.src = nil; self.fd = -1; self.onExit(code)
+            if n < 0 && (errno == EINTR || errno == EAGAIN) { return }
+            // EIO/EOF: reap child off the main thread so a lingering process never blocks AppKit.
+            let child = self.pid
+            self.pid = 0; self.src?.cancel(); self.src = nil; self.fd = -1
+            DispatchQueue.global(qos: .utility).async {
+                var st: Int32 = 0
+                var r: pid_t = -1
+                repeat { r = waitpid(child, &st, 0) } while r < 0 && errno == EINTR
+                let code: Int32 = r == child ? ((st & 0x7f) == 0 ? (st >> 8) & 0xff : 128 + (st & 0x7f)) : -1
+                DispatchQueue.main.async { self.onExit(code) }
+            }
         }
-        s.setCancelHandler { close(master) }
+        s.setCancelHandler { [writeQ] in writeQ.async { close(master) } }
         s.resume(); src = s
     }
     func write(_ text: String) {
-        guard fd >= 0 else { return }
-        var d = Array(text.utf8)
-        while !d.isEmpty { let n = Darwin.write(fd, d, d.count); if n <= 0 { break }; d.removeFirst(n) }
+        let curFd = fd
+        guard curFd >= 0 else { return }
+        let bytes = Array(text.utf8)
+        writeQ.async { [weak self] in
+            guard let self, self.fd == curFd else { return }
+            var off = 0
+            while off < bytes.count {
+                let n = bytes.withUnsafeBytes { ptr in Darwin.write(curFd, ptr.baseAddress!.advanced(by: off), bytes.count - off) }
+                if n > 0 { off += n; continue }
+                if n < 0 && errno == EINTR { continue }
+                if n < 0 && errno == EAGAIN {
+                    var pfd = pollfd(fd: curFd, events: Int16(POLLOUT), revents: 0)
+                    if poll(&pfd, 1, 2000) > 0 && (pfd.revents & Int16(POLLOUT)) != 0 { continue }
+                }
+                break
+            }
+        }
     }
     func resize(cols: Int, rows: Int) {
         guard fd >= 0 else { return }
-        var ws = winsize(ws_row: UInt16(max(rows, 2)), ws_col: UInt16(max(cols, 10)), ws_xpixel: 0, ws_ypixel: 0)
+        var ws = winsize(ws_row: UInt16(min(max(rows, 2), Int(UInt16.max))), ws_col: UInt16(min(max(cols, 10), Int(UInt16.max))), ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(fd, TIOCSWINSZ, &ws)
     }
     func stop() {
-        guard pid > 0 else { return }
-        kill(pid, SIGHUP); var st: Int32 = 0; waitpid(pid, &st, WNOHANG)
-        src?.cancel(); src = nil; fd = -1; pid = 0
+        let child = pid
+        guard child > 0 else { return }
+        pid = 0; src?.cancel(); src = nil; fd = -1
+        kill(child, SIGHUP)
+        DispatchQueue.global(qos: .utility).async {
+            var st: Int32 = 0
+            for _ in 0..<20 {
+                let r = waitpid(child, &st, WNOHANG)
+                if r == child || (r < 0 && errno == ECHILD) { return }
+                usleep(50_000)
+            }
+            kill(child, SIGKILL)
+            var r: pid_t = -1
+            repeat { r = waitpid(child, &st, 0) } while r < 0 && errno == EINTR
+        }
     }
 }
 
@@ -622,12 +664,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         })
     }
 
+    var dashProc: Process?
     func streamDash() {
-        ssh("\(py)/dash.py stream 5", onLine: { [weak self] l in
-            guard let self, l.hasPrefix("{") else { return }
-            self.dashSnap = l
-            self.broadcast("window.mc && mc.update(\(l))")
-            self.queueBuilds(l)
+        dashProc = ssh("\(py)/dash.py stream 5", onLine: { [weak self] l in
+            guard let self, l.hasPrefix("{"), let d = l.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  JSONSerialization.isValidJSONObject(obj),
+                  let clean = try? JSONSerialization.data(withJSONObject: obj),
+                  let js = String(data: clean, encoding: .utf8) else { return }
+            self.dashSnap = js
+            self.broadcast("window.mc && mc.update(\(js))")
+            self.queueBuilds(js)
         }, onExit: { [weak self] _ in DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.streamDash() } })
     }
 
@@ -680,7 +727,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         var out = ""
         ssh("\(py)/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", onLine: { out += $0 }, onExit: { [weak self] code in
             self?.suggesting.remove(name)
-            let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
+            let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
             self?.broadcast("window.mc && mc.suggest(\(js))")
             self?.termWebs.forEach { $0.evaluateJavaScript("window.term && term.suggest(\(js))") }  // the sidebar card's button
         })
@@ -694,7 +741,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         broadcast("window.mc && mc.builds({building: \(names), parallel: \(greenlight.designParallel)})")
     }
 
+    func trustedOrigin(_ web: WKWebView?, for name: String) -> Bool {
+        guard let u = web?.url else { return false }
+        if u.scheme == "file" { return true }
+        if name == "mc" {
+            let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
+            if let cfg = URL(string: s), ["http", "https"].contains(cfg.scheme?.lowercased() ?? "") {
+                return u.scheme?.lowercased() == cfg.scheme?.lowercased() && u.host?.lowercased() == cfg.host?.lowercased() && u.port == cfg.port
+            }
+        }
+        return false
+    }
+
     func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
+        guard m.frameInfo.isMainFrame, trustedOrigin(m.webView, for: m.name) else { return }
         if m.name == "term" { if let b = m.body as? [String: Any] { termMessage(b, from: m.webView) }; return }
         guard let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let from = m.webView else { return }
         let l = l1(from)  // a second Greenlight Center window: its own projects and chat
@@ -758,7 +818,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
             ssh("\(py)/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"couldn't load this page from \#(host) (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["name": name, "error": "couldn't load this page from \(host) (exit \(code))"])
                 from.evaluateJavaScript("mc.page(\(js))")
             })
         }
@@ -767,9 +827,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let before = b["before"] as? String ?? ""
             if !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil { return }
             var out = ""
-            let bj = before.isEmpty ? "null" : "\"\(before)\""  // echoed: the page tells a failed Load earlier from a failed refresh
             ssh("\(py)/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","before":\#(bj),"error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["name": name, "before": before.isEmpty ? NSNull() : before, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.transcript(\(js))")
             })
         }
@@ -783,7 +842,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if cmd == "answer" { greenlight.log(.greenlight, name, .action, "answering its agent: \(text)") }
             ssh(remote, stdin: text, onLine: { out += $0 }, onExit: { code in
                 if cmd == "answer" { self.greenlight.acted(name, "answer", code, out) }
-                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.\(cmd == "ask" ? "asked" : "answered")(\(js))")
             })
         }
@@ -793,7 +852,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
             ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(name, on ? "park" : "unpark", code, out)
-                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
         }
@@ -802,7 +861,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
            let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             var out = ""
             ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
-                let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","arg":"\#(arg)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
         }
@@ -816,7 +875,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             greenlight.log(.greenlight, who, .action, ["merge": "merging", "ready": "marking ready", "signoff": "signing off"][op] ?? op)
             ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(who, op, code, out)
-                let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
         }
@@ -831,18 +890,33 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
             ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(name, "start agent", code, out)
-                let js = out.hasPrefix("{") ? out : #"{"name":"\#(name)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
         }
     }
 
-    // Links in the dashboard (MRs, pipelines) open in the browser, not in the pane.
+    // Links in the dashboard/terminal open in the browser, never navigating privileged WebViews to arbitrary URLs or file:// links.
     func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if a.navigationType == .linkActivated, let u = a.request.url, u.scheme != "file" {
-            if ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
-            decisionHandler(.cancel)
-        } else { decisionHandler(.allow) }
+        if a.navigationType == .linkActivated {
+            if let u = a.request.url, ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
+            decisionHandler(.cancel); return
+        }
+        guard let u = a.request.url else { decisionHandler(.cancel); return }
+        if u.scheme == "about" { decisionHandler(.allow); return }
+        let isTerm = termWebs.contains { $0 === w }
+        if u.scheme == "file" {
+            let ok = isTerm ? (u.path == page("terminal")?.path)
+                : (u.path == page("dashboard")?.path || (!greenlight.fluidURL.isEmpty && u.path == URL(fileURLWithPath: (greenlight.fluidURL.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath).path))
+            decisionHandler(ok ? .allow : .cancel); return
+        }
+        if !isTerm, ["http", "https"].contains(u.scheme?.lowercased() ?? "") {
+            let s = greenlight.fluidURL.trimmingCharacters(in: .whitespaces)
+            if let cfg = URL(string: s), u.scheme?.lowercased() == cfg.scheme?.lowercased(), u.host?.lowercased() == cfg.host?.lowercased(), u.port == cfg.port {
+                decisionHandler(.allow); return
+            }
+        }
+        decisionHandler(.cancel)
     }
 
     /// A regular app now: app, Edit and Window menus. ⌘A/C/V/X/Z in text fields route through Edit.
@@ -898,15 +972,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// diag.py report on greenlight's host, with this app's own events on stdin (it checks them like its own).
     func bugReport(_ title: String, _ body: String, execute: Bool, shown: String? = nil) {
-        let app = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n").suffix(500)
-            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) }
-        let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown.map { $0 as Any } ?? NSNull()])) ?? Data("{}".utf8)
-        var out = ""
-        _ = ssh("\(py)/diag.py report --json\(execute ? " --execute" : "")", stdin: String(decoding: input, as: UTF8.self),
-                onLine: { out += $0 }, onExit: { [weak self] code in
-            let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
-            self?.bugResult(j, code, title, body, execute)
-        })
+        Diag.q.async { [weak self] in
+            let app = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n").suffix(500)
+                .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) }
+            let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown.map { $0 as Any } ?? NSNull()])) ?? Data("{}".utf8)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                var out = ""
+                _ = ssh("\(py)/diag.py report --json\(execute ? " --execute" : "")", stdin: String(decoding: input, as: UTF8.self),
+                        onLine: { out += $0 }, onExit: { [weak self] code in
+                    let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+                    self?.bugResult(j, code, title, body, execute)
+                })
+            }
+        }
     }
     func bugResult(_ j: [String: Any], _ code: Int32, _ title: String, _ body: String, _ executed: Bool) {
         let a = NSAlert()
@@ -920,7 +999,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             a.messageText = j["filed"] as? Bool == true ? "Filed" : "Finish on GitHub"
             a.informativeText = j["filed"] as? Bool == true ? "Thank you. The issue is open in your browser." :
                 "gh isn't set up where greenlight runs, so GitHub's form is open with your title and description. Attach the bundle you saved."
-            if let u = (j["url"] as? String).flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
+            if let u = (j["url"] as? String).flatMap(URL.init(string:)), ["http", "https"].contains(u.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(u) }
             a.runModal(); return
         }
         a.messageText = "This is the whole report"
@@ -1067,9 +1146,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
     func l1Pick(here: Bool = true, in l: L1? = nil) {
-        let list = (try? JSONSerialization.data(withJSONObject: projList)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let list = (JSONSerialization.isValidJSONObject(projList) ? (try? JSONSerialization.data(withJSONObject: projList)) : nil).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         let o = l == nil ? l1Only : live(l!.only)
-        let only = (o.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        let only = (o.flatMap { JSONSerialization.isValidJSONObject($0) ? (try? JSONSerialization.data(withJSONObject: $0)) : nil }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         (l?.web ?? fluid).evaluateJavaScript("window.mc && mc.pickProjects && mc.pickProjects(\(list), \(only), \(here))")
     }
 
@@ -1151,7 +1230,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
     func closeL1(_ l: L1) {
         l.c.queue = []; l.c.proc?.terminate(); l.c.run = nil  // its turn's late result writes nothing (onExit checks run)
-        ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(greenlightHome) && rm -rf chat-\(l.id)")  // cd: a home with a space fails, not rm's word split
+        l.c.voice.stopAll()
+        l.c.recorder?.stop(); l.c.recorder = nil; l.c.meter?.invalidate(); l.c.meter = nil; l.c.recording = nil
+        l.c.cancelPlans()
+        for work in l.c.launchWorks.values { work.cancel() }
+        l.c.launchWorks.removeAll(); l.c.toastListeners.removeAll()
+        ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(shellPath(greenlightHome)) && rm -rf chat-\(l.id)")
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
@@ -1197,7 +1281,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             (p["id"] as? String)?.range(of: #"^p\w{1,40}$"#, options: .regularExpression) != nil && (p["name"] as? String)?.count ?? 0 <= 80
             && (p["repos"] as? [String])?.count ?? 999 <= 500 && ((p["dirs"] as? [String]).map { $0.count <= 100 && $0.allSatisfy { $0.range(of: dir, options: .regularExpression) != nil && !$0.contains("..") } } ?? false)
             && (p["dir"] == nil || (p["dir"] as? String).map { $0.range(of: dir, options: .regularExpression) != nil && !$0.contains("..") } ?? false)  // the default folder
-        }), let d = try? JSONSerialization.data(withJSONObject: list) else { return false }
+        }), JSONSerialization.isValidJSONObject(list), let d = try? JSONSerialization.data(withJSONObject: list) else { return false }
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try? d.write(to: projectsFile, options: .atomic)
         let s = String(decoding: d, as: UTF8.self)
@@ -1220,6 +1304,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         cfg.userContentController.add(self, name: "term")
         UITestServer.installErrorCollector(cfg)
         let web = WKWebView(frame: .zero, configuration: cfg)
+        web.navigationDelegate = self
         web.setValue(false, forKey: "drawsBackground")
         w.contentView = web
         let name = id == 0 ? "terminal" : "terminal-\(id)"
@@ -1296,7 +1381,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         var out = [String: String]()
         for (k, v) in all {
             if let key = keys[k] { out[key] = ["font", "size", "optAlt"].contains(key) ? v : (v.hasPrefix("#") ? v : "#" + v) }
-            else if k == "palette", let eq = v.firstIndex(of: "="), let n = Int(v[..<eq]), n < 16 {
+            else if k == "palette", let eq = v.firstIndex(of: "="), let n = Int(v[..<eq]), (0..<16).contains(n) {
                 let c = String(v[v.index(after: eq)...]); out[n < 8 ? ansi[n] : "bright" + ansi[n - 8].capitalized] = c.hasPrefix("#") ? c : "#" + c
             }
         }
@@ -1372,8 +1457,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             p.standardInput = inPipe; p.standardOutput = out; p.standardError = FileHandle.nullDevice
             var text = ""
             if (try? p.run()) != nil {
-                inPipe.fileHandleForWriting.write(Data(prompt.utf8))
-                try? inPipe.fileHandleForWriting.close()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
+                    try? inPipe.fileHandleForWriting.close()
+                }
                 let d = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
                 if p.terminationStatus == 0 { text = String(decoding: d, as: UTF8.self) }
             }
@@ -1396,7 +1483,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
-        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + [host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
+        return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + ["--", host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
     var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
@@ -1420,7 +1507,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
-            if out.hasPrefix("{") { self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(out))") } }
+            if out.hasPrefix("{"), let d = out.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+               JSONSerialization.isValidJSONObject(obj) {
+                self.termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
+            }
         })
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
@@ -1448,7 +1539,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "open":
             guard let session, let at = paneWhere(b["ws"] as? String ?? "") else { return }
             let p = Pty()
-            p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 charset only
+            p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
             ptys[id] = p; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
         case "in":
@@ -1491,7 +1582,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var out = ""
             ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
                 onLine: { out += $0 }, onExit: { [weak self, weak web] code in
-                let js = out.hasPrefix("{") ? out : #"{"op":"\#(op)","path":"\#(path)","error":"\#(host) didn't answer (exit \#(code))"}"#
+                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(host) didn't answer (exit \(code))"])
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
             })
@@ -1525,7 +1616,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "copy":
             if let s = b["text"] as? String { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
         case "save":
-            if let st = b["state"], let d = try? JSONSerialization.data(withJSONObject: st) {
+            if let st = b["state"], JSONSerialization.isValidJSONObject(st), let d = try? JSONSerialization.data(withJSONObject: st) {
                 try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
                 try? d.write(to: termState(wid), options: .atomic)
             }
@@ -1537,14 +1628,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "badge":  // agents waiting on you, per window: the Dock icon shows the sum
             termBadges[wid] = max(0, b["n"] as? Int ?? 0)
             let n = termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
-        case "file":  // a dropped or pasted file: written where the pane's shell runs, its path goes back to be pasted
+        case "file":  // a dropped or pasted file: written where the pane's shell runs (uid-private 0700 dir, 0600 file), its path goes back to be pasted
             guard let at = paneWhere(b["ws"] as? String ?? ""), let data = b["data"] as? String, data.count <= 14_000_000,
                   data.range(of: #"^[A-Za-z0-9+/=]*$"#, options: .regularExpression) != nil else { return }
             let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
-            let path = "/tmp/greenlight/\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
-            // ponytail: stdin is written on the main thread, so a 10 MB drop over a slow ssh stalls the UI for its upload
-            ssh("mkdir -p /tmp/greenlight && base64 -d > \(shellQuote(path))", on: at.host, stdin: data, onExit: { [weak web] code in
-                web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 ? path : "")))")
+            let fname = "\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
+            var writtenPath = ""
+            ssh("umask 077; d=\"${XDG_RUNTIME_DIR:-/tmp}/greenlight-$(id -u)\"; [ ! -L \"$d\" ] && mkdir -p \"$d\" && chmod 700 \"$d\" && [ -O \"$d\" ] && p=\"$d/\"\(shellQuote(fname)) && base64 -d > \"$p\" && printf '%s\\n' \"$p\"",
+                on: at.host, stdin: data, onLine: { writtenPath = $0 }, onExit: { [weak web] code in
+                web?.callJS("window.term && term.filed", [tid, code == 0 && !writtenPath.isEmpty ? writtenPath : ""])
             })
         case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
             guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
@@ -1553,7 +1645,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let key = "\(at.host):\(port)"
             if tunnels[key]?.isRunning == true { NSWorkspace.shared.open(u); return tunnelState(key, "open") }
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)"] + devSsh(at.host) + [at.host]
+            p.arguments = ["-N", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)"] + devSsh(at.host) + ["--", at.host]
             p.standardError = FileHandle.nullDevice
             // ControlPath=none: through a ControlMaster the forward lands on the shared master and this ssh exits at once, so it would outlive the app
             p.terminationHandler = { [weak self] q in DispatchQueue.main.async { if self?.tunnels[key] === q { self?.tunnels[key] = nil; self?.tunnelState(key, q.terminationStatus == 0 ? "closed" : "failed") } } }  // ssh exiting on its own (port taken, host down, dropped): failed; Cancel removes it first
@@ -1955,6 +2047,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
     func applicationWillTerminate(_ n: Notification) {
         tunnels.values.forEach { $0.terminate() }
+        dashProc?.terminate(); dashProc = nil
+        greenlight.outboxProc?.terminate(); greenlight.outboxProc = nil
+        greenlight.proc?.terminate(); greenlight.proc = nil
+        treesProc?.terminate(); treesProc = nil
+        l1s.values.forEach { $0.c.proc?.terminate(); $0.c.voice.stopAll() }
         Speech.shared.stop()
         uitestServer?.stop()
         if let suite = uitestSuiteName { UserDefaults.standard.removePersistentDomain(forName: suite) }

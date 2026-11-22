@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+from typing import Any
 import sys
 import threading
 import time
@@ -73,7 +74,7 @@ DESTRUCTIVE = re.compile(r"\b(?:merge[sd]?|merging|close[sd]?|closing|delete[sd]
 REASONING = re.compile(r"\?\s*$|^\s*(?:why|what|how|which|who|when|where|should|could|would|can|is|are|does|do you|tell|explain|"
                        r"show|summari[sz]e|compare|list)\b|\b(?:if|when|unless|until|after|before|once|then|instead|because|except|but|or|temporarily)\b|"
                        r"\bfor\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?)\b", re.I)
-NEGATION = re.compile(r"\b(?:don'?t|do not|never|no longer|stop|not)\b(?! merge)", re.I)
+NEGATION = re.compile(r"\b(?:do ?n['’]?t|do not|never|no longer|stop|not|can['’]?t|won['’]?t|shouldn['’]?t)\b(?! merge)", re.I)
 REQUEST_PREFIX = re.compile(r"^\s*(?:(?:hey|ok|okay|so|and|now|chief)[,\s]+)*(?:(?:can|could|would|will) you\b|please\b|go ahead and\b|let'?s\b)", re.I)
 REF_RE = re.compile(r"(?:(?<![\w])[#!]|\b(?:pr|mr|pull request|merge request)\s*#?)(\d{1,7})\b", re.I)
 HERE_RE = re.compile(r"\b(?:this(?: one)?|it|here|current(?: one)?|that one)\b", re.I)
@@ -123,7 +124,12 @@ def ask(state, questions, deadline=DEADLINE):
     t = time.monotonic()
     got, provider = {}, "none"
     if decide is not None and hasattr(decide, "batch"):
-        f = _pool.submit(decide.batch, state, questions)
+        def _call():
+            try:
+                return decide.batch(state, questions, timeout=deadline)
+            except TypeError:
+                return decide.batch(state, questions)
+        f = _pool.submit(_call)
         try:
             got = f.result(timeout=deadline) or {}
             provider = next((a.get("provider") for a in got.values() if isinstance(a, dict) and a.get("provider")), "decide")
@@ -189,7 +195,7 @@ def grammar(text, pucks, focus=None):
     """What the words alone say: {verbs, refs, names, filters, count, tokens, here, why} (why: a reason it must go to Chief)."""
     raw = " ".join(text.split())
     t = POLITE.sub("", raw).strip()
-    g = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
+    g: dict[str, Any] = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
     if raw.endswith("?") and not REQUEST_PREFIX.search(raw):
         g["why"] = "it's a question or has a condition"
     # the workspaces named outright, longest first, cut out of the text so their words aren't read as anything else
@@ -200,6 +206,9 @@ def grammar(text, pucks, focus=None):
             g["why"] = "a status word also names a workspace"
             continue
         if len(n) >= 3 and re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", rest, re.I):
+            if DESTRUCTIVE.fullmatch(n) or NEGATION.fullmatch(n) or REASONING.fullmatch(n):
+                g["why"] = f"“{n}” also names a workspace"
+                continue
             g["names"].append(n)
             rest = re.sub(rf"(?<![\w-]){re.escape(n)}(?![\w-])", " ", rest, flags=re.I)
     matches = {v: list(r.finditer(rest)) for v, r in VERB_RES.items()}
@@ -342,14 +351,16 @@ def plan(o):
         return chief(g["why"], ms={"grammar": gram_ms, "total": gram_ms})
     pool, why = structural(g, pucks, focus)
     if why:
-        return chief(why, verb=g["verbs"][:1] and g["verbs"][0], ms={"grammar": gram_ms, "total": gram_ms})
+        return chief(why, verb=g["verbs"][0] if g["verbs"] else None, ms={"grammar": gram_ms, "total": gram_ms})
     # the candidates System One is asked about: the ones the structural words leave, capped
     state = {"board": [facts_of(p) for p in pucks[:40]], "focus": focus, "source": src}
     qs = {"route": {"kind": "choice", "question": f"The user said: “{text}”. Is it a direct board action (park, unpark, hold, release a hold, "
                                                   "start an agent to fix CI, rebase or answer threads, on named workspaces), or does it need "
                                                   "Chief to reason, look things up or confirm?",
                     "options": ["direct_board_action", "needs_chief_reasoning"]},
-          "verb": {"kind": "choice", "question": f"Which board action does “{text}” ask for?", "options": [*VERBS, "none"]}}
+          "verb": {"kind": "choice", "question": f"Which board action does “{text}” ask for? "
+                                                 "(Pick release only to lift a merge hold, never to deploy/ship/publish.)",
+                   "options": [*VERBS, "none"]}}
     if g["tokens"]:
         phrase = " ".join(g["tokens"])
         lex = lexical(g, pool)
@@ -365,6 +376,8 @@ def plan(o):
     if verb_d and verb_d != "none" and verb and verb_d != verb:
         return chief(f"unclear whether it means {verb} or {verb_d}", provider=provider, ms=ms | {"total": round((time.monotonic() - t0) * 1000)})
     if not verb and verb_d in VERBS and route == "direct_board_action":
+        if verb_d == "release" and not re.search(r"\b(?:hold|unhold|freeze|unfreeze|ice|merge)\b", text, re.I):
+            return chief("“release” without hold wording could mean shipping or deploying", provider=provider, ms=ms | {"total": round((time.monotonic() - t0) * 1000)})
         verb = verb_d  # System One read a verb the grammar has no words for ("put the auth ones on ice")
         g["verbs"] = [verb]
     if not verb:
@@ -452,6 +465,9 @@ def apply(o):
     acts = [a for a in o.get("actions") or [] if isinstance(a, dict) and a.get("verb") in VERBS and isinstance(a.get("ws"), str)]
     if not acts:
         return {"ok": True, "done": [], "errors": []}
+    if len(acts) > MAX_BULK:
+        return {"ok": False, "undo": None, "done": [], "unchanged": [],
+                "errors": [f"too many actions ({len(acts)} > {MAX_BULK})"], "ms": round((time.monotonic() - t0) * 1000)}
     live = [w for w, _ in dash.live_agents().values()]
     said = " ".join((o.get("text") or "").split())[:200]
     requested_undo = o.get("undo")
@@ -785,4 +801,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import diag
+    diag.install("dwim")
     main()

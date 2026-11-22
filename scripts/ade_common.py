@@ -44,8 +44,10 @@ def git_info(path):
 
 
 def worktree_add(repo, name, base=None):
+    if not name or name.startswith("-") or (base and base.startswith("-")):
+        raise RuntimeError("git worktree add: invalid branch or base ref")
     path = str(Path(repo).parent / f"{Path(repo).name}-{name.replace('/', '-')}")
-    p = subprocess.run(["git", "-C", repo, "worktree", "add", "-b", name, path, *([base] if base else [])],
+    p = subprocess.run(["git", "-C", repo, "worktree", "add", "-b", name, "--", path, *([base] if base else [])],
                        capture_output=True, text=True)
     if p.returncode:
         raise RuntimeError(f"git worktree add: {p.stderr.strip()[:300]}")
@@ -54,17 +56,24 @@ def worktree_add(repo, name, base=None):
 
 def worktree_remove(ws, force=False):
     if not ws["isMainWorktree"]:  # git refuses a dirty tree without --force: only the Basement passes it, after the page showed the risks
-        p = subprocess.run(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), ws["path"]], capture_output=True, text=True)
+        p = subprocess.run(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), "--", ws["path"]], capture_output=True, text=True)
         if p.returncode:
             raise RuntimeError(f"git worktree remove {ws['path']}: {p.stderr.strip()[:300]}")
+
+
+VALUE_FLAGS = frozenset({
+    "worktree", "repo", "name", "base-branch", "base", "comment", "terminal",
+    "text", "agent", "prompt", "limit", "pr", "gitlab-mr", "setup", "status", "display-name",
+})
 
 
 def flags(args):
     out, i = {}, 0
     while i < len(args):
         if args[i].startswith("--"):
-            val = i + 1 < len(args) and not args[i + 1].startswith("--")
-            out[args[i][2:]] = args[i + 1] if val else True
+            k = args[i][2:]
+            val = i + 1 < len(args) and (k in VALUE_FLAGS or not args[i + 1].startswith("--"))
+            out[k] = args[i + 1] if val else True
             i += 2 if val else 1
         else:
             i += 1
@@ -240,7 +249,9 @@ def set_goal(path, goal):
     g = goals()
     g.pop(path, None) if not goal else g.update({path: goal})
     GOALS.parent.mkdir(parents=True, exist_ok=True)
-    GOALS.write_text(json.dumps(g, indent=1))
+    tmp = GOALS.with_name(f".{GOALS.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(g, indent=1))
+    os.replace(tmp, GOALS)
 
 
 def repo_list(worktrees):
