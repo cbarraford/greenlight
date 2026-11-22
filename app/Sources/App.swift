@@ -395,6 +395,18 @@ func buildProjectList(saved: [[String: Any]], trees: [[String: Any]], dark: Bool
     }
 }
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+    /// A window with chat docked: 480pt of dashboard, a 320pt chat pane and the thin divider between them.
+    static let paneMinWidth: CGFloat = 480 + 320 + 1
+
+    /// Widen `w` to at least `minW`, shifted left when that would run past its screen's right edge.
+    static func widen(_ w: NSWindow, to minW: CGFloat, display: Bool) {
+        guard w.frame.width < minW else { return }
+        var f = w.frame
+        f.size.width = minW
+        if let vf = (w.screen ?? NSScreen.main)?.visibleFrame, f.maxX > vf.maxX { f.origin.x = max(vf.minX, vf.maxX - f.width) }
+        w.setFrame(f, display: display)
+    }
+
     var item: NSStatusItem?
     let greenlight = Core()
     var timer: Timer?
@@ -656,7 +668,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.backgroundColor = .black
         w.titleVisibility = .hidden  // the floors say L1 · GREENLIGHT; the title stays for the Window menu and Mission Control
         w.isReleasedWhenClosed = false  // the close button hides it; the menubar star, Dock or ⌃⌥M bring it back
-        w.minSize = NSSize(width: (!greenlight.chatOut && !chatHidden) ? 801 : 480, height: 520)
+        w.minSize = NSSize(width: (!greenlight.chatOut && !chatHidden) ? App.paneMinWidth : 480, height: 520)
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
@@ -1199,16 +1211,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                          chat.topAnchor.constraint(equalTo: home.topAnchor), chat.bottomAnchor.constraint(equalTo: home.bottomAnchor)])
         }
         let pane = !greenlight.chatOut && !chatHidden
-        let minW: CGFloat = pane ? 480 + 320 + max(1, split.dividerThickness) : 480
-        window.minSize = NSSize(width: minW, height: 520)
-        if pane && window.frame.width < minW {
-            var f = window.frame
-            f.size.width = minW
-            if let vf = (window.screen ?? NSScreen.main)?.visibleFrame, f.maxX > vf.maxX {
-                f.origin.x = max(vf.minX, vf.maxX - f.width)
-            }
-            window.setFrame(f, display: window.isVisible)
-        }
+        window.minSize = NSSize(width: pane ? App.paneMinWidth : 480, height: 520)
+        if pane { App.widen(window, to: App.paneMinWidth, display: window.isVisible) }
         if chatSlot.isHidden == pane {
             chatSlot.isHidden = !pane
             split.adjustSubviews(); split.layoutSubtreeIfNeeded()
@@ -1342,7 +1346,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.backgroundColor = .black; w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
-        w.minSize = NSSize(width: 801, height: 520); w.delegate = self; w.appearance = window.appearance
+        w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self; w.appearance = window.appearance
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
         c.follow(greenlight)
         c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
@@ -1375,11 +1379,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !w.setFrameUsingName("main-\(id)") {
             if let f = (from ?? (window.isVisible ? window : nil))?.frame { w.setFrame(f, display: false); w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)) } else { w.center() }
         }
-        if w.frame.width < w.minSize.width {
-            var f = w.frame
-            f.size.width = w.minSize.width
-            w.setFrame(f, display: false)
-        }
+        App.widen(w, to: w.minSize.width, display: false)
         w.setFrameAutosaveName("main-\(id)")
         sp.layoutSubtreeIfNeeded()
         sp.setPosition(max(480, sp.bounds.width - 440), ofDividerAt: 0)
