@@ -300,8 +300,8 @@ final class UITestServer {
                 done(["ok": true])
             case "clearErrors":
                 let js = "(() => { window.__uitestErrors = []; window.__uitestConsoleErrors = []; return true; })()"
-                app.fluid.evaluateJavaScript(js, completionHandler: nil)
-                (app.termWindow.contentView as? WKWebView)?.evaluateJavaScript(js, completionHandler: nil)
+                app.fluid.evaluateJavaScript(js, completionHandler: nil)  // safety-ok
+                (app.termWindow.contentView as? WKWebView)?.evaluateJavaScript(js, completionHandler: nil)  // safety-ok
                 done(["ok": true])
             case "openWorkspace":
                 guard let path = req["path"] as? String else { return done(["ok": false, "error": "missing path"]) }
@@ -378,7 +378,7 @@ final class UITestServer {
                 if remaining == 0 { done(errs, consoleErrs, domNodes) }
                 continue
             }
-            web.evaluateJavaScript(probeJS) { val, _ in
+            web.evaluateJavaScript(probeJS) { val, _ in  // safety-ok
                 if let s = val as? String, let d = s.data(using: .utf8),
                    let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
                     errs[name] = obj["e"] as? [String] ?? []

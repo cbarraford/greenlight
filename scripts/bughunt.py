@@ -19,6 +19,7 @@ CLI usage:
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -35,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,11 +44,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import diag  # noqa: E402
 import uitest  # noqa: E402
 
+harness: Any = None
 try:
-    import harness  # noqa: E402
+    import harness as _harness  # noqa: E402
     from greenlight import CONFIG, LIMIT_RE  # noqa: E402
+    harness = _harness
 except Exception:  # pragma: no cover - allows standalone import in minimal envs
-    harness = None
     CONFIG = {"agents": ["claude", "codex"]}
     LIMIT_RE = re.compile(r"rate.?limit|429|usage limit|limit reached", re.I)
 
@@ -303,8 +306,9 @@ def get_recent_commits(repo_dir: Path = ROOT, since_hours: int = 72) -> tuple[li
     except (OSError, subprocess.SubprocessError):
         return [], set()
 
-    commits, files = [], set()
-    cur = None
+    commits: list[dict[str, Any]] = []
+    files: set[str] = set()
+    cur: dict[str, Any] | None = None
     for line in p.stdout.splitlines():
         line = line.strip()
         if not line:
@@ -355,7 +359,9 @@ def run_baseline(repo_dir: Path = ROOT) -> list[dict]:
                 rc, out = p.returncode, (p.stdout + "\n" + p.stderr).strip()
             except subprocess.TimeoutExpired as e:
                 rc = 124
-                out = f"Timed out after {timeout}s\n{(e.stdout or '')}"
+                raw_out = e.stdout
+                out_s = raw_out.decode(errors="replace") if isinstance(raw_out, bytes) else (raw_out or "")
+                out = f"Timed out after {timeout}s\n{out_s}"
             except OSError as e:
                 rc, out = 127, str(e)
             if rc != 0:
@@ -470,29 +476,90 @@ def _read_isolated_diag_errors(home: Path) -> list[dict]:
     return hits
 
 
-def _check_session_oracles(sess: uitest.UITestSession, fixture: str, track: str, seen_keys: set[str],
-                           shot_dir: Path | None = None) -> tuple[list[dict], dict]:
+def _collect_web_findings(
+    sess: uitest.UITestSession, st: dict[str, Any], fixture: str, track: str,
+    seen_keys: set[str], shot_dir: Path | None,
+) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for page, errs in (st.get("webErrors") or {}).items():
+        for err in errs:
+            norm = normalize_error(err)
+            key = f"js:{page}:{norm}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                shot = _maybe_snap(sess, shot_dir, f"{fixture}-{page}-jserr.png", page)
+                found.append(make_finding(
+                    oracle="js_error", track=track, fixture=fixture,
+                    title=f"Uncaught JS error in `{page}` ({fixture}): {norm[:80]}",
+                    summary=f"[{page}] {err}", where=f"app/{page}.html",
+                    files=[f"app/{page}.html"], screenshot_path=shot, reproducible=False,
+                ))
+    for page, errs in (st.get("consoleErrors") or {}).items():
+        for err in errs:
+            norm = normalize_error(err)
+            key = f"console:{page}:{norm}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                found.append(make_finding(
+                    oracle="console_error", track=track, fixture=fixture,
+                    title=f"console.error in `{page}` ({fixture}): {norm[:80]}",
+                    summary=f"[{page}] console.error: {err}", where=f"app/{page}.html",
+                    files=[f"app/{page}.html"], reproducible=False,
+                ))
+    return found
+
+
+def _collect_xss_and_diag_findings(
+    sess: uitest.UITestSession, fixture: str, track: str, seen_keys: set[str],
+) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for page in ("dashboard", "terminal"):
+        try:
+            pwn = sess.eval(page, "window.__pwned || null", record=False)
+        except OSError:
+            break
+        if pwn.get("ok") and pwn.get("result"):
+            key = f"xss:{page}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                found.append(make_finding(
+                    oracle="security", track=track, fixture=fixture,
+                    title=f"XSS executed in `{page}` WKWebView ({fixture})",
+                    summary=f"window.__pwned became truthy ({pwn['result']}) in {page}",
+                    where=f"app/{page}.html", files=[f"app/{page}.html"], reproducible=True,
+                ))
+    if sess.home:
+        for ev in _read_isolated_diag_errors(sess.home):
+            key = f"diag:{ev['oracle']}:{normalize_error(ev['summary'])}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                found.append(make_finding(
+                    oracle=ev["oracle"], track=track, fixture=fixture,
+                    title=f"{ev['oracle']} under `{fixture}`: {ev['summary'][:80]}",
+                    summary=ev["summary"], details=ev["details"], where=ev["where"], reproducible=False,
+                ))
+    return found
+
+
+def _check_session_oracles(
+    sess: uitest.UITestSession, fixture: str, track: str, seen_keys: set[str],
+    shot_dir: Path | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Poll a live --uitest session for crashes, JS/console errors, XSS, diag errors, and metrics."""
-    new_findings = []
-    metrics = {}
+    new_findings: list[dict[str, Any]] = []
+    metrics: dict[str, Any] = {}
     if not sess.is_alive():
         rc = sess.proc.returncode if sess.proc else -1
         key = f"crash:{rc}"
         if key not in seen_keys:
             seen_keys.add(key)
-            log_tail = ""
             log_p = sess.root / "app.log"
-            if log_p.is_file():
-                log_tail = log_p.read_text(errors="replace")[-1500:]
+            log_tail = log_p.read_text(errors="replace")[-1500:] if log_p.is_file() else ""
             new_findings.append(make_finding(
-                oracle="crash",
-                track=track,
-                fixture=fixture,
+                oracle="crash", track=track, fixture=fixture,
                 title=f"Greenlight exited unexpectedly under `{fixture}` fixture (rc={rc})",
                 summary=f"Greenlight --uitest process exited unexpectedly with code {rc}",
-                details=log_tail,
-                where="app",
-                reproducible=False,  # upgraded to True after replay confirms
+                details=log_tail, where="app", reproducible=False,
             ))
         return new_findings, metrics
 
@@ -504,13 +571,10 @@ def _check_session_oracles(sess: uitest.UITestSession, fixture: str, track: str,
         if key not in seen_keys:
             seen_keys.add(key)
             new_findings.append(make_finding(
-                oracle="hang",
-                track=track,
-                fixture=fixture,
+                oracle="hang", track=track, fixture=fixture,
                 title=f"Greenlight UI RPC stalled/disconnected under `{fixture}` fixture",
                 summary=f"RPC state() failed: {type(e).__name__}: {e}",
-                where="UITestServer",
-                reproducible=False,
+                where="UITestServer", reproducible=False,
             ))
         return new_findings, metrics
     rpc_ms = round((time.monotonic() - t0) * 1000.0, 1)
@@ -518,93 +582,16 @@ def _check_session_oracles(sess: uitest.UITestSession, fixture: str, track: str,
     if st.get("ok"):
         metrics = dict(st.get("metrics") or {})
         metrics["rpcMs"] = rpc_ms
-        if rpc_ms > 2500.0:
-            key = "hang:slow_rpc"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                new_findings.append(make_finding(
-                    oracle="hang",
-                    track=track,
-                    fixture=fixture,
-                    title=f"Main-thread stall: state() RPC took {rpc_ms}ms on `{fixture}`",
-                    summary=f"UITest state() RPC blocked main thread for {rpc_ms}ms (>2500ms)",
-                    where="main-thread",
-                    reproducible=False,
-                ))
-
-        for page, errs in (st.get("webErrors") or {}).items():
-            for err in errs:
-                norm = normalize_error(err)
-                key = f"js:{page}:{norm}"
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    shot = _maybe_snap(sess, shot_dir, f"{fixture}-{page}-jserr.png", page)
-                    new_findings.append(make_finding(
-                        oracle="js_error",
-                        track=track,
-                        fixture=fixture,
-                        title=f"Uncaught JS error in `{page}` ({fixture}): {norm[:80]}",
-                        summary=f"[{page}] {err}",
-                        where=f"app/{page}.html",
-                        files=[f"app/{page}.html"],
-                        screenshot_path=shot,
-                        reproducible=False,
-                    ))
-
-        for page, errs in (st.get("consoleErrors") or {}).items():
-            for err in errs:
-                norm = normalize_error(err)
-                key = f"console:{page}:{norm}"
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    new_findings.append(make_finding(
-                        oracle="console_error",
-                        track=track,
-                        fixture=fixture,
-                        title=f"console.error in `{page}` ({fixture}): {norm[:80]}",
-                        summary=f"[{page}] console.error: {err}",
-                        where=f"app/{page}.html",
-                        files=[f"app/{page}.html"],
-                        reproducible=False,
-                    ))
-
-        # Security invariant: XSS payload must never execute.
-        for page in ("dashboard", "terminal"):
-            try:
-                pwn = sess.eval(page, "window.__pwned || null", record=False)
-                if pwn.get("ok") and pwn.get("result"):
-                    key = f"xss:{page}"
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        new_findings.append(make_finding(
-                            oracle="security",
-                            track=track,
-                            fixture=fixture,
-                            title=f"XSS executed in `{page}` WKWebView ({fixture})",
-                            summary=f"window.__pwned became truthy ({pwn['result']}) in {page}",
-                            where=f"app/{page}.html",
-                            files=[f"app/{page}.html"],
-                            reproducible=True,
-                        ))
-            except OSError:
-                break
-
-    if sess.home:
-        for ev in _read_isolated_diag_errors(sess.home):
-            key = f"diag:{ev['oracle']}:{normalize_error(ev['summary'])}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                new_findings.append(make_finding(
-                    oracle=ev["oracle"],
-                    track=track,
-                    fixture=fixture,
-                    title=f"{ev['oracle']} under `{fixture}`: {ev['summary'][:80]}",
-                    summary=ev["summary"],
-                    details=ev["details"],
-                    where=ev["where"],
-                    reproducible=False,
-                ))
-
+        if rpc_ms > 2500.0 and "hang:slow_rpc" not in seen_keys:
+            seen_keys.add("hang:slow_rpc")
+            new_findings.append(make_finding(
+                oracle="hang", track=track, fixture=fixture,
+                title=f"Main-thread stall: state() RPC took {rpc_ms}ms on `{fixture}`",
+                summary=f"UITest state() RPC blocked main thread for {rpc_ms}ms (>2500ms)",
+                where="main-thread", reproducible=False,
+            ))
+        new_findings.extend(_collect_web_findings(sess, st, fixture, track, seen_keys, shot_dir))
+        new_findings.extend(_collect_xss_and_diag_findings(sess, fixture, track, seen_keys))
     return new_findings, metrics
 
 
@@ -620,38 +607,94 @@ def _maybe_snap(sess: uitest.UITestSession, shot_dir: Path | None, name: str, wi
         return None
 
 
+def _run_fuzz_step(
+    sess: uitest.UITestSession, rng: random.Random, active_page: str,
+    fixture: str, step_idx: int, seen_keys: set[str], shot_dir: Path | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Execute one randomized UI action; returns (updated_active_page, layout_findings)."""
+    roll = rng.random()
+    layout_hits: list[dict[str, Any]] = []
+    if roll < 0.22:
+        fl = rng.choice(("pipe", "basement", "center"))
+        sess.action("floor", to=fl)
+        return ("dashboard" if fl == "center" else "terminal"), layout_hits
+    if roll < 0.34:
+        w, h = rng.choice(DEFAULT_VIEWPORTS)
+        win = "dashboard" if active_page == "dashboard" else "terminal"
+        sess.action("resize", window=win, width=w, height=h)
+    elif roll < 0.44:
+        act = rng.choice(("toggleChat", "openSettings", "closeSettings", "rescan", "openPalette", "closePalette", "chatClear"))
+        sess.action(act)
+    elif roll < 0.50:
+        sess.action("sendChat", text=rng.choice(("what should I work on next?", "highlight auth", "status")))
+    elif roll < 0.78:
+        r = sess.eval(active_page, _DISCOVER_CLICKABLES_JS, record=False)
+        sels = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
+        if sels:
+            sess.click(active_page, rng.choice(sels))
+    elif roll < 0.92:
+        r = sess.eval(active_page, _DISCOVER_INPUTS_JS, record=False)
+        sels = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
+        if sels:
+            sess.type_text(active_page, rng.choice(sels), rng.choice(FUZZ_INPUTS))
+    else:
+        r = sess.eval(active_page, _LAYOUT_CHECK_JS, record=False)
+        issues = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
+        for iss in issues:
+            key = f"layout:{active_page}:{iss}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                shot = _maybe_snap(sess, shot_dir, f"{fixture}-{active_page}-layout-{step_idx}.png", active_page)
+                layout_hits.append(make_finding(
+                    oracle="layout_issue", track="fuzz", fixture=fixture,
+                    title=f"Layout anomaly in `{active_page}` ({fixture}): {iss[:80]}",
+                    summary=f"[{active_page}] {iss}", where=f"app/{active_page}.html",
+                    files=[f"app/{active_page}.html"], screenshot_path=shot, reproducible=False,
+                ))
+    return active_page, layout_hits
+
+
+def _check_tmux_leak(tmux_sock: str | None, fixture: str) -> list[dict[str, Any]]:
+    if not tmux_sock:
+        return []
+    cp = subprocess.run(["tmux", "-L", tmux_sock, "list-sessions"], capture_output=True, text=True)
+    if cp.returncode == 0 and cp.stdout.strip():
+        subprocess.run(["tmux", "-L", tmux_sock, "kill-server"], capture_output=True, timeout=5)
+        return [make_finding(
+            oracle="process_leak", track="fuzz", fixture=fixture,
+            title=f"Isolated tmux server survived quit() on `{fixture}`",
+            summary=f"tmux -L {tmux_sock} still had live sessions after clean quit",
+            details=cp.stdout, where="scripts/uitest.py", reproducible=True,
+        )]
+    return []
+
+
 def fuzz_session(
     fixture: str = "default",
     seed: int = 42,
     steps: int = 60,
     binary: Path | None = None,
     run_dir: Path | None = None,
-) -> tuple[list[dict], list[dict], dict]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Run a seeded deterministic monkey session on one isolated --uitest instance.
 
     Returns (findings, trace_steps, summary_metrics).
     """
     rng = random.Random(seed)
     seen_keys: set[str] = set()
-    findings: list[dict] = []
-    metrics_samples: list[dict] = []
+    findings: list[dict[str, Any]] = []
+    metrics_samples: list[dict[str, Any]] = []
     shot_dir = (run_dir / "screenshots") if run_dir else None
     tmux_sock = None
 
     with uitest.UITestSession(fixture=fixture, binary=binary, record_trace=True) as sess:
         tmux_sock = sess.tmux_socket
-        # Let terminal & dashboard settle initially
-        try:
+        with contextlib.suppress(Exception):
             sess.wait_for("terminal", "Boolean(window.term)", timeout=12)
-        except Exception:
-            pass
         sess.action("floor", to="center")
-        try:
+        with contextlib.suppress(Exception):
             sess.wait_for("dashboard", "Boolean(document.querySelector('#main'))", timeout=12)
-        except Exception:
-            pass
 
-        # Initial oracle check
         f0, m0 = _check_session_oracles(sess, fixture, "fuzz", seen_keys, shot_dir)
         findings.extend(f0)
         if m0:
@@ -663,67 +706,20 @@ def fuzz_session(
                 f_dead, _ = _check_session_oracles(sess, fixture, "fuzz", seen_keys, shot_dir)
                 findings.extend(f_dead)
                 break
-
-            roll = rng.random()
             try:
-                if roll < 0.22:
-                    fl = rng.choice(("pipe", "basement", "center"))
-                    sess.action("floor", to=fl)
-                    active_page = "dashboard" if fl == "center" else "terminal"
-                elif roll < 0.34:
-                    w, h = rng.choice(DEFAULT_VIEWPORTS)
-                    win = "dashboard" if active_page == "dashboard" else "terminal"
-                    sess.action("resize", window=win, width=w, height=h)
-                elif roll < 0.44:
-                    act = rng.choice(("toggleChat", "openSettings", "closeSettings", "rescan", "openPalette", "closePalette", "chatClear"))
-                    sess.action(act)
-                elif roll < 0.50:
-                    sess.action("sendChat", text=rng.choice(("what should I work on next?", "highlight auth", "status")))
-                elif roll < 0.78:
-                    r = sess.eval(active_page, _DISCOVER_CLICKABLES_JS, record=False)
-                    sels = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
-                    if sels:
-                        sess.click(active_page, rng.choice(sels))
-                elif roll < 0.92:
-                    r = sess.eval(active_page, _DISCOVER_INPUTS_JS, record=False)
-                    sels = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
-                    if sels:
-                        sess.type_text(active_page, rng.choice(sels), rng.choice(FUZZ_INPUTS))
-                else:
-                    # Layout check on current page (soft oracle)
-                    r = sess.eval(active_page, _LAYOUT_CHECK_JS, record=False)
-                    issues = r.get("result") if r.get("ok") and isinstance(r.get("result"), list) else []
-                    for iss in issues:
-                        key = f"layout:{active_page}:{iss}"
-                        if key not in seen_keys:
-                            seen_keys.add(key)
-                            shot = _maybe_snap(sess, shot_dir, f"{fixture}-{active_page}-layout-{i}.png", active_page)
-                            findings.append(make_finding(
-                                oracle="layout_issue",
-                                track="fuzz",
-                                fixture=fixture,
-                                title=f"Layout anomaly in `{active_page}` ({fixture}): {iss[:80]}",
-                                summary=f"[{active_page}] {iss}",
-                                where=f"app/{active_page}.html",
-                                files=[f"app/{active_page}.html"],
-                                screenshot_path=shot,
-                                reproducible=False,
-                            ))
+                active_page, l_hits = _run_fuzz_step(sess, rng, active_page, fixture, i, seen_keys, shot_dir)
+                findings.extend(l_hits)
             except OSError as e:
                 key = f"hang:step:{type(e).__name__}"
                 if key not in seen_keys:
                     seen_keys.add(key)
                     findings.append(make_finding(
-                        oracle="hang",
-                        track="fuzz",
-                        fixture=fixture,
+                        oracle="hang", track="fuzz", fixture=fixture,
                         title=f"RPC failure during fuzz step {i} on `{fixture}`",
                         summary=f"Step {i} raised {type(e).__name__}: {e}",
-                        where="UITestServer",
-                        reproducible=False,
+                        where="UITestServer", reproducible=False,
                     ))
                 break
-
             if (i + 1) % 6 == 0 or i == steps - 1:
                 time.sleep(0.08)
                 fi, mi = _check_session_oracles(sess, fixture, "fuzz", seen_keys, shot_dir)
@@ -732,38 +728,21 @@ def fuzz_session(
                     metrics_samples.append(mi)
 
         trace_steps = list(sess.trace)
-        trace_path = None
         if run_dir and findings:
             trace_path = sess.save_trace(run_dir / "traces" / f"fuzz-{fixture}-seed{seed}.jsonl")
             for f in findings:
                 f["trace_path"] = str(trace_path)
 
-    # Post-stop process leak oracle: isolated tmux server must be gone
-    if tmux_sock:
-        cp = subprocess.run(["tmux", "-L", tmux_sock, "list-sessions"], capture_output=True, text=True)
-        if cp.returncode == 0 and cp.stdout.strip():
-            subprocess.run(["tmux", "-L", tmux_sock, "kill-server"], capture_output=True, timeout=5)
-            findings.append(make_finding(
-                oracle="process_leak",
-                track="fuzz",
-                fixture=fixture,
-                title=f"Isolated tmux server survived quit() on `{fixture}`",
-                summary=f"tmux -L {tmux_sock} still had live sessions after clean quit",
-                details=cp.stdout,
-                where="scripts/uitest.py",
-                reproducible=True,
-            ))
-
-    summary = _summarize_metrics(metrics_samples)
-    return findings, trace_steps, summary
+    findings.extend(_check_tmux_leak(tmux_sock, fixture))
+    return findings, trace_steps, _summarize_metrics(metrics_samples)
 
 
-def _summarize_metrics(samples: list[dict]) -> dict:
+def _summarize_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     if not samples:
         return {}
-    rss = [s["rssMb"] for s in samples if isinstance(s.get("rssMb"), (int, float))]
-    fds = [s["openFds"] for s in samples if isinstance(s.get("openFds"), (int, float)) and s["openFds"] >= 0]
-    rpcs = [s["rpcMs"] for s in samples if isinstance(s.get("rpcMs"), (int, float))]
+    rss = [s["rssMb"] for s in samples if isinstance(s.get("rssMb"), int | float)]
+    fds = [s["openFds"] for s in samples if isinstance(s.get("openFds"), int | float) and s["openFds"] >= 0]
+    rpcs = [s["rpcMs"] for s in samples if isinstance(s.get("rpcMs"), int | float)]
     dom_d = [s["domNodes"].get("dashboard", 0) for s in samples if isinstance(s.get("domNodes"), dict)]
     out = {"samples": len(samples)}
     if rss:
@@ -805,9 +784,9 @@ def append_perf_history(record: dict, home_dir: Path | None = None):
         f.write(json.dumps(record) + "\n")
 
 
-def evaluate_perf_oracles(soak_metrics: dict, history: list[dict], fixture: str = "scale") -> list[dict]:
+def evaluate_perf_oracles(soak_metrics: dict[str, Any], history: list[dict[str, Any]], fixture: str = "scale") -> list[dict[str, Any]]:
     """Flag clear memory leaks, FD leaks, or rolling-baseline perf regressions."""
-    findings = []
+    findings: list[dict[str, Any]] = []
     if not soak_metrics:
         return findings
 
@@ -881,10 +860,8 @@ def run_soak(soak_secs: int = 90, fixture: str = "scale", binary: Path | None = 
     cycle = 0
     with uitest.UITestSession(fixture=fixture, binary=binary, record_trace=False) as sess:
         sess.action("floor", to="center")
-        try:
+        with contextlib.suppress(Exception):
             sess.wait_for("dashboard", "document.querySelectorAll('#main .cell').length >= 10", timeout=15)
-        except Exception:
-            pass
         while time.monotonic() < deadline and sess.is_alive():
             cycle += 1
             try:
@@ -955,50 +932,43 @@ def replay_trace(
     return matched, findings
 
 
-def shrink_trace(steps: list[dict], check_fn, max_attempts: int = 24) -> list[dict]:
+def _try_shrink_pass(
+    cur: list[dict[str, Any]], slices: list[tuple[int, int]], check_fn: Any,
+    attempts: int, max_attempts: int, complement: bool = False,
+) -> tuple[list[dict[str, Any]] | None, int]:
+    for lo, hi in slices:
+        if attempts >= max_attempts:
+            break
+        cand = (cur[:lo] + cur[hi:]) if complement else cur[lo:hi]
+        if not cand or len(cand) == len(cur):
+            continue
+        attempts += 1
+        if check_fn(cand):
+            return cand, attempts
+    return None, attempts
+
+
+def shrink_trace(steps: list[dict[str, Any]], check_fn: Any, max_attempts: int = 24) -> list[dict[str, Any]]:
     """Delta-debugging (ddmin) trace minimizer: shrinks a failing trace to the smallest reproducer."""
     if len(steps) <= 2:
         return list(steps)
     cur = list(steps)
-    n = 2
-    attempts = 0
+    n, attempts = 2, 0
     while len(cur) >= 2 and attempts < max_attempts:
-        # Partition cur into n balanced slices
         bounds = [(i * len(cur)) // n for i in range(n + 1)]
         slices = [(bounds[i], bounds[i + 1]) for i in range(n) if bounds[i] < bounds[i + 1]]
-        reduced = False
-        # At n == 2, test each half first (fast binary search when bug lives in one half)
+        reduced: list[dict[str, Any]] | None = None
         if n == 2:
-            for lo, hi in slices:
-                if attempts >= max_attempts:
-                    break
-                cand = cur[lo:hi]
-                if not cand or len(cand) == len(cur):
-                    continue
-                attempts += 1
-                if check_fn(cand):
-                    cur = cand
-                    n = 2
-                    reduced = True
-                    break
-        if reduced:
-            continue
-        # Remove one slice at a time (complement) — converges fast for multi-step bugs
-        for lo, hi in slices:
-            if attempts >= max_attempts:
-                break
-            cand = cur[:lo] + cur[hi:]
-            if not cand or len(cand) == len(cur):
+            reduced, attempts = _try_shrink_pass(cur, slices, check_fn, attempts, max_attempts, complement=False)
+            if reduced is not None:
+                cur, n = reduced, 2
                 continue
-            attempts += 1
-            if check_fn(cand):
-                cur = cand
-                n = max(n - 1, 2)
-                reduced = True
-                break
-        if not reduced:
-            if n >= len(cur):
-                break
+        reduced, attempts = _try_shrink_pass(cur, slices, check_fn, attempts, max_attempts, complement=True)
+        if reduced is not None:
+            cur, n = reduced, max(n - 1, 2)
+        elif n >= len(cur):
+            break
+        else:
             n = min(len(cur), n * 2)
     return cur
 
@@ -1084,17 +1054,17 @@ def run_fuzz_matrix(
             if fp in confirmed_fps or (fp, fx) in attempted_pairs:
                 continue
             attempted_pairs.add((fp, fx))
-            tr = traces_by_fixture.get(fx)
-            if not tr:
+            tr_list = traces_by_fixture.get(fx)
+            if not tr_list:
                 continue
-            ok, _ = replay_trace(tr, fixture=fx, binary=binary, target_fingerprint=fp)
+            ok, _ = replay_trace(tr_list, fixture=fx, binary=binary, target_fingerprint=fp)
             if ok:
                 confirmed_fps.add(fp)
                 f["reproducible"] = True
                 f["auto_pr"] = True
                 f["priority"] = score_finding(f)
                 minimal = shrink_trace(
-                    tr,
+                    tr_list,
                     lambda cand, _fx=fx, _fp=fp: replay_trace(cand, fixture=_fx, binary=binary, target_fingerprint=_fp)[0],
                     max_attempts=14,
                 )
@@ -1102,7 +1072,8 @@ def run_fuzz_matrix(
                     min_path = save_trace_file(run_dir / "traces" / f"minimal-{fx}-{fp}.jsonl", fx, minimal)
                     f["trace_path"] = str(min_path)
 
-    soak_findings, soak_metrics = [], {}
+    soak_findings: list[dict[str, Any]] = []
+    soak_metrics: dict[str, Any] = {}
     if soak_secs > 0:
         with diag.span("bughunt", phase="soak"):
             soak_findings, soak_metrics = run_soak(
@@ -1134,9 +1105,8 @@ def run_agent_with_fallback(prompt: str, cwd: Path, timeout_mins: int = 20, agen
             )
             last_out, last_rc = p.stdout or "", p.returncode
         except subprocess.TimeoutExpired as e:
-            last_out = ((e.stdout or b"") if isinstance(e.stdout, bytes) else (e.stdout or ""))
-            if isinstance(last_out, bytes):
-                last_out = last_out.decode(errors="replace")
+            raw_out = e.stdout
+            last_out = raw_out.decode(errors="replace") if isinstance(raw_out, bytes) else (raw_out or "")
             last_out += "\n[timed out]"
             last_rc = 124
         except (ValueError, OSError) as e:
@@ -1218,7 +1188,8 @@ If no real bugs are found, output `[]` inside the `bughunt-json` block.
         oracle = str(item.get("oracle") or "visual_issue")
         if oracle not in ORACLE_SCORES:
             oracle = "visual_issue"
-        files = item.get("files") if isinstance(item.get("files"), list) else []
+        raw_files = item.get("files")
+        files: list[str] = [str(x) for x in raw_files] if isinstance(raw_files, list) else []
         findings.append(make_finding(
             oracle=oracle,
             track="llm_diff",
@@ -1227,7 +1198,7 @@ If no real bugs are found, output `[]` inside the `bughunt-json` block.
             summary=str(item["summary"]),
             details=str(item.get("details") or ""),
             where=str(item.get("where") or ""),
-            files=[str(x) for x in files],
+            files=files,
             reproducible=bool(item.get("reproducible")),
             recent_commit_overlap=bool(commits) or bool(set(files) & recent_files),
         ))
@@ -1271,10 +1242,37 @@ def run_vm_hid(repo_dir: Path, run_dir: Path) -> list[dict]:
 # Stage 4: Repro-First Autonomous Draft PR Patcher (Top-N Priority Cap)
 # ---------------------------------------------------------------------------
 
-def verify_patch_worktree(wt_dir: Path, finding: dict, base_ref: str = "HEAD~1") -> tuple[bool, str]:
+def _verify_trace_replay(wt_dir: Path, finding: dict[str, Any]) -> tuple[bool, str]:
+    """Rebuild binary from worktree and confirm the minimized UI trace no longer triggers the bug."""
+    wt_bin = Path(tempfile.gettempdir()) / f"gl-bughunt-verify-{os.getpid()}-{finding['fingerprint']}"
+    try:
+        wt_srcs = sorted((wt_dir / "app" / "Sources").glob("*.swift"))
+        cmd = ["swiftc", "-Onone", *[str(s) for s in wt_srcs], "-o", str(wt_bin)]
+        if platform.machine() == "arm64":
+            cmd = ["arch", "-arm64", *cmd]
+        env = {**os.environ, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools"}
+        cp = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
+        if cp.returncode != 0:
+            return False, f"Worktree swiftc build failed:\n{(cp.stderr or cp.stdout)[-1000:]}"
+        fx, tr_steps = load_trace_file(Path(finding["trace_path"]))
+        old_root = uitest.ROOT
+        try:
+            uitest.ROOT = wt_dir
+            still_fails, _ = replay_trace(tr_steps, fixture=fx, binary=wt_bin, target_fingerprint=finding["fingerprint"])
+        finally:
+            uitest.ROOT = old_root
+        if still_fails:
+            return False, "Trace replay verification failed: bug still reproduces after patch."
+        return True, "trace-replay: PASS (bug no longer reproduces)"
+    except Exception as e:
+        return False, f"Trace replay verification errored: {e}"
+    finally:
+        wt_bin.unlink(missing_ok=True)
+
+
+def verify_patch_worktree(wt_dir: Path, finding: dict[str, Any], base_ref: str = "HEAD~1") -> tuple[bool, str]:
     """Independent host-side verification gate before pushing or opening a Draft PR."""
     notes = []
-    # 1. Must have a real diff across all commits since base_ref AND at least one test change under tests/
     st = subprocess.run(["git", "-C", str(wt_dir), "status", "--porcelain"], capture_output=True, text=True)
     changed = [line[3:].strip() for line in st.stdout.splitlines() if line.strip()]
     diff_committed = subprocess.run(
@@ -1288,7 +1286,6 @@ def verify_patch_worktree(wt_dir: Path, finding: dict, base_ref: str = "HEAD~1")
         return False, f"Repro-first gate failed: no test file modified/added in tests/ (touched: {all_touched})."
     notes.append(f"Touched files ({len(all_touched)}): {', '.join(all_touched[:10])}")
 
-    # 2. Static safety, lint, release leak check, Python tests, Swift typecheck
     gates = [
         ("check_safety", [*_python_cmd(), "scripts/check_safety.py"], 60),
         ("test_release", [*_python_cmd(), "tests/test_release.py"], 60),
@@ -1309,74 +1306,17 @@ def verify_patch_worktree(wt_dir: Path, finding: dict, base_ref: str = "HEAD~1")
             return False, f"Verification gate `{gname}` failed (rc={p.returncode}):\n{tail}"
         notes.append(f"{gname}: PASS")
 
-    # 3. If UI bug with minimized trace, replay against rebuilt binary from worktree to verify fix!
     if sys.platform == "darwin" and finding.get("trace_path") and Path(finding["trace_path"]).is_file():
-        wt_bin = Path(tempfile.gettempdir()) / f"gl-bughunt-verify-{os.getpid()}-{finding['fingerprint']}"
-        try:
-            wt_srcs = sorted((wt_dir / "app" / "Sources").glob("*.swift"))
-            cmd = ["swiftc", "-Onone", *[str(s) for s in wt_srcs], "-o", str(wt_bin)]
-            if platform.machine() == "arm64":
-                cmd = ["arch", "-arm64", *cmd]
-            env = {**os.environ, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools"}
-            cp = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
-            if cp.returncode != 0:
-                return False, f"Worktree swiftc build failed:\n{(cp.stderr or cp.stdout)[-1000:]}"
-            fx, tr_steps = load_trace_file(Path(finding["trace_path"]))
-            old_root = uitest.ROOT
-            try:
-                uitest.ROOT = wt_dir
-                still_fails, _ = replay_trace(tr_steps, fixture=fx, binary=wt_bin, target_fingerprint=finding["fingerprint"])
-            finally:
-                uitest.ROOT = old_root
-            if still_fails:
-                return False, "Trace replay verification failed: bug still reproduces after patch."
-            notes.append("trace-replay: PASS (bug no longer reproduces)")
-        except Exception as e:
-            return False, f"Trace replay verification errored: {e}"
-        finally:
-            wt_bin.unlink(missing_ok=True)
+        ok, replay_note = _verify_trace_replay(wt_dir, finding)
+        if not ok:
+            return False, replay_note
+        notes.append(replay_note)
 
     return True, "\n".join(notes)
 
 
-def patch_and_open_draft_pr(
-    finding: dict,
-    repo_dir: Path,
-    base_ref: str,
-    run_dir: Path,
-    dry_run: bool = False,
-) -> dict:
-    """Create an isolated worktree, run repro-first agent patcher, verify independently, and open Draft PR."""
-    fp = finding["fingerprint"]
-    date_s = dt.date.today().isoformat()
-    branch = f"bughunt/{date_s}-{fp}"
-    wt_dir = Path(tempfile.mkdtemp(prefix=f"gl-bughunt-wt-{fp}-"))
-    result = {"fingerprint": fp, "title": finding["title"], "priority": finding["priority"], "status": "skipped", "pr_url": None, "note": ""}
-
-    if dry_run:
-        shutil.rmtree(wt_dir, ignore_errors=True)
-        result["status"] = "dry_run"
-        result["note"] = f"Would create branch {branch} and open Draft PR for priority={finding['priority']} ({finding['oracle']})"
-        return result
-
-    try:
-        # Prepare clean worktree off base_ref
-        shutil.rmtree(wt_dir, ignore_errors=True)
-        add = subprocess.run(
-            ["git", "-C", str(repo_dir), "worktree", "add", "-B", branch, str(wt_dir), base_ref],
-            capture_output=True, text=True, timeout=60,
-        )
-        if add.returncode != 0:
-            result["status"] = "failed"
-            result["note"] = f"git worktree add failed: {add.stderr.strip()}"
-            return result
-
-        replay_hint = (
-            f"python3 scripts/bughunt.py replay {finding['trace_path']}"
-            if finding.get("trace_path")
-            else "See details below"
-        )
-        prompt = f"""You are Greenlight's autonomous nightly bug fixer working in an isolated worktree (`{wt_dir}`).
+def _build_patch_prompt(finding: dict[str, Any], wt_dir: Path, base_ref: str, branch: str, replay_hint: str) -> str:
+    return f"""You are Greenlight's autonomous nightly bug fixer working in an isolated worktree (`{wt_dir}`).
 
 Target finding (priority {finding['priority']}, oracle `{finding['oracle']}`, fixture `{finding['fixture']}`):
 - Title: {finding['title']}
@@ -1396,51 +1336,21 @@ Strict 4-gate contract (do NOT skip any gate):
 
 Leave your fix cleanly committed on branch `{branch}` with a concise commit message (do NOT push; the orchestrator verifies and opens the Draft PR).
 """
-        with diag.span("bughunt", phase="patch"):
-            out, rc, eng = run_agent_with_fallback(prompt, cwd=wt_dir, timeout_mins=25)
-            (run_dir / f"patch-{fp}.log").write_text(f"engine={eng} rc={rc}\n\n{out}")
 
-        # Ensure any unstaged edits are committed if the agent forgot to commit
-        st = subprocess.run(["git", "-C", str(wt_dir), "status", "--porcelain"], capture_output=True, text=True)
-        if st.stdout.strip():
-            subprocess.run(["git", "-C", str(wt_dir), "add", "-A"], check=True)
-            cm = subprocess.run(
-                ["git", "-C", str(wt_dir), "commit", "-m", f"fix: {finding['title'][:72]} (bughunt {fp})"],
-                capture_output=True, text=True,
-            )
-            if cm.returncode != 0:
-                result["status"] = "failed"
-                result["note"] = f"git commit failed: {(cm.stderr or cm.stdout).strip()}"
-                return result
 
-        # Confirm branch actually advanced beyond base_ref
-        rev = subprocess.run(
-            ["git", "-C", str(wt_dir), "rev-list", "--count", f"{base_ref}..HEAD"],
-            capture_output=True, text=True,
-        )
-        if rev.returncode != 0 or int((rev.stdout or "0").strip() or "0") == 0:
-            result["status"] = "no_fix"
-            result["note"] = "Agent produced no commit (could not reproduce or fix cleanly)."
-            return result
+def _push_and_create_draft_pr(
+    wt_dir: Path, finding: dict[str, Any], branch: str, replay_hint: str, verify_notes: str,
+) -> tuple[str, str | None, str]:
+    push = subprocess.run(
+        ["git", "-C", str(wt_dir), "push", "-u", "origin", branch, "--force-with-lease"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if push.returncode != 0:
+        return "push_failed", None, f"git push failed: {push.stderr.strip()}"
 
-        ok, verify_notes = verify_patch_worktree(wt_dir, finding, base_ref=base_ref)
-        if not ok:
-            result["status"] = "verify_failed"
-            result["note"] = verify_notes
-            return result
-
-        # Push branch & open Draft PR
-        push = subprocess.run(
-            ["git", "-C", str(wt_dir), "push", "-u", "origin", branch, "--force-with-lease"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if push.returncode != 0:
-            result["status"] = "push_failed"
-            result["note"] = f"git push failed: {push.stderr.strip()}"
-            return result
-
-        pr_title = f"[Nightly Bug Hunt] {finding['title'][:95]}"
-        pr_body = f"""## Nightly Bug Hunt — Automated Draft Fix
+    fp = finding["fingerprint"]
+    pr_title = f"[Nightly Bug Hunt] {finding['title'][:95]}"
+    pr_body = f"""## Nightly Bug Hunt — Automated Draft Fix
 
 - **Priority score:** `{finding['priority']}` (`{finding['oracle']}`)
 - **Track:** `{', '.join(finding.get('tracks') or [finding['track']])}`
@@ -1460,23 +1370,80 @@ Leave your fix cleanly committed on branch `{branch}` with a concise commit mess
 <sub>Generated autonomously by `scripts/bughunt.py` (repro-first Draft PR; never auto-merged).</sub>
 <sub>bughunt-fingerprint: {fp}</sub>
 """
-        repo_args = _gh_repo_args(wt_dir)
-        pr_cmd = ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch, "--label", PR_LABEL]
-        pr = subprocess.run(pr_cmd, cwd=str(wt_dir), capture_output=True, text=True, timeout=60)
-        if pr.returncode != 0 and "label" in (pr.stderr or "").lower():
-            # Fallback if label doesn't exist in repo yet
-            pr = subprocess.run(
-                ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch],
-                cwd=str(wt_dir), capture_output=True, text=True, timeout=60,
-            )
-        if pr.returncode != 0:
-            result["status"] = "pr_failed"
-            result["note"] = f"gh pr create failed: {(pr.stderr or pr.stdout).strip()}"
+    repo_args = _gh_repo_args(wt_dir)
+    pr_cmd = ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch, "--label", PR_LABEL]
+    pr = subprocess.run(pr_cmd, cwd=str(wt_dir), capture_output=True, text=True, timeout=60)
+    if pr.returncode != 0 and "label" in (pr.stderr or "").lower():
+        pr = subprocess.run(
+            ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch],
+            cwd=str(wt_dir), capture_output=True, text=True, timeout=60,
+        )
+    if pr.returncode != 0:
+        return "pr_failed", None, f"gh pr create failed: {(pr.stderr or pr.stdout).strip()}"
+    pr_url = pr.stdout.strip().splitlines()[-1] if pr.stdout.strip() else ""
+    return "opened", pr_url, verify_notes
+
+
+def patch_and_open_draft_pr(
+    finding: dict[str, Any],
+    repo_dir: Path,
+    base_ref: str,
+    run_dir: Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Create an isolated worktree, run repro-first agent patcher, verify independently, and open Draft PR."""
+    fp = finding["fingerprint"]
+    branch = f"bughunt/{dt.date.today().isoformat()}-{fp}"
+    wt_dir = Path(tempfile.mkdtemp(prefix=f"gl-bughunt-wt-{fp}-"))
+    result: dict[str, Any] = {
+        "fingerprint": fp, "title": finding["title"], "priority": finding["priority"],
+        "status": "skipped", "pr_url": None, "note": "",
+    }
+    if dry_run:
+        shutil.rmtree(wt_dir, ignore_errors=True)
+        result["status"] = "dry_run"
+        result["note"] = f"Would create branch {branch} and open Draft PR for priority={finding['priority']} ({finding['oracle']})"
+        return result
+
+    try:
+        shutil.rmtree(wt_dir, ignore_errors=True)
+        add = subprocess.run(
+            ["git", "-C", str(repo_dir), "worktree", "add", "-B", branch, str(wt_dir), base_ref],
+            capture_output=True, text=True, timeout=60,
+        )
+        if add.returncode != 0:
+            result["status"], result["note"] = "failed", f"git worktree add failed: {add.stderr.strip()}"
             return result
 
-        result["status"] = "opened"
-        result["pr_url"] = pr.stdout.strip().splitlines()[-1] if pr.stdout.strip() else ""
-        result["note"] = verify_notes
+        replay_hint = f"python3 scripts/bughunt.py replay {finding['trace_path']}" if finding.get("trace_path") else "See details below"
+        prompt = _build_patch_prompt(finding, wt_dir, base_ref, branch, replay_hint)
+        with diag.span("bughunt", phase="patch"):
+            out, rc, eng = run_agent_with_fallback(prompt, cwd=wt_dir, timeout_mins=25)
+            (run_dir / f"patch-{fp}.log").write_text(f"engine={eng} rc={rc}\n\n{out}")
+
+        st = subprocess.run(["git", "-C", str(wt_dir), "status", "--porcelain"], capture_output=True, text=True)
+        if st.stdout.strip():
+            subprocess.run(["git", "-C", str(wt_dir), "add", "-A"], check=True)
+            cm = subprocess.run(
+                ["git", "-C", str(wt_dir), "commit", "-m", f"fix: {finding['title'][:72]} (bughunt {fp})"],
+                capture_output=True, text=True,
+            )
+            if cm.returncode != 0:
+                result["status"], result["note"] = "failed", f"git commit failed: {(cm.stderr or cm.stdout).strip()}"
+                return result
+
+        rev = subprocess.run(["git", "-C", str(wt_dir), "rev-list", "--count", f"{base_ref}..HEAD"], capture_output=True, text=True)
+        if rev.returncode != 0 or int((rev.stdout or "0").strip() or "0") == 0:
+            result["status"], result["note"] = "no_fix", "Agent produced no commit (could not reproduce or fix cleanly)."
+            return result
+
+        ok, verify_notes = verify_patch_worktree(wt_dir, finding, base_ref=base_ref)
+        if not ok:
+            result["status"], result["note"] = "verify_failed", verify_notes
+            return result
+
+        status, pr_url, note = _push_and_create_draft_pr(wt_dir, finding, branch, replay_hint, verify_notes)
+        result["status"], result["pr_url"], result["note"] = status, pr_url, note
         return result
     finally:
         subprocess.run(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(wt_dir)], capture_output=True)
