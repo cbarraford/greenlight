@@ -55,8 +55,63 @@ except Exception:  # pragma: no cover - allows standalone import in minimal envs
 
 PR_LABEL = "nightly-bug-hunter"
 LAUNCHD_LABEL = "greenlight-bughunt"
+LLM_MAX_COMMITS = 15
 DEFAULT_FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt")
 DEFAULT_VIEWPORTS = ((760, 520), (1300, 900), (1680, 1020), (1100, 480))
+_CRASH_HEADER_RE = re.compile(
+    r"(?:\*\*\* Terminating app due to uncaught exception|"
+    r"Fatal error:|Assertion failed:|Precondition failed:|"
+    r"Thread \d+ Crashed|EXC_BAD_ACCESS|Segmentation fault|Bus error)"
+)
+_PERMISSION_DENIED_RE = re.compile(
+    r"(?:permission|command|bash|tool)[^.\n]{0,50}(?:denied|blocked|refused|not allowed)|"
+    r"nothing ran|unable to (?:run|execute)",
+    re.I,
+)
+_CLAUDE_EXPLORE_TOOLS = ",".join((
+    "Read",
+    "Glob",
+    "Grep",
+    "Bash(python3 scripts/uitest.py *)",
+    "Bash(python3 *)",
+    "Bash(git log *)",
+    "Bash(git show *)",
+    "Bash(git diff *)",
+    "Bash(git status*)",
+    "Bash(ls *)",
+    "Bash(cat *)",
+    "Bash(head *)",
+    "Bash(tail *)",
+    "Bash(rg *)",
+    "Bash(grep *)",
+    "Bash(sleep *)",
+    "Bash(mkdir *)",
+    "Bash(echo *)",
+))
+_CLAUDE_PATCH_TOOLS = ",".join((
+    "Read",
+    "Edit",
+    "Write",
+    "Glob",
+    "Grep",
+    "Bash(python3 *)",
+    "Bash(uv *)",
+    "Bash(make *)",
+    "Bash(ruff *)",
+    "Bash(git *)",
+    "Bash(node *)",
+    "Bash(shellcheck *)",
+    "Bash(swiftc *)",
+    "Bash(arch *)",
+    "Bash(ls *)",
+    "Bash(cat *)",
+    "Bash(head *)",
+    "Bash(tail *)",
+    "Bash(rg *)",
+    "Bash(grep *)",
+    "Bash(sleep *)",
+    "Bash(echo *)",
+))
 FUZZ_INPUTS = (
     "status",
     "park the auth ones",
@@ -328,7 +383,7 @@ def get_recent_commits(repo_dir: Path = ROOT, since_hours: int = 72) -> tuple[li
 # ---------------------------------------------------------------------------
 
 def _python_cmd() -> list[str]:
-    return ["uv", "run", "python"] if shutil.which("uv") else [sys.executable]
+    return ["uv", "run", "--no-project", "python"] if shutil.which("uv") else [sys.executable]
 
 
 def _has_playwright() -> bool:
@@ -433,7 +488,18 @@ _LAYOUT_CHECK_JS = """(() => {
 })()"""
 
 
-def _read_isolated_diag_errors(home: Path) -> list[dict]:
+def _is_expected_chaos_orca_error(ev: dict[str, Any], fixture: str) -> bool:
+    """Under the chaos fixture, stub orca intentionally returns malformed JSON / exits 1."""
+    if fixture != "chaos" or ev.get("comp") not in ("dash", "greenlight"):
+        return False
+    if ev.get("err") not in ("JSONDecodeError", "RuntimeError"):
+        return False
+    where = ev.get("where")
+    frames = where if isinstance(where, list) else ([str(where)] if where else [])
+    return any("greenlight.py:" in str(fr) and ("orca_cli" in str(fr) or ":_run" in str(fr)) for fr in frames)
+
+
+def _read_isolated_diag_errors(home: Path, fixture: str = "default") -> list[dict]:
     """Read isolated $GREENLIGHT_HOME/diag/{events,app}.jsonl for hangs, uncaught errors, dash_errors."""
     hits = []
     for fname in ("events.jsonl", "app.jsonl"):
@@ -458,6 +524,8 @@ def _read_isolated_diag_errors(home: Path) -> list[dict]:
                     "details": json.dumps(ev),
                 })
             elif kind in ("uncaught", "dash_error"):
+                if _is_expected_chaos_orca_error(ev, fixture):
+                    continue
                 where = ev.get("where")
                 where_s = where[-1] if isinstance(where, list) and where else str(where or ev.get("comp") or "")
                 hits.append({
@@ -509,6 +577,53 @@ def _collect_web_findings(
     return found
 
 
+def _extract_crash_excerpt(log_text: str, max_chars: int = 3500) -> str:
+    """Keep the exception reason + top stack frames instead of tail-truncating to AppKit boilerplate."""
+    if len(log_text) <= max_chars:
+        return log_text
+    matches = list(_CRASH_HEADER_RE.finditer(log_text))
+    if matches:
+        start = max(0, matches[-1].start() - 200)
+        head_budget = max_chars - 500
+        excerpt = log_text[start : start + head_budget]
+        if start + head_budget < len(log_text):
+            tail = log_text[-450:]
+            return f"{excerpt}\n... [truncated] ...\n{tail}"
+        return excerpt
+    head = log_text[:1200]
+    tail = log_text[-(max_chars - 1250) :]
+    return f"{head}\n... [truncated] ...\n{tail}"
+
+
+def _settle_if_exiting(sess: uitest.UITestSession, wait_secs: float = 0.3) -> bool:
+    """Give a crashing child a brief moment to report its exit code; return True if dead."""
+    if not sess.is_alive():
+        return True
+    proc = getattr(sess, "proc", None)
+    if proc is not None and hasattr(proc, "wait"):
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+            proc.wait(timeout=wait_secs)
+    return not sess.is_alive()
+
+
+def _record_crash_finding(
+    sess: uitest.UITestSession, fixture: str, track: str, seen_keys: set[str],
+) -> list[dict[str, Any]]:
+    rc = sess.proc.returncode if sess.proc else -1
+    key = f"crash:{rc}"
+    if key in seen_keys:
+        return []
+    seen_keys.add(key)
+    log_p = sess.root / "app.log"
+    log_excerpt = _extract_crash_excerpt(log_p.read_text(errors="replace")) if log_p.is_file() else ""
+    return [make_finding(
+        oracle="crash", track=track, fixture=fixture,
+        title=f"Greenlight exited unexpectedly under `{fixture}` fixture (rc={rc})",
+        summary=f"Greenlight --uitest process exited unexpectedly with code {rc}",
+        details=log_excerpt, where="app", reproducible=False,
+    )]
+
+
 def _collect_xss_and_diag_findings(
     sess: uitest.UITestSession, fixture: str, track: str, seen_keys: set[str],
 ) -> list[dict[str, Any]]:
@@ -516,7 +631,7 @@ def _collect_xss_and_diag_findings(
     for page in ("dashboard", "terminal"):
         try:
             pwn = sess.eval(page, "window.__pwned || null", record=False)
-        except OSError:
+        except (OSError, ValueError):
             break
         if pwn.get("ok") and pwn.get("result"):
             key = f"xss:{page}"
@@ -529,7 +644,7 @@ def _collect_xss_and_diag_findings(
                     where=f"app/{page}.html", files=[f"app/{page}.html"], reproducible=True,
                 ))
     if sess.home:
-        for ev in _read_isolated_diag_errors(sess.home):
+        for ev in _read_isolated_diag_errors(sess.home, fixture=fixture):
             key = f"diag:{ev['oracle']}:{normalize_error(ev['summary'])}"
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -549,24 +664,16 @@ def _check_session_oracles(
     new_findings: list[dict[str, Any]] = []
     metrics: dict[str, Any] = {}
     if not sess.is_alive():
-        rc = sess.proc.returncode if sess.proc else -1
-        key = f"crash:{rc}"
-        if key not in seen_keys:
-            seen_keys.add(key)
-            log_p = sess.root / "app.log"
-            log_tail = log_p.read_text(errors="replace")[-1500:] if log_p.is_file() else ""
-            new_findings.append(make_finding(
-                oracle="crash", track=track, fixture=fixture,
-                title=f"Greenlight exited unexpectedly under `{fixture}` fixture (rc={rc})",
-                summary=f"Greenlight --uitest process exited unexpectedly with code {rc}",
-                details=log_tail, where="app", reproducible=False,
-            ))
+        new_findings.extend(_record_crash_finding(sess, fixture, track, seen_keys))
         return new_findings, metrics
 
     t0 = time.monotonic()
     try:
         st = sess.state()
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        if _settle_if_exiting(sess):
+            new_findings.extend(_record_crash_finding(sess, fixture, track, seen_keys))
+            return new_findings, metrics
         key = f"hang:rpc:{type(e).__name__}"
         if key not in seen_keys:
             seen_keys.add(key)
@@ -603,7 +710,7 @@ def _maybe_snap(sess: uitest.UITestSession, shot_dir: Path | None, name: str, wi
         out = shot_dir / name
         r = sess.screenshot(out, window=window)
         return str(out) if r.get("ok") else None
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 
@@ -709,16 +816,20 @@ def fuzz_session(
             try:
                 active_page, l_hits = _run_fuzz_step(sess, rng, active_page, fixture, i, seen_keys, shot_dir)
                 findings.extend(l_hits)
-            except OSError as e:
-                key = f"hang:step:{type(e).__name__}"
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    findings.append(make_finding(
-                        oracle="hang", track="fuzz", fixture=fixture,
-                        title=f"RPC failure during fuzz step {i} on `{fixture}`",
-                        summary=f"Step {i} raised {type(e).__name__}: {e}",
-                        where="UITestServer", reproducible=False,
-                    ))
+            except (OSError, ValueError) as e:
+                if _settle_if_exiting(sess):
+                    f_dead, _ = _check_session_oracles(sess, fixture, "fuzz", seen_keys, shot_dir)
+                    findings.extend(f_dead)
+                else:
+                    key = f"hang:step:{type(e).__name__}"
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        findings.append(make_finding(
+                            oracle="hang", track="fuzz", fixture=fixture,
+                            title=f"RPC failure during fuzz step {i} on `{fixture}`",
+                            summary=f"Step {i} raised {type(e).__name__}: {e}",
+                            where="UITestServer", reproducible=False,
+                        ))
                 break
             if (i + 1) % 6 == 0 or i == steps - 1:
                 time.sleep(0.08)
@@ -873,7 +984,7 @@ def run_soak(soak_secs: int = 90, fixture: str = "scale", binary: Path | None = 
                     sess.action("resize", window="active", width=w, height=h)
                 if cycle % 5 == 0:
                     sess.action("toggleChat")
-            except OSError:
+            except (OSError, ValueError):
                 pass
             time.sleep(min(2.0, max(0.2, deadline - time.monotonic())))
             f_i, m_i = _check_session_oracles(sess, fixture, "soak", seen_keys)
@@ -912,7 +1023,8 @@ def replay_trace(
                     sess.type_text(args.get("target", "dashboard"), args.get("selector", ""), args.get("text", ""))
                 elif op == "eval":
                     sess.eval(args.get("target", "dashboard"), args.get("js", "null"), record=False)
-            except OSError:
+            except (OSError, ValueError):
+                _settle_if_exiting(sess)
                 break
             time.sleep(0.05)
         f_end, _ = _check_session_oracles(sess, fixture, "replay", seen)
@@ -1057,17 +1169,23 @@ def run_fuzz_matrix(
             tr_list = traces_by_fixture.get(fx)
             if not tr_list:
                 continue
-            ok, _ = replay_trace(tr_list, fixture=fx, binary=binary, target_fingerprint=fp)
+            try:
+                ok, _ = replay_trace(tr_list, fixture=fx, binary=binary, target_fingerprint=fp)
+            except Exception:
+                ok = False
             if ok:
                 confirmed_fps.add(fp)
                 f["reproducible"] = True
                 f["auto_pr"] = True
                 f["priority"] = score_finding(f)
-                minimal = shrink_trace(
-                    tr_list,
-                    lambda cand, _fx=fx, _fp=fp: replay_trace(cand, fixture=_fx, binary=binary, target_fingerprint=_fp)[0],
-                    max_attempts=14,
-                )
+                try:
+                    minimal = shrink_trace(
+                        tr_list,
+                        lambda cand, _fx=fx, _fp=fp: replay_trace(cand, fixture=_fx, binary=binary, target_fingerprint=_fp)[0],
+                        max_attempts=14,
+                    )
+                except Exception:
+                    minimal = tr_list
                 if run_dir:
                     min_path = save_trace_file(run_dir / "traces" / f"minimal-{fx}-{fp}.jsonl", fx, minimal)
                     f["trace_path"] = str(min_path)
@@ -1088,7 +1206,33 @@ def run_fuzz_matrix(
 # Headless agent runner (uses Greenlight's harness.py with limit fallback)
 # ---------------------------------------------------------------------------
 
-def run_agent_with_fallback(prompt: str, cwd: Path, timeout_mins: int = 20, agents: list[str] | None = None) -> tuple[str, int, str]:
+def _augment_agent_cmd(
+    eng: str, cmd: list[str], mode: str = "default", add_dirs: list[Path] | None = None,
+) -> list[str]:
+    """Add scoped tool permissions so headless Claude can run uitest/tests safely without global bypass."""
+    if eng != "claude":
+        return cmd
+    is_bypass = bool(harness and harness.conf(eng).get("bypass") is True)
+    extra: list[str] = []
+    if mode == "explore":
+        extra.extend(["--disallowedTools", "Edit,Write,NotebookEdit"])
+        if not is_bypass:
+            extra.extend(["--allowedTools", _CLAUDE_EXPLORE_TOOLS])
+    elif mode == "patch" and not is_bypass:
+        extra.extend(["--allowedTools", _CLAUDE_PATCH_TOOLS])
+    for d in add_dirs or ():
+        extra.extend(["--add-dir", str(d)])
+    return [*cmd, *extra]
+
+
+def run_agent_with_fallback(
+    prompt: str,
+    cwd: Path,
+    timeout_mins: int = 20,
+    agents: list[str] | None = None,
+    mode: str = "default",
+    add_dirs: list[Path] | None = None,
+) -> tuple[str, int, str]:
     """Run an agent prompt across configured harnesses, falling back automatically on usage limits."""
     if harness is None:
         return "harness module unavailable", 127, "none"
@@ -1098,6 +1242,7 @@ def run_agent_with_fallback(prompt: str, cwd: Path, timeout_mins: int = 20, agen
         last_eng = eng
         try:
             cmd, stdin_text = harness.argv(eng, prompt, stream=False)
+            cmd = _augment_agent_cmd(eng, cmd, mode=mode, add_dirs=add_dirs)
             p = subprocess.run(
                 cmd, input=stdin_text, cwd=str(cwd), text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1117,34 +1262,65 @@ def run_agent_with_fallback(prompt: str, cwd: Path, timeout_mins: int = 20, agen
     return last_out, last_rc, last_eng
 
 
+def parse_bughunt_result(text: str) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
+    """Extract (found_valid_block, findings, telemetry_meta) from the last ```bughunt-json``` block."""
+    matches = list(re.finditer(r"```bughunt-json\s*(.*?)\s*```", text, re.S | re.I))
+    if not matches:
+        return False, [], {}
+    try:
+        data = json.loads(matches[-1].group(1))
+    except ValueError:
+        return False, [], {}
+    if isinstance(data, dict):
+        raw_findings = data.get("findings")
+        findings = [x for x in raw_findings if isinstance(x, dict)] if isinstance(raw_findings, list) else []
+        meta = {
+            k: data.get(k)
+            for k in ("status", "checks_run", "fixtures_tested", "uitest_started", "notes")
+            if k in data
+        }
+        return True, findings, meta
+    if isinstance(data, list):
+        return True, [x for x in data if isinstance(x, dict)], {"legacy_list": True}
+    return False, [], {}
+
+
 def parse_bughunt_json(text: str) -> list[dict]:
     """Extract structured findings from a fenced ```bughunt-json ... ``` block in agent output."""
-    m = re.search(r"```bughunt-json\s*(.*?)\s*```", text, re.S | re.I)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(1))
-    except ValueError:
-        return []
-    return data if isinstance(data, list) else []
+    _, findings, _ = parse_bughunt_result(text)
+    return findings
 
 
-# ---------------------------------------------------------------------------
-# Track B: Diff-Aware Commit Regression LLM Explorer
-# ---------------------------------------------------------------------------
+def _classify_llm_explorer_run(
+    out: str, rc: int, eng: str, has_json: bool, raw_items: list[dict[str, Any]], meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Determine Track B execution status (ok / blocked / error) so blocked runs never fake a clean pass."""
+    base: dict[str, Any] = {
+        "engine": eng,
+        "rc": rc,
+        "checks_run": meta.get("checks_run"),
+        "fixtures_tested": meta.get("fixtures_tested") or [],
+        "uitest_started": meta.get("uitest_started"),
+    }
+    if rc != 0:
+        return {**base, "status": "error", "detail": f"{eng} exited {rc}"}
+    if not has_json:
+        return {**base, "status": "error", "detail": f"{eng} output lacked a valid bughunt-json block"}
+    reported = str(meta.get("status") or "").lower()
+    if reported in ("blocked", "error", "skipped"):
+        return {**base, "status": reported, "detail": str(meta.get("notes") or f"agent reported {reported}")[:200]}
+    if meta.get("uitest_started") is False or (isinstance(meta.get("checks_run"), int) and meta["checks_run"] <= 0):
+        return {**base, "status": "blocked", "detail": str(meta.get("notes") or "zero uitest checks executed")[:200]}
+    if not raw_items and _PERMISSION_DENIED_RE.search(out):
+        return {**base, "status": "blocked", "detail": "agent reported tool/command permission denial"}
+    checks = meta.get("checks_run")
+    detail = f"engine={eng}, checks={checks if checks is not None else '?'}, findings={len(raw_items)}"
+    return {**base, "status": "ok", "detail": detail}
 
-def run_llm_explorer(repo_dir: Path, commits: list[dict], recent_files: set[str], run_dir: Path) -> list[dict]:
-    """Ask a headless coding agent to exercise recently changed flows against a live --uitest app."""
-    if sys.platform != "darwin":
-        return []
-    commit_lines = "\n".join(f"- {c['sha']} {c['subject']} ({', '.join(c['files'][:6])})" for c in commits[:15])
-    if not commit_lines:
-        commit_lines = "- (No commits in window — focus on long-tail interactive UI flows: look dialog, palette, diff, settings, chat)"
 
-    shots = run_dir / "screenshots" / "llm"
-    shots.mkdir(parents=True, exist_ok=True)
-    prompt = f"""You are Greenlight's nightly QA & regression hunter running in READ-ONLY exploration mode.
-Do NOT modify any repository files.
+def _build_llm_explorer_prompt(commit_lines: str, shots_dir: Path) -> str:
+    return f"""You are Greenlight's nightly QA & regression hunter running in READ-ONLY exploration mode.
+Do NOT modify any repository files. Run simple direct commands (`python3 scripts/uitest.py ...`, `git show ...`, `git diff ...`) rather than complex chained subshells.
 
 Recent commits to scrutinize for regressions:
 {commit_lines}
@@ -1156,31 +1332,81 @@ Instructions:
 2. Drive the app through `scripts/uitest.py` (`action`, `click`, `type`, `eval`, `state`, `screenshot`) to thoroughly test:
    - The UI/backend features touched by the recent commits above.
    - Edge cases (empty states, resizing, switching Pipe <-> Basement <-> Greenlight Center <-> Settings, opening/closing dialogs).
-3. Capture screenshots into `{shots}` when you spot visual/layout issues or after key state transitions.
+3. Capture screenshots into `{shots_dir}` when you spot visual/layout issues or after key state transitions.
 4. ALWAYS stop every started instance cleanly with `python3 scripts/uitest.py stop --socket <SOCK>` before finishing.
-5. Report ONLY concrete, observed bugs (zero speculation). End your response with a single fenced JSON block:
+5. Report ONLY concrete, observed bugs (zero speculation). End your response with a single fenced JSON object:
 
 ```bughunt-json
-[
-  {{
-    "title": "Short bug title",
-    "oracle": "commit_regression | js_error | console_error | hang | layout_issue | visual_issue | security",
-    "fixture": "default",
-    "summary": "Exact observed failure or error message",
-    "where": "app/dashboard.html or scripts/dash.py:123",
-    "files": ["app/dashboard.html"],
-    "reproducible": true,
-    "details": "Exact uitest.py commands that reproduced it and observed output"
-  }}
-]
+{{
+  "status": "ok | blocked | error",
+  "uitest_started": true,
+  "checks_run": 6,
+  "fixtures_tested": ["default"],
+  "notes": "Brief summary of flows actually exercised (or why blocked)",
+  "findings": [
+    {{
+      "title": "Short bug title",
+      "oracle": "commit_regression | js_error | console_error | hang | layout_issue | visual_issue | security",
+      "fixture": "default",
+      "summary": "Exact observed failure or error message",
+      "where": "app/dashboard.html or scripts/dash.py:123",
+      "files": ["app/dashboard.html"],
+      "reproducible": true,
+      "details": "Exact uitest.py commands that reproduced it and observed output"
+    }}
+  ]
+}}
 ```
-If no real bugs are found, output `[]` inside the `bughunt-json` block.
+If commands could not run, set `"status": "blocked"`, `"uitest_started": false`, `"checks_run": 0`. If tests ran cleanly with no bugs, set `"status": "ok"`, `"uitest_started": true`, `"checks_run": <N>`, and `"findings": []`.
 """
-    with diag.span("bughunt", phase="llm_explorer"):
-        out, rc, eng = run_agent_with_fallback(prompt, cwd=repo_dir, timeout_mins=15)
-        (run_dir / "llm-explorer.log").write_text(f"engine={eng} rc={rc}\n\n{out}")
 
-    raw_items = parse_bughunt_json(out)
+
+# ---------------------------------------------------------------------------
+# Track B: Diff-Aware Commit Regression LLM Explorer
+# ---------------------------------------------------------------------------
+
+def run_llm_explorer(
+    repo_dir: Path,
+    commits: list[dict],
+    recent_files: set[str],
+    run_dir: Path,
+    status_out: dict[str, Any] | None = None,
+) -> list[dict]:
+    """Ask a headless coding agent to exercise recently changed flows against a live --uitest app."""
+    if sys.platform != "darwin":
+        if status_out is not None:
+            status_out.update({"status": "skipped", "detail": "macOS only"})
+        return []
+    commit_lines = "\n".join(
+        f"- {c['sha']} {c['subject']} ({', '.join(c['files'][:6])})" for c in commits[:LLM_MAX_COMMITS]
+    )
+    if not commit_lines:
+        commit_lines = "- (No commits in window — focus on long-tail interactive UI flows: look dialog, palette, diff, settings, chat)"
+
+    shots_dest = run_dir / "screenshots" / "llm"
+    shots_dest.mkdir(parents=True, exist_ok=True)
+    shots_stage = Path(tempfile.mkdtemp(prefix="gl-bughunt-shots-"))
+    try:
+        prompt = _build_llm_explorer_prompt(commit_lines, shots_stage)
+        with diag.span("bughunt", phase="llm_explorer"):
+            out, rc, eng = run_agent_with_fallback(
+                prompt, cwd=repo_dir, timeout_mins=15, mode="explore", add_dirs=[shots_stage],
+            )
+        for shot_file in shots_stage.glob("*"):
+            if shot_file.is_file():
+                with contextlib.suppress(OSError):
+                    shutil.copy2(shot_file, shots_dest / shot_file.name)
+    finally:
+        shutil.rmtree(shots_stage, ignore_errors=True)
+
+    has_json, raw_items, meta = parse_bughunt_result(out)
+    run_status = _classify_llm_explorer_run(out, rc, eng, has_json, raw_items, meta)
+    if status_out is not None:
+        status_out.update(run_status)
+    (run_dir / "llm-explorer.log").write_text(
+        f"engine={eng} rc={rc} status={run_status['status']} detail={run_status['detail']}\n\n{out}"
+    )
+
     findings = []
     for item in raw_items:
         if not isinstance(item, dict) or not item.get("summary"):
@@ -1190,6 +1416,12 @@ If no real bugs are found, output `[]` inside the `bughunt-json` block.
             oracle = "visual_issue"
         raw_files = item.get("files")
         files: list[str] = [str(x) for x in raw_files] if isinstance(raw_files, list) else []
+        where_s = str(item.get("where") or "")
+        overlap = (
+            oracle == "commit_regression"
+            or bool(set(files) & recent_files)
+            or any(Path(rf).name in where_s for rf in recent_files if rf)
+        )
         findings.append(make_finding(
             oracle=oracle,
             track="llm_diff",
@@ -1197,10 +1429,10 @@ If no real bugs are found, output `[]` inside the `bughunt-json` block.
             title=str(item.get("title") or item["summary"][:100]),
             summary=str(item["summary"]),
             details=str(item.get("details") or ""),
-            where=str(item.get("where") or ""),
+            where=where_s,
             files=files,
             reproducible=bool(item.get("reproducible")),
-            recent_commit_overlap=bool(commits) or bool(set(files) & recent_files),
+            recent_commit_overlap=overlap,
         ))
     return findings
 
@@ -1270,6 +1502,28 @@ def _verify_trace_replay(wt_dir: Path, finding: dict[str, Any]) -> tuple[bool, s
         wt_bin.unlink(missing_ok=True)
 
 
+def _verification_gates(all_touched: list[str]) -> list[tuple[str, list[str], int]]:
+    """Build the independent host-side verification command list based on touched files."""
+    gates: list[tuple[str, list[str], int]] = [
+        ("check_safety", [*_python_cmd(), "scripts/check_safety.py"], 60),
+        ("test_release", [*_python_cmd(), "tests/test_release.py"], 60),
+        ("test-py", ["make", "test-py"], 300),
+    ]
+    if shutil.which("ruff"):
+        gates.insert(0, ("ruff", ["ruff", "check", "scripts/", "tests/"], 120))
+    if sys.platform == "darwin":
+        gates.append(("typecheck", ["make", "typecheck"], 180))
+    touches_app = any(
+        (p.startswith("app/") and p.endswith(".html")) or (p.startswith("app/Sources/") and p.endswith(".swift"))
+        for p in all_touched
+    )
+    if touches_app and _has_playwright():
+        gates.append(("test-js", ["make", "test-js"], 300))
+    if touches_app and sys.platform == "darwin":
+        gates.append(("test-ui", ["make", "test-ui"], 240))
+    return gates
+
+
 def verify_patch_worktree(wt_dir: Path, finding: dict[str, Any], base_ref: str = "HEAD~1") -> tuple[bool, str]:
     """Independent host-side verification gate before pushing or opening a Draft PR."""
     notes = []
@@ -1286,17 +1540,7 @@ def verify_patch_worktree(wt_dir: Path, finding: dict[str, Any], base_ref: str =
         return False, f"Repro-first gate failed: no test file modified/added in tests/ (touched: {all_touched})."
     notes.append(f"Touched files ({len(all_touched)}): {', '.join(all_touched[:10])}")
 
-    gates = [
-        ("check_safety", [*_python_cmd(), "scripts/check_safety.py"], 60),
-        ("test_release", [*_python_cmd(), "tests/test_release.py"], 60),
-        ("test-py", ["make", "test-py"], 300),
-    ]
-    if shutil.which("ruff"):
-        gates.insert(0, ("ruff", ["ruff", "check", "scripts/", "tests/"], 120))
-    if sys.platform == "darwin":
-        gates.append(("typecheck", ["make", "typecheck"], 180))
-
-    for gname, cmd, timeout in gates:
+    for gname, cmd, timeout in _verification_gates(all_touched):
         try:
             p = subprocess.run(cmd, cwd=str(wt_dir), capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.SubprocessError) as e:
@@ -1418,7 +1662,7 @@ def patch_and_open_draft_pr(
         replay_hint = f"python3 scripts/bughunt.py replay {finding['trace_path']}" if finding.get("trace_path") else "See details below"
         prompt = _build_patch_prompt(finding, wt_dir, base_ref, branch, replay_hint)
         with diag.span("bughunt", phase="patch"):
-            out, rc, eng = run_agent_with_fallback(prompt, cwd=wt_dir, timeout_mins=25)
+            out, rc, eng = run_agent_with_fallback(prompt, cwd=wt_dir, timeout_mins=25, mode="patch")
             (run_dir / f"patch-{fp}.log").write_text(f"engine={eng} rc={rc}\n\n{out}")
 
         st = subprocess.run(["git", "-C", str(wt_dir), "status", "--porcelain"], capture_output=True, text=True)
@@ -1478,6 +1722,29 @@ def open_top_draft_prs(
 # Report generation
 # ---------------------------------------------------------------------------
 
+def _format_commit_summary(commits: list[dict], commits_inspected: int | None) -> str:
+    total = len(commits)
+    inspected = min(LLM_MAX_COMMITS, total) if commits_inspected is None else commits_inspected
+    if inspected == 0 and total > 0:
+        return f"{total} in window (0 inspected — Track B skipped)"
+    if total > inspected:
+        return f"{inspected} of {total} recent commits"
+    return f"{total}"
+
+
+def _format_track_status_lines(track_status: dict[str, dict[str, Any]]) -> list[str]:
+    if not track_status:
+        return []
+    out = ["## Track Status", ""]
+    for name, info in track_status.items():
+        st = info.get("status", "unknown")
+        detail = info.get("detail") or ""
+        suffix = f" — {detail}" if detail else ""
+        out.append(f"- **`{name}`:** `{st}`{suffix}")
+    out.append("")
+    return out
+
+
 def write_report(
     run_dir: Path,
     ranked_findings: list[dict],
@@ -1485,19 +1752,23 @@ def write_report(
     metrics: dict,
     commits: list[dict],
     max_prs: int,
+    track_status: dict[str, dict[str, Any]] | None = None,
+    commits_inspected: int | None = None,
 ) -> Path:
     now_s = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    status_map = track_status or {}
     lines = [
         f"# Nightly Bug Hunt Report — {now_s}",
         "",
         f"- **Host:** `{platform.node()}` ({platform.system()} {platform.machine()})",
-        f"- **Commits inspected:** {len(commits)}",
+        f"- **Commits inspected:** {_format_commit_summary(commits, commits_inspected)}",
         f"- **Total unique findings:** {len(ranked_findings)} "
         f"({sum(1 for f in ranked_findings if f['auto_pr'])} PR-eligible, "
         f"{sum(1 for f in ranked_findings if not f['auto_pr'])} digest-only)",
         f"- **Draft PR cap:** {max_prs} (strictly highest-priority confirmed bugs)",
         "",
     ]
+    lines.extend(_format_track_status_lines(status_map))
 
     if pr_outcomes:
         lines += ["## Draft PRs Attempted (Top Priority)", ""]
@@ -1522,8 +1793,14 @@ def write_report(
         ]
 
     lines += ["## All Ranked Findings", ""]
+    failed_tracks = [k for k, v in status_map.items() if v.get("status") in ("blocked", "error")]
     if not ranked_findings:
-        lines.append("_Clean run — zero issues detected across all tracks._")
+        if failed_tracks:
+            lines.append(
+                f"_No findings recorded, but track(s) did not complete cleanly: {', '.join(failed_tracks)} (see Track Status)._"
+            )
+        else:
+            lines.append("_Clean run — zero issues detected across all tracks._")
     else:
         for i, f in enumerate(ranked_findings, 1):
             badge = "AUTO-PR" if f["auto_pr"] else "DIGEST"
@@ -1541,6 +1818,7 @@ def write_report(
     report_path.write_text("\n".join(lines))
     (run_dir / "findings.json").write_text(json.dumps({
         "ts": int(time.time()),
+        "track_status": status_map,
         "metrics": metrics,
         "findings": ranked_findings,
         "pr_outcomes": pr_outcomes,
@@ -1710,6 +1988,21 @@ def _acquire_pid_lock(lock_file: Path) -> bool:
     return False
 
 
+def _run_track_isolated(
+    track_status: dict[str, dict[str, Any]], name: str, fn: Any, default: Any,
+) -> Any:
+    """Execute one nightly track with fault isolation so report generation is never aborted."""
+    t0 = time.monotonic()
+    try:
+        res = fn()
+        if name not in track_status:
+            track_status[name] = {"status": "ok", "detail": f"{round(time.monotonic() - t0, 1)}s"}
+        return res
+    except Exception as e:
+        track_status[name] = {"status": "error", "detail": f"{type(e).__name__}: {str(e)[:200]}"}
+        return default
+
+
 def run_nightly(args) -> int:
     fixtures = tuple(x.strip() for x in args.fixtures.split(",") if x.strip())
     bad_fx = [fx for fx in fixtures if fx not in uitest.FIXTURES]
@@ -1742,32 +2035,53 @@ def run_nightly(args) -> int:
         history = load_perf_history(home)
         raw_findings: list[dict] = []
         metrics: dict = {}
+        track_status: dict[str, dict[str, Any]] = {}
 
         with diag.span("bughunt", phase="full"):
             # Track 0: Baseline gate
-            if not args.skip_baseline:
-                raw_findings.extend(run_baseline(ROOT))
+            if args.skip_baseline:
+                track_status["baseline"] = {"status": "skipped", "detail": "--skip-baseline"}
+            else:
+                raw_findings.extend(_run_track_isolated(track_status, "baseline", lambda: run_baseline(ROOT), []))
 
             # Track A: Parallel chaos fuzzer + scale perf soak
-            fuzz_findings, fuzz_metrics = run_fuzz_matrix(
-                fixtures=fixtures,
-                seed=args.seed,
-                steps=args.fuzz_steps,
-                soak_secs=args.soak_secs,
-                workers=args.workers,
-                run_dir=run_dir,
-                history=history,
+            fuzz_findings, fuzz_metrics = _run_track_isolated(
+                track_status,
+                "fuzz_soak",
+                lambda: run_fuzz_matrix(
+                    fixtures=fixtures,
+                    seed=args.seed,
+                    steps=args.fuzz_steps,
+                    soak_secs=args.soak_secs,
+                    workers=args.workers,
+                    run_dir=run_dir,
+                    history=history,
+                ),
+                ([], {}),
             )
             raw_findings.extend(fuzz_findings)
             metrics.update(fuzz_metrics)
 
             # Track B: Diff-aware commit regression LLM explorer
-            if not args.skip_llm:
-                raw_findings.extend(run_llm_explorer(ROOT, commits, recent_files, run_dir))
+            commits_inspected = 0
+            if args.skip_llm:
+                track_status["llm_diff"] = {"status": "skipped", "detail": "--skip-llm"}
+            else:
+                llm_status: dict[str, Any] = {}
+                commits_inspected = min(LLM_MAX_COMMITS, len(commits))
+                llm_hits = _run_track_isolated(
+                    track_status,
+                    "llm_diff",
+                    lambda: run_llm_explorer(ROOT, commits, recent_files, run_dir, status_out=llm_status),
+                    [],
+                )
+                if llm_status:
+                    track_status["llm_diff"] = llm_status
+                raw_findings.extend(llm_hits)
 
             # Optional Tier-2 VM HID smoke
             if args.with_vm:
-                raw_findings.extend(run_vm_hid(ROOT, run_dir))
+                raw_findings.extend(_run_track_isolated(track_status, "vm", lambda: run_vm_hid(ROOT, run_dir), []))
 
             # Rank ALL findings across all tracks, then pick strictly top `max_prs` (default 2)
             ranked = merge_and_rank_findings(raw_findings, recent_files=recent_files)
@@ -1784,7 +2098,16 @@ def run_nightly(args) -> int:
                 known_fps=known_fps,
             )
 
-            report_path = write_report(run_dir, ranked, pr_outcomes, metrics, commits, args.max_prs)
+            report_path = write_report(
+                run_dir,
+                ranked,
+                pr_outcomes,
+                metrics,
+                commits,
+                args.max_prs,
+                track_status=track_status,
+                commits_inspected=commits_inspected,
+            )
             prs_opened = sum(1 for o in pr_outcomes if o["status"] == "opened")
             append_perf_history({
                 "ts": int(time.time()),
