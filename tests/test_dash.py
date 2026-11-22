@@ -709,3 +709,13 @@ with mock.patch.object(dash, "live_agents", return_value=_live_corrupt), \
     assert {p["name"] for p in _corrupt_snap["pucks"]} == {"null-msg", "bare-row"}
 _lj3.write_text(_prev_lj3) if _prev_lj3 is not None else _lj3.unlink()
 print("corrupt snapshot ok")
+
+# CLI `dash.py page` catches backend failures via oops() and emits JSON error instead of crashing
+_page_out = _io.StringIO()
+with mock.patch.object(sys, "argv", ["dash.py", "page", "fix-auth"]), \
+     mock.patch.object(dash, "page", side_effect=RuntimeError("orca down")), \
+     mock.patch.object(dash, "oops") as _page_oops, \
+     mock.patch.object(sys, "stdout", _page_out):
+    dash.main()
+assert json.loads(_page_out.getvalue().strip()) == {"name": "fix-auth", "error": "orca down"} and _page_oops.call_count == 1
+print("page cli resilience ok")
