@@ -5,6 +5,7 @@ import Combine
 import CoreAudio
 import CryptoKit
 import Network
+import os
 import Security
 import Speech
 import SwiftUI
@@ -130,7 +131,7 @@ final class Voice: NSObject, ObservableObject {
         hush()
         do { try startEngine(); listen() }  // listen() is a no-op on GPT-Live, whose socket stays up
         catch {
-            NSLog("voice: audio restart failed: %@", "\(error)")
+            liveLog.error("voice: audio restart failed: \(String(describing: error), privacy: .public)")
             core?.msgs.append(Msg(.note, "Voice mode stopped: the audio didn't restart after the devices changed (\(error.localizedDescription)). Start it again to pick it up."))
             stopAll()
             staleEngine = true
@@ -168,7 +169,7 @@ final class Voice: NSObject, ObservableObject {
                 // didn't initialize. Retrying the same engine fails the same way, because enabling voice processing again does nothing
                 // and the failed unit stays. A second click worked because stopping turned voice processing off. So each retry gets a
                 // new engine with its own voice-processing unit, and one click is enough.
-                NSLog("voice: audio start %d failed: %@", attempt + 1, "\(error)")
+                liveLog.error("voice: audio start \(attempt + 1, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                 self.freshEngine()
                 if attempt < Self.startRetries.count && (error as NSError).domain != "Voice" {  // not when there's no mic: no retry finds one
                     return DispatchQueue.main.asyncAfter(deadline: .now() + Self.startRetries[attempt]) { self.start(attempt: attempt + 1, gen: g) }
@@ -176,7 +177,7 @@ final class Voice: NSObject, ObservableObject {
                 self.core?.msgs.append(Msg(.note, "Voice mode couldn't start the audio: \(error.localizedDescription)"))
                 return self.stopAll()
             }
-            if attempt > 0 { NSLog("voice: audio started on try %d", attempt + 1) }
+            if attempt > 0 { liveLog.info("voice: audio started on try \(attempt + 1, privacy: .public)") }
             self.starting = false
             self.on = true
             self.fallback = ""; self.toldFallback = ""
@@ -215,6 +216,13 @@ final class Voice: NSObject, ObservableObject {
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {  // no input device: installTap would raise, not throw
             throw NSError(domain: "Voice", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone is connected."])
         }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        // AUVoiceProcessor (vpio) fails with -10875 ("client-side input and output formats do not match") when input and output
+        // devices run at different sample rates (e.g. 48 kHz built-in mic + 44.1 kHz headphones) because mainMixerNode's
+        // implicit connection to outputNode stays at the output device's rate. Match mixer->output to the input rate.
+        if vp, let outFmt = matchedVoiceOutputFormat(inputRate: inFormat.sampleRate, outputFormat: engine.outputNode.inputFormat(forBus: 0)) {
+            try engine.link(engine.mainMixerNode, to: engine.outputNode, format: outFmt)
+        }
         let conv = AVAudioConverter(from: inFormat, to: micFormat), lconv = isLive ? AVAudioConverter(from: inFormat, to: live.fmt) : nil
         if inFormat.channelCount > 1 { conv?.channelMap = [0]; lconv?.channelMap = [0] }
         input.removeTap(onBus: 0)
@@ -226,7 +234,6 @@ final class Voice: NSObject, ObservableObject {
             let l = level(m)
             DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
         }
-        engine.mainMixerNode.removeTap(onBus: 0)
         try engine.mainMixerNode.tap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
             let l = level(b)
             DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
@@ -468,7 +475,7 @@ final class Voice: NSObject, ObservableObject {
             let g = startGen
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id) } }
         case .failed(let code, let m):
-            NSLog("GPT-Live: %@ %@", code, m)
+            liveLog.error("GPT-Live: \(code, privacy: .public) \(m, privacy: .public)")
             guard liveUp else { return liveFailed("refused the session: \(m)") }  // e.g. a voice it doesn't have
             if toldLive.insert(code).inserted { core?.msgs.append(Msg(.note, "GPT-Live: \(m)")) }
         case .closed(let why): liveFailed(why == "close_requested" ? "closed the session" : why == "expired" ? "ended the session (it ran out of time)" : why)
@@ -544,6 +551,19 @@ let voiceClaim = Notification.Name("dev.greenlight.voice.claim")
 /// Whether this app's voice mode gives way to another's claim: the later start keeps it (the pid breaks a tie), so one shortcut press
 /// that starts two apps leaves exactly one on.
 func voiceYields(mine: (at: Double, pid: Int), theirs: (at: Double, pid: Int)) -> Bool { theirs.pid != mine.pid && (theirs.at, theirs.pid) > (mine.at, mine.pid) }
+
+/// Output format for `mainMixerNode -> outputNode` under voice processing: matches `inputRate` while preserving the output
+/// channel count/layout, so AUVoiceProcessor doesn't fail with -10875 on mixed-rate devices (e.g. 48 kHz mic + 44.1 kHz headphones).
+func matchedVoiceOutputFormat(inputRate: Double, outputFormat: AVAudioFormat) -> AVAudioFormat? {
+    guard inputRate > 0, outputFormat.channelCount > 0 else { return nil }
+    if outputFormat.channelCount <= 2 {
+        return AVAudioFormat(standardFormatWithSampleRate: inputRate, channels: outputFormat.channelCount)
+    }
+    if let layout = outputFormat.channelLayout {
+        return AVAudioFormat(standardFormatWithSampleRate: inputRate, channelLayout: layout)
+    }
+    return AVAudioFormat(standardFormatWithSampleRate: inputRate, channels: 2)
+}
 
 /// A voice better than AVSpeechSynthesizer: Kokoro on this Mac (app/kokoro.py under uv) or ElevenLabs Flash.
 /// pcm() blocks, on q; nil means Apple's voice says that line (not ready yet, no key, a failure).
@@ -889,6 +909,8 @@ struct WSReader {
     }
 }
 
+private let liveLog = Logger(subsystem: "dev.greenlight.app", category: "live")
+
 /// One GPT-Live session over a WebSocket. Events come to `on` on the main queue; `send` and `mic` are safe from any thread.
 final class LiveVoice {
     static let model = "gpt-live-1.1", host = "api.openai.com", path = "/v1/live/sessions"
@@ -975,8 +997,9 @@ final class LiveVoice {
         let m = liveRefusal(httpBody(h, s.body), h), ref = liveReplyRef(h)
         // the headers that tell one server from another, for Console (not x-error-json or cookies: they can carry account details)
         let shown = ["server", "content-type", "content-length", "transfer-encoding", "connection", "via", "cf-ray", "x-request-id"]
-        NSLog("GPT-Live: upgrade refused, HTTP %d, %@: %@ [%@]", status, ref ?? "no request id", m,
-              shown.compactMap { k in h[k].map { "\(k): \($0)" } }.joined(separator: "; "))
+        let hdrs = shown.compactMap { k in h[k].map { "\(k): \($0)" } }.joined(separator: "; ")
+        let refText = ref ?? "no request id"
+        liveLog.error("GPT-Live: upgrade refused, HTTP \(status, privacy: .public), \(refText, privacy: .public): \(m, privacy: .public) [\(hdrs, privacy: .public)]")
         end(s, LiveVoice.why(status, m, ref: ref))
     }
     private func frames(_ s: Sock, _ d: Data) {
@@ -1137,10 +1160,11 @@ final class LivePreview: ObservableObject {
     func voiceModeEnded() {
         if case .skipped(let why) = phase, why.hasPrefix(LivePreview.voiceOnNote) { phase = .idle }
     }
-    /// A key was saved or removed. A new OpenAI key may fix a failure, so ▶ is worth another try, and a preview still
-    /// starting on the old key is stopped (its refusal would land after the save). Removing a key fixes nothing.
-    func keyChanged(_ account: String, to v: String) {
-        guard account == "openai", !v.isEmpty else { return }
+    /// A key was saved or removed. A new OpenAI key (or removing the Keychain override when OPENAI_API_KEY is set)
+    /// may fix a failure, so ▶ is worth another try, and a preview still starting on the old key is stopped (its refusal
+    /// would land after the save). Removing a key with no fallback fixes nothing.
+    func keyChanged(_ account: String, to v: String, hasFallback: Bool = false) {
+        guard account == "openai", !v.isEmpty || hasFallback else { return }
         switch phase { case .loading: stop(); case .failed: phase = .idle; default: break }
     }
     static let voiceOnNote = "Voice mode is on"
@@ -1202,7 +1226,7 @@ final class LivePreview: ObservableObject {
         if played >= scheduled { finish(voice) }
     }
     private func finish(_ voice: String) { teardown(); phase = .played(voice) }
-    private func fail(_ voice: String, _ why: String) { NSLog("GPT-Live preview: %@", why); teardown(); phase = .failed(voice, why) }
+    private func fail(_ voice: String, _ why: String) { liveLog.error("GPT-Live preview: \(why, privacy: .public)"); teardown(); phase = .failed(voice, why) }
     private func teardown() {
         gen += 1  // its timers and late callbacks are void, so they can't replace how it ended
         feed?.invalidate(); feed = nil
