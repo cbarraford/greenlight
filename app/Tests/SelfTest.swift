@@ -59,6 +59,7 @@ func unitTest() {
         fflush(stdout)
     }
     runOfflineUnitTests(check: check)
+    check("--unittest keeps transcripts in a per-process dir, not the real Application Support", support.path.hasSuffix("greenlight-unittest-\(ProcessInfo.processInfo.processIdentifier)"))
     let c = Core(session: -9003)
     runInboxUnitTests(c, check: check)
     try? FileManager.default.removeItem(at: c.transcriptFile)
