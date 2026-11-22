@@ -606,6 +606,12 @@ def unresolved(mr):
             if d["notes"] and d["notes"][0].get("resolvable") and not d["notes"][0].get("resolved")]
 
 
+def awaiting_me(d):
+    """An unresolved thread whose last word isn't mine: whoever spoke last, a person or the review bot,
+    waits on a fix or a reply. Only my note (a reply, or GitLab's note for my push to the line) hands it back."""
+    return d["notes"][-1]["author"]["username"] != ME
+
+
 def thread_line(d):
     """'author, file:line: "first line"' for one discussion: a {threads} entry."""
     n = d["notes"][0]
@@ -838,9 +844,8 @@ def check(step, mr, ws, milestone):
             return "me", "goal says keep draft but everything else is green: take it out of draft?", ready  # the card's Mark ready runs it
         return "greenlight", "mark ready for review", ready
     if step == "threads":
-        bot = repo_bot(proj)
         ds = unresolved(mr)
-        todo = [d for d in ds if d["notes"][-1]["author"]["username"] not in (ME, bot)]
+        todo = [d for d in ds if awaiting_me(d)]  # a bot's unanswered finding is work too, not an answer
         if ds and not todo:  # we replied last on every one: the reviewer has to re-review
             return "reviewers", f"{len(ds)} threads answered, waiting on reviewer re-review", None
         if todo or mr.get("blocking_discussions_resolved") is False:  # GitLab's flag catches what the first-note test misses
@@ -950,7 +955,7 @@ def evaluate(ws, mr, milestone):
             return {"step": "review", "owner": "reviewers", "action": "your commits are in it: you can't approve, waiting on others"}
         if not mine:
             return {"step": "review", "owner": "me", "action": "review it"}
-        if any(d["notes"][-1]["author"]["username"] != ME for d in mine):
+        if any(awaiting_me(d) for d in mine):
             return {"step": "review", "owner": "me", "action": "author replied on your threads: re-review"}
         return {"step": "review", "owner": "author", "action": f"{len(mine)} of your threads open, waiting on author"}
     for step in pre:
@@ -1277,7 +1282,6 @@ def scan(save=True, _backfill_retries=0):
                 r["goal"] = "" if STATUS_LINE_RE.search(r["comment"]) else r["comment"]
                 if save:
                     prune_candidates.append((r["id"], remembered, (mr or {}).get("iid")))
-            bot = repo_bot(r["project"])
             r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft")} | {
                 "ref": ref(r["forge"], mr["iid"]), "forge": r["forge"],
                 "author": mr["author"].get("login") or mr["author"]["username"], "role": "author" if mr["author"]["username"] == ME else "review",
@@ -1294,7 +1298,7 @@ def scan(save=True, _backfill_retries=0):
                 "milestone": (mr.get("milestone") or {}).get("title"), "approved_by": mr.get("_approved_by", []),
                 "pipeline_url": (mr.get("head_pipeline") or {}).get("web_url"),
                 "sha": mr.get("sha"), "reviewed_sha": mr.get("_reviewed_sha"),  # the review prompt's {sha} and {last_review_sha}
-                "todo_threads": [thread_line(d) for d in unresolved(mr) if d["notes"][-1]["author"]["username"] not in (ME, bot)][:40],
+                "todo_threads": [thread_line(d) for d in unresolved(mr) if awaiting_me(d)][:40],
                 "failed_jobs": mr.get("_failed_jobs", [])[:40],  # the Resolve threads / Fix CI prompts' {threads} / {failed_jobs}
                 "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable"))}
             r["branch_gone"] = not mr and upstream_gone(r)
