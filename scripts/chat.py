@@ -193,7 +193,6 @@ def window_allow(board):
             ident = (r["name"], r["project"], (r.get("mr") or {}).get("ref"))
             counts[ident] = counts.get(ident, 0) + 1
         selected = [r for r, exact in selected if exact or counts[(r["name"], r["project"], (r.get("mr") or {}).get("ref"))] == 1]
-        import ws_state
         return {r["card"]: (r.get("forge") or "", r.get("project") or "", (r.get("mr") or {}).get("ref") or "",
                            (r.get("mr") or {}).get("sha") or "", r.get("goal") or "",
                            (r.get("mr") or {}).get("target_branch") or "", r.get("id") or "", r.get("branch") or "",
@@ -273,7 +272,7 @@ def board_note(query="", key="", seen=None, snapshot=None):
     elif focused:
         extra = [l for l in focused.splitlines() if board_name(l) and seen["lines"].get(l) != ws_state.digest(l)]
         if extra:
-            note += f"BOARD (more lines from the same scan, for this message):\n" + "\n".join(extra) + "\n\n"
+            note += "BOARD (more lines from the same scan, for this message):\n" + "\n".join(extra) + "\n\n"
     if seen["board"] is not None and seen.get("finished", 0) != finished:
         note += f"BOARD update: {finished} more finished\n\n"
     seen["finished"] = finished

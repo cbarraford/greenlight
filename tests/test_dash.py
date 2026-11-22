@@ -309,7 +309,7 @@ for _a in ("cmux", "herdr", "t3"):
     _sys.modules[f"ade_{_a}"] = types.SimpleNamespace(call=lambda *a, _a=_a: _wt(_a))
 _last = (dash.greenlight.STATE / "last.json").read_text()
 (dash.greenlight.STATE / "last.json").write_text(json.dumps({"ts": 1, "rows": [{"path": "/r/a", "name": "r-a", "project": "r",
-    "agent": {"state": "waiting"}, "next": {"step": "ci_green", "owner": "agent", "action": ""},
+    "agent": {"state": "waiting"}, "next": {"step": "ci_green", "owner": "agent", "action": ""}, "life": {"stage_name": "Review", "sub_name": "Respond"},
     "mr": {"ref": "!7", "state": "opened", "pipeline": "failed", "threads": 2, "rebase": True, "author": "x", "by": {"name": "x", "avatar": "u"}}}]}))
 _t = dash.trees()
 (dash.greenlight.STATE / "last.json").write_text(_last)
@@ -322,7 +322,7 @@ assert _mr["ref"] == "!7" and _mr["threads"] == 2 and _mr["rebase"] and "author"
 assert _t[-1] == {"ade": "cmux", "project": "r", "name": "a", "path": "/r/a", "branch": "x", "main": False, "agent": "working",
                   "goal": "", "pinned": False, "active": None, "since": None, "created": None,
                   "puck": "r-a", "state": "working", "why": "agent working",
-                  "steps": [], "step_index": None, "step": "ci_green", "owner": "agent", "advice": ""}, _t[-1]
+                  "steps": [], "step_index": None, "step": "ci_green", "owner": "agent", "advice": "", "life": {"stage_name": "Review", "sub_name": "Respond"}}, _t[-1]
 
 # the workspace menu's Delete: by path, the worktree only; a dirty or unpushed tree (or a pinned one) needs --force, main never goes
 import subprocess as _sp
