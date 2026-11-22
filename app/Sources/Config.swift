@@ -329,7 +329,7 @@ final class RulesStore: ObservableObject {
 /// The app's half of scripts/diag.py's trail (~/Library/Logs/Greenlight/app.jsonl, which diag.py reads when it's on
 /// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
 enum Diag {
-    static let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl")
+    static let url = URL(fileURLWithPath: uitest ? (greenlightHome + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
     static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
     static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     static let q = DispatchQueue(label: "greenlight.diag")
@@ -372,7 +372,9 @@ enum Diag {
         return remote[r].replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
     }
     /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
-    static let marker = NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")"  // per app: dev copies relaunch on their own
+    static let marker = uitest
+        ? (greenlightHome + "/diag/running-\(ProcessInfo.processInfo.processIdentifier)")
+        : (NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")")  // per app: dev copies relaunch on their own
     static func launched(host: String) {
         if FileManager.default.fileExists(atPath: marker) { event("prev_crash") }
         try? FileManager.default.createDirectory(atPath: (marker as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
