@@ -583,28 +583,30 @@ test("Agents show by default; Hide sticks, and a window that was told to hide th
 test("Agents strip: working and waiting agents on 'needs' and 'raised' workspaces show, and the counts match the cards", async page => {
   const ws = (name, state, agent, type = "claude") => { const b = puck(name, name, agent); return {...b, state, agent: {...b.agent, type, last: ""}} };
   const pucks = [ws("ask-work", "needs", "working"), ws("ask-wait", "needs", "waiting"), ws("raise-work", "raised", "working"), ws("raise-wait", "raised", "waiting"),
-    ws("quiet-work", "quiet", "working"), ws("idle-a", "working", "idle"), ws("idle-b", "done", "idle"), ws("down", "crashed", "idle"), ws("none", "working", "idle", ""), ws("back-up", "crashed", "working")];
+    ws("quiet-work", "quiet", "working"), ws("idle-a", "working", "idle"), ws("idle-b", "done", "idle"), ws("down", "crashed", "idle"), ws("none", "working", "idle", ""), ws("back-up", "crashed", "working"), {...ws("back-ask", "crashed", "waiting"), step: "ci_green"}];  // its own step: three alike would stack into one hex
   await page.evaluate(s => { window.mc.update(s); ui.agentsFolded = false; ui.q = ""; render() }, {...SNAP, pucks});
   const cards = () => page.$$eval(".agents .acard", es => es.map(e => e.dataset.name).sort());
   const pills = () => page.$$eval(".agents .shead .pill", es => es.map(e => e.textContent));
-  const live = ["ask-wait", "ask-work", "back-up", "quiet-work", "raise-wait", "raise-work"];
+  const live = ["ask-wait", "ask-work", "back-ask", "back-up", "quiet-work", "raise-wait", "raise-work"];
   assert.deepEqual(await cards(), live, "agents on 'needs' and 'raised' workspaces show");
-  assert.deepEqual(await pills(), ["Working 4", "2 awaiting answer"], "the pills count the cards");
-  assert.equal(await page.textContent(".agents .crash"), "2 crashed", "the chip counts crashed workspaces, as the footer does");
-  assert.equal(await page.evaluate(() => counts().crashed), 2, "the map's and the footer's count agrees");
+  assert.deepEqual(await pills(), ["Working 4", "3 awaiting answer"], "the pills count the cards");
+  assert.equal(await page.textContent(".agents .crash"), "3 crashed", "the chip counts crashed workspaces, as the footer does");
+  assert.equal(await page.evaluate(() => counts().crashed), 3, "counts(), which feeds the map's legend and the footer, agrees");
   assert.equal(await page.locator(".agents .shead .muted").count(), 0, "no 'No agents working' line while agents work");
-  for (const [n, says] of [["ask-work", /Claude is working/], ["raise-work", /Claude is working/], ["ask-wait", /Claude is waiting/], ["raise-wait", /Claude is waiting/], ["down", /Claude crashed/], ["back-up", /Claude is working/]]) {  // each hex's hover card reads the state the strip shows
+  for (const [n, says] of [["ask-work", /Claude is working/], ["raise-work", /Claude is working/], ["ask-wait", /Claude is waiting/], ["raise-wait", /Claude is waiting/], ["down", /Claude crashed/], ["back-up", /Claude is working/], ["back-ask", /Claude is waiting/]]) {  // each hex's hover card reads the state the strip shows
     await page.mouse.move(1, 1); await page.waitForSelector("#hcard", {state: "hidden", timeout: 2000});  // the last card can cover the next hex
     await page.hover(`.cell[data-name='${n}']`);
     assert.match(await page.textContent("#hcard"), says, n);
   }
   await page.click(".agents .crash");
-  assert.deepEqual(await page.$$eval("#main .cell:not(.dim)", es => es.map(e => e.dataset.name).sort()), ["back-up", "down"], "the chip lights the workspaces it counted");
-  assert.deepEqual(await cards(), ["back-up"], "the one whose agent works again keeps its card");
-  await page.evaluate(() => { ui.q = ""; render() });
+  assert.deepEqual(await page.$$eval("#main .cell:not(.dim)", es => es.map(e => e.dataset.name).sort()), ["back-ask", "back-up", "down"], "the chip lights the workspaces it counted");
+  assert.deepEqual(await cards(), ["back-ask", "back-up"], "the ones whose agent is live again keep their cards");
+  assert.equal(await page.textContent(".agents .acard[data-name='back-ask'] .open"), "Answer", "a waiting agent on a crashed workspace is asked, not inspected");
+  assert.deepEqual(await pills(), ["Working 1", "1 awaiting answer"], "and the pills follow the chip's filter");
+  await page.evaluate(() => { ui.q = ""; render() });  // clear the chip's search
   await page.click(".agents button.fold");
   assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
-  assert.match(await page.textContent(".agents button.fold"), /^Show 6 agents\b/, "the fold counts them all");
+  assert.match(await page.textContent(".agents button.fold"), /^Show 7 agents\b/, "the fold counts them all");
   await page.evaluate(() => { ui.agentsFolded = false; ui.q = "raise-"; renderMain() });
   assert.deepEqual(await cards(), ["raise-wait", "raise-work"], "a search narrows the cards");
   assert.deepEqual(await pills(), ["Working 1", "1 awaiting answer"], "and the pills with them");
@@ -617,7 +619,7 @@ test("Agents strip: working and waiting agents on 'needs' and 'raised' workspace
   try {  // the detached Agents window: the same agents, plus the crashed ones as cards
     await det.evaluate(s => { window.mc.update(s); ui.only = "agents"; ui.agentsFolded = false; render() }, {...SNAP, pucks});
     assert.deepEqual(await det.$$eval(".agents .acard", es => es.map(e => e.dataset.name).sort()), [...live, "down"].sort());
-    assert.deepEqual(await det.$$eval(".agents .shead .pill", es => es.map(e => e.textContent)), ["Working 4", "2 awaiting answer"]);
+    assert.deepEqual(await det.$$eval(".agents .shead .pill", es => es.map(e => e.textContent)), ["Working 4", "3 awaiting answer"]);
     await det.evaluate(() => { ui.q = "down"; renderMain() });
     assert.deepEqual(await det.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["down"], "a search can leave only a crashed card");
     await det.evaluate(() => { ui.q = "zzz-nothing"; renderMain() });
