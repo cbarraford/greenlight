@@ -65,21 +65,30 @@ def saved():
 def remember(repo):
     if repo not in (have := saved()):
         REPOS.parent.mkdir(parents=True, exist_ok=True)
-        REPOS.write_text(json.dumps([*have, repo], indent=1))
+        tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps([*have, repo], indent=1))
+        os.replace(tmp, REPOS)
 
 
 def worktrees():
     ps, g = panes(), goals()
     repos = dict.fromkeys([*saved(), *(git_info(p["cwd"])["repoId"] for p in {p["cwd"]: p for p in ps}.values())])
+    paths = [l[9:] for repo in filter(None, repos)
+             for l in git(repo, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
+    by_len = sorted(set(paths), key=len, reverse=True)
+    owned = {}
+    for p in ps:
+        owner = next((w for w in by_len if p["cwd"] == w or p["cwd"].startswith(w + "/")), None)
+        if owner is not None:
+            owned.setdefault(owner, []).append(p)
     out = []
-    for repo in filter(None, repos):
-        for path in (l[9:] for l in git(repo, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")):
-            mine = [p for p in ps if p["cwd"] == path or p["cwd"].startswith(path + "/")]
-            ags = [{"state": s, "agentType": "claude", "updatedAt": int(p["at"] or 0) * 1000, "stateStartedAt": int(p["at"] or 0) * 1000,
-                    "handle": p["handle"]} for p in mine if (s := state(p["title"], screen(p["handle"]) if p["title"][:1] == "✳" else None))]
-            out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
-                        "isPinned": False, "linkedGitLabMR": None, "agents": ags,
-                        "lastOutputAt": max((int(p["at"] or 0) * 1000 for p in mine), default=None)})
+    for path in dict.fromkeys(paths):
+        mine = owned.get(path, [])
+        ags = [{"state": s, "agentType": "claude", "updatedAt": int(p["at"] or 0) * 1000, "stateStartedAt": int(p["at"] or 0) * 1000,
+                "handle": p["handle"]} for p in mine if (s := state(p["title"], screen(p["handle"]) if p["title"][:1] == "✳" else None))]
+        out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
+                    "isPinned": False, "linkedGitLabMR": None, "agents": ags,
+                    "lastOutputAt": max((int(p["at"] or 0) * 1000 for p in mine), default=None)})
     return out
 
 
@@ -90,20 +99,26 @@ def read(handle, limit):
 
 def send(handle, text, enter):
     if enter:  # a bracketed paste keeps a multi-line brief one message; then Enter submits it
-        subprocess.run(["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", "gl", "-"], input=text, text=True, timeout=20, check=True)
-        tmux("paste-buffer", "-p", "-d", "-b", "gl", "-t", handle)
+        buf = f"gl-{secrets.token_hex(4)}"
+        try:
+            subprocess.run(["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", buf, "-"], input=text, text=True, timeout=20, check=True)
+            tmux("paste-buffer", "-p", "-d", "-b", buf, "-t", handle)
+        finally:
+            subprocess.run(["tmux", "-L", TMUX_SOCKET, "delete-buffer", "-b", buf], capture_output=True, timeout=10)
         time.sleep(0.2)
         tmux("send-keys", "-t", handle, "Enter")
     else:  # a menu pick
-        tmux("send-keys", "-t", handle, "-l", text)
+        tmux("send-keys", "-t", handle, "-l", "--", text)
 
 
 def launch(path, agent, prompt):
     """A detached tmux session in the worktree running the agent; the page attaches a tab to it (mc-… is the page's own naming)."""
     if prompt and ("\n" in prompt or len(prompt.encode()) > 800):  # as herdr: a long brief goes by file
-        brief = BRIEFS / f"{Path(path).name}-{int(time.time())}.md"
-        brief.parent.mkdir(parents=True, exist_ok=True)
-        brief.write_text(prompt)
+        BRIEFS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        brief = BRIEFS / f"{Path(path).name}-{int(time.time())}-{secrets.token_hex(4)}.md"
+        fd = os.open(str(brief), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as bf:
+            bf.write(prompt)
         prompt = f"Your brief is in {brief}. Read it and follow it."
     s = f"mc-{secrets.token_hex(4)}"
     # -i: the agent's PATH (~/.local/bin for claude) is set in .zshrc/.bashrc, which a bare `sh -c` from tmux never reads

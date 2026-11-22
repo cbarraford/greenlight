@@ -24,7 +24,7 @@ def cmux(*args, js=True):
     p = subprocess.run(["cmux", "--id-format", "uuids", *(["--json"] if js else []), *args],
                        capture_output=True, text=True, timeout=60, env=env)
     if p.returncode:
-        raise RuntimeError(f"cmux {' '.join(args)}: {(p.stderr or p.stdout).strip()[:300]}")
+        raise RuntimeError(f"cmux {' '.join(args[:3])}: {(p.stderr or p.stdout).strip()[:300]}")
     return json.loads(p.stdout) if js else p.stdout
 
 
@@ -69,11 +69,11 @@ def worktrees():
             out.append({
                 **git_info(path), "id": w["id"], "worktreeId": w["id"], "displayName": w["title"],
                 "comment": w.get("description") or "", "isPinned": w.get("pinned"), "linkedGitLabMR": None,
-                "lastOutputAt": ags[0]["updatedAt"] * 1000 if ags else None,
+                "lastOutputAt": (ags[0].get("updatedAt") or 0) * 1000 if ags else None,
                 "agents": [{"state": STATES.get(a.get("agentLifecycle"), "unknown"),
                             "agentType": (a.get("launchCommand") or {}).get("launcher") or "claude",
-                            "lastAssistantMessage": a.get("lastBody") or "", "updatedAt": a.get("updatedAt", 0) * 1000,
-                            "stateStartedAt": a.get("updatedAt", 0) * 1000} for a in ags],
+                            "lastAssistantMessage": a.get("lastBody") or "", "updatedAt": (a.get("updatedAt") or 0) * 1000,
+                            "stateStartedAt": (a.get("updatedAt") or 0) * 1000} for a in ags],
             })
     return out
 

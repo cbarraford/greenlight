@@ -37,8 +37,8 @@ let greenlightCode = ProcessInfo.processInfo.environment["GREENLIGHT_CODE"] ?? u
 let tmuxSocketName = ProcessInfo.processInfo.environment["GREENLIGHT_TMUX_SOCKET"] ?? (uitest ? "gl-uitest-\(ProcessInfo.processInfo.processIdentifier)" : "greenlight")
 /// Quotes a filesystem path for a POSIX shell while preserving leading `~` expansion on local or remote hosts.
 func shellPath(_ p: String) -> String {
-    if p == "~" { return "$HOME" }
-    if p.hasPrefix("~/") { return "$HOME/" + shellQuote(String(p.dropFirst(2))) }
+    if p == "~" { return "\"$HOME\"" }
+    if p.hasPrefix("~/") { return "\"$HOME\"/" + shellQuote(String(p.dropFirst(2))) }
     return shellQuote(p)
 }
 
@@ -55,9 +55,9 @@ let devTagWidth: CGFloat = devName.map { min(190, ceil(($0 as NSString).size(wit
 /// A dev copy's extra ssh options to a host dev.py has a tunnel to: the tunnel's socket, so nothing connects in the copy's
 /// name and a firewall (Little Snitch) has no new app to ask about, however many copies there are. Empty otherwise.
 func devSsh(_ h: String) -> [String] {
-    guard let devDir else { return [] }
+    guard let devDir, !h.isEmpty, !h.contains("/"), !h.contains(".."), !h.hasPrefix("-") else { return [] }
     let sock = URL(fileURLWithPath: devDir).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("ssh/\(h).sock").path
-    return FileManager.default.fileExists(atPath: sock) ? ["-o", "ProxyCommand=/usr/bin/nc -U '\(sock)'"] : []
+    return FileManager.default.fileExists(atPath: sock) ? ["-o", "ProxyCommand=/usr/bin/nc -U \(shellQuote(sock))"] : []
 }
 /// A bundled page (dashboard, terminal, stage): in a dev copy or --uitest, the workspace's live one.
 func page(_ name: String) -> URL? {
@@ -68,10 +68,24 @@ func page(_ name: String) -> URL? {
     return Bundle.main.url(forResource: name, withExtension: "html")
 }
 
+/// Validates a backend stdout string as a single JSON object (re-serialized cleanly), or serializes `fallback`.
+func safeJSON(_ out: String, fallback: [String: Any] = [:]) -> String {
+    if out.hasPrefix("{"), let d = out.data(using: .utf8),
+       let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+       JSONSerialization.isValidJSONObject(obj),
+       let clean = try? JSONSerialization.data(withJSONObject: obj),
+       let s = String(data: clean, encoding: .utf8) { return s }
+    if JSONSerialization.isValidJSONObject(fallback),
+       let d = try? JSONSerialization.data(withJSONObject: fallback),
+       let s = String(data: d, encoding: .utf8) { return s }
+    return "{}"
+}
+
 extension WKWebView {
     /// Safely invokes a JS function path (e.g. "window.mc && mc.openPage") with JSON-serialized arguments.
     func callJS(_ fn: String, _ args: [Any] = [], done: ((Any?, Error?) -> Void)? = nil) {
-        guard let data = try? JSONSerialization.data(withJSONObject: args),
+        guard JSONSerialization.isValidJSONObject(args),
+              let data = try? JSONSerialization.data(withJSONObject: args),
               let json = String(data: data, encoding: .utf8) else { return }
         evaluateJavaScript("(() => { const f = \(fn); return typeof f === 'function' ? f(...\(json)) : undefined; })()", completionHandler: done)
     }
@@ -84,7 +98,7 @@ func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) 
         if uitest { return ("/bin/sh", ["-c", remote]) }
         return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote])
     }
-    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + [host, remote])
+    return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + ["--", host, remote])
 }
 
 /// The terminal sidebar's Hosts: ~/.ssh/config's Host names, minus wildcards, git hosts and the -ts (Tailscale) twin of a listed host.
@@ -256,14 +270,16 @@ final class RulesStore: ObservableObject {
     @Published var draftProj = ""
     @Published var draftDir = ""
     var loaded = false
+    private var pending = 0
 
     func call(_ op: String, _ arg: String, _ stdin: String = "", _ done: @escaping ([String: Any]) -> Void) {
-        busy = true
+        pending += 1; busy = true
         var out = ""
-        ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
-            self?.busy = false
+        ssh("\(py)/dash.py task \(shellQuote(op)) \(shellQuote(arg))", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
+            guard let self else { return }
+            self.pending = max(0, self.pending - 1); self.busy = self.pending > 0
             let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["error": "\(host) didn't answer (exit \(code))"]
-            if let e = j["error"] as? String { self?.status = e } else { done(j) }
+            if let e = j["error"] as? String { self.status = e } else { done(j) }
         })
     }
     func load() {
@@ -281,27 +297,33 @@ final class RulesStore: ObservableObject {
     }
     func pick(_ r: String) {
         repo = r; status = ""; if !repos.contains(r) { repos = (repos + [r]).sorted() }
-        call("lifecycle-get", r) { self.got($0) }; getPrompt(); call("autorun-get", r) { self.gotAuto($0) }
+        call("lifecycle-get", r) { [weak self] j in if self?.repo == r { self?.got(j) } }
+        getPrompt()
+        call("autorun-get", r) { [weak self] j in if self?.repo == r { self?.gotAuto(j) } }
     }
     func gotAuto(_ j: [String: Any]) {
         autoKinds = (j["kinds"] as? [[String: Any]] ?? []).map { (kind: $0["kind"] as? String ?? "", when: $0["when"] as? String ?? "", gates: $0["gates"] as? [String] ?? []) }
         autoOn = j["on"] as? [String: Int] ?? [:]
     }
     func setAuto(_ k: String, _ gate: Int?) {  // saved at once; nil = off
+        let r = repo
         autoOn[k] = gate
         if gate != nil { ud.set(true, forKey: "autorun") }  // the app keeps the Basement's page loaded and its workspaces fresh from now on
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: autoOn)) ?? Data(), as: UTF8.self)
-        call("autorun-set", repo, s) { self.gotAuto($0) }
+        call("autorun-set", r, s) { [weak self] j in if self?.repo == r { self?.gotAuto(j) } }
     }
-    func getPrompt() { call("prompt-get", "\(repo)/\(kind)") { self.gotReview($0) } }
+    func getPrompt() {
+        let r = repo
+        call("prompt-get", "\(r)/\(kind)") { [weak self] j in if self?.repo == r { self?.gotReview(j) } }
+    }
     func gotReview(_ j: [String: Any]) {
         guard j["kind"] as? String == kind else { return }  // an answer for the tab you just left
         review = j["text"] as? String ?? ""; reviewDefault = j["default"] as? String ?? ""; reviewOwn = j["own"] as? Bool ?? false
         reviewVars = (j["vars"] as? [String] ?? []).map { "{\($0)}" } + ["{default}"]
     }
     func saveReview() {  // empty or Default: back to the default (dash.py deletes yours)
-        let own = reviewOwn && !review.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        call("prompt-set", "\(repo)/\(kind)", own ? review : "") { self.gotReview($0); self.status = own ? "Saved the prompt." : "Using the default prompt." }
+        let r = repo, own = reviewOwn && !review.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        call("prompt-set", "\(r)/\(kind)", own ? review : "") { [weak self] j in if self?.repo == r { self?.gotReview(j); self?.status = own ? "Saved the prompt." : "Using the default prompt." } }
     }
     func got(_ j: [String: Any]) {
         stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "") }
@@ -339,12 +361,14 @@ enum Diag {
         var dropped = 0
         for (k, x) in f {
             if let s = x as? String { if s.range(of: #"^[A-Za-z0-9_.:+-]{1,64}$"#, options: .regularExpression) != nil { e[k] = s } else { dropped += 1 } }
-            else if let n = x as? NSNumber { e[k] = n } else if !(x is NSNull) { dropped += 1 }
+            else if let n = x as? NSNumber { if n.doubleValue.isFinite { e[k] = n } else { dropped += 1 } }
+            else if !(x is NSNull) { dropped += 1 }
         }
         if dropped > 0 { e["dropped"] = dropped }
         let rec = e
         q.async {
-            guard var d = try? JSONSerialization.data(withJSONObject: rec) else { return }
+            guard JSONSerialization.isValidJSONObject(rec),
+                  var d = try? JSONSerialization.data(withJSONObject: rec) else { return }
             d.append(10)
             let fm = FileManager.default, path = url.path
             try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -366,10 +390,10 @@ enum Diag {
         where s.range(of: re, options: [.regularExpression, .caseInsensitive]) != nil { return c }
         return s.isEmpty ? "none" : "other"
     }
-    /// "dash.task" for "…/dash.py task …": which backend call, not its arguments.
+    /// "dash.task" for "…/scripts/dash.py task …": allowlisted Greenlight scripts only, never dropped user filenames.
     static func verb(_ remote: String) -> String {
-        guard let r = remote.range(of: #"(\w+)\.py( [a-z][\w-]{0,20})?"#, options: .regularExpression) else { return "shell" }
-        return remote[r].replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
+        guard let r = remote.range(of: #"scripts/(dash|chat|greenlight|auto|autonomy|decide|decisions|dwim|diag|orchestrate|adopt|cleanup|lifestage|blocking|audit)\.py( [a-z][\w-]{0,20})?"#, options: .regularExpression) else { return "shell" }
+        return remote[r].dropFirst(8).replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
     }
     /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
     static let marker = NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")"  // per app: dev copies relaunch on their own
@@ -444,12 +468,15 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
         if d.isEmpty { h.readabilityHandler = nil; return }
+        var lines = [String]()
+        buf.l.lock()
         buf.s.append(d)
         while let nl = buf.s.firstIndex(of: 10) {
-            let l = String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self)
+            lines.append(String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self))
             buf.s.removeSubrange(buf.s.startIndex...nl)
-            DispatchQueue.main.async { onLine(l) }
         }
+        buf.l.unlock()
+        if !lines.isEmpty { DispatchQueue.main.async { for l in lines { onLine(l) } } }
     }
     p.terminationHandler = { p in
         out.fileHandleForReading.readabilityHandler = nil
@@ -465,13 +492,25 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
         } else {
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
         }
-        let rest = out.fileHandleForReading.readDataToEndOfFile()
+        let outSem = DispatchSemaphore(value: 0), outDrained = Buf()
+        DispatchQueue.global().async { outDrained.s = out.fileHandleForReading.readDataToEndOfFile(); outSem.signal() }
+        let rest = outSem.wait(timeout: .now() + 0.3) == .success ? outDrained.s : Data()
+        buf.l.lock(); let leftover = buf.s + rest; buf.s.removeAll(); buf.l.unlock()
+        try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
         DispatchQueue.main.async {
-            for l in String(decoding: buf.s + rest, as: UTF8.self).split(separator: "\n") { onLine(String(l)) }
-            onExit(p.terminationStatus)
+            for l in String(decoding: leftover, as: UTF8.self).split(separator: "\n") { onLine(String(l)) }
+            onExit(rc)
         }
     }
-    do { try p.run() } catch { Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": -1, "msg_class": "spawn"]); DispatchQueue.main.async { onExit(-1) }; return p }
+    do { try p.run() } catch {
+        out.fileHandleForReading.readabilityHandler = nil
+        err.fileHandleForReading.readabilityHandler = nil
+        p.terminationHandler = nil
+        try? inPipe.fileHandleForWriting.close(); try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
+        Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": -1, "msg_class": "spawn"])
+        DispatchQueue.main.async { onExit(-1) }
+        return p
+    }
     let w = inPipe.fileHandleForWriting, d = Data(stdin.utf8)
     // off the main thread: a pipe holds 16 KB, and ssh reads stdin only once it's connected (attached files are MBs).
     // The throwing write: a dead ssh's EPIPE isn't a crash

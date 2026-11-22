@@ -95,7 +95,8 @@ CONTEXT_K = 5     # state cards and memory notes picked for the message (ws_stat
 
 def chat_config():
     try:
-        return json.load(open(os.path.join(os.path.expanduser(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight"), "config.json")))
+        with open(os.path.join(os.path.expanduser(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight"), "config.json")) as fh:
+            return json.load(fh)
     except (OSError, ValueError):
         return {}
 
@@ -137,10 +138,11 @@ SEEN = "seen.json"  # what the session in use has been sent: {"key": "<engine>:<
 def seen_load(key):
     """The seen record for this session; another session's (an engine switch, a new or lost session) counts as nothing seen."""
     try:
-        s = json.load(open(os.path.join(DIR, SEEN)))
+        with open(os.path.join(DIR, SEEN)) as fh:
+            s = json.load(fh)
     except (OSError, ValueError):
         s = {}
-    return s if s.get("key") == key and isinstance(s.get("lines"), dict) else {"key": key, "board": None, "lines": {}, "context": {}}
+    return s if isinstance(s, dict) and s.get("key") == key and isinstance(s.get("lines"), dict) else {"key": key, "board": None, "lines": {}, "context": {}}
 
 
 def seen_save(s):
@@ -151,13 +153,6 @@ def seen_save(s):
                     json.dump(s, f)
     except OSError:
         pass  # session context is a cache; a full disk must not abort a delivered chat turn
-
-
-def seen_rekey(old, new):
-    """A new session's sid is known only after its first turn: what that turn sent is now that session's."""
-    s = seen_load(old)
-    if s.get("board") is not None or s.get("context"):
-        seen_save(s | {"key": new})
 
 
 def seen_forget(force=False):
@@ -175,7 +170,8 @@ def window_allow(board):
         for line in board.splitlines():
             if name := board_name(line):
                 lines_by_name.setdefault(name, []).append(line)
-        rows = json.load(open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")))["rows"]
+        with open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")) as fh:
+            rows = json.load(fh)["rows"]
         selected = []
         for r in rows:
             if r["name"] not in lines_by_name:
@@ -372,7 +368,7 @@ RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
 
-def cmd_title(cmd):
+def cmd_title(cmd, _depth=0):
     """A shell command as what it ran, not "Ran a shell command": the first real program (the script, for an interpreter), with
     its subcommand (`cd x && python3 /a/greenlight.py scan | tail` → "Ran greenlight.py scan", `gh pr list -R a/b` → "Ran gh pr
     list"). Arguments stay out: the step's detail has the whole command. The generic line when nothing's left (echo, cd)."""
@@ -387,8 +383,8 @@ def cmd_title(cmd):
         if not w or w[0] in ("cd", "export", "set", "source", ".", "true", ":", "echo", "printf", "sleep", "[", "test", "if", "fi",
                              "done", "for", "while", "until", "case", "esac", "EOF") or w[:2] in (["command", "-v"], ["command", "-V"]):
             continue  # nothing ran (command -v only looks a program up)
-        if os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
-            return cmd_title(" ".join(w[2:]))
+        if _depth < 8 and os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
+            return cmd_title(" ".join(w[2:]), _depth + 1)
         while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
             if w[1] in ("-c", "-e", "-"):  # python3 -c '…' or a heredoc: inline code, the interpreter is the name
                 w = w[:1]
@@ -610,33 +606,35 @@ class Norm:
         return [{"e": "text_reset"}, {"e": "text", "delta": text, "whole": True}]
 
     def usage(self, u):
-        return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+        if not isinstance(u, dict):
+            return 0
+        return (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0)
 
     def claude(self, d):
         t, out = d.get("type"), []
         if t == "system" and d.get("subtype") == "status" and d.get("status"):
-            out.append({"e": "status", "text": d["status"].capitalize()})
-        elif t == "system" and d.get("subtype") == "task_started" and d.get("is_backgrounded"):
+            out.append({"e": "status", "text": str(d["status"]).capitalize()})
+        elif t == "system" and d.get("subtype") == "task_started" and d.get("is_backgrounded") and d.get("task_id"):
             self.shells[d["task_id"]] = {"id": d["task_id"], "title": d.get("description") or "Background shell",
                                          "cmd": self.cmds.get(d.get("tool_use_id"), ""), "started": time.time()}
             out.append({"e": "bg", "shells": list(self.shells.values())})
         elif t == "system" and d.get("subtype") == "background_tasks_changed":
-            live = {x["task_id"] for x in d.get("tasks", [])}
+            live = {x["task_id"] for x in (d.get("tasks") or []) if isinstance(x, dict) and "task_id" in x}
             self.shells = {k: v for k, v in self.shells.items() if k in live}
             out.append({"e": "bg", "shells": list(self.shells.values())})
         elif t == "system" and d.get("subtype") == "compact_boundary":
-            self.context = d["compact_metadata"].get("post_tokens", 0)
+            self.context = (d.get("compact_metadata") or {}).get("post_tokens") or 0
             out.append({"e": "usage", "context": self.context})
-        elif t == "stream_event":
+        elif t == "stream_event" and isinstance(d.get("event"), dict):
             ev = d["event"]
-            if ev["type"] == "message_start":
+            if ev.get("type") == "message_start":
                 self.msg_t, self.chars = time.time(), 0
                 self.out, self.msg_out = self.out + self.msg_out, 0
-                self.context = self.usage(ev["message"].get("usage", {})) or self.context
+                self.context = self.usage((ev.get("message") or {}).get("usage")) or self.context
                 out.append({"e": "usage", "context": self.context})
-            elif ev["type"] == "content_block_start" and ev["content_block"]["type"] == "text":
+            elif ev.get("type") == "content_block_start" and (ev.get("content_block") or {}).get("type") == "text":
                 out.append({"e": "text_reset"})
-            elif ev["type"] == "content_block_delta":
+            elif ev.get("type") == "content_block_delta" and isinstance(ev.get("delta"), dict):
                 dl = ev["delta"]
                 s = dl.get("text") or dl.get("thinking") or dl.get("partial_json") or ""
                 self.chars += len(s)
@@ -649,58 +647,64 @@ class Norm:
                     self.last_tps = time.time()
                     out.append({"e": "usage", "tps": round(self.chars / 4 / max(time.time() - self.msg_t, 0.2), 1),
                                 "out": self.out + max(self.msg_out, self.chars // 4)})
-            elif ev["type"] == "message_delta" and self.msg_t:
-                n = self.msg_out = ev.get("usage", {}).get("output_tokens", 0)
+            elif ev.get("type") == "message_delta" and self.msg_t:
+                n = self.msg_out = (ev.get("usage") or {}).get("output_tokens") or 0
                 out.append({"e": "usage", "tps": round(n / max(time.time() - self.msg_t, 0.2), 1), "out": self.out + n})
         elif t == "assistant":
-            for c in d["message"].get("content", []):
+            for c in (d.get("message") or {}).get("content") or []:
+                if not isinstance(c, dict):
+                    continue
                 if c.get("type") == "tool_use":
-                    self.cmds[c["id"]] = c.get("input", {}).get("command", "")
-                    title, detail = step_title(c["name"], c.get("input", {}))
-                    out.append(self.more({"e": "step", "id": c["id"], "title": short(title, 80), "detail": short(detail), "call": call(c["name"], c.get("input", {}))},
-                                         input=full_input(c["name"], c.get("input", {}))))
-                    if c["name"] == "TodoWrite" and not d.get("parent_tool_use_id"):  # a subagent's list isn't the turn's plan
-                        out += self.todos(c.get("input", {}).get("todos"))
+                    inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+                    cid, cname = c.get("id") or "", c.get("name") or "tool"
+                    self.cmds[cid] = inp.get("command") or ""
+                    title, detail = step_title(cname, inp)
+                    out.append(self.more({"e": "step", "id": cid, "title": short(title, 80), "detail": short(detail), "call": call(cname, inp)},
+                                         input=full_input(cname, inp)))
+                    if cname == "TodoWrite" and not d.get("parent_tool_use_id"):  # a subagent's list isn't the turn's plan
+                        out += self.todos(inp.get("todos"))
                 elif c.get("type") == "text":
-                    self.text = c["text"]
-        elif t == "user" and isinstance(d.get("message", {}).get("content"), list):
+                    self.text = c.get("text") or ""
+        elif t == "user" and isinstance((d.get("message") or {}).get("content"), list):
             for c in d["message"]["content"]:
-                if c.get("type") == "tool_result":
+                if isinstance(c, dict) and c.get("type") == "tool_result":
                     res = c.get("content")
                     if isinstance(res, list):
                         res = " ".join(x.get("text", "") for x in res if isinstance(x, dict))
-                    out.append(self.more({"e": "step_done", "id": c["tool_use_id"], "ok": not c.get("is_error"), "out": short(res or "", 120)}, full=clip(res, tail=True)))
+                    out.append(self.more({"e": "step_done", "id": c.get("tool_use_id"), "ok": not c.get("is_error"), "out": short(res or "", 120)}, full=clip(res, tail=True)))
         elif t == "result":
             mu = next(iter((d.get("modelUsage") or {}).values()), {})
-            self.window = mu.get("contextWindow") or self.window
+            self.window = (mu.get("contextWindow") if isinstance(mu, dict) else None) or self.window
             u = d.get("usage") or {}
-            self.tin, self.tout = self.tin + self.usage(u), self.tout + (u.get("output_tokens") or 0)  # +=: a retry's run adds to the first's
-            if isinstance(d.get("total_cost_usd"), (int, float)):
+            self.tin, self.tout = self.tin + self.usage(u), self.tout + ((u.get("output_tokens") or 0) if isinstance(u, dict) else 0)  # +=: a retry's run adds to the first's
+            if isinstance(d.get("total_cost_usd"), (int, float)) and not isinstance(d.get("total_cost_usd"), bool):
                 self.cost = (self.cost or 0) + d["total_cost_usd"]
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
                         "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
         return out
 
     def codex(self, d):
-        t, it, out = d.get("type"), d.get("item", {}), []
+        t, it, out = d.get("type"), d.get("item") if isinstance(d.get("item"), dict) else {}, []
         if t == "thread.started":
             self.thread = d.get("thread_id") or self.thread
         elif t == "item.started" and it.get("type") == "command_execution":
-            cmd = it["command"].split(" -lc ", 1)[-1].strip("'")
+            if not it.get("command") or it.get("id") is None:
+                return out
+            cmd = str(it["command"]).split(" -lc ", 1)[-1].strip("'")
             out.append(self.more({"e": "step", "id": it["id"], "title": cmd_title(cmd), "detail": short(cmd), "call": f"Bash({short(cmd, 100)})"}, input=clip(cmd)))
         elif t == "item.completed" and it.get("type") == "command_execution":
-            out.append(self.more({"e": "step_done", "id": it["id"], "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output", ""), 120)},
+            out.append(self.more({"e": "step_done", "id": it.get("id"), "ok": it.get("exit_code") == 0, "out": short(it.get("aggregated_output") or "", 120)},
                                  full=clip(it.get("aggregated_output"), tail=True)))
         elif t == "item.completed" and it.get("type") == "reasoning":
-            out += self.think(it.get("text", ""))
+            out += self.think(it.get("text") or "")
         elif t == "item.completed" and it.get("type") == "agent_message":
-            self.text = it["text"]
-            out += self.whole(it["text"])
+            self.text = it.get("text") or ""
+            out += self.whole(self.text)
         elif it.get("type") == "todo_list" and t in ("item.started", "item.updated", "item.completed"):
             out += self.plan([(x.get("text", ""), "completed" if x.get("completed") else "", None) for x in it.get("items") or [] if isinstance(x, dict)])
         elif it.get("type") in ("mcp_tool_call", "web_search") and t in ("item.started", "item.completed"):
             mcp = it["type"] == "mcp_tool_call"
-            title, detail = (it.get("tool", "tool").replace("_", " "), it.get("server", "")) if mcp else ("Searched the web", it.get("query", ""))
+            title, detail = ((it.get("tool") or "tool").replace("_", " "), it.get("server") or "") if mcp else ("Searched the web", it.get("query") or "")
             if t == "item.started":
                 out.append({"e": "step", "id": it.get("id"), "title": short(title, 80), "detail": short(detail)})
             else:
@@ -712,13 +716,14 @@ class Norm:
             out += [{"e": "step", "id": it.get("id"), "title": short("Edited " + (", ".join(names) or "files"), 80), "detail": ""},
                     {"e": "step_done", "id": it.get("id"), "ok": it.get("status") != "failed", "out": ""}]
         elif t == "item.started":
-            out.append({"e": "status", "text": it.get("type", "working").replace("_", " ").capitalize()})
-        elif t == "error" and str(d.get("message", "")).startswith("Reconnecting"):  # a retry, not the end
+            out.append({"e": "status", "text": str(it.get("type") or "working").replace("_", " ").capitalize()})
+        elif t == "error" and str(d.get("message") or "").startswith("Reconnecting"):  # a retry, not the end
             out.append({"e": "status", "text": short(d["message"], 80)})
         elif t == "turn.completed":
-            total = d.get("usage", {}).get("input_tokens")
+            u = d.get("usage") if isinstance(d.get("usage"), dict) else {}
+            total = u.get("input_tokens")
             if self.base is not None and total and total >= self.base[0]:  # less: another thread's rollout
-                self.tin, self.tout = total - self.base[0], (d.get("usage", {}).get("output_tokens") or 0) - self.base[1]
+                self.tin, self.tout = total - self.base[0], (u.get("output_tokens") or 0) - self.base[1]
             ctx, self.window = codex_usage(self.thread, total)
             if ctx is None and self.thread:  # Codex writes its rollout from a queue: give the last token_count a moment
                 time.sleep(0.1)
@@ -893,16 +898,19 @@ QUESTION_DELIVERY = "question.delivery"
 def generation_unlocked():
     path = os.path.join(DIR, GENERATION)
     try:
-        return open(path).read()
+        with open(path) as fh:
+            return fh.read()
     except OSError:
         value = hashlib.sha1(os.urandom(32)).hexdigest()
-        open(path, "w").write(value)
+        with open(path, "w") as fh:
+            fh.write(value)
         return value
 
 
 def rotate_generation_unlocked():
     value = hashlib.sha1(os.urandom(32)).hexdigest()
-    open(os.path.join(DIR, GENERATION), "w").write(value)
+    with open(os.path.join(DIR, GENERATION), "w") as fh:
+        fh.write(value)
     return value
 
 
@@ -919,7 +927,8 @@ def cancel_running_unlocked():
 
 def pid_record():
     try:
-        raw = json.load(open(PIDFILE))
+        with open(PIDFILE) as fh:
+            raw = json.load(fh)
         if isinstance(raw, int):  # old marker: readable for cleanup, never trusted for signaling
             return {"pid": raw, "birth": None}
         return {"pid": int(raw["pid"]), "birth": raw["birth"]}
@@ -1039,7 +1048,8 @@ def stale_pending_question(snapshot):
     current = {identity[6]: identity for identity in allow.values() if isinstance(identity, tuple) and len(identity) > 6}
     backfilled = set()
     try:
-        rows = json.load(open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")))["rows"]
+        with open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")) as fh:
+            rows = json.load(fh)["rows"]
         for row in rows:
             mr = row.get("mr") or {}
             if row.get("_goal_backfill"):
@@ -1236,99 +1246,150 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
         if not birth:
             p.terminate()
             p.wait()
+            for s in (p.stdin, p.stdout, p.stderr):
+                with contextlib.suppress(OSError):
+                    if s:
+                        s.close()
             return None, "harness process identity unavailable"
-        open(PIDFILE, "w").write(json.dumps({"pid": p.pid, "birth": birth}))
-    try:
-        p.stdin.write(text)
-        p.stdin.close()
-    except (OSError, ValueError):  # Clear may terminate the registered child before it reads the prompt
-        with contextlib.suppress(OSError):
-            p.stdin.close()
-        p.wait()
-        cleanup_run(p.pid, birth)
-        return None, "window changed"
-    request_stale = threading.Event()
-    request_status = ["valid"]
-    if os.environ.get("GREENLIGHT_ONLY") or request_guard is not None:
-        def watch_scope():
-            next_request_check = 0.0
-            while p.poll() is None:
-                with scope_lock():
-                    stale = not scope_current_unlocked()
-                if request_guard is not None and time.monotonic() >= next_request_check:
-                    status = live_question_status(request_guard)
-                    if status != "valid":
-                        request_status[0] = status
-                        request_stale.set()
-                        stale = True
-                    next_request_check = time.monotonic() + 0.5
-                if stale:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(p.pid, signal.SIGTERM)
-                    return
-                time.sleep(0.1)
-        threading.Thread(target=watch_scope, daemon=True).start()
-    sid, done, private, failed_done = None, False, set(), None
-    for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
-        emit(e="step_done", id=sid_, ok=False, out="interrupted")
-    if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
-        emit(e="plan", done=0, total=0, title="", eta=None)
-    norm.plan_t0, norm.plan_keys, norm.running = None, None, []
-    hiding, needles = guard or watch_for_attachments()
-    for line in p.stdout:
-        with scope_lock():
-            stale = not scope_current_unlocked()
-        if stale:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(p.pid, signal.SIGTERM)
-            p.wait()
-            cleanup_run(p.pid, birth)
-            return sid, "window changed"
+        with open(PIDFILE, "w") as pf:
+            pf.write(json.dumps({"pid": p.pid, "birth": birth}))
+    stderr_buf = []
+
+    def _drain_stderr():
+        if not p.stderr:
+            return
+        total = 0
         try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        init = d.get("init") if isinstance(d.get("init"), dict) else {}
-        result = d.get("result") if isinstance(d.get("result"), dict) else {}
-        sid = d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id") or d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
-        raw = getattr(norm, engine)(d)
-        for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
-            if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
-                private.add(e["id"])
-            elif hiding and e["e"] == "step_done" and e.get("id") in private:
-                e["out"] = attach.HIDDEN
-                e.pop("full", None)
-            if hiding and e["e"] in ("step", "step_done", "plan"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
-                attach.hide(DIR, e, needles)
-        evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
-        if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            while chunk := p.stderr.read(4096):
+                if total < 65536:
+                    stderr_buf.append(chunk[:65536 - total])
+                    total += len(chunk)
+        except (OSError, ValueError):
+            pass
+
+    err_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    err_thread.start()
+
+    def _kill_child():
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(p.pid, signal.SIGTERM)
+
+    old_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with contextlib.suppress(ValueError, OSError):
+                prev_h = signal.getsignal(sig)
+
+                def _on_sig(signum, frame, _prev=prev_h):
+                    _kill_child()
+                    raise SystemExit(128 + signum)
+
+                old_handlers[sig] = prev_h
+                signal.signal(sig, _on_sig)
+
+    try:
+        try:
+            p.stdin.write(text)
+            p.stdin.close()
+        except (OSError, ValueError):  # Clear may terminate the registered child before it reads the prompt
+            with contextlib.suppress(OSError):
+                p.stdin.close()
             p.wait()
-            cleanup_run(p.pid, birth)
-            return sid, "retry"
-        for e in evs:
-            if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
-                for sh in e["shells"] if hiding else ():
-                    attach.hide(DIR, sh, needles)  # its title is the step's: hidden as the step's is
-                json.dump(e["shells"], open(BGFILE, "w"))
+            return None, "window changed"
+        request_stale = threading.Event()
+        request_status = ["valid"]
+        if os.environ.get("GREENLIGHT_ONLY") or request_guard is not None:
+            def watch_scope():
+                next_request_check = 0.0
+                while p.poll() is None:
+                    with scope_lock():
+                        stale = not scope_current_unlocked()
+                    if request_guard is not None and time.monotonic() >= next_request_check:
+                        status = live_question_status(request_guard)
+                        if status != "valid":
+                            request_status[0] = status
+                            request_stale.set()
+                            stale = True
+                        next_request_check = time.monotonic() + 0.5
+                    if stale:
+                        _kill_child()
+                        return
+                    time.sleep(0.1)
+            threading.Thread(target=watch_scope, daemon=True).start()
+        sid, done, private, failed_done = None, False, set(), None
+        for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
+            emit(e="step_done", id=sid_, ok=False, out="interrupted")
+        if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
+            emit(e="plan", done=0, total=0, title="", eta=None)
+        norm.plan_t0, norm.plan_keys, norm.running = None, None, []
+        hiding, needles = guard or watch_for_attachments()
+        for line in p.stdout:
+            with scope_lock():
+                stale = not scope_current_unlocked()
+            if stale:
+                _kill_child()
+                p.wait()
+                return sid, "window changed"
+            try:
+                d = json.loads(line)
+            except ValueError:
                 continue
-            if e["e"] == "done" and done:  # opencode can report one failure twice
+            if not isinstance(d, dict):
                 continue
-            if e["e"] == "done" and e["ok"] and sid:  # save only successful turns before the app hears done
-                session(engine, sid)
-            if e["e"] == "done":
-                done, norm.reply = True, e["text"] if e["ok"] else None
-                if not e["ok"]:
-                    failed_done = e
-            if defer_done and e["e"] == "done":
-                norm.pending_done = e
-            else:
-                emit(**e)
-    p.wait()
-    cleanup_run(p.pid, birth)
+            init = d.get("init") if isinstance(d.get("init"), dict) else {}
+            result = d.get("result") if isinstance(d.get("result"), dict) else {}
+            sid = d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id") or d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
+            raw = getattr(norm, engine)(d)
+            for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
+                if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
+                    private.add(e["id"])
+                elif hiding and e["e"] == "step_done" and e.get("id") in private:
+                    e["out"] = attach.HIDDEN
+                    e.pop("full", None)
+                if hiding and e["e"] in ("step", "step_done", "plan"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
+                    attach.hide(DIR, e, needles)
+            evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
+            if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
+                _kill_child()
+                p.wait()
+                return sid, "retry"
+            for e in evs:
+                if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
+                    for sh in e["shells"] if hiding else ():
+                        attach.hide(DIR, sh, needles)  # its title is the step's: hidden as the step's is
+                    tmp_bg = f"{BGFILE}.{os.getpid()}.tmp"
+                    fd = os.open(tmp_bg, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as bf:
+                        json.dump(e["shells"], bf)
+                    os.replace(tmp_bg, BGFILE)
+                    continue
+                if e["e"] == "done" and done:  # opencode can report one failure twice
+                    continue
+                if e["e"] == "done" and e["ok"] and sid:  # save only successful turns before the app hears done
+                    session(engine, sid)
+                if e["e"] == "done":
+                    done, norm.reply = True, e["text"] if e["ok"] else None
+                    if not e["ok"]:
+                        failed_done = e
+                if defer_done and e["e"] == "done":
+                    norm.pending_done = e
+                else:
+                    emit(**e)
+        p.wait()
+        err_thread.join(timeout=1.0)
+    finally:
+        for sig, prev_h in old_handlers.items():
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, prev_h)
+        if hasattr(p, "poll") and p.poll() is None:
+            _kill_child()
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                p.wait(timeout=3)
+        for s in (getattr(p, "stdin", None), getattr(p, "stdout", None), getattr(p, "stderr", None)):
+            with contextlib.suppress(OSError, ValueError):
+                if s:
+                    s.close()
+        cleanup_run(p.pid, birth)
     if request_stale.is_set():
         return sid, "request unavailable" if request_status[0] == "unavailable" else "request changed"
     with scope_lock():
@@ -1346,7 +1407,7 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
     if not done and p.returncode:
         if p.returncode in (-15, 143):  # SIGTERM from `chat.py stop`
             return sid, "Stopped"
-        return sid, p.stderr.read().strip() or f"exit {p.returncode}"
+        return sid, "".join(stderr_buf).strip() or f"exit {p.returncode}"
     if failed_done:
         return sid, "model failed"
     return (None if done else sid), None  # done: its session is saved already
@@ -1368,7 +1429,15 @@ def agent_title(a):
 
 def background():
     """This chat's live background shells and every working Orca agent, for the app's footer chip."""
-    shells = json.load(open(BGFILE)) if os.path.exists(BGFILE) and os.path.exists(PIDFILE) else []
+    shells = []
+    if os.path.exists(BGFILE) and os.path.exists(PIDFILE):
+        try:
+            with open(BGFILE) as fh:
+                raw = json.load(fh)
+            if isinstance(raw, list):
+                shells = [s for s in raw if isinstance(s, dict)]
+        except (OSError, ValueError):
+            shells = []
     agents = []
     try:
         import greenlight
@@ -1384,25 +1453,41 @@ def background():
 
 def stop_shell(task_id):
     """Kill one background shell: the claude process's descendants whose command line holds the shell's command."""
-    shells = json.load(open(BGFILE)) if os.path.exists(BGFILE) else []
-    cmd = next((s["cmd"] for s in shells if s["id"] == task_id), "")
+    shells = []
+    if os.path.exists(BGFILE):
+        try:
+            with open(BGFILE) as fh:
+                raw = json.load(fh)
+            if isinstance(raw, list):
+                shells = [s for s in raw if isinstance(s, dict)]
+        except (OSError, ValueError):
+            return False
+    cmd = next((s.get("cmd") or "" for s in shells if s.get("id") == task_id), "")
     key = max(re.split(r"['\"\\]", cmd), key=len).strip()  # ponytail: longest quote-free chunk, quoting is rewritten on the way to the shell
     parent = pid_record()
-    if not key or not pid_matches(parent):
+    if len(key) < 4 or not pid_matches(parent):
         return False
-    rows = [l.split(None, 2) for l in subprocess.run(["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True).stdout.splitlines()]
+    try:
+        ps_out = subprocess.run(["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    rows = [l.split(None, 2) for l in ps_out.splitlines()]
     kids = {}
     for r in rows:
-        if len(r) == 3:
+        if len(r) == 3 and r[0].isdigit() and r[1].isdigit():
             kids.setdefault(int(r[1]), []).append((int(r[0]), r[2]))
     args = {pid: a for v in kids.values() for pid, a in v}
-    def tree(pid):
-        return [pid] + [x for k, _ in kids.get(pid, []) for x in tree(k)]
+    def tree(pid, seen=None):
+        seen = set() if seen is None else seen
+        if pid in seen:
+            return []
+        seen.add(pid)
+        return [pid] + [x for k, _ in kids.get(pid, []) for x in tree(k, seen)]
     hits = [p for p in tree(parent["pid"])[1:] if key in args.get(p, "")]
     for p in {x for h in hits for x in tree(h)}:
         try:
             os.kill(p, signal.SIGTERM)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError, OSError):
             pass
     return bool(hits)
 
@@ -1526,10 +1611,14 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
             return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
         except OSError as e:
             return dict(e="done", ok=False, text=f"The attached files couldn't be saved where greenlight runs ({e.strerror or e}).", context=0, window=None, ms=None)
-    prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() not in ("greenlight", "greenlight") else "")
+    elif os.path.isdir(attach.root(DIR)):
+        with contextlib.suppress(OSError):
+            attach.prune(DIR)
+    prompt = PROMPT + (f" The user has named you {name} in the app; answer to that name." if name and name.lower() != "greenlight" else "")
     rules = os.path.expanduser(os.path.join(os.environ.get("GREENLIGHT_HOME") or "~/.greenlight", "instructions.md"))
     if os.path.exists(rules):  # the user's standing instructions (Settings → Model), read every turn
-        prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + open(rules).read().strip()
+        with open(rules) as rf:
+            prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + rf.read().strip()
     snapshot = None
     if os.environ.get("GREENLIGHT_ONLY"):
         try:
@@ -1608,12 +1697,17 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                 os.remove(asked)
                 return dict(e="done", ok=False, text="The previous question could not be verified; ask again.",
                             context=0, window=None, ms=None)
-            question_context = open(asked).read() if os.path.exists(asked) else None
+            if os.path.exists(asked):
+                with open(asked) as af:
+                    question_context = af.read()
+            else:
+                question_context = None
         if question_context and needs_request_check:
             request_guard = snapshot
         # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
         # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
-        os.environ["GREENLIGHT_REQUEST"] = question_context + ANSWER + text if question_context else text
+        req_val = question_context + ANSWER + text if question_context else text
+        os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
         wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
         text = wrap(board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
@@ -1644,8 +1738,12 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
-        cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-        new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+        try:
+            cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+        except (ValueError, OSError) as e:
+            seen_forget()
+            return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
         sid = None  # don't fall into the session-lost retry below
     if err == "window changed":
         return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
@@ -1667,8 +1765,12 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         seen = seen_load(key)
         text = wrap(board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         norm.base = (0, 0)  # a new thread: its totals start at 0
-        cmd, t = mk(None, text)
-        new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+        try:
+            cmd, t = mk(None, text)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+        except (ValueError, OSError) as e:
+            seen_forget()
+            return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     if err == "model failed":
         return norm.pending_done
     if err == "request unavailable":
@@ -1715,8 +1817,10 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                         discard_sessions_unlocked()
                         return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again.",
                                 "context": 0, "window": None, "ms": None}
-                    open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w").write(reservation[0] if reservation else "pending")
-                    open(asked, "w").write(os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)
+                    with open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as qdf:
+                        qdf.write(reservation[0] if reservation else "pending")
+                    with open(asked, "w") as af:
+                        af.write((os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)[-16384:])
                     decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=list(targets))
                     if stale_pending_question(request_snapshot):
                         decisions.forget_chat(chat=chat_identity())
@@ -1746,7 +1850,7 @@ def main():
     os.makedirs(DIR, exist_ok=True)
     args = sys.argv[1:]
     cmd = args[0] if args else "send"
-    opt = lambda k: args[args.index(k) + 1] if k in args else None
+    opt = lambda k: args[i + 1] if k in args and (i := args.index(k)) + 1 < len(args) else None
     if cmd == "new":
         # Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR.
         with scope_lock():
@@ -1780,7 +1884,7 @@ def main():
     elif cmd == "bg":
         print(json.dumps(background()))
     elif cmd == "bgstop":
-        print(json.dumps({"ok": stop_shell(args[1])}))
+        print(json.dumps({"ok": stop_shell(args[1]) if len(args) > 1 else False}))
     elif cmd == "compact":
         if not session("claude"):
             emit(e="done", ok=True, text="Nothing to compact yet.", context=0, window=None, ms=None)

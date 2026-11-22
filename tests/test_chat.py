@@ -946,7 +946,11 @@ def test_second_turn_cannot_replace_active_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     chat.check_session_scope("claude")
-    (tmp_path / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": chat.auto.process_start(os.getpid())}))
+    birth = chat.auto.process_start(os.getpid())
+    (tmp_path / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": birth}))
+    # On macOS (no /proc), auto.process_start invokes subprocess.run(["ps", ...]) which calls Popen;
+    # pin process_start so patching chat.subprocess.Popen only intercepts the harness launch.
+    monkeypatch.setattr(chat.auto, "process_start", lambda pid: birth if pid == os.getpid() else None)
     with mock.patch.object(chat.subprocess, "Popen") as launch:
         assert chat.run(["fake"], "claude", "hello", chat.Norm())[1] == "another turn running"
         launch.assert_not_called()

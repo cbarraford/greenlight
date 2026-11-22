@@ -106,7 +106,10 @@ def owner_keys(ids, migrate=True):
                         card = json.loads(card_file.read_text())
                         if card.get("id") and card.get("ws"):
                             record = {"id": card["id"], "card": card["ws"]}
-                            owner_file(card["id"]).write_text(json.dumps(record))
+                            of = owner_file(card["id"])
+                            tmp = of.with_name(f".{of.name}.{os.getpid()}.tmp")
+                            tmp.write_text(json.dumps(record))
+                            os.replace(tmp, of)
                             if card["id"] in missing:
                                 owners[card["id"]] = card["ws"]
                 (DIR / ".owners-migrated").touch()
@@ -298,7 +301,7 @@ def risks(row):
         header = re.compile(rf"^((?:Merge|Review)\s+[#!]\d+:\s*){re.escape(mr['title'].strip())}"
                             r"(?=[.!?]?(?:$|\n)|\s+\((?!until\b)|\s+[—–-]\s+)", re.I)
         goal_words = header.sub(r"\1", goal_words, count=1)
-    if re.search(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", goal_words, re.I):
+    if (row.get("_intents") or {}).get("is_held") or re.search(r"(?<![\w-])(?:hold|do ?n[o'’]t merge)(?![\w-])", goal_words, re.I):
         out.append("goal says hold: no merge")
     if nxt.get("owner") == "me":
         out.append(f"waiting on the user: {act[:160]}")

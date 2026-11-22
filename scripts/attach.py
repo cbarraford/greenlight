@@ -39,14 +39,15 @@ def safe_name(name):
     (a filesystem's limit is 255 bytes, and 80 emoji are 320)."""
     n = re.split(r"[/\\]", str(name or ""))[-1]
     n = re.sub(r"[\x00-\x1f\x7f]", "", n)
-    n = " ".join(n.split()).lstrip(".").strip()
+    n = " ".join(n.split()).lstrip(". ").strip()
     if len(n) > 80:
         stem, dot, ext = n.rpartition(".")
         n = (stem[: 79 - len(ext)] + "." + ext) if dot and 0 < len(ext) <= 10 else n[:80]
     while len(n.encode()) > 200:
         stem, dot, ext = n.rpartition(".")
         n = (stem[:-1] + "." + ext) if dot and stem and len(ext) <= 10 else n[:-1]
-    return n.replace(",", "_") or "file"  # codex's --image splits its value on commas
+    n = n.replace(",", "_").lstrip(". ").strip()
+    return n if n and n not in (".", "..") else "file"  # codex's --image splits its value on commas
 
 
 def kind(data):

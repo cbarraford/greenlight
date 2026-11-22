@@ -655,7 +655,7 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   await page.evaluate(() => term.suggest({name: "sidebar", label: "Fix lint job", prompt: "Fix the failing lint job on !51 and push."}));
   assert.match(await page.$eval("#card .nx", b => b.textContent), /Fix lint job.*Fix the failing lint job/);
   await page.click("#card .nx");
-  assert.match((await posts(page, "in")).pop().d, /^claude 'Fix the failing lint job on !51 and push\.'/);
+  assert.match((await posts(page, "in")).pop().d, /^claude \$'Fix the failing lint job on !51 and push\.'/);
   // Copy opens a small menu
   await row("sidebar").click({button: "right"}); await page.click("#card button:has-text('Copy')"); await page.click("#menu button:text-is('Branch name')");
   assert.equal((await posts(page, "copy")).pop().text, "term-sidebar");
