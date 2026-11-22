@@ -120,6 +120,13 @@ import auto  # noqa: E402
 auto.tick()  # a 3am automation isn't due now, but the tick still leaves its heartbeat
 assert {c["check"]: c for c in diag.doctor()["checks"]}["auto_timer"]["state"] == "fresh"
 
+# usage: chat turns roll up per harness.model
+for o, c in ((1200, 5.123), (800, 3.0)):
+    diag.event("chat_turn", ok=True, harness="claude", model="opus", out_tokens=o, cost_cents=c, secs=2.0)
+diag.event("chat_turn", ok=False, harness="codex", secs=1.0)
+u = diag.summary(0)["usage"]
+assert u == {"claude.opus": {"turns": 2, "out_tokens": 2000, "cost_usd": 0.08123}, "codex.default": {"turns": 1, "out_tokens": 0, "cost_usd": 0.0}}, u
+
 # crash reports: the crashed thread's frames by image name and symbol; a frame naming a path is dropped
 crash = Path(HOME, "crashes"); crash.mkdir()
 (crash / "Greenlight-2026-11-21-101010.ips").write_text(json.dumps({"build_version": "abc1234"}) + "\n" + json.dumps({

@@ -332,14 +332,18 @@ THINK_STATUS = {"Thinking", "Reasoning"}  # claude/pi/opencode thinking, codex's
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
 
 
-TURN = {}  # this process's turn, for its diag event: {harness, model, t}
+TURN = {}  # this process's turn, for its diag event: {harness, model, t, out}
 
 
 def emit(**e):
     print(json.dumps(e), flush=True)
-    if e.get("e") == "done":  # one chat_turn per answered message: harness, timing, context size; never the text
+    if e.get("e") == "usage" and isinstance(e.get("out"), int):
+        TURN["out"] = e["out"]  # the turn's output tokens so far
+    if e.get("e") == "done":  # one chat_turn per answered message: harness, timing, tokens, cost; never the text
+        num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None  # noqa: E731
         diag.event("chat_turn", ok=bool(e.get("ok")), harness=TURN.get("harness"), model=TURN.get("model"),
                    context=e.get("context") if isinstance(e.get("context"), int) else None, ms=e.get("ms"),
+                   out_tokens=TURN.get("out"), cost_cents=num(e.get("cost")) and e["cost"] * 100,  # cents: clean() keeps 3 decimals
                    secs=time.monotonic() - TURN["t"] if "t" in TURN else None)
 
 
@@ -646,7 +650,7 @@ class Norm:
             mu = next(iter((d.get("modelUsage") or {}).values()), {})
             self.window = mu.get("contextWindow") or self.window
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
-                        "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
+                        "context": self.context, "window": self.window, "ms": d.get("duration_ms"), "cost": d.get("total_cost_usd")})
         return out
 
     def codex(self, d):

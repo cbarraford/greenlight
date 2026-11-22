@@ -25,6 +25,8 @@ the host: the checkout is `~/.claude/skills/greenlight`.
   `hang {secs}` (the main thread didn't answer for over 2 s) and, every 5 min, `sample {rss_mb, cpu_pct, up_mins}`.
 - `summary.crashes`: the app's macOS crash reports (`~/Library/Logs/DiagnosticReports/Greenlight*.ips`), exception,
   signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
+- `summary.usage`: chat turns per `harness.model` with output tokens and cost. Each `chat_turn` carries `out_tokens`,
+  `context` and `cost_cents`; only Claude reports a cost.
 
 **How to read it**
 - Every event has `ts`, `v` (git short SHA), `comp` (the script, or `app`), `run`, `pid` and `kind`.
