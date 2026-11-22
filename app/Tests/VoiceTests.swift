@@ -37,6 +37,21 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: while voice mode is starting, its button says a press cancels the start",
           voiceButtonText(on: false, starting: true).label == "Cancel starting voice mode" && voiceButtonText(on: false, starting: false).label == "Start voice mode"
           && voiceButtonText(on: true, starting: false).label == "End voice mode" && voiceButtonText(on: false, starting: true).help.contains("cancel"))
+    do {  // the header's knobs say what a click does now
+        let off = HeaderTips(), live = HeaderTips(on: true, transcript: true, captions: true, out: true, name: "Ada", look: "Zen", next: "Orb")
+        check("chat header: each top-right knob's hint and label follow its state",
+              off.voice.label == "Start voice mode" && live.voice.label == "End voice mode"
+              && off.view.label == "Show the transcript" && live.view.label == "Show the stage" && live.view.help.contains("Ada")
+              && off.caption.label == "Turn captions on" && live.caption.label == "Turn captions off"
+              && off.pop.label == "Move to its own window" && live.pop.label == "Put back in the main window"
+              && live.style.help == "Style: Zen. Click for Orb" && live.style.label.contains("Orb")
+              && [off.attach, off.view, off.caption, off.style, off.voice, off.pop, live.view, live.caption, live.pop].allSatisfy { !$0.help.isEmpty && $0.help.count <= 100 && !$0.label.isEmpty })
+        let scr = NSRect(x: 0, y: 0, width: 1000, height: 800), sz = NSSize(width: 200, height: 24)
+        let mid = hintFrame(sz, mouse: NSPoint(x: 500, y: 400), screen: scr), low = hintFrame(sz, mouse: NSPoint(x: 500, y: 20), screen: scr)
+        let edge = hintFrame(sz, mouse: NSPoint(x: 990, y: 400), screen: scr)
+        check("hover hint: by the cursor, below it, flipped above near the bottom, kept on screen at the right edge",
+              mid.minX == 510 && mid.maxY < 400 && mid.maxY > 360 && low.minY > 20 && scr.contains(low) && scr.contains(edge) && edge.maxX <= 996)
+    }
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     if !AVSpeechSynthesisVoice.speechVoices().isEmpty {
         let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
