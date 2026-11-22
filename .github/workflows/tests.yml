@@ -12,16 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - id: filter
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch origin "${{ github.base_ref }}" --depth=1
-            base="origin/${{ github.base_ref }}"
+            range="HEAD^1..HEAD"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            range="${{ github.event.before }}..${{ github.sha }}"
           else
-            base="HEAD~1"
+            range="HEAD~1..HEAD"
           fi
-          if git diff --name-only "$base" HEAD 2>/dev/null | grep -qE '^(app/|\.github/workflows/tests\.yml$)'; then
+          if ! changed="$(git diff --name-only "$range" 2>/dev/null)"; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"

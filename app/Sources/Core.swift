@@ -151,24 +151,24 @@ final class Core: ObservableObject {
     var hsaved = "", recalling = false, toEnd = false  // toEnd: the key monitor puts the caret at the end after this key
     @Published var model = savedModel("model", fallback: "claude-opus-5-5") {
         didSet {
-            UserDefaults.standard.set(model, forKey: "model")
+            ud.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
                 msgs.append(Msg(.note, isClaude ? "Back to the Claude conversation." : "\(modelName) keeps its own conversation, separate from Claude's."))
                 context = 0; window = 0; run?.meterStale = true  // the meter was the other harness's: tokens only until this one reports
             }
         }
     }
-    @Published var effort = UserDefaults.standard.string(forKey: "effort") ?? "medium" { didSet { UserDefaults.standard.set(effort, forKey: "effort") } }
+    @Published var effort = ud.string(forKey: "effort") ?? "medium" { didSet { ud.set(effort, forKey: "effort") } }
     // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one through agy.
-    @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") { didSet { UserDefaults.standard.set(designModel, forKey: "designModel") } }
-    @Published var designEffort = UserDefaults.standard.string(forKey: "designEffort") ?? "low" { didSet { UserDefaults.standard.set(designEffort, forKey: "designEffort") } }
+    @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") { didSet { ud.set(designModel, forKey: "designModel") } }
+    @Published var designEffort = ud.string(forKey: "designEffort") ?? "low" { didSet { ud.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
-    @Published var termNameModel = UserDefaults.standard.string(forKey: "termNameModel") ?? "claude-haiku-5-5" { didSet { UserDefaults.standard.set(termNameModel, forKey: "termNameModel") } }
-    @Published var termAutoName = UserDefaults.standard.object(forKey: "termAutoName") as? Bool ?? true { didSet { UserDefaults.standard.set(termAutoName, forKey: "termAutoName") } }
+    @Published var termNameModel = ud.string(forKey: "termNameModel") ?? "claude-haiku-5-5" { didSet { ud.set(termNameModel, forKey: "termNameModel") } }
+    @Published var termAutoName = ud.object(forKey: "termAutoName") as? Bool ?? true { didSet { ud.set(termAutoName, forKey: "termAutoName") } }
     // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
-    @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { UserDefaults.standard.set(nextModel, forKey: "nextModel") } }
-    @Published var nextEffort = UserDefaults.standard.string(forKey: "nextEffort") ?? "low" { didSet { UserDefaults.standard.set(nextEffort, forKey: "nextEffort") } }
-    @Published var designParallel = UserDefaults.standard.object(forKey: "designParallel") as? Int ?? 3 { didSet { UserDefaults.standard.set(designParallel, forKey: "designParallel") } }
+    @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { ud.set(nextModel, forKey: "nextModel") } }
+    @Published var nextEffort = ud.string(forKey: "nextEffort") ?? "low" { didSet { ud.set(nextEffort, forKey: "nextEffort") } }
+    @Published var designParallel = ud.object(forKey: "designParallel") as? Int ?? 3 { didSet { ud.set(designParallel, forKey: "designParallel") } }
     @Published var context = 0 { didSet { ud.set(context, forKey: meterKeys.context) } }  // init reads this chat's
     @Published var window = 0 { didSet { ud.set(window, forKey: meterKeys.window) } }  // 0: unknown, the meter shows tokens only
     @Published var tps = 0.0
@@ -196,7 +196,7 @@ final class Core: ObservableObject {
     @Published var connected = false
     @Published var unread = 0
     @Published var now = Date()
-    @Published var name = UserDefaults.standard.string(forKey: "name") ?? "Greenlight" { didSet { UserDefaults.standard.set(name, forKey: "name") } }
+    @Published var name = ud.string(forKey: "name") ?? "Greenlight" { didSet { ud.set(name, forKey: "name") } }
     @Published var editingName = false
     @Published var hint = ""  // hover text for the footer buttons; native tooltips are slow
     @Published var voiceTest = ""  // Settings' Test of the speaking voice: what happened
@@ -211,10 +211,10 @@ final class Core: ObservableObject {
     @Published var inboxOpen = false
     @Published var replyingTo: UUID?
     @Published var replyText = ""
-    @Published var engine = UserDefaults.standard.string(forKey: "engine") ?? "apple" { didSet { UserDefaults.standard.set(engine, forKey: "engine") } }
-    @Published var voiceMods = UserDefaults.standard.object(forKey: "voiceMods") as? Int ?? (controlKey | optionKey) { didSet { UserDefaults.standard.set(voiceMods, forKey: "voiceMods") } }
-    @Published var voiceCode = UserDefaults.standard.object(forKey: "voiceCode") as? Int ?? kVK_ANSI_V { didSet { UserDefaults.standard.set(voiceCode, forKey: "voiceCode") } }
-    @Published var voiceKey = UserDefaults.standard.string(forKey: "voiceKey") ?? "V" { didSet { UserDefaults.standard.set(voiceKey, forKey: "voiceKey") } }
+    @Published var engine = ud.string(forKey: "engine") ?? "apple" { didSet { ud.set(engine, forKey: "engine") } }
+    @Published var voiceMods = ud.object(forKey: "voiceMods") as? Int ?? (controlKey | optionKey) { didSet { ud.set(voiceMods, forKey: "voiceMods") } }
+    @Published var voiceCode = ud.object(forKey: "voiceCode") as? Int ?? kVK_ANSI_V { didSet { ud.set(voiceCode, forKey: "voiceCode") } }
+    @Published var voiceKey = ud.string(forKey: "voiceKey") ?? "V" { didSet { ud.set(voiceKey, forKey: "voiceKey") } }
     @Published var recording: Date?
     @Published var transcribing = false
     @Published var levels = [Float](repeating: 0, count: 28)  // recent mic levels 0...1, newest last
@@ -669,7 +669,7 @@ final class Core: ObservableObject {
     // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
     // checkInMins, greenlight asks the chat what to work on next, once per quiet stretch.
     // ponytail: work outside Greenlight (an editor, a browser) doesn't count; count pushes from the scan if it nags then
-    @Published var checkInMins = UserDefaults.standard.object(forKey: "checkInMins") as? Int ?? 30 { didSet { UserDefaults.standard.set(checkInMins, forKey: "checkInMins") } }
+    @Published var checkInMins = ud.object(forKey: "checkInMins") as? Int ?? 30 { didSet { ud.set(checkInMins, forKey: "checkInMins") } }
     var lastActive = Date(), checkedIn = false
     func active() { lastActive = Date(); checkedIn = false; if session > 0 { delegate.greenlight.active() } }  // the check-in is the main chat's
     func checkIn() {
@@ -697,7 +697,7 @@ final class Core: ObservableObject {
     }
 
     // The watch: a workspace that newly needs the user gets the chat a quiet turn, and it asks only if it's worth asking.
-    @Published var watch = UserDefaults.standard.object(forKey: "watch") as? Bool ?? true { didSet { UserDefaults.standard.set(watch, forKey: "watch") } }
+    @Published var watch = ud.object(forKey: "watch") as? Bool ?? true { didSet { ud.set(watch, forKey: "watch") } }
     var focus = "", focusSent = ""  // the window you were last in, described for Chief (noteFocus)
     // The projects every window shows (one pick for all of them) as JSON, while one is up: Chief's BOARD and the watch have only
     // these. nil: every project (none picked, or no window up: you're in the menubar alone). App.pickScope.
@@ -898,8 +898,8 @@ final class Core: ObservableObject {
     // MARK: pings
 
     var seen: Int {  // outbox lines already shown, so pings sent while the Mac slept still arrive
-        get { UserDefaults.standard.object(forKey: "seen") as? Int ?? -1 }
-        set { UserDefaults.standard.set(newValue, forKey: "seen") }
+        get { ud.object(forKey: "seen") as? Int ?? -1 }
+        set { ud.set(newValue, forKey: "seen") }
     }
 
     func tailOutbox() {
