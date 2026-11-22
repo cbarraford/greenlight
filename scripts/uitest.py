@@ -88,7 +88,12 @@ def rpc(sock_path, payload, timeout=30.0):
             if b"\n" in chunk:
                 break
         line = bytes(buf).split(b"\n", 1)[0]
-        return json.loads(line.decode())
+        if not line:
+            raise ConnectionResetError(f"EOF from --uitest socket {sock_path}")
+        try:
+            return json.loads(line.decode(errors="replace"))
+        except ValueError as e:
+            raise ConnectionResetError(f"malformed JSON from --uitest socket {sock_path}: {e}") from e
     finally:
         s.close()
 
@@ -341,6 +346,78 @@ def _make_fixture(root: Path, fixture: str):
     return home, bindir, webdir
 
 
+def _find_session_pids(root_dir: Path) -> set[int]:
+    """Find PIDs (and their descendants) whose argv references this isolated `gl-uitest-*` root."""
+    if not root_dir.name.startswith("gl-uitest-"):
+        return set()
+    p = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,command="], capture_output=True, text=True, timeout=5)
+    if p.returncode != 0:
+        return set()
+    marker = str(root_dir)
+    children: dict[int, list[int]] = {}
+    ppid_of: dict[int, int] = {}
+    seeds: list[int] = []
+    for line in p.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        ppid_of[pid] = ppid
+        children.setdefault(ppid, []).append(pid)
+        if marker in parts[2]:
+            seeds.append(pid)
+    # Never signal ourselves or any ancestor up to PID 1
+    protected: set[int] = set()
+    cur = os.getpid()
+    while cur > 1 and cur not in protected:
+        protected.add(cur)
+        cur = ppid_of.get(cur, 0)
+    found: set[int] = set()
+    stack = list(seeds)
+    while stack:
+        pid = stack.pop()
+        if pid in found or pid in protected or pid <= 1:
+            continue
+        found.add(pid)
+        stack.extend(children.get(pid, ()))
+    return found
+
+
+def _reap_session_processes(root_dir: Path, pgid: int | None = None) -> None:
+    """Terminate the app's process group plus detached child sessions (e.g. chat.py) before rmtree."""
+    my_pgrp = os.getpgrp()
+    if pgid and pgid > 1 and pgid != my_pgrp:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGTERM)
+    pids = _find_session_pids(root_dir)
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        pg_alive = False
+        if pgid and pgid > 1 and pgid != my_pgrp:
+            try:
+                os.killpg(pgid, 0)
+                pg_alive = True
+            except OSError:
+                pass
+        pids = _find_session_pids(root_dir)
+        if not pg_alive and not pids:
+            return
+        time.sleep(0.05)
+    if pgid and pgid > 1 and pgid != my_pgrp:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGKILL)
+    for pid in _find_session_pids(root_dir):
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    time.sleep(0.05)
+
+
 class UITestSession:
     """Context manager for an isolated background Greenlight --uitest instance."""
 
@@ -375,7 +452,7 @@ class UITestSession:
         self._log = log
         self.proc = subprocess.Popen(
             [str(binary), "--uitest", "--uitest-socket", str(self.socket_path)],
-            env=env, stdout=log, stderr=subprocess.STDOUT,
+            env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         deadline = time.time() + self.timeout
         last_err = None
@@ -392,11 +469,11 @@ class UITestSession:
                     if r.get("ok"):
                         # Save metadata beside socket for CLI `stop` cleanup
                         (self.root / "meta.json").write_text(json.dumps({
-                            "pid": self.proc.pid, "root": str(self.root),
+                            "pid": self.proc.pid, "pgid": self.proc.pid, "root": str(self.root),
                             "tmux_socket": self.tmux_socket, "socket": str(self.socket_path),
                         }))
                         return self
-                except OSError as e:
+                except (OSError, ValueError) as e:
                     last_err = e
             time.sleep(0.1)
         self.stop()
@@ -475,11 +552,16 @@ class UITestSession:
             time.sleep(interval)
         raise TimeoutError(f"wait_for({target}, {js_predicate!r}) timed out; last={last}")
 
+    def _reap_process_group(self, pgid: int | None) -> None:
+        """Terminate any lingering child processes (e.g. dash.py stream, chat.py) before deleting tempdir."""
+        _reap_session_processes(self.root, pgid)
+
     def stop(self):
+        pgid = self.proc.pid if self.proc is not None else None
         if self.socket_path.exists():
             try:
                 rpc(self.socket_path, {"cmd": "action", "name": "quit"}, timeout=3.0)
-            except OSError:
+            except (OSError, ValueError):
                 pass
         if self.proc is not None:
             try:
@@ -488,6 +570,7 @@ class UITestSession:
                 self.proc.kill()
                 self.proc.wait(timeout=2)
             self.proc = None
+        self._reap_process_group(pgid)
         if hasattr(self, "_log") and self._log:
             try:
                 self._log.close()
@@ -602,17 +685,21 @@ def main():
         meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
         try:
             rpc(a.socket, {"cmd": "action", "name": "quit"}, timeout=3.0)
-        except OSError:
+        except (OSError, ValueError):
             pass
         pid = meta.get("pid")
+        pgid = meta.get("pgid") or pid
         if isinstance(pid, int) and pid > 0:
             time.sleep(0.3)
             with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
+        root_str = meta.get("root")
+        if root_str and Path(root_str).name.startswith("gl-uitest-"):
+            _reap_session_processes(Path(root_str), pgid if isinstance(pgid, int) else None)
         if meta.get("tmux_socket"):
             subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
-        if meta.get("root") and Path(meta["root"]).name.startswith("gl-uitest-"):
-            shutil.rmtree(meta["root"], ignore_errors=True)
+        if root_str and Path(root_str).name.startswith("gl-uitest-"):
+            shutil.rmtree(root_str, ignore_errors=True)
         print(json.dumps({"ok": True}))
         return 0
     return 2

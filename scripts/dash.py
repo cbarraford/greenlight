@@ -613,9 +613,17 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     pucks, blk = [], blocking.cached()
     for r in rows:
         w, ag = live[r["id"]]
+        r["agent"] = r.get("agent") if isinstance(r.get("agent"), dict) else {"state": "none", "type": None, "last": ""}
+        r["agent"].setdefault("state", "none")
+        r["agent"].setdefault("type", None)
+        r["agent"]["last"] = r["agent"].get("last") or ""
+        r["next"] = r.get("next") if isinstance(r.get("next"), dict) else {"step": "freeform", "owner": "parked", "action": ""}
+        r["next"].setdefault("step", "freeform")
+        r["next"].setdefault("owner", "parked")
+        r["next"]["action"] = r["next"].get("action") or ""
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=ag.get("agentType") or r["agent"]["type"],
-                              last=(ag.get("lastAssistantMessage") or r["agent"]["last"])[-(20000 if full else 400):],
+                              last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
                               task=(ag.get("taskTitle") or ag.get("prompt") or "")[:160], tool=ag.get("toolName") or "",
                               input=(ag.get("toolInput") or "")[:160], since=ag.get("stateStartedAt"))
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
@@ -1783,7 +1791,11 @@ def main():
         opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
         if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
             sys.exit("bad --model/--effort")
-        print(json.dumps(page(a[1], "--fresh" in a, **opt)))
+        try:
+            print(json.dumps(page(a[1], "--fresh" in a, **opt)))
+        except Exception as e:
+            oops(a, e)
+            print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["suggest"] and len(a) > 1 and NAME_RE.match(a[1]):
         opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
         if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
