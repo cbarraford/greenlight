@@ -1873,7 +1873,7 @@ struct SettingsView: View {
                 Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
             }.pickerStyle(.segmented).labelsHidden().fixedSize()
             if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
+                Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo.replacingOccurrences(of: "/", with: "__")).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
                     .font(sys(size: Theme.fs2)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
                 if own { Button("Use default", action: rs.reset).buttonStyle(.link).font(sys(size: Theme.fs2)).disabled(rs.busy) }
             } }
@@ -1891,6 +1891,29 @@ struct SettingsView: View {
     func optBinding(_ k: String) -> Binding<Bool> {
         Binding(get: { rs.options[k] != nil }, set: { v in if v { rs.options[k] = "" } else { rs.options[k] = nil } })
     }
+    func optText(_ k: String) -> Binding<String> {
+        Binding(get: { rs.options[k] ?? "" }, set: { v in
+            let s = v.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+            if s.isEmpty { rs.options[k] = nil } else { rs.options[k] = s }
+        })
+    }
+    func optChoice(_ k: String) -> Binding<String> {
+        Binding(get: { (rs.options[k] ?? "").lowercased() }, set: { v in
+            if v.isEmpty { rs.options[k] = nil } else { rs.options[k] = v }
+        })
+    }
+    var humanApprovalBinding: Binding<String> {
+        Binding(
+            get: {
+                if let v = rs.options["human_approval"]?.lowercased(), v == "true" || v == "false" { return v }
+                return rs.options["no_human_approval"] != nil ? "false" : ""
+            },
+            set: { v in
+                rs.options["no_human_approval"] = nil
+                if v.isEmpty { rs.options["human_approval"] = nil } else { rs.options["human_approval"] = v }
+            }
+        )
+    }
 
     @ViewBuilder var lifecycle: some View {
         box("Stages", aside: "In order. The first unmet stage is the MR's next step.") {
@@ -1901,7 +1924,7 @@ struct SettingsView: View {
                         Button("\(k) (built-in)") { rs.stages.insert(Stage(key: k, req: rs.builtins[k] ?? "", done: ""), at: max(0, rs.stages.count - 1)) }
                     }
                     Divider()
-                    Button("Your own (sign-off or label)…") { rs.stages.insert(Stage(key: "stage\(rs.stages.count + 1)", req: "", done: "signoff"), at: max(0, rs.stages.count - 1)) }
+                    Button("Your own (sign-off, label or check)…") { rs.stages.insert(Stage(key: "stage\(rs.stages.count + 1)", req: "", done: "signoff"), at: max(0, rs.stages.count - 1)) }
                 }.fixedSize()
                 Spacer()
             }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
@@ -1910,19 +1933,37 @@ struct SettingsView: View {
             toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
             toggleRow("Merge by itself", "Once every step before the merge passes (an agent's reviews and try-out, say), Greenlight merges without waiting on an approval or asking you.", optBinding("automerge"))
             toggleRow("Merge into any branch", "Greenlight may merge an MR whose target isn't the default branch.", optBinding("merge_any_base"))
+            toggleRow("Auto-rebase", "Dispatch an agent to rebase when the forge reports the branch needs a rebase with no conflicts.", optBinding("auto_rebase"))
+            row("Merge method", "Overrides your global config.json merge_method for this repository.") {
+                Picker("Merge method", selection: optChoice("merge_method")) {
+                    Text("Default").tag(""); Text("Merge").tag("merge"); Text("Squash").tag("squash"); Text("Rebase").tag("rebase")
+                }.labelsHidden().frame(width: 140)
+            }
+            row("Human approval", "Overrides your global require_human_approval setting for this repository.") {
+                Picker("Human approval", selection: humanApprovalBinding) {
+                    Text("Default").tag(""); Text("Required").tag("true"); Text("Not required").tag("false")
+                }.labelsHidden().frame(width: 140)
+            }
+            row("Review bot", "Overrides global review_bot for this repo. Set to none to disable.") {
+                TextField("Global default", text: optText("review_bot")).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180)
+            }
+            row("Milestone prefix", "Active milestone prefix for the milestone step (default Release-).") {
+                TextField("Release-", text: optText("milestone")).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180)
+            }
         }
         saveRow("Save", rs.save)
     }
 
     func stageRow(_ i: Int) -> some View {
         let s = $rs.stages[i], builtin = rs.builtins[rs.stages[i].key] != nil
+        let badge = builtin ? "Built-in" : s.wrappedValue.done.hasPrefix("label=") ? "Label" : s.wrappedValue.done.hasPrefix("check=") ? "CI check" : "Your sign-off"
         return ruled(HStack(alignment: .top, spacing: Theme.sp3) {
             Text("\(i + 1)").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
             VStack(alignment: .leading, spacing: Theme.sp1) {
                 HStack(spacing: Theme.sp2) {
                     if builtin { Text(rs.stages[i].key).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
                     else { TextField("key", text: s.key).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
-                    Text(builtin ? "Built-in" : s.wrappedValue.done.hasPrefix("label=") ? "Label" : "Your sign-off").font(sys(size: Theme.fs1, weight: .medium))
+                    Text(badge).font(sys(size: Theme.fs1, weight: .medium))
                         .foregroundColor(builtin ? sub : accent).padding(.horizontal, Theme.sp2).frame(height: 20)
                         .background(Capsule().fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
                 }
@@ -1930,14 +1971,29 @@ struct SettingsView: View {
                 else {
                     TextField("Requirement", text: s.req).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
                     HStack(spacing: Theme.sp2) {
-                        Picker("Done when", selection: Binding(get: { s.wrappedValue.done.hasPrefix("label=") ? "label" : "signoff" },
-                                                               set: { s.wrappedValue.done = $0 == "label" ? "label=" : "signoff" })) {
-                            Text("You sign off").tag("signoff"); Text("It has a label").tag("label")
+                        Picker("Done when", selection: Binding(
+                            get: { s.wrappedValue.done.hasPrefix("label=") ? "label" : s.wrappedValue.done.hasPrefix("check=") ? "check" : "signoff" },
+                            set: { s.wrappedValue.done = $0 == "label" ? "label=" : $0 == "check" ? "check=" : "signoff" })) {
+                            Text("You sign off").tag("signoff"); Text("It has a label").tag("label"); Text("CI check passes").tag("check")
                         }.labelsHidden().frame(width: 150)
                         if s.wrappedValue.done.hasPrefix("label=") {
                             TextField("label", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "label=" + $0 }))
                                 .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
+                        } else if s.wrappedValue.done.hasPrefix("check=") {
+                            TextField("check name", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "check=" + $0 }))
+                                .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) check")
+                        } else {
+                            TextField("Run command (optional)", text: s.run).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced))
+                                .frame(width: 200).accessibilityLabel("Stage \(i + 1) run command")
                         }
+                    }
+                    HStack(spacing: Theme.sp2) {
+                        Picker("Owner", selection: s.owner) {
+                            Text("Default owner").tag(""); Text("Agent").tag("agent"); Text("You").tag("me"); Text("Reviewers").tag("reviewers"); Text("CI").tag("ci")
+                        }.labelsHidden().frame(width: 140)
+                        Picker("Phase", selection: s.phase) {
+                            Text("Default phase").tag(""); Text("Define").tag("define"); Text("Build").tag("build"); Text("Verify").tag("verify"); Text("Review").tag("review"); Text("Land").tag("land")
+                        }.labelsHidden().frame(width: 140)
                     }
                 }
             }

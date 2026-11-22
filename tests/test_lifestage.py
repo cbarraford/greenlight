@@ -339,4 +339,24 @@ snap = [row(None, goal="add retries", path=wt) | {"id": "d", "name": "delta"}]; 
 lifestage.save("preflight", "delta", {"goal": "add retries", "ok": True, "p_ambiguous": 0.1, "clarity": 0.9, "provider": "fake", "answers": {}})
 out = run("delta")
 assert "1.3 done condition: P(ambiguous) 0.1, clarity 0.9 (fake)" in out and "2.3 self-test: `true` exit 0" in out and "stale" in out, out
+
+# custom stages respect explicit Owner: and Phase: instead of hardcoding 3.4 Verify / agent
+(greenlight.STATE / "lifecycles/custom-phases.md").write_text(
+    "# custom\n\n1. `rfc` — RFC approved. Done: `signoff` Phase: `define`\n2. `mr_open` — x\n"
+    "3. `qa` — QA passed. Done: `label=qa-ok` Owner: `reviewers` Phase: `review`\n"
+    "4. `e2e` — E2E green. Done: `check=e2e` Phase: `verify`\n5. `merge` — x\n"
+    "6. `release_qa` — Prod QA. Done: `label=prod-ok` Owner: `reviewers`\n")
+assert life(None, goal="new feature", project="acme/custom-phases") == ("1.2", "yours", "you", "Sign off rfc")
+(greenlight.STATE / "signoffs.json").write_text(json.dumps({"acme/custom-phases@b": ["rfc"]}))
+assert life(mr(labels=[]), project="acme/custom-phases") == ("4.5", "waiting", "reviewers", None)
+assert life(mr(labels=["qa-ok"], _checks=[{"name": "e2e", "status": "running"}]), project="acme/custom-phases") == ("3.4", "waiting", "CI", None)
+assert life(mr(state="merged", labels=[]), project="acme/custom-phases") == ("5.3", "waiting", "reviewers", None)
+# auto_rebase places as agent-owned mergeable (3.3), and Owner: me on label/check uses "Complete", while Owner: reviewers on signoff waits on reviewers
+(greenlight.STATE / "lifecycles/auto-reb.md").write_text(
+    "# auto-reb\n\nOptions: `auto_rebase`\n\n1. `mr_open` — x\n2. `me_lbl` — Add it. Done: `label=ok` Owner: `me`\n"
+    "3. `rev_so` — Reviewer signoff. Done: `signoff` Owner: `reviewers`\n4. `merge` — x\n")
+assert life(mr(labels=[]), project="acme/auto-reb") == ("3.4", "yours", "you", "Complete me lbl")
+assert life(mr(labels=["ok"]), project="acme/auto-reb") == ("3.4", "waiting", "reviewers", None)
+(greenlight.STATE / "signoffs.json").write_text(json.dumps({"acme/auto-reb#7": ["rev_so"]}))
+assert life(mr(labels=["ok"], detailed_merge_status="need_rebase"), project="acme/auto-reb") == ("3.3", "yours", "your agent", "Rebase !7")
 print("test_lifestage ok")
