@@ -612,6 +612,30 @@ func selfTest() {
               && opened == [.started, .audio(Data([1, 0, 2, 0])), .closed("closed the connection")]
               && sent.count == 1 && sent.first?["type"] as? String == "session.start" && ((sent.first?["session"] as? [String: Any])?["audio"] as? [String: Any]).flatMap { ($0["output"] as? [String: Any])?["voice"] as? String } == "cedar"
               && frames.contains(.pong) && frames.contains(.close(1000, "")))
+        // Pre-upgrade mic buffers must be dropped (not queued into s.queued), so a slow connect never bursts >5 s on 101.
+        let framesBefore = fake.seen.frames.count
+        fake.set { req in
+            let n = req.components(separatedBy: "\r\n").first { $0.hasPrefix("Sec-WebSocket-Key: ") }.map { String($0.dropFirst(19)) } ?? ""
+            return [Data(), Data(), Data(),
+                    Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(wsAccept(n))\r\n\r\n".utf8)
+                    + wsFrame(0x1, Data(#"{"type":"session.started","session":{}}"#.utf8), mask: nil)]
+        }
+        let ml = LiveVoice(); ml.endpoint = ("127.0.0.1", fake.l.port?.rawValue ?? 1, false)
+        let micChunk = AVAudioPCMBuffer(pcmFormat: ml.fmt, frameCapacity: 2400)!
+        micChunk.frameLength = 2400
+        var mEvs = [LiveEvent]()
+        ml.open("sk-test", voice: "cedar") { mEvs.append($0) }
+        for _ in 0..<3 { ml.mic(micChunk) }  // before 101 arrives: must be dropped
+        let mEnd = Date() + 5; while !mEvs.contains(.started) && Date() < mEnd { RunLoop.main.run(until: Date() + 0.02) }
+        ml.mic(micChunk)  // after upgrade: must be sent
+        RunLoop.main.run(until: Date() + 0.15)
+        ml.close(); RunLoop.main.run(until: Date() + 0.1)
+        let micSent = fake.seen.frames.dropFirst(framesBefore).compactMap { frame -> String? in
+            guard case .text(let d) = frame, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+            return o["type"] as? String
+        }
+        check("voice: GPT-Live drops mic audio before upgrade and sends it once up (\(micSent))",
+              mEvs.contains(.started) && micSent.filter { $0 == "session.input_audio.append" }.count == 1 && micSent.first == "session.start")
         fake.l.cancel()
     }
     do {  // the OpenAI key: Settings' (Keychain) first, else OPENAI_API_KEY from the app's environment, else the login shell's
