@@ -1091,8 +1091,8 @@ const askLabel = p => p.agent.state === "waiting" ? "Answer" : p.mr && p.mr.role
 function agentsStrip(docked){  // docked: the overview's strip, where the "N crashed" chip stands in for crashed cards; every live agent shows, whatever its workspace's state
   const busy = p => ["working", "waiting"].includes(p.agent.state), all = shown();
   const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, the chip stands in for them); hid: the search hides some
-  const down = p => p.state === "crashed" && !busy(p);  // as the hover card: a live agent outranks the crash (its card shows), an idle one reads "crashed"
-  const crashed = all.filter(down).length, idle = all.filter(p => p.agent.type && !busy(p) && !down(p)).length;
+  const crashed = all.filter(p => p.state === "crashed").length;  // crashed workspaces, as the footer, the hexes and the chip's own filter count them
+  const idle = all.filter(p => p.agent.type && !busy(p) && p.state !== "crashed").length;  // as the hover card: an idle agent on a crashed workspace reads "crashed"
   const working = live.filter(p => p.agent.state === "working").length;  // the pills count the cards below them
   const waiting = live.filter(p => p.agent.state === "waiting").length;
   const pills = [working ? h("span", {class:"pill blue"}, `Working ${working}`) : null, waiting ? h("span", {class:"pill orange", title:"Agents waiting on your answer"}, `${waiting} awaiting answer`) : null];  // agents only: waiting-on-others and done sit on the shelf

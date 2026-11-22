@@ -590,13 +590,18 @@ test("Agents strip: working and waiting agents on 'needs' and 'raised' workspace
   const live = ["ask-wait", "ask-work", "back-up", "quiet-work", "raise-wait", "raise-work"];
   assert.deepEqual(await cards(), live, "agents on 'needs' and 'raised' workspaces show");
   assert.deepEqual(await pills(), ["Working 4", "2 awaiting answer"], "the pills count the cards");
-  assert.equal(await page.textContent(".agents .crash"), "1 crashed", "a crashed workspace whose agent is back at work is a card, not the chip");
+  assert.equal(await page.textContent(".agents .crash"), "2 crashed", "the chip counts crashed workspaces, as the footer does");
+  assert.equal(await page.evaluate(() => counts().crashed), 2, "the map's and the footer's count agrees");
   assert.equal(await page.locator(".agents .shead .muted").count(), 0, "no 'No agents working' line while agents work");
   for (const [n, says] of [["ask-work", /Claude is working/], ["raise-work", /Claude is working/], ["ask-wait", /Claude is waiting/], ["raise-wait", /Claude is waiting/], ["down", /Claude crashed/], ["back-up", /Claude is working/]]) {  // each hex's hover card reads the state the strip shows
     await page.mouse.move(1, 1); await page.waitForSelector("#hcard", {state: "hidden", timeout: 2000});  // the last card can cover the next hex
     await page.hover(`.cell[data-name='${n}']`);
     assert.match(await page.textContent("#hcard"), says, n);
   }
+  await page.click(".agents .crash");
+  assert.deepEqual(await page.$$eval("#main .cell:not(.dim)", es => es.map(e => e.dataset.name).sort()), ["back-up", "down"], "the chip lights the workspaces it counted");
+  assert.deepEqual(await cards(), ["back-up"], "the one whose agent works again keeps its card");
+  await page.evaluate(() => { ui.q = ""; render() });
   await page.click(".agents button.fold");
   assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
   assert.match(await page.textContent(".agents button.fold"), /^Show 6 agents\b/, "the fold counts them all");
