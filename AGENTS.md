@@ -12,6 +12,7 @@ before reading code. It's JSON on stdout, built for you:
 python3 scripts/diag.py summary              # version, env, config shape, error counts, top errors, p50/p95 per span, automations
 python3 scripts/diag.py errors --since 24h   # failures grouped by component, kind, exception type, class and code location
 python3 scripts/diag.py tail -n 50 [--kind cmd] [--since 1h] [--run ID]   # raw events, oldest first
+python3 scripts/diag.py doctor               # setup checks: glab/gh auth, agent CLIs, disk, automations timer, dead pid files
 ```
 
 Use `uv run python` in place of `python3` when uv is there. On a remote host (the app's `GREENLIGHT_HOST`), run these on
@@ -20,7 +21,14 @@ the host: the checkout is `~/.claude/skills/greenlight`.
 **Where it lives**
 - Backend: `$GREENLIGHT_HOME/diag/events.jsonl` (default `~/.greenlight`), rotated at 5 MB to `.1`–`.3`.
 - The Mac app: `~/Library/Logs/Greenlight/app.jsonl`. `diag.py` merges it in when the app runs on the same machine.
-- The app writes `ssh_exit`, `action`, `floor`, `voice`, `app_start`, `js_error` and `prev_crash` (a launch after a crash or a kill).
+- The app writes `ssh_exit`, `action`, `floor`, `voice`, `app_start`, `js_error` and `prev_crash` (a launch after a crash or a kill),
+  `hang {secs}` (the main thread didn't answer for over 2 s) and, every 5 min, `sample {rss_mb, cpu_pct, up_mins}`.
+- `summary.crashes`: the app's macOS crash reports (`~/Library/Logs/DiagnosticReports/Greenlight*.ips`), exception,
+  signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
+- `summary.usage`: chat turns and automation runs per `harness.model`, with tokens in and out and cost. `chat_turn` and
+  `automation` events (and `auto/runs.jsonl`) carry `in_tokens`, `out_tokens` and `cost_cents`; only Claude reports a cost.
+  `in_tokens` counts cache reads and sums every request of the turn, so it runs far above `context` (one request's size).
+  A resumed Codex turn is its thread's total minus the one in its rollout before the turn; none if that's unreadable.
 
 **How to read it**
 - Every event has `ts`, `v` (git short SHA), `comp` (the script, or `app`), `run`, `pid` and `kind`.
@@ -32,6 +40,10 @@ the host: the checkout is `~/.claude/skills/greenlight`.
 - `cmd` is every external command (glab, gh, orca, …) made through `greenlight.run()`: `tool`, `sub`, `rc`, `tries`.
 - Names are salted hashes (`ws_h`, `mr_h`, `name_h`): stable within one install, meaningless outside it. Ask the user
   which workspace or MR they mean; don't try to reverse them.
+
+**Bug reports**: `diag.py bundle` (a file) and `diag.py report --title T --body-file F` (a preview; `--execute` files it on
+cbarraford/greenlight). Both re-check every string with `audit.py`'s patterns and `leak.re` and fail closed. Never file
+without the user's yes, and never attach anything but a bundle.
 
 ## Privacy rules (the trail may be shared publicly)
 

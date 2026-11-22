@@ -21,8 +21,11 @@ REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
 SEP = "\t"
 
 
+TMUX_SOCKET = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
+
+
 def tmux(*args):
-    p = subprocess.run(["tmux", "-L", "greenlight", *args], capture_output=True, text=True, timeout=20)
+    p = subprocess.run(["tmux", "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=20)
     if p.returncode and "no server running" not in p.stderr and "error connecting" not in p.stderr:
         raise RuntimeError(f"tmux {args[0]}: {p.stderr.strip()[:300]}")
     return p.stdout
@@ -87,7 +90,7 @@ def read(handle, limit):
 
 def send(handle, text, enter):
     if enter:  # a bracketed paste keeps a multi-line brief one message; then Enter submits it
-        subprocess.run(["tmux", "-L", "greenlight", "load-buffer", "-b", "gl", "-"], input=text, text=True, timeout=20, check=True)
+        subprocess.run(["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", "gl", "-"], input=text, text=True, timeout=20, check=True)
         tmux("paste-buffer", "-p", "-d", "-b", "gl", "-t", handle)
         time.sleep(0.2)
         tmux("send-keys", "-t", handle, "Enter")
