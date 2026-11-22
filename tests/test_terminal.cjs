@@ -489,7 +489,7 @@ test("⌘J: MR number, title, description and people match; > lists actions; Esc
   await page.keyboard.type("split dow"); assert.equal(await page.$eval("#pres .sel .m", m => m.textContent), "Split down");
   await page.keyboard.press("Enter"); assert.equal(await page.evaluate(() => paneOf(cur).length), 2, "the action ran");
   await page.keyboard.press("Meta+j");
-  assert.deepEqual([...new Set(await page.$$eval("#pres .r-ws .ic svg", d => d.map(x => x.getBoundingClientRect().height + (x.getAttribute("aria-label") ? "" : " unlabeled"))))], [15], "every workspace row has a 15px, labelled state glyph (no stretched sidebar dots)");
+  assert.deepEqual([...new Set(await page.$$eval("#pres .r-ws .ic svg", d => d.map(x => parseFloat(getComputedStyle(x).height) + (x.getAttribute("aria-label") ? "" : " unlabeled"))))], [15], "every workspace row has a 15px, labelled state glyph (no stretched sidebar dots)");
   assert.equal(await page.$eval("#pv", p => getComputedStyle(p).display !== "none" && p.getBoundingClientRect().width), 290, "the preview pane stays beside the results");
   await page.keyboard.press("Tab");
   assert.deepEqual(await page.$$eval("#pres .r", r => [...new Set(r.map(x => x.classList[1]))]), ["r-tab"], "⇥: Terminals only");
