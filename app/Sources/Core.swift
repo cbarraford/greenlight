@@ -201,6 +201,9 @@ final class Core: ObservableObject {
     @Published var hint = ""  // hover text for the footer buttons; native tooltips are slow
     @Published var voiceTest = ""  // Settings' Test of the speaking voice: what happened
     @Published var keying = false  // the next chord becomes the voice shortcut: Settings shows the recorder in place
+    static let keyPrompt = "Press the new voice shortcut, with ⌃, ⌥ or ⌘ (Esc cancels)"
+    /// The menu's voice-shortcut prompt is up (Settings' Change… shows its own recorder): hover hints leave it alone until a key comes.
+    var prompting: Bool { keying && hint == Core.keyPrompt }
     @Published var questions: [Question] = [] {  // init reads questionsURL
         didSet {  // all waiting ones plus the last 20 answered
             let keep = questions.filter { $0.answer == nil } + questions.filter { $0.answer != nil }.suffix(20)

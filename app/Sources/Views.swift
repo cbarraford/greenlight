@@ -680,7 +680,7 @@ struct Tip: ViewModifier {
     @ObservedObject var c: Core
     let text: String
     func body(content: Content) -> some View {
-        content.accessibilityHint(text).onHover { c.hint = $0 ? text : (c.hint == text ? "" : c.hint) }
+        content.accessibilityHint(text).onHover { if !c.prompting { c.hint = $0 ? text : (c.hint == text ? "" : c.hint) } }
             .onChange(of: text) { old, new in if c.hint == old { c.hint = new } }
             .onDisappear { if c.hint == text { c.hint = "" } }
     }
@@ -2658,7 +2658,7 @@ struct ContextButton: View, Looked {
         // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
         let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
         let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
-        return Button { c.ctxOpen.toggle(); c.hint = c.ctxOpen ? "" : ctxTip(c) } label: {  // the hint would cover the popover; closed, it says it again
+        return Button { c.ctxOpen.toggle(); if !c.prompting { c.hint = "" } } label: {  // the hint would cover the popover (and after a click a tooltip goes, as the native one does)
             HStack(spacing: Theme.sp1) {
                 ZStack {
                     Circle().stroke(edge, lineWidth: 2)
