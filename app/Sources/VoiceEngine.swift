@@ -505,7 +505,7 @@ final class Voice: NSObject, ObservableObject {
     /// Its audio streams all the time, silence between turns: play from the first loud piece until 0.8 s of quiet.
     func liveAudio(_ d: Data) {
         quietFor = audible(d) ? 0 : quietFor + Double(d.count) / 48000
-        guard !liveDrop, on else { if speaking > 0 { speaking = 0; newCaption = true }; return }
+        guard !liveDrop, on, engine.attachedNodes.contains(player) else { if speaking > 0 { speaking = 0; newCaption = true }; return }
         if speaking == 0 {
             guard quietFor == 0 else { return }
             speaking = 1
@@ -1125,6 +1125,8 @@ final class LivePreview: ObservableObject {
     enum Phase: Equatable { case idle, loading(String), playing(String), played(String), skipped(String), failed(String, String) }
     @Published private(set) var phase = Phase.idle
     private(set) var said = "", gen = 0, opened = 0
+    /// Optional loopback endpoint override for offline `--unittest` preview tests.
+    var testEndpoint: (host: String, port: UInt16, tls: Bool)?
     private var live: LiveVoice?, engine: AVAudioEngine?, node: AVAudioPlayerNode?, conv: AVAudioConverter?, feed: Timer?
     private(set) var scheduled = 0, played = 0
     private var track = PreviewTrack(), closed = false
@@ -1179,6 +1181,7 @@ final class LivePreview: ObservableObject {
         do { try e.link(n, to: e.mainMixerNode, format: out); try e.start(); try n.start() } catch { return fail(voice, "the audio output didn’t start (\(error.localizedDescription))") }
         engine = e; node = n; track = PreviewTrack(); said = ""; scheduled = 0; played = 0; closed = false; opened += 1
         let l = LiveVoice()
+        if let ep = testEndpoint { l.endpoint = ep }
         live = l
         l.open(k, voice: voice, instructions: livePreviewRule) { [weak self] ev in self?.on(ev, voice, g) }
         let silence = AVAudioPCMBuffer(pcmFormat: l.fmt, frameCapacity: 2400)!  // zeroed: 100 ms of quiet
