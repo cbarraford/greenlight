@@ -138,15 +138,21 @@ assert decide.choice("new state 4", "?", ["a", "b"])["provider"] == "local"
 REPLY["fn"] = lambda path, body: (200, {"answers": {"q0": {"type": "choice", "probabilities": {"finished": 0.2}}}})
 assert decide.choice("new state 5", "State?", ["working", "finished"])["provider"] == "local"  # incomplete probabilities cannot become certain
 
-# ---- the key: env, else the secrets file (0600), which `decide.py key` writes ----
+# ---- the key: env, else the secrets file (0600), which `decide.py key` writes (never `/usr/bin/security`) ----
+from unittest import mock  # noqa: E402
 del os.environ["TYPESAFE_API_KEY"]
+_real_subproc_run = subprocess.run
+_spawned = []
+def _spy_run(cmd, *a, **kw):
+    _spawned.append(cmd)
+    return _real_subproc_run(cmd, *a, **kw)
+with mock.patch.object(decide.subprocess, "run", side_effect=_spy_run):
+    assert decide.jev_key() is None and not any(c and c[0] == "security" for c in _spawned)
 decide.set_key("  file-key \n")
 f = Path(HOME) / "secrets" / "typesafe"
 assert decide.jev_key() == "file-key" and stat.S_IMODE(f.stat().st_mode) == 0o600
-old_keychain = decide.keychain
-decide.keychain = lambda account: "old-key"
 decide.set_key("new-key")
-assert decide.jev_key() == "new-key"  # Settings' replacement beats a stale Keychain entry
+assert decide.jev_key() == "new-key"
 jev_answers(lambda q: {"type": "noul", "noul": 0.9})
 assert decide.bool("cached before clear", "Is it?")["provider"] == "jev"
 cached_calls = len(SEEN)
@@ -163,7 +169,6 @@ decide.set_key("")
 os.environ["TYPESAFE_API_KEY"] = "env-key"
 assert decide.jev_key() == "env-key"  # environment remains the strongest override
 del os.environ["TYPESAFE_API_KEY"]
-decide.keychain = old_keychain
 os.environ["TYPESAFE_API_KEY"] = "ts-test"
 
 # ---- jev failing → haiku (Messages API with a key, else claude -p) ----
@@ -196,8 +201,17 @@ REPLY["fn"] = lambda path, body: (200, {"answers": {"q0": {"noul": 0.9}}}) if pa
 assert decide.bool("malformed haiku bool", "Hold?")["provider"] == "jev"  # missing p_yes must try the fallback
 del os.environ["ANTHROPIC_API_KEY"]
 configure(provider="haiku")  # no API key: claude -p with --json-schema (the fake answers o1 = 0.8, p_yes = 0.9)
-r = decide.batch("s", {"b": {"question": "?"}, "c": {"question": "?", "options": ["a", "b", "c"]}, "s": {"rubric": ["no", "yes"]}})
+_spawned.clear()
+with mock.patch.object(decide.subprocess, "run", side_effect=_spy_run):
+    r = decide.batch("s", {"b": {"question": "?"}, "c": {"question": "?", "options": ["a", "b", "c"]}, "s": {"rubric": ["no", "yes"]}})
+assert not any(c and c[0] == "security" for c in _spawned), _spawned
 assert r["b"]["prob"] == 0.9 and r["c"]["choice"] == "b" and r["s"]["score"] == 0.8 and {a["provider"] for a in r.values()} == {"haiku"}, r
+(Path(HOME) / "secrets" / "anthropic").write_text("sk-file\n")
+REPLY["fn"] = two
+configure(provider="haiku")
+assert decide.bool("file secret", "?") == {"value": False, "prob": 0.2, "provider": "haiku"} and SEEN[-1]["headers"]["x-api-key"] == "sk-file"
+(Path(HOME) / "secrets" / "anthropic").unlink()
+configure(provider="haiku")
 args = json.loads((Path(HOME) / "claude-args.json").read_text())
 assert args[args.index("--model") + 1] == "claude-haiku-5-5" and args[args.index("--tools") + 1] == "" and "--no-session-persistence" in args
 FAKE_CLAUDE.write_text("#!/bin/sh\necho 'not json'\nexit 1\n")
