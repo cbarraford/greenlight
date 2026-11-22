@@ -424,9 +424,13 @@ with decisions.book() as recs:
         r = decisions.record(f"idea {i}?\nOptions: do it | no", "ping", key=f"@c{i}", kind="check-in")
         r["id"] += f"-c{i}"
         recs.append(r)
-r = subprocess.run([sys.executable, str(SCRIPT.parent / "decisions.py"), "dismiss"], capture_output=True, text=True,
-                   input=json.dumps([{"text": f"idea {i}?", "key": f"@c{i}", "reason": "cleared"} for i in range(4)]))
-assert r.returncode == 0 and [x["closed"] for x in decisions.load()] == ["cleared"] * 4, (r, decisions.load())
+argv, stdin = sys.argv, sys.stdin  # in-process, so coverage sees the CLI
+sys.argv, sys.stdin = ["decisions.py", "dismiss"], io.StringIO(json.dumps([{"text": f"idea {i}?", "key": f"@c{i}", "reason": "cleared"} for i in range(4)]))
+try:
+    decisions.main()
+finally:
+    sys.argv, sys.stdin = argv, stdin
+assert [x["closed"] for x in decisions.load()] == ["cleared"] * 4, decisions.load()
 assert not greenlight.ping("You could tidy fix-1's commits.\nOptions: do it | no", "@tidy", kind="check-in").get("held")
 
 print("ok")
