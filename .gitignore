@@ -1,4 +1,11 @@
 __pycache__/
 .DS_Store
+.venv/
 memory/
 VERSION
+.coverage
+.coverage.*
+coverage.xml
+CLAUDE.local.md
+.claude/design/
+.claude/worktrees/

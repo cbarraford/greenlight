@@ -579,6 +579,7 @@ out(type="result", result=reply, is_error=False, duration_ms=10)
 
 
 def turn(tmp_path, monkeypatch, msg, verbose=False):
+    import ws_state
     fake = tmp_path / "claude"
     fake.write_text(FAKE)
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -587,6 +588,8 @@ def turn(tmp_path, monkeypatch, msg, verbose=False):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    monkeypatch.setattr(ws_state, "DIR", tmp_path / "state")
+    monkeypatch.setattr(ws_state, "MEMORY", tmp_path / "memory")
     chat.turn(msg, "claude-haiku-5-5", None, verbose=verbose)
     prompts = [json.loads(l) for l in open(str(fake) + ".log")]
     return events, prompts
@@ -945,8 +948,9 @@ def test_second_turn_cannot_replace_active_pid(tmp_path, monkeypatch):
     from unittest import mock
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat.auto, "process_start", lambda pid: "test-birth")
     chat.check_session_scope("claude")
-    (tmp_path / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": chat.auto.process_start(os.getpid())}))
+    (tmp_path / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": "test-birth"}))
     with mock.patch.object(chat.subprocess, "Popen") as launch:
         assert chat.run(["fake"], "claude", "hello", chat.Norm())[1] == "another turn running"
         launch.assert_not_called()

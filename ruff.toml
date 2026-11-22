@@ -1,9 +1,10 @@
 target-version = "py312"
 
 [lint]
-select = ["F", "B", "S"]
+select = ["F", "B", "S", "T10", "ISC001", "ISC003"]
 # Exclude noisy style/expected-subprocess rules while keeping real bug & security checks:
-# F* (undefined/unused/redefined), B* (bugbear, e.g. B023 loop closure), S602 (shell=True), S310 (urlopen scheme), S105-S107 (secrets)
+# F* (undefined/unused/redefined), B* (bugbear, e.g. B023 loop closure), S602 (shell=True),
+# S310 (urlopen scheme), S105-S107 (secrets), T10 (debugger leftovers), ISC001/ISC003 (concat bugs)
 ignore = ["S101", "S110", "S112", "S311", "S324", "S603", "S606", "S607", "B007", "B904", "B905"]
 
 [lint.per-file-ignores]
