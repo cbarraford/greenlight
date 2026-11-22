@@ -17,7 +17,7 @@ auto.STATE = pathlib.Path(tempfile.mkdtemp()); auto.FILE = auto.STATE / "automat
 auto.save({"x": {"schedule": "* * * * *", "prompt": "hi", "precheck": "exit 1"}})
 auto.execute("x")
 calls = []
-auto.agent = lambda a, e, log: (calls.append(e), ("You've hit your usage limit", 1) if e == "claude" else ("done", 0))[1]
+auto.agent = lambda a, e, log: (calls.append(e), ("You've hit your usage limit", 1, {}) if e == "claude" else ("done", 0, {}))[1]
 auto.save({"x": {"schedule": "* * * * *", "prompt": "hi", "precheck": "true"}})
 auto.execute("x")
 runs = [json.loads(l) for l in (auto.DIR / "runs.jsonl").read_text().splitlines()]

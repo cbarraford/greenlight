@@ -120,12 +120,37 @@ import auto  # noqa: E402
 auto.tick()  # a 3am automation isn't due now, but the tick still leaves its heartbeat
 assert {c["check"]: c for c in diag.doctor()["checks"]}["auto_timer"]["state"] == "fresh"
 
-# usage: chat turns roll up per harness.model
+# usage: chat turns and automation runs roll up per harness.model; orchestrator and skipped runs aren't agent runs
 for o, c in ((1200, 5.123), (800, 3.0)):
-    diag.event("chat_turn", ok=True, harness="claude", model="opus", out_tokens=o, cost_cents=c, secs=2.0)
+    diag.event("chat_turn", ok=True, harness="claude", model="opus", in_tokens=9000, out_tokens=o, cost_cents=c, secs=2.0)
 diag.event("chat_turn", ok=False, harness="codex", secs=1.0)
+diag.event("automation", status="ok", engine="codex", in_tokens=500, out_tokens=50, secs=9.0)
+diag.event("automation", status="ok", engine="orchestrator", secs=9.0)
+diag.event("automation", status="skipped", secs=0.1)
 u = diag.summary(0)["usage"]
-assert u == {"claude.opus": {"turns": 2, "out_tokens": 2000, "cost_usd": 0.08123}, "codex.default": {"turns": 1, "out_tokens": 0, "cost_usd": 0.0}}, u
+assert u == {"claude.opus": {"turns": 2, "runs": 0, "in_tokens": 18000, "out_tokens": 2000, "cost_usd": 0.08123},
+             "codex.default": {"turns": 1, "runs": 1, "in_tokens": 500, "out_tokens": 50, "cost_usd": 0.0}}, u
+
+# automations stream JSON: reply() keeps the reply, step titles and plain stderr lines, and reads the tokens
+claude = "\n".join(json.dumps(x) for x in [
+    {"type": "system", "subtype": "init", "session_id": "s"},
+    {"type": "result", "result": "All green.", "usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 7},
+     "total_cost_usd": 0.0123}])
+text, tok = auto.reply("claude", "warning: plain stderr\n42\n" + claude)
+assert text == "warning: plain stderr\n42\nAll green." and tok == {"in_tokens": 100, "out_tokens": 7, "cost_cents": 1.23}, (text, tok)
+assert auto.reply("claude", "Error: not logged in") == ("Error: not logged in", {})
+assert auto.reply("codex", '{"type": "item.started", "item": {"type": "command_execution"}}\nboom') == ("boom", {})  # a parser KeyError: the line is skipped
+
+# codex: a resumed thread's usage is the thread's total, so the turn's is the difference from its rollout's last token_count
+import chat  # noqa: E402
+chat.CODEX_SESSIONS = str(Path(HOME, "codex"))
+Path(HOME, "codex", "2026", "11", "21").mkdir(parents=True)
+Path(HOME, "codex", "2026", "11", "21", "rollout-x-th1.jsonl").write_text(json.dumps(
+    {"payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 1000, "output_tokens": 100}}}}) + "\n")
+n = chat.Norm()
+n.base = chat.codex_base("th1")
+n.codex({"type": "turn.completed", "usage": {"input_tokens": 1600, "output_tokens": 160}})
+assert (n.tin, n.tout) == (600, 60) and chat.codex_base("none") is None, (n.tin, n.tout)
 
 # crash reports: the crashed thread's frames by image name and symbol; a frame naming a path is dropped
 crash = Path(HOME, "crashes"); crash.mkdir()
