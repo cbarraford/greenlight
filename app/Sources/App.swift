@@ -321,6 +321,79 @@ func livePick(_ only: [String]?, known: [String]?) -> [String]? {
     let k = known.map { ids in only.filter(ids.contains) } ?? only
     return k.isEmpty ? nil : k
 }
+/// Whether a dashboard window may render snapshots yet: All-projects windows don't wait; filtered ones wait until the project list is loaded
+/// so the UI doesn't flash another project's hexes before narrowing to the saved pick.
+func canShowDashboard(only: [String]?, projectsLoaded: Bool) -> Bool { only == nil || projectsLoaded }
+/// The title-bar project chip for a window: hidden while a saved pick is still loading, instead of flashing "All projects".
+func projectChip(only: [String]?, projList: [[String: Any]], projectsLoaded: Bool) -> (text: String, colors: [String]) {
+    if only != nil && !projectsLoaded { return ("", []) }
+    let o = projList.isEmpty ? nil : livePick(only, known: projList.compactMap { $0["id"] as? String })
+    let ps = (o ?? []).compactMap { id in projList.first { $0["id"] as? String == id } }
+    let names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
+    return (o == nil ? "All projects" : names.isEmpty ? "No projects" : names, o == nil ? [] : ps.compactMap { $0["color"] as? String })
+}
+/// Builds L1's project list (`projList`) from `projects.json` and `dash.py trees` — matching terminal.html's merge + setTitle rules.
+/// Each entry has: id ("" No Man's Land last), name, color, repos, paths, busy. `fallback`: used only if `dash.py trees` failed.
+func buildProjectList(saved: [[String: Any]], trees: [[String: Any]], dark: Bool, fallback: Bool = false) -> [[String: Any]] {
+    struct Proj { var id: String; var name: String; var repos: [String]; var dirs: [String] }
+    let nml = "No Man's Land"
+    let palette = dark
+        ? ["#FF9F0A", "#4DA3FF", "#30D158", "#C597FF", "#66D4CF", "#FFD60A", "#FF6259"]
+        : ["#B25000", "#0969DA", "#1A7F37", "#8250DF", "#0E7C77", "#8A6A00", "#C9372C"]
+    let savedProjs: [Proj] = saved.compactMap { p in
+        guard let id = p["id"] as? String, !id.isEmpty,
+              let repos = p["repos"] as? [String], let dirs = p["dirs"] as? [String] else { return nil }
+        return Proj(id: id, name: p["name"] as? String ?? "Project", repos: repos, dirs: dirs)
+    }
+    var allP = savedProjs
+    for w in trees {
+        guard w["main"] as? Bool == true, let repo = w["project"] as? String, !repo.isEmpty,
+              let raw = (w["cfg"] as? [String: Any])?["name"] as? String else { continue }
+        let name = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !name.isEmpty, name.lowercased() != nml.lowercased(),
+              !savedProjs.contains(where: { $0.repos.contains(repo) }) else { continue }
+        if let i = allP.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            if !allP[i].repos.contains(repo) { allP[i].repos.append(repo) }
+        } else {
+            let slug = name.lowercased().replacingOccurrences(of: #"[^a-z0-9_]+"#, with: "_", options: .regularExpression)
+            allP.append(Proj(id: "p" + String(slug.prefix(40)), name: name, repos: [repo], dirs: []))
+        }
+    }
+    func under(_ path: String, _ dir: String) -> Bool { path == dir || path.hasPrefix(dir + "/") }
+    func repoIn(_ repo: String) -> Int? {
+        if let i = allP.firstIndex(where: { $0.repos.contains(repo) }) { return i }
+        return allP.firstIndex { p in
+            trees.contains { w in
+                w["main"] as? Bool == true && w["project"] as? String == repo
+                    && p.dirs.contains { d in under(w["path"] as? String ?? "", d) }
+            }
+        }
+    }
+    func projIndex(_ w: [String: Any]) -> Int? {
+        if let r = w["project"] as? String, !r.isEmpty, let i = repoIn(r) { return i }
+        let path = w["path"] as? String ?? ""
+        return allP.firstIndex { p in p.dirs.contains { d in under(path, d) } }
+    }
+    let indices: [Int?] = allP.indices.map { Optional($0) } + [nil]
+    return indices.map { idx in
+        let id = idx.map { allP[$0].id } ?? ""
+        let name = idx.map { allP[$0].name } ?? nml
+        let color = idx.map { palette[$0 % palette.count] } ?? "#8E8E93"
+        if fallback && trees.isEmpty {
+            let rs = idx.map { allP[$0].repos } ?? [], ps = idx.map { allP[$0].dirs } ?? []
+            return ["id": id, "name": name, "color": color, "repos": rs, "paths": ps, "busy": 0]
+        }
+        let mine: ([String: Any]) -> Bool = { projIndex($0) == idx }
+        var seenR = Set<String>(), rs = [String]()
+        for w in trees {
+            guard let r = w["project"] as? String, !r.isEmpty, !seenR.contains(r), repoIn(r) == idx else { continue }
+            if trees.allSatisfy({ ($0["project"] as? String != r) || mine($0) }) { seenR.insert(r); rs.append(r) }
+        }
+        let paths = trees.filter(mine).compactMap { $0["path"] as? String }
+        let busy = trees.filter { ($0["agent"] as? String == "working") && mine($0) }.count
+        return ["id": id, "name": name, "color": color, "repos": rs, "paths": paths, "busy": busy]
+    }
+}
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var item: NSStatusItem?
     let greenlight = Core()
@@ -429,6 +502,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             un.getNotificationSettings { s in NSLog("greenlight notifications: authorization %d, alert %d", s.authorizationStatus.rawValue, s.alertSetting.rawValue) }
         }
         greenlight.tailOutbox()
+        pushTrees()
         streamDash()
         rescan()
         if !uitest { hotKey() }
@@ -522,7 +596,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Closing a view's window hands the view back to the main window.
     func attach(_ v: String) {
         guard let w = viewWindows.removeValue(forKey: v) else { return }
-        (w.contentView as? WKWebView)?.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
+        if let web = w.contentView as? WKWebView {
+            let id = ObjectIdentifier(web)
+            readyDash.remove(id); waitingDash.remove(id)
+            web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
+        }
         detached.removeAll { $0 == v }
         w.orderOut(nil)
         pushMode()
@@ -653,7 +731,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     // MARK: dashboard data (dash.py where greenlight runs)
 
     var rescanning = false
-    var dashSnap = ""  // newest snapshot line, replayed when the page (re)loads
+    var dashSnapObj: [String: Any]?  // newest validated snapshot, replayed once a dashboard page is ready and its project filter is known
 
     /// A fresh greenlight scan, at launch and from the footer's ↻; the stream picks up the new last.json.
     func rescan() {
@@ -674,8 +752,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                   JSONSerialization.isValidJSONObject(obj),
                   let clean = try? JSONSerialization.data(withJSONObject: obj),
                   let js = String(data: clean, encoding: .utf8) else { return }
-            self.dashSnap = js
-            self.broadcast("window.mc && mc.update(\(js))")
+            self.dashSnapObj = obj
+            for w in self.webs where self.readyDash.contains(ObjectIdentifier(w)) {
+                w.callJS("window.mc && mc.update", [obj])
+            }
             self.queueBuilds(js)
         }, onExit: { [weak self] _ in DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.streamDash() } })
     }
@@ -763,10 +843,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "ready", let l { l.pushedRepos = ""; l.pushedChat = ""; l.c.attached = [] }
         if cmd == "ready" {
             from.evaluateJavaScript("mc.mode(\(modeJSON(for: from)))")
-            if !dashSnap.isEmpty { from.evaluateJavaScript("mc.update(\(dashSnap))") }
+            let id = ObjectIdentifier(from)
+            if canShowDash(for: from) {
+                waitingDash.remove(id); readyDash.insert(id)
+                pushPaths(to: from)
+                if let snap = dashSnapObj { from.callJS("window.mc && mc.update", [snap]) }
+            } else {
+                readyDash.remove(id); waitingDash.insert(id)
+                if treesProc == nil { pushTrees() }
+            }
             pushBuilds(); pushPicks(from)
             if from === web(showing: "hex") { greenlight.attached = [] }  // a reloaded hive starts with an empty dock
-            pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
+            pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""  // tick sends the code font, the bell and the orb's room
         }
         if cmd == "error" {
             NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
@@ -778,7 +866,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
-            if let l { l.only = livePick(only, known: nil); saveL1s(); syncL1() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
+            if let l { l.only = livePick(only, known: nil); saveL1s(); syncL1(); syncDashPaths() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
         }
         if cmd == "window" {  // L1's Open projects, New window: another Greenlight Center, with its own Chief
             let only = b["only"] as? [String]
@@ -896,6 +984,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
         }
+    }
+
+    func webView(_ w: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+        let id = ObjectIdentifier(w)
+        readyDash.remove(id); waitingDash.remove(id)
     }
 
     // Links in the dashboard/terminal open in the browser, never navigating privileged WebViews to arbitrary URLs or file:// links.
@@ -1113,20 +1206,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func splitView(_ v: NSSplitView, constrainMinCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { max(p, 480) }
     func splitView(_ v: NSSplitView, constrainMaxCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat { min(p, v.bounds.width - 320) }
 
-    // MARK: L1's projects: the Open projects dialog B1/B2 have (in the dashboard page), over the projects a terminal page last listed; the dashboard shows their repos
-    // ponytail: until a terminal page has loaded, the list is empty and L1 shows All projects
+    // MARK: L1's projects: the Open projects dialog B1/B2 have (in the dashboard page), built at launch from projects.json + dash.py trees
 
     let l1Floor = FloorState()
     var projList = [[String: Any]]()  // id ("" No Man's Land), name, color, repos, paths (its worktrees), busy
+    var projectsLoaded = false  // true once dash.py trees (or a terminal page with trees) has listed the projects
+    var lastTreesObj: [String: Any]?  // newest valid dash.py trees payload, replayed to terminal pages and recomputed on project/theme changes
+    var readyDash = Set<ObjectIdentifier>(), waitingDash = Set<ObjectIdentifier>()  // dashboard webviews that have received mc.paths vs ones waiting on projectsLoaded
     var sharedOnly: [String]? { ud.array(forKey: "termOnly0") as? [String] }  // the one pick every floor and window shows; nil: all projects
     func setPick(_ only: [String]?, except: WKWebView? = nil) {
         let only = livePick(only, known: nil)  // none ticked is all: never stored empty
-        ud.set(only, forKey: "termOnly0"); syncL1()
+        ud.set(only, forKey: "termOnly0"); syncL1(); syncDashPaths()
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
     }
-    var l1Only: [String]? { live(sharedOnly) }  // nil until a terminal page lists the projects
-    /// A pick as the windows show it, against the projects the terminal page listed: nil (all) until it has, and for a pick none of whose
+    var l1Only: [String]? { live(sharedOnly) }  // nil until projects are listed
+    /// A pick as the windows show it, against the listed projects: nil (all) until listed, and for a pick none of whose
     /// projects is still there. The pick itself stays as saved, so a project that comes back (its host's trees) is shown again.
     func live(_ only: [String]?) -> [String]? { projList.isEmpty ? nil : livePick(only, known: projList.compactMap { $0["id"] as? String }) }
     var l1Picked: [[String: Any]] { picked(l1Only) }
@@ -1134,24 +1229,62 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The picked projects' "paths" or "repos"; nil: every project. Sorted: the tick compares it.
     func sel(_ only: [String]?, _ k: String) -> [String]? { only == nil ? nil : Array(Set(picked(only).flatMap { $0[k] as? [String] ?? [] })).sorted() }
     var l1Paths: [String]? { sel(l1Only, "paths") }
-    var l1Repos: [String]? { sel(l1Only, "repos") }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the terminal page's last trees
+    var l1Repos: [String]? { sel(l1Only, "repos") }  // the dashboard matches them against its own fresh trees: l1Paths is only as new as the last trees
+    func canShowDash(for web: WKWebView) -> Bool { canShowDashboard(only: l1(web).map(\.only) ?? sharedOnly, projectsLoaded: projectsLoaded) }
+    func pushPaths(to web: WKWebView) {
+        let o = l1(web).map { live($0.only) } ?? l1Only
+        web.callJS("window.mc && mc.paths", [sel(o, "paths") ?? NSNull(), sel(o, "repos") ?? NSNull()])
+    }
+    func syncDashPaths() {
+        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
+        let mainKey = "\(json(l1Paths)), \(json(l1Repos))", mainChanged = pushedRepos != mainKey
+        if mainChanged { pushedRepos = mainKey }
+        for web in mainWebs {
+            let id = ObjectIdentifier(web)
+            if waitingDash.contains(id), canShowDash(for: web) {
+                waitingDash.remove(id); readyDash.insert(id)
+                pushPaths(to: web)
+                if let snap = dashSnapObj { web.callJS("window.mc && mc.update", [snap]) }
+            } else if mainChanged, readyDash.contains(id) {
+                pushPaths(to: web)
+            }
+        }
+        for l in l1s.values {
+            let id = ObjectIdentifier(l.web), o = live(l.only)
+            let key = "\(json(sel(o, "paths"))), \(json(sel(o, "repos")))", changed = l.pushedRepos != key
+            if changed { l.pushedRepos = key }
+            if waitingDash.contains(id), canShowDash(for: l.web) {
+                waitingDash.remove(id); readyDash.insert(id)
+                pushPaths(to: l.web)
+                if let snap = dashSnapObj { l.web.callJS("window.mc && mc.update", [snap]) }
+            } else if changed, readyDash.contains(id) {
+                pushPaths(to: l.web)
+            }
+        }
+    }
+    func refreshProjects() {
+        let trees = (lastTreesObj?["trees"] as? [[String: Any]]) ?? []
+        projList = buildProjectList(saved: savedProjects, trees: trees, dark: isDark, fallback: lastTreesObj == nil)
+        projectsLoaded = true
+        syncL1()
+        syncDashPaths()
+    }
     /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
     /// them is up. Read straight from the pick, not asked of a page: nothing to wait on, and no answer from a window you've left.
     var pickScope: String? {
         windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
     }
     func syncL1() {
-        for (f, o) in [(l1Floor, l1Only)] + l1s.values.map({ ($0.floor, live($0.only)) }) {
-            let ps = picked(o), names = ps.compactMap { $0["name"] as? String }.joined(separator: ", ")
-            f.project = o == nil ? "All projects" : names.isEmpty ? "No projects" : names
-            f.colors = o == nil ? [] : ps.compactMap { $0["color"] as? String }
+        for (f, raw) in [(l1Floor, sharedOnly)] + l1s.values.map({ ($0.floor, $0.only) }) {
+            let chip = projectChip(only: raw, projList: projList, projectsLoaded: projectsLoaded)
+            f.project = chip.text
+            f.colors = chip.colors
         }
     }
     func l1Pick(here: Bool = true, in l: L1? = nil) {
-        let list = (JSONSerialization.isValidJSONObject(projList) ? (try? JSONSerialization.data(withJSONObject: projList)) : nil).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let shownList = projectsLoaded ? projList : buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true)
         let o = l == nil ? l1Only : live(l!.only)
-        let only = (o.flatMap { JSONSerialization.isValidJSONObject($0) ? (try? JSONSerialization.data(withJSONObject: $0)) : nil }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
-        (l?.web ?? fluid).evaluateJavaScript("window.mc && mc.pickProjects && mc.pickProjects(\(list), \(only), \(here))")
+        (l?.web ?? fluid).callJS("window.mc && mc.pickProjects", [shownList, o ?? NSNull(), here])
     }
 
     // MARK: more Greenlight Center windows (L1's Open projects → New window): each with its own projects and its own Chief (Core(session:)),
@@ -1227,7 +1360,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard !selftest else { return }  // not your windows and their chat-<n>
         let saved = ud.array(forKey: "l1Windows") as? [[String: Any]] ?? []
         for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: livePick(d["only"] as? [String], known: nil)).w.orderFront(nil) } }
-        if !saved.isEmpty { _ = termWindow }  // its page lists the projects (hidden): until it has, a window shows All projects
     }
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
     func closeL1(_ l: L1) {
@@ -1240,6 +1372,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(shellPath(greenlightHome)) && rm -rf chat-\(l.id)")
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
+        let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
@@ -1288,6 +1421,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         try? d.write(to: projectsFile, options: .atomic)
         let s = String(decoding: d, as: UTF8.self)
         termWebs.filter { $0 !== web }.forEach { $0.evaluateJavaScript("term.projects(\(s))") }
+        if projectsLoaded { refreshProjects() }
         return true
     }
     func makeTermWindow(_ id: Int, only: [String]?) -> NSWindow {
@@ -1501,9 +1635,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let d = (try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         web?.evaluateJavaScript("term.toast(\(d))")
     }
-    /// The sidebar: every installed ADE's worktrees (dash.py trees), where greenlight lives.
+    /// Every installed ADE's worktrees (dash.py trees), where greenlight lives. Runs at launch so L1 resolves its project selector before rendering hexes.
     func pushTrees() {
-        guard termLoaded, treesProc == nil else { return }
+        guard treesProc == nil else { return }
         treesAt = Date()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
@@ -1512,7 +1646,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if out.hasPrefix("{"), let d = out.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                JSONSerialization.isValidJSONObject(obj) {
+                self.lastTreesObj = obj
+                self.refreshProjects()
                 self.termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
+            } else if !self.projectsLoaded {
+                self.refreshProjects()  // fallback to projects.json so filtered L1 windows never hang on a failed trees fetch
             }
         })
     }
@@ -1537,7 +1675,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
             web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
             if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.evaluateJavaScript("term.ws(\(js(p)))") } }
-            pushTrees()
+            if let obj = lastTreesObj { web?.callJS("window.term && term.workspaces", [obj]) }
+            if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":
             guard let session, let at = paneWhere(b["ws"] as? String ?? "") else { return }
             let p = Pty()
@@ -1552,7 +1691,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if let session, let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
         case "hide": if wid == 0 { termWindow.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }  // its last tab closed
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
-            if let l = b["list"] as? [[String: Any]] { projList = l; syncL1() }
+            if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }
         case "side": floors[wid]?.at = b["open"] as? Bool ?? false ? "basement" : "pipe"; if wid == 0 { termSide = b["open"] as? Bool ?? false; syncOrbs() }  // the green light shows only while the Basement's sidebar is open
         case "projects": saveProjects(b["projects"], from: web)
         case "pickdir":  // Projects' Choose folder…: the path goes back to the page, which checks it like a pasted one
@@ -1833,7 +1972,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
         for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
         if pushedTerm != theme.name { pushedTerm = theme.name  // the terminals' chrome follows the mode; their screens stay as they are
-            let m = termMode; termWebs.forEach { $0.callJS("window.term && term.mode", [m["mode"]!, m["lightBg"]!, m["lightFg"]!]) } }
+            let m = termMode; termWebs.forEach { $0.callJS("window.term && term.mode", [m["mode"]!, m["lightBg"]!, m["lightFg"]!]) }
+            if projectsLoaded { refreshProjects() } }
         if fluid.appearance?.name != look?.name { fluid.appearance = look }
         if window.appearance?.name != look?.name { window.appearance = look }  // else the full-screen title bar drops in white
         if chatWindow.appearance?.name != look?.name { chatWindow.appearance = look }
@@ -1842,21 +1982,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
-        if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : devDir == nil && ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
+        if lastTreesObj == nil && Date().timeIntervalSince(treesAt) > 10 { pushTrees() }
+        else if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : devDir == nil && ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
         syncOrbs()
         let bell = "\(greenlight.waiting.count), \(greenlight.inboxOpen), \(greenlight.askedJSON)"  // re-pushed whenever a question changes, not only the count
         if pushedBell != bell { pushedBell = bell; broadcast("window.mc && mc.bell(\(bell))") }
         let orb = greenlight.orbsHidden ? "0px" : "72px"  // the shelf keeps the orb's 56pt and some air clear at its right end
         if pushedOrb != orb { pushedOrb = orb; fluid.callJS("((v) => { document.documentElement.style.setProperty('--orb-w', v); window.render && render(); })", [orb]) }
-        let json = { (v: [String]?) in v.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null" }
-        let repos = "\(json(l1Paths)), \(json(l1Repos))"
-        if pushedRepos != repos { pushedRepos = repos; mainWebs.forEach { $0.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(repos))") } }
+        syncDashPaths()
         for l in l1s.values {  // the other Greenlight Center windows: their own projects, their chat always in its pane
-            let o = live(l.only), r = "\(json(sel(o, "paths"))), \(json(sel(o, "repos")))"
-            if l.pushedRepos != r { l.pushedRepos = r; l.web.evaluateJavaScript("window.mc && mc.paths && mc.paths(\(r))") }
-            if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.evaluateJavaScript("window.mc && mc.chat(true,0)") }
+            if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
             if l.w.appearance?.name != look?.name { l.w.appearance = look; l.web.appearance = look }
-            if case let t = "\(greenlight.name) · \(l.floor.project)", l.w.title != t { l.w.title = t }  // the Window menu tells them apart
+            if case let t = l.floor.project.isEmpty ? greenlight.name : "\(greenlight.name) · \(l.floor.project)", l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
             if l.c.run == nil, l.c.connected != greenlight.connected { l.c.connected = greenlight.connected }  // ponytail: same host, so the main chat's online light stands in until this one runs a turn
         }

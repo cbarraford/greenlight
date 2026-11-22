@@ -371,6 +371,45 @@ func selfTest() {
     check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
           livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
           && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])
+    let savedProjs: [[String: Any]] = [
+        ["id": "p1", "name": "Platform", "repos": ["acme/widgets"], "dirs": ["/notes"]],
+        ["id": "p2", "name": "Review", "repos": [String](), "dirs": ["/w/review"]],
+    ]
+    let sampleTrees: [[String: Any]] = [
+        ["project": "acme/widgets", "path": "/w/widgets", "main": true, "agent": "none"],
+        ["project": "acme/widgets", "path": "/w/fix", "main": false, "agent": "working"],
+        ["project": "octo/greenlight", "path": "/w/greenlight", "main": true, "agent": "none", "cfg": ["name": "Greenlight"]],
+        ["project": "octo/greenlight", "path": "/w/feat", "main": false, "agent": "working"],
+        ["project": "octo/other", "path": "/w/review", "main": false, "agent": "none"],
+        ["project": "octo/other", "path": "/w/loose", "main": false, "agent": "none"],
+    ]
+    let builtProjs = buildProjectList(saved: savedProjs, trees: sampleTrees, dark: true)
+    let byId = { (id: String) in builtProjs.first { $0["id"] as? String == id } }
+    check("projects: buildProjectList merges projects.json + .greenlight.json and computes paths, repos and busy",
+          builtProjs.count == 4
+          && (byId("p1")?["repos"] as? [String]) == ["acme/widgets"]
+          && Set(byId("p1")?["paths"] as? [String] ?? []) == ["/w/widgets", "/w/fix"]
+          && (byId("p1")?["busy"] as? Int) == 1
+          && (byId("pgreenlight")?["name"] as? String) == "Greenlight"
+          && (byId("pgreenlight")?["repos"] as? [String]) == ["octo/greenlight"]
+          && Set(byId("pgreenlight")?["paths"] as? [String] ?? []) == ["/w/greenlight", "/w/feat"]
+          && (byId("pgreenlight")?["busy"] as? Int) == 1
+          && (byId("p2")?["paths"] as? [String]) == ["/w/review"]
+          && (byId("p2")?["repos"] as? [String]) == []
+          && (byId("")?["paths"] as? [String]) == ["/w/loose"]
+          && (byId("")?["repos"] as? [String]) == [])
+    let fallbackProjs = buildProjectList(saved: savedProjs, trees: [], dark: false, fallback: true)
+    check("projects: fallback preserves saved repos/dirs when dash.py trees fails",
+          (fallbackProjs.first { $0["id"] as? String == "p1" }?["repos"] as? [String]) == ["acme/widgets"]
+          && (fallbackProjs.first { $0["id"] as? String == "p1" }?["color"] as? String) == "#B25000")
+    check("projects: dashboard holds snapshot until projectsLoaded for filtered windows, and chip doesn't flash All",
+          canShowDashboard(only: nil, projectsLoaded: false)
+          && !canShowDashboard(only: ["pgreenlight"], projectsLoaded: false)
+          && canShowDashboard(only: ["pgreenlight"], projectsLoaded: true)
+          && projectChip(only: ["pgreenlight"], projList: [], projectsLoaded: false).text == ""
+          && projectChip(only: nil, projList: [], projectsLoaded: false).text == "All projects"
+          && projectChip(only: ["pgreenlight"], projList: builtProjs, projectsLoaded: true).text == "Greenlight"
+          && projectChip(only: ["gone"], projList: builtProjs, projectsLoaded: true).text == "All projects")
     check("voice: spoken text is plain, whole sentences only: \(ss)", ss.said == ["Two MRs: !12 is green.", "One fails!"] && sentences("a. b", from: ss.to).said.isEmpty)
     check("dwim: only words dwim.py knows leave the Chief path", dwimCandidate("park the two auth ones") && dwimCandidate("Kick off CI fixes on the red ones")
           && dwimCandidate("hold #42") && dwimCandidate("don't merge #42") && dwimCandidate("unpark billing") && dwimCandidate("fix the merge conflicts on search")
