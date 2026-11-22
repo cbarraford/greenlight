@@ -5,6 +5,7 @@ herdr has workspaces, git worktrees, panes and agent detection of its own; goals
 """
 import json
 import os
+import secrets
 import shlex
 import subprocess
 import time
@@ -63,11 +64,11 @@ def read(handle, limit):
 
 def send(handle, text, enter):
     if enter and handle in agents():  # agent prompt pastes (one message, newlines kept) and submits in one write
-        herdr("agent", "prompt", handle, text)
+        herdr("agent", "prompt", handle, "--", text)
     elif enter:
-        herdr("pane", "run", handle, text)
+        herdr("pane", "run", handle, "--", text)
     else:  # a menu pick
-        herdr("pane", "send-text", handle, text)
+        herdr("pane", "send-text", handle, "--", text)
 
 
 def launch(ws_id, agent, prompt, pane=None):
@@ -77,9 +78,11 @@ def launch(ws_id, agent, prompt, pane=None):
     # The brief rides in argv so it survives a startup block (Claude's folder-trust prompt is the user's to answer).
     # macOS caps a typed command line at ~1KB, and a newline would split it, so a long brief goes by file.
     if prompt and ("\n" in prompt or len(shlex.quote(prompt).encode()) > 800):
-        brief = BRIEFS / f"{pane.replace(':', '-')}-{int(time.time())}.md"
-        brief.parent.mkdir(parents=True, exist_ok=True)
-        brief.write_text(prompt)
+        BRIEFS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        brief = BRIEFS / f"{pane.replace(':', '-')}-{int(time.time())}-{secrets.token_hex(4)}.md"
+        fd = os.open(str(brief), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as bf:
+            bf.write(prompt)
         prompt = f"Your brief is in {brief}. Read it and follow it."
     for i in range(15):
         try:

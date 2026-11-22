@@ -29,7 +29,7 @@ def check(m, proj=PRIV, pipe="success", jobs=(), threads=(), left=0, rules=("dev
           notes=(), can_approve=True):
     """the blocking hits for one MR. GitLab answers by path suffix; anything it isn't asked for stays unasked."""
     api = {"/pipelines?per_page=1": [{"id": 1, "status": pipe}] if pipe else [],
-           "/jobs?per_page=100": [{"id": i, "status": s, "stage": st} for i, (s, st) in enumerate(jobs)],
+           "/jobs?scope[]=failed": [{"id": i, "status": s, "stage": st} for i, (s, st) in enumerate(jobs)],
            "/approvals": {"approvals_left": left, "approval_rules_left": [{"name": r} for r in rules],
                           "approved_by": [{"user": {"username": u}} for u in approved], "user_can_approve": can_approve},
            "/reviewers": [{"user": {"username": u}, "state": "reviewed"} for u in reviewers],
@@ -37,7 +37,8 @@ def check(m, proj=PRIV, pipe="success", jobs=(), threads=(), left=0, rules=("dev
            "/notes?sort=desc&per_page=100": [{"author": {"username": u}, "system": False,
                                               "created_at": "2026-11-02T00:00:00Z"} for u in notes]}
     gl = lambda path: next(v for k, v in api.items() if path.endswith(k))
-    with mock.patch.object(greenlight, "gl", side_effect=gl), mock.patch.object(greenlight, "gl_all", return_value=list(threads)):
+    gl_all = lambda path: api["/jobs?scope[]=failed"] if path.endswith("/jobs?scope[]=failed") else list(threads)
+    with mock.patch.object(greenlight, "gl", side_effect=gl), mock.patch.object(greenlight, "gl_all", side_effect=gl_all):
         return blocking.check(proj, m)
 
 
@@ -80,4 +81,22 @@ with mock.patch.object(blocking.time, "time", return_value=blocking.time.time() 
     assert blocking.cached() is None
 with mock.patch.object(blocking, "scan", side_effect=RuntimeError("502")):
     assert blocking.blocks(fresh=True) is None  # no answer, not "nothing blocked"
+
+# scan(): aggregates hits, skips transient single-MR errors, raises if ALL MR checks fail
+m1 = {"iid": 10, "web_url": "https://example.invalid/10", "title": "First"}
+m2 = {"iid": 11, "web_url": "https://example.invalid/11", "title": "Second"}
+with mock.patch.object(blocking, "open_mrs", side_effect=lambda proj, pre: [m1, m2] if proj == TN else []), \
+        mock.patch.object(blocking, "check", side_effect=lambda proj, m: (
+            [(ME, "discussion", "@bob"), (ME, "discussion", "@carol")] if m["iid"] == 10 else (_ for _ in ()).throw(RuntimeError("blip"))
+        )):
+    res = blocking.scan()
+    assert res == {f"{TN}!10": {"reason": "discussion", "why": "2 threads are waiting on you", "n": 2,
+                                "url": m1["web_url"], "title": m1["title"]}}, res
+try:
+    with mock.patch.object(blocking, "open_mrs", side_effect=lambda proj, pre: [m1] if proj == TN else []), \
+            mock.patch.object(blocking, "check", side_effect=RuntimeError("502")):
+        blocking.scan()
+    raise AssertionError("expected RuntimeError when all MR checks fail")
+except RuntimeError as e:
+    assert "all 1 MR blocking checks failed" in str(e)
 print("ok")

@@ -69,17 +69,21 @@ const XSS_URL = 'javascript:window.__pwned=6';
       const snap = JSON.parse(rawSnap);
       await page.evaluate(s => window.mc.update(s), snap);
       await page.evaluate((x) => {
-        window.mc.pickProjects([{id: x, name: x, repos: ["a"], busy: 1, color: 'red;background:url(x)'}], null, true);
+        window.mc.pickProjects([{id: x, name: x, repos: ["a"], busy: 1, color: 'red;background:url(https://evil.invalid/x)'}], null, true);
       }, XSS_IMG);
       await page.waitForTimeout(150);
       assert.equal(await page.evaluate(() => window.__pwned), undefined, "dashboard.html executed injected XSS!");
       assert.equal(await page.locator('img[src="x"]').count(), 0, "dashboard.html rendered injected <img>");
+      const badStyle = await page.evaluate(() => [...document.querySelectorAll("#pp .sq")].some(el => (el.getAttribute("style") || "").includes("url(")));
+      assert.equal(badStyle, false, "dashboard.html allowed CSS injection in pickProjects color!");
+      const badHref = await page.evaluate(() => [...document.querySelectorAll("a[href]")].some(a => !/^https?:\/\//i.test(a.getAttribute("href") || "")));
+      assert.equal(badHref, false, "dashboard.html rendered non-http(s) <a href>!");
       assert.deepEqual(errs, [], "dashboard.html page errors: " + errs.join("; "));
       await page.close();
       console.log(`ok  dashboard.html adversarial XSS + dash.py contract (${ENGINE})`);
     }
 
-    // 2. terminal.html: adversarial workspaces, tree info, ask() modal, pickProjects, hostile avatar URL
+    // 2. terminal.html: adversarial workspaces, wsMenu, chips, ansi(), toAgent(), tree info, ask() modal, hostile avatar URL
     {
       const page = await browser.newPage({viewport: {width: 1200, height: 800}});
       const errs = [];
@@ -91,36 +95,42 @@ const XSS_URL = 'javascript:window.__pwned=6';
       await page.goto("file://" + path.join(dir, "terminal.html"));
       await page.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
       await page.evaluate(() => { term.restore(null); if (document.body.classList.contains("noside")) toggleSide(); });
-      await page.evaluate(({img, scr, attr, url}) => {
-        term.workspaces({trees: [{
+      const secChecks = await page.evaluate(({img, scr, attr, url}) => {
+        const w = {
           ade: "orca", project: "acme/" + img, name: img, path: "/w/xss", branch: scr, main: false,
           agent: "waiting", state: "needs", why: img,
-          mr: {ref: "!9" + img, state: "opened", title: img, author: {name: img, avatar: url}, pipeline: "failed", threads: 2},
-          moves: [{kind: "ci", prompt: img, auto: false}],
-        }]});
+          mr: {ref: "!9" + img, state: "opened", title: img, by: {name: img, avatar: url}, assignees: [{name: img, avatar: url}], pipeline: "failed", threads: img},
+          moves: [{kind: "ci", prompt: "a\x7f\x03\x1bb", auto: false}],
+        };
+        term.workspaces({trees: [w]});
+        wsMenu({clientX: 10, clientY: 10}, "/w/xss", w);
         term.tree({op: "info", path: "/w/xss", dirty: img, unpushed: scr, error: img, teardown: img});
         ask({icon: "warn", title: img, text: esc(img), rows: [["r", img, img]], cancel: "No", ok: "Yes"});
+        return {ansiDel: ansi("hi\x7fthere\x03"), escQuote: esc("a'b")};
       }, {img: XSS_IMG, scr: XSS_SCRIPT, attr: XSS_ATTR, url: XSS_URL});
       await page.waitForTimeout(150);
       assert.equal(await page.evaluate(() => window.__pwned), undefined, "terminal.html executed injected XSS!");
       assert.equal(await page.locator('img[src="x"], img[src^="javascript:"]').count(), 0, "terminal.html rendered injected <img>");
+      assert.ok(!secChecks.ansiDel.includes("\x7f") && secChecks.ansiDel.includes("\\x7f") && secChecks.ansiDel.includes("\\x03"), "ansi() failed to escape DEL/control chars: " + secChecks.ansiDel);
+      assert.ok(!secChecks.escQuote.includes("'"), "esc() failed to escape single quotes");
       assert.deepEqual(errs, [], "terminal.html page errors: " + errs.join("; "));
       await page.close();
       console.log(`ok  terminal.html adversarial XSS & CSP (${ENGINE})`);
     }
 
-    // 3. stage.html: adversarial HTML & spec payloads remain inert inside sandboxed iframe/text nodes
+    // 3. stage.html: adversarial HTML & spec payloads remain inert inside sandboxed iframe/text nodes (tested separately!)
     {
       const page = await browser.newPage({viewport: {width: 800, height: 600}});
       const errs = [];
       page.on("pageerror", e => errs.push(e.message));
       await page.goto("file://" + path.join(ROOT, "app/stage.html"));
-      await page.evaluate(({img, scr}) => {
-        stage.html(`<h1>Hello</h1>${img}${scr}`);
-        stage.spec({kind: "table", title: img, columns: [img], rows: [[img, scr]]});
-      }, {img: XSS_IMG, scr: XSS_SCRIPT});
+      await page.evaluate(({img, scr}) => { stage.html(`<h1>Hello</h1>${img}${scr}`); }, {img: XSS_IMG, scr: XSS_SCRIPT});
       await page.waitForTimeout(200);
-      assert.equal(await page.evaluate(() => window.__pwned), undefined, "stage.html executed injected XSS!");
+      assert.equal(await page.locator("iframe[sandbox]").count(), 1, "stage.html did not render sandboxed iframe");
+      assert.equal(await page.evaluate(() => window.__pwned), undefined, "stage.html iframe escaped sandbox!");
+      await page.evaluate(({img, scr}) => { stage.spec({kind: "table", title: img, columns: [img], rows: [[img, scr]]}); }, {img: XSS_IMG, scr: XSS_SCRIPT});
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => window.__pwned), undefined, "stage.html spec executed injected XSS!");
       assert.equal(await page.locator('img[src="x"]').count(), 0, "stage.html rendered injected <img>");
       assert.deepEqual(errs, [], "stage.html page errors: " + errs.join("; "));
       await page.close();

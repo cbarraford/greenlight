@@ -1,6 +1,6 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src https: data: blob:; connect-src data: blob:; font-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src https: data: blob:; connect-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'">
 <title>Terminal</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:12px -apple-system,BlinkMacSystemFont,sans-serif}
@@ -489,7 +489,7 @@ function newPane(tab, cmd, session = sid()){
   return {p, mount(){
     t.loadAddon(fit); t.open(host); ownBlocks(t); fit.fit(); fit.observeResize();
     t.attachCustomKeyEventHandler(e => { const s = e.metaKey || e.isComposing ? null : ghostKey(t, e); if (s) t.input(s, true); return typeof s === "string" });
-    host.addEventListener("mousemove", e => setTimeout(() => linkHover(p, e), 40));  // after ghostty-web's own 16ms-throttled hover
+    host.addEventListener("mousemove", e => { clearTimeout(p.lnkT); p.lnkT = setTimeout(() => linkHover(p, e), 40) });  // after ghostty-web's own 16ms-throttled hover
     host.addEventListener("mouseleave", lnkHide);
     host.addEventListener("click", e => { const l = t.currentHoveredLink;  // a plain click opens it too; ⌘-click is ghostty-web's own
       if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
@@ -524,6 +524,7 @@ function ghostKey(t, e){
 window.open = u => { u = String(u); const f = $("lnk")._url; post({cmd: "url", url: f?.startsWith(u) ? f : u}); return null };  // a wrapped URL: the joined one
 let lnkT;
 function linkHover(p, e){
+  if (!panes.has(p.id)) return;
   const l = p.t.currentHoveredLink, b = $("lnk");
   if (!l) return lnkHide();
   clearTimeout(lnkT);
@@ -581,10 +582,10 @@ function drag(e, dv, down){
   const total = down ? ra.height + rb.height : ra.width + rb.width, start = down ? e.clientY : e.clientX, from = down ? ra.height : ra.width;
   dv.classList.add("drag"); document.body.style.cursor = down ? "row-resize" : "col-resize";
   const move = m => { const s = Math.max(60, Math.min(total - 60, from + (down ? m.clientY : m.clientX) - start)); a.style.flex = `${s} 1 0`; b.style.flex = `${total - s} 1 0` };
-  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
-  addEventListener("mousemove", move); addEventListener("mouseup", up);
+  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); removeEventListener("blur", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
+  addEventListener("mousemove", move); addEventListener("mouseup", up); addEventListener("blur", up);
 }
-function kill(p){ post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
+function kill(p){ clearTimeout(p.scanT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
   const tab = p.tab, parent = p.box.parentElement;
@@ -599,6 +600,7 @@ function closePane(p){
 }
 function closeTab(tab = cur){ if (tab) { paneOf(tab).forEach(kill); dropTab(tab) } }
 function dropTab(tab){
+  clearTimeout(tab.quiet); clearTimeout(tab.retry);
   const i = tabs.indexOf(tab); tabs.splice(i, 1); tab.r.remove();
   if (!tabs.length) { cur = null; render(); return post({cmd: "hide"}) }  // the last tab: the window goes; T brings a new shell
   // the closed tab's workspace keeps the focus while it has tabs; else the tab you used last
@@ -606,6 +608,7 @@ function dropTab(tab){
   if (tab === cur) show(last(setTabs(tab)) || wsTabs(tab.ws).sort((a, b) => b.used - a.used)[0] || [...tabs].sort((a, b) => b.used - a.used)[0]); else render();
 }
 function focusPane(p){
+  if (!panes.has(p.id)) return;
   p.tab.focus = p; p.bell = false;
   if (p.tab !== cur) return show(p.tab);
   render(); p.t.focus();
@@ -631,7 +634,7 @@ const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 function sniff(p, s){
   let changed = false;
   for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
-  for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { const d = decodeURIComponent(v); if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
+  for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { let d = v; try { d = decodeURIComponent(v) } catch {} if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
   if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true; if (isClaude(p)) ping(p, "needs you", paneTitle(p)) }
   if (isClaude(p) && !p.scanT) p.scanT = setTimeout(() => { p.scanT = 0; working(p) }, 500);  // at most twice a second, and once after the last chunk
   else if (!isClaude(p)) p.st = "";
@@ -642,6 +645,7 @@ function sniff(p, s){
 // Claude works while its spinner line ("✶ Skedaddling… (3s · …)") is on screen; inside tmux it doesn't animate its title
 const BUSY = /^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)/;  // ? : tmux skips the unchanged space with a cursor move, which reads back as nothing; $: the first second has no timer
 function working(p){
+  if (!panes.has(p.id)) return;
   const b = p.t.buffer.active, was = p.st; let spin = /^[⠀-⣿]/.test(p.title || "");
   for (let y = b.length - 1, n = 0; y >= Math.max(0, b.length - 80) && n < 15 && !spin; y--) {  // the last 15 lines with text
     const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = BUSY.test(l) } }
@@ -757,7 +761,7 @@ const dur = ms => { const s = (Date.now() - ms) / 1000; return s < 60 ? "now" : 
 const ago = ms => dur(ms) === "now" ? "just now" : dur(ms) + " ago";
 const when = ms => ms ? `<span title="${new Date(ms).toLocaleString()}">${ago(ms)}</span>` : "";
 const shq = s => "'" + s.replace(/'/g, "'\\''") + "'";
-const ansi = s => "$'" + s.replace(/[\\']/g, "\\$&").replace(/[\x00-\x1f]/g, c => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")) + "'";  // one typed line, no tab completing (bash and zsh)
+const ansi = s => "$'" + String(s).replace(/[\\']/g, "\\$&").replace(/[\x00-\x1f\x7f-\x9f]/g, c => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")) + "'";  // one typed line, no tab completing or TTY erase (bash and zsh)
 const AGENT = {working: ["b", "Agent working"], waiting: ["o", "Agent waiting"], done: ["g", "Agent done"], idle: ["dim", "Agent idle"], crashed: ["r", "Agent crashed"], error: ["r", "Agent error"]};  // "Agent": the card's pill is Claude's state, not the MR's
 const IC = {
   ext: svg('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 12),
@@ -765,7 +769,7 @@ const IC = {
   warn: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>', 17),
 };
 // forge avatar, username on hover; the initial shows through if the image fails (bots, offline)
-const face = u => { const av = typeof u.avatar === "string" && /^https?:\/\//i.test(u.avatar) ? u.avatar : ""; return `<span class="av" title="${esc(u.name)}">${esc(u.name[0] || "?")}${av ? `<img src="${esc(av)}" alt="" onerror="this.remove()">` : ""}</span>` };
+const face = u => { const nm = String(u?.name || ""), av = typeof u?.avatar === "string" && /^https?:\/\//i.test(u.avatar) ? u.avatar : ""; return `<span class="av" title="${esc(nm)}">${esc(nm[0] || "?")}${av ? `<img src="${esc(av)}" alt="" onerror="this.remove()">` : ""}</span>` };
 const stats = o => [[o?.dirty, "uncommitted", o?.dirty ? "k-o" : ""], [o?.unpushed, "unpushed", ""], [o?.commit && dur(o.commit), "last commit", "", o?.commit && new Date(o.commit).toLocaleString()]]
   .map(([v, l, k, t]) => `<div class="${k}"${t ? ` title="${esc(t)}"` : ""}><b>${!o ? "·" : esc(v ?? "–")}</b><span>${l}</span></div>`).join("");
 const meta = (w, o) => [w.why && esc(w.why), w.created && "Created " + when(w.created), w.active && "last output " + when(w.active), o?.error && `<span class="k-r">Git: ${esc(o.error)}</span>`].filter(Boolean).join(" · ");
@@ -775,6 +779,7 @@ function renameLocal(){
   inp.select();
 }
 function wsMenu(e, ws, w){
+  clearTimeout(hoverT);
   const closeAll = ["Close all terminals here", "", () => wsTabs(ws).forEach(closeTab), wsTabs(ws).length ? {} : {off: "No terminals open here"}];
   if (!ws || ws[0] === "@") return showMenu(e, [["New terminal here", "", () => newTab(ws)], ...hostOf(ws) === "local" ? [["Rename…", "", renameLocal]] : [], null, closeAll]);
   if (!w?.ade) return showMenu(e, [["New terminal here", "", () => newTab(ws)], ["Copy path", "", () => post({cmd: "copy", text: ws})], null, closeAll]);  // gone from every ADE
@@ -783,10 +788,11 @@ function wsMenu(e, ws, w){
   const btn = (cls, html, fn, off) => { const b = el("button", cls, html); b.type = "button"; if (off) { b.disabled = true; b.title = off } b.onclick = fn; return b };
   const act = fn => () => { c.hidden = true; fn() };
   const tag = (k, glyph, text, t = "") => `<span class="tag k-${k}" title="${t}">${g16(glyph)}${text}</span>`;
-  const tags = [m.ref && tag(open ? (m.draft ? "dim" : "g") : m.state === "merged" ? "p" : "dim", G.mr, esc(m.ref) + (open ? "" : " " + m.state), esc(m.title || "")),
+  const thN = Number(m.threads) | 0;
+  const tags = [m.ref && tag(open ? (m.draft ? "dim" : "g") : m.state === "merged" ? "p" : "dim", G.mr, esc(m.ref) + (open ? "" : " " + esc(m.state || "")), esc(m.title || "")),
     open && m.conflicts && tag("r", G.rebase, "Conflicts"), open && !m.conflicts && m.rebase && tag("o", G.rebase, "Needs rebase"),
     open && CI[m.pipeline] && tag(CI[m.pipeline][0], CI[m.pipeline][1], CI[m.pipeline][2]),
-    open && m.threads && tag("o", G.thread, `${m.threads} thread${m.threads > 1 ? "s" : ""}`)].filter(Boolean);
+    open && thN > 0 && tag("o", G.thread, `${thN} thread${thN > 1 ? "s" : ""}`)].filter(Boolean);
   c.replaceChildren();
   c.insertAdjacentHTML("beforeend", `<div class="hd"><b>${esc(w.name)}</b>${label ? `<span class="pill k-${k}"><i></i>${label}${w.since ? " · " + dur(w.since) : ""}</span>` : ""}</div>`
     + (w.branch ? `<div class="br" title="${esc(ws)}">${g16(G.branch)}<span>${esc(w.branch)}</span></div>` : "")
@@ -818,7 +824,7 @@ function wsMenu(e, ws, w){
   ft.append(cp, btn("", I.x(12) + `Close ${n}`, act(() => wsTabs(ws).forEach(closeTab)), !n && "No terminals open here"));
   if (!w.main) ft.append(btn("del", "Delete…", act(() => delWs(ws))));
   // the smart button: this MR's most urgent move (dash.py moves, in order); the others it also needs sit under it as "Also"
-  const all = w.moves || [], land = all.filter(x => ["merge", "ready", "signoff"].includes(x.kind)), mv = all.filter(x => !land.includes(x)), top = [];
+  const all = w.moves || [], land = all.filter(x => ["merge", "ready", "signoff"].includes(x.kind)), mv = all.filter(x => !land.includes(x) && Object.hasOwn(MOVE, x.kind)), top = [];
   const run = x => act(() => { newTab(ws, "claude " + ansi(x.prompt)); cur.job = x.kind; save() });  // job: auto-run won't start the same one beside it
   if (mv[0]) {
     const x = mv[0], [label, sub] = MOVE[x.kind](m, x), pv = el("pre", "rvp");
@@ -837,7 +843,7 @@ function wsMenu(e, ws, w){
   land.forEach(x => top.push(x.kind === "merge" ? mergeBtn(ws, m, x) : x.kind === "signoff" ? signoffBtn(ws, m, x) : readyBtn(ws, m)));  // under a review it still waits on: merge when you're happy
   const pk = !all.length && ["needs", "raised"].includes(w.state) && (w.puck || w.name);  // only when it waits on you: you block its MR, or the next move is yours
   if (pk && /^[\w.@+/-]{1,200}$/.test(pk)) {  // greenlight's next step toward the goal, as a prompt (dash.py suggest: the Next model, Haiku by default)
-    const nx = btn("nx", "", act(() => newTab(ws, "claude " + shq(sugg.get(pk).prompt))));
+    const nx = btn("nx", "", act(() => newTab(ws, "claude " + ansi(sugg.get(pk).prompt))));
     nx.dataset.pk = pk; if (busy) nx.dataset.busy = busy;
     top.push(nx);
     if (!(Date.now() - (sugg.get(pk)?.at || 0) < 60e3)) post({cmd: "suggest", name: pk});
@@ -1035,7 +1041,7 @@ async function treeDone(o){
   } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
   else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
 }
-addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) $("card").hidden = true; else cardHover = false }, true);
+addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) { clearTimeout(hoverT); $("card").hidden = true } else cardHover = false }, true);
 // hover: resting on a workspace row opens its card (sooner when one is already up); leaving both row and card closes a card that hover opened.
 // Using the card (any click in it) or a right-click keeps it until Esc or a click outside.
 let hoverT = 0, hoverRow = null, pt = [0, 0], was = [0, 0];
@@ -1143,10 +1149,11 @@ function badge(w){
 const CI = {success: ["g", G.ok, "CI passed"], failed: ["r", G.bad, "CI failed"], running: ["b", G.run, "CI running"], pending: ["b", G.run, "CI pending"], created: ["b", G.run, "CI queued"]};
 function chips(m){
   const c = [], chip = (k, glyph, text, label) => c.push(`<span class="chip k-${k}" title="${label}">${g16(glyph, glyph === G.run ? "spin" : "", text ? "" : label)}${text}</span>`);
-  chip({opened: m.draft ? "dim" : "g", merged: "p"}[m.state] || "dim", G.mr, esc(m.ref || ""), `${m.draft ? "Draft " : ""}${m.state}: ${esc(m.title || "")}`);
+  chip({opened: m.draft ? "dim" : "g", merged: "p"}[m.state] || "dim", G.mr, esc(m.ref || ""), `${m.draft ? "Draft " : ""}${esc(m.state || "")}: ${esc(m.title || "")}`);
   if (m.state !== "opened") return c.join("");
   if (CI[m.pipeline]) { const [k, glyph, label] = CI[m.pipeline]; chip(k, glyph, "", label) }
-  if (m.threads) chip("o", G.thread, m.threads, `${m.threads} unresolved thread${m.threads > 1 ? "s" : ""}`);
+  const thN = Number(m.threads) | 0;
+  if (thN > 0) chip("o", G.thread, thN, `${thN} unresolved thread${thN > 1 ? "s" : ""}`);
   if (m.conflicts) chip("r", G.rebase, "", "Conflicts with the target branch");
   else if (m.rebase) chip("o", G.rebase, "", "Needs a rebase");
   return c.join("");
@@ -1173,7 +1180,7 @@ function reveal(ws){
 }
 const made = new Map();  // workspaces New workspace just made → their repo: a bare row (by its tab) in the repo's project until the ADE lists it; revealed both times
 const sideOrder = () => sideGroups().flatMap(([k, , m]) => isShut("§" + k) ? [] : [...m].flatMap(([p, ws]) => isShut(k + "/" + p) ? [] : ws.map(w => w.path)));
-const esc = s => String(s).replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 function renderSide(){
   const ades = new Set(trees.map(w => w.ade)).size > 1, rows = [];
   const tmRows = ws => { const ts = wsTabs(ws), first = new Map();
@@ -1535,8 +1542,8 @@ $("jump").onclick = () => palette(true);
 $("sdv").onmousedown = e => {
   e.preventDefault(); $("sdv").classList.add("drag"); document.body.style.cursor = "col-resize";
   const move = m => { sideW = Math.max(200, Math.min(520, m.clientX)); $("side").style.width = sideW + "px" };
-  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); $("sdv").classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()); save() };
-  addEventListener("mousemove", move); addEventListener("mouseup", up);
+  const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); removeEventListener("blur", up); $("sdv").classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()); save() };
+  addEventListener("mousemove", move); addEventListener("mouseup", up); addEventListener("blur", up);
 };
 
 // the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
@@ -1557,7 +1564,7 @@ function build(tab, n, mounts){
   a.style.flex = n.flex?.[0] || ""; b.style.flex = n.flex?.[1] || "";
   wrap.append(a, divider(n.col), b); return wrap;
 }
-let firstWait = false;
+let firstWait = false, pendingWs = null;
 const firstShell = () => { if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };
 function restore(st){
   try {
@@ -1577,6 +1584,7 @@ function restore(st){
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
   restored = true;
+  if (pendingWs) { const w = pendingWs; pendingWs = null; openWs(w); lastSaved = snap(); return }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
@@ -1685,7 +1693,14 @@ function palDraw(){
       const b = el("button", pri ? "pri" : "", `${esc(label)} <span>${key}</span>`); b.type = "button"; b.tabIndex = -1;
       b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.stopPropagation(); palRun(fn) }; return b }));
     r.setAttribute("role", "option"); r.setAttribute("aria-selected", on);
-    r.onmousemove = () => { if (pal.sel !== i) { pal.sel = i; palDraw() } };
+    r.onmousemove = () => {
+      if (pal.sel === i) return;
+      const prev = $("pres").querySelector(".sel");
+      if (prev) { prev.classList.remove("sel"); prev.setAttribute("aria-selected", "false") }
+      pal.sel = i; r.classList.add("sel"); r.setAttribute("aria-selected", "true");
+      if (pal.act) $("pft").innerHTML = `<span>${kbd("↵", "amb")}${esc(it.side || "Run")}</span><span>Every action lists its shortcut</span>`;
+      palPv(it);
+    };
     r.onclick = () => palRun(it.go);
     out.push(r);
   });
@@ -1753,7 +1768,7 @@ $("pal").onmousedown = e => { if (e.target === $("pal")) { e.preventDefault(); p
 // ⌘⇧P actions, ⌘B sidebar; tabs and ⌘1–9 count within the workspace
 addEventListener("keydown", e => {
   if (e.target.closest?.("#card textarea")) return;  // the goal box keeps its own keys (this listener captures)
-  if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
+  if (e.key === "Escape" && (!$("menu").hidden || !$("card").hidden)) { e.preventDefault(); e.stopPropagation(); clearTimeout(hoverT); $($("menu").hidden ? "card" : "menu").hidden = true; cur && cur.focus.t.focus(); return }
   const free = cur && !editing && $("pal").hidden && $("dlg").hidden;
   if (free && e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) { const ws = setTabs(cur); show(ws[(ws.indexOf(cur) + (e.shiftKey ? -1 : 1) + ws.length) % ws.length]); e.preventDefault(); e.stopPropagation(); return }
   if (!e.metaKey || !free) return;
@@ -1761,7 +1776,7 @@ addEventListener("keydown", e => {
   const wss = [...(isShut("§host") ? [] : homes()), ...sideOrder()], t = cur.focus.t, inT = e.target.closest?.(".t"), only = !e.shiftKey && !e.altKey && !e.ctrlKey;
   if (k === "j" && !e.shiftKey) palette(true);
   else if (k === "b" && !e.shiftKey) toggleSide();
-  else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) openWs(wss[(wss.indexOf(curWs) + (e.key === "ArrowDown" ? 1 : -1) + wss.length) % wss.length]);
+  else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { if (wss.length) openWs(wss[(wss.indexOf(curWs) + (e.key === "ArrowDown" ? 1 : -1) + wss.length) % wss.length]) }
   else if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) paneToward(e.key === "ArrowLeft" ? -1 : 1);
   else if (e.ctrlKey && e.key.startsWith("Arrow")) nudge(cur.focus, e.key);
   else if (e.ctrlKey && (k === "=" || k === "+")) equalize(cur);
@@ -1794,7 +1809,8 @@ addEventListener("paste", e => {
   const s = e.clipboardData?.getData("text/plain"), img = [...e.clipboardData?.files || []].filter(f => f.type.startsWith("image/"));
   if (cur && !s && img.length && e.target.closest?.(".t")) { e.preventDefault(); e.stopImmediatePropagation(); return img.slice(0, 5).forEach(f => sendFile(cur.focus, f)) }  // a screenshot: saved where the shell runs, its path pasted
   if (!cur || !s || !e.target.closest?.(".t")) return;
-  e.preventDefault(); e.stopImmediatePropagation(); cur.focus.t.scrollToBottom(); cur.focus.t.paste(s.replace(/\r?\n/g, "\r"));  // newlines as ↵, like xterm.js and Ghostty
+  const safePaste = s.replace(/\x1b\[20[01]~/g, "").replace(/\r?\n/g, "\r");
+  e.preventDefault(); e.stopImmediatePropagation(); cur.focus.t.scrollToBottom(); cur.focus.t.paste(safePaste);  // newlines as ↵, like xterm.js and Ghostty
 }, true);
 function paneToward(d){  // ⌘⌥← / →: the nearest pane that side
   const a = cur.focus.box.getBoundingClientRect(), mid = r => (r.top + r.bottom) / 2;
@@ -1827,7 +1843,9 @@ function find(open, pre){
   if (pre) $("fq").value = pre;
   $("fq").focus(); $("fq").select(); findScan();
 }
+let fndT;
 function findScan(){
+  if (!cur) return;
   const t = cur.focus.t, b = t.buffer.active, q = $("fq").value, lc = q === q.toLowerCase();
   fnd.hits = []; fnd.i = -1; fnd.t = t; fnd.n = q.length;
   for (let y = b.length - 1; q && y >= 0; y--) {
@@ -1838,6 +1856,8 @@ function findScan(){
   findGo(1);
 }
 function findGo(d){
+  if (!cur) return;
+  if (fndT) { clearTimeout(fndT); fndT = 0; return findScan() }
   if (fnd.t !== cur.focus.t) return findScan();  // another pane since: find there
   const n = fnd.hits.length, t = fnd.t;
   $("fn").textContent = !$("fq").value ? "" : n ? `${(fnd.i = (fnd.i + d + n) % n) + 1} of ${n}` : "No matches";
@@ -1846,7 +1866,7 @@ function findGo(d){
   t.scrollToLine(Math.max(0, Math.min(sb, sb - y + (t.rows >> 1))));  // scrollToLine takes lines up from the bottom
   sm.selectionStart = {col: x, absoluteRow: y}; sm.selectionEnd = {col: x + fnd.n - 1, absoluteRow: y}; sm.requestRender();
 }
-$("fq").oninput = findScan;
+$("fq").oninput = () => { clearTimeout(fndT); fndT = 0; if (!cur || cur.focus.t.buffer.active.length <= 500) findScan(); else fndT = setTimeout(() => { fndT = 0; findScan() }, 100) };
 $("fq").onkeydown = e => {
   if (e.key === "Enter") findGo(e.shiftKey ? -1 : 1);
   else if (e.key === "Escape") find(false);
@@ -1879,7 +1899,8 @@ const cmdsOf = ws => { const c = cfgOf(ws).commands;  // the repo's file: names 
 function toAgent(ws, text){
   const p = wsTabs(ws).flatMap(paneOf).find(isClaude);
   if (!p) { post({cmd: "copy", text}); return toast(`No Claude open in ${wsName(ws)}: copied it instead`) }
-  show(p.tab); focusPane(p); p.t.scrollToBottom(); p.t.paste(text.replace(/\r?\n/g, "\r"));
+  const clean = String(text).replace(/\x1b\[20[01]~/g, "").replace(/\r?\n/g, "\r").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+  show(p.tab); focusPane(p); p.t.scrollToBottom(); p.t.paste(clean);
 }
 // a branch name from the goal: its first five words, lowercase, dashed
 const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 5).join("-").slice(0, 40).replace(/-+$/, "");
@@ -2061,7 +2082,7 @@ window.term = {
   slide: v => { slide = +v || 0 },
   localName: v => { LOCALNAME = v || "Local"; render() },
   opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide() },  // Settings → Terminal → App opens to
-  ws: path => { if (restored && typeof path === "string") openWs(path) },  // Greenlight's Basement button: that worktree's latest tab, or a new shell in it
+  ws: path => { if (typeof path !== "string") return; if (restored) openWs(path); else pendingWs = path },  // Greenlight's Basement button: that worktree's latest tab, or a new shell in it
   suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
   exited: (id, code) => {
@@ -2092,7 +2113,8 @@ window.term = {
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
   closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
-    panes.forEach(p => p.t.dispose?.()); panes.clear(); tabs.forEach(t => t.r.remove()); tabs.length = 0; cur = null; return out },
+    panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear();
+    tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; return out },
   workspaces: o => { trees = o?.trees || []; treesIn = true; const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
@@ -2127,7 +2149,8 @@ function autoRun(){
     autoDone = [...autoDone, key(x)].slice(-300); save();
     if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "auto-merge", path: w.path}); continue }
     const was = cur; newTab(w.path, "claude " + ansi(x.auto));
-    Object.assign(cur, {name: `${AUTO_NAME[x.kind](x)} · ${w.mr?.ref || wsName(w.path)}`, manual: true, auto: {kind: x.kind, sha: x.sha}});
+    const nm = Object.hasOwn(AUTO_NAME, x.kind) ? AUTO_NAME[x.kind](x) : x.kind;
+    Object.assign(cur, {name: `${nm} · ${w.mr?.ref || wsName(w.path)}`, manual: true, auto: {kind: x.kind, sha: x.sha}});
     if (was) show(was); else render();
   }
 }

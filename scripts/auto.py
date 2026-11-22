@@ -23,14 +23,17 @@ The provider (default: config agents[0]) runs first; on a usage limit the same p
 Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
 An --orchestrator automation ("kind": "orchestrator") runs orchestrate.py tick instead of an agent; its prompt is optional.
 """
+import fcntl
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 sys.path.insert(0, str(Path(__file__).parent))
 import diag  # noqa: E402
@@ -40,6 +43,13 @@ from greenlight import CONFIG, LIMIT_RE, STATE, ping  # noqa: E402
 FILE = STATE / "automations.json"
 DIR = STATE / "auto"
 OPTS = ("schedule", "prompt", "cwd", "precheck", "provider", "model", "effort", "timeout")
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}\Z")
+
+
+def valid_name(name):
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+        raise ValueError(f"invalid automation name: {name!r}")
+    return name
 
 
 def load():
@@ -48,30 +58,56 @@ def load():
 
 def save(autos):
     STATE.mkdir(exist_ok=True)
-    FILE.write_text(json.dumps(autos, indent=2))
+    tmp = FILE.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(json.dumps(autos, indent=2))
+    tmp.replace(FILE)
 
 
 def field(spec, lo, hi):
     out = set()
     for part in spec.split(","):
-        rng, _, step = part.partition("/")
-        a, b = (lo, hi) if rng == "*" else map(int, (rng.split("-") * 2)[:2])
-        out |= set(range(a, b + 1, int(step or 1)))
+        if not part:
+            raise ValueError(f"empty cron field part in {spec!r}")
+        rng, slash, step_s = part.partition("/")
+        step = int(step_s) if slash else 1
+        if step < 1:
+            raise ValueError(f"invalid cron step in {spec!r}")
+        if rng == "*":
+            a, b = lo, hi
+        elif "-" in rng:
+            bits = rng.split("-")
+            if len(bits) != 2:
+                raise ValueError(f"invalid cron range in {spec!r}")
+            a, b = int(bits[0]), int(bits[1])
+        else:
+            a = int(rng)
+            b = hi if slash else a
+        if not (lo <= a <= b <= hi):
+            raise ValueError(f"cron value out of bounds in {spec!r}")
+        out |= set(range(a, b + 1, step))
     return out
 
 
 def due(cron, t):
     """Does a 5-field cron match struct_time t (to the minute)?"""
     m, h, dom, mon, dow = cron.split()
-    ok_dom, ok_dow = t.tm_mday in field(dom, 1, 31), (t.tm_wday + 1) % 7 in field(dow, 0, 7) | ({0} if "7" in dow else set())
+    dow_vals = field(dow, 0, 7)
+    if 7 in dow_vals:
+        dow_vals.add(0)
+    ok_dom, ok_dow = t.tm_mday in field(dom, 1, 31), (t.tm_wday + 1) % 7 in dow_vals
     day = (ok_dom and ok_dow) if "*" in (dom, dow) else (ok_dom or ok_dow)  # cron: both restricted → either matches
     return t.tm_min in field(m, 0, 59) and t.tm_hour in field(h, 0, 23) and t.tm_mon in field(mon, 1, 12) and day
 
 
 def alive(name):
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+        return False
     f = DIR / f"{name}.pid"
     try:
-        os.kill(int(f.read_text()), 0)
+        pid = int(f.read_text())
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
         return True
     except (OSError, ValueError):
         return False
@@ -203,51 +239,66 @@ def kill_process_tree(root, nonce=None):
         if group != os.getpgrp():
             try:
                 os.killpg(group, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
     marker.unlink(missing_ok=True)
 
 
 def execute(name):
     """One run, start to finish: precheck, agent (the next of config agents on a limit), log, record."""
+    valid_name(name)
     a = load()[name]
     DIR.mkdir(parents=True, exist_ok=True)
-    (DIR / f"{name}.pid").write_text(str(os.getpid()))
-    start = time.time()
-    logf = DIR / name / f"{time.strftime('%Y%m%d-%H%M%S')}.log"
-    logf.parent.mkdir(exist_ok=True)
-    rec = {"name": name, "ts": int(start), "log": str(logf)}
-    with logf.open("w") as log:
-        if a.get("precheck"):
-            # shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
-            p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),  # noqa: S602
-                               text=True, capture_output=True, timeout=300)
-            log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
-            if p.returncode:
-                rec |= {"status": "skipped", "summary": (p.stdout or p.stderr).strip()[-200:]}
-        if "status" not in rec and a.get("kind") == "orchestrator":
-            out, code = orchestrator(a, log)
-            rec |= {"status": "ok" if code == 0 else "failed", "engine": "orchestrator", "summary": out.strip()[-300:]}
-        if "status" not in rec:
-            for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
-                out, code, tokens = agent(a, engine, log)
-                if not (code and LIMIT_RE.search(out)):
-                    break
-            rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:], **tokens}
-            if engine == provider(a) and a.get("model"):
-                rec["model"] = a["model"]
-    rec["secs"] = int(time.time() - start)
-    diag.event("automation", name_h=diag.h(name), status=rec["status"], engine=rec.get("engine"), model=rec.get("model"),
-               in_tokens=rec.get("in_tokens"), out_tokens=rec.get("out_tokens"), cost_cents=rec.get("cost_cents"), secs=time.time() - start,
-               msg_class=diag.classify(rec.get("summary", "")) if rec["status"] == "failed" else None)
-    with (DIR / "runs.jsonl").open("a") as fh:
-        fh.write(json.dumps(rec) + "\n")
-    (DIR / f"{name}.pid").unlink(missing_ok=True)
-    if rec["status"] == "failed":
-        ping(f"Automation {name} failed: {rec['summary'][-150:]}\nLog: {logf}\nOptions: look into it | ignore", kind="automation-failed")
+    lock_file = DIR / f"{name}.lock"
+    pid_file = DIR / f"{name}.pid"
+    with lock_file.open("a+") as lf:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        pid_file.write_text(str(os.getpid()))
+        try:
+            start = time.time()
+            logf = DIR / name / f"{time.strftime('%Y%m%d-%H%M%S')}.log"
+            logf.parent.mkdir(exist_ok=True)
+            rec = {"name": name, "ts": int(start), "log": str(logf)}
+            with logf.open("w") as log:
+                if a.get("precheck"):
+                    # shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
+                    try:
+                        p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),  # noqa: S602
+                                           text=True, capture_output=True, timeout=300)
+                        log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
+                        if p.returncode:
+                            rec |= {"status": "skipped", "summary": (p.stdout or p.stderr).strip()[-200:]}
+                    except subprocess.TimeoutExpired:
+                        log.write(f"$ precheck: {a['precheck']}\n[timed out]\n")
+                        rec |= {"status": "failed", "summary": "precheck timed out"}
+                if "status" not in rec and a.get("kind") == "orchestrator":
+                    out, code = orchestrator(a, log)
+                    rec |= {"status": "ok" if code == 0 else "failed", "engine": "orchestrator", "summary": out.strip()[-300:]}
+                if "status" not in rec:
+                    for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
+                        out, code, tokens = agent(a, engine, log)
+                        if not (code and LIMIT_RE.search(out)):
+                            break
+                    rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:], **tokens}
+                    if engine == provider(a) and a.get("model"):
+                        rec["model"] = a["model"]
+            rec["secs"] = int(time.time() - start)
+            diag.event("automation", name_h=diag.h(name), status=rec["status"], engine=rec.get("engine"), model=rec.get("model"),
+                       in_tokens=rec.get("in_tokens"), out_tokens=rec.get("out_tokens"), cost_cents=rec.get("cost_cents"), secs=time.time() - start,
+                       msg_class=diag.classify(rec.get("summary", "")) if rec["status"] == "failed" else None)
+            with (DIR / "runs.jsonl").open("a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            if rec["status"] == "failed":
+                ping(f"Automation {name} failed: {rec['summary'][-150:]}\nLog: {logf}\nOptions: look into it | ignore", kind="automation-failed")
+        finally:
+            pid_file.unlink(missing_ok=True)
 
 
 def spawn(name):
+    valid_name(name)
     if alive(name):
         return print(f"{name}: still running, skipped")
     DIR.mkdir(parents=True, exist_ok=True)
@@ -266,8 +317,13 @@ def tick(now=None):
         pass  # a heartbeat never stops the tick
     # ponytail: a minute the timer misses (machine down) is skipped, not caught up; add a last-run check if that matters
     for name, a in load().items():
-        if a.get("enabled", True) and due(a["schedule"], t):
-            spawn(name)
+        try:
+            if not NAME_RE.fullmatch(name):
+                continue
+            if a.get("enabled", True) and due(a["schedule"], t):
+                spawn(name)
+        except Exception as e:
+            diag.event("automation", name_h=diag.h(name), status="failed", **diag.failure(e))
 
 
 UNIT = """[Unit]
@@ -307,6 +363,10 @@ def main():
             print(f"{n:24} {'on ' if a.get('enabled', True) else 'off'}  {a['schedule']:15} {'tick' if orch else provider(a):8}"
                   f" {'running' if alive(n) else ''}\n    {'orchestrate.py tick' if orch else a['prompt'][:100]}")
     elif cmd in ("add", "edit"):
+        try:
+            valid_name(name)
+        except ValueError as e:
+            sys.exit(str(e))
         if (cmd == "add") == (name in autos):
             sys.exit(f"{name}: {'already exists' if cmd == 'add' else 'no such automation'}")
         a = autos.get(name, {"enabled": True}) | {k: opt(k) for k in OPTS if opt(k) is not None}
@@ -344,14 +404,20 @@ def main():
         f = Path.home() / "Library/LaunchAgents/greenlight-auto.plist"
         f.parent.mkdir(parents=True, exist_ok=True)
         # launchd starts with a bare PATH: keep this shell's, so glab/gh/orca and the agents are found
-        f.write_text(PLIST.format(exe=sys.executable, path=Path(__file__).resolve(), env_path=os.environ.get("PATH", "")))
+        f.write_text(PLIST.format(exe=xml_escape(sys.executable), path=xml_escape(str(Path(__file__).resolve())),
+                                  env_path=xml_escape(os.environ.get("PATH", ""))))
         subprocess.run(["launchctl", "unload", str(f)], capture_output=True)
         subprocess.run(["launchctl", "load", "-w", str(f)], check=True)
         print(f"greenlight-auto launch agent loaded ({f})")
     elif cmd == "install":
+        def _sd_quote(s):
+            s = str(s)
+            if any(c in s for c in ("\n", "\r", "\0")):
+                raise ValueError(f"control char in systemd ExecStart path: {s!r}")
+            return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
         d = Path.home() / ".config/systemd/user"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "greenlight-auto.service").write_text(UNIT.format(exe=sys.executable, path=Path(__file__).resolve()))
+        (d / "greenlight-auto.service").write_text(UNIT.format(exe=_sd_quote(sys.executable), path=_sd_quote(Path(__file__).resolve())))
         (d / "greenlight-auto.timer").write_text(TIMER)
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "--user", "enable", "--now", "greenlight-auto.timer"], check=True)

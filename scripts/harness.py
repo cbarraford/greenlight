@@ -13,11 +13,12 @@ pi has no permission gate at all, so it runs only once you set its bypass.
 """
 import os
 import shutil
+from typing import Any
 
 from greenlight import CONFIG
 
 # safe/bypass: permission args. system: has a system-prompt flag (else it rides in the first message).
-H = {
+H: dict[str, dict[str, Any]] = {
     "claude": {"safe": ["--permission-mode", "acceptEdits"], "bypass": ["--permission-mode", "bypassPermissions"], "system": True},
     "codex": {"safe": ["-c", "sandbox_mode=workspace-write"], "bypass": ["--dangerously-bypass-approvals-and-sandbox"], "system": False},
     "opencode": {"safe": [], "bypass": ["--auto"], "system": False},
@@ -48,13 +49,26 @@ def binary(name):
         (p for p in (os.path.expanduser(f"~/.local/bin/{name}"), os.path.expanduser(f"~/.{name}/bin/{name}")) if os.path.exists(p)), name)
 
 
-def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=()):
+def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=(), tools=True):
     if name not in H:
         raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
     h = H[name]
-    perms = h["bypass"] if conf(name).get("bypass") else h["safe"]
-    if perms is None:
-        raise ValueError(f"{name} has no permission sandbox: set harnesses.{name}.bypass true in config.json to use it")
+    if tools:
+        perms = h["bypass"] if conf(name).get("bypass") is True else h["safe"]
+        if perms is None:
+            raise ValueError(f"{name} has no permission sandbox: set harnesses.{name}.bypass true in config.json to use it")
+    else:
+        # Pure text/JSON generation (e.g. dashboard layout/suggestions): never enable bypass or edit tools.
+        perms = {
+            "claude": ["--tools", "", "--no-session-persistence"],
+            "codex": ["-c", "sandbox_mode=read-only"],
+            "opencode": [],
+            "gemini": ["--approval-mode", "default", "--skip-trust"],
+            "agy": [],
+            "pi": None,
+        }[name]
+        if perms is None:
+            raise ValueError(f"{name} has no toolless/sandboxed mode for untrusted prompts")
     if system and not h["system"] and not sid:
         text = system + "\n\n" + text
     opt = lambda flag, v: [flag, v] if v else []
@@ -85,4 +99,12 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
 def interactive(name, prompt):
     """The command line that starts `name` in a terminal with a first prompt (opencode's positional is a project dir;
     gemini's positional runs headless when stdin isn't a TTY, -i keeps it interactive)."""
-    return [name, *({"opencode": ["--prompt"], "gemini": ["-i"]}.get(name, [])), prompt] if prompt else [name]
+    if name not in H:
+        raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
+    b = binary(name)
+    if not prompt:
+        return [b]
+    flag = {"opencode": ["--prompt"], "gemini": ["-i"]}.get(name)
+    if flag:
+        return [b, *flag, prompt]
+    return [b, "--", prompt]

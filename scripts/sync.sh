@@ -5,8 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 H=${GREENLIGHT_HOST:-$(defaults read dev.greenlight.app host 2>/dev/null || true)}
-[ -n "$H" ] && [ "$H" != local ] || { echo "usage: GREENLIGHT_HOST=<ssh host> scripts/sync.sh" >&2; exit 1; }
+[ -n "$H" ] && [ "$H" != local ] && [ "${H#-}" = "$H" ] || { echo "usage: GREENLIGHT_HOST=<ssh host> scripts/sync.sh" >&2; exit 1; }
 [ -d memory ] && { rsync -au "$H":.claude/skills/greenlight/memory/ memory/ 2>/dev/null || true; }  # pull notes the host's runs wrote
 git rev-parse --short HEAD > VERSION  # the host's copy has no .git: diag.py reads its version from here
 rsync -a --exclude .git --exclude .gitignore --exclude memory --exclude app ./ "$H":.claude/skills/greenlight/
-[ -d memory ] && rsync -au memory/ "$H":.claude/skills/greenlight/memory/ || true
+if [ -d memory ]; then rsync -au memory/ "$H":.claude/skills/greenlight/memory/; fi
