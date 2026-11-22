@@ -105,13 +105,33 @@ def rpc(sock_path, payload, timeout=30.0):
 
 def _install_stub_harnesses(bindir: Path):
     """Install deterministic offline stub agent CLIs so UI fuzzing never spends real API tokens."""
-    # Claude stream-json stub: emits a tiny valid assistant message + result envelope.
+    # Mode-aware Claude stub: emits stream-json when --output-format stream-json is requested (chat.py),
+    # valid Insights layout JSON when asked for JSON layout (dash.py design), JSON array for ask_user,
+    # and concise 2-line label+prompt for dash.py suggest.
     claude_stub = bindir / "claude"
     claude_stub.write_text(
         "#!/bin/sh\n"
-        "cat >/dev/null 2>&1 || true\n"
-        "printf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Stub Chief reply (uitest offline).\"}]}}\\n'\n"
-        "printf '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"Stub Chief reply (uitest offline).\",\"session_id\":\"uitest-stub-sid\"}\\n'\n"
+        "case \" $* \" in\n"
+        "  *' stream-json '*)\n"
+        "    cat >/dev/null 2>&1 || true\n"
+        "    printf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Stub Chief reply (uitest offline).\"}]}}\\n'\n"
+        "    printf '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"Stub Chief reply (uitest offline).\",\"session_id\":\"uitest-stub-sid\"}\\n'\n"
+        "    ;;\n"
+        "  *)\n"
+        "    BODY=$(cat 2>/dev/null || true)\n"
+        "    case \"$BODY\" in\n"
+        "      *'Return ONLY JSON'*)\n"
+        "        printf '{\"puck\":null,\"tiles\":[{\"widget\":\"note\",\"title\":\"Status\",\"props\":{\"text\":\"Stub insight (uitest offline).\",\"tone\":\"muted\"}}],\"wide\":null}\\n'\n"
+        "        ;;\n"
+        "      *'JSON array of strings'*)\n"
+        "        printf '[\"Yes, proceed\",\"Hold off\"]\\n'\n"
+        "        ;;\n"
+        "      *)\n"
+        "        printf 'Check workspace\\nReview the latest changes and run tests.\\n'\n"
+        "        ;;\n"
+        "    esac\n"
+        "    ;;\n"
+        "esac\n"
     )
     claude_stub.chmod(0o755)
 
