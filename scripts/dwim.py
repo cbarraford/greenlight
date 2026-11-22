@@ -693,15 +693,28 @@ def card_table(text, pucks, one):
             "tones": [tone(p) for p in rows]}
 
 
+STEP_LABELS = {"mr_open": "Open MR", "ci_green": "CI green", "no_conflicts": "No conflicts", "review_bot": "Review bot",
+               "milestone": "Milestone", "ready": "Ready", "threads": "Threads", "approved": "Approved", "merge": "Merge", "review": "Review"}
+
+
 def card_lifecycle(text, pucks, one):
     if not one:
         return None
     life = one.get("life") or {}
-    keys = [s[0] for s in lifestage.STAGES]
-    i = keys.index(life["stage"]) if life.get("stage") in keys else -1
     done = life.get("pile") == "done"
-    stages = [{"label": name, "state": "done" if done or j < i else "now" if j == i else "todo",
-               "detail": (life.get("sub_name") or "") if j == i else ""} for j, (_, name, _) in enumerate(lifestage.STAGES)]
+    steps = one.get("steps") or []
+    if steps:
+        idx = len(steps) if done else one.get("step_index")
+        idx = idx if isinstance(idx, int) else -1
+        detail = life.get("sub_name") or one.get("action") or ""
+        stages = [{"label": STEP_LABELS.get(k, str(k).replace("_", " ").capitalize()),
+                   "state": "done" if done or j < idx else "now" if j == idx else "todo",
+                   "detail": detail if j == idx else ""} for j, k in enumerate(steps)]
+    else:
+        keys = [s[0] for s in lifestage.STAGES]
+        i = keys.index(life["stage"]) if life.get("stage") in keys else -1
+        stages = [{"label": name, "state": "done" if done or j < i else "now" if j == i else "todo",
+                   "detail": (life.get("sub_name") or "") if j == i else ""} for j, (_, name, _) in enumerate(lifestage.STAGES)]
     return {"kind": "lifecycle", "eyebrow": one["name"], "title": life.get("do") or one.get("action") or one["name"],
             "stages": stages, "at": life.get("at") or "", "holder": life.get("holder") or ""}
 

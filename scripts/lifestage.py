@@ -127,7 +127,14 @@ def save(kind, where, data):
 
 
 def record(kind, r):
-    for where in (r.get("path"), r.get("name")):
+    p = r.get("path")
+    candidates = [p]
+    if p:
+        rp = os.path.realpath(p)
+        if rp != p:
+            candidates.append(rp)
+    candidates.append(r.get("name"))
+    for where in candidates:
         try:
             if where and isinstance(o := json.loads(_file(kind, where).read_text()), dict):
                 return o
@@ -237,6 +244,32 @@ def place(r, nxt=None):
     return _place(r, nxt, ck) | {"checks": ck}
 
 
+PHASE_AT = {"define": ("define", "scope"), "build": ("build", "implement"), "verify": ("verify", "author-check"),
+            "review": ("review", "approved"), "land": ("land", "merge-gate")}
+
+
+def _place_custom(step, owner, why, ref, Ref, merged, phase):
+    """Place a repo's own custom stage, respecting declared `phase` and `owner`."""
+    name = step.replace("_", " ")
+    st, sub = PHASE_AT.get(phase, ("land", "merged") if merged else ("verify", "author-check"))
+    if merged:
+        rest = sentence(why.replace("Sign it off?", "Confirm it is met to sign it off.")) if ":" in why and "merged from" not in why else ""
+        if owner == "me":
+            return spot(st, sub, "author", "you", f"Sign off {name}",
+                        f"{Ref} is merged, and {name} comes after the merge. " + (rest or "Do it, then sign it off."), why)
+        if owner in ("reviewers", "ci"):
+            return spot(st, sub, owner, "others", do=f"{Ref} is merged, waiting on {OTHERS[owner]} for {name}.", why=why)
+        return spot(st, sub, "author", "agent", f"Meet {name}", f"{Ref} is merged, and {name} comes after the merge. {rest} Start an agent on it.".replace("  ", " "), why)
+    if owner == "me":
+        lbl = f"Sign off {name}" if "Sign it off" in why else f"Complete {name}"
+        return spot(st, sub, "author", "you", lbl, sentence(why.replace("Sign it off?", "Confirm it is met to sign it off.")), why)
+    if owner == "reviewers":
+        return spot(st, sub, "reviewers", "others", do=f"Waiting on reviewers for {name} on {ref}.", why=why)
+    if owner == "ci":
+        return spot(st, sub, "ci", "others", do=f"Waiting on CI check for {name} on {ref}.", why=why)
+    return spot(st, sub, "author", "agent", f"Meet {name}", f"{sentence(why)} Start an agent on it.", why)
+
+
 def _place(r, nxt, ck):
     nxt, mr = nxt or r.get("next") or {}, r.get("mr") or {}
     step, owner, why = nxt.get("step"), nxt.get("owner"), nxt.get("action") or ""
@@ -334,6 +367,9 @@ def _place(r, nxt, ck):
         if "semantic audit" in why:
             return spot("land", "merge-gate", "author", "you", "Review audit, then merge?",
                         f"{Ref} was held by the semantic audit. {sentence(why)}", why)
+        if owner == "agent":
+            return spot("verify", "mergeable", "author", "agent", f"Rebase {ref}",
+                        f"{Ref} must be rebased onto {into} before it can merge. Start an agent to rebase it.", why)
         if mr.get("rebase") or "rebase" in why:
             return spot("verify", "mergeable", "author", "you", f"Rebase {ref}?",
                         f"{Ref} must be rebased onto {into} before it can merge. There is no conflict. Say whether to rebase it.", why)
@@ -350,18 +386,8 @@ def _place(r, nxt, ck):
                     f"The forge won't merge {ref} ({why.removeprefix('not mergeable: ')}). Open it and clear what blocks it.", why)
     if step == "error":
         return spot(None, None, "author", "you", "Look at the error", f"Greenlight couldn't work out where this stands. {sentence(why)}", why)
-    if step and step not in BUILTIN and mr.get("state") == "merged":  # a lifecycle step after `merge` (deploy, verify): it's in, not over
-        name = step.replace("_", " ")
-        rest = sentence(why.replace("Sign it off?", "Confirm it is met to sign it off.")) if ":" in why and "merged from" not in why else ""
-        if owner == "me":
-            return spot("land", "merged", "author", "you", f"Sign off {name}",
-                        f"{Ref} is merged, and {name} comes after the merge. " + (rest or "Do it, then sign it off."), why)
-        return spot("land", "merged", "author", "agent", f"Meet {name}", f"{Ref} is merged, and {name} comes after the merge. {rest} Start an agent on it.".replace("  ", " "), why)
-    if step and step not in BUILTIN:  # the repo's own step: a label the agent earns, or my sign-off
-        name = step.replace("_", " ")
-        if "Sign it off" in why:
-            return spot("verify", "author-check", "author", "you", f"Sign off {name}", sentence(why.replace("Sign it off?", "Confirm it is met to sign it off.")), why)
-        return spot("verify", "author-check", "author", "agent", f"Meet {name}", f"{sentence(why)} Start an agent on it.", why)
+    if step and step not in BUILTIN:  # the repo's own step: label, check, or sign-off (pre-PR, pre-merge, or post-merge)
+        return _place_custom(step, owner, why, ref, Ref, mr.get("state") == "merged", nxt.get("phase") or "")
     return spot(None, None, None, None, why=why, pile="waiting")
 
 

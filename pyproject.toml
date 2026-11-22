@@ -1,0 +1,17 @@
+[tool.uv]
+managed = false
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = false
+
+[tool.coverage.run]
+source = ["scripts"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true

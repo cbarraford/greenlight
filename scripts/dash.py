@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -161,21 +162,37 @@ def _strip_ctrl(text):
     return CTRL_RE.sub("", text) if isinstance(text, str) else text
 
 
+def _signoff_move(r):
+    """Sign-off move for a custom stage waiting on `me` (pre-MR, pre-merge, or post-merge), or None."""
+    mr, nxt = r.get("mr") or {}, r.get("next") or {}
+    if nxt.get("owner") != "me" or "signoff" not in (nxt.get("cmd") or []):
+        return None
+    step = nxt.get("step")
+    if mr.get("state") == "merged" and step not in greenlight.post_merge(r["project"]):
+        return None  # a row from before the lifecycle dropped the step: the next scan says done
+    st = next((s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == step), None)
+    if not st or st["done"] != "signoff":
+        return None
+    return {"kind": "signoff", "step": step, "run": st["run"]}
+
+
 def moves(r, blk=None):
     """Both hover cards' (and the page's) buttons for this row's open MR, most urgent first: conflicts › ci › threads (the MR's fixes) ›
     review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
-    draft, when that waits on you). None → the card
+    draft, when that waits on you) › signoff (a custom sign-off stage). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
-    if mr.get("state") == "merged" and nxt.get("owner") == "me" and "signoff" in (nxt.get("cmd") or []):  # your step after the merge: deploy, verify
-        if nxt["step"] not in greenlight.post_merge(r["project"]):
-            return []  # a row from before the lifecycle dropped the step (greenlight.md's old deploy): the next scan says done
-        st = next(s for s in greenlight.lifecycle_doc(r["project"])["stages"] if s["key"] == nxt["step"])
-        return [{"kind": "signoff", "step": nxt["step"], "run": st["run"]}]
+    if mr.get("state") == "merged":
+        sm = _signoff_move(r)
+        return [sm] if sm else []
+    if not mr:
+        sm = _signoff_move(r)
+        return [sm] if sm else []
     if mr.get("state") != "opened":
         return []
     mine = mr.get("role") == "author"
-    review = nxt.get("owner") == "me" and (nxt.get("step") == "review" or "signoff" in (nxt.get("cmd") or []) or "review it" in nxt.get("action", ""))
+    sm = _signoff_move(r)
+    review = nxt.get("owner") == "me" and not sm and (nxt.get("step") == "review" or "review it" in nxt.get("action", ""))
     on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
@@ -198,8 +215,10 @@ def moves(r, blk=None):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
     if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
         out.append({"kind": "ready"})
+    if not fix and sm:
+        out.append(sm)
     for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
-        g = on_auto.get(m["kind"]) if m["kind"] != "ready" and not (m["kind"] == "merge" and len(out) > 1) \
+        g = on_auto.get(m["kind"]) if m["kind"] not in ("ready", "signoff") and not (m["kind"] == "merge" and len(out) > 1) \
             and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
         if not (isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1]))):
             continue
@@ -307,13 +326,13 @@ def tree_ready(path):
 
 
 def tree_signoff(path):
-    """The card's Deploy (any step after merge): runs the step's `Run:` command from your lifecycle on this host, in the
+    """The card's Sign-off / Deploy button: runs the step's `Run:` command from the lifecycle on this host, in the
     worktree, then signs the step off. No Run: just signs it off. A failed command signs nothing off; its output comes back."""
     r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
     m = next((x for x in moves(r) if x["kind"] == "signoff"), None) if r else None
-    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref"), "step": m and m["step"]}
+    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref") or r.get("name"), "step": m and m["step"]}
     if not m:
-        return {**base, "error": "greenlight doesn't say a step after the merge waits on you"}
+        return {**base, "error": "greenlight doesn't say a sign-off step waits on you"}
     if m["run"]:
         if not os.path.isdir(path):
             return {**base, "error": "worktree folder does not exist"}
@@ -499,7 +518,8 @@ def progress(r):
     if step in steps:
         return steps.index(step) / len(steps), steps, steps.index(step)
     if steps and not r.get("mr") and step in ("freeform", "goal", "automation"):
-        return 0.0, steps, 0
+        i = steps.index("mr_open") if step == "freeform" and "mr_open" in steps else 0
+        return i / len(steps), steps, i
     return None, steps, None
 
 
@@ -520,7 +540,7 @@ def _advice_me(r):
         return f"CI {mr['pipeline']}, so read the diff, then approve or leave threads for what has to change." \
             if mr.get("pipeline") not in (None, "success") else "Read the diff, then approve or leave threads for what has to change."
     if "signoff" in cmd:
-        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this MR."
+        return f"Once it's true, sign off {step.replace('_', ' ')} in the chat; greenlight records it for this {'MR' if mr else 'branch'}."
     if step == "ready":
         return "If the reason to keep it a draft is gone, take it out of draft; otherwise leave it."
     if step == "milestone":
@@ -600,11 +620,14 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
         state, why = state_of(r, blk)
         prog, steps, idx = progress(r)
+        step_meta = {s["key"]: {k: s[k] for k in ("req", "done", "run", "owner", "phase") if s.get(k)}
+                     for s in (greenlight.lifecycle_doc(r["project"])["stages"] if r.get("forge") else [])
+                     if s["key"] not in greenlight.BUILTIN}
         mr = r.get("mr") or {}
         page = cached_page(r["name"])
         pucks.append({
             "name": r["name"], "path": r["path"], "project": r["project"], "repo": r["repo"], "goal": r["goal"], "goal_live": w.get("comment") or "", "state": state, "why": why,
-            "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"],
+            "progress": prog, "steps": steps, "step_index": idx, "step": r["next"]["step"], **({"step_meta": step_meta} if step_meta else {}),
             # the live goal, not last.json's: a park from the dock shows up before the next scan
             "owner": r["next"]["owner"], "hidden": bool(greenlight.PARKED_RE.search(w.get("comment") or "")
                                                         and (r.get("mr") or {}).get("state") not in ("merged", "closed")),
@@ -939,22 +962,39 @@ def safe(name):
     return re.sub(r"[^\w.@+-]", "_", name)
 
 
+def _write_json(path, obj):
+    """Write JSON atomically so concurrent dash.py processes never leave a torn or trailing-byte file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as tf:
+            tmp = Path(tf.name)
+            json.dump(obj, tf)
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
 def record(pucks):
     """Append a history line per puck whose (state, step, owner) moved since the last tick."""
     DASH.mkdir(parents=True, exist_ok=True)
     f = DASH / "state.json"
     try:
-        prev = json.loads(f.read_text()) if f.exists() else {}
+        loaded = json.loads(f.read_text()) if f.exists() else {}
+        prev = loaded if isinstance(loaded, dict) else {}
     except (OSError, ValueError):
         prev = {}
     cur = {}
     for p in pucks:
         sig = [p["state"], p["step"], p["owner"]]
         cur[p["name"]] = sig
-        if prev.get(p["name"]) not in (None, sig):
+        prev_sig = prev.get(p["name"])
+        if isinstance(prev_sig, list) and len(prev_sig) == 3 and prev_sig != sig:
             with open(DASH / f"{safe(p['name'])}.jsonl", "a") as h:
-                h.write(json.dumps({"ts": int(time.time()), "from": prev[p["name"]], "to": sig, "action": p["action"][:200]}) + "\n")
-    _atomic_write(f, json.dumps(cur))
+                h.write(json.dumps({"ts": int(time.time()), "from": prev_sig, "to": sig, "action": p["action"][:200]}) + "\n")
+    _write_json(f, cur)
 
 
 def history(name):
@@ -975,7 +1015,7 @@ def history(name):
             e = json.loads(line)
             moves.append({"ts": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["ts"])),
                           "text": f"{e['from'][0]} → {e['to'][0]} ({e['to'][1]}/{e['to'][2]}): {e['action']}", "state": e["to"][0]})
-        except (ValueError, KeyError, TypeError, IndexError):
+        except (ValueError, KeyError, IndexError, TypeError):
             continue
     return sorted(notes + moves, key=lambda e: e["ts"], reverse=True)[:60]
 
@@ -1092,8 +1132,7 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     if text:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(out))
+        _write_json(cache, out)
     return out
 
 
@@ -1242,7 +1281,7 @@ def ask_user(name, model="claude-haiku-5-5", effort="low"):
                   "If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\n" + q[-6000:], model, effort)
         m = re.search(r"\[.*\]", raw, re.S)
         out["options"] = [{"key": "", "label": str(o)[:200]} for o in (json.loads(m[0]) if m else []) if str(o).strip()][:3]
-        _atomic_write(cache, json.dumps({"key": key, "out": out}))
+        _write_json(cache, {"key": key, "out": out})
     except Exception:  # no suggestions is fine: the free-text reply still works
         pass
     return out
@@ -1333,15 +1372,14 @@ def cached_page(name):
 def page(name, fresh=False, **designer):
     f = facts(name)
     cache = DASH / "pages" / f"{safe(name)}.json"
-    try:
-        cached = json.loads(cache.read_text()) if cache.exists() else {}
-    except (OSError, ValueError):
+    cached = cached_page(name)
+    if not isinstance(cached, dict):
         cached = {}
     s = sig(f["puck"])
     if fresh or cached.get("sig") != s or cached.get("v") != PAGE_V:
         try:
             cached = {"v": PAGE_V, "sig": s, "designed": int(time.time()), "layout": design(f, **designer)}
-            _atomic_write(cache, json.dumps(cached))
+            _write_json(cache, cached)
         except Exception as e:  # designer down / out of tokens: keep the old layout, say why
             cached = cached | {"error": f"designer failed: {str(e)[:200]}"}
     return {"name": name, "facts": f, **cached}
@@ -1619,6 +1657,16 @@ def task(op, arg, stdin):
 MEMORY = greenlight.ROOT / "memory"
 
 
+def _lifecycle_key(arg):
+    """Validate a lifecycle repo or org/repo arg and return its safe filename stem, or None."""
+    if not arg or len(arg) > 100 or not re.fullmatch(r"[\w.-]+(?:/[\w.-]+)*", arg):
+        return None
+    parts = arg.split("/")
+    if any(p.startswith(".") for p in parts):
+        return None
+    return "__".join(parts)
+
+
 def settings(op, arg, stdin):
     """The app's Settings: a repo's lifecycle, greenlight's standing instructions, and greenlight's memory notes."""
     if op.startswith("prompt-"):  # the hover card's prompts: arg <repo>/<kind>; yours in ~/.greenlight/prompts/<repo>/<kind>.md
@@ -1644,10 +1692,11 @@ def settings(op, arg, stdin):
             a[arg] = {k: g for k, g in on.items() if k in AUTO and isinstance(g, int) and not isinstance(g, bool) and 0 <= g < max(1, len(AUTO[k][1]))}
             _atomic_write(greenlight.STATE / "autorun.json", json.dumps(a, indent=1))
         return {"on": a.get(arg, {}), "kinds": [{"kind": k, "when": w, "gates": [g for g, _ in gs]} for k, (w, gs) in AUTO.items()]}
-    if op.startswith("lifecycle-") and (not re.fullmatch(r"[\w.-]{1,100}", arg) or arg.startswith(".")):
-        return {"error": "bad repo"}
     if op.startswith("lifecycle-"):
-        f = greenlight.STATE / "lifecycles" / f"{arg}.md"
+        stem = _lifecycle_key(arg)
+        if not stem:
+            return {"error": "bad repo"}
+        f = greenlight.STATE / "lifecycles" / f"{stem}.md"
         if op == "lifecycle-set":
             md = greenlight.lifecycle_md(arg, json.loads(stdin))
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -1689,6 +1738,28 @@ def oops(a, e):
     """A dash op's caught failure, for diag: the op, the exception type and class, never the message."""
     diag.event("dash_error", op=a[0], sub=a[1] if a[0] in ("task", "tree") else None, **diag.failure(e))
 
+
+def _stream(every):
+    while True:
+        try:
+            s = snapshot()
+            print(json.dumps(s), flush=True)
+        except BrokenPipeError:
+            return
+        except Exception as e:
+            oops(["stream"], e)
+            try:
+                print(json.dumps({"error": str(e)[:300]}), flush=True)
+            except BrokenPipeError:
+                return
+        else:
+            try:
+                record(s["pucks"])
+            except Exception as e:
+                oops(["stream"], e)
+        time.sleep(every)
+
+
 def main():
     a = sys.argv[1:]
     if a[:1] == ["snapshot"]:
@@ -1698,15 +1769,7 @@ def main():
             every = max(1.0, float(a[1])) if len(a) > 1 else 10.0
         except ValueError:
             every = 10.0
-        while True:
-            try:
-                s = snapshot()
-                record(s["pucks"])
-                print(json.dumps(s), flush=True)
-            except Exception as e:
-                oops(a, e)
-                print(json.dumps({"error": str(e)[:300]}), flush=True)
-            time.sleep(every)
+        _stream(every)
     elif a[:1] == ["page"] and len(a) > 1 and NAME_RE.match(a[1]):
         opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
         if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):

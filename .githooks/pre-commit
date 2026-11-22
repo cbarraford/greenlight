@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Fast local pre-commit guardrail for Greenlight (enable via `make setup-hooks`).
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+py_cmd="python3"
+command -v uv >/dev/null 2>&1 && py_cmd="uv run --no-project python"
+
+py_files=()
+sh_files=()
+while IFS= read -r f; do
+  case "$f" in
+    *.py) [ -f "$f" ] && py_files+=("$f") ;;
+    *.sh) [ -f "$f" ] && sh_files+=("$f") ;;
+  esac
+done <<< "$staged"
+
+if [ "${#py_files[@]}" -gt 0 ] && command -v ruff >/dev/null 2>&1; then
+  ruff check "${py_files[@]}"
+fi
+
+if [ "${#sh_files[@]}" -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
+  shellcheck -S warning "${sh_files[@]}"
+fi
+
+$py_cmd scripts/check_safety.py
+$py_cmd scripts/check_diff_quality.py --staged

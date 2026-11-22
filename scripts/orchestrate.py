@@ -51,19 +51,36 @@ TICK_LOCK_FD = None  # inherited by each mutating child so a killed parent canno
 FIX_KIND = {"ci_green": "ci", "no_conflicts": "conflicts", "threads": "threads"}  # step → prompts/<kind>.md
 MAX_SAME_STEP = 3  # the third dispatch for one step is a fork, whatever the commit
 FORK = ["dispatch again", "hand it to the next agent", "ask the user"]
-BRIEF_RULES = ("- verify each review claim with a refuting subagent before acting on it;\n"
-               "- fix it with a test, or reply inline with evidence, then resolve the thread (always leave a comment);\n"
-               "- get CI green;\n"
-               "- keep drafts as drafts.")
 BRIEF = """/goal {goal}
 
-Workspace {name} ({project}). Follow the lifecycle in {lifecycle} end to end: carry the goal through every agent step in it,
-not just the code (open the PR, then any review and try-out steps, adding each step's label as it passes).
+Workspace {name} ({project}). Follow the lifecycle in {lifecycle} end to end: carry the goal through every agent step in it{custom_hint}.
 Next step: {step}: {action}
 MR: {url}{extra}
 
 Rules for this task:
 {rules}{repo_rules}"""
+
+
+def _brief_rules(doc):
+    """Build default brief rules from the repo's actual lifecycle stages instead of assuming every repo has the same cycle."""
+    keys = {s["key"] for s in doc.get("stages") or []}
+    lines = []
+    if not keys or "threads" in keys:
+        lines += ["- verify each review claim with a refuting subagent before acting on it;",
+                  "- fix it with a test, or reply inline with evidence, then resolve the thread (always leave a comment);"]
+    if not keys or "ci_green" in keys:
+        lines.append("- get CI green;")
+    if not keys or "ready" in keys:
+        lines.append("- keep drafts as drafts.")
+    return "\n".join(lines) or "- follow the lifecycle stages and rules below."
+
+
+def _custom_hint(doc):
+    custom = [s["key"] for s in doc.get("stages") or []
+              if s["key"] not in greenlight.BUILTIN and s.get("done") != "signoff" and (s.get("owner") or "agent") == "agent"]
+    if not custom:
+        return ""
+    return ", including " + ", ".join(f"`{k}`" for k in custom)
 
 
 def decide_choice(state, question, options, context=""):
@@ -234,14 +251,15 @@ def brief(r, card, handoff=""):
         body = next((m.get("auto") or m["prompt"] for m in dash.moves(r) if m["kind"] == kind), None)
     if body is None:
         try:
-            doc = greenlight.lifecycle_doc(r["project"]) if mr else {"file": "(no MR: free-form goal)", "rules": ""}
+            doc = greenlight.lifecycle_doc(r["project"]) if r.get("project") else {"file": "(no MR: free-form goal)", "rules": "", "stages": []}
         except Exception:  # noqa: BLE001
-            doc = {"file": "(unknown)", "rules": ""}
+            doc = {"file": "(unknown)", "rules": "", "stages": []}
         extra = "".join(f"\nFailed job: {j.get('name')} ({j.get('stage')}): {j.get('url')}" for j in (mr.get("failed_jobs") or [])[:10])
         extra += "".join(f"\nThread: {t}" for t in (mr.get("todo_threads") or [])[:10])
         body = BRIEF.format(goal=r.get("goal") or mr.get("title") or nxt["action"], name=r["name"], project=r.get("project"),
-                            lifecycle=doc["file"], step=nxt["step"], action=nxt["action"], url=mr.get("web_url") or "(none yet)",
-                            extra=extra, rules=BRIEF_RULES, repo_rules=f"\n\nThe repo's standing rules:\n{doc['rules']}" if doc["rules"] else "")
+                            lifecycle=doc.get("file") or "(no MR: free-form goal)", custom_hint=_custom_hint(doc),
+                            step=nxt["step"], action=nxt["action"], url=mr.get("web_url") or "(none yet)",
+                            extra=extra, rules=_brief_rules(doc), repo_rules=f"\n\nThe repo's standing rules:\n{doc['rules']}" if doc["rules"] else "")
     return body + (f"\n\n{handoff}" if handoff else "") + "\n\n" + ws_state.brief(card)
 
 

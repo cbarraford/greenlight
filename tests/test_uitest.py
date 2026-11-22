@@ -37,7 +37,7 @@ def main():
 
     shot_dir = Path(os.environ.get("UITEST_SHOT_DIR") or tempfile.mkdtemp(prefix="gl-uitest-shots-"))
     shot_dir.mkdir(parents=True, exist_ok=True)
-    binary = uitest.build_test_binary()
+    binary = Path(os.environ["UITEST_BINARY"]) if os.environ.get("UITEST_BINARY") else uitest.build_test_binary()
 
     # Launch TWO concurrent instances simultaneously (default + adversarial) to verify parallel isolation
     with uitest.UITestSession(fixture="default", binary=binary) as ui1, \

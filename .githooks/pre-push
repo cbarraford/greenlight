@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Local pre-push verification gate for Greenlight (enable via `make setup-hooks`).
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# Git sets GIT_DIR / GIT_WORK_TREE during hooks; clear them so temp git repos in tests never touch this repo.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
+make lint
+make test-py
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  make typecheck
+fi

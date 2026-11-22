@@ -231,8 +231,8 @@ func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capital
 
 // MARK: Settings: repo lifecycles, instructions, memory
 
-/// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
-struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "" }  // ponytail: run (a sign-off step's Run: command) is kept, not editable here: edit the .md
+/// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x" | "check=x").
+struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "", owner = "", phase = "" }
 
 /// Settings → Repositories / Memory and the chat's instructions: each read and saved with `dash.py task <op> <arg>` where greenlight runs.
 final class RulesStore: ObservableObject {
@@ -326,13 +326,27 @@ final class RulesStore: ObservableObject {
         call("prompt-set", "\(r)/\(kind)", own ? review : "") { [weak self] j in if self?.repo == r { self?.gotReview(j); self?.status = own ? "Saved the prompt." : "Using the default prompt." } }
     }
     func got(_ j: [String: Any]) {
-        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "") }
+        stages = ((j["stages"] as? [[String: String]]) ?? []).map {
+            Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "", owner: $0["owner"] ?? "", phase: $0["phase"] ?? "")
+        }
         options = j["options"] as? [String: String] ?? [:]
         rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
         builtins = j["builtins"] as? [String: String] ?? [:]
     }
     func save() {
-        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run] }, "options": options, "rules": rules, "intro": intro]
+        for s in stages where builtins[s.key] == nil {
+            if s.done.hasPrefix("label="), s.done.dropFirst(6).trimmingCharacters(in: .whitespaces).isEmpty {
+                status = "Enter a label name for stage \(s.key)."; return
+            }
+            if s.done.hasPrefix("check="), s.done.dropFirst(6).trimmingCharacters(in: .whitespaces).isEmpty {
+                status = "Enter a CI check name for stage \(s.key)."; return
+            }
+        }
+        for (k, v) in options where v.contains("`") || v.contains("\n") || v.contains("\r") {
+            status = "Option \(k) can't contain backticks or newlines."; return
+        }
+        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run, "owner": $0.owner, "phase": $0.phase] },
+                                  "options": options, "rules": rules, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
         call("lifecycle-set", repo, s) { self.got($0); self.status = "Saved." }
     }
@@ -351,7 +365,7 @@ final class RulesStore: ObservableObject {
 /// The app's half of scripts/diag.py's trail (~/Library/Logs/Greenlight/app.jsonl, which diag.py reads when it's on
 /// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
 enum Diag {
-    static let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl")
+    static let url = URL(fileURLWithPath: uitest ? (greenlightHome + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
     static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
     static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     static let q = DispatchQueue(label: "greenlight.diag")
@@ -396,7 +410,9 @@ enum Diag {
         return remote[r].dropFirst(8).replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
     }
     /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
-    static let marker = NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")"  // per app: dev copies relaunch on their own
+    static let marker = uitest
+        ? (greenlightHome + "/diag/running-\(ProcessInfo.processInfo.processIdentifier)")
+        : (NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")")  // per app: dev copies relaunch on their own
     static func launched(host: String) {
         if FileManager.default.fileExists(atPath: marker) { event("prev_crash") }
         try? FileManager.default.createDirectory(atPath: (marker as NSString).deletingLastPathComponent, withIntermediateDirectories: true)

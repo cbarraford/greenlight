@@ -465,7 +465,7 @@ func dwimCandidate(_ t: String) -> Bool {
 /// The snapshot facts dwim.py reads, trimmed: the stage card and the router want names, goals, MRs, moves and lifecycle, not pages.
 func dwimPucks(_ pucks: [[String: Any]]) -> [[String: Any]] {
     pucks.map { p in
-        var o = p.filter { ["name", "path", "project", "repo", "goal", "goal_live", "state", "step", "owner", "hidden", "action", "agent", "mr", "life", "moves", "branch"].contains($0.key) }
+        var o = p.filter { ["name", "path", "project", "repo", "goal", "goal_live", "state", "step", "steps", "step_index", "owner", "hidden", "action", "agent", "mr", "life", "moves", "branch"].contains($0.key) }
         if let ag = p["agent"] as? [String: Any] { o["agent"] = ["state": ag["state"] ?? ""] }
         return o
     }
@@ -703,6 +703,7 @@ func applePick(_ reply: String, _ pucks: [[String: Any]], asked: Bool, named: [S
         return (n, [n, mr?["ref"] as? String, (mr?["title"] as? String).map { String($0.prefix(60)) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | "))
     }.prefix(60)
     guard !ws.isEmpty, SystemLanguageModel.default.isAvailable else { return done(named) }
+    nonisolated(unsafe) let finish = done
     Task {
         var picked: [String] = []
         do {
@@ -720,7 +721,7 @@ func applePick(_ reply: String, _ pucks: [[String: Any]], asked: Bool, named: [S
         } catch { NSLog("pick: %@", "\(error)") }
         let ok = Set(picked.filter { n in pucks.contains { $0["name"] as? String == n && grounded(reply, $0) } })
         let out = (named + picked.filter(ok.contains)).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        await MainActor.run { done(out) }
+        await MainActor.run { finish(out) }
     }
     #else
     done(named)
