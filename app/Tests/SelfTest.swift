@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Carbon
 import Foundation
+import Security
 import UserNotifications
 
 // MARK: test runners (--unittest, --selftest)
@@ -15,6 +16,34 @@ func runOfflineUnitTests(check: (String, Bool) -> Void) {
 /// `Greenlight --unittest [--filter <substr>]`: fast, deterministic Swift unit test suite for local & CI.
 func unitTest() {
     let t0 = Date()
+    // Keep --unittest 100% hermetic: never touch the host macOS login Keychain (which pops ACL dialogs on headless/CI Macs).
+    var memKC: [String: Data] = [:]
+    let acctOf: (CFDictionary) -> String = { (($0 as NSDictionary)[kSecAttrAccount as String] as? String) ?? "" }
+    let dataOf: (CFDictionary) -> Data? = { ($0 as NSDictionary)[kSecValueData as String] as? Data }
+    keyLock.lock()
+    keychainOps = KeychainOps(
+        copy: { q, out in
+            guard let d = memKC[acctOf(q)] else { return errSecItemNotFound }
+            out?.pointee = d as CFData; return errSecSuccess
+        },
+        update: { q, attrs in
+            let k = acctOf(q)
+            guard memKC[k] != nil, let d = dataOf(attrs) else { return errSecItemNotFound }
+            memKC[k] = d; return errSecSuccess
+        },
+        add: { q, _ in
+            let k = acctOf(q)
+            guard memKC[k] == nil, let d = dataOf(q) else { return errSecDuplicateItem }
+            memKC[k] = d; return errSecSuccess
+        },
+        delete: { q in
+            let k = acctOf(q)
+            guard memKC.removeValue(forKey: k) != nil else { return errSecItemNotFound }
+            return errSecSuccess
+        }
+    )
+    keys.removeAll()
+    keyLock.unlock()
     let filter: String? = {
         if let i = CommandLine.arguments.firstIndex(of: "--filter"), i + 1 < CommandLine.arguments.count {
             return CommandLine.arguments[i + 1].lowercased()
