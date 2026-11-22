@@ -961,12 +961,13 @@ final class LiveVoice {
         guard let d = try? JSONSerialization.data(withJSONObject: o), let s = String(data: d, encoding: .utf8) else { return }
         q.async { if let k = self.sock, !k.dead { self.write(k, s) } }
     }
-    /// Mic audio, already 24 kHz 16-bit mono, sent in 100 ms pieces.
+    /// Mic audio, already 24 kHz 16-bit mono, sent in 100 ms pieces once the WebSocket upgrade is up.
+    /// Dropped before upgrade so a slow TCP/TLS connect never flushes a >5 s burst that trips input_audio_rate_limit_exceeded.
     func mic(_ b: AVAudioPCMBuffer) {
         guard let p = b.int16ChannelData, b.frameLength > 0 else { return }
         let d = Data(bytes: p[0], count: Int(b.frameLength) * 2)
         q.async {
-            guard let k = self.sock, !k.dead else { return }
+            guard let k = self.sock, !k.dead, k.up else { self.pending = Data(); return }
             self.pending += d
             guard self.pending.count >= 4800 else { return }
             let o = ["type": "session.input_audio.append", "audio": self.pending.base64EncodedString()]
