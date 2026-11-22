@@ -260,9 +260,39 @@ def suggestion(cached):
 assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}) == {"label": "Mark ready", "prompt": "Mark #23 ready.", "advice": ""}
 assert suggestion({"sig": "stale", "label": "Mark ready", "prompt": "Mark #23 ready."}) is None  # the state moved on since
 assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an old entry without a label gets rewritten
+assert suggestion({"sig": pk["sig"], "label": "", "prompt": "There's an issue with the selected model (gemini-4-hydrogen-medium).", "advice": ""}) is None  # old model errors must be regenerated
+assert suggestion({"sig": pk["sig"], "label": "", "prompt": "Mark #23 ready.", "advice": "", "ok": True}) == {"label": "", "prompt": "Mark #23 ready.", "advice": ""}  # a real one-line reply stays cached
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
+# a failed model run answers "": `claude -p` prints its error on stdout and exits 1, and that text became the console's
+# suggestion, which was then launched into an agent as its task ("There's an issue with the selected model (gemini-...)")
+_err = "There's an issue with the selected model (claude-gone-1). It may not exist or you may not have access to it. Run --model to pick a different model.\n"
+_run = lambda rc, out: mock.patch.object(dash.subprocess, "run", return_value=_sp_run.CompletedProcess([], rc, stdout=out, stderr=""))
+import subprocess as _sp_run
+with _run(1, _err):
+    assert dash.ask("p", "claude-gone-1", "low") == ""
+with _run(0, "Mark ready\nMark #23 ready.\n"):
+    assert dash.ask("p", "claude-haiku-5-5", "low") == "Mark ready\nMark #23 ready.\n"
+(dash.DASH / "suggest" / "ws-gh.json").unlink()
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "facts", return_value={}), _run(1, _err):
+    _s = dash.suggest("ws-gh", model="claude-gone-1")
+assert "prompt" not in _s and "no answer" in _s["error"] and "issue" not in json.dumps(_s) and not (dash.DASH / "suggest" / "ws-gh.json").exists(), _s  # nothing cached: asked again next time
+# a one-line reply (no label line) is cached and answers the next call without asking again
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "facts", return_value={}), _run(0, "Mark #23 ready.\n"):
+    assert dash.suggest("ws-gh")["prompt"] == "Mark #23 ready."
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked again for a cached one-line reply")):
+    assert dash.suggest("ws-gh")["prompt"] == "Mark #23 ready."
+(dash.DASH / "suggest" / "ws-gh.json").unlink()
+# A failed Insights refresh must leave its last good layout in the cache and show an error.
+_page_file = dash.DASH / "pages" / "ws-gh.json"
+_page_file.parent.mkdir(parents=True, exist_ok=True)
+_layout = {"puck": None, "tiles": [{"widget": "note", "title": "Last good", "props": {"text": "ok"}}], "wide": None}
+_page_file.write_text(json.dumps({"v": dash.PAGE_V, "sig": dash.sig(pk), "layout": _layout}))
+with mock.patch.object(dash, "facts", return_value={"puck": pk}), _run(1, _err):
+    _page = dash.page("ws-gh", fresh=True, model="claude-gone-1")
+assert _page["layout"] == _layout and "designer returned no layout" in _page["error"]
+assert json.loads(_page_file.read_text())["layout"] == _layout
 print("ok")
 # advice: a rule when you're the blocker or an agent step has no agent; None -> suggest writes it; "" -> no advice at all
 _r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"step": step, "owner": owner, "action": action, "cmd": cmd},

@@ -272,6 +272,12 @@ func selfTest() {
             Thread.sleep(forTimeInterval: 0.5)
         }
     }
+    let claudeErr = "There's an issue with the selected model (gemini-4-neon-high). It may not exist or you may not have access to it. Run --model to pick a different model."
+    let stale = staleBackendNote(model: "gemini-4-neon-high", error: claudeErr, host: "devbox", code: "~/.claude/skills/greenlight")
+    check("stale host: a Gemini model sent to Claude Code by an old chat.py says to update the host, not that the model is missing: \(stale ?? "nil")",
+          stale?.contains("Greenlight on devbox is older than this app") == true && stale?.contains("~/.claude/skills/greenlight") == true
+          && staleBackendNote(model: "claude-opus-5-5", error: claudeErr, host: "devbox", code: "x") == nil
+          && staleBackendNote(model: "gemini-4-neon-high", error: "quota exhausted", host: "devbox", code: "x") == nil)
     let fz = fuzzy("evm test", "run the evm unit tests")
     check("!! and !$ expand as whole words only", expandBang("cat !$ again: !!", "open x/y.go") == "cat x/y.go again: open x/y.go" && expandBang("now!! !4521", "z") == "now!! !4521")
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)
