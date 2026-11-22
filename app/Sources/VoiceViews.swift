@@ -932,10 +932,10 @@ struct Live {
     }
     /// The context readout as a button: its popover has the totals and Compact.
     func ctx<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button { c.ctxOpen.toggle(); if !c.prompting { c.hint = "" } } label: { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
+        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
     func clearButton<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button(action: clear) { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: "Clear the context and start a new conversation (or say “reset”)")).accessibilityLabel("Clear the context")
+        Button(action: clear) { label() }.buttonStyle(.plain).help("Clear the context and start a new conversation (or say “reset”)").accessibilityLabel("Clear the context")
     }
 }
 

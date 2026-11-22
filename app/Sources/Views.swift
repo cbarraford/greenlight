@@ -688,8 +688,6 @@ struct Tip: ViewModifier {
             .onDisappear { if c.hint == text { c.hint = "" } }
     }
 }
-/// The context readout's hover hint: how full it is, and that a click opens the totals and Compact.
-func ctxTip(_ c: Core) -> String { "Context: \(c.ctxSpoken). Click for the totals and Compact" }
 
 /// The bell's panel, a triage list: one line per waiting question, the open one (Core.inboxFocus) expanded with its choices,
 /// then the last few answered, and a footer of keys and Clear all.
@@ -2661,7 +2659,7 @@ struct ContextButton: View, Looked {
         // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
         let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
         let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
-        return Button { c.ctxOpen.toggle(); if !c.prompting { c.hint = "" } } label: {  // the hint would cover the popover (and after a click a tooltip goes, as the native one does)
+        return Button { c.ctxOpen.toggle() } label: {
             HStack(spacing: Theme.sp1) {
                 ZStack {
                     Circle().stroke(edge, lineWidth: 2)
@@ -2672,7 +2670,7 @@ struct ContextButton: View, Looked {
             }.foregroundColor(high ? needsInk : lk.id == "phosphor" ? fg : sub).padding(.horizontal, bare ? 0 : Theme.sp2).frame(height: 24)
                 .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "onair" ? card : c.ctxOpen ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber
                 .overlay(RoundedRectangle(cornerRadius: r).stroke(high ? needs.opacity(0.6) : c.ctxOpen && lk.id == "onair" ? fg : bare ? .clear : line)).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
+        }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
 }
 
