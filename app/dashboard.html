@@ -356,6 +356,7 @@ body.nohex main{margin-left:0;padding-right:0}  /* the rails are hidden: so are 
 .pop{display:grid;place-items:center;width:24px;height:24px;flex-shrink:0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--text3)}
 .pop:hover{background:var(--fill);color:var(--text)}
 .empty:focus{outline:none} .empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--text3);text-align:center;padding:24px}
+body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .spin{width:18px;height:18px;border-radius:50%;border:2px solid var(--track);border-top-color:var(--blue);animation:spin .9s linear infinite}
 .empty>.spin{width:28px;height:28px;border-width:3px;margin-bottom:var(--sp-1)}
 .empty .eh{margin:0;font-size:var(--fs-6);line-height:28px;font-weight:600;color:var(--text)}.empty .eh.sm{font-size:var(--fs-5);line-height:24px}
@@ -483,8 +484,8 @@ body.nohex main{margin-left:0;padding-right:0}  /* the rails are hidden: so are 
 .shd small{font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hero{display:grid;grid-template-columns:68px minmax(0,1fr);align-items:center;gap:14px}
 .ht{min-width:0;display:flex;flex-direction:column;gap:4px}
-.h1r{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.ht h1{margin:0;font-size:21px;line-height:26px;font-weight:600;letter-spacing:-.01em}
+.h1r{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.ht h1{margin:0;font-size:21px;line-height:26px;font-weight:600;letter-spacing:-.01em;min-width:0;overflow-wrap:anywhere}
 .meta{display:flex;flex-wrap:wrap;gap:6px;font-size:12px;line-height:16px;color:var(--text3)}.meta .mono{color:var(--text2);font-size:12px}
 .fv{display:inline-flex;align-items:center;gap:6px}
 .now{flex-direction:row;align-items:center;gap:14px;padding:12px 16px}.now.yellow{background:color-mix(in srgb,var(--yellow) 8%,var(--card));box-shadow:0 0 0 1px color-mix(in srgb,var(--yellow) 45%,transparent)}
@@ -1401,7 +1402,7 @@ function safeHttpUrl(u){ return typeof u === "string" && /^https?:\/\//i.test(u)
 function mrFacts(p, ml){
   const mr = p.mr || {};
   if (!mr.iid) return h("section", {class:"panel"}, h("h2", {}, "Workspace"), h("dl", {class:"facts"},
-    h("dt", {}, "Branch"), h("dd", {class:"mono"}, p.name), h("dt", {}, "Project"), h("dd", {}, p.project || "none"), h("dt", {}, "Goal"), h("dd", {}, p.goal || "No goal in the Orca comment.")));
+    h("dt", {}, "Branch"), h("dd", {class:"mono"}, p.branch || p.name), h("dt", {}, "Project"), h("dd", {}, p.project || "none"), h("dt", {}, "Goal"), h("dd", {}, p.goal || "No goal in the Orca comment.")));
   const [ci, tn, ic] = ciSay(ml, mr), cis = h("span", {class:"fv", style: tn ? `color:${ink({ok:"--green", run:"--blue", bad:"--red"}[tn])}` : null},
     icon(ic, 14), (tn === "run" ? "running" : tn === "bad" ? "failed" : tn === "ok" ? "passed" : "") + (tn && arr(ml.jobs).length ? " · " : "") + (arr(ml.jobs).length || !tn ? ci : ""));
   const appr = ml.approved_by || [], need = Math.max(mr.approvals_required || 0, appr.length), un = ml.unresolved != null ? ml.unresolved : mr.threads || 0;

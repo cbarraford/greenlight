@@ -903,8 +903,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "rescan" { rescan() }
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
+        let isWsName: (String) -> Bool = { $0.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil }
+        let badNameErr = "Unsupported characters in workspace name."
         if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
-        if cmd == "page", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "page", let name = b["name"] as? String {
+            guard isWsName(name) else { from.callJS("window.mc && mc.page", [["name": name, "error": badNameErr]]); return }
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
             ssh("\(py)/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
@@ -913,9 +916,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // The agent card's All output: a page of the workspace's agent conversation (newest, or the one before a cursor), polled while it's open.
-        if cmd == "transcript", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "transcript", let name = b["name"] as? String {
             let before = b["before"] as? String ?? ""
-            if !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil { return }
+            let badBefore = !before.isEmpty && before.range(of: #"^[\w.-]{1,200}:\d{1,9}$"#, options: .regularExpression) == nil
+            guard isWsName(name), !badBefore else {
+                let err: [String: Any] = ["name": name, "before": before.isEmpty ? NSNull() : before, "error": badNameErr]
+                from.callJS("window.mc && mc.transcript", [err])
+                return
+            }
             var out = ""
             ssh("\(py)/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", onLine: { out += $0 }, onExit: { code in
                 let js = safeJSON(out, fallback: ["name": name, "before": before.isEmpty ? NSNull() : before, "error": "\(host) didn't answer (exit \(code))"])
@@ -923,9 +931,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // A waiting agent's question (ask) and your reply to it (answer), from the Answer button or the page.
-        if cmd == "ask" || cmd == "answer", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "ask" || cmd == "answer", let name = b["name"] as? String {
             let text = b["text"] as? String ?? ""
             if cmd == "answer" && text.isEmpty { return }
+            guard isWsName(name) else {
+                from.callJS(cmd == "ask" ? "window.mc && mc.asked" : "window.mc && mc.answered", [["name": name, "error": badNameErr]])
+                return
+            }
             let remote = cmd == "answer" ? "\(py)/dash.py answer '\(name)'"
                 : "\(py)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
@@ -937,7 +949,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             })
         }
         // The hover card's Next step: greenlight's next-step prompt for a workspace, and running a prompt there as a new agent.
-        if cmd == "park", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil, let on = b["on"] as? Bool {
+        if cmd == "park", let name = b["name"] as? String, let on = b["on"] as? Bool {
+            guard isWsName(name) else { from.callJS("window.mc && mc.parked", [["name": name, "error": badNameErr]]); return }
             var out = ""
             greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
             ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
@@ -948,14 +961,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
-           let arg = b["arg"] as? String, arg.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+           let arg = b["arg"] as? String, isWsName(arg) {
             var out = ""
             ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
                 let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
         }
-        if cmd == "suggest", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "suggest", let name = b["name"] as? String {
+            guard isWsName(name) else { from.callJS("window.mc && mc.suggest", [["name": name, "error": badNameErr]]); return }
             suggest(name)  // already in flight (the background queue): its answer reaches this page too
         }
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
@@ -973,9 +987,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = b["kind"] as? String ?? "", kind = RulesStore.kinds.contains { $0.0 == k } ? "/" + k : ""
             greenlight.settingsTab = "Repositories"; greenlight.settingsRepo = r + kind; appSettings()
         }
-        if cmd == "run", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
+        if cmd == "run", let name = b["name"] as? String {
             let prompt = b["prompt"] as? String ?? ""
             if prompt.isEmpty { return }
+            guard isWsName(name) else { from.callJS("window.mc && mc.ran", [["name": name, "error": badNameErr]]); return }
             var out = ""
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
             ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
