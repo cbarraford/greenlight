@@ -5,22 +5,7 @@
 //
 // The browser is $CHROME, else the newest Playwright headless shell under ~/.cache/ms-playwright.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-let pw;
-try { pw = require("playwright-core") } catch { try { pw = require("playwright") } catch {
-  console.error("needs playwright-core: npm i playwright-core, then run with NODE_PATH=<that>/node_modules"); process.exit(2) } }
-const {chromium, webkit} = pw;
-const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
-
-function browserPath(){
-  if (process.env.CHROME) return process.env.CHROME;
-  const root = path.join(os.homedir(), ".cache", "ms-playwright");
-  const dirs = fs.existsSync(root) ? fs.readdirSync(root).filter(d => /^chromium(_headless_shell)?-\d+$/.test(d)).sort().reverse() : [];
-  for (const d of dirs) for (const rel of ["chrome-headless-shell-linux64/chrome-headless-shell", "chrome-linux/chrome",
-      "chrome-headless-shell-mac-arm64/chrome-headless-shell", "chrome-mac/Chromium.app/Contents/MacOS/Chromium"]) {
-    const p = path.join(root, d, rel); if (fs.existsSync(p)) return p;
-  }
-  return undefined;  // let Playwright find its own
-}
+const { launchBrowser } = require("./js_harness.cjs");
 
 const PAGE = "file://" + path.join(__dirname, "../app/", "dashboard.html");
 // Playwright WebKit doesn't intercept file:// subresources via page.route(), so stage terminal.html + ghostty-web.js side by side.
@@ -1104,7 +1089,7 @@ test("empty state: .empty clears the Context rail gutter and does not clip at na
 });
 
 (async () => {
-  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch({executablePath: browserPath()});
+  const browser = await launchBrowser();
   let failed = 0;
   for (const t of tests) {
     const page = await boot(browser);

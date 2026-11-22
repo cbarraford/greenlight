@@ -49,13 +49,13 @@ jobs:
       - name: diff quality ratchet (PRs)
         if: github.event_name == 'pull_request'
         run: python3 scripts/check_diff_quality.py --base "origin/${{ github.base_ref }}"
-      - name: Python test suites (scripts + pytest + coverage)
+      - name: Python test suites (scripts + pytest + coverage >= 85%, per-file >= 80%)
         run: |
           git config --global user.name ci && git config --global user.email ci@example.invalid
-          python3 scripts/run_py_tests.py --coverage /tmp/coverage.xml
+          python3 scripts/run_py_tests.py --coverage /tmp/coverage.xml --fail-under 85 --min-file 80
       - name: diff coverage gate (PRs)
         if: github.event_name == 'pull_request'
-        run: diff-cover /tmp/coverage.xml --compare-branch="origin/${{ github.base_ref }}" --fail-under=70
+        run: diff-cover /tmp/coverage.xml --compare-branch="origin/${{ github.base_ref }}" --fail-under=80
 
   js-playwright:
     runs-on: ubuntu-latest
@@ -88,13 +88,17 @@ jobs:
           NODE_PATH: /tmp/pw/node_modules
           BROWSER: ${{ matrix.browser }}
         run: |
-          fail=0
-          for t in tests/test_*.cjs; do
-            echo "::group::$t (${{ matrix.browser }})"
-            node "$t" || { echo "::error::$t failed on ${{ matrix.browser }}"; fail=1; }
-            echo "::endgroup::"
-          done
-          exit $fail
+          if [ "${{ matrix.browser }}" = "chromium" ]; then
+            python3 scripts/js_coverage.py --fail-under 80 --min-file 80
+          else
+            fail=0
+            for t in tests/test_*.cjs; do
+              echo "::group::$t (${{ matrix.browser }})"
+              node "$t" || { echo "::error::$t failed on ${{ matrix.browser }}"; fail=1; }
+              echo "::endgroup::"
+            done
+            exit $fail
+          fi
 
   macos-swift:
     needs: changes
@@ -125,6 +129,7 @@ jobs:
           PY
           chmod +x /tmp/gl-ci-bin/claude
           printf '{"harnesses":{"claude":{"bin":"/tmp/gl-ci-bin/claude"}}}\n' > /tmp/gl-ci-home/config.json
+          /tmp/Greenlight-ci --unittest
           /tmp/Greenlight-ci --vimtest
           /tmp/Greenlight-ci --attachtest
       - name: Run parallel background macOS --uitest E2E suite
