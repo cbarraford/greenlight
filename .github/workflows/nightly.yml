@@ -6,25 +6,29 @@ on:
 
 jobs:
   python-full-coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-      - run: pip install pytest "ruff==0.17.6" "mypy<2" coverage
+          node-version: "22"
+      - run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pytest "ruff==0.17.6" "mypy<2" coverage
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - run: ruff check scripts/ tests/ app/kokoro.py
       - run: python3 scripts/check_safety.py
       - run: python3 scripts/js_lint.py
       - run: shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
       - run: |
-          git config --global user.name ci && git config --global user.email ci@localhost
-          python3 scripts/run_py_tests.py --coverage /tmp/py-coverage.xml --json /tmp/py-cov.json --fail-under 85
+          git config --global user.name >/dev/null || git config --global user.name ci
+          git config --global user.email >/dev/null || git config --global user.email ci@localhost
+          python3 scripts/run_py_tests.py --coverage "$RUNNER_TEMP/py-coverage.xml" --json "$RUNNER_TEMP/py-cov.json" --fail-under 85
 
   js-full-coverage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
       matrix:
@@ -35,12 +39,18 @@ jobs:
         with:
           node-version: "22"
       - run: |
-          mkdir -p /tmp/pw && cd /tmp/pw
-          npm init -y >/dev/null 2>&1
-          npm install --no-save --save-exact "playwright-core@1.65.1"
-          npx playwright-core install --with-deps ${{ matrix.browser }}
+          PW_DIR="$HOME/.cache/gl-pw-1.65.1-${{ matrix.browser }}"
+          MARKER="$PW_DIR/.ready-1.65.1-${{ matrix.browser }}"
+          if [ ! -f "$MARKER" ]; then
+            mkdir -p "$PW_DIR"
+            cd "$PW_DIR"
+            [ -f package.json ] || npm init -y >/dev/null 2>&1
+            npm install --no-save --save-exact "playwright-core@1.65.1"
+            npx playwright-core install --with-deps ${{ matrix.browser }}
+            touch "$MARKER"
+          fi
+          echo "NODE_PATH=$PW_DIR/node_modules" >> "$GITHUB_ENV"
       - env:
-          NODE_PATH: /tmp/pw/node_modules
           BROWSER: ${{ matrix.browser }}
         run: |
           if [ "${{ matrix.browser }}" = "chromium" ]; then
@@ -52,8 +62,8 @@ jobs:
           fi
 
   macos-swift-coverage:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - run: command -v tmux >/dev/null 2>&1 || brew install tmux
-      - run: python3 scripts/swift_coverage.py --include-ui --fail-under-logic 80 --json /tmp/swift-cov.json
+      - run: python3 scripts/swift_coverage.py --include-ui --fail-under-logic 80 --json "$RUNNER_TEMP/swift-cov.json"

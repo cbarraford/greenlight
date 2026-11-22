@@ -6,7 +6,7 @@ on:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     outputs:
       app: ${{ steps.filter.outputs.app }}
     steps:
@@ -31,15 +31,19 @@ jobs:
           fi
 
   python-and-lint:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-      - run: pip install pytest "ruff==0.17.6" "mypy<2" coverage diff-cover
+          node-version: "22"
+      - name: Set up isolated Python test venv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pytest "ruff==0.17.6" "mypy<2" coverage diff-cover
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: ruff lint & security
         run: ruff check scripts/ tests/ app/kokoro.py
       - name: static safety & JS syntax checks
@@ -53,14 +57,15 @@ jobs:
         run: python3 scripts/check_diff_quality.py --base "origin/${{ github.base_ref }}"
       - name: Python test suites (scripts + pytest + coverage >= 85%, per-file >= 80%)
         run: |
-          git config --global user.name ci && git config --global user.email ci@example.invalid
-          python3 scripts/run_py_tests.py --coverage /tmp/coverage.xml --fail-under 85 --min-file 80
+          git config --global user.name >/dev/null || git config --global user.name ci
+          git config --global user.email >/dev/null || git config --global user.email ci@localhost
+          python3 scripts/run_py_tests.py --coverage "$RUNNER_TEMP/coverage.xml" --fail-under 85 --min-file 80
       - name: diff coverage gate (PRs)
         if: github.event_name == 'pull_request'
-        run: diff-cover /tmp/coverage.xml --compare-branch="origin/${{ github.base_ref }}" --fail-under=80
+        run: diff-cover "$RUNNER_TEMP/coverage.xml" --compare-branch="origin/${{ github.base_ref }}" --fail-under=80
 
   js-playwright:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
       matrix:
@@ -70,24 +75,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - uses: actions/cache@v4
-        id: pw-cache
-        with:
-          path: |
-            /tmp/pw
-            ~/.cache/ms-playwright
-          key: pw-${{ runner.os }}-${{ matrix.browser }}-1.65.1
-      - name: Install playwright-core and browser
+      - name: Ensure playwright-core and browser (${{ matrix.browser }})
         run: |
-          if [ "${{ steps.pw-cache.outputs.cache-hit }}" != "true" ]; then
-            mkdir -p /tmp/pw && cd /tmp/pw
-            npm init -y >/dev/null 2>&1
+          PW_DIR="$HOME/.cache/gl-pw-1.65.1-${{ matrix.browser }}"
+          MARKER="$PW_DIR/.ready-1.65.1-${{ matrix.browser }}"
+          if [ ! -f "$MARKER" ]; then
+            mkdir -p "$PW_DIR"
+            cd "$PW_DIR"
+            [ -f package.json ] || npm init -y >/dev/null 2>&1
             npm install --no-save --save-exact "playwright-core@1.65.1"
+            npx playwright-core install --with-deps ${{ matrix.browser }}
+            touch "$MARKER"
           fi
-          cd /tmp/pw && npx playwright-core install --with-deps ${{ matrix.browser }}
+          echo "NODE_PATH=$PW_DIR/node_modules" >> "$GITHUB_ENV"
       - name: Run JS UI & security tests (${{ matrix.browser }})
         env:
-          NODE_PATH: /tmp/pw/node_modules
           BROWSER: ${{ matrix.browser }}
         run: |
           if [ "${{ matrix.browser }}" = "chromium" ]; then
@@ -105,22 +107,22 @@ jobs:
   macos-swift:
     needs: changes
     if: needs.changes.outputs.app == 'true'
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - name: Typecheck & compile Swift sources
         run: |
           swiftc -typecheck -warnings-as-errors -strict-concurrency=targeted app/Sources/*.swift
           swiftc -typecheck -warnings-as-errors -strict-concurrency=targeted -DGREENLIGHT_TESTS app/Sources/*.swift app/Tests/*.swift
-          swiftc -Onone -DGREENLIGHT_TESTS app/Sources/*.swift app/Tests/*.swift -o /tmp/Greenlight-ci
-      - name: Run Swift --vimtest and --attachtest
+          swiftc -Onone -DGREENLIGHT_TESTS app/Sources/*.swift app/Tests/*.swift -o "$RUNNER_TEMP/Greenlight-ci"
+      - name: Run Swift --unittest, --vimtest and --attachtest
         env:
           GREENLIGHT_HOST: local
           GREENLIGHT_CODE: ${{ github.workspace }}
-          GREENLIGHT_HOME: /tmp/gl-ci-home
         run: |
-          mkdir -p /tmp/gl-ci-home /tmp/gl-ci-bin
-          cat > /tmp/gl-ci-bin/claude <<'PY'
+          export GREENLIGHT_HOME="$RUNNER_TEMP/gl-ci-home"
+          mkdir -p "$GREENLIGHT_HOME" "$RUNNER_TEMP/gl-ci-bin"
+          cat > "$RUNNER_TEMP/gl-ci-bin/claude" <<'PY'
           #!/usr/bin/env python3
           import json, sys, time
           prompt = sys.stdin.read()
@@ -130,22 +132,20 @@ jobs:
           print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}), flush=True)
           print(json.dumps({"type": "result", "is_error": False, "result": reply, "duration_ms": 10}), flush=True)
           PY
-          chmod +x /tmp/gl-ci-bin/claude
-          printf '{"harnesses":{"claude":{"bin":"/tmp/gl-ci-bin/claude"}}}\n' > /tmp/gl-ci-home/config.json
-          /tmp/Greenlight-ci --unittest
-          /tmp/Greenlight-ci --vimtest
-          /tmp/Greenlight-ci --attachtest
+          chmod +x "$RUNNER_TEMP/gl-ci-bin/claude"
+          printf '{"harnesses":{"claude":{"bin":"%s/gl-ci-bin/claude"}}}\n' "$RUNNER_TEMP" > "$GREENLIGHT_HOME/config.json"
+          "$RUNNER_TEMP/Greenlight-ci" --unittest
+          "$RUNNER_TEMP/Greenlight-ci" --vimtest
+          "$RUNNER_TEMP/Greenlight-ci" --attachtest
       - name: Run parallel background macOS --uitest E2E suite
-        env:
-          UITEST_BINARY: /tmp/Greenlight-ci
         run: |
           command -v tmux >/dev/null 2>&1 || brew install tmux
-          python3 tests/test_uitest.py
+          UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest.py
 
   ci-gate:
     needs: [changes, python-and-lint, js-playwright, macos-swift]
     if: always() && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     steps:
       - name: Verify all required checks passed
         run: |
