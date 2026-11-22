@@ -65,7 +65,8 @@ apple=$(printf %s "$line" | awk '{print $2}') cn=$(printf %s "$line" | cut -d'"'
 team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple" '/^SHA-1 hash:/{on=($3==h)} on; /END CERTIFICATE/{on=0}' |
   openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
 if [ -n "$apple" ] && [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2; exit 1; fi
-# Command Line Tools swiftc: avoids needing the Xcode license accepted
+# Command Line Tools swiftc: avoids needing the Xcode license accepted.
+# Production builds compile ONLY Sources/*.swift without -DGREENLIGHT_TESTS so Tests/*.swift never ships in Greenlight.app.
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Sources/*.swift -o "$bin"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 mv "$bin" "$app/Contents/MacOS/$name"

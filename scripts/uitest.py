@@ -40,19 +40,24 @@ BIN_CACHE = Path(tempfile.gettempdir()) / f"greenlight-uitest-bin-{os.getuid()}"
 FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt")
 
 
-def swift_sources():
+def swift_sources(include_tests: bool = True):
     d = ROOT / "app" / "Sources"
     if d.is_dir():
-        return sorted(d.glob("*.swift"))
+        srcs = sorted(d.glob("*.swift"))
+        tests_dir = ROOT / "app" / "Tests"
+        if include_tests and tests_dir.is_dir():
+            srcs.extend(sorted(tests_dir.glob("*.swift")))
+        return srcs
     return [ROOT / "app" / "Greenlight.swift"]
 
 
 def build_test_binary():
-    """Compile an unoptimized scratch Greenlight binary cached by Swift source hash."""
-    srcs = swift_sources()
-    h = hashlib.sha256()
+    """Compile an unoptimized scratch Greenlight test binary cached by Swift source hash."""
+    srcs = swift_sources(include_tests=True)
+    h = hashlib.sha256(b"GREENLIGHT_TESTS\n")
     for p in srcs:
-        h.update(p.name.encode())
+        rel = str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else p.name
+        h.update(rel.encode())
         h.update(p.read_bytes())
     key = h.hexdigest()[:16]
     BIN_CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -61,7 +66,7 @@ def build_test_binary():
     if out.is_file() and os.access(out, os.X_OK):
         return out
     tmp = BIN_CACHE / f"Greenlight-{key}.{os.getpid()}"
-    cmd = ["swiftc", "-Onone", *[str(p) for p in srcs], "-o", str(tmp)]
+    cmd = ["swiftc", "-Onone", "-DGREENLIGHT_TESTS", *[str(p) for p in srcs], "-o", str(tmp)]
     if platform.machine() == "arm64":
         cmd = ["arch", "-arm64", *cmd]
     env = {**os.environ, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools"}
