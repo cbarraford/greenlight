@@ -451,6 +451,7 @@ test("a workspace opens a shell in its worktree; the strip shows only that works
 test("the layout saves (splits by session) and a fresh page restores the same sessions", async page => {
   await page.click("#tree .ws:has-text('sidebar')");
   await page.keyboard.press("Meta+d");
+  await page.waitForFunction(() => window.__posts.some(m => m.cmd === "save"), {timeout: 3000});
   const st = await lastSave(page);
   assert.equal(st.tabs.length, 2);
   const t = st.tabs[1];
