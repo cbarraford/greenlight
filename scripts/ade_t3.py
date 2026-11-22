@@ -35,7 +35,7 @@ def ms(iso):
 
 def projects():
     # ponytail: the CLI has no `project list`, so read T3's own state DB (read-only); swap in the CLI if it grows one
-    db = sqlite3.connect(f"file:{HOME / 'userdata' / 'statev2.sqlite'}?mode=ro", uri=True)
+    db = sqlite3.connect((HOME / "userdata" / "statev2.sqlite").as_uri() + "?mode=ro", uri=True)
     try:
         return db.execute("select project_id, title, workspace_root from projection_projects where deleted_at is null").fetchall()
     finally:

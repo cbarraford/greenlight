@@ -18,11 +18,14 @@ CLI usage:
     python3 scripts/uitest.py stop       --socket SOCK
 """
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import platform
+import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -33,7 +36,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BIN_CACHE = Path(tempfile.gettempdir()) / "greenlight-uitest-bin"
+BIN_CACHE = Path(tempfile.gettempdir()) / f"greenlight-uitest-bin-{os.getuid()}"
 FIXTURES = ("default", "empty", "adversarial", "scale", "chaos", "corrupt")
 
 
@@ -52,7 +55,8 @@ def build_test_binary():
         h.update(p.name.encode())
         h.update(p.read_bytes())
     key = h.hexdigest()[:16]
-    BIN_CACHE.mkdir(parents=True, exist_ok=True)
+    BIN_CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(BIN_CACHE, 0o700)
     out = BIN_CACHE / f"Greenlight-{key}"
     if out.is_file() and os.access(out, os.X_OK):
         return out
@@ -285,9 +289,9 @@ def _make_fixture(root: Path, fixture: str):
     orca_bin = bindir / "orca"
     dispatch_ok = (
         f"case \"$1 $2\" in\n"
-        f"  'terminal list'*) cat {json.dumps(str(orca_terms))};;\n"
-        f"  'repo list'*) cat {json.dumps(str(orca_repos))};;\n"
-        f"  *) cat {json.dumps(str(orca_data))};;\n"
+        f"  'terminal list'*) cat {shlex.quote(str(orca_terms))};;\n"
+        f"  'repo list'*) cat {shlex.quote(str(orca_repos))};;\n"
+        f"  *) cat {shlex.quote(str(orca_data))};;\n"
         f"esac\n"
     )
     if fixture == "chaos":
@@ -304,18 +308,18 @@ def _make_fixture(root: Path, fixture: str):
         counter = root / "chaos-counter"
         orca_bin.write_text(
             "#!/bin/sh\n"
-            f"if [ \"$1\" = 'terminal' ]; then cat {json.dumps(str(orca_terms))}; exit 0; fi\n"
-            f"if [ \"$1\" = 'repo' ]; then cat {json.dumps(str(orca_repos))}; exit 0; fi\n"
-            f"CFILE={json.dumps(str(counter))}\n"
+            f"if [ \"$1\" = 'terminal' ]; then cat {shlex.quote(str(orca_terms))}; exit 0; fi\n"
+            f"if [ \"$1\" = 'repo' ]; then cat {shlex.quote(str(orca_repos))}; exit 0; fi\n"
+            f"CFILE={shlex.quote(str(counter))}\n"
             "N=$(cat \"$CFILE\" 2>/dev/null || echo 0)\n"
             "N=$((N + 1))\n"
             "echo \"$N\" > \"$CFILE\"\n"
             "MOD=$((N % 5))\n"
-            f"if [ \"$MOD\" -eq 1 ]; then cat {json.dumps(str(orca_data))}; exit 0; fi\n"
-            f"if [ \"$MOD\" -eq 2 ]; then sleep 0.35; cat {json.dumps(str(orca_alt))}; exit 0; fi\n"
+            f"if [ \"$MOD\" -eq 1 ]; then cat {shlex.quote(str(orca_data))}; exit 0; fi\n"
+            f"if [ \"$MOD\" -eq 2 ]; then sleep 0.35; cat {shlex.quote(str(orca_alt))}; exit 0; fi\n"
             "if [ \"$MOD\" -eq 3 ]; then echo '{broken-json'; exit 0; fi\n"
             "if [ \"$MOD\" -eq 4 ]; then echo 'transient orca error' >&2; exit 1; fi\n"
-            f"cat {json.dumps(str(orca_data))}\n"
+            f"cat {shlex.quote(str(orca_data))}\n"
         )
     else:
         orca_bin.write_text("#!/bin/sh\n" + dispatch_ok)
@@ -377,9 +381,11 @@ class UITestSession:
         last_err = None
         while time.time() < deadline:
             if self.proc.poll() is not None:
+                rc = self.proc.returncode
                 log.flush()
                 tail = (self.root / "app.log").read_text(errors="replace")[-1000:]
-                raise RuntimeError(f"Greenlight --uitest exited early ({self.proc.returncode}):\n{tail}")
+                self.stop()
+                raise RuntimeError(f"Greenlight --uitest exited early ({rc}):\n{tail}")
             if self.socket_path.exists():
                 try:
                     r = self.ping()
@@ -598,10 +604,14 @@ def main():
             rpc(a.socket, {"cmd": "action", "name": "quit"}, timeout=3.0)
         except OSError:
             pass
+        pid = meta.get("pid")
+        if isinstance(pid, int) and pid > 0:
+            time.sleep(0.3)
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
         if meta.get("tmux_socket"):
             subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
         if meta.get("root") and Path(meta["root"]).name.startswith("gl-uitest-"):
-            time.sleep(0.3)
             shutil.rmtree(meta["root"], ignore_errors=True)
         print(json.dumps({"ok": True}))
         return 0

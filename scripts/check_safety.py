@@ -126,6 +126,8 @@ def check_stage_web_isolated(root=ROOT):
         m = re.search(r"lazy var stageWeb\s*:\s*WKWebView\s*=\s*\{(.*?)\}\(\)", text, re.S)
         if m and "userContentController.add" in m.group(1):
             errs.append(f"{path.relative_to(root)}: stageWeb must not attach any WKScriptMessageHandler")
+        if re.search(r"\bstageWeb\b[^\n]*userContentController\.add", text):
+            errs.append(f"{path.relative_to(root)}: stageWeb must not attach any WKScriptMessageHandler")
     return errs
 
 
@@ -145,6 +147,8 @@ def check_python_shell_true(root=ROOT):
                 continue
             if re.search(r"\bshell\s*=\s*True\b", line) and "noqa: S602" not in line:
                 errs.append(f"{path.relative_to(root)}:{i}: unapproved shell=True (use argv list or document `# noqa: S602`)")
+            if re.search(r"\bos\.(?:system|popen)\s*\(", line) and "noqa: S605" not in line:
+                errs.append(f"{path.relative_to(root)}:{i}: unapproved os.system/os.popen")
     return errs
 
 
@@ -157,8 +161,11 @@ def check_html_csp_and_handlers(root=ROOT):
         if not path.is_file():
             continue
         text = path.read_text()
-        if '<meta http-equiv="Content-Security-Policy"' not in text:
+        m = re.search(r'<meta http-equiv="Content-Security-Policy"\s+content="([^"]+)"', text)
+        if not m:
             errs.append(f"{path.relative_to(root)}: missing Content-Security-Policy meta tag")
+        elif "'unsafe-eval'" in m.group(1):
+            errs.append(f"{path.relative_to(root)}: CSP must not allow 'unsafe-eval'")
         for i, line in enumerate(text.splitlines(), 1):
             cleaned = line.replace('onerror="this.remove()"', "")
             if inline_ev.search(cleaned):

@@ -73,14 +73,14 @@ def check(proj, mr):
     if mr.get("has_conflicts"):
         return [(own, "conflict", f"needs a rebase onto {mr['target_branch']}")]
     pipes = greenlight.gl(f"{base}/pipelines?per_page=1")
-    if pipes and pipes[0]["status"] != "success":
+    if pipes and pipes[0]["status"] not in ("success", "skipped", "manual"):
         pending = pipes[0]["status"] in PENDING
         try:
-            jobs = greenlight.gl(f"projects/{greenlight.pid(proj)}/pipelines/{pipes[0]['id']}/jobs?per_page=100")
+            jobs = greenlight.gl_all(f"projects/{greenlight.pid(proj)}/pipelines/{pipes[0]['id']}/jobs?scope[]=failed")
         except Exception:  # noqa: BLE001 - a pipeline we can't read doesn't block, go on to threads
             jobs = None
         if jobs is not None:
-            failed = sorted((j for j in jobs if j["status"] == "failed"), key=lambda j: -j["id"])
+            failed = sorted((j for j in jobs if j["status"] == "failed" and not j.get("allow_failure")), key=lambda j: -j["id"])
             if failed:
                 return [(own, "pipeline", f"CI failed: {failed[0]['stage']}")]
             note = "pipeline"
@@ -147,13 +147,17 @@ def scan():
 
     def safe(job):
         try:
-            return check(*job)
+            return check(*job), True
         except Exception:  # noqa: BLE001 - ponytail: an MR whose check errored isn't orphaned; a GitLab blip
-            return []      # shouldn't make a hex, so it's skipped until the next scan
+            return [], False  # shouldn't make a hex, so it's skipped until the next scan
 
-    out = {}
+    out: dict[str, dict] = {}
+    errs = 0
     with ThreadPoolExecutor(8) as ex:
-        for (proj, m), hits in zip(jobs, ex.map(safe, jobs)):
+        for (proj, m), (hits, ok) in zip(jobs, ex.map(safe, jobs)):
+            if not ok:
+                errs += 1
+                continue
             for u, reason, why in hits:
                 if u != ME:
                     continue
@@ -161,6 +165,8 @@ def scan():
                                                          "url": m["web_url"], "title": m["title"]})
                 if b["reason"] == reason:  # first reason wins; threads are counted
                     b["n"] += 1
+    if jobs and errs == len(jobs):
+        raise RuntimeError(f"all {errs} MR blocking checks failed")
     for b in out.values():
         if b["reason"] == "discussion" and b["n"] > 1:
             b["why"] = f"{b['n']} threads are waiting on you"
@@ -179,8 +185,11 @@ def blocks(fresh=False):
     except Exception as e:  # noqa: BLE001
         print(f"blocking scan failed: {e}", file=sys.stderr)
         return None
+    import os, uuid
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps({"ts": int(time.time()), "blocks": b}, indent=1))
+    tmp = FILE.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(json.dumps({"ts": int(time.time()), "blocks": b}, indent=1))
+    os.replace(tmp, FILE)
     return b
 
 

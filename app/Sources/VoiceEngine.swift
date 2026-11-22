@@ -22,7 +22,13 @@ final class Voice: NSObject, ObservableObject {
     let meter = Meter()
     @Published var caption = ""  // the sentence Chief is saying
     @Published var look = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1] {  // default Orb
-        didSet { ud.set(look.id, forKey: "stageStyle"); chatLook = look; core?.look += 1; stageWeb.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua); stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)") }
+        didSet {
+            ud.set(look.id, forKey: "stageStyle"); chatLook = look; core?.look += 1
+            if stageWebLoaded {
+                stageWeb.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)
+                stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
+            }
+        }
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
     @Published var transcript = false  // the chat instead of the stage
@@ -56,16 +62,42 @@ final class Voice: NSObject, ObservableObject {
         return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
     }()
 
+    private final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {
+        let stageURL: URL?
+        var ready = false, queued: String?
+        init(_ u: URL?) { stageURL = u }
+        func webView(_ w: WKWebView, didFinish navigation: WKNavigation!) {
+            ready = true
+            if let q = queued { queued = nil; w.evaluateJavaScript(q) }  // safety-ok: queued only by Voice.js() with JSONSerialization args
+        }
+        func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let u = a.request.url else { decisionHandler(.cancel); return }
+            let ok = u.scheme == "about" || (u.scheme == "file" && u.path == stageURL?.path)
+            decisionHandler(ok ? .allow : .cancel)
+        }
+        func webView(_ w: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+    }
+    private var stageNav: StageNav?
+    private var stageWebLoaded = false
     lazy var stageWeb: WKWebView = {  // no message handlers: nothing on the stage can reach the app
-        let v = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        stageWebLoaded = true
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .nonPersistent()
+        let u = page("stage")
+        let nav = StageNav(u); stageNav = nav
+        let v = WKWebView(frame: .zero, configuration: cfg)
+        v.navigationDelegate = nav; v.uiDelegate = nav
         v.setValue(false, forKey: "drawsBackground")
         v.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)  // the look's, not the system's
-        if let u = page("stage") { v.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
+        if let u { v.loadFileURL(u, allowingReadAccessTo: u) }
         return v
     }()
     func js(_ f: String, _ args: [Any]) {
-        guard let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
-        stageWeb.evaluateJavaScript("(s => { \(delegate.themeVars()) \(look.vars) })(document.documentElement.style); \(f)(...\(a))")
+        guard JSONSerialization.isValidJSONObject(args),
+              let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
+        let code = "(s => { \(delegate.themeVars()) \(look.vars) })(document.documentElement.style); \(f)(...\(a))"
+        _ = stageWeb
+        if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }  // safety-ok: JSONSerialization args + hardcoded look.vars
     }
     func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
@@ -73,24 +105,30 @@ final class Voice: NSObject, ObservableObject {
         drawSeq += 1; shown = true; js("stage.spec", [spec])
     }
 
+    private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
     override init() {
         super.init()
         // Another Greenlight (Greenlight.app beside a dev copy, which shares its shortcut) started voice mode: one listens and speaks,
         // or each hears you, asks Chief on its own and says its own answer over the other's (one in Apple's voice when its Keychain says no)
-        DistributedNotificationCenter.default().addObserver(forName: voiceClaim, object: nil, queue: .main) { [weak self] n in
+        claimObs = DistributedNotificationCenter.default().addObserver(forName: voiceClaim, object: nil, queue: .main) { [weak self] n in
             guard let self, self.on, let at = n.userInfo?["at"] as? Double, let pid = n.userInfo?["pid"] as? Int,
                   voiceYields(mine: (self.claimedAt, Int(getpid())), theirs: (at, pid)) else { return }
             self.stopAll()
             self.core?.msgs.append(Msg(.note, "Voice mode moved to \(n.object as? String ?? "another Greenlight"), so this one stopped listening: two would both answer you, over each other."))
         }
-        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] n in
+        audioObs = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] n in
             guard let self, self.on, n.object as AnyObject? === self.engine else { return }  // a headset in or out: the engine stopped itself
             self.restart()
         }
     }
+    deinit {
+        if let claimObs { DistributedNotificationCenter.default().removeObserver(claimObs) }
+        if let audioObs { NotificationCenter.default.removeObserver(audioObs) }
+    }
     /// The engine stopped itself (a headset in or out): start it again. If it won't, voice mode stops and says so, and the next start
-    /// gets a new engine. Not a new one now: play() reads the engine off the main thread while voice mode is on.
+    /// gets a new engine.
     func restart() {
+        hush()
         do { try startEngine(); listen() }  // listen() is a no-op on GPT-Live, whose socket stays up
         catch {
             liveLog.error("voice: audio restart failed: \(String(describing: error), privacy: .public)")
@@ -116,9 +154,9 @@ final class Voice: NSObject, ObservableObject {
         guard g == startGen else { return }  // cancelled
         guard !on, core?.recording == nil else { starting = false; return }  // dictation has the mic
         let live = Speech.shared.kind == "live"  // GPT-Live hears you itself: Speech Recognition isn't needed
-        AVCaptureDevice.requestAccess(for: .audio) { ok in SFSpeechRecognizer.requestAuthorization { st in DispatchQueue.main.async {
-            guard g == self.startGen else { return }
-            guard ok, st == .authorized || live else {
+        let finishAuth: (Bool, Bool) -> Void = { ok, speechOk in DispatchQueue.main.async {
+            guard g == self.startGen, !self.on, self.core?.recording == nil else { self.starting = false; return }
+            guard ok, speechOk else {
                 self.starting = false
                 self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
                 return
@@ -150,7 +188,10 @@ final class Voice: NSObject, ObservableObject {
             if live { return self.openLive() }
             self.listen()
             self.wait("Listening", "Say something, or “goodbye” to stop.")
-        }}}
+        }}
+        AVCaptureDevice.requestAccess(for: .audio) { ok in
+            if live { finishAuth(ok, true) } else { SFSpeechRecognizer.requestAuthorization { st in finishAuth(ok, st == .authorized) } }
+        }
     }
 
     /// Drops an engine whose start failed, voice processing and all, for a new one. The player moves to the new engine.
@@ -384,20 +425,23 @@ final class Voice: NSObject, ObservableObject {
             self.synthConv.flatMap { convert(b, $0, self.speechFormat) }.map { self.play($0, end: false, g) }
         }
     }
-    /// end: a silent frame marks the line's end in the player.
+    /// end: a silent frame marks the line's end in the player. Always touches AVAudioEngine/player on the main thread.
     func play(_ buf: AVAudioPCMBuffer?, end: Bool, _ g: Int) {
-        guard gen == g, on else { return }
-        var out = buf
-        if end { out = AVAudioPCMBuffer(pcmFormat: speechFormat, frameCapacity: 1); out?.frameLength = 1 }
-        guard let out else { return }
-        DispatchQueue.main.async { if self.gen == g { self.speaking += 1 } }
-        self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
-            guard self.gen == g else { return }
-            self.speaking = max(0, self.speaking - 1)
-            if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
-            if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
-        }}
-        if !self.player.isPlaying && self.engine.isRunning { try? self.player.start() }  // play() raises on a stopped engine
+        let work = {
+            guard self.gen == g, self.on, self.engine.attachedNodes.contains(self.player) else { return }
+            var out = buf
+            if end { out = AVAudioPCMBuffer(pcmFormat: self.speechFormat, frameCapacity: 1); out?.frameLength = 1 }
+            guard let out else { return }
+            self.speaking += 1
+            self.player.scheduleBuffer(out, completionCallbackType: .dataPlayedBack) { _ in DispatchQueue.main.async {
+                guard self.gen == g else { return }
+                self.speaking = max(0, self.speaking - 1)
+                if end { if !self.lines.isEmpty { self.lines.removeFirst() }; self.caption = self.lines.first ?? self.caption }
+                if self.speaking == 0 && self.lines.isEmpty && self.on { self.ending ? self.stopAll() : self.listen() }  // Chief's echo is in that request
+            }}
+            if !self.player.isPlaying && self.engine.isRunning { try? self.player.start() }  // play() raises on a stopped engine
+        }
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
     /// Stop talking (you cut in, or said stop); the turn itself goes on.
     func hush() {
@@ -428,7 +472,8 @@ final class Voice: NSObject, ObservableObject {
             caption = String(liveCaption(caption.isEmpty ? String(d.drop { $0.isWhitespace }) : caption + d).suffix(240))
         case .audio(let d): liveAudio(d)
         case .delegated(let id):  // its transcript of your turn can trail the hand-off a little
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.handOff(id) }
+            let g = startGen
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id) } }
         case .failed(let code, let m):
             liveLog.error("GPT-Live: \(code, privacy: .public) \(m, privacy: .public)")
             guard liveUp else { return liveFailed("refused the session: \(m)") }  // e.g. a voice it doesn't have
@@ -610,25 +655,32 @@ final class Speech {
     func test(_ line: String, _ done: @escaping (String?) -> Void) {
         q.async {
             self.stuck = nil; self.status = ""
-            let d = self.data(line)
+            let d = self.data(line), errStatus = self.status
             DispatchQueue.main.async {
-                guard let d else { return done(self.status.isEmpty ? "No audio" : self.status) }
+                guard let d else { return done(errStatus.isEmpty ? "No audio" : errStatus) }
                 self.tester = try? AVAudioPlayer(data: wav(d, rate: 24000))
                 done(self.tester?.play() == true ? nil : "Got audio but couldn't play it")
             }
         }
     }
 
+    private func kokoroRead(_ text: String, kin: FileHandle, kout: FileHandle, voice: String) throws -> Data? {
+        guard let line = try? JSONSerialization.data(withJSONObject: ["text": text, "voice": voice]) else { return nil }
+        try kin.write(contentsOf: line + Data("\n".utf8))
+        guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
+        let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
+        return len == 0 ? nil : try kout.read(upToCount: len)
+    }
+
     func kokoro(_ text: String) -> Data? {
-        guard let kin, let kout, let line = try? JSONSerialization.data(withJSONObject: ["text": text, "voice": kokoroVoice]) else { return nil }
+        guard let kin, let kout else { return nil }
+        let p = proc
         do {
-            try kin.write(contentsOf: line + Data("\n".utf8))
-            guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
-            let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
-            return len == 0 ? nil : try kout.read(upToCount: len)
+            return try kokoroRead(text, kin: kin, kout: kout, voice: kokoroVoice)
         } catch {  // it died: restart it once it had been working (a failed start stays failed, no respawn loop)
-            let was = ready; ready = false; status = was ? "Kokoro stopped, restarting" : "Kokoro didn't start"; proc?.terminate(); proc = nil
-            if was { DispatchQueue.main.async { self.warm() } }
+            let was = ready
+            if proc === p { ready = false; status = was ? "Kokoro stopped, restarting" : "Kokoro didn't start"; proc?.terminate(); proc = nil; self.kin = nil; self.kout = nil }
+            if was { warm() }
             return nil
         }
     }
@@ -636,28 +688,39 @@ final class Speech {
     /// Start Kokoro if it's the voice (at launch, on picking it, and as voice mode starts); a warm-up line loads the model before the first real one.
     /// It also clears a stuck ElevenLabs failure: you may have fixed it (a new key, voice ID or plan).
     func warm() {
-        q.async { if self.stuck != nil { self.stuck = nil; self.status = "" } }
-        if kind == "live" { q.async { _ = openAIKey() } }
-        if kind == "eleven" { q.async { _ = keychain("elevenlabs") } }  // any Keychain prompt at launch, not with the first line (which would go to Apple's voice)
-        guard kind == "kokoro", proc == nil else { return }
-        let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
-        guard let uv, let script = Bundle.main.path(forResource: "kokoro", ofType: "py") else { status = "Kokoro needs uv (brew install uv)"; return }
-        let p = Process(), i = Pipe(), o = Pipe()
-        p.executableURL = URL(fileURLWithPath: uv)
-        p.arguments = ["run", "-q", script]
-        p.standardInput = i; p.standardOutput = o
-        let log = NSHomeDirectory() + "/Library/Logs/Greenlight-kokoro.log"
-        FileManager.default.createFile(atPath: log, contents: nil)
-        p.standardError = FileHandle(forWritingAtPath: log)
-        status = "Kokoro is loading (the first time downloads about 1 GB)"
-        do { try p.run() } catch { status = "Kokoro: \(error.localizedDescription)"; return }
-        proc = p; kin = i.fileHandleForWriting; kout = o.fileHandleForReading
-        DispatchQueue.global().async {
-            let ok = self.kokoro("Ready.") != nil
-            self.q.async { self.ready = ok; self.status = ok ? "" : "Kokoro didn't start" }
+        q.async {
+            if self.stuck != nil { self.stuck = nil; self.status = "" }
+            let k = self.kind
+            if k == "live" { _ = openAIKey(); return }
+            if k == "eleven" { _ = keychain("elevenlabs"); return }  // any Keychain prompt at launch, not with the first line
+            guard k == "kokoro", self.proc == nil else { return }
+            let uv = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", NSHomeDirectory() + "/.local/bin/uv"].first { FileManager.default.isExecutableFile(atPath: $0) }
+            guard let uv, let script = Bundle.main.path(forResource: "kokoro", ofType: "py") else { self.status = "Kokoro needs uv (brew install uv)"; return }
+            let p = Process(), i = Pipe(), o = Pipe()
+            p.executableURL = URL(fileURLWithPath: uv)
+            p.arguments = ["run", "-q", script]
+            p.standardInput = i; p.standardOutput = o
+            let log = NSHomeDirectory() + "/Library/Logs/Greenlight-kokoro.log"
+            FileManager.default.createFile(atPath: log, contents: nil)
+            p.standardError = FileHandle(forWritingAtPath: log)
+            self.status = "Kokoro is loading (the first time downloads about 1 GB)"
+            do { try p.run() } catch { self.status = "Kokoro: \(error.localizedDescription)"; return }
+            let wIn = i.fileHandleForWriting, wOut = o.fileHandleForReading, v = self.kokoroVoice
+            self.proc = p; self.kin = wIn; self.kout = wOut
+            DispatchQueue.global().async {
+                let ok = (try? self.kokoroRead("Ready.", kin: wIn, kout: wOut, voice: v)) != nil
+                self.q.async {
+                    guard self.proc === p else { return }
+                    self.ready = ok
+                    self.status = ok ? "" : "Kokoro didn't start"
+                    if !ok { self.proc?.terminate(); self.proc = nil; self.kin = nil; self.kout = nil }
+                }
+            }
         }
     }
-    func stop() { proc?.terminate(); proc = nil; ready = false }
+    func stop() {
+        q.async { self.proc?.terminate(); self.proc = nil; self.kin = nil; self.kout = nil; self.ready = false }
+    }
 
     /// Once, ElevenLabs users move to GPT-Live (what they asked for); picking ElevenLabs again afterwards sticks.
     static func switchToLive(_ d: UserDefaults) {
@@ -733,8 +796,9 @@ func audible(_ pcm: Data) -> Bool {
 let liveALPN = ["http/1.1"]
 /// The upgrade request: plain HTTP/1.1, the key as a bearer token.
 func wsHandshake(host: String, path: String, key: String, nonce: String) -> Data {
-    Data(("GET \(path) HTTP/1.1\r\nHost: \(host)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(nonce)\r\n"
-        + "Sec-WebSocket-Version: 13\r\nAuthorization: Bearer \(key)\r\nUser-Agent: Greenlight\r\n\r\n").utf8)
+    let clean = { (s: String) in s.replacingOccurrences(of: #"[\r\n\0]"#, with: "", options: .regularExpression) }
+    return Data(("GET \(clean(path)) HTTP/1.1\r\nHost: \(clean(host))\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(clean(nonce))\r\n"
+        + "Sec-WebSocket-Version: 13\r\nAuthorization: Bearer \(clean(key))\r\nUser-Agent: Greenlight\r\n\r\n").utf8)
 }
 /// What a server must answer to `nonce` in Sec-WebSocket-Accept.
 func wsAccept(_ nonce: String) -> String { Data(Insecure.SHA1.hash(data: Data((nonce + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))).base64EncodedString() }
@@ -758,7 +822,7 @@ func unchunk(_ body: Data) -> (data: Data, done: Bool) {
     while let eol = body[at...].range(of: Data("\r\n".utf8)),
           let n = Int(String(decoding: body[at..<eol.lowerBound], as: UTF8.self).split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? "", radix: 16) {
         if n == 0 { return (out, true) }
-        guard body.distance(from: eol.upperBound, to: body.endIndex) >= n + 2 else { break }
+        guard n > 0, n <= 64 << 10, body.distance(from: eol.upperBound, to: body.endIndex) - 2 >= n else { break }
         let end = body.index(eol.upperBound, offsetBy: n)
         out += body[eol.upperBound..<end]
         at = body.index(end, offsetBy: 2)
@@ -857,10 +921,13 @@ final class LiveVoice {
     let q = DispatchQueue(label: "live")
     /// One socket's state, touched only on q. Callbacks from a socket that isn't `sock` any more are ignored.
     private final class Sock {
-        let c: NWConnection, nonce: String, key: String
+        let c: NWConnection, nonce: String, key: String, gen: Int
         var waited: NWError?, up = false, dead = false, head = Data(), reply: (status: Int, headers: [String: String])?, body = Data(), reader = WSReader(), queued = [Data]()
-        init(_ c: NWConnection, _ key: String) { self.c = c; self.key = key; nonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString() }
+        init(_ c: NWConnection, _ key: String, _ gen: Int) { self.c = c; self.key = key; self.gen = gen; nonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString() }
     }
+    private let genLock = NSLock()
+    private var liveGen = 0
+    private func isCurrent(_ g: Int) -> Bool { genLock.lock(); defer { genLock.unlock() }; return liveGen == g }
     private var sock: Sock?
     var pending = Data(), on: ((LiveEvent) -> Void)?
     /// Where the socket goes: api.openai.com over TLS; the selftest's fake server is plain TCP on this Mac.
@@ -871,8 +938,9 @@ final class LiveVoice {
         let tls = NWProtocolTLS.Options()
         for p in liveALPN { sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, p) }
         let e = endpoint
-        let s = Sock(NWConnection(host: .init(e.host), port: .init(rawValue: e.port)!, using: e.tls ? NWParameters(tls: tls) : .tcp), key)
-        q.sync { sock = s; pending = Data() }
+        genLock.lock(); liveGen += 1; let g = liveGen; genLock.unlock()
+        let s = Sock(NWConnection(host: .init(e.host), port: .init(rawValue: e.port)!, using: e.tls ? NWParameters(tls: tls) : .tcp), key, g)
+        q.async { self.sock = s; self.pending = Data() }
         self.on = on
         s.c.stateUpdateHandler = { [weak self, weak s] st in if let s { self?.state(s, st) } }  // weak: the connection keeps its handler
         s.c.start(queue: q)
@@ -904,7 +972,11 @@ final class LiveVoice {
     }
     /// The reply to the upgrade: 101 and the right accept opens the socket; anything else is a refusal, read to its end.
     private func upgrade(_ s: Sock, _ d: Data) {
-        if s.reply != nil { s.body += d; if wsBodyDone(s.reply!.headers, s.body) { refused(s, s.reply!.status, s.reply!.headers) }; return }
+        if s.reply != nil {
+            if s.body.count < 64 << 10 { s.body += d.prefix((64 << 10) - s.body.count) }
+            if s.body.count >= 64 << 10 || wsBodyDone(s.reply!.headers, s.body) { refused(s, s.reply!.status, s.reply!.headers) }
+            return
+        }
         s.head += d
         guard let r = wsReply(s.head) else { if s.head.count > 64 << 10 { end(s, "sent a reply Greenlight can't read") }; return }
         s.head = Data()
@@ -935,7 +1007,7 @@ final class LiveVoice {
             switch m {
             case .text(let p), .binary(let p):
                 let e = liveEvent(p)
-                if e != .other { DispatchQueue.main.async { if self.q.sync(execute: { self.sock === s }) { self.on?(e) } } }
+                if e != .other { DispatchQueue.main.async { if self.isCurrent(s.gen) { self.on?(e) } } }
             case .ping(let p): s.c.send(content: wsFrame(0xA, p), completion: .contentProcessed { _ in })
             case .pong: break
             case .close(let c, let why):
@@ -949,8 +1021,9 @@ final class LiveVoice {
     private func end(_ s: Sock, _ why: String, last: Data? = nil) {
         guard !s.dead else { return }
         s.dead = true
+        if sock === s { sock = nil }
         if let last { s.c.send(content: last, completion: .contentProcessed { _ in s.c.cancel() }) } else { s.c.cancel() }
-        DispatchQueue.main.async { if self.q.sync(execute: { self.sock === s }) { self.q.sync { self.sock = nil }; self.on?(.closed(why)) } }
+        DispatchQueue.main.async { if self.isCurrent(s.gen) { self.on?(.closed(why)) } }
     }
     /// On q: a text frame, now or once the upgrade is through.
     private func write(_ s: Sock, _ text: String) {
@@ -966,7 +1039,7 @@ final class LiveVoice {
         guard let p = b.int16ChannelData, b.frameLength > 0 else { return }
         let d = Data(bytes: p[0], count: Int(b.frameLength) * 2)
         q.async {
-            guard let k = self.sock, !k.dead else { return }
+            guard let k = self.sock, !k.dead, k.up else { return }
             self.pending += d
             guard self.pending.count >= 4800 else { return }
             let o = ["type": "session.input_audio.append", "audio": self.pending.base64EncodedString()]
@@ -975,6 +1048,7 @@ final class LiveVoice {
         }
     }
     func close() {
+        genLock.lock(); liveGen += 1; genLock.unlock()
         on = nil
         q.async {
             guard let s = self.sock else { return }
@@ -984,6 +1058,7 @@ final class LiveVoice {
             guard s.up else { return s.c.cancel() }
             s.c.send(content: wsFrame(0x1, Data(#"{"type":"session.close"}"#.utf8)), completion: .contentProcessed { _ in })
             s.c.send(content: wsFrame(0x8, Data([0x03, 0xE8])), completion: .contentProcessed { _ in s.c.cancel() })
+            self.q.asyncAfter(deadline: .now() + 2) { s.c.cancel() }
         }
     }
     /// Why the socket failed, in words: an HTTP status with the server's reason, or a network error.
