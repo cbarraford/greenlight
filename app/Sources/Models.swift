@@ -180,6 +180,7 @@ final class Run: ObservableObject {
     var meterStale = false  // Clear or a harness change mid-turn: its usage is the old conversation's, not the meter's
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
+    var model = ""  // the --model it was sent with: the picker can change mid-turn
     init(_ q: String) { question = q }
 }
 
