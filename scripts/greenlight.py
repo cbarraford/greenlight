@@ -120,6 +120,7 @@ def run(cmd, timeout=120, tries=1):
 def _run(cmd, timeout, tries, d):
     for i in range(tries):
         d["tries"] = i + 1
+        d.pop("rc", None), d.pop("msg_class", None)  # an earlier try's failure isn't this one's
         last = i == tries - 1
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
