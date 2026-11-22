@@ -246,13 +246,26 @@ def load_known_fingerprints(home_dir: Path | None = None) -> set[str]:
     return set()
 
 
+def _gh_repo_args(repo_dir: Path = ROOT) -> list[str]:
+    """Resolve `owner/repo` from `origin` so `gh` works even in multi-remote checkouts."""
+    try:
+        p = subprocess.run(["git", "-C", str(repo_dir), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=5)
+        url = (p.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", url)
+    return ["-R", m.group(1)] if m else []
+
+
 def fetch_open_pr_fingerprints(repo_dir: Path = ROOT) -> set[str]:
     """Inspect open nightly-bug-hunter PRs so we never open duplicate PRs for the same fingerprint."""
     if not shutil.which("gh"):
         return set()
     try:
         p = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--label", PR_LABEL, "--json", "number,body,headRefName"],
+            ["gh", "pr", "list", *_gh_repo_args(repo_dir), "--state", "open", "--label", PR_LABEL,
+             "--json", "number,body,headRefName"],
             cwd=str(repo_dir), capture_output=True, text=True, timeout=20,
         )
         if p.returncode != 0 or not p.stdout.strip():
@@ -1447,12 +1460,13 @@ Leave your fix cleanly committed on branch `{branch}` with a concise commit mess
 <sub>Generated autonomously by `scripts/bughunt.py` (repro-first Draft PR; never auto-merged).</sub>
 <sub>bughunt-fingerprint: {fp}</sub>
 """
-        pr_cmd = ["gh", "pr", "create", "--draft", "--title", pr_title, "--body", pr_body, "--head", branch, "--label", PR_LABEL]
+        repo_args = _gh_repo_args(wt_dir)
+        pr_cmd = ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch, "--label", PR_LABEL]
         pr = subprocess.run(pr_cmd, cwd=str(wt_dir), capture_output=True, text=True, timeout=60)
         if pr.returncode != 0 and "label" in (pr.stderr or "").lower():
             # Fallback if label doesn't exist in repo yet
             pr = subprocess.run(
-                ["gh", "pr", "create", "--draft", "--title", pr_title, "--body", pr_body, "--head", branch],
+                ["gh", "pr", "create", *repo_args, "--draft", "--title", pr_title, "--body", pr_body, "--head", branch],
                 cwd=str(wt_dir), capture_output=True, text=True, timeout=60,
             )
         if pr.returncode != 0:
