@@ -30,7 +30,7 @@ def check_swift_eval_js():
     # Disallow quoted Swift string interpolation inside evaluateJavaScript(...), e.g.
     # evaluateJavaScript("mc.openPage(\"\(name)\")") or evaluateJavaScript("term.opens('\(f)')")
     # Safe patterns pass JSON via callJS(...) or pass an already-JSON-encoded expression.
-    bad_quoted = re.compile(r'evaluateJavaScript\([^)]*(?:\\"|(?<!\\)\')\\\(')
+    bad_quoted = re.compile(r'evaluateJavaScript\((?:[^;]*?)(?:\\"|(?<!\\)\'|`)\\\(')
     for path in swift_files():
         for i, line in enumerate(path.read_text().splitlines(), 1):
             stripped = line.lstrip()
@@ -43,17 +43,25 @@ def check_swift_eval_js():
 
 def check_stage_web_isolated():
     errs = []
+    found_def = False
     for path in swift_files():
         text = path.read_text()
         m = re.search(r"lazy var stageWeb\s*:\s*WKWebView\s*=\s*\{(.*?)\}\(\)", text, re.S)
-        if m and "userContentController.add" in m.group(1):
+        if m:
+            found_def = True
+            if "userContentController.add" in m.group(1):
+                errs.append(f"{path.relative_to(ROOT)}: stageWeb must not attach any WKScriptMessageHandler")
+        if re.search(r"\bstageWeb\b[^\n]*userContentController\.add", text):
             errs.append(f"{path.relative_to(ROOT)}: stageWeb must not attach any WKScriptMessageHandler")
+    if not found_def:
+        errs.append("stageWeb definition not found in Swift sources")
     return errs
 
 
 def check_python_shell_true():
     errs = []
-    for path in sorted((ROOT / "scripts").glob("*.py")):
+    py_files = sorted((ROOT / "scripts").glob("*.py")) + sorted((ROOT / "app").glob("*.py"))
+    for path in py_files:
         if path.name == "check_safety.py":
             continue
         for i, line in enumerate(path.read_text().splitlines(), 1):
@@ -62,22 +70,40 @@ def check_python_shell_true():
                 continue
             if re.search(r"\bshell\s*=\s*True\b", line) and "noqa: S602" not in line:
                 errs.append(f"{path.relative_to(ROOT)}:{i}: unapproved shell=True (use argv list or document `# noqa: S602`)")
+            if re.search(r"\bos\.(?:system|popen)\s*\(", line) and "noqa: S605" not in line:
+                errs.append(f"{path.relative_to(ROOT)}:{i}: unapproved os.system/os.popen")
     return errs
 
 
 def check_html_csp_and_handlers():
     errs = []
-    inline_ev = re.compile(r'\bon(?:click|error|load|focus|blur|mouseover|mouseenter)\s*=\s*["\']', re.I)
+    inline_ev = re.compile(r'\bon[a-z]{3,20}\s*=\s*(?:["\']|[^\s>]+)', re.I)
     for name in ("dashboard.html", "terminal.html", "stage.html"):
         path = ROOT / "app" / name
         text = path.read_text()
-        if '<meta http-equiv="Content-Security-Policy"' not in text:
+        m = re.search(r'<meta http-equiv="Content-Security-Policy"\s+content="([^"]+)"', text)
+        if not m:
             errs.append(f"{path.relative_to(ROOT)}: missing Content-Security-Policy meta tag")
+        else:
+            csp = m.group(1)
+            for req in ("default-src 'none'", "base-uri 'none'", "form-action 'none'"):
+                if req not in csp:
+                    errs.append(f"{path.relative_to(ROOT)}: CSP missing `{req}`")
+            if "'unsafe-eval'" in csp:
+                errs.append(f"{path.relative_to(ROOT)}: CSP must not allow 'unsafe-eval'")
+        in_script = False
         for i, line in enumerate(text.splitlines(), 1):
-            if "onerror=\"this.remove()\"" in line and line.count("onerror=") == 1:
-                continue
-            if inline_ev.search(line):
-                errs.append(f"{path.relative_to(ROOT)}:{i}: inline HTML event handler detected")
+            cleaned = line.replace('onerror="this.remove()"', "")
+            if "<script" in line.lower():
+                in_script = True
+            if "</script>" in line.lower():
+                in_script = False
+            # Only check HTML tag attribute context (or JS template literals containing `<... on...=`)
+            if not in_script or "<" in cleaned:
+                for hm in re.finditer(r"<[a-z][^>]*>", cleaned, re.I):
+                    if inline_ev.search(hm.group(0)):
+                        errs.append(f"{path.relative_to(ROOT)}:{i}: inline HTML event handler detected")
+                        break
     return errs
 
 

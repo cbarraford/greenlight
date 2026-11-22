@@ -63,8 +63,11 @@ def load(f, default):
 
 
 def save(f, data):
+    import uuid
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(data, indent=1))
+    tmp = f.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    os.replace(tmp, f)
 
 
 def orca_ade():
@@ -188,7 +191,7 @@ def review_done(c):
     """Why someone else's MR needs no review workspace from me (approved, or GitLab won't let me), else None."""
     if c["forge"] == "github":  # GitHub never blocks approving a PR with your commits in it
         revs = greenlight.gh("pr", "view", str(c["iid"]), "-R", c["project"], "--json", "latestReviews")["latestReviews"]
-        return "approved by me" if any(r["author"]["login"] == gh_login() and r["state"] == "APPROVED" for r in revs) else None
+        return "approved by me" if any((r.get("author") or {}).get("login") == gh_login() and r["state"] == "APPROVED" for r in revs) else None
     ap = greenlight.gl(f"projects/{c['project_id']}/merge_requests/{c['iid']}/approvals")
     if any(a["user"]["username"] == ME for a in ap.get("approved_by", [])):
         return "approved by me"
@@ -306,8 +309,8 @@ def plan(rows=None, rows_ts=None, cap=CAP, now=None):
                 if repo["path"] not in busy_cache:
                     busy_cache[repo["path"]] = checked_out(repo["path"])
                 busy = busy_cache[repo["path"]]
-                hit = next((b for b in (c["source_branch"], f"mr-{c['iid']}" if c["role"] == "review" else None)
-                            if b and b in busy), None)
+                want_b = f"mr-{c['iid']}" if c["role"] == "review" else c["source_branch"]
+                hit = want_b if want_b and want_b in busy else None
                 if hit:
                     verdict, reason = "busy", f"{hit} is checked out in {busy[hit]}"
                 elif len(create) >= cap:
@@ -360,14 +363,15 @@ def ensure_branch(path, want, upstream=None):
         exists = git(path, "rev-parse", "--verify", "-q", f"refs/heads/{want}", check=False)
         if not exists:
             git(path, "switch", "-c", want)
-        elif subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", want, "HEAD"]).returncode == 0:
+        elif subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", f"refs/heads/{want}", "HEAD"],
+                            capture_output=True, text=True, timeout=60).returncode == 0:
             git(path, "switch", "-C", want)  # want is behind HEAD: moving it loses nothing
         else:
             want = cur  # a diverged local branch of that name: leave it alone, keep Orca's
         if cur and cur != want:
-            git(path, "branch", "-D", cur, check=False)  # same commit as HEAD
+            git(path, "branch", "-D", "--", cur, check=False)  # same commit as HEAD
     if upstream:
-        git(path, "branch", f"--set-upstream-to=origin/{upstream}", want)
+        git(path, "branch", f"--set-upstream-to=origin/{upstream}", "--", want)
     return want
 
 
@@ -400,8 +404,14 @@ def log(entry):
 
 
 def apply(p):
+    import fcntl
     now = int(time.time())
-    save(DISMISSED, p["dismissed"])
+    DISMISSED.parent.mkdir(parents=True, exist_ok=True)
+    with (DISMISSED.parent / "adopt.lock").open("a+") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        cleared = {i["key"] for i in p.get("items") or () if i.get("cleared")}
+        cur_d = {k: v for k, v in load(DISMISSED, {}).items() if k not in cleared}
+        save(DISMISSED, cur_d | p["dismissed"])
     st = load(STATE_FILE, {})
     created = {k: t for k, t in st.get("created", {}).items() if k not in p["seen"]}
     for c in p["create"]:
@@ -424,7 +434,11 @@ def apply(p):
 def main():
     ap = argparse.ArgumentParser()
     if sys.argv[1:2] == ["dismiss"]:  # adopt.py dismiss <project>!<iid>...: never adopt these (the no-repo ping's "ignore")
-        save(DISMISSED, load(DISMISSED, {}) | {k: {"ts": int(time.time()), "why": "ignored"} for k in sys.argv[2:]})
+        import fcntl
+        DISMISSED.parent.mkdir(parents=True, exist_ok=True)
+        with (DISMISSED.parent / "adopt.lock").open("a+") as lk:
+            fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+            save(DISMISSED, load(DISMISSED, {}) | {k: {"ts": int(time.time()), "why": "ignored"} for k in sys.argv[2:]})
         return
     ap.add_argument("cmd", choices=["scan", "precheck", "apply"])
     ap.add_argument("--json", action="store_true")

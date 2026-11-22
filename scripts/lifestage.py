@@ -114,13 +114,14 @@ QUESTIONS = {  # id: (question, options); the answer can also be the user's own 
 
 def _file(kind, where):
     """A check's record for a workspace: by its worktree path, or by name (a task's workspace before its path is known)."""
-    return CHECKS / f"{kind}-{hashlib.sha1(str(where).encode()).hexdigest()[:16]}.json"
+    key = os.path.realpath(str(where)) if os.path.isabs(str(where)) else str(where)
+    return CHECKS / f"{kind}-{hashlib.sha1(key.encode()).hexdigest()[:16]}.json"
 
 
 def save(kind, where, data):
     CHECKS.mkdir(parents=True, exist_ok=True)
     f = _file(kind, where)
-    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+    tmp = f.with_suffix(f".{os.getpid()}.{__import__('uuid').uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(data | {"ts": int(time.time())}))
     tmp.replace(f)
 
@@ -325,9 +326,14 @@ def _place(r, nxt, ck):
         if owner == "reviewers":  # mergeable, but no human has approved
             return spot("review", "approved", "reviewers", "others", do=f"{Ref} could merge, but no person has approved it. Waiting for a reviewer.", why=why)
         if owner == "ci":
+            if "semantic audit" in why:
+                return spot("land", "merge-gate", "ci", "others", do=f"Waiting for the semantic audit before {ref} can merge.", why=why)
             return spot("land", "merge-gate", "ci", "others", do=f"Waiting for the pipeline before {ref} can merge.", why=why)
         if owner == "dependency":
             return spot("land", "merge-gate", "dependency", "others", do=f"{Ref} is {why}.", why=why)
+        if "semantic audit" in why:
+            return spot("land", "merge-gate", "author", "you", "Review audit, then merge?",
+                        f"{Ref} was held by the semantic audit. {sentence(why)}", why)
         if mr.get("rebase") or "rebase" in why:
             return spot("verify", "mergeable", "author", "you", f"Rebase {ref}?",
                         f"{Ref} must be rebased onto {into} before it can merge. There is no conflict. Say whether to rebase it.", why)
@@ -412,7 +418,10 @@ def now(life, agent_state, logged_out=False, block=None):
 
 def rows():
     f = STATE / "last.json"
-    return json.loads(f.read_text()).get("rows", []) if f.exists() else []
+    try:
+        return json.loads(f.read_text()).get("rows", []) if f.exists() else []
+    except (OSError, ValueError):
+        return []
 
 
 def of(r):

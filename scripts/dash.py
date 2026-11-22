@@ -34,6 +34,7 @@ import importlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -129,15 +130,35 @@ PUSH_RULE = (f" Before any push, run `python3 {greenlight.HERE / 'greenlight.py'
              "Stop and report any block.")
 
 
+def _atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def autorun():
     """~/.greenlight/autorun.json: {repo: {kind: gate index}}; a kind that's there is on."""
     f = greenlight.STATE / "autorun.json"
-    return json.loads(f.read_text()) if f.exists() else {}
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def merge_how(cmd):
     """'Squash', 'Rebase' or 'Merge': how greenlight's merge cmd lands it."""
     return next((f[2:].capitalize() for f in cmd if f in ("--squash", "--rebase")), "Merge")
+
+
+CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def _strip_ctrl(text):
+    return CTRL_RE.sub("", text) if isinstance(text, str) else text
 
 
 def moves(r, blk=None):
@@ -170,6 +191,7 @@ def moves(r, blk=None):
             text, own = prompt_of(repo, kind)
             ok = set(COMMON + KINDS[kind])
             text = re.sub(r"\{(\w+)\}", lambda m, ok=ok: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
+            text = _strip_ctrl(text)
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
     fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
     if not fix and nxt.get("step") == "merge" and (cmd[:1] in (["gh"], ["glab"]) or cmd[2:3] == ["checked-merge"]):
@@ -293,8 +315,10 @@ def tree_signoff(path):
     if not m:
         return {**base, "error": "greenlight doesn't say a step after the merge waits on you"}
     if m["run"]:
+        if not os.path.isdir(path):
+            return {**base, "error": "worktree folder does not exist"}
         try:
-            p = subprocess.run(["bash", "-lc", m["run"]], cwd=path if os.path.isdir(path) else None, capture_output=True, text=True, timeout=600)
+            p = subprocess.run(["bash", "-lc", m["run"]], cwd=path, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
             return {**base, "error": f"`{m['run']}` ran past 10 minutes"}
         if p.returncode:
@@ -654,8 +678,11 @@ def trees():
                 if mv := moves(r, blk):
                     out[-1]["moves"] = mv
                     if any("auto" in m for m in mv):  # auto-run: has greenlight's scan caught up with what's pushed? (the tab's "needs you")
-                        h = subprocess.run(["git", "-C", w["path"], "rev-parse", "@{u}"], capture_output=True, text=True)
-                        out[-1]["pushed"] = h.stdout.strip() if h.returncode == 0 else None
+                        try:
+                            h = subprocess.run(["git", "-C", w["path"], "rev-parse", "@{u}"], capture_output=True, text=True, timeout=10)
+                            out[-1]["pushed"] = h.stdout.strip() if h.returncode == 0 else None
+                        except (OSError, subprocess.TimeoutExpired):
+                            out[-1]["pushed"] = None
                 if mr := r.get("mr"):
                     out[-1]["mr"] = {k: mr.get(k) for k in ("ref", "web_url", "title", "state", "draft", "pipeline", "conflicts",
                                                              "rebase", "threads", "mergeable", "by", "assignees",
@@ -742,9 +769,13 @@ CFG = ".greenlight.json"  # in a repo's main checkout: {"name", "look", "host", 
 
 
 def repo_cfg(path):
-    """The checkout's .greenlight.json; None when it's missing, over 8 KB or not a JSON object."""
+    """The checkout's .greenlight.json; None when it's missing, a symlink, over 8 KB or not a JSON object."""
+    if not path:
+        return None
     try:
         f = Path(path) / CFG
+        if f.is_symlink():
+            return None
         if f.stat().st_size <= 8192 and isinstance(o := json.loads(f.read_text()), dict):
             return o
     except (OSError, ValueError):
@@ -763,7 +794,13 @@ def tree_cfg(path, text):
         o = None
     if not isinstance(o, dict):
         return {"error": "not a JSON object"}
-    (Path(path) / CFG).write_text(json.dumps(o, indent=2) + "\n")
+    f = Path(path) / CFG
+    if f.is_symlink():
+        return {"error": "refusing to overwrite symlink .greenlight.json"}
+    encoded = json.dumps(o, indent=2) + "\n"
+    if len(encoded.encode()) > 8192:
+        return {"error": ".greenlight.json must be 8 KB or less"}
+    f.write_text(encoded)
     return {"ok": True, "cfg": o}
 
 
@@ -771,8 +808,8 @@ BRANCH_RE = re.compile(r"\w[\w./-]{0,99}")
 
 
 def main_of(path):
-    """The main checkout of path's repo (where .greenlight.json lives)."""
-    return ade_common.git_info(path)["repoId"] or path
+    """The main checkout of path's repo (where .greenlight.json lives), or None if undetermined."""
+    return ade_common.git_info(path)["repoId"] or None
 
 
 def hook(cmd, path):
@@ -801,12 +838,13 @@ def tree_new(path, o):
     made = res.get("worktree") or {}
     if not made.get("path"):  # ponytail: Orca's create answer isn't pinned down here; find it by branch instead
         made = next((x for x in call("worktree", "ps", "--limit", "10000")["worktrees"]
-                     if (x.get("branch") or "").removeprefix("refs/heads/").endswith(name)), {})
+                     if x.get("repoId") == w["repoId"] and
+                     ((b := (x.get("branch") or "").removeprefix("refs/heads/")) == name or b.endswith("/" + name))), {})
     new, wid = made.get("path"), made.get("worktreeId") or made.get("id")
     if not new:
         return {"error": "the worktree was made but its folder didn't come back; refresh the sidebar"}
     cmd = (repo_cfg(main_of(path)) or {}).get("setup")
-    if o.get("setup") and o["setup"] == cmd and (err := hook(cmd, new)):
+    if isinstance(cmd, str) and o.get("setup") and o["setup"] == cmd and (err := hook(cmd, new)):
         return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
     out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
     if o.get("agent") and wid:
@@ -844,10 +882,17 @@ def tree_diff(path, mode):
     kind = {x[-1]: x[0][0] for x in (l.split("\t") for l in git("diff", "--name-status", base).stdout.splitlines()) if len(x) > 1}  # M A D R…
     # an agent's new files are untracked, which `git diff` never shows; ponytail: first 100, one git call each
     for f in [x for x in git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0") if x][:100]:
-        a, d = (git("diff", "--no-index", "--numstat", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
+        a, d = (git("diff", "--no-index", "--numstat", "--", "/dev/null", f).stdout or "0\t0\t").split("\t")[:2]  # an empty file prints nothing
         files.append([f, a, d]); kind[f] = "U"
         if len(patch) <= DIFF_CAP:  # past the cap only the counts: a big un-ignored file isn't read whole
-            patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "/dev/null", f).stdout
+            try:
+                too_big = (Path(path) / f).stat().st_size > DIFF_CAP
+            except OSError:
+                too_big = False
+            if too_big:
+                patch += f"diff --git a/{f} b/{f}\nnew file\n(file exceeds diff size limit)\n"
+            else:
+                patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", f).stdout
     return {"mode": mode, "base": label, "files": files, "status": [kind.get(f, "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
@@ -898,7 +943,10 @@ def record(pucks):
     """Append a history line per puck whose (state, step, owner) moved since the last tick."""
     DASH.mkdir(parents=True, exist_ok=True)
     f = DASH / "state.json"
-    prev = json.loads(f.read_text()) if f.exists() else {}
+    try:
+        prev = json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        prev = {}
     cur = {}
     for p in pucks:
         sig = [p["state"], p["step"], p["owner"]]
@@ -906,19 +954,29 @@ def record(pucks):
         if prev.get(p["name"]) not in (None, sig):
             with open(DASH / f"{safe(p['name'])}.jsonl", "a") as h:
                 h.write(json.dumps({"ts": int(time.time()), "from": prev[p["name"]], "to": sig, "action": p["action"][:200]}) + "\n")
-    f.write_text(json.dumps(cur))
+    _atomic_write(f, json.dumps(cur))
 
 
 def history(name):
     hf = greenlight.history_file(name)
-    notes = [{"ts": m[1], "text": m[2]} for line in (hf.read_text().splitlines() if hf.exists() else [])
-             if (m := HIST_RE.match(line))]
+    try:
+        hlines = hf.read_text().splitlines() if hf.exists() else []
+    except OSError:
+        hlines = []
+    notes = [{"ts": m[1], "text": m[2]} for line in hlines if (m := HIST_RE.match(line))]
     moves = []
     jf = DASH / f"{safe(name)}.jsonl"
-    for line in jf.read_text().splitlines() if jf.exists() else []:
-        e = json.loads(line)
-        moves.append({"ts": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["ts"])),
-                      "text": f"{e['from'][0]} → {e['to'][0]} ({e['to'][1]}/{e['to'][2]}): {e['action']}", "state": e["to"][0]})
+    try:
+        jlines = jf.read_text().splitlines() if jf.exists() else []
+    except OSError:
+        jlines = []
+    for line in jlines:
+        try:
+            e = json.loads(line)
+            moves.append({"ts": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["ts"])),
+                          "text": f"{e['from'][0]} → {e['to'][0]} ({e['to'][1]}/{e['to'][2]}): {e['action']}", "state": e["to"][0]})
+        except (ValueError, KeyError, TypeError, IndexError):
+            continue
     return sorted(notes + moves, key=lambda e: e["ts"], reverse=True)[:60]
 
 
@@ -987,10 +1045,13 @@ def design(f, model="claude-haiku-5-5", effort="low"):
 
 def ask(prompt, model, effort):
     """One headless answer: a gemini-* model runs on agy, anything else on config llm_harness
-    (a Claude model name means nothing to another harness, so that one uses its default)."""
+    (a Claude model name means nothing to another harness, so that one uses its default).
+    Runs toolless/sandboxed in an empty tempdir so untrusted PR/commit/agent text cannot execute tools."""
+    import tempfile
     h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
-    cmd, text = harness.argv(h, prompt, model=model, effort=effort)
-    output = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180).stdout
+    cmd, text = harness.argv(h, prompt, model=model, effort=effort, tools=False)
+    with tempfile.TemporaryDirectory(prefix="greenlight-llm-") as empty_cwd:
+        output = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180, cwd=empty_cwd).stdout
     if h == "agy":
         for line in reversed(output.splitlines()):
             try:
@@ -1181,8 +1242,7 @@ def ask_user(name, model="claude-haiku-5-5", effort="low"):
                   "If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\n" + q[-6000:], model, effort)
         m = re.search(r"\[.*\]", raw, re.S)
         out["options"] = [{"key": "", "label": str(o)[:200]} for o in (json.loads(m[0]) if m else []) if str(o).strip()][:3]
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"key": key, "out": out}))
+        _atomic_write(cache, json.dumps({"key": key, "out": out}))
     except Exception:  # no suggestions is fine: the free-text reply still works
         pass
     return out
@@ -1194,18 +1254,23 @@ def pending_questions(path):
     if not fs:
         return None
     pend = None
-    for line in fs[0].open(errors="replace"):  # ponytail: rescans the whole transcript per ask; tail-read if screenshot-heavy ones get slow
-        try:
-            content = json.loads(line).get("message", {}).get("content")
-        except ValueError:
-            continue
-        for b in content if isinstance(content, list) else []:
-            if not isinstance(b, dict):
-                continue
-            if b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion":
-                pend = b
-            elif b.get("type") == "tool_result" and pend and b.get("tool_use_id") == pend.get("id"):
-                pend = None
+    try:
+        with fs[0].open(errors="replace") as fh:
+            for line in fh:  # ponytail: rescans the whole transcript per ask; tail-read if screenshot-heavy ones get slow
+                try:
+                    d = json.loads(line)
+                    content = (d.get("message") or {}).get("content") if isinstance(d, dict) else None
+                except (ValueError, AttributeError):
+                    continue
+                for b in content if isinstance(content, list) else []:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion":
+                        pend = b
+                    elif b.get("type") == "tool_result" and pend and b.get("tool_use_id") == pend.get("id"):
+                        pend = None
+    except OSError:
+        return None
     qs = ((pend or {}).get("input") or {}).get("questions")
     return qs if isinstance(qs, list) and qs else None
 
@@ -1219,7 +1284,7 @@ def answer(name, text):
     if (rd.get("draft") or "").strip():
         return {"error": "there's unsent text in that agent's input box; answer it in its workspace"}
     opts = menu(rd.get("tail") or [])
-    text = " ".join(text.split())  # one line: a newline would submit half the answer
+    text = " ".join(_strip_ctrl(text).split())  # one line: a newline would submit half the answer
     if opts and text in {k for k, _ in opts}:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text)
     elif opts:  # Esc closes the picker, then the answer goes in as a plain message
@@ -1268,13 +1333,15 @@ def cached_page(name):
 def page(name, fresh=False, **designer):
     f = facts(name)
     cache = DASH / "pages" / f"{safe(name)}.json"
-    cached = json.loads(cache.read_text()) if cache.exists() else {}
+    try:
+        cached = json.loads(cache.read_text()) if cache.exists() else {}
+    except (OSError, ValueError):
+        cached = {}
     s = sig(f["puck"])
     if fresh or cached.get("sig") != s or cached.get("v") != PAGE_V:
         try:
             cached = {"v": PAGE_V, "sig": s, "designed": int(time.time()), "layout": design(f, **designer)}
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(cached))
+            _atomic_write(cache, json.dumps(cached))
         except Exception as e:  # designer down / out of tokens: keep the old layout, say why
             cached = cached | {"error": f"designer failed: {str(e)[:200]}"}
     return {"name": name, "facts": f, **cached}
@@ -1282,59 +1349,87 @@ def page(name, fresh=False, **designer):
 
 def _claude_entries(f):
     out = []
-    for line in f.open(errors="replace"):
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        m = d.get("message") or {}
-        if d.get("type") not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
-            continue
-        ct = m.get("content")
-        for b in [{"type": "text", "text": ct}] if isinstance(ct, str) else ct or []:
-            if b.get("type") == "text":
-                t = b.get("text") or ""
-                cmd = re.search(r"<command-name>(.*?)</command-name>", t)
-                if cmd:
-                    t = cmd[1] + " " + (re.search(r"<command-args>(.*?)</command-args>", t, re.S) or [""," "])[1]
-                elif t.lstrip().startswith("<"):  # caveats, reminders, local command output
+    try:
+        with f.open(errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
                     continue
-                out.append(("user" if d["type"] == "user" else "assistant", t.strip()))
-            elif b.get("type") == "tool_use":
-                i = b.get("input") or {}
-                arg = next((i[k] for k in ("command", "file_path", "pattern", "description", "url", "prompt") if i.get(k)), "")
-                out.append(("tool", f"{b.get('name')} {' '.join(str(arg).split())}"))
+                if not isinstance(d, dict):
+                    continue
+                m = d.get("message") or {}
+                if not isinstance(m, dict) or d.get("type") not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
+                    continue
+                ct = m.get("content")
+                for b in [{"type": "text", "text": ct}] if isinstance(ct, str) else ct or []:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text":
+                        t = b.get("text") or ""
+                        cmd = re.search(r"<command-name>(.*?)</command-name>", t)
+                        if cmd:
+                            t = cmd[1] + " " + (re.search(r"<command-args>(.*?)</command-args>", t, re.S) or ["", " "])[1]
+                        elif t.lstrip().startswith("<"):  # caveats, reminders, local command output
+                            continue
+                        out.append(("user" if d["type"] == "user" else "assistant", t.strip()))
+                    elif b.get("type") == "tool_use":
+                        i = b.get("input") or {}
+                        if not isinstance(i, dict):
+                            i = {}
+                        arg = next((i[k] for k in ("command", "file_path", "pattern", "description", "url", "prompt") if i.get(k)), "")
+                        out.append(("tool", f"{b.get('name')} {' '.join(str(arg).split())}"))
+    except OSError:
+        pass
     return out
 
 
 def _codex_entries(f):
     out = []
-    for line in f.open(errors="replace"):
-        try:
-            p = json.loads(line).get("payload") or {}
-        except ValueError:
-            continue
-        if p.get("type") == "message" and p.get("role") in ("user", "assistant"):
-            for b in p.get("content") or []:
-                t = b.get("text") or ""
-                if t.strip() and not t.lstrip().startswith("<"):
-                    out.append((p["role"], t.strip()))
-        elif p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
-            out.append(("tool", f"{p.get('name') or 'shell'} {' '.join(str(p.get('arguments') or p.get('input') or '').split())}"))
+    try:
+        with f.open(errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                    p = (d.get("payload") or {}) if isinstance(d, dict) else {}
+                except (ValueError, AttributeError):
+                    continue
+                if not isinstance(p, dict):
+                    continue
+                if p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+                    for b in p.get("content") or []:
+                        if not isinstance(b, dict):
+                            continue
+                        t = b.get("text") or ""
+                        if t.strip() and not t.lstrip().startswith("<"):
+                            out.append((p["role"], t.strip()))
+                elif p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
+                    out.append(("tool", f"{p.get('name') or 'shell'} {' '.join(str(p.get('arguments') or p.get('input') or '').split())}"))
+    except OSError:
+        pass
     return out
 
 
 def transcript_files(path):
     """Every agent session that ran in `path`, newest first: Claude Code transcripts and Codex rollouts."""
-    fs = [(f, "claude") for f in (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*.jsonl")]
+    fs = []
+    for f in (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*.jsonl"):
+        try:
+            fs.append((f.stat().st_mtime, f, "claude"))
+        except OSError:
+            pass
     cutoff = time.time() - 30 * 86400
     for f in (Path.home() / ".codex/sessions").glob("*/*/*/rollout-*.jsonl"):  # ponytail: reads each recent rollout's first line; index by cwd if this gets slow
         try:
-            if f.stat().st_mtime > cutoff and json.loads(f.open().readline())["payload"].get("cwd") == path:
-                fs.append((f, "codex"))
-        except (OSError, ValueError, KeyError):
+            mt = f.stat().st_mtime
+            if mt > cutoff:
+                with f.open(errors="replace") as fh:
+                    first = fh.readline()
+                if (json.loads(first).get("payload") or {}).get("cwd") == path:
+                    fs.append((mt, f, "codex"))
+        except (OSError, ValueError, KeyError, AttributeError, TypeError):
             pass
-    return sorted(fs, key=lambda x: x[0].stat().st_mtime, reverse=True)[:40]
+    return [(f, kind) for _, f, kind in sorted(fs, key=lambda x: x[0], reverse=True)[:40]]
 
 
 RECENT = 300  # seconds
@@ -1468,11 +1563,20 @@ def task_new(repo_name, payload):
     if gate["pause"]:  # 1.3: ask before the workspace and its agent exist
         return paused(gate)
     name = _free(_slug(title), {w["displayName"] for w, _ in live_agents().values()} | {d.name for d in TASKS.glob("*")})
+    agents = greenlight.CONFIG.get("agents") or []
+    if not agents:
+        return {"error": "no agents configured"}
     d = TASKS / name
-    (d / "files").mkdir(parents=True)
-    (d / "request.md").write_text(request + "\n")
+    (d / "files").mkdir(mode=0o700, parents=True)
+    os.chmod(d, 0o700)
+    os.chmod(d / "files", 0o700)
+    fd = os.open(str(d / "request.md"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as rf:
+        rf.write(request + "\n")
     for fn, raw in files:
-        (d / "files" / fn).write_bytes(raw)
+        fd = os.open(str(d / "files" / fn), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as ff:
+            ff.write(raw)
     quoted = request if len(request) <= REQUEST_CAP else request[:REQUEST_CAP] + f"\n[… cut here: the rest is in {d}/request.md]"
     brief = (f"Your task in {repo['path']}: {title}. My whole request is below (verbatim in {d}/request.md)."
              + (f" I attached {len(files)} file{'s' * (len(files) > 1)}, in {d}/files: {', '.join(fn for fn, _ in files)}. Read them first."
@@ -1482,13 +1586,14 @@ def task_new(repo_name, payload):
                f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess. Before you open the MR, run its tests with "
                f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record."
               + f"\n\nMy request:\n\n{quoted}{gate['brief']}" + PUSH_RULE)
-    for a in greenlight.CONFIG["agents"]:
+    for a in agents:
         try:
             res = greenlight.orca("worktree", "create", "--repo", f"id:{repo['id']}", "--name", name, "--setup", "skip",
                              "--comment", title, "--no-parent", "--agent", a, "--prompt", brief)
             break
         except RuntimeError as e:
-            if a == greenlight.CONFIG["agents"][-1] or not greenlight.LIMIT_RE.search(str(e)):
+            if a == agents[-1] or not greenlight.LIMIT_RE.search(str(e)):
+                shutil.rmtree(d, ignore_errors=True)
                 return {"error": f"couldn't start the workspace: {str(e)[:300]}"}
     wid = (res.get("worktree") or {}).get("id")
     if wid:  # keep Orca from prefixing the name; cosmetic, so a failure here doesn't fail the task
@@ -1536,8 +1641,8 @@ def settings(op, arg, stdin):
         a = autorun()
         if op == "autorun-set":
             on = json.loads(stdin or "{}")
-            a[arg] = {k: g for k, g in on.items() if k in AUTO and isinstance(g, int) and 0 <= g < max(1, len(AUTO[k][1]))}
-            (greenlight.STATE / "autorun.json").write_text(json.dumps(a, indent=1))
+            a[arg] = {k: g for k, g in on.items() if k in AUTO and isinstance(g, int) and not isinstance(g, bool) and 0 <= g < max(1, len(AUTO[k][1]))}
+            _atomic_write(greenlight.STATE / "autorun.json", json.dumps(a, indent=1))
         return {"on": a.get(arg, {}), "kinds": [{"kind": k, "when": w, "gates": [g for g, _ in gs]} for k, (w, gs) in AUTO.items()]}
     if op.startswith("lifecycle-") and (not re.fullmatch(r"[\w.-]{1,100}", arg) or arg.startswith(".")):
         return {"error": "bad repo"}
@@ -1589,7 +1694,10 @@ def main():
     if a[:1] == ["snapshot"]:
         print(json.dumps(snapshot()))
     elif a[:1] == ["stream"]:
-        every = float(a[1]) if len(a) > 1 else 10
+        try:
+            every = max(1.0, float(a[1])) if len(a) > 1 else 10.0
+        except ValueError:
+            every = 10.0
         while True:
             try:
                 s = snapshot()

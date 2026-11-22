@@ -32,7 +32,7 @@ final class Core: ObservableObject {
     }
     /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
-    var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(greenlightHome)/chat-\(session) \(py)/chat.py" }
+    var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(shellPath(greenlightHome))/chat-\(session) \(py)/chat.py" }
     var light: ([String], Bool) -> Void = { delegate.pick($0, open: $1) }  // the hexes a reply is about, lit in this chat's dashboard; true: open the lone one's card
     var subs = Set<AnyCancellable>(), mirroring = false
     /// A second window's chat keeps the main one's settings, both ways: Settings (the main chat's) and this chat's own name agree.
@@ -240,7 +240,7 @@ final class Core: ObservableObject {
         let h = runHost, code = runCode.isEmpty ? "~/.claude/skills/greenlight" : runCode
         var out = ""
         hostCheck = "Checking \(h)…"
-        ssh("command -v python3 >/dev/null || { echo nopy; exit 3; }; test -f \(code)/scripts/greenlight.py && echo ok", on: h, onLine: { out = $0 }) { [weak self] rc in
+        ssh("command -v python3 >/dev/null || { echo nopy; exit 3; }; test -f \(shellPath(code))/scripts/greenlight.py && echo ok", on: h, onLine: { out = $0 }) { [weak self] rc in
             self?.hostCheck = out == "ok" ? "✓ \(h) is ready: greenlight is at \(code)." : out == "nopy" ? "✗ \(h) has no python3."
                 : rc == 255 || rc == -1 ? "✗ Can't reach \(h) over ssh (BatchMode: it needs key auth)." : "✗ \(h) has no \(code)/scripts/greenlight.py. Clone the repo there."
         }
@@ -319,9 +319,9 @@ final class Core: ObservableObject {
             else { self.autonomyNote = "Couldn't read autonomy settings from \(host)." }
         })
     }
-    /// autonomy.py set's arguments (`--auto milestone on`, `--gate 0.35`), then the report again.
-    func setAutonomy(_ args: String) {
-        ssh("\(py)/autonomy.py set \(args)", onExit: { [weak self] code in
+    /// autonomy.py set's arguments (`["--auto", "milestone", "on"]`, `["--gate", "0.35"]`), then the report again.
+    func setAutonomy(_ args: [String]) {
+        ssh("\(py)/autonomy.py set \(args.map(shellQuote).joined(separator: " "))", onExit: { [weak self] code in
             if code != 0 { self?.autonomyNote = "Couldn't save that on \(host)." }
             self?.loadAutonomy()
         })
@@ -507,13 +507,18 @@ final class Core: ObservableObject {
     }
 
     /// Mic button / voice shortcut: start recording, or stop and transcribe into the input box (not sent).
+    var startingVoice = false
     func toggleVoice() {
         if voice.on || voice.starting { return }  // voice mode has the mic, or is about to
-        if recording != nil { stopVoice() } else if !transcribing { startVoice() }
+        if recording != nil { stopVoice() } else if !transcribing && !startingVoice { startVoice() }
     }
 
     func startVoice() {
-        AVCaptureDevice.requestAccess(for: .audio) { [self] ok in DispatchQueue.main.async {
+        startingVoice = true
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] ok in DispatchQueue.main.async {
+            guard let self else { return }
+            self.startingVoice = false
+            guard self.recording == nil, !self.transcribing else { return }
             guard ok else { return self.msgs.append(Msg(.note, "Microphone access is off: System Settings → Privacy & Security → Microphone → Greenlight.")) }
             let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1,
                                            AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false]
@@ -521,9 +526,12 @@ final class Core: ObservableObject {
                 return self.msgs.append(Msg(.note, "Couldn't start the microphone."))
             }
             r.isMeteringEnabled = true
+            self.recorder?.stop()
             self.recorder = r
             self.recording = Date()
-            self.meter = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] _ in
+            self.meter?.invalidate()
+            self.meter = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self, weak r] _ in
+                guard let r else { return }
                 r.updateMeters()
                 self?.levels = Array((self?.levels ?? []).dropFirst()) + [max(0, min(1, (r.averagePower(forChannel: 0) + 50) / 45))]
             }
@@ -531,9 +539,11 @@ final class Core: ObservableObject {
     }
 
     func stopVoice() {
+        startingVoice = false
         recorder?.stop()
         recorder = nil
         meter?.invalidate()
+        meter = nil
         recording = nil
         levels = levels.map { _ in 0 }
         transcribing = true
@@ -652,7 +662,7 @@ final class Core: ObservableObject {
         let new = attached.filter { !$0.sent }  // each docked hex goes over once; the chat session keeps it
         if !new.isEmpty {
             payload = "The user dragged these workspaces from the dashboard into the chat; this message is about them:\n"
-                + new.map(\.text).joined(separator: "\n") + "\n\n" + text
+                + new.map(\.text).joined(separator: "\n") + "\n\n" + payload
             for i in attached.indices { attached[i].sent = true }
         }
         if !focus.isEmpty && focus != focusSent {  // only when it changed: the chat session remembers the last one
@@ -704,7 +714,7 @@ final class Core: ObservableObject {
     var scope: () -> String? = { nil }
     var chatSend: String {
         let only = scope().map { " --only \(shellQuote($0))" } ?? ""
-        return "\(chief) send --model \(model) --effort \(effort) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
+        return "\(chief) send --model \(shellQuote(model)) --effort \(shellQuote(effort)) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     @Published var agents: [Agent] = []  // the agents in your workspaces: the activity feed is live while one works
@@ -744,7 +754,7 @@ final class Core: ObservableObject {
 
     func compact() {
         guard run == nil, clearing == 0, isClaude else { return }
-        start(Run("Compact context"), "\(chief) compact --model \(model)", stdin: "")
+        start(Run("Compact context"), "\(chief) compact --model \(shellQuote(model))", stdin: "")
     }
 
     var clearing = 0  // Clear's `chat.py new`s still running: a send waits for all of them
@@ -902,9 +912,10 @@ final class Core: ObservableObject {
         set { ud.set(newValue, forKey: "seen") }
     }
 
+    var outboxProc: Process?
     func tailOutbox() {
-        let from = seen < 0 ? "$(wc -l < $f)" : "\(seen)"
-        ssh("f=\(greenlightHome)/outbox.jsonl; touch $f; n=\(from); echo \"#start $n\"; tail -n +$((n+1)) -F $f 2>/dev/null",
+        let from = seen < 0 ? "$(wc -l < \"$f\" | tr -d ' ')" : "\(seen)"
+        outboxProc = ssh("f=\(shellPath(greenlightHome))/outbox.jsonl; touch \"$f\"; n=\(from); echo \"#start $n\"; tail -n +$((n+1)) -F \"$f\" 2>/dev/null",
             onLine: { [weak self] l in self?.ping(l) },
             onExit: { [weak self] _ in  // network drop, sleep, host reboot: reconnect
                 self?.connected = false
@@ -913,7 +924,7 @@ final class Core: ObservableObject {
     }
 
     func ping(_ l: String) {
-        if l.hasPrefix("#start ") { seen = Int(l.dropFirst(7)) ?? 0; connected = true; return }
+        if l.hasPrefix("#start ") { seen = Int(l.dropFirst(7).trimmingCharacters(in: .whitespaces)) ?? 0; connected = true; return }
         seen += 1
         guard let d = l.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         if let k = j["resolve"] as? String {  // greenlight noticed the question no longer applies: close it quietly

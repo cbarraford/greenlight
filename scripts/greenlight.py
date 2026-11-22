@@ -376,7 +376,10 @@ def lifecycle_opts(project):
 
 def signoffs():
     f = STATE / "signoffs.json"
-    return json.loads(f.read_text()) if f.exists() else {}
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def release_milestone(project, forge="gitlab"):
@@ -998,11 +1001,15 @@ ANY_BACKFILL_REVISION = object()
 
 
 def backfills_update(change):
-    """Serialize goal overlay edits from ticks and standalone reports."""
+    """Serialize goal overlay edits from ticks and standalone reports. Only writes if data actually changed."""
     with backfill_lock():
         data = backfills_load()
+        before = json.dumps(data, sort_keys=True)
         change(data)
-        backfills_write_unlocked(data)
+        if json.dumps(data, sort_keys=True) != before:
+            backfills_write_unlocked(data)
+            return True
+        return False
 
 
 def backfills_write_unlocked(data):
@@ -1070,22 +1077,27 @@ def scan(save=True, _backfill_retries=0):
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},
         })
     if superseded_backfills and save:
-        def prune(current):
-            fresh = {w["worktreeId"]: w for w in orca("worktree", "ps", "--limit", "10000")["worktrees"]}
-            for wid, old in superseded_backfills.items():
-                live = fresh.get(wid)
-                if not live or current.get(wid) != old:
-                    continue
-                identity = projects.get(live.get("repoId"))
-                if not identity:
-                    continue
-                live_forge, live_project = identity
-                link = linked_number(live.get("linkedPR" if live_forge == "github" else "linkedGitLabMR"))
-                if goal_with_backfill((live.get("comment") or "").strip(), wid, current,
-                                      (live.get("branch") or "").removeprefix("refs/heads/"), link,
-                                      live_forge, live_project)[1]:
-                    current.pop(wid, None)
-        backfills_update(prune)
+        fresh = {w["worktreeId"]: w for w in orca("worktree", "ps", "--limit", "10000")["worktrees"]}
+        with backfill_lock():
+            if backfill_revision() == backfill_read:
+                current = backfills_load()
+                before = json.dumps(current, sort_keys=True)
+                for wid, old in superseded_backfills.items():
+                    live = fresh.get(wid)
+                    if not live or current.get(wid) != old:
+                        continue
+                    identity = projects.get(live.get("repoId"))
+                    if not identity:
+                        continue
+                    live_forge, live_project = identity
+                    link = linked_number(live.get("linkedPR" if live_forge == "github" else "linkedGitLabMR"))
+                    if goal_with_backfill((live.get("comment") or "").strip(), wid, current,
+                                          (live.get("branch") or "").removeprefix("refs/heads/"), link,
+                                          live_forge, live_project)[1]:
+                        current.pop(wid, None)
+                if json.dumps(current, sort_keys=True) != before:
+                    backfills_write_unlocked(current)
+                    backfill_read = backfill_revision()
 
     # One open-MR/PR listing per project resolves most branches without per-branch lookups.
     open_by_branch, closes, milestones = {}, {}, {}
@@ -1189,8 +1201,11 @@ def scan(save=True, _backfill_retries=0):
         return r
 
     prev_file = STATE / "last.json"
-    prev = json.loads(prev_file.read_text()) if prev_file.exists() else {}
-    prev_rows = {r["id"]: r for r in prev.get("rows", [])}
+    try:
+        prev = json.loads(prev_file.read_text()) if prev_file.exists() else {}
+    except (OSError, ValueError):
+        prev = {}
+    prev_rows = {r["id"]: r for r in prev.get("rows", []) if isinstance(r, dict) and "id" in r}
     for r in rows:
         p = prev_rows.get(r["id"])
         if p and p.get("goal") == r["goal"] and p.get("comment") == r["comment"] and p.get("_revisit"):
@@ -1228,10 +1243,12 @@ def scan(save=True, _backfill_retries=0):
             with backfill_lock(), ws_state.lock():
                 accepted = {r["id"]: (r.get("mr") or {}).get("iid") for r in json.loads((STATE / "last.json").read_text())["rows"]}
                 current = backfills_load()
+                before = json.dumps(current, sort_keys=True)
                 for wid, remembered, iid in prune_candidates:
                     if wid in accepted and accepted[wid] == iid and current.get(wid) == remembered:
                         current.pop(wid, None)
-                backfills_write_unlocked(current)
+                if json.dumps(current, sort_keys=True) != before:
+                    backfills_write_unlocked(current)
         for r in rows:
             if r.get("_goal_backfill") and (r.get("mr") or {}).get("ref"):
                 decisions.backfilled_goal(r["id"], r["mr"]["ref"], r["goal"], r.get("project"), r.get("forge"))
@@ -1263,7 +1280,8 @@ def keep(result, expected_backfill_revision=ANY_BACKFILL_REVISION):
         except (OSError, ValueError):
             previous = {}
             previous_started = 0
-        same_clock = result.get("scan_clock_id") == previous.get("scan_clock_id")
+        same_clock = (result.get("scan_clock_id") == previous.get("scan_clock_id")
+                      and result.get("scan_clock_id") != "unknown")
         if same_clock and result.get("scan_started_ns", 0) < previous_started:
             patches = previous.get("dashboard_merges") or []
             baseline = previous.get("accepted_scan_started_ns", previous.get("dashboard_base_started_ns", previous_started))
@@ -1321,8 +1339,14 @@ def pinged(update=None):
     """Open questions keyed by workspace name or id: {key: ts}. ~/.greenlight/pinged.json"""
     f = STATE / "pinged.json"
     if update is None:
-        return json.loads(f.read_text()) if f.exists() else {}
-    f.write_text(json.dumps(update))
+        try:
+            return json.loads(f.read_text()) if f.exists() else {}
+        except (OSError, ValueError):
+            return {}
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(json.dumps(update))
+    os.replace(tmp, f)
 
 
 def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
@@ -1435,7 +1459,10 @@ def recent_keys():
 def scanned_names():
     """{name or id: name} for every workspace in the last scan (~/.greenlight/last.json)."""
     f = STATE / "last.json"
-    rows = json.loads(f.read_text()).get("rows", []) if f.exists() else []
+    try:
+        rows = json.loads(f.read_text()).get("rows", []) if f.exists() else []
+    except (OSError, ValueError):
+        rows = []
     return {r["id"]: r["name"] for r in rows} | {r["name"]: r["name"] for r in rows}
 
 
@@ -1472,12 +1499,22 @@ def resolve(key, why):
 
 def close_stale(rows):
     """Questions about a workspace close once it's gone or no longer waiting on me."""
+    open_pings = pinged()
+    if not open_pings:
+        return
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
-    undo_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@undo:") and e.get("ws")}
-    stuck_ws = {e["key"]: e["ws"] for e in outbox_events() if str(e.get("key", "")).startswith("@stuck:") and e.get("ws")}
-    stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
-                 for r in decisions.load() if str(r.get("key", "")).startswith("@stuck:")}
-    for key in pinged():
+    undo_ws, stuck_ws, stuck_ids = {}, {}, {}
+    if any(k.startswith(("@undo:", "@stuck:")) for k in open_pings):
+        for e in outbox_events():
+            k = str(e.get("key", ""))
+            if k.startswith("@undo:") and e.get("ws"):
+                undo_ws[k] = e["ws"]
+            elif k.startswith("@stuck:") and e.get("ws"):
+                stuck_ws[k] = e["ws"]
+    if any(k.startswith("@stuck:") for k in open_pings):
+        stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
+                     for r in decisions.load() if str(r.get("key", "")).startswith("@stuck:")}
+    for key in open_pings:
         if key.startswith("@stuck:"):
             names = stuck_ids.get(key) or stuck_ws.get(key, [])
             if names and not any(name in by_key for name in names):
@@ -1579,10 +1616,14 @@ def main():
         print(json.dumps(orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"]), indent=1))
         return
     if cmd == "signoff":  # greenlight.py signoff <project> <iid> <stage>: the user signed off a custom stage on this MR
-        so, k = signoffs(), f"{sys.argv[2]}#{sys.argv[3]}"
-        so[k] = sorted(set(so.get(k, [])) | {sys.argv[4]})
         STATE.mkdir(parents=True, exist_ok=True)
-        (STATE / "signoffs.json").write_text(json.dumps(so, indent=1))
+        with (STATE / "signoffs.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            so, k = signoffs(), f"{sys.argv[2]}#{sys.argv[3]}"
+            so[k] = sorted(set(so.get(k, [])) | {sys.argv[4]})
+            tmp = (STATE / "signoffs.json").with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+            tmp.write_text(json.dumps(so, indent=1))
+            os.replace(tmp, STATE / "signoffs.json")
         return
     if cmd == "history":  # greenlight.py history <workspace>
         f = history_file(sys.argv[2])

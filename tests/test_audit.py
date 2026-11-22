@@ -681,7 +681,7 @@ with mock.patch.object(audit, "git", return_value=""):
 with mock.patch.object(audit.subprocess, "run") as ran:
     ran.return_value.returncode, ran.return_value.stdout = 0, "pushed"
     assert audit.push_audited(wt, sha, "feat", force=True, expected="a" * 40, destination="https://github.com/o/x.git") == 0
-    assert ran.call_args.args[0] == ["git", "-C", wt, "push", f"--force-with-lease=refs/heads/feat:{'a' * 40}", "https://github.com/o/x.git", f"{sha}:refs/heads/feat"]
+    assert ran.call_args.args[0] == ["git", "-C", wt, "push", f"--force-with-lease=refs/heads/feat:{'a' * 40}", "--", "https://github.com/o/x.git", f"{sha}:refs/heads/feat"]
 assert audit.push_audited(wt, sha, "feat", force=True) == 4
 with mock.patch.object(audit, "row_for", return_value={"path": wt, "goal": "Merge #1", "project": "o/x", "forge": "github",
                                                     "mr": {"iid": 23, "target_branch": "main"}}), \

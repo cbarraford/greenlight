@@ -20,9 +20,11 @@ that hits is left out, and if that check can't run, nothing is exported.
 Stdlib only, and no greenlight import, so every script can use it. Writing never raises.
 """
 import contextlib
+import fcntl
 import hashlib
 import hmac
 import json
+import math
 import os
 import platform
 import re
@@ -60,17 +62,34 @@ CLASS_RES = [(c, re.compile(p, re.I)) for c, p in CLASSES]
 _comp = None
 _ver = None
 _leak = False
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 
-def leak():
-    """The owner's private-terms regex ($GREENLIGHT_HOME/leak.re, one per line), or None."""
+def leak(strict=False):
+    """The owner's private-terms regex ($GREENLIGHT_HOME/leak.re, one per line), or None.
+    When strict=True (used by export gate()), any read/regex error raises so export fails closed."""
     global _leak
-    if _leak is False:
+    if _leak is False or (strict and _leak is None):
+        f = home() / "leak.re"
         try:
-            lines = [x for x in (home() / "leak.re").read_text().splitlines() if x.strip()]
-            _leak = re.compile("|".join(lines), re.I) if lines else None
-        except (OSError, re.error):
+            text = f.read_text()
+        except FileNotFoundError:
             _leak = None
+            return None
+        except OSError:
+            if strict:
+                raise
+            return None
+        try:
+            lines = [x.strip() for x in text.splitlines() if x.strip()]
+            rx = re.compile("|".join(f"(?:{x})" for x in lines), re.I) if lines else None
+            if rx and rx.search(""):
+                raise re.error("leak.re matches empty string")
+            _leak = rx
+        except re.error:
+            if strict:
+                raise
+            return None
     return _leak
 
 
@@ -114,7 +133,7 @@ def salt():
             return s
     # written whole, then linked in: a reader never sees it half-written, and two first runs agree on one salt
     f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_name(f"salt.{os.getpid()}.tmp")
+    tmp = f.with_name(f"salt.{os.getpid()}.{secrets.token_hex(6)}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as w:
         w.write(secrets.token_bytes(32))
@@ -159,11 +178,22 @@ def where(tb):
 def clean(fields):
     """Fields that fit the schema; the number dropped goes in `dropped`."""
     out, dropped = {}, 0
+    lrx = leak()
     for k, v in fields.items():
         if v is None:
             continue
-        if isinstance(v, (bool, int, float)):
-            out[k] = round(v, 3) if isinstance(v, float) else v
+        if not isinstance(k, str) or not KEY_RE.fullmatch(k) or (lrx and lrx.search(k)):
+            dropped += 1
+            continue
+        if isinstance(v, bool):
+            out[k] = v
+        elif isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, float):
+            if math.isfinite(v):
+                out[k] = round(v, 3)
+            else:
+                dropped += 1
         elif isinstance(v, str) and k.endswith("_h") and HASH.fullmatch(v):
             out[k] = v
         elif isinstance(v, str) and k in KEYS and token(v):
@@ -178,11 +208,17 @@ def clean(fields):
 
 
 def rotate(f):
-    for i in range(KEEP - 1, 0, -1):
+    lock = f.with_name(".rotate.lock")
+    with lock.open("a+") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
         with contextlib.suppress(OSError):
-            os.replace(f"{f}.{i}", f"{f}.{i + 1}")
-    with contextlib.suppress(OSError):
-        os.replace(f, f"{f}.1")
+            if not f.exists() or f.stat().st_size <= MAX:
+                return
+        for i in range(KEEP - 1, 0, -1):
+            with contextlib.suppress(OSError):
+                os.replace(f"{f}.{i}", f"{f}.{i + 1}")
+        with contextlib.suppress(OSError):
+            os.replace(f, f"{f}.1")
 
 
 def event(kind, **fields):
@@ -333,25 +369,33 @@ def crashes(after, n=5):
     """The app's macOS crash reports since `after`: exception, signal and the crashed thread's frames as image:symbol.
     Images by name, never path; a frame with a slash in it is dropped, and the export gate checks the rest.
     Only this machine's: with a remote host the bundle is built there, so the Mac's reports aren't in it."""
-    out = []
-    for f in sorted(crash_dir().glob("[Gg]reenlight*.ips"), key=lambda f: f.stat().st_mtime)[-n:]:
+    def _mtime(p):
         try:
-            if f.stat().st_mtime < after:
+            return p.stat().st_mtime
+        except OSError:
+            return -1
+    out = []
+    for f in sorted(crash_dir().glob("[Gg]reenlight*.ips"), key=_mtime)[-n:]:
+        try:
+            mt = f.stat().st_mtime
+            if mt < after:
                 continue
             head, body = f.read_text(errors="replace").split("\n", 1)
             hd, b = json.loads(head), json.loads(body)
             if not str(b.get("codeSigningID") or "").startswith("dev.greenlight."):
                 continue  # another app whose name starts with Greenlight
-            imgs = [i.get("name") or "?" for i in b.get("usedImages", [])]
+            imgs = ["greenlight-dev" if str(i.get("name") or "").lower().startswith("greenlight-") else (i.get("name") or "?")
+                    for i in b.get("usedImages", [])]
             th = b.get("threads", [])[b.get("faultingThread", 0)]
             frames = []
             for fr in th.get("frames", [])[:12]:
                 i = fr.get("imageIndex")
-                x = f"{imgs[i] if isinstance(i, int) and i < len(imgs) else '?'}:{fr.get('symbol', hex(fr.get('imageOffset', 0)))}"[:160]
+                img = imgs[i] if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(imgs) else "?"
+                x = f"{img}:{fr.get('symbol', hex(fr.get('imageOffset', 0)))}"[:160]
                 if "/" not in x:
                     frames.append(x)
             ex = b.get("exception") or {}
-            out.append({"ts": round(f.stat().st_mtime), "v": str(hd.get("build_version") or "")[:12], "exc": ex.get("type"),
+            out.append({"ts": round(mt), "v": str(hd.get("build_version") or "")[:12], "exc": ex.get("type"),
                         "signal": ex.get("signal"), "frames": frames})
         except (OSError, ValueError, IndexError, AttributeError, TypeError):
             continue  # ponytail: an unreadable report is skipped, not reported
@@ -467,7 +511,8 @@ def strings(o):
 def gate():
     """The export check: text -> the kind of thing it leaks, or None. Raises when it can't be built, so nothing exports."""
     import audit  # stdlib-only at import; late so writing events never needs it
-    res = [*audit.SECRET_RES, *audit.PERSONAL_RES] + ([(leak(), "a private term")] if leak() else [])
+    lrx = leak(strict=True)
+    res = [*audit.SECRET_RES, *audit.PERSONAL_RES] + ([(lrx, "a private term")] if lrx else [])
     return lambda text: next((why for rx, why in res if rx.search(text)), None)
 
 

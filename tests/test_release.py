@@ -10,7 +10,11 @@ f = Path(os.environ.get("GREENLIGHT_HOME", "~/.greenlight")).expanduser() / "lea
 if not f.exists():
     print(f"test_release skipped: no {f}")
     raise SystemExit(0)
-LEAK = re.compile("|".join(x for x in f.read_text().splitlines() if x.strip()), re.I)
+patterns = [x.strip() for x in f.read_text().splitlines() if x.strip()]
+if not patterns:
+    print("test_release skipped: empty leak.re")
+    raise SystemExit(0)
+LEAK = re.compile("|".join(f"(?:{x})" for x in patterns), re.I)
 SKIP = {".git", ".claude", "memory", "node_modules", "__pycache__", "vendor"}  # memory/: gitignored, owner-only; .claude/: local Claude Code state (worktrees), untracked
 root = Path(__file__).resolve().parents[1]
 hits = []

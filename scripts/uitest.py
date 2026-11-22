@@ -22,7 +22,9 @@ import hashlib
 import json
 import os
 import platform
+import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -32,7 +34,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BIN_CACHE = Path(tempfile.gettempdir()) / "greenlight-uitest-bin"
+BIN_CACHE = Path(tempfile.gettempdir()) / f"greenlight-uitest-bin-{os.getuid()}"
 
 
 def swift_sources():
@@ -50,7 +52,8 @@ def build_test_binary():
         h.update(p.name.encode())
         h.update(p.read_bytes())
     key = h.hexdigest()[:16]
-    BIN_CACHE.mkdir(parents=True, exist_ok=True)
+    BIN_CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(BIN_CACHE, 0o700)
     out = BIN_CACHE / f"Greenlight-{key}"
     if out.is_file() and os.access(out, os.X_OK):
         return out
@@ -159,7 +162,7 @@ def _make_fixture(root: Path, fixture: str):
     orca_data = root / "orca-ps.json"
     orca_data.write_text(json.dumps({"ok": True, "result": {"worktrees": worktrees}}))
     orca_bin = bindir / "orca"
-    orca_bin.write_text(f"#!/bin/sh\ncat {json.dumps(str(orca_data))}\n")
+    orca_bin.write_text(f"#!/bin/sh\ncat {shlex.quote(str(orca_data))}\n")
     orca_bin.chmod(0o755)
 
     for stub in ("glab", "gh"):
@@ -208,9 +211,11 @@ class UITestSession:
         last_err = None
         while time.time() < deadline:
             if self.proc.poll() is not None:
+                rc = self.proc.returncode
                 log.flush()
                 tail = (self.root / "app.log").read_text(errors="replace")[-1000:]
-                raise RuntimeError(f"Greenlight --uitest exited early ({self.proc.returncode}):\n{tail}")
+                self.stop()
+                raise RuntimeError(f"Greenlight --uitest exited early ({rc}):\n{tail}")
             if self.socket_path.exists():
                 try:
                     r = self.ping()
@@ -392,10 +397,16 @@ def main():
             rpc(a.socket, {"cmd": "action", "name": "quit"}, timeout=3.0)
         except OSError:
             pass
+        pid = meta.get("pid")
+        if isinstance(pid, int) and pid > 0:
+            time.sleep(0.3)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
         if meta.get("tmux_socket"):
             subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
         if meta.get("root") and Path(meta["root"]).name.startswith("gl-uitest-"):
-            time.sleep(0.3)
             shutil.rmtree(meta["root"], ignore_errors=True)
         print(json.dumps({"ok": True}))
         return 0

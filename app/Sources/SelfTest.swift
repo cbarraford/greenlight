@@ -31,7 +31,7 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
         let t = chatFile(tiff, name: "shot.tiff"), bin = chatFile(at: tmp.appendingPathComponent("tool.bin")), dir = chatFile(at: tmp)
         let big = chatFile(Data(repeating: 0x61, count: (1 << 20) + 1), name: "big.log"), note = chatFile(at: tmp.appendingPathComponent("notes.txt"))
         check("shellPath: preserves leading ~ expansion and quotes spaces",
-              shellPath("~") == "$HOME" && shellPath("~/.greenlight") == "$HOME/'.greenlight'" && shellPath("/tmp/a b") == "'/tmp/a b'")
+              shellPath("~") == "\"$HOME\"" && shellPath("~/.greenlight") == "\"$HOME\"/'.greenlight'" && shellPath("/tmp/a b") == "'/tmp/a b'")
         check("attach: kinds from the bytes; TIFF goes as PNG; the name has no folder",
               fileKind(png) == "image" && fileKind(Data("%PDF-1.7".utf8)) == "pdf" && fileKind(Data("héllo".utf8)) == "text"
               && t.file?.name == "shot.png" && t.file.map { fileKind($0.data) } == "image" && note.file?.name == "notes.txt" && note.file?.kind == "text")
@@ -245,7 +245,7 @@ func attachOnly() {
     let c = Core()
     Thread.detachNewThread {
         DispatchQueue.main.sync { c.clear(); c.model = "claude-haiku-5-5"; c.effort = "low" }
-        Thread.sleep(forTimeInterval: 2)
+        wait("initial clear", 30) { c.clearing == 0 }
         attachTest(c, check: check, wait: wait)
         DispatchQueue.main.sync { c.clear() }
         for (k, v) in keep { ud.set(v, forKey: k) }
