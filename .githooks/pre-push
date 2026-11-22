@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Local pre-push verification gate for Greenlight (enable via `make setup-hooks`).
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+make lint
+make test-py
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  make typecheck
+fi
