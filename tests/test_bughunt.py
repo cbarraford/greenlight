@@ -624,6 +624,283 @@ def test_remote_schedule_run_nightly_and_cli():
         assert bughunt.main() == 0
 
 
+def test_socket_eof_crash_excerpt_and_settle():
+    # 1. uitest.rpc raises ConnectionResetError (subclass of OSError) on EOF or malformed JSON
+    import socket as _socket
+
+    tmp = Path(tempfile.mkdtemp(prefix="gl-sock-eof-"))
+    try:
+        sock_p = tmp / "eof.sock"
+        srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        srv.bind(str(sock_p))
+        srv.listen(1)
+        import threading
+
+        def accept_and_close():
+            conn, _ = srv.accept()
+            conn.recv(1024)
+            conn.close()
+
+        t = threading.Thread(target=accept_and_close, daemon=True)
+        t.start()
+        try:
+            uitest.rpc(sock_p, {"cmd": "ping"}, timeout=2.0)
+            raise AssertionError("expected ConnectionResetError on EOF")
+        except ConnectionResetError:
+            pass
+        finally:
+            t.join(timeout=2)
+            srv.close()
+
+        # Malformed JSON from socket also raises ConnectionResetError
+        sock_bad = tmp / "bad.sock"
+        srv2 = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        srv2.bind(str(sock_bad))
+        srv2.listen(1)
+
+        def accept_and_garbage():
+            conn, _ = srv2.accept()
+            conn.recv(1024)
+            conn.sendall(b"{not-json\n")
+            conn.close()
+
+        t2 = threading.Thread(target=accept_and_garbage, daemon=True)
+        t2.start()
+        try:
+            uitest.rpc(sock_bad, {"cmd": "ping"}, timeout=2.0)
+            raise AssertionError("expected ConnectionResetError on malformed JSON")
+        except ConnectionResetError:
+            pass
+        finally:
+            t2.join(timeout=2)
+            srv2.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 2. Mid-RPC socket EOF during replay_trace still records a reproducible crash once process exits
+    class _CrashMidRpcSession(_FakeSession):
+        def action(self, name, **kwargs):
+            self._alive = False
+            self.proc.returncode = -6
+            raise ConnectionResetError("EOF from --uitest socket")
+
+    with mock.patch.object(bughunt.uitest, "UITestSession", side_effect=lambda **_k: _CrashMidRpcSession()), \
+         mock.patch.object(bughunt.time, "sleep", return_value=None):
+        ok, hits = bughunt.replay_trace(
+            [{"seq": 0, "op": "action", "args": {"name": "sendChat", "text": "hi"}}],
+            fixture="default",
+            target_oracle="crash",
+        )
+        assert ok and len(hits) == 1 and hits[0]["oracle"] == "crash", (ok, hits)
+
+    # 2b. _settle_if_exiting + _check_session_oracles mid-state() crash vs live hang
+    with _FakeSession(alive=True) as dying:
+        def die_on_wait(timeout=None):
+            dying._alive = False
+            dying.proc.returncode = -11
+
+        dying.proc.wait.side_effect = die_on_wait
+        dying.state = mock.Mock(side_effect=ConnectionResetError("EOF"))
+        hits_d, _ = bughunt._check_session_oracles(dying, "default", "fuzz", set())
+        assert len(hits_d) == 1 and hits_d[0]["oracle"] == "crash", hits_d
+
+    with _FakeSession(alive=True) as hung:
+        hung.state = mock.Mock(side_effect=TimeoutError("rpc timeout"))
+        hits_h, _ = bughunt._check_session_oracles(hung, "default", "fuzz", set())
+        assert len(hits_h) == 1 and hits_h[0]["oracle"] == "hang", hits_h
+
+    # 3. _extract_crash_excerpt preserves exception header + top frames (Core.notify), and head+tail fallback
+    long_log = (
+        ("startup log line\n" * 80)
+        + "*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'bundleProxy nil'\n"
+        + "*** First throw call stack:\n(\n"
+        + "  0 CoreFoundation 0x1\n  1 Greenlight Core.notify +1972\n"
+        + "".join(f"  {i} AppKit boilerplate frame 0x{i:08x}\n" for i in range(2, 90))
+        + ")\nlibc++abi: terminating due to uncaught exception of type NSException\n"
+    )
+    excerpt = bughunt._extract_crash_excerpt(long_log, max_chars=2000)
+    assert "NSInternalInconsistencyException" in excerpt, excerpt[:300]
+    assert "Core.notify" in excerpt, excerpt[:500]
+    assert "libc++abi:" in excerpt, excerpt[-300:]
+    plain_long = "HEAD_MARKER " + ("x" * 4000) + " TAIL_MARKER"
+    plain_ex = bughunt._extract_crash_excerpt(plain_long, max_chars=2000)
+    assert "HEAD_MARKER" in plain_ex and "TAIL_MARKER" in plain_ex and "[truncated]" in plain_ex
+
+    # 4. _reap_session_processes terminates both process group and detached descendants cleanly
+    reap_dir = Path("/tmp/gl-uitest-reap1234-test")
+    with mock.patch.object(uitest, "_find_session_pids", side_effect=[{50001}, {50001}, set()]), \
+         mock.patch.object(uitest.os, "killpg", side_effect=[None, ProcessLookupError(), ProcessLookupError()]) as m_kpg, \
+         mock.patch.object(uitest.os, "kill") as m_kill, \
+         mock.patch.object(uitest.time, "sleep", return_value=None):
+        uitest._reap_session_processes(reap_dir, pgid=50000)
+        assert m_kpg.call_count >= 1 and m_kill.call_count >= 1
+
+    # Fallback SIGKILL path when group/pids survive past deadline
+    t_vals = iter([0.0, 1.0])
+    with mock.patch.object(uitest, "_find_session_pids", return_value={50002}), \
+         mock.patch.object(uitest.os, "killpg") as m_kpg2, \
+         mock.patch.object(uitest.os, "kill") as m_kill2, \
+         mock.patch.object(uitest.time, "monotonic", side_effect=lambda: next(t_vals, 2.0)), \
+         mock.patch.object(uitest.time, "sleep", return_value=None):
+        uitest._reap_session_processes(reap_dir, pgid=50000)
+        assert m_kpg2.call_count == 2 and m_kill2.call_count == 2
+
+
+def test_uv_no_project_chaos_filter_and_commit_overlap():
+    # _python_cmd must pass --no-project when uv is installed so Track 0 never writes uv.lock
+    with mock.patch.object(bughunt.shutil, "which", return_value="/opt/homebrew/bin/uv"):
+        assert bughunt._python_cmd() == ["uv", "run", "--no-project", "python"]
+    with mock.patch.object(bughunt.shutil, "which", return_value=None):
+        assert bughunt._python_cmd() == [sys.executable]
+
+    # Chaos fixture ignores expected orca_cli JSONDecodeError/RuntimeError in dash, but keeps real bugs & non-chaos errors
+    tmp = Path(tempfile.mkdtemp(prefix="gl-chaos-diag-"))
+    try:
+        (tmp / "diag").mkdir()
+        (tmp / "diag" / "events.jsonl").write_text(
+            json.dumps({
+                "kind": "dash_error", "comp": "dash", "err": "JSONDecodeError", "msg_class": "parse",
+                "where": ["dash.py:610:snapshot", "greenlight.py:180:orca_cli"],
+            }) + "\n"
+            + json.dumps({
+                "kind": "uncaught", "comp": "dash", "err": "RuntimeError", "msg_class": "other",
+                "where": ["dash.py:610:snapshot", "greenlight.py:180:orca_cli", "greenlight.py:136:_run"],
+            }) + "\n"
+            + json.dumps({
+                "kind": "uncaught", "comp": "greenlight", "err": "RuntimeError", "msg_class": "parse",
+                "where": ["greenlight.py:1147:scan", "greenlight.py:180:orca_cli", "greenlight.py:136:_run"],
+            }) + "\n"
+            + json.dumps({
+                "kind": "dash_error", "comp": "dash", "err": "KeyError", "msg_class": "other",
+                "where": ["dash.py:620:snapshot"],
+            }) + "\n"
+        )
+        chaos_hits = bughunt._read_isolated_diag_errors(tmp, fixture="chaos")
+        assert len(chaos_hits) == 1 and "KeyError" in chaos_hits[0]["summary"], chaos_hits
+        default_hits = bughunt._read_isolated_diag_errors(tmp, fixture="default")
+        assert len(default_hits) == 4, default_hits
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # _find_session_pids matches descendants referencing gl-uitest-* root and skips current/non-uitest dirs
+    fake_ps = (
+        f"  {os.getpid()}     1 python3 test_bughunt.py /tmp/gl-uitest-abc12345-xyz\n"
+        "  50001     1 /bin/sh -c GREENLIGHT_HOME=/tmp/gl-uitest-abc12345-xyz/home python3 scripts/chat.py\n"
+        "  50002 50001 python3 scripts/chat.py\n"
+        "  50003     1 /bin/sh -c echo unrelated\n"
+    )
+    with mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=fake_ps, stderr="")):
+        assert uitest._find_session_pids(Path("/tmp/gl-uitest-abc12345-xyz")) == {50001, 50002}
+        assert uitest._find_session_pids(Path("/tmp/not-uitest-dir")) == set()
+
+    # Track B recent_commit_overlap must NOT be set unconditionally just because commits exist
+    run_dir = Path(tempfile.mkdtemp(prefix="gl-overlap-test-"))
+    try:
+        payload = json.dumps({
+            "status": "ok",
+            "uitest_started": True,
+            "checks_run": 5,
+            "fixtures_tested": ["default"],
+            "findings": [
+                {"title": "Unrelated visual", "oracle": "visual_issue", "summary": "Off by 2px",
+                 "where": "app/stage.html", "files": ["app/stage.html"], "reproducible": True},
+                {"title": "Touched file", "oracle": "js_error", "summary": "TypeError",
+                 "where": "app/dashboard.html", "files": ["app/dashboard.html"], "reproducible": True},
+            ],
+        })
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=(f"```bughunt-json\n{payload}\n```", 0, "claude")):
+            st: dict = {}
+            hits = bughunt.run_llm_explorer(
+                ROOT,
+                [{"sha": "abc", "subject": "dash", "files": ["app/dashboard.html"]}],
+                {"app/dashboard.html"},
+                run_dir,
+                status_out=st,
+            )
+            assert st["status"] == "ok" and st["checks_run"] == 5, st
+            by_oracle = {h["oracle"]: h for h in hits}
+            assert by_oracle["visual_issue"]["recent_commit_overlap"] is False
+            assert by_oracle["js_error"]["recent_commit_overlap"] is True
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_track_b_blocked_detection_permissions_and_report():
+    # Scoped permissions added for claude in safe mode; explore always disallows Edit/Write
+    with mock.patch.object(bughunt.harness, "conf", return_value={}):
+        exp_cmd = bughunt._augment_agent_cmd("claude", ["claude", "-p"], mode="explore", add_dirs=[Path("/tmp/shots")])
+        assert "--allowedTools" in exp_cmd and "--disallowedTools" in exp_cmd and "--add-dir" in exp_cmd, exp_cmd
+        pat_cmd = bughunt._augment_agent_cmd("claude", ["claude", "-p"], mode="patch")
+        assert "--allowedTools" in pat_cmd and "--disallowedTools" not in pat_cmd, pat_cmd
+    with mock.patch.object(bughunt.harness, "conf", return_value={"bypass": True}):
+        byp_cmd = bughunt._augment_agent_cmd("claude", ["claude", "-p"], mode="explore")
+        assert "--disallowedTools" in byp_cmd and "--allowedTools" not in byp_cmd, byp_cmd
+
+    # Blocked / false-green detection across all failure modes
+    run_dir = Path(tempfile.mkdtemp(prefix="gl-blocked-test-"))
+    try:
+        # 1. Legacy [] with permission denial prose -> blocked
+        denied_out = "Every Bash command was denied. Nothing ran, so this is not a clean result.\n```bughunt-json\n[]\n```"
+        st1: dict = {}
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=(denied_out, 0, "claude")):
+            bughunt.run_llm_explorer(ROOT, [], set(), run_dir, status_out=st1)
+            assert st1["status"] == "blocked", st1
+
+        # 2. Structured envelope with checks_run=0 -> blocked
+        zero_out = '```bughunt-json\n{"status":"ok","uitest_started":false,"checks_run":0,"findings":[]}\n```'
+        st2: dict = {}
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=(zero_out, 0, "claude")):
+            bughunt.run_llm_explorer(ROOT, [], set(), run_dir, status_out=st2)
+            assert st2["status"] == "blocked", st2
+
+        # 3. Missing bughunt-json block -> error
+        st3: dict = {}
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=("plain text only", 0, "claude")):
+            bughunt.run_llm_explorer(ROOT, [], set(), run_dir, status_out=st3)
+            assert st3["status"] == "error", st3
+
+        # 4. Report MUST NOT claim clean run when a track is blocked, and must show "15 of 25 recent commits"
+        commits = [{"sha": f"c{i:02d}", "subject": f"msg {i}", "files": ["README.md"]} for i in range(25)]
+        rp = bughunt.write_report(
+            run_dir, [], [], {}, commits, max_prs=2,
+            track_status={"baseline": {"status": "ok", "detail": "2s"}, "llm_diff": {"status": "blocked", "detail": "denied"}},
+            commits_inspected=15,
+        )
+        txt = rp.read_text()
+        assert "Clean run" not in txt, txt
+        assert "15 of 25 recent commits" in txt, txt
+        assert "## Track Status" in txt and "`blocked`" in txt, txt
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_verification_gates_and_nightly_fault_isolation():
+    # _verification_gates adds test-js & test-ui for app/ edits, omits for scripts-only edits
+    with mock.patch.object(bughunt.shutil, "which", return_value="/usr/bin/ruff"), \
+         mock.patch.object(bughunt, "_has_playwright", return_value=True), \
+         mock.patch.object(bughunt.sys, "platform", "darwin"):
+        py_only = [g[0] for g in bughunt._verification_gates(["scripts/dash.py", "tests/test_dash.py"])]
+        assert "test-js" not in py_only and "test-ui" not in py_only, py_only
+        app_html = [g[0] for g in bughunt._verification_gates(["app/dashboard.html", "tests/test_dashboard.cjs"])]
+        assert "test-js" in app_html and "test-ui" in app_html, app_html
+        app_swift = [g[0] for g in bughunt._verification_gates(["app/Sources/Core.swift", "tests/test_uitest.py"])]
+        assert "test-js" in app_swift and "test-ui" in app_swift, app_swift
+
+    # run_nightly still writes report.md when one track raises an unexpected exception
+    with mock.patch.object(bughunt, "run_baseline", side_effect=RuntimeError("boom baseline")), \
+         mock.patch.object(bughunt, "run_fuzz_matrix", return_value=([], {"soak": {}})), \
+         mock.patch.object(bughunt, "run_llm_explorer", return_value=[]), \
+         mock.patch.object(bughunt, "fetch_open_pr_fingerprints", return_value=set()), \
+         mock.patch.object(bughunt.sys, "argv", ["bughunt.py", "run", "--dry-run", "--base", "HEAD", "--fixtures", "default"]):
+        assert bughunt.main() == 0
+        latest = (bughunt.bughunt_home() / "latest.md").read_text()
+        assert "`baseline`:** `error`" in latest and "Clean run" not in latest, latest
+
+
 def main():
     test_normalize_and_fingerprint()
     print("ok  normalize & fingerprint")
@@ -653,6 +930,14 @@ def main():
     print("ok  agent fallback, LLM explorer, VM HID & Draft PR patcher")
     test_remote_schedule_run_nightly_and_cli()
     print("ok  remote Mac mini scheduling, run_nightly & CLI")
+    test_socket_eof_crash_excerpt_and_settle()
+    print("ok  socket EOF, mid-RPC crash settle & top-frame crash excerpt")
+    test_uv_no_project_chaos_filter_and_commit_overlap()
+    print("ok  uv --no-project, chaos orca filter & commit overlap scoring")
+    test_track_b_blocked_detection_permissions_and_report()
+    print("ok  Track B scoped permissions, blocked detection & report status")
+    test_verification_gates_and_nightly_fault_isolation()
+    print("ok  app/ verification gates & nightly track fault isolation")
     print("all test_bughunt checks passed")
 
 
