@@ -59,8 +59,8 @@ STATE = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 DEFAULTS = {
     "me": None,                       # your GitLab/GitHub username; None = ask glab (else gh) once, cached in me.json
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
-    "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini)
-    "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}; see harness.py
+    "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini|agy)
+    "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
     "require_human_approval": True,   # False: a mergeable MR with no other human's approval merges anyway
@@ -171,8 +171,24 @@ def primary_agent(agents):
                                              a.get("updatedAt") or a.get("stateStartedAt") or 0))
 
 
+ORCA_AGENTS = {"agy": "antigravity"}  # greenlight's harness names that Orca knows by another id
+
+
+def orca_agent(args):
+    """`--agent <name>` as Orca knows it, plus that agent's `harnesses.<name>.model` unless a --model was given."""
+    args = list(args)
+    if "--agent" not in args[:-1]:
+        return args
+    i = args.index("--agent") + 1
+    name = args[i]
+    args[i] = ORCA_AGENTS.get(name, name)
+    model = ((CONFIG.get("harnesses") or {}).get(name) or {}).get("model")
+    return args + ["--model", model] if model and "--model" not in args else args
+
+
 def orca_cli(*args, timeout=120):
     """The Orca CLI itself, whatever GREENLIGHT_ADE is (dash.py trees asks every ADE)."""
+    args = orca_agent(args)
     # Bare `orca` on Linux outside an Orca terminal is the GNOME screen reader.
     shim = Path.home() / ".config/orca/linux-orca-cli-shim/orca"  # ssh / cron shells have no orca-ide on PATH
     exe = os.environ.get("ORCA_CLI_COMMAND") or shutil.which("orca-ide") or (shim.exists() and str(shim)) or "orca"

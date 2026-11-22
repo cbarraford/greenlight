@@ -337,14 +337,14 @@ def config_shape():
         c = json.loads((home() / "config.json").read_text())
     except (OSError, ValueError):
         return {}
-    shape = {}
+    shape: dict[str, Any] = {}
     for k, v in c.items():
         if isinstance(v, (bool, int, float)) or v is None:
             shape[k] = v
         elif k in ("merge_method", "llm_harness") and isinstance(v, str) and token(v):
             shape[k] = v
         elif k == "agents" and isinstance(v, list):
-            shape[k] = [a for a in v if a in ("claude", "codex", "opencode", "pi", "gemini")]
+            shape[k] = [a for a in v if a in ("claude", "codex", "opencode", "pi", "gemini", "agy")]
         else:
             shape[k] = type(v).__name__
     return shape
@@ -422,7 +422,7 @@ def doctor():
     except (OSError, ValueError, AttributeError):
         agents = ["claude"]
     for a in agents if isinstance(agents, list) else []:
-        if a in ("claude", "codex", "opencode", "pi", "gemini"):
+        if a in ("claude", "codex", "opencode", "pi", "gemini", "agy"):
             add(f"agent_{a}", bool(shutil.which(a)))
     with contextlib.suppress(OSError):
         free = shutil.disk_usage(home() if home().exists() else Path.home()).free / 1e9
