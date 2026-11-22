@@ -4,7 +4,7 @@ NATIVE := $(shell [ "$$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo 
 SWIFTC = DEVELOPER_DIR=/Library/Developer/CommandLineTools $(NATIVE) swiftc
 SWIFT_SRCS = $(wildcard app/Sources/*.swift)
 
-.PHONY: help test lint test-py test-js test-webkit test-ui typecheck build report sync dev-status
+.PHONY: help test lint test-py test-js test-webkit test-ui bughunt typecheck build report sync dev-status
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
@@ -27,6 +27,9 @@ test-webkit: ## page tests on WebKit (matches macOS WKWebView)
 
 test-ui: ## parallel background macOS --uitest end-to-end suite
 	$(PY) tests/test_uitest.py
+
+bughunt: ## dry-run nightly bug hunter locally (fast Track A fuzz + ranking)
+	$(PY) scripts/bughunt.py run --dry-run --skip-baseline --skip-llm --soak-secs 15 --fuzz-steps 25
 
 typecheck: ## compile-check Swift app sources
 	$(SWIFTC) -typecheck $(SWIFT_SRCS)

@@ -13,15 +13,30 @@ final class UITestServer {
     private var stopped = false
     private let q = DispatchQueue(label: "dev.greenlight.uitest.server", qos: .userInitiated)
 
-    /// Injected into every WKWebView under `--uitest` to capture uncaught page errors & unhandled rejections.
+    /// Injected into every WKWebView under `--uitest` to capture uncaught page errors, rejections & console.error.
     static let errorCollectorJS = """
     window.__uitestErrors = window.__uitestErrors || [];
+    window.__uitestConsoleErrors = window.__uitestConsoleErrors || [];
     window.addEventListener('error', e => {
-      window.__uitestErrors.push(String(e.message || e.error || 'error'));
+      const loc = e.filename ? ` (${e.filename}:${e.lineno || 0})` : '';
+      window.__uitestErrors.push(String(e.message || e.error || 'error') + loc);
     });
     window.addEventListener('unhandledrejection', e => {
       window.__uitestErrors.push(String(e.reason || 'unhandledrejection'));
     });
+    if (!window.__uitestConsoleWrapped) {
+      window.__uitestConsoleWrapped = true;
+      const origErr = console.error;
+      console.error = function(...args) {
+        try {
+          window.__uitestConsoleErrors.push(args.map(a => {
+            if (a instanceof Error) return a.stack || a.message;
+            try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); }
+          }).join(' ').slice(0, 500));
+        } catch {}
+        return origErr.apply(this, args);
+      };
+    }
     """
 
     static func installErrorCollector(_ cfg: WKWebViewConfiguration) {
@@ -192,7 +207,10 @@ final class UITestServer {
             ])
 
         case "state":
-            collectWebErrors(app: app) { errors in
+            collectWebHealth(app: app) { errors, consoleErrors, domNodes in
+                let rssMb = (Double(Diag.rss()) / 1048576.0 * 10.0).rounded() / 10.0
+                let cpuSecs = (Diag.cpu() * 1000.0).rounded() / 1000.0
+                let openFds = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
                 done([
                     "ok": true,
                     "upstairs": app.upstairs,
@@ -204,6 +222,13 @@ final class UITestServer {
                     "coreBusy": app.greenlight.run != nil,
                     "feedCount": app.greenlight.feed.lines.count,
                     "webErrors": errors,
+                    "consoleErrors": consoleErrors,
+                    "metrics": [
+                        "rssMb": rssMb,
+                        "cpuSecs": cpuSecs,
+                        "openFds": openFds,
+                        "domNodes": domNodes,
+                    ],
                     "windows": [
                         "dashboard": ["visible": app.window.isVisible, "width": Int(app.window.frame.width), "height": Int(app.window.frame.height)],
                         "terminal": ["visible": app.termWindow.isVisible, "width": Int(app.termWindow.frame.width), "height": Int(app.termWindow.frame.height)],
@@ -260,6 +285,24 @@ final class UITestServer {
             case "chatClear":
                 app.greenlight.clear()
                 done(["ok": true])
+            case "sendChat":
+                guard let text = req["text"] as? String, !text.isEmpty else {
+                    return done(["ok": false, "error": "missing text"])
+                }
+                app.greenlight.send(text)
+                done(["ok": true])
+            case "openPalette":
+                app.basement()
+                (app.termWindow.contentView as? WKWebView)?.callJS("window.term && term.palette", [true])
+                done(["ok": true])
+            case "closePalette":
+                (app.termWindow.contentView as? WKWebView)?.callJS("window.term && term.palette", [false])
+                done(["ok": true])
+            case "clearErrors":
+                let js = "(() => { window.__uitestErrors = []; window.__uitestConsoleErrors = []; return true; })()"
+                app.fluid.evaluateJavaScript(js, completionHandler: nil)
+                (app.termWindow.contentView as? WKWebView)?.evaluateJavaScript(js, completionHandler: nil)
+                done(["ok": true])
             case "openWorkspace":
                 guard let path = req["path"] as? String else { return done(["ok": false, "error": "missing path"]) }
                 app.toWorkspace(path)
@@ -310,24 +353,44 @@ final class UITestServer {
         }
     }
 
-    private func collectWebErrors(app: App, done: @escaping ([String: [String]]) -> Void) {
-        var out = [String: [String]]()
+    private func collectWebHealth(app: App, done: @escaping ([String: [String]], [String: [String]], [String: Int]) -> Void) {
+        var errs = [String: [String]]()
+        var consoleErrs = [String: [String]]()
+        var domNodes = [String: Int]()
         let targets: [(String, WKWebView?)] = [
             ("dashboard", app.fluid),
             ("terminal", app.termWindow.contentView as? WKWebView),
         ]
+        let probeJS = """
+        (() => JSON.stringify({
+          e: window.__uitestErrors || [],
+          c: window.__uitestConsoleErrors || [],
+          n: document.getElementsByTagName('*').length
+        }))()
+        """
         var remaining = targets.count
         for (name, web) in targets {
             guard let web else {
-                out[name] = []
+                errs[name] = []
+                consoleErrs[name] = []
+                domNodes[name] = 0
                 remaining -= 1
-                if remaining == 0 { done(out) }
+                if remaining == 0 { done(errs, consoleErrs, domNodes) }
                 continue
             }
-            web.evaluateJavaScript("window.__uitestErrors || []") { val, _ in
-                out[name] = val as? [String] ?? []
+            web.evaluateJavaScript(probeJS) { val, _ in
+                if let s = val as? String, let d = s.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                    errs[name] = obj["e"] as? [String] ?? []
+                    consoleErrs[name] = obj["c"] as? [String] ?? []
+                    domNodes[name] = obj["n"] as? Int ?? 0
+                } else {
+                    errs[name] = []
+                    consoleErrs[name] = []
+                    domNodes[name] = 0
+                }
                 remaining -= 1
-                if remaining == 0 { done(out) }
+                if remaining == 0 { done(errs, consoleErrs, domNodes) }
             }
         }
     }
