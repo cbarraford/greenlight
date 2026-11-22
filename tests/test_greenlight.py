@@ -116,9 +116,20 @@ assert nxt(mr(draft=True), ws() | {"comment": "Rebase !5008 (stay draft) — dis
 assert nxt(mr(_approved_by=[greenlight.BOT])) == ("merge", "reviewers")
 assert nxt(mr(draft=True), ws("Merge !5008 (stay draft, revisit 2999-01-01)")) == ("parked", "parked")
 assert nxt(mr(draft=True), ws("Merge !5008 (stay draft, revisit 2000-01-01)")) == ("ready", "me")
-# threads: reviewer spoke last -> agent; we (or the bot) replied last -> reviewer re-review
-assert nxt(mr(_discussions=[thread("bob", "bob")])) == ("threads", "agent")
-assert nxt(mr(_discussions=[thread("bob", greenlight.BOT)])) == ("threads", "reviewers")
+# threads: only my reply hands a thread back to the reviewer; whoever else spoke last (a person or the review bot) waits on an agent
+assert nxt(mr(_discussions=[thread("bob", "bob")])) == ("threads", "agent")  # human-opened, unanswered
+assert nxt(mr(_discussions=[thread("bob", greenlight.BOT)])) == ("threads", "agent")  # the bot chimed in on a person's thread
+bot_only = {"notes": [{"resolvable": True, "resolved": False, "author": U(greenlight.BOT)}]}
+assert nxt(mr(_discussions=[bot_only])) == ("threads", "agent")  # bot-opened finding nobody answered
+bot_again = {"notes": bot_only["notes"] + [{"author": U(greenlight.ME)}, {"author": U(greenlight.BOT)}]}
+assert nxt(mr(_discussions=[bot_again])) == ("threads", "agent")  # the bot replied after me: still not fixed
+assert nxt(mr(_discussions=[thread(greenlight.BOT, greenlight.ME)])) == ("threads", "reviewers")  # I answered the bot
+assert nxt(mr(_discussions=[thread("bob", greenlight.ME)])) == ("threads", "reviewers")  # I answered the person
+both = mr(_discussions=[thread("bob", greenlight.ME), bot_only])
+assert nxt(both) == ("threads", "agent")
+assert "(1 unresolved)" in greenlight.check("threads", both, ws(), None)[1]  # counts only the one waiting on me
+pushed = {"notes": bot_only["notes"] + [{"author": U(greenlight.ME), "system": True}]}
+assert nxt(mr(_discussions=[pushed])) == ("threads", "reviewers")  # GitLab's "changed this line" note for my push: as before, mine
 assert nxt(None, ws("nightly loop (automation)")) == ("freeform", "working")
 assert nxt(mr(), ws("Merge !5131 (parked)")) == ("parked", "parked")
 assert nxt(mr(state="merged"), ws("Merge !5131 (parked)")) != ("parked", "parked")  # a finished MR still gets cleaned up
@@ -428,7 +439,11 @@ OPEN = [{"number": 22, "headRefName": "ws-branch", "closingIssuesReferences": []
         {"number": 13, "headRefName": "plan-view", "closingIssuesReferences": []}]
 def fake_pr(project, n, forge="gitlab"):
     assert forge == "github" and project == "octo/greenlight" and isinstance(n, int), n  # gh rejects `$n: Int!` = a dict
-    return gh_pr(number=n, state="MERGED" if n == 9 else "OPEN", baseRefName="plan-view" if n == 22 else "main")
+    bot_th = {"isResolved": False, "first": {"nodes": [{"author": {"login": greenlight.BOT}, "body": "Critical: leak"}]},
+              "last": {"nodes": [{"author": {"login": greenlight.BOT}}]}}
+    mine_th = {"isResolved": False, "first": {"nodes": [{"author": {"login": "alice"}, "body": "why?"}]}, "last": {"nodes": [{"author": {"login": "octo"}}]}}
+    return gh_pr(number=n, state="MERGED" if n == 9 else "OPEN", baseRefName="plan-view" if n == 22 else "main",
+                 **({"reviewThreads": {"nodes": [bot_th, mine_th]}} if n == 23 else {}))
 def fake_gh(*a):
     return [{"number": 9}] if "ws-old" in a else []
 (greenlight.STATE / "last.json").unlink(missing_ok=True)  # the precheck test above leaves a non-JSON snapshot
@@ -451,6 +466,7 @@ by = {r["name"]: r for r in res["rows"]}
 assert res["skipped"] == 1 and set(by) == {"ws-linked", "ws-linked-obj", "ws-branch", "ws-issue", "ws-old", "ws-none"}
 assert {n: r["mr"] and r["mr"]["ref"] for n, r in by.items()} == {"ws-linked": "#17", "ws-linked-obj": "#39", "ws-branch": "#22", "ws-issue": "#23",
                                                                    "ws-old": "#9", "ws-none": None}
+assert by["ws-issue"]["mr"]["threads"] == 2 and by["ws-issue"]["mr"]["todo_threads"] == [f'{greenlight.BOT}: "Critical: leak"']  # the bot's finding, not my answered one
 assert by["ws-branch"]["next"]["owner"] == "dependency" and "#13" in by["ws-branch"]["next"]["action"]  # stacked on plan-view
 assert by["ws-old"]["next"]["step"] == "done" and by["ws-none"]["next"]["step"] == "freeform"
 assert by["ws-issue"]["mr"]["forge"] == "github" and by["ws-issue"]["mr"]["author"] == "octo"
@@ -628,10 +644,10 @@ assert pre_nb["step"] == "rfc" and pre_nb["cmd"][-2] == "@nb"
 with mock.patch.object(sys, "argv", ["greenlight.py"] + pre_nb["cmd"][2:]):
     greenlight.main()
 assert greenlight.evaluate(empty_br, None, None)["step"] == "freeform"
-# per-repo review_bot in threads: bot-a replied last -> waiting on reviewers (not agent)
+# per-repo review_bot in threads: bot-a spoke last -> an agent answers it, not the reviewers
 th_e = greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}],
                                   labels=["qa-ok"], _discussions=[thread("alice", "bot-a")]), None)
-assert (th_e["step"], th_e["owner"]) == ("threads", "reviewers"), th_e
+assert (th_e["step"], th_e["owner"]) == ("threads", "agent"), th_e
 (greenlight.STATE / "lifecycles/strict.md").write_text(greenlight.lifecycle_md("strict", {
     "options": {"human_approval": "true"}, "stages": [{"key": "mr_open"}, {"key": "merge"}]}))
 old_cfg = greenlight.CONFIG
