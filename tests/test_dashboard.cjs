@@ -5,9 +5,11 @@
 //
 // The browser is $CHROME, else the newest Playwright headless shell under ~/.cache/ms-playwright.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-let chromium;
-try { ({chromium} = require("playwright-core")) } catch { try { ({chromium} = require("playwright")) } catch {
+let pw;
+try { pw = require("playwright-core") } catch { try { pw = require("playwright") } catch {
   console.error("needs playwright-core: npm i playwright-core, then run with NODE_PATH=<that>/node_modules"); process.exit(2) } }
+const {chromium, webkit} = pw;
+const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
 
 function browserPath(){
   if (process.env.CHROME) return process.env.CHROME;
@@ -21,6 +23,11 @@ function browserPath(){
 }
 
 const PAGE = "file://" + path.join(__dirname, "../app/", "dashboard.html");
+// Playwright WebKit doesn't intercept file:// subresources via page.route(), so stage terminal.html + ghostty-web.js side by side.
+const TERM_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "dash-term-"));
+fs.copyFileSync(path.join(__dirname, "../app/", "terminal.html"), path.join(TERM_DIR, "terminal.html"));
+fs.copyFileSync(path.join(__dirname, "../app/", "vendor", "ghostty-web.js"), path.join(TERM_DIR, "ghostty-web.js"));
+const TERM_PAGE = "file://" + path.join(TERM_DIR, "terminal.html");
 const puck = (name, goal, state) => ({name, path: "/w/" + name, project: "acme/widgets", goal, state: state === "waiting" ? "needs" : "working", why: "",
   progress: 0, steps: [], step_index: 0, step: "freeform", owner: "parked", hidden: false, action: "", changed: null,
   agent: {state, type: "claude", last: state === "waiting" ? "Which one?" : "", since: 1700000000000, task: "", tool: "", input: ""},
@@ -345,13 +352,15 @@ test("toast: the dismiss button closes it", async page => {
   assert.equal(await page.$(".toast"), null);
 });
 
-test("Basement: a page's button and a ⌘-click on a hex send B1 that worktree; no console is left", async page => {
+test("Basement: a page's button sends B1 that worktree; ⌘-click on a hex docks it into chat context; no console is left", async page => {
   assert.equal(await page.$("#con"), null);
   await page.evaluate(() => openPage("plan-a"));
   await page.click("#bar button:has-text('Basement')");
   await page.evaluate(() => closePage());
   await page.click("#main .cell[data-name='plan-b']", {modifiers: ["Meta"]});
-  assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-a", "/w/plan-b"]);
+  assert.deepEqual((await posts(page, "basement")).map(m => m.path), ["/w/plan-a"]);
+  const ctx = (await posts(page, "context")).pop();
+  assert.ok(ctx && ctx.items.some(i => i.key === "plan-b"), "⌘-click on a hex docks it in chat context");
 });
 
 test("hover card button: greyed \"Please wait…\" until the step is written, then says it and runs it; none while the agent works or waits", async page => {
@@ -727,8 +736,7 @@ test("L1's Open projects returns to All when the last project is unticked", asyn
 test("terminal: arrows move between tabs, Enter opens the focused one", async page => {
   const tp = await page.context().browser().newPage({viewport: {width: 760, height: 460}});
   await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
-  await tp.route("**/ghostty-web.js", r => r.fulfill({path: path.join(__dirname, "../app/", "vendor", "ghostty-web.js")}));
-  await tp.goto("file://" + path.join(__dirname, "../app/", "terminal.html"));
+  await tp.goto(TERM_PAGE);
   await tp.waitForFunction(() => (window.__term || []).some(m => m.cmd === "ready"), null, {timeout: 8000});
   await tp.evaluate(() => term.restore(null));  // the app's answer to ready: no saved layout
   await tp.evaluate(() => { newTab(); show(tabs[0]) });
@@ -756,8 +764,7 @@ test("bridge: the app's theme colors restyle surfaces and chrome, never the stat
 test("terminal: a tab whose title is just ~ is named by the folder its shell is in", async page => {
   const tp = await page.context().browser().newPage({viewport: {width: 760, height: 460}});
   await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
-  await tp.route("**/ghostty-web.js", r => r.fulfill({path: path.join(__dirname, "../app/", "vendor", "ghostty-web.js")}));
-  await tp.goto("file://" + path.join(__dirname, "../app/", "terminal.html"));
+  await tp.goto(TERM_PAGE);
   await tp.waitForFunction(() => (window.__term || []).some(m => m.cmd === "ready"), null, {timeout: 8000});
   await tp.evaluate(() => term.restore(null));  // the app's answer to ready: no saved layout
   await tp.evaluate(() => { const id = window.__term.find(m => m.cmd === "open").id; term.feed(id, btoa("\x1b]2;me@devbox:~\x07\x1b]7;file://devbox/home/me/w/retry-stuck-outbounds\x07$ ")) });
@@ -768,8 +775,7 @@ test("terminal: a tab whose title is just ~ is named by the folder its shell is 
 test("terminal: keys send what Ghostty sends, and ⌘K / ⌘A / ⌘F / ⌘V / panes act like Ghostty's", async page => {
   const tp = await page.context().browser().newPage({viewport: {width: 1000, height: 600}});
   await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
-  await tp.route("**/ghostty-web.js", r => r.fulfill({path: path.join(__dirname, "../app/", "vendor", "ghostty-web.js")}));
-  await tp.goto("file://" + path.join(__dirname, "../app/", "terminal.html"));
+  await tp.goto(TERM_PAGE);
   await tp.waitForFunction(() => (window.__term || []).some(m => m.cmd === "ready"), null, {timeout: 8000});
   await tp.evaluate(() => term.restore(null));
   await tp.click(".pane canvas");
@@ -1029,7 +1035,7 @@ test("All output: another session is labelled from the first paint; a new sessio
 });
 
 (async () => {
-  const browser = await chromium.launch({executablePath: browserPath()});
+  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch({executablePath: browserPath()});
   let failed = 0;
   for (const t of tests) {
     const page = await boot(browser);
@@ -1038,6 +1044,7 @@ test("All output: another session is labelled from the first paint; a new sessio
     await page.close();
   }
   await browser.close();
+  fs.rmSync(TERM_DIR, {recursive: true, force: true});
   console.log(`${tests.length - failed}/${tests.length} passed`);
   process.exit(failed ? 1 : 0);
 })();

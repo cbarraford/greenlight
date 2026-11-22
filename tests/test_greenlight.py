@@ -189,7 +189,6 @@ assert code and "Options" in str(code) and out == []
 
 # glab retries: timeouts and transient 5xx/reset retry (3 tries); real errors fail fast
 import subprocess
-from unittest import mock
 ok = subprocess.CompletedProcess([], 0, "[1]", "")
 bad = lambda err: subprocess.CompletedProcess([], 1, "", err)
 slow = subprocess.TimeoutExpired("glab", 45)

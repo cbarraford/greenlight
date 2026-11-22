@@ -61,7 +61,7 @@ team=$([ -n "$apple" ] && security find-certificate -a -Z -p | awk -v h="$apple"
   openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
 if [ -n "$apple" ] && [ -z "$team" ]; then echo "build.sh: error: couldn't read the team (OU) from \"$cn\"" >&2; exit 1; fi
 # Command Line Tools swiftc: avoids needing the Xcode license accepted
-DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Greenlight.swift -o "$bin"
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Sources/*.swift -o "$bin"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 mv "$bin" "$app/Contents/MacOS/$name"
 cat > "$app/Contents/Info.plist" <<EOF

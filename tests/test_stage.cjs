@@ -1,9 +1,10 @@
 // Headless checks for stage.html, voice mode's card: each kind renders as text only, and Chief's own HTML can't run script.
 //   NODE_PATH=…/node_modules node tests/test_stage.cjs
-const { chromium } = require("playwright-core");
+const { chromium, webkit } = require("playwright-core");
 const assert = require("assert");
+const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
 (async () => {
-  const b = await chromium.launch(); const p = await b.newPage();
+  const b = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch(); const p = await b.newPage();
   await p.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
   assert.match(await p.textContent("#s"), /Listening/);
   await p.evaluate(() => stage.spec({ title: "3 MRs ready", kind: "steps", eyebrow: "<i>ship</i>", stat: "", items: [{ label: "<b>x</b>", detail: "d" }, { label: "two", detail: "" }] }));
