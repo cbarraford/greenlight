@@ -93,4 +93,21 @@ p = subprocess.run([sys.executable, str(ROOT / "scripts" / "dash.py"), "tree", "
 out = json.loads(p.stdout) if p.stdout.strip().startswith("{") else {"error": p.stderr}
 assert p.returncode != 0 or out.get("error"), f"path traversal was not rejected: {p.stdout} {p.stderr}"
 
+# 5. Swift shellPath preserves ~ expansion & no stray UserDefaults.standard leaks remain outside Config/cleanup
+config_swift = (ROOT / "app" / "Sources" / "Config.swift").read_text()
+assert "func shellPath(" in config_swift and "shellPath(greenlightHome)" in config_swift and "shellPath(greenlightCode)" in config_swift
+for sf in check_safety.swift_files():
+    for i, line in enumerate(sf.read_text().splitlines(), 1):
+        if "UserDefaults.standard" in line:
+            allowed = (sf.name == "Config.swift" and "let ud:" in line) or (sf.name == "App.swift" and "removePersistentDomain" in line)
+            assert allowed, f"stray UserDefaults.standard in {sf.name}:{i}: {line.strip()}"
+
+# 6. audit.py review handles argv cleanly without UnboundLocalError
+import audit
+from unittest import mock
+assert audit.main(["review", "--path", str(ROOT), "--deterministic-only"]) == 0
+with mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
+    assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 0
+    assert mc.called
+
 print("ok  test_security.py passed")

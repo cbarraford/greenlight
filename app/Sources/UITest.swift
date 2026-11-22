@@ -54,11 +54,13 @@ final class UITestServer {
             buf[pathBytes.count] = 0
         }
 
+        let oldMask = umask(0o077)
         let bindRes = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                 bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
+        umask(oldMask)
         guard bindRes == 0 else {
             NSLog("uitest: bind(%@) failed: %d", socketPath, errno)
             close(fd)
@@ -96,15 +98,30 @@ final class UITestServer {
         }
     }
 
+    private final class ReplyBox {
+        private let lock = NSLock()
+        private var value: [String: Any] = ["ok": false, "error": "timeout"]
+        func set(_ v: [String: Any]) { lock.lock(); value = v; lock.unlock() }
+        func get() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
     private func handleClient(_ fd: Int32) {
         defer { close(fd) }
+        var tv = timeval(tv_sec: 10, tv_usec: 0)
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 4096)
-        while true {
+        let maxBytes = 1 << 20  // 1 MiB cap per JSON-RPC request
+        while data.count < maxBytes {
             let n = read(fd, &buf, buf.count)
             if n <= 0 { break }
             data.append(buf, count: n)
             if data.contains(0x0A) { break }  // newline-delimited JSON request
+        }
+        guard data.count < maxBytes else {
+            writeJSON(fd, ["ok": false, "error": "request too large"])
+            return
         }
         guard !data.isEmpty,
               let line = data.split(separator: 0x0A, maxSplits: 1).first,
@@ -113,16 +130,20 @@ final class UITestServer {
             return
         }
         let sem = DispatchSemaphore(value: 0)
-        var resp: [String: Any] = ["ok": false, "error": "app gone"]
+        let box = ReplyBox()
         DispatchQueue.main.async { [weak self] in
-            guard let self, let app = self.app else { sem.signal(); return }
+            guard let self, let app = self.app else {
+                box.set(["ok": false, "error": "app gone"])
+                sem.signal()
+                return
+            }
             self.dispatch(req, app: app) { out in
-                resp = out
+                box.set(out)
                 sem.signal()
             }
         }
         _ = sem.wait(timeout: .now() + 30)
-        writeJSON(fd, resp)
+        writeJSON(fd, box.get())
     }
 
     private func writeJSON(_ fd: Int32, _ obj: [String: Any]) {

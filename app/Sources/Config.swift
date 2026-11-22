@@ -35,9 +35,16 @@ let host = ProcessInfo.processInfo.environment["GREENLIGHT_HOST"] ?? ud.string(f
 let greenlightHome = ProcessInfo.processInfo.environment["GREENLIGHT_HOME"] ?? ud.string(forKey: "greenlightHome") ?? "~/.greenlight"
 let greenlightCode = ProcessInfo.processInfo.environment["GREENLIGHT_CODE"] ?? ud.string(forKey: "greenlightCode") ?? "~/.claude/skills/greenlight"
 let tmuxSocketName = ProcessInfo.processInfo.environment["GREENLIGHT_TMUX_SOCKET"] ?? (uitest ? "gl-uitest-\(ProcessInfo.processInfo.processIdentifier)" : "greenlight")
-let py = "GREENLIGHT_HOME=\(shellQuote(greenlightHome)) GREENLIGHT_TMUX_SOCKET=\(shellQuote(tmuxSocketName)) python3 \(shellQuote(greenlightCode))/scripts"  // + "/greenlight.py ..."
+/// Quotes a filesystem path for a POSIX shell while preserving leading `~` expansion on local or remote hosts.
+func shellPath(_ p: String) -> String {
+    if p == "~" { return "$HOME" }
+    if p.hasPrefix("~/") { return "$HOME/" + shellQuote(String(p.dropFirst(2))) }
+    return shellQuote(p)
+}
+
+let py = "GREENLIGHT_HOME=\(shellPath(greenlightHome)) GREENLIGHT_TMUX_SOCKET=\(shellQuote(tmuxSocketName)) python3 \(shellPath(greenlightCode))/scripts"  // + "/greenlight.py ..."
 let selftest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--attachtest")  // scratch chat session + transcript, see selfTest()
-let chatCmd = (selftest ? "CHAT_DIR=\(shellQuote(greenlightHome))/chat-test " : "") + "\(py)/chat.py"
+let chatCmd = (selftest ? "CHAT_DIR=\(shellPath(greenlightHome))/chat-test " : "") + "\(py)/chat.py"
 let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
 /// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
 /// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
@@ -202,7 +209,7 @@ let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5
 /// Gemini model ids run through agy; the Gemini CLI entry still starts that harness's default model.
 func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "agy" : model }
 func savedModel(_ key: String, fallback: String) -> String {
-    let stored = UserDefaults.standard.string(forKey: key) ?? fallback
+    let stored = ud.string(forKey: key) ?? fallback
     return stored == "gemini-4-neon" ? "gemini-4-neon-medium" : stored
 }
 let efforts = ["low", "medium", "high", "xhigh", "max"]

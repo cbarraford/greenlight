@@ -324,7 +324,7 @@ def drop(k):
 
 def errors(out):
     """The compiler's errors (path:line:col: error: …), else the end of what it printed."""
-    e = [re.sub(r"^(?=[\w.-]+\.swift:\d)", "app/", l) for l in out.splitlines() if "error:" in l and not l.lstrip().startswith(("|", "`"))]  # build.sh compiles in app/
+    e = [re.sub(r"^(?=(?:[\w.-]+/)*[\w.-]+\.swift:\d)", "app/", l) for l in out.splitlines() if "error:" in l and not l.lstrip().startswith(("|", "`"))]  # build.sh compiles in app/
     return "\n".join(dict.fromkeys(e)) if e else "\n".join(out.splitlines()[-30:])
 
 
