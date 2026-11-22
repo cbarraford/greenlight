@@ -99,7 +99,7 @@ final class Voice: NSObject, ObservableObject {
         }
     }
 
-    func toggle() { on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
+    func toggle() { Diag.event("voice", ["on": !(on || starting)]); on || starting ? stopAll() : start() }  // a press while it's still starting cancels it
     @Published var starting = false  // a start (and its retries) under way: the voice button shows it, and a press cancels it
     var startGen = 0  // stopAll() bumps it, which ends a start still under way
     var staleEngine = false  // its restart failed: the next start begins on a new engine

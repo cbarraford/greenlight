@@ -307,6 +307,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             Speech.shared.warm()
         }
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
+        Diag.launched(host: host)
         if !uitest {
             let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             s.button?.imagePosition = .imageLeading
@@ -705,7 +706,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if from === web(showing: "hex") { greenlight.attached = [] }  // a reloaded hive starts with an empty dock
             pushedMono = ""; pushedBell = ""; pushedChat = ""; pushedOrb = ""; pushedRepos = ""  // tick sends the code font, the bell and the orb's room
         }
-        if cmd == "error" { NSLog("greenlight page error: %@", String(describing: b["m"] ?? "")) }
+        if cmd == "error" {
+            NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
+            Diag.event("js_error", ["page": "dashboard", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
+        } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "unpick" { if let l { l.c.light([], false) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
@@ -862,12 +866,82 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                             ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
+        _ = menu("Help", [("Report a Bug…", "appReportBug", "")], target: self)
         NSApp.mainMenu = bar
     }
     @objc func appNewWindow() { newTermWindow(sharedOnly, from: NSApp.keyWindow.flatMap { termWins.values.contains($0) ? $0 : nil }) }  // the shared pick
     @objc func appNewL1() { newL1(l1s.values.first { $0.w.isKeyWindow }?.only ?? sharedOnly, from: NSApp.keyWindow) }  // the projects of the one you're in
     @objc func appSettings() { greenlight.settingsOpen = true; greenlight.inboxOpen = false }
     @objc func appReload() { loadFluid(l1s.values.first { $0.w.isKeyWindow }?.web) }
+
+    /// Help › Report a Bug…: a title and description, then the full issue diag.py would file (its trail, re-checked for
+    /// leaks on greenlight's host), then Save… or File on GitHub. Nothing leaves this Mac before that last click.
+    @objc func appReportBug() {
+        let a = NSAlert()
+        a.messageText = "Report a Bug"
+        a.informativeText = "The report goes on GitHub, in public. Greenlight adds its diagnostic trail: event kinds, timings and error classes, with names hashed and no messages. You'll see all of it before anything is sent. Leave names, paths and secrets out of what you write."
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 176))
+        let t = NSTextField(frame: NSRect(x: 0, y: 150, width: 420, height: 24))
+        t.placeholderString = "What went wrong, in a line"
+        let sv = NSTextView.scrollableTextView()
+        sv.frame = NSRect(x: 0, y: 0, width: 420, height: 142)
+        sv.borderType = .bezelBorder
+        let tv = sv.documentView as! NSTextView
+        tv.isRichText = false; tv.font = .systemFont(ofSize: 12); tv.isAutomaticQuoteSubstitutionEnabled = false
+        box.addSubview(t); box.addSubview(sv)
+        a.accessoryView = box
+        a.addButton(withTitle: "Preview…"); a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = t
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        bugReport(t.stringValue, tv.string, execute: false)
+    }
+    /// diag.py report on greenlight's host, with this app's own events on stdin (it checks them like its own).
+    func bugReport(_ title: String, _ body: String, execute: Bool, shown: String? = nil) {
+        let app = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n").suffix(500)
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) }
+        let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown.map { $0 as Any } ?? NSNull()])) ?? Data("{}".utf8)
+        var out = ""
+        _ = ssh("\(py)/diag.py report --json\(execute ? " --execute" : "")", stdin: String(decoding: input, as: UTF8.self),
+                onLine: { out += $0 }, onExit: { [weak self] code in
+            let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+            self?.bugResult(j, code, title, body, execute)
+        })
+    }
+    func bugResult(_ j: [String: Any], _ code: Int32, _ title: String, _ body: String, _ executed: Bool) {
+        let a = NSAlert()
+        NSApp.activate(ignoringOtherApps: true)
+        guard j["ok"] as? Bool == true else {
+            a.messageText = j["blocked"] != nil ? "Not sent" : "Couldn't make the report"
+            a.informativeText = j["reason"] as? String ?? "diag.py on \(host.isEmpty ? "this Mac" : host) didn't answer (exit \(code)). Is greenlight synced there?"
+            a.runModal(); return
+        }
+        if executed {
+            a.messageText = j["filed"] as? Bool == true ? "Filed" : "Finish on GitHub"
+            a.informativeText = j["filed"] as? Bool == true ? "Thank you. The issue is open in your browser." :
+                "gh isn't set up where greenlight runs, so GitHub's form is open with your title and description. Attach the bundle you saved."
+            if let u = (j["url"] as? String).flatMap(URL.init(string:)) { NSWorkspace.shared.open(u) }
+            a.runModal(); return
+        }
+        a.messageText = "This is the whole report"
+        a.informativeText = "It will be public on github.com/\(j["repo"] as? String ?? "cbarraford/greenlight"). Events that failed the privacy check are already left out."
+        let sv = NSTextView.scrollableTextView()
+        sv.frame = NSRect(x: 0, y: 0, width: 560, height: 320)
+        let tv = sv.documentView as! NSTextView
+        tv.isEditable = false; tv.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        tv.string = "\(j["title"] as? String ?? "")\n\n\(j["body"] as? String ?? "")"
+        a.accessoryView = sv
+        a.addButton(withTitle: "File on GitHub"); a.addButton(withTitle: "Save Bundle…"); a.addButton(withTitle: "Cancel")
+        switch a.runModal() {
+        case .alertFirstButtonReturn: bugReport(title, body, execute: true, shown: j["body"] as? String)  // what was shown, not a rebuild
+        case .alertSecondButtonReturn:
+            let s = NSSavePanel()
+            s.nameFieldStringValue = "greenlight-bug-report.json"
+            if s.runModal() == .OK, let u = s.url, let d = j["data"],
+               let data = try? JSONSerialization.data(withJSONObject: d, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: u) }
+        default: break
+        }
+    }
     @objc func appToggleTerm() { toggleTerm() }
     @objc func appJumpTerm() {  // ⌘J from any window: the terminal with its jump palette open (the page catches ⌘J itself when it has focus)
         if !(termWindow.isVisible && termWindow.isKeyWindow) { toggleTerm() }
@@ -1355,6 +1429,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
         let session = (b["session"] as? String).flatMap { $0.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil }
+        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "error", "localName", "trees"].contains(c) {
+            Diag.event("action", ["cmd": c, "page": "terminal"])  // the command, never its payload; keystrokes and resizes aren't actions
+        }
         switch b["cmd"] as? String {
         case "ready":
             for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop() }  // a (re)loaded page starts with no tabs: detach, restore reattaches
@@ -1502,7 +1579,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
                 NSWorkspace.shared.open(u)
             }
-        case "error": NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
+        case "error":
+            NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
+            Diag.event("js_error", ["page": "terminal", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
         default: break
         }
     }
@@ -1533,6 +1612,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     @objc func appGoUp() { if !upstairs { ride(up: true) } else { show() } }
     func ride(up: Bool) {
         guard !riding, up != upstairs else { return }
+        Diag.event("floor", ["to": up ? "upstairs" : "basement"])
         let from = orbHost, to = up ? window : termWindow
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
@@ -1871,6 +1951,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         Speech.shared.stop()
         uitestServer?.stop()
         if let suite = uitestSuiteName { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        try? FileManager.default.removeItem(atPath: Diag.marker)  // a clean quit: no prev_crash next launch
     }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 

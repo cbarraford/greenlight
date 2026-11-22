@@ -324,6 +324,99 @@ final class RulesStore: ObservableObject {
     func deleteNote() { let n = note; call("memory-delete", n) { self.gotNotes($0); self.status = "Deleted \(n)." } }
 }
 
+// MARK: diag
+
+/// The app's half of scripts/diag.py's trail (~/Library/Logs/Greenlight/app.jsonl, which diag.py reads when it's on
+/// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
+enum Diag {
+    static let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl")
+    static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
+    static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    static let q = DispatchQueue(label: "greenlight.diag")
+    static func event(_ kind: String, _ f: [String: Any] = [:]) {
+        var e: [String: Any] = ["ts": (Date().timeIntervalSince1970 * 1000).rounded() / 1000, "v": v, "comp": "app", "run": run,
+                                "pid": Int(getpid()), "kind": kind]
+        var dropped = 0
+        for (k, x) in f {
+            if let s = x as? String { if s.range(of: #"^[A-Za-z0-9_.:+-]{1,64}$"#, options: .regularExpression) != nil { e[k] = s } else { dropped += 1 } }
+            else if let n = x as? NSNumber { e[k] = n } else if !(x is NSNull) { dropped += 1 }
+        }
+        if dropped > 0 { e["dropped"] = dropped }
+        let rec = e
+        q.async {
+            guard var d = try? JSONSerialization.data(withJSONObject: rec) else { return }
+            d.append(10)
+            let fm = FileManager.default, path = url.path
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let n = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, n > 5 << 20 {  // ponytail: size rotation, like diag.py
+                for i in stride(from: 2, through: 1, by: -1) { try? fm.removeItem(atPath: "\(path).\(i + 1)"); try? fm.moveItem(atPath: "\(path).\(i)", toPath: "\(path).\(i + 1)") }
+                try? fm.moveItem(atPath: path, toPath: "\(path).1")
+            }
+            let fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+            guard fd >= 0 else { return }
+            _ = d.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            close(fd)
+        }
+    }
+    /// stderr's class (diag.py's names where they match), never its text.
+    static func classify(_ s: String) -> String {
+        for (re, c) in [("Permission denied|publickey|Host key verification", "auth"), ("timed out|Timeout", "timeout"),
+                        ("Could not resolve|Connection refused|No route to host|Network is unreachable|Connection reset|closed by remote", "network"),
+                        ("command not found|No such file", "not_found"), ("rate limit|429", "rate_limit"), ("Traceback", "traceback")]
+        where s.range(of: re, options: [.regularExpression, .caseInsensitive]) != nil { return c }
+        return s.isEmpty ? "none" : "other"
+    }
+    /// "dash.task" for "…/dash.py task …": which backend call, not its arguments.
+    static func verb(_ remote: String) -> String {
+        guard let r = remote.range(of: #"(\w+)\.py( [a-z][\w-]{0,20})?"#, options: .regularExpression) else { return "shell" }
+        return remote[r].replacingOccurrences(of: ".py", with: "").replacingOccurrences(of: " ", with: ".")
+    }
+    /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
+    static let marker = NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")"  // per app: dev copies relaunch on their own
+    static func launched(host: String) {
+        if FileManager.default.fileExists(atPath: marker) { event("prev_crash") }
+        try? FileManager.default.createDirectory(atPath: (marker as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: marker, contents: Data(v.utf8))
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        event("app_start", ["macos": "\(os.majorVersion).\(os.minorVersion)", "host_kind": host.isEmpty || host == "local" ? "local" : "remote"])
+        Thread.detachNewThread { watch() }
+    }
+    /// Pings the main thread every second: a reply later than 2s is a `hang`, recorded once it's back
+    /// (one that never ends is a kill, which the next launch's prev_crash shows). Every 5 min a `sample` of memory and CPU.
+    static func watch() {
+        let t0 = Date()
+        var lastCPU = cpu(), lastAt = t0, n = 0
+        while true {
+            let sent = Date(), back = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { back.signal() }
+            if back.wait(timeout: .now() + 2) == .timedOut {
+                back.wait()
+                event("hang", ["secs": (Date().timeIntervalSince(sent) * 10).rounded() / 10])
+            }
+            Thread.sleep(forTimeInterval: 1)
+            n += 1
+            if n % 300 == 0 {
+                let c = cpu(), wall = Date().timeIntervalSince(lastAt)
+                event("sample", ["rss_mb": rss() >> 20, "cpu_pct": ((c - lastCPU) / max(wall, 1) * 1000).rounded() / 10,
+                                 "up_mins": Int(Date().timeIntervalSince(t0) / 60)])
+                lastCPU = c; lastAt = Date()
+            }
+        }
+    }
+    static func cpu() -> Double {
+        var r = rusage(); getrusage(RUSAGE_SELF, &r)
+        return Double(r.ru_utime.tv_sec + r.ru_stime.tv_sec) + Double(r.ru_utime.tv_usec + r.ru_stime.tv_usec) / 1e6
+    }
+    static func rss() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Int(info.resident_size) : 0
+    }
+}
+
 // MARK: ssh
 
 /// Runs <remote> where greenlight lives (remoteArgv), calling onLine (main thread) per stdout line and onExit when it ends.
@@ -337,12 +430,20 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     let inPipe = Pipe(), out = Pipe()
     p.standardInput = inPipe
     p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
-    final class Buf { var s = Data() }
-    let buf = Buf()
+    final class Buf { var s = Data(); let l = NSLock() }  // tail: its handler's queue writes, terminationHandler reads
+    let buf = Buf(), err = Pipe(), tail = Buf(), t0 = Date()
+    // stderr's last 4 KB, in memory only: classified into the diag trail, never written
+    p.standardError = err
+    err.fileHandleForReading.readabilityHandler = { h in
+        let d = h.availableData
+        if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: a handler left on re-fires forever (a full core)
+        tail.l.lock(); tail.s.append(d)
+        if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
+        tail.l.unlock()
+    }
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if d.isEmpty { return }
+        if d.isEmpty { h.readabilityHandler = nil; return }
         buf.s.append(d)
         while let nl = buf.s.firstIndex(of: 10) {
             let l = String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self)
@@ -352,13 +453,25 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     }
     p.terminationHandler = { p in
         out.fileHandleForReading.readabilityHandler = nil
+        err.fileHandleForReading.readabilityHandler = nil
+        let rc = p.terminationStatus
+        if rc != 0 {  // a fast failure's stderr may not have been read yet: drain it, but never wait long on a pipe a daemon kept
+            let sem = DispatchSemaphore(value: 0), drained = Buf()
+            DispatchQueue.global().async { drained.s = err.fileHandleForReading.readDataToEndOfFile(); sem.signal() }
+            let more = sem.wait(timeout: .now() + 0.3) == .success ? drained.s : Data()  // ponytail: a held pipe leaks that one reader thread
+            tail.l.lock(); let seen = tail.s; tail.l.unlock()
+            Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": Int(rc), "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
+                                    "msg_class": Diag.classify(String(decoding: (seen + more).suffix(4096), as: UTF8.self))])
+        } else {
+            Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
+        }
         let rest = out.fileHandleForReading.readDataToEndOfFile()
         DispatchQueue.main.async {
             for l in String(decoding: buf.s + rest, as: UTF8.self).split(separator: "\n") { onLine(String(l)) }
             onExit(p.terminationStatus)
         }
     }
-    do { try p.run() } catch { DispatchQueue.main.async { onExit(-1) }; return p }
+    do { try p.run() } catch { Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": -1, "msg_class": "spawn"]); DispatchQueue.main.async { onExit(-1) }; return p }
     let w = inPipe.fileHandleForWriting, d = Data(stdin.utf8)
     // off the main thread: a pipe holds 16 KB, and ssh reads stdin only once it's connected (attached files are MBs).
     // The throwing write: a dead ssh's EPIPE isn't a crash

@@ -906,6 +906,12 @@ test("auto-run: only the main window runs it", async page => {
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 0);
 });
 
+test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
+  await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
+  await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));
+  page._errs.splice(0);  // the rejection is the point
+});
+
 (async () => {
   const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch(process.env.CHROME ? {executablePath: process.env.CHROME} : {});
   let failed = 0;

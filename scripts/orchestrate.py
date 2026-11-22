@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import diag  # noqa: E402
 import greenlight  # noqa: E402
 import ws_state  # noqa: E402
 
@@ -88,6 +89,8 @@ def decide_choice(state, question, options, context=""):
 def log(entry):
     with LOG.open("a") as fh:
         fh.write(json.dumps({"ts": int(time.time())} | entry) + "\n")
+    diag.event("orch", did=str(entry.get("did") or "").split(" ")[0], ws_h=diag.h(entry.get("ws")), mr_h=diag.h(entry.get("mr")),
+               ok=entry.get("ok"), step=entry.get("step"))
 
 
 def ref_of(r):
@@ -709,6 +712,14 @@ def process_start(pid):
 
 
 def script(name, *args, timeout=900):
+    t = time.monotonic()
+    rc, out = _script(name, *args, timeout=timeout)
+    diag.event("script", name=name.removesuffix(".py"), sub=args[0] if args else None, rc=rc, ok=rc == 0,
+               secs=time.monotonic() - t, msg_class=diag.classify(out[-500:]) if rc else None)
+    return rc, out
+
+
+def _script(name, *args, timeout=900):
     marker = greenlight.STATE / f"orchestrator-phase-{os.getpid()}.pid"
     try:
         # The child waits for release until its process group is recorded for auto.py's timeout cleanup.
@@ -1159,6 +1170,8 @@ def tick():
     for r in rows:
         owners[r["next"]["owner"]] = owners.get(r["next"]["owner"], 0) + 1
     out["owners"] = owners
+    for k, ph in out["phases"].items():
+        diag.event("phase", phase=k, ok=ph["ok"], n=len(ph.get("done") or ()) or None)
     return out
 
 
@@ -1210,4 +1223,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("orchestrate")
     main()

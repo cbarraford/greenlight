@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import diag  # noqa: E402
 import harness  # noqa: E402
 from greenlight import CONFIG, LIMIT_RE, STATE, ping  # noqa: E402
 
@@ -81,9 +82,10 @@ def provider(a):
 
 
 def agent(a, engine, log):
+    """(text, exit code, tokens): the run's step titles, plain lines and reply, and its diag token fields."""
     own = engine == provider(a)  # a model name only means something to its own harness
-    try:
-        cmd, text = harness.argv(engine, a["prompt"], model=own and a.get("model"), effort=own and a.get("effort"))
+    try:  # stream JSON, as chat does: the same parsers then give the reply and its tokens
+        cmd, text = harness.argv(engine, a["prompt"], model=own and a.get("model"), effort=own and a.get("effort"), stream=True)
         env = {**os.environ, "GREENLIGHT_REQUEST": a["prompt"]}  # a read-only automation can't create workspaces (greenlight.read_only)
         p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(a.get("timeout") or 120) * 60)
@@ -92,8 +94,36 @@ def agent(a, engine, log):
         out, code = (e.stdout or b"").decode(errors="replace") + "\n[timed out]", 124
     except (ValueError, OSError) as e:  # an unusable harness: unknown, pi without bypass, binary missing
         out, code = str(e), 127
+    out, tokens = reply(engine, out)
     log.write(f"$ {engine}\n{out}\n[exit {code}]\n")
-    return out, code
+    return out, code, tokens
+
+
+def reply(engine, raw):
+    """A stream-JSON run's output → (readable text, token fields). Non-JSON lines (stderr: auth, limits) stay as they are.
+    Never raises: a parser that chokes leaves the raw output and no tokens."""
+    try:
+        import chat  # here, not at the top: chat imports auto
+        norm, lines, final = chat.Norm(), [], None
+    except Exception:
+        return raw, {}
+    for line in raw.splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            d = None
+        if not isinstance(d, dict):
+            lines.append(line)
+            continue
+        try:
+            for e in getattr(norm, engine)(d):
+                if e.get("e") == "step":
+                    lines.append(f"› {e.get('title', '')}")
+                elif e.get("e") == "done" and final is None:  # the first, as chat.run(): codex's turn.failed repeats an error as a dict
+                    final = e.get("text")
+        except Exception:
+            continue
+    return "\n".join([*lines, final or norm.text or ""]).strip(), {k: v for k, v in chat.tokens(norm).items() if v is not None}
 
 
 def orchestrator(a, log):
@@ -200,11 +230,16 @@ def execute(name):
             rec |= {"status": "ok" if code == 0 else "failed", "engine": "orchestrator", "summary": out.strip()[-300:]}
         if "status" not in rec:
             for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
-                out, code = agent(a, engine, log)
+                out, code, tokens = agent(a, engine, log)
                 if not (code and LIMIT_RE.search(out)):
                     break
-            rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:]}
+            rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:], **tokens}
+            if engine == provider(a) and a.get("model"):
+                rec["model"] = a["model"]
     rec["secs"] = int(time.time() - start)
+    diag.event("automation", name_h=diag.h(name), status=rec["status"], engine=rec.get("engine"), model=rec.get("model"),
+               in_tokens=rec.get("in_tokens"), out_tokens=rec.get("out_tokens"), cost_cents=rec.get("cost_cents"), secs=time.time() - start,
+               msg_class=diag.classify(rec.get("summary", "")) if rec["status"] == "failed" else None)
     with (DIR / "runs.jsonl").open("a") as fh:
         fh.write(json.dumps(rec) + "\n")
     (DIR / f"{name}.pid").unlink(missing_ok=True)
@@ -224,6 +259,11 @@ def spawn(name):
 
 def tick(now=None):
     t = time.localtime(now)
+    try:
+        DIR.mkdir(parents=True, exist_ok=True)
+        (DIR / "last_tick").touch()  # diag.py doctor: a timer that stopped firing shows as a stale file
+    except OSError:
+        pass  # a heartbeat never stops the tick
     # ponytail: a minute the timer misses (machine down) is skipped, not caught up; add a last-run check if that matters
     for name, a in load().items():
         if a.get("enabled", True) and due(a["schedule"], t):
@@ -321,4 +361,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("auto")
     main()
