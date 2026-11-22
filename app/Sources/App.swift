@@ -403,6 +403,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return c.vimKeys.key(k, tv) ? nil : e
         }
         floorMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // ⌘↑ up a floor (B2 → B1 → L1 → B2), ⌘↓ down, round the loop
+            if let self, self.capture == nil, self.greenlight.inboxOpen, e.window === self.window, !(e.window?.firstResponder is NSTextView),
+               self.greenlight.inboxKey(e) { return nil }  // the inbox's keys, unless a reply is being typed
             if let self, self.capture == nil, e.keyCode == kVK_Escape, self.greenlight.voice.on || self.greenlight.voice.starting,  // Esc leaves live chat, or stops it starting (sheets keep theirs)
                !self.greenlight.settingsOpen, !self.greenlight.inboxOpen { self.greenlight.voice.stopAll(); return nil }
             guard let self, self.capture == nil, e.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
@@ -1765,8 +1767,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let webs = ([fluid] + termWebs).filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }
         var parts = [(NSImage, NSRect)](), left = webs.count
         func finish() {
+            let over = [inboxHost].filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }.compactMap { o -> (NSImage, NSRect)? in  // over the web views, as on screen
+                guard let rep = o.bitmapImageRepForCachingDisplay(in: o.bounds) else { return nil }
+                o.cacheDisplay(in: o.bounds, to: rep); let i = NSImage(size: o.bounds.size); i.addRepresentation(rep)
+                return (i, o.convert(o.bounds, to: v))
+            }
             done(NSImage(size: v.bounds.size, flipped: v.isFlipped) { _ in
-                for (i, r) in [(base, v.bounds)] + parts { i.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
+                for (i, r) in [(base, v.bounds)] + parts + over { i.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
                 return true
             })
         }

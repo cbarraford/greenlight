@@ -208,7 +208,9 @@ final class Core: ObservableObject {
             try? JSONEncoder().encode(keep.sorted { $0.ts < $1.ts }).write(to: questionsURL, options: .atomic)
         }
     }
-    @Published var inboxOpen = false
+    @Published var inboxOpen = false { didSet { if !inboxOpen { inboxConfirm = false } } }
+    @Published var inboxPick: UUID?  // the inbox's open row (inboxFocus), ↑↓ to move
+    @Published var inboxConfirm = false  // Clear all's "Dismiss all N?" in the footer
     @Published var replyingTo: UUID?
     @Published var replyText = ""
     @Published var engine = ud.string(forKey: "engine") ?? "apple" { didSet { ud.set(engine, forKey: "engine") } }
@@ -474,9 +476,51 @@ final class Core: ObservableObject {
         }
         if replyingTo == q.id { replyingTo = nil; replyText = "" }
         if doSend { send(q.ping ? "(Replying to your question: \"\(q.text)\")\n\(text)" : text, shown: text) }
-        if !doSend && text == "(dismissed)" && !selftest, let d = try? JSONSerialization.data(withJSONObject: ["text": q.text, "key": q.key as Any? ?? NSNull(), "ping": q.ping, "chat": session == 0 ? "" : "chat-\(session)"]) {
+        if !doSend && text == "(dismissed)" && !selftest, let d = try? JSONSerialization.data(withJSONObject: dismissal(q)) {
             ssh("\(py)/decisions.py dismiss", stdin: String(decoding: d, as: UTF8.self))  // the ✕: autonomy.py's gate counts it against its kind
         }
+    }
+    private func dismissal(_ q: Question, _ reason: String = "dismissed") -> [String: Any] {
+        ["text": q.text, "key": q.key as Any? ?? NSNull(), "ping": q.ping, "chat": session == 0 ? "" : "chat-\(session)", "reason": reason]
+    }
+    /// The inbox's Clear all: dismisses every waiting question without sending. decisions.py closes them as "cleared", which the gate doesn't count.
+    func clearInbox() {
+        let w = waiting
+        questions = questions.map { var q = $0; if q.answer == nil { q.answer = "(dismissed)" }; return q }  // one write, not one per question
+        replyingTo = nil; replyText = ""; inboxConfirm = false; inboxPick = nil
+        if !w.isEmpty && !selftest, let d = try? JSONSerialization.data(withJSONObject: w.map { dismissal($0, "cleared") }) {
+            ssh("\(py)/decisions.py dismiss", stdin: String(decoding: d, as: UTF8.self))
+        }
+    }
+    /// The inbox row that's open: the one picked, else the oldest.
+    var inboxFocus: Question? { let w = waiting; return w.first { $0.id == inboxPick } ?? w.first }
+    /// ✕ on the open row, then the next one opens in its place.
+    func dismiss(_ q: Question) {
+        let i = waiting.firstIndex { $0.id == q.id } ?? 0
+        answer(q, "(dismissed)", send: false)
+        let w = waiting; inboxPick = w.isEmpty ? nil : w[min(i, w.count - 1)].id
+    }
+    /// The inbox's keys (App's key monitor, while it's open and nothing is being typed): ↑↓ move, 1–9 answer, R reply, ⌫ dismiss,
+    /// ⇧⌫ Clear all (Return confirms, Esc cancels). True = handled.
+    func inboxKey(_ e: NSEvent) -> Bool {
+        let m = e.modifierFlags.intersection([.command, .control, .option, .shift]), k = Int(e.keyCode), w = waiting
+        if inboxConfirm {
+            if m.isEmpty && (k == kVK_Return || k == kVK_ANSI_KeypadEnter) { clearInbox() }
+            else if k == kVK_Escape { inboxConfirm = false } else { return false }
+            return true
+        }
+        guard let q = inboxFocus, let i = w.firstIndex(where: { $0.id == q.id }) else { return false }
+        if m == .shift && k == kVK_Delete { inboxConfirm = true; return true }
+        guard m.isEmpty else { return false }
+        switch k {
+        case kVK_UpArrow, kVK_DownArrow: inboxPick = w[max(0, min(w.count - 1, i + (k == kVK_UpArrow ? -1 : 1)))].id
+        case kVK_Delete, kVK_ForwardDelete: dismiss(q)
+        case kVK_ANSI_R: replyText = ""; replyingTo = q.id
+        default:
+            guard let n = Int(e.charactersIgnoringModifiers ?? ""), n >= 1, n <= min(9, q.options.count) else { return false }
+            answer(q, q.options[n - 1])
+        }
+        return true
     }
 
     /// Takes back an answer greenlight gave for you (autonomy.py undo): the question comes back to the inbox as a new ping.
