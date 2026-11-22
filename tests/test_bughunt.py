@@ -651,6 +651,29 @@ def test_socket_eof_crash_excerpt_and_settle():
         finally:
             t.join(timeout=2)
             srv.close()
+
+        # Malformed JSON from socket also raises ConnectionResetError
+        sock_bad = tmp / "bad.sock"
+        srv2 = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        srv2.bind(str(sock_bad))
+        srv2.listen(1)
+
+        def accept_and_garbage():
+            conn, _ = srv2.accept()
+            conn.recv(1024)
+            conn.sendall(b"{not-json\n")
+            conn.close()
+
+        t2 = threading.Thread(target=accept_and_garbage, daemon=True)
+        t2.start()
+        try:
+            uitest.rpc(sock_bad, {"cmd": "ping"}, timeout=2.0)
+            raise AssertionError("expected ConnectionResetError on malformed JSON")
+        except ConnectionResetError:
+            pass
+        finally:
+            t2.join(timeout=2)
+            srv2.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -670,7 +693,23 @@ def test_socket_eof_crash_excerpt_and_settle():
         )
         assert ok and len(hits) == 1 and hits[0]["oracle"] == "crash", (ok, hits)
 
-    # 3. _extract_crash_excerpt preserves exception header + top frames (Core.notify), not just AppKit tail
+    # 2b. _settle_if_exiting + _check_session_oracles mid-state() crash vs live hang
+    with _FakeSession(alive=True) as dying:
+        def die_on_wait(timeout=None):
+            dying._alive = False
+            dying.proc.returncode = -11
+
+        dying.proc.wait.side_effect = die_on_wait
+        dying.state = mock.Mock(side_effect=ConnectionResetError("EOF"))
+        hits_d, _ = bughunt._check_session_oracles(dying, "default", "fuzz", set())
+        assert len(hits_d) == 1 and hits_d[0]["oracle"] == "crash", hits_d
+
+    with _FakeSession(alive=True) as hung:
+        hung.state = mock.Mock(side_effect=TimeoutError("rpc timeout"))
+        hits_h, _ = bughunt._check_session_oracles(hung, "default", "fuzz", set())
+        assert len(hits_h) == 1 and hits_h[0]["oracle"] == "hang", hits_h
+
+    # 3. _extract_crash_excerpt preserves exception header + top frames (Core.notify), and head+tail fallback
     long_log = (
         ("startup log line\n" * 80)
         + "*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'bundleProxy nil'\n"
@@ -683,6 +722,28 @@ def test_socket_eof_crash_excerpt_and_settle():
     assert "NSInternalInconsistencyException" in excerpt, excerpt[:300]
     assert "Core.notify" in excerpt, excerpt[:500]
     assert "libc++abi:" in excerpt, excerpt[-300:]
+    plain_long = "HEAD_MARKER " + ("x" * 4000) + " TAIL_MARKER"
+    plain_ex = bughunt._extract_crash_excerpt(plain_long, max_chars=2000)
+    assert "HEAD_MARKER" in plain_ex and "TAIL_MARKER" in plain_ex and "[truncated]" in plain_ex
+
+    # 4. _reap_session_processes terminates both process group and detached descendants cleanly
+    reap_dir = Path("/tmp/gl-uitest-reap1234-test")
+    with mock.patch.object(uitest, "_find_session_pids", side_effect=[{50001}, {50001}, set()]), \
+         mock.patch.object(uitest.os, "killpg", side_effect=[None, ProcessLookupError(), ProcessLookupError()]) as m_kpg, \
+         mock.patch.object(uitest.os, "kill") as m_kill, \
+         mock.patch.object(uitest.time, "sleep", return_value=None):
+        uitest._reap_session_processes(reap_dir, pgid=50000)
+        assert m_kpg.call_count >= 1 and m_kill.call_count >= 1
+
+    # Fallback SIGKILL path when group/pids survive past deadline
+    t_vals = iter([0.0, 1.0])
+    with mock.patch.object(uitest, "_find_session_pids", return_value={50002}), \
+         mock.patch.object(uitest.os, "killpg") as m_kpg2, \
+         mock.patch.object(uitest.os, "kill") as m_kill2, \
+         mock.patch.object(uitest.time, "monotonic", side_effect=lambda: next(t_vals, 2.0)), \
+         mock.patch.object(uitest.time, "sleep", return_value=None):
+        uitest._reap_session_processes(reap_dir, pgid=50000)
+        assert m_kpg2.call_count == 2 and m_kill2.call_count == 2
 
 
 def test_uv_no_project_chaos_filter_and_commit_overlap():
