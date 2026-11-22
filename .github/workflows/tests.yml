@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
 
 jobs:
   changes:
@@ -17,6 +18,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             range="HEAD^1..HEAD"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            range="${{ github.event.merge_group.base_sha }}..HEAD"
           elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
             range="${{ github.event.before }}..${{ github.sha }}"
           else
