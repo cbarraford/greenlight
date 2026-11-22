@@ -95,8 +95,9 @@ class Repo:
         if u.startswith("git@"):
             host, proj = u[4:].split(":", 1)
         else:
-            host, proj = urllib.parse.urlparse(u).netloc.split("@")[-1], urllib.parse.urlparse(u).path.lstrip("/")
-        self.host, self.project = host, proj
+            parsed = urllib.parse.urlparse(u)
+            host, proj = (parsed.hostname or ""), parsed.path.lstrip("/")
+        self.host, self.project, self._gh_me = host, proj, None
         if host not in ("gitlab.com", "github.com"):
             self.error = f"unsupported forge {host}"
 
@@ -124,8 +125,9 @@ class Repo:
                 if state == "open" and m["author"]["username"] != ME:
                     # Review checkout: my approval finishes my part, same as a merge would.
                     ap = json.loads(run(["glab", "api", f"projects/{pid}/merge_requests/{m['iid']}/approvals"]).stdout)
-                    if f"{self.project}!{m['iid']}" in (blocking.cached() or {}):
-                        pass  # still blocked on me: keep it
+                    blk = blocking.cached()
+                    if blk is None or f"{self.project}!{m['iid']}" in blk:
+                        pass  # still blocked on me, or blocking roster cache unavailable (fail closed): keep it
                     elif any(a["user"]["username"] == ME for a in ap.get("approved_by", [])):
                         state = "approved by me"
                     elif not ap.get("user_can_approve", True) and m["source_branch"] != branch:
@@ -137,12 +139,16 @@ class Repo:
         if branch:
             ps += json.loads(run(["gh", "pr", "list", "-R", self.project, "--head", branch, "--state", "all",
                                   "--json", fields]).stdout)
-        me = json.loads(run(["gh", "api", "user"]).stdout)["login"] if any(p["state"] == "OPEN" for p in ps) else None
+        me = None
+        if any(p["state"] == "OPEN" for p in ps):
+            if getattr(self, "_gh_me", None) is None:
+                self._gh_me = json.loads(run(["gh", "api", "user"]).stdout)["login"]
+            me = self._gh_me
         # gh states are OPEN / MERGED / CLOSED: a merged or closed PR finishes the workspace like a merged/closed MR.
         # Review checkout: my approval finishes my part. ponytail: GitHub has no "can't approve" case to mirror
         out = {p["number"]: {"label": f"#{p['number']}", "iid": p["number"], "sha": p["headRefOid"], "state":
                              "approved by me" if p["state"] == "OPEN" and (p["author"] or {}).get("login") != me
-                             and any(r["author"]["login"] == me and r["state"] == "APPROVED" for r in p["latestReviews"])
+                             and any((r.get("author") or {}).get("login") == me and r.get("state") == "APPROVED" for r in p["latestReviews"])
                              else p["state"].lower()} for p in reversed(ps)}
         return sorted(out.values(), key=lambda m: -m["iid"])
 
@@ -211,25 +217,34 @@ def evaluate(wt, repo, busy):
         return "skip", f"MR lookup failed: {e}"
 
     if mrs:
-        newest = mrs[0]  # an open MR older than a merged/closed one for the same work is stale
-        if newest["state"] == "open":
-            return "keep", f"MR {newest['label']} is open"
+        newest = mrs[0]  # an open MR older than a merged one for the same work is stale; a closed duplicate never supersedes an open MR
+        open_mrs = [m for m in mrs if m["state"] == "open"]
+        if newest["state"] == "open" or (open_mrs and newest["state"] != "merged"):
+            active = newest if newest["state"] == "open" else open_mrs[0]
+            return "keep", f"MR {active['label']} is open"
         if newest["state"] == "merged" and (left := post_merge_left(path, repo.project)):
             return "keep", f"MR {newest['label']} merged, still to do: {left}"
         reason = f"MR {newest['label']} {newest['state']}"
-        if any(m["state"] == "open" for m in mrs):
-            reason += f" (older {', '.join(m['label'] for m in mrs if m['state'] == 'open')} open, stale)"
-        # Local commits must already be on the forge: in an MR head (squash merges delete the remote
+        if open_mrs:
+            reason += f" (older {', '.join(m['label'] for m in open_mrs)} open, stale)"
+        # Local commits must already be on the forge: in a finished MR head (squash merges delete the remote
         # branch), in an earlier pushed version of the MR (GitLab rebases before merging), or in a remote.
+        finished = [m for m in mrs if m["state"] != "open"]
         contains = lambda sha: sha and (tip == sha or is_ancestor(path, tip, sha))
-        safe = (any(contains(m["sha"]) for m in mrs)
+        safe = (any(contains(m["sha"]) for m in finished)
                 or not git(path, "rev-list", "-1", tip, "--not", "--remotes")
-                or any(contains(sha) for m in mrs for sha in repo.pushed_heads(m["iid"])))
+                or any(contains(sha) for m in finished for sha in repo.pushed_heads(m["iid"])))
         if not safe:
             return "skip", f"{reason}, but local commits aren't in the MR head or any remote"
     elif not branch:
         return "keep", "detached HEAD, its MR wasn't found"
     else:
+        comment = (wt.get("comment") or "").strip()
+        if greenlight.PARKED_RE.search(comment) or greenlight.AUTOMATION_RE.search(comment):
+            return "keep", "no MR/PR, parked or automation workspace"
+        if m_rev := greenlight.REVISIT_RE.search(comment):
+            if m_rev.group(1) >= time.strftime("%Y-%m-%d"):
+                return "keep", f"no MR/PR, revisit scheduled for {m_rev.group(1)}"
         if not is_ancestor(path, tip, repo.base):
             return "keep", "no MR/PR, branch not merged"
         idle_h = (NOW_MS - (wt.get("lastActivityAt") or NOW_MS)) / 3.6e6
@@ -269,8 +284,8 @@ def dedupe(wts):
 
 def scan():
     wts = dedupe(orca("worktree", "list", "--limit", "10000")["worktrees"])
-    cutoff = NOW_MS - ACTIVE_MINUTES * 60_000
-    busy = {t["worktreeId"] for t in orca("terminal", "list")["terminals"]
+    cutoff = time.time() * 1000 - ACTIVE_MINUTES * 60_000
+    busy = {t["worktreeId"] for t in orca("terminal", "list", "--limit", "10000")["terminals"]
             if (t.get("lastOutputAt") or 0) > cutoff}
     # Group by repo; worktree list gives the repo id, the main checkout gives its path.
     roots = {w["repoId"]: w["path"] for w in wts if w.get("isMainWorktree")}
@@ -281,12 +296,14 @@ def scan():
 
     def one(w):
         repo = repos.get(w["repoId"])
+        tip = git(w["path"], "rev-parse", "HEAD", check=False) if os.path.isdir(w["path"]) else ""
         try:
             verdict, reason = evaluate(w, repo, busy) if repo else ("skip", "unknown repo")
         except Exception as e:
             verdict, reason = "skip", f"error: {e}"
-        return {"id": w["id"], "name": w.get("displayName") or Path(w["path"]).name, "path": w["path"],
-                "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "verdict": verdict, "reason": reason}
+        return {"id": w["id"], "ids": w.get("ids") or [w["id"]], "name": w.get("displayName") or Path(w["path"]).name,
+                "path": w["path"], "tip": tip, "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
+                "verdict": verdict, "reason": reason}
 
     with ThreadPoolExecutor(8) as ex:
         return list(ex.map(one, wts))
@@ -320,6 +337,18 @@ def main():
     if a.cmd == "apply":
         for r in cands:
             try:
+                # Re-verify worktree state immediately before deletion to close the scan→apply TOCTOU window.
+                if os.path.isdir(r["path"]):
+                    cur_tip = git(r["path"], "rev-parse", "HEAD", check=False)
+                    if r.get("tip") and cur_tip and cur_tip != r["tip"]:
+                        raise RuntimeError("HEAD changed since scan")
+                    if git(r["path"], "status", "--porcelain", "--untracked-files=normal", check=False):
+                        raise RuntimeError("uncommitted/untracked changes appeared since scan")
+                    cutoff = time.time() * 1000 - ACTIVE_MINUTES * 60_000
+                    live_busy = {t["worktreeId"] for t in orca("terminal", "list", "--limit", "10000")["terminals"]
+                                 if (t.get("lastOutputAt") or 0) > cutoff}
+                    if any(i in live_busy for i in r.get("ids") or [r["id"]]):
+                        raise RuntimeError("terminal became active since scan")
                 orca("worktree", "rm", "--worktree", f"id:{r['id']}")
                 r["removed"] = True
             except Exception as e:

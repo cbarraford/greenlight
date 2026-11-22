@@ -40,12 +40,13 @@ OSA
 screencapture -x "$OUT/vm-center.png"
 
 # 2. Real macOS Pasteboard PNG -> ⌘V screenshot attachment check
-python3 - <<'PY'
-import base64, subprocess
+HOME_TMP="$HOME_TMP" python3 - <<'PY'
+import base64, os, subprocess
 # 1x1 red PNG
 png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-p = "/tmp/gl-hid-paste.png"
-open(p, "wb").write(png)
+p = os.path.join(os.environ["HOME_TMP"], "paste.png")
+with open(p, "wb") as f:
+    f.write(png)
 subprocess.run(["osascript", "-e", f'set the clipboard to (read (POSIX file "{p}") as «class PNGf»)'], check=True)
 PY
 

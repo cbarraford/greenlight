@@ -1598,7 +1598,8 @@ struct SettingsView: View {
     func seconds(_ label: String, _ v: Binding<Double>) -> some View {
         let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) }), on = v.wrappedValue > 0
         return HStack(spacing: Theme.sp2) {
-            Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)  // no `step:`, which draws 41 tick marks.frame(width: 130).accessibilityLabel(label)
+            Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)
+                .frame(width: 130).accessibilityLabel(label)  // no `step:`, which draws 41 tick marks
             TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
             Text("s").foregroundColor(sub)
             Text(on ? "On" : "Off").font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(on ? accent : dim)
@@ -1678,13 +1679,13 @@ struct SettingsView: View {
                 }
             }
             row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { writerModelPicker("Suggestions model", $c.nextModel) }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "agy") } }
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
             }
             row("Watch workspaces", "When a workspace starts needing you, the chat looks into it and asks you a question if one's worth asking.") {
                 Toggle("Watch workspaces", isOn: $c.watch).labelsHidden().toggleStyle(.switch)
             }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "agy") } }
         }
         box("System One", aside: "decide.py on \(hostLabel)") {
             row("Quick decisions", c.s1Provider == "local" ? "Off: greenlight's own patterns decide. On: a fast model reads what each agent's terminal shows (any harness), what your goals ask (hold, stay draft, park, revisit) and which hexes Chief's reply is about."
@@ -1727,20 +1728,20 @@ struct SettingsView: View {
             if let r = c.autonomy {
                 ForEach(r.candidates, id: \.kind) { cand in
                     banner("graduationcap", "\(Self.kindTitle[cand.kind] ?? cand.kind): \(cand.right) of \(cand.n) sure guesses were right. Let Greenlight answer these itself?", tinted: true) {
-                        Button("Turn on") { c.setAutonomy("--auto \(cand.kind) on") }.buttonStyle(.borderedProminent)
+                        Button("Turn on") { c.setAutonomy(["--auto", cand.kind, "on"]) }.buttonStyle(.borderedProminent)
                     }
                 }
                 box("Answered for you", aside: "Only when 95%+ sure, and only an inactive answer") {
                     ForEach(r.kinds, id: \.kind) { k in
                         row(Self.kindTitle[k.kind] ?? k.kind, kindStats(k)) {
-                            Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy("--auto \(k.kind) \($0 ? "on" : "off")") }))
+                            Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy(["--auto", k.kind, $0 ? "on" : "off"]) }))
                                 .labelsHidden().toggleStyle(.switch).disabled(!k.eligible)
                         }
                     }
                 }
                 box("Questions nobody asked for") {
                     row("Ping gate", "Idle check-ins and the watch go out only while you act on them more often than you dismiss them (✕, or left unanswered a day).") {
-                        Picker("Ping gate", selection: Binding(get: { r.gate }, set: { c.setAutonomy("--gate \($0)") })) {
+                        Picker("Ping gate", selection: Binding(get: { r.gate }, set: { c.setAutonomy(["--gate", "\($0)"]) })) {
                             Text("Off").tag(0.0); Text("Lenient").tag(0.25); Text("Balanced").tag(0.35); Text("Strict").tag(0.5)
                         }.labelsHidden().pickerStyle(.segmented).fixedSize()
                     }
@@ -1817,14 +1818,17 @@ struct SettingsView: View {
 
     @ViewBuilder func projectDetail(_ i: Int) -> some View {
         let p = rs.projs[i], id = pid(p), dirs = pstrings(p, "dirs"), repos = pstrings(p, "repos"), opensIn = p["dir"] as? String ?? dirs.first
+        let mutate: ((inout [String: Any]) -> Void) -> Void = { fn in
+            commitProjects { l in if let idx = l.firstIndex(where: { pid($0) == id }) { fn(&l[idx]) } }
+        }
         HStack(spacing: Theme.sp3) {
-            TextField("Project name", text: Binding(get: { pname(p) }, set: { v in commitProjects { l in l[i]["name"] = String(v.prefix(80)) } }))
+            TextField("Project name", text: Binding(get: { pname(p) }, set: { v in mutate { $0["name"] = String(v.prefix(80)) } }))
                 .textFieldStyle(.plain).font(sys(size: 20, weight: .bold)).foregroundColor(fg)
             Button("Delete", role: .destructive) { deleteProject(id) }
         }
         box("Terminal") {
             row("New terminals open in", "Empty: the project's first folder.") {
-                Picker("New terminals open in", selection: Binding(get: { p["dir"] as? String ?? "" }, set: { v in commitProjects { l in l[i]["dir"] = v.isEmpty ? nil : v } })) {
+                Picker("New terminals open in", selection: Binding(get: { p["dir"] as? String ?? "" }, set: { v in mutate { $0["dir"] = v.isEmpty ? nil : v } })) {
                     Text("First folder").tag("")
                     ForEach(dirs, id: \.self) { Text($0).tag($0) }
                 }.labelsHidden().frame(maxWidth: 260)
@@ -1834,8 +1838,8 @@ struct SettingsView: View {
             ForEach(dirs, id: \.self) { d in
                 pathRow("folder", d) {
                     if d == opensIn { chip("new terminals") }
-                    else { Button("Open terminals here") { commitProjects { l in l[i]["dir"] = d } }.buttonStyle(.borderless).font(sys(size: Theme.fs2)) }
-                    xButton("Remove \(d)") { commitProjects { l in l[i]["dirs"] = dirs.filter { $0 != d }; if l[i]["dir"] as? String == d { l[i]["dir"] = nil } } }
+                    else { Button("Open terminals here") { mutate { $0["dir"] = d } }.buttonStyle(.borderless).font(sys(size: Theme.fs2)) }
+                    xButton("Remove \(d)") { mutate { $0["dirs"] = pstrings($0, "dirs").filter { $0 != d }; if $0["dir"] as? String == d { $0["dir"] = nil } } }
                 }
             }
             ruled(HStack(spacing: 10) {
@@ -2012,43 +2016,50 @@ struct SettingsView: View {
     }
 
     func stageRow(_ i: Int) -> some View {
-        let s = $rs.stages[i], builtin = rs.builtins[rs.stages[i].key] != nil
-        let badge = builtin ? "Built-in" : s.wrappedValue.done.hasPrefix("label=") ? "Label" : s.wrappedValue.done.hasPrefix("check=") ? "CI check" : "Your sign-off"
+        let safeStage: () -> Stage = { i < rs.stages.count ? rs.stages[i] : Stage(key: "", req: "", done: "") }
+        let keyBind = Binding(get: { safeStage().key }, set: { if i < rs.stages.count { rs.stages[i].key = $0 } })
+        let reqBind = Binding(get: { safeStage().req }, set: { if i < rs.stages.count { rs.stages[i].req = $0 } })
+        let doneBind = Binding(get: { safeStage().done }, set: { if i < rs.stages.count { rs.stages[i].done = $0 } })
+        let runBind = Binding(get: { safeStage().run }, set: { if i < rs.stages.count { rs.stages[i].run = $0 } })
+        let ownerBind = Binding(get: { safeStage().owner }, set: { if i < rs.stages.count { rs.stages[i].owner = $0 } })
+        let phaseBind = Binding(get: { safeStage().phase }, set: { if i < rs.stages.count { rs.stages[i].phase = $0 } })
+        let cur = safeStage(), builtin = rs.builtins[cur.key] != nil
+        let badge = builtin ? "Built-in" : cur.done.hasPrefix("label=") ? "Label" : cur.done.hasPrefix("check=") ? "CI check" : "Your sign-off"
         return ruled(HStack(alignment: .top, spacing: Theme.sp3) {
             Text("\(i + 1)").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
             VStack(alignment: .leading, spacing: Theme.sp1) {
                 HStack(spacing: Theme.sp2) {
-                    if builtin { Text(rs.stages[i].key).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
-                    else { TextField("key", text: s.key).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
+                    if builtin { Text(cur.key).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
+                    else { TextField("key", text: keyBind).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
                     Text(badge).font(sys(size: Theme.fs1, weight: .medium))
                         .foregroundColor(builtin ? sub : accent).padding(.horizontal, Theme.sp2).frame(height: 20)
                         .background(Capsule().fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
                 }
-                if builtin { note(rs.stages[i].req) }
+                if builtin { note(cur.req) }
                 else {
-                    TextField("Requirement", text: s.req).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
+                    TextField("Requirement", text: reqBind).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
                     HStack(spacing: Theme.sp2) {
                         Picker("Done when", selection: Binding(
-                            get: { s.wrappedValue.done.hasPrefix("label=") ? "label" : s.wrappedValue.done.hasPrefix("check=") ? "check" : "signoff" },
-                            set: { s.wrappedValue.done = $0 == "label" ? "label=" : $0 == "check" ? "check=" : "signoff" })) {
+                            get: { doneBind.wrappedValue.hasPrefix("label=") ? "label" : doneBind.wrappedValue.hasPrefix("check=") ? "check" : "signoff" },
+                            set: { doneBind.wrappedValue = $0 == "label" ? "label=" : $0 == "check" ? "check=" : "signoff" })) {
                             Text("You sign off").tag("signoff"); Text("It has a label").tag("label"); Text("CI check passes").tag("check")
                         }.labelsHidden().frame(width: 150)
-                        if s.wrappedValue.done.hasPrefix("label=") {
-                            TextField("label", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "label=" + $0 }))
+                        if doneBind.wrappedValue.hasPrefix("label=") {
+                            TextField("label", text: Binding(get: { String(doneBind.wrappedValue.dropFirst(6)) }, set: { doneBind.wrappedValue = "label=" + $0 }))
                                 .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
-                        } else if s.wrappedValue.done.hasPrefix("check=") {
-                            TextField("check name", text: Binding(get: { String(s.wrappedValue.done.dropFirst(6)) }, set: { s.wrappedValue.done = "check=" + $0 }))
+                        } else if doneBind.wrappedValue.hasPrefix("check=") {
+                            TextField("check name", text: Binding(get: { String(doneBind.wrappedValue.dropFirst(6)) }, set: { doneBind.wrappedValue = "check=" + $0 }))
                                 .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) check")
                         } else {
-                            TextField("Run command (optional)", text: s.run).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced))
+                            TextField("Run command (optional)", text: runBind).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced))
                                 .frame(width: 200).accessibilityLabel("Stage \(i + 1) run command")
                         }
                     }
                     HStack(spacing: Theme.sp2) {
-                        Picker("Owner", selection: s.owner) {
+                        Picker("Owner", selection: ownerBind) {
                             Text("Default owner").tag(""); Text("Agent").tag("agent"); Text("You").tag("me"); Text("Reviewers").tag("reviewers"); Text("CI").tag("ci")
                         }.labelsHidden().frame(width: 140)
-                        Picker("Phase", selection: s.phase) {
+                        Picker("Phase", selection: phaseBind) {
                             Text("Default phase").tag(""); Text("Define").tag("define"); Text("Build").tag("build"); Text("Verify").tag("verify"); Text("Review").tag("review"); Text("Land").tag("land")
                         }.labelsHidden().frame(width: 140)
                     }
@@ -2056,9 +2067,9 @@ struct SettingsView: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 0) {
-                Button { rs.stages.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
-                Button { rs.stages.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }.disabled(i == rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
-                Button { rs.stages.remove(at: i) } label: { Image(systemName: "xmark") }.disabled(rs.stages.count == 1).accessibilityLabel("Remove stage \(i + 1)")
+                Button { if i > 0 && i < rs.stages.count { rs.stages.swapAt(i, i - 1) } } label: { Image(systemName: "chevron.up") }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
+                Button { if i + 1 < rs.stages.count { rs.stages.swapAt(i, i + 1) } } label: { Image(systemName: "chevron.down") }.disabled(i >= rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
+                Button { if i < rs.stages.count && rs.stages.count > 1 { rs.stages.remove(at: i) } } label: { Image(systemName: "xmark") }.disabled(rs.stages.count <= 1).accessibilityLabel("Remove stage \(i + 1)")
             }.buttonStyle(.borderless).foregroundColor(sub).frame(height: 24)
         }.padding(.leading, Theme.sp3).padding(.trailing, Theme.sp3).padding(.vertical, 10))
     }

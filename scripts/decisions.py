@@ -255,8 +255,17 @@ def calibrate(recs=None):
     Right: you picked the proposed option. An auto answer is measured only when the user answers its re-ask."""
     recs = load() if recs is None else recs
     f = STATE / "autonomy.jsonl"
-    reasked = {e.get("record"): e.get("reasked_record") for e in map(json.loads, f.read_text().splitlines() if f.exists() else [])
-               if e.get("undone")}
+    reasked = {}
+    if f.exists():
+        for line in f.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("undone"):
+                reasked[e.get("record")] = e.get("reasked_record")
     by_id = {r["id"]: r for r in recs}
     out = {}
     for r in recs:

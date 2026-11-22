@@ -95,12 +95,21 @@ def unclosed_private_key(text):
     return bool(PRIVATE_KEY_OPEN_RE.search(PRIVATE_KEY_BLOCK_RE.sub("", text or "")))
 
 
+def _lf_lines(text):
+    """Split unified diffs strictly on LF, never on CR or Unicode line separators."""
+    return (text or "").split("\n")
+
+
+def _lf_lines_keepends(text):
+    return re.findall(r"[^\n]*\n|[^\n]+", text or "")
+
+
 def scrub_removed_private_keys(diff):
     """Mask PEM material on the old side without swallowing later changed lines or files."""
     if not re.search(r"(?m)^(?:diff --git |@@ )", diff or ""):
         return diff or ""
     out, removed_key = [], False
-    for line in (diff or "").splitlines(keepends=True):
+    for line in _lf_lines_keepends(diff):
         if line.startswith(("diff --git ", "@@ ")):
             removed_key = False
         if line.startswith("-") and not line.startswith("--- "):
@@ -172,8 +181,11 @@ def comment_diff(diff, path=None, line=None, limit=MAXC // 2, side="RIGHT"):
             continue
         header = re.split(r"(?=^@@ )", block, maxsplit=1, flags=re.M)[0]
         prefix = "--- a/" if side == "LEFT" else "+++ b/"
-        header_match = any(row.startswith(prefix) and row[len(prefix):] == path for row in header.splitlines())
-        names = shlex.split(block.splitlines()[0])
+        header_match = any(row.startswith(prefix) and row[len(prefix):] == path for row in _lf_lines(header))
+        try:
+            names = shlex.split(_lf_lines(block)[0])
+        except ValueError:
+            names = []
         fallback_match = len(names) == 4 and names[2 if side == "LEFT" else 3].removeprefix("a/" if side == "LEFT" else "b/") == path
         if not (header_match or fallback_match):
             continue
@@ -195,7 +207,7 @@ def comment_diff(diff, path=None, line=None, limit=MAXC // 2, side="RIGHT"):
                                 (int(old_match[3]), int(old_match[4] or 1)))
                 if not start <= wanted < start + count:
                     continue
-                lines, pos = hunk.splitlines(), start
+                lines, pos = _lf_lines(hunk), start
                 center = 1
                 for i, row in enumerate(lines[1:], 1):
                     if row.startswith(("-", " ") if side == "LEFT" else ("+", " ")):
@@ -284,7 +296,7 @@ def p_true(r):
 
 def published_lines(diff):
     """Lines that a commit publishes: added content and destination paths (including binary files)."""
-    lines = (diff or "").splitlines()
+    lines = _lf_lines(diff)
     in_hunk = not any(line.startswith(("diff --git ", "@@")) for line in lines)  # allow a standalone +line in callers/tests
     out = []
     dest = None
@@ -295,7 +307,10 @@ def published_lines(diff):
             in_hunk = False
             # Only the destination leaves this branch; an old secret-bearing
             # filename may be removed or renamed away.
-            names = shlex.split(line)
+            try:
+                names = shlex.split(line)
+            except ValueError:
+                names = []
             if len(names) == 4 and names[:2] == ["diff", "--git"] and names[3].startswith("b/"):
                 dest = names[3]
             else:
@@ -340,7 +355,7 @@ def secrets(text, diff=False):
     """[(what, line)] for credential shapes in the text (a diff: its added lines only), the secret itself masked. A value that
     is an exact, known published example isn't one."""
     hits = []
-    for line in published_lines(text) if diff else (text or "").splitlines():
+    for line in published_lines(text) if diff else _lf_lines(text):
         found = [what for rx, what in (*SECRET_RES, *PERSONAL_RES)
                  if any(m[0] not in EXAMPLE_VALUES and not (what == "an email address" and
                         m[0].rsplit("@", 1)[-1].lower() in PUBLIC_EMAIL_DOMAINS) for m in rx.finditer(line))]
@@ -359,7 +374,7 @@ def test_signals(diff):
     """Plain facts about the diff's test files the model weighs (never a verdict on their own): asserts removed vs added, skips added.
     A deleted test file counts under its old name."""
     f, old, hdr, rm, add, skips = None, None, False, 0, 0, []
-    for line in (diff or "").splitlines():
+    for line in _lf_lines(diff):
         if line.startswith("diff --git "):
             f, old, hdr = None, None, True
             continue
@@ -461,9 +476,9 @@ def contracts(state, checks, *, goal="", diff="", replies=(), outbound=""):
                                                         f"\n\nThe branch's diff:\n{redact_diff_pii(clip(diff, MAXC // 2))}"}
     if "no_secrets_or_pii" in checks:
         published = "\n".join(published_lines(diff)) if diff else ""
-        seen = set(published.splitlines())
+        seen = set(_lf_lines(published))
         extra = []
-        for line in outbound.splitlines():
+        for line in _lf_lines(outbound):
             if line not in seen:
                 extra.append(line)
                 seen.add(line)
@@ -559,10 +574,11 @@ def score_outbound(state, comments, *, kind="review", diff="", goal=""):
 
 def git(path, *args, timeout=60):
     try:
-        p = subprocess.run(["git", "--no-replace-objects", "-C", str(path), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        # Capture raw bytes and decode without universal newlines so CR (\r) is never converted to LF (\n).
+        p = subprocess.run(["git", "--no-replace-objects", "-C", str(path), *args], capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return p.stdout if p.returncode == 0 else None
+    return p.stdout.decode("utf-8", errors="replace") if p.returncode == 0 else None
 
 
 def push_audited(path, sha, branch, force=False, expected=None, destination="origin"):
@@ -571,7 +587,7 @@ def push_audited(path, sha, branch, force=False, expected=None, destination="ori
         print("AUDIT ERROR force push needs the scanned source commit")
         return 4
     lease = [f"--force-with-lease=refs/heads/{branch}:{expected}"] if force else []
-    cmd = ["git", "-C", str(path), "push", *lease, destination, f"{sha}:refs/heads/{branch}"]
+    cmd = ["git", "-C", str(path), "push", *lease, "--", destination, f"{sha}:refs/heads/{branch}"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -601,7 +617,7 @@ def create_draft_pr(path, project, forge, branch, target, title, body):
 
 def remote_branch_sha(path, destination, branch):
     """Read the live branch at the validated push destination, not a possibly stale local tracking ref."""
-    out = git(path, "ls-remote", destination, f"refs/heads/{branch}", timeout=90)
+    out = git(path, "ls-remote", "--", destination, f"refs/heads/{branch}", timeout=90)
     rows = (out or "").splitlines()
     return rows[0].split("\t", 1)[0] if len(rows) == 1 and rows[0].endswith(f"\trefs/heads/{branch}") else None
 
@@ -621,11 +637,15 @@ def origin_push_url(path, project, forge):
     if len(urls) != 1:
         return None
     url = urls[0]
+    if not url or url.startswith("-") or any(c.isspace() or ord(c) < 32 for c in url):
+        return None
     if "://" in url:
         parsed = urlparse(url)
+        if parsed.scheme.lower() not in ("https", "http", "ssh"):
+            return None
         host, repo = parsed.hostname, parsed.path.lstrip("/")
     else:
-        m = re.fullmatch(r"(?:[^@/:]+@)?([^:/]+):(.+)", url)
+        m = re.fullmatch(r"(?:[A-Za-z0-9._-]+@)?([^:/]+):(.+)", url)
         host, repo = (m[1], m[2]) if m else (None, None)
     expected_host = "github.com" if forge == "github" else "gitlab.com" if forge == "gitlab" else None
     if host and repo and host.lower() == expected_host and repo.removesuffix(".git").rstrip("/").lower() == project.lower():
@@ -723,10 +743,10 @@ def branch_history(path, target=None, sha="HEAD"):
 
 def _run(cmd, timeout=90):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return p.stdout if p.returncode == 0 else None
+    return p.stdout.decode("utf-8", errors="replace") if p.returncode == 0 else None
 
 
 def forge_head(project, iid, forge):
@@ -786,10 +806,12 @@ def live_thread_snapshot(project, iid, forge, tid):
     if not isinstance(tid, str) or not tid:
         raise ValueError("reply needs a nonempty thread_id")
     if forge == "github":
+        if not re.fullmatch(r"[A-Za-z0-9_=:-]+\Z", tid):
+            raise ValueError("invalid GitHub thread_id")
         query = ("query($id:ID!){node(id:$id){... on PullRequestReviewThread{"
                  "id isResolved pullRequest{number repository{nameWithOwner}} "
                  "comments(first:100){pageInfo{hasNextPage}nodes{id body}}}}}")
-        out = _run(["gh", "api", "graphql", "-f", f"query={query}", "-F", f"id={tid}"], timeout=90)
+        out = _run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={tid}"], timeout=90)
         d = json.loads(out or "null")
         thread = ((d or {}).get("data") or {}).get("node") or {}
         comments = thread.get("comments") or {}
@@ -835,7 +857,7 @@ def post_reply(project, iid, forge, thread_id, body, baseline_text):
         add = ("mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:"
                "{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}")
         resolve = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}"
-        out = _run(["gh", "api", "graphql", "-f", f"query={add}", "-F", f"id={thread_id}", "-f", f"body={body}"], timeout=90)
+        out = _run(["gh", "api", "graphql", "-f", f"query={add}", "-f", f"id={thread_id}", "-f", f"body={body}"], timeout=90)
         d = json.loads(out or "null") or {}
         note_id = (((d.get("data") or {}).get("addPullRequestReviewThreadReply") or {}).get("comment") or {}).get("id")
         if d.get("errors") or not note_id:
@@ -843,7 +865,7 @@ def post_reply(project, iid, forge, thread_id, body, baseline_text):
         after = live_thread_snapshot(project, iid, forge, thread_id)
         if after["ids"] != before["ids"] + [str(note_id)] or after["text"] != baseline_text + "\n\n" + body:
             raise RuntimeError("reply posted but new reviewer feedback arrived; thread left unresolved")
-        out = _run(["gh", "api", "graphql", "-f", f"query={resolve}", "-F", f"id={thread_id}"], timeout=90)
+        out = _run(["gh", "api", "graphql", "-f", f"query={resolve}", "-f", f"id={thread_id}"], timeout=90)
         d = json.loads(out or "null") or {}
         thread = ((d.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}
         if d.get("errors") or thread.get("id") != thread_id or thread.get("isResolved") is not True:
@@ -874,7 +896,7 @@ def review_position(diff, path, line, side="RIGHT"):
         raise ValueError("review comment needs a positive line and LEFT or RIGHT side")
     old_path = new_path = None
     old_no = new_no = None
-    for row in (diff or "").splitlines():
+    for row in _lf_lines(diff):
         if row.startswith("diff --git "):
             old_path = new_path = None
             old_no = new_no = None
@@ -1495,7 +1517,10 @@ def main(argv=None):
         try:
             tgt = requested_target or default_target(str(root))
             sha = (git(str(root), "rev-parse", "HEAD") or "").strip()
-            diff = branch_diff(str(root), tgt, sha) or ""
+            diff = branch_diff(str(root), tgt, sha) if tgt and sha else None
+            if diff is None:
+                print(f"AUDIT ERROR could not compute branch diff against target {tgt!r}")
+                return 4
             res = contracts({"action": "review", "target": tgt},
                             ("tests_not_weakened", "no_secrets_or_pii"), diff=diff)
         except Exception as e:  # noqa: BLE001
