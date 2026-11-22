@@ -16,8 +16,13 @@ A lifecycle can add an `Options:` line of backticked flags:
 - `solo`: nobody else reviews this repo. A mergeable MR/PR with no other human's approval goes to the user ("review it, then merge?") with the merge command attached, instead of waiting on reviewers.
 - `automerge`: the lifecycle's own steps stand in for a human approval. A mergeable MR/PR whose every earlier step passed is merged by greenlight without waiting on reviewers or asking the user (a goal that says "hold" still asks). It needs at least one of your own steps before `merge` that checks the work (an agent's independent reviews, a try-out, each `Done: `label=…``); a lifecycle with none never automerges.
 - `merge_any_base`: greenlight may merge an MR/PR whose target isn't the default branch. Without it a stacked GitHub PR waits on the PR its base branch comes from (`dependency`), or asks the user when there is none.
+- `merge_method=merge|squash|rebase`: overrides global `merge_method` from config.json for this repository.
+- `review_bot=<username|none>`: overrides global `review_bot` from config.json for this repository (`none` disables it).
+- `human_approval=true|false` (or `no_human_approval`): overrides global `require_human_approval` for this repository.
+- `auto_rebase`: dispatch an agent to rebase when the forge reports `need_rebase` (no conflicts), instead of asking the user.
+- `milestone=<prefix>`: prefix for the active release milestone step (default `Release-`).
 
-A step that isn't one of the built-ins above is your own: ``N. `qa` — QA passed. Done: `label=qa-ok` `` passes once the MR has that label (the agent adds it when the requirement is met), and ``Done: `signoff` `` asks you once per MR. Steps after `merge` are what's left once it lands (deploy, verify): ``8. `deploy` — Deployed to prod. Done: `signoff` ``. They can only be your own steps (signoff or label), they're checked only on your own MRs after they merge, and cleanup keeps the workspace until they're done. `mr_open` is the implement phase: the goal is being built until the MR exists.
+A step that isn't one of the built-ins above is your own: ``N. `qa` — QA passed. Done: `label=qa-ok` `` passes once the MR has that label, ``Done: `check=e2e` `` passes once that CI check succeeds, and ``Done: `signoff` `` asks you once per MR (with optional ``Run: `cmd` `` to run a command first). Any custom step may also set ``Owner: `agent|me|reviewers|ci` `` and ``Phase: `define|build|verify|review|land` ``. Steps before `mr_open` run before an MR is opened (keyed per branch); steps after `merge` run once it lands (deploy, verify) and cleanup keeps the workspace until they're done. `mr_open` is the implement phase: the goal is being built until the MR exists.
 
 **Semantic audit.** Before anything an agent did unattended leaves the box, `scripts/audit.py` asks System One (`scripts/decide.py`) four contracts in parallel (one `decide.batch`), each phrased so yes means kept:
 

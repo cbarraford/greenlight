@@ -173,12 +173,15 @@ for sf in check_safety.swift_files():
             allowed = (sf.name == "Config.swift" and "let ud:" in line) or (sf.name == "App.swift" and "removePersistentDomain" in line)
             assert allowed, f"stray UserDefaults.standard in {sf.name}:{i}: {line.strip()}"
 
-# 6. audit.py review handles argv cleanly without UnboundLocalError and passes diff=diff
+# 6. audit.py review handles argv cleanly and passes diff= (not outbound=) to contracts()
 assert audit.main(["review", "--path", str(ROOT), "--deterministic-only"]) == 0
-with mock.patch.object(audit, "branch_diff", return_value="diff --git a/a.py b/a.py\n@@ -0,0 +1 @@\n+x = 1\n"), \
+sample_diff = "diff --git a/scripts/foo.py b/scripts/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
+with mock.patch.object(audit, "branch_diff", return_value=sample_diff), \
         mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 0
-    assert mc.called and mc.call_args.kwargs.get("diff") and mc.call_args.kwargs.get("outbound") == ""
+    assert mc.called
+    assert mc.call_args.kwargs.get("diff") == sample_diff, f"expected diff= kwarg, got {mc.call_args}"
+    assert "outbound" not in mc.call_args.kwargs, f"raw diff must not be passed as outbound=: {mc.call_args}"
 with mock.patch.object(audit, "branch_diff", return_value=None):
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 4
 

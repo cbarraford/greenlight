@@ -928,17 +928,17 @@ function readyBtn(ws, m){
 // Deploy (any step after the merge): runs the step's Run command from the lifecycle on the host, then signs it off. One click.
 const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function signoffBtn(ws, m, x){
-  const box = el("div", "mg"), b = el("button", "go"), t = stepTitle(x.step); b.type = "button";
-  b.innerHTML = I.check + `<span><b>${x.run ? esc(t) + " " + esc(m.ref || "") : "Sign off " + esc(x.step.replace(/_/g, " "))}</b><small>${x.run ? "Runs " + esc(x.run.length > 60 ? x.run.slice(0, 59) + "…" : x.run) + ", then signs it off" : "Done: marks the step finished"}</small></span>`;
+  const box = el("div", "mg"), b = el("button", "go"), t = stepTitle(x.step), ref = (m && m.ref) || wsName(ws); b.type = "button";
+  b.innerHTML = I.check + `<span><b>${x.run ? esc(t) + " " + esc(ref) : "Sign off " + esc(x.step.replace(/_/g, " "))}</b><small>${x.run ? "Runs " + esc(x.run.length > 60 ? x.run.slice(0, 59) + "…" : x.run) + ", then signs it off" : "Done: marks the step finished"}</small></span>`;
   b.title = x.run || "";
   b.onclick = () => { box.className = "mg st"; b.disabled = true; b.innerHTML = I.spin + `<span><b>${x.run ? esc(t) + "ing" : "Signing off"}…</b></span>`; post({cmd: "tree", op: "signoff", path: ws}) };
   box.append(b); box.dataset.ws = ws; return box;
 }
 function signoffDone(o){
-  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st"), t = stepTitle(o.step || "step");
-  if (!box) return o.error ? ask({icon: "warn", title: `${t} didn't finish for ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`${t}: signed off ${o.ref}`);
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st"), t = stepTitle(o.step || "step"), ref = o.ref || wsName(o.path);
+  if (!box) return o.error ? ask({icon: "warn", title: `${t} didn't finish for ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`${t}: signed off ${ref}`);
   box.className = "mg " + (o.error ? "no" : "ok");
-  box.innerHTML = o.error ? `<b>${esc(t)} didn't finish</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(t)} signed off</b><small>${o.ran ? "Ran " + esc(o.ran) : esc(o.ref || "")}</small></span>`;
+  box.innerHTML = o.error ? `<b>${esc(t)} didn't finish</b><code>${esc(o.error)}</code>` : I.check + `<span><b>${esc(t)} signed off</b><small>${o.ran ? "Ran " + esc(o.ran) : esc(ref)}</small></span>`;
 }
 function readyDone(o){
   const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st");
@@ -1268,17 +1268,20 @@ function renderSide(){
 }
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
-let slide = .25, sliding;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut
+let slide = .25, sliding, slideTimer;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut
 function toggleSide(){
   const b = document.body, s = $("side"), st = $("stage"), sw = st.offsetWidth, from = sliding && getComputedStyle(s).marginLeft;  // a re-toggle mid-slide turns back from where it is
-  sliding?.cancel(); sliding = null;
+  clearTimeout(slideTimer); slideTimer = 0; sliding?.cancel(); sliding = null;
   const open = !b.classList.toggle("noside"); post({cmd: "side", open}); render();
-  const end = () => { sliding = null; b.classList.remove("sliding"); st.style.width = ""; setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
+  const end = () => { clearTimeout(slideTimer); slideTimer = 0; sliding = null; b.classList.remove("sliding"); st.style.width = ""; setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
   if (!(slide > 0) || matchMedia("(prefers-reduced-motion: reduce)").matches) return end();
   b.classList.add("sliding"); st.style.width = sw + "px";
   const w = "-" + s.offsetWidth + "px";
-  sliding = s.animate({marginLeft: [from || (open ? w : "0px"), open ? "0px" : w]}, {duration: slide * 1000, easing: open ? "cubic-bezier(.2,.8,.2,1)" : "cubic-bezier(.4,0,.8,.2)"});
-  sliding.onfinish = end;
+  const anim = s.animate({marginLeft: [from || (open ? w : "0px"), open ? "0px" : w]}, {duration: slide * 1000, easing: open ? "cubic-bezier(.2,.8,.2,1)" : "cubic-bezier(.4,0,.8,.2)"});
+  sliding = anim;
+  anim.onfinish = end;
+  // Occluded WKWebView windows can suspend Web Animations so onfinish never fires; guarantee cleanup.
+  slideTimer = setTimeout(() => { if (sliding === anim) { anim.cancel(); end(); } }, slide * 1000 + 120);
 }
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
 const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});

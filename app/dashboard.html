@@ -1329,7 +1329,19 @@ function stepNote(k, i, cur, p, ml){
     case "approved": return [need ? `${appr} of ${need}` : `${appr} approvals`, null];
     case "merge": return ["greenlight merges", null];
     case "review": return ["your review", null];
-    default: return ["not yet", null];
+    default: {
+      const m = p.step_meta && p.step_meta[k], d = (m && m.done) || "";
+      if (d.startsWith("label=")) return [`needs label ${d.slice(6)}`, null];
+      if (d.startsWith("check=")) {
+        const want = d.slice(6), hit = jobs.find(j => j.name === want);
+        if (hit && hit.status === "failed") return [`${want} failed`, "bad"];
+        if (hit && ["running", "pending"].includes(hit.status)) return [`${want} ${hit.status}`, "run"];
+        if (hit && hit.status === "success") return [want, "ok"];
+        return [`needs check ${want}`, null];
+      }
+      if (d === "signoff") return ["needs sign-off", null];
+      return ["not yet", null];
+    }
   }
 }
 function lifecycle(p, ml){
@@ -1340,7 +1352,7 @@ function lifecycle(p, ml){
     const mark = t === "ok" && !now ? icon("check", 12) : t === "bad" ? icon("close", 12) : t === "run" ? icon("ci-run", 12) : null;
     return h("li", {"aria-current": now ? "step" : null, style: (tok ? `--c:${c(tok)};` : "") + (i <= cur && t === "ok" ? `--lc:${c("--green")}` : "")},
       h("span", {class:"rb" + (t === "ok" && !now ? " ok" : tok ? " on" : "")}, mark),
-      h("b", {style: now ? `color:${ink(tok)}` : ""}, STEP_GOALS[k] || STEP_NAMES[k] || k),
+      h("b", {style: now ? `color:${ink(tok)}` : ""}, STEP_GOALS[k] || STEP_NAMES[k] || cap(String(k).replace(/_/g, " "))),
       h("span", {class:"n", title: k === "ci_green" ? ciSay(ml, p.mr || {})[0] : note, style: tok && tok !== "--green" ? `color:${ink(tok)}` : ""}, now && !mark && !t && (wait || p.state === "raised") ? "waiting on you" : note));
   })));
 }
@@ -1799,7 +1811,7 @@ function hoverCard(p){
       tile("CI", ct, null, ci),
       tile(mr.mergeable && !mr.conflicts ? "Merge" : "Conflicts", mr.conflicts ? "Has conflicts" : mr.mergeable ? "Mergeable" : "None", null, mr.conflicts ? "--orange" : mr.mergeable ? "--green" : null))];
   }
-  const mv = mr ? arr(p.moves) : [];  // open MRs' moves, and a merged one's step after the merge (dash.py moves)  // dash.py moves: the smart button replaces the next step
+  const mv = arr(p.moves);  // open MRs' moves, pre-MR signoffs, and post-merge steps (dash.py moves)  // dash.py moves: the smart button replaces the next step
   const open = h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, "Open workspace");
   const acts = a.state === "waiting" ? h("div", {class: "hacts"}, h("button", {class: "btn sm ans", onclick: () => { hideCard(); openAnswer(p.name) }}, "Answer"), open)  // its question, answered from here
       : a.state === "working" ? null
@@ -1843,7 +1855,7 @@ function stepsEl(p){
         const card = document.getElementById("hcard");
         if (card) { const r = card.getBoundingClientRect(); card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - card.offsetHeight))}px` } }},  // taller: keep it on screen
     h("div", {class: "steps", style: `--n:${n}`}, Array.from({length: n}, (_, k) => h("i", {class: k === i ? "cur" : null, style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))),  // done green, here in its state color, ahead on the track
-    h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || p.step || ""), lifeLine(p)));
+    h("span", {class: "sl"}, `Step ${Math.min(i + 1, n)} of ${n} · `, h("b", {style: `color:${ink(STATE[p.state].color)}`}, fixCI(p) ? "Fix CI" : STEP_NAMES[p.step] || cap(String(p.step || "").replace(/_/g, " "))), lifeLine(p)));
   const list = () => h("ol", {class: "chk"}, st.flatMap((k, j) => [
     j === after + 1 && after >= 0 ? h("li", {class: "sep", "aria-hidden": "true"}, "After merge") : null,
     h("li", {class: j < i ? "ok" : j === i ? "cur" : null},
@@ -1889,7 +1901,7 @@ function readyEl(p){
 // Deploy (any step after the merge): the step's Run command from the lifecycle, then its sign-off; no Run: just the sign-off
 const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function signoffEl(p, x){
-  const box = h("div", {class: "mg"}), ref = mrRef(p.mr), t = stepTitle(x.step);
+  const box = h("div", {class: "mg"}), ref = p.mr && p.mr.iid ? mrRef(p.mr) : p.name, t = stepTitle(x.step);
   box.append(h("button", {class: "go", title: x.run || "", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, x.run ? `${t}ing ${ref}…` : "Signing off…")); post({cmd: "signoff", path: p.path}) }},
     h("b", {}, x.run ? `${t} ${ref}` : `Sign off ${x.step.replace(/_/g, " ")}`), h("small", {}, x.run ? `Runs ${short(x.run, 60)}, then signs it off` : "Done: marks the step finished")));
   box.dataset.path = p.path; return box;

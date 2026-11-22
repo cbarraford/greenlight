@@ -15,10 +15,9 @@ Extra keys: choice/score answers also carry `confidence`, and a fallback carries
 Providers, from config.json's "system_one" ({"provider": "jev"|"haiku"|"local", "fallback": "haiku"|null, "model": "jev-latest",
 "url": ..., "haiku_model": "claude-haiku-5-5", "timeout": 20}; a bare string names the provider):
   jev    TypeSafe's System One API (https://api.typesafe.ai/v1/systemone). Key: TYPESAFE_API_KEY, else
-         $GREENLIGHT_HOME/secrets/typesafe (`decide.py key` writes it from stdin), else the macOS login Keychain
-         (service greenlight, account typesafe).
-  haiku  Claude Haiku with structured JSON output: the Messages API when ANTHROPIC_API_KEY (or the Keychain's greenlight/anthropic)
-         is set, else `claude -p --json-schema`.
+         $GREENLIGHT_HOME/secrets/typesafe (`decide.py key` writes it from stdin).
+  haiku  Claude Haiku with structured JSON output: the Messages API when ANTHROPIC_API_KEY (or
+         $GREENLIGHT_HOME/secrets/anthropic) is set, else `claude -p --json-schema`.
   local  No model: every answer is uninformative (bool 0.5, uniform choice, score 0.5) and says provider "local", so callers
          keep their own deterministic rules. It's the default, and what any failure falls back to.
 Answers from a model are cached in $GREENLIGHT_HOME/decide-cache.json (same state + questions → no new call for a day).
@@ -81,24 +80,15 @@ def chain(c=None):
     return list(dict.fromkeys(out)) + ["local"]
 
 
-def keychain(account):
-    if sys.platform != "darwin":
-        return None
+def _secret(name):
     try:
-        p = subprocess.run(["security", "find-generic-password", "-s", "greenlight", "-a", account, "-w"],
-                           capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+        return (HOME / "secrets" / name).read_text().strip() or None
+    except OSError:
         return None
-    return p.stdout.strip() or None if p.returncode == 0 else None
 
 
 def jev_key():
-    if k := os.environ.get("TYPESAFE_API_KEY", "").strip():
-        return k
-    try:
-        return (HOME / "secrets" / "typesafe").read_text().strip() or None  # empty file explicitly clears a legacy Keychain key
-    except OSError:
-        return keychain("typesafe")
+    return os.environ.get("TYPESAFE_API_KEY", "").strip() or _secret("typesafe")
 
 
 def set_key(value):
@@ -245,7 +235,7 @@ def post(url, body, headers, timeout):
 def jev(state, qs, c):
     key = jev_key()
     if not key:
-        raise RuntimeError("no TypeSafe key (TYPESAFE_API_KEY, the Keychain, or `decide.py key`)")
+        raise RuntimeError("no TypeSafe key (TYPESAFE_API_KEY or `decide.py key`)")
     names = {n: f"q{i}" for i, n in enumerate(qs)}  # its question names are ours to pick: ours may have any characters
     body = {"model": c["model"], "state": state, "questions": {}}
     for n, q in qs.items():
@@ -330,7 +320,7 @@ def haiku_parse(qs, keys, d):
 
 def haiku(state, qs, c):
     text, schema, keys = haiku_prompt(state, qs)
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or keychain("anthropic")
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or _secret("anthropic")
     if key:
         r = post(c["anthropic_url"], {
             "model": c["haiku_model"], "max_tokens": 1024, "thinking": {"type": "disabled"},

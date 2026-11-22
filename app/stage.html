@@ -343,7 +343,7 @@ const TEMPLATES = {
   // {stages: [{label, state: done|now|todo, detail}], holder, at}
   lifecycle(o){
     const ol = $("ol", "life");
-    for (const st of arr(o.stages).slice(0, 8).map(Object)) { const li = $("li", ["done", "now", "todo"].includes(st.state) ? st.state : "todo");
+    for (const st of arr(o.stages).slice(0, 12).map(Object)) { const li = $("li", ["done", "now", "todo"].includes(st.state) ? st.state : "todo");
       li.append($("b", null, str(st.label))); if (st.detail) li.append($("span", null, str(st.detail))); ol.append(li) }
     if (!ol.children.length) return null;
     const foot = [o.at && "at " + str(o.at), o.holder && "with " + str(o.holder)].filter(Boolean).join(" · ");

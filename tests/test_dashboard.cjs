@@ -1034,6 +1034,25 @@ test("All output: another session is labelled from the first paint; a new sessio
   assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
 });
 
+test("custom lifecycle stages show step_meta requirements and pre-MR signoff button without an MR", async page => {
+  const custom = {...puck("pre-rfc", "Write RFC", "idle"), state: "needs", owner: "me", step: "rfc", mr: {},
+    steps: ["rfc", "mr_open", "qa", "e2e", "merge"], step_index: 0,
+    step_meta: {rfc: {done: "signoff"}, qa: {done: "label=qa-ok"}, e2e: {done: "check=e2e-suite"}},
+    moves: [{kind: "signoff", step: "rfc", run: "make rfc"}]};
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [custom]});
+  await page.evaluate(() => window.mc.pick(["pre-rfc"], true));
+  const btnText = await page.textContent("#hcard .mg .go");
+  assert.match(btnText, /Rfc pre-rfc/);
+  assert.ok(!btnText.includes("undefined"), `unexpected undefined in signoff button: ${btnText}`);
+  assert.deepEqual(await page.evaluate(p => [
+    stepNote("rfc", 0, 0, p, {})[0],
+    stepNote("qa", 2, 0, p, {})[0],
+    stepNote("e2e", 3, 0, p, {})[0],
+    stepNote("e2e", 3, 0, p, {jobs: [{name: "e2e-suite", status: "running"}]})[0],
+    stepNote("e2e", 3, 0, p, {jobs: [{name: "e2e-suite", status: "failed"}]})[1],
+  ], custom), ["needs sign-off", "needs label qa-ok", "needs check e2e-suite", "e2e-suite running", "bad"]);
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));

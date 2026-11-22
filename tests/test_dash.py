@@ -572,3 +572,85 @@ assert dash.forge_line(iss, {}, now) == "- [octo/app#3](v) Bug · bug · no PR �
 pr = dash.gh_item({"number": 4, "title": "Feat", "url": "w", "isDraft": False, "updatedAt": "", "reviewDecision": "CHANGES_REQUESTED", "mergeable": "CONFLICTING",
                    "repository": {"nameWithOwner": "octo/app"}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]}}, "review")
 assert dash.forge_line(pr, {}, now) == "- [octo/app#4](w) Feat · conflicts · CI failure · changes requested", dash.forge_line(pr, {}, now)
+
+# record / history / page / stream resilience: corrupt state.json or cache never breaks dashboard updates
+dash.DASH.mkdir(parents=True, exist_ok=True)
+_sf = dash.DASH / "state.json"
+_sf.write_text('{"alpha": ["working", "ci", "agent"]}]}')  # trailing bytes from a concurrent non-atomic write
+_p1 = {"name": "alpha", "state": "needs", "step": "review", "owner": "me", "action": "review it"}
+dash.record([_p1])
+assert json.loads(_sf.read_text()) == {"alpha": ["needs", "review", "me"]}
+assert not list(dash.DASH.glob(".state.json.*.tmp"))
+_sf.write_text("[]")  # valid JSON, wrong shape
+dash.record([_p1])
+assert json.loads(_sf.read_text()) == {"alpha": ["needs", "review", "me"]}
+dash.record([{**_p1, "state": "done", "step": "done", "owner": "done", "action": "merged"}])
+_hist_file = dash.DASH / "alpha.jsonl"
+with open(_hist_file, "a") as _hf:
+    _hf.write("{corrupt line\n")
+_hist = dash.history("alpha")
+assert len(_hist) == 1 and "needs → done" in _hist[0]["text"], _hist
+_page_cache = dash.DASH / "pages" / "alpha.json"
+_page_cache.parent.mkdir(parents=True, exist_ok=True)
+_page_cache.write_text("{corrupt")
+with mock.patch.object(dash, "facts", return_value={"puck": {**_p1, "agent": {"state": "idle"}, "mr": None}}), \
+     mock.patch.object(dash, "design", return_value={"puck": None, "tiles": [], "wide": None}):
+    _pg = dash.page("alpha")
+assert _pg["name"] == "alpha" and _pg["layout"] == {"puck": None, "tiles": [], "wide": None} and json.loads(_page_cache.read_text())["v"] == dash.PAGE_V
+import contextlib as _cl, io as _io
+_out = _io.StringIO()
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [_p1]}), \
+     mock.patch.object(dash, "record", side_effect=OSError("disk full")), \
+     mock.patch.object(dash, "oops") as _oops, \
+     mock.patch.object(dash.time, "sleep", side_effect=StopIteration), \
+     mock.patch.object(sys, "stdout", _out), \
+     _cl.suppress(StopIteration):
+    dash._stream(1)
+assert json.loads(_out.getvalue().strip()) == {"pucks": [_p1]} and _oops.call_count == 1
+_out2 = _io.StringIO()
+with mock.patch.object(dash, "snapshot", side_effect=RuntimeError("boom")), \
+     mock.patch.object(dash, "oops") as _oops2, \
+     mock.patch.object(dash.time, "sleep", side_effect=StopIteration), \
+     mock.patch.object(sys, "stdout", _out2), \
+     _cl.suppress(StopIteration):
+    dash._stream(1)
+assert json.loads(_out2.getvalue().strip()) == {"error": "boom"} and _oops2.call_count == 1
+with mock.patch.object(dash, "snapshot", side_effect=BrokenPipeError), \
+     mock.patch.object(dash, "oops") as _oops3:
+    dash._stream(1)
+assert _oops3.call_count == 0
+with mock.patch.object(dash.os, "replace", side_effect=OSError("fail")), _cl.suppress(OSError):
+    dash._write_json(dash.DASH / "fail.json", {"a": 1})
+assert not list(dash.DASH.glob(".fail.json.*.tmp"))
+print("resilience ok")
+
+# per-repo qualified lifecycles (org/repo) and pre-merge / pre-MR custom signoff moves
+_org = dash.settings("lifecycle-set", "team-a/shared", json.dumps({
+    "stages": [{"key": "rfc", "req": "RFC ready.", "done": "signoff"}, {"key": "mr_open", "req": ""},
+               {"key": "legal", "req": "Legal ok.", "done": "signoff", "run": "echo ok > legal.txt"}, {"key": "merge", "req": ""}],
+    "options": {"merge_method": "squash"}, "rules": "", "intro": ""}))
+assert _org["source"] == "yours" and _org["options"]["merge_method"] == "squash"
+assert (dash.greenlight.STATE / "lifecycles" / "team-a__shared.md").exists()
+assert dash.settings("lifecycle-get", "team-a/../x", "")["error"]
+assert dash.settings("lifecycle-reset", "team-a/shared", "")["source"] == "default"
+(dash.greenlight.STATE / "lifecycles/pre.md").write_text(dash.greenlight.lifecycle_md("pre", {
+    "stages": [{"key": "rfc", "req": "RFC.", "done": "signoff"}, {"key": "mr_open", "req": ""},
+               {"key": "legal", "req": "Legal.", "done": "signoff", "run": "echo yes > pre.txt"}, {"key": "merge", "req": ""}]}))
+_open_so = {"path": "/w/pre", "project": "acme/pre", "mr": {"state": "opened", "role": "author", "ref": "!3", "conflicts": False, "pipeline": "success", "todo_threads": []},
+            "next": {"step": "legal", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/pre", "3", "legal"]}}
+assert dash.moves(_open_so) == [{"kind": "signoff", "step": "legal", "run": "echo yes > pre.txt"}]
+# urgent fix suppresses pre-merge signoff without misrouting to review
+assert [m["kind"] for m in dash.moves({**_open_so, "mr": {**_open_so["mr"], "pipeline": "failed"}})] == ["ci"]
+_pre_mr_so = {"name": "pre-ws", "path": "/w/pre", "project": "acme/pre", "forge": "github", "mr": None,
+              "next": {"step": "rfc", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/pre", "@b", "rfc"]}}
+assert dash.moves(_pre_mr_so) == [{"kind": "signoff", "step": "rfc", "run": ""}]
+# after pre-MR stage passes, progress sits at mr_open (index 1), not back at index 0
+assert dash.progress({**_pre_mr_so, "next": {"step": "freeform", "owner": "agent"}}) == (0.25, ["rfc", "mr_open", "legal", "merge"], 1)
+# tree_signoff for pre-MR row returns workspace name as ref (never None)
+_lj2 = dash.greenlight.STATE / "last.json"
+_prev_lj2 = _lj2.read_text() if _lj2.exists() else None
+_lj2.write_text(json.dumps({"ts": 1, "rows": [_pre_mr_so]}))
+with mock.patch.object(dash.greenlight, "run", return_value=""):
+    assert dash.tree_signoff("/w/pre") == {"op": "signoff", "path": "/w/pre", "ref": "pre-ws", "step": "rfc", "ok": True, "ran": ""}
+_lj2.write_text(_prev_lj2) if _prev_lj2 is not None else _lj2.unlink()
+print("per-repo lifecycle ok")

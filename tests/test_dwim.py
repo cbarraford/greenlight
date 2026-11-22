@@ -303,6 +303,12 @@ B2 = [puck("auth-login", 42, pipeline="failed", life=life), puck("auth-tokens", 
 c = dwim.stage({"text": "where is auth-login at?", "pucks": B2})
 assert c["kind"] == "lifecycle" and [s["state"] for s in c["stages"]] == ["done", "done", "now", "todo", "todo"] and c["stages"][2]["detail"] == "Pipeline green", c
 assert c["title"] == "CI failed on #42." and c["at"] == "3.2"
+# when the puck carries its repo's own lifecycle steps, the lifecycle card renders those instead of the fixed 5 stages
+B_custom = [puck("custom-ws", 50, steps=["mr_open", "qa", "merge", "deploy"], step_index=1,
+                 life={"stage": "verify", "sub_name": "Author check", "pile": "yours", "do": "Meet qa.", "at": "3.4", "holder": "your agent"})]
+c_cust = dwim.stage({"text": "where is custom-ws at?", "pucks": B_custom})
+assert c_cust["kind"] == "lifecycle" and [(s["label"], s["state"]) for s in c_cust["stages"]] == [
+    ("Open MR", "done"), ("Qa", "now"), ("Merge", "todo"), ("Deploy", "todo")], c_cust
 c = dwim.stage({"text": "which CI status for auth-login?", "pucks": B2})
 assert c["kind"] == "table" and [r[0] for r in c["rows"]] == ["auth-login"], c
 c = dwim.stage({"text": "which ones are red", "pucks": B2})
