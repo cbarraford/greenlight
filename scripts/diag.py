@@ -35,6 +35,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 MAX = 5 << 20  # ponytail: size rotation, no compression; enough for a local trail
@@ -61,7 +62,7 @@ CLASSES = (  # first match wins: classify()
 CLASS_RES = [(c, re.compile(p, re.I)) for c, p in CLASSES]
 _comp = None
 _ver = None
-_leak = False
+_leak: Any = False
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 
@@ -177,7 +178,8 @@ def where(tb):
 
 def clean(fields):
     """Fields that fit the schema; the number dropped goes in `dropped`."""
-    out, dropped = {}, 0
+    out: dict[str, Any] = {}
+    dropped = 0
     lrx = leak()
     for k, v in fields.items():
         if v is None:
@@ -185,9 +187,7 @@ def clean(fields):
         if not isinstance(k, str) or not KEY_RE.fullmatch(k) or (lrx and lrx.search(k)):
             dropped += 1
             continue
-        if isinstance(v, bool):
-            out[k] = v
-        elif isinstance(v, int):
+        if isinstance(v, int):  # bool is a subclass of int; both are kept as-is
             out[k] = v
         elif isinstance(v, float):
             if math.isfinite(v):

@@ -368,6 +368,38 @@ RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
 
+def _strip_runners(w):
+    while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
+        if w[1] in ("-c", "-e", "-"):  # python3 -c '…' or a heredoc: inline code, the interpreter is the name
+            return w[:1]
+        i, valued = 1, RUNNER_VALUED.get(os.path.basename(w[0]), ())
+        while i < len(w) and (w[i].startswith("-") or w[i] == "run" or re.match(r"^\d+[smh]?$", w[i])):
+            if w[i] == "-m" and i + 1 < len(w):  # python -m pytest: the module
+                i += 1
+                break
+            i += 2 if w[i] in valued else 1
+        w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
+    return w
+
+
+def _extract_sub(prog, w):
+    sub: list[str] = []
+    if not (prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog)):
+        return sub
+    i = 1
+    while i < len(w) and len(sub) < (2 if prog in NOUN_VERB or sub[:1] and sub[0] in WRAPPER_VERBS else 1):
+        if w[i].startswith("-"):
+            if sub and not (prog in NOUN_VERB and w[i] in VALUED):  # flags after the subcommand: its arguments, kept out
+                break
+            i += 2 if w[i] in VALUED else 1  # git -C /w status, gh pr --repo a/b list: flags before the words
+            continue
+        if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
+            break
+        sub.append(w[i])
+        i += 1
+    return sub
+
+
 def cmd_title(cmd, _depth=0):
     """A shell command as what it ran, not "Ran a shell command": the first real program (the script, for an interpreter), with
     its subcommand (`cd x && python3 /a/greenlight.py scan | tail` → "Ran greenlight.py scan", `gh pr list -R a/b` → "Ran gh pr
@@ -385,34 +417,12 @@ def cmd_title(cmd, _depth=0):
             continue  # nothing ran (command -v only looks a program up)
         if _depth < 8 and os.path.basename(w[0]) in SHELLS and len(w) > 2 and w[1] in ("-c", "-lc"):
             return cmd_title(" ".join(w[2:]), _depth + 1)
-        while len(w) > 1 and os.path.basename(w[0]) in RUNNERS:
-            if w[1] in ("-c", "-e", "-"):  # python3 -c '…' or a heredoc: inline code, the interpreter is the name
-                w = w[:1]
-                break
-            i, valued = 1, RUNNER_VALUED.get(os.path.basename(w[0]), ())
-            while i < len(w) and (w[i].startswith("-") or w[i] == "run" or re.match(r"^\d+[smh]?$", w[i])):
-                if w[i] == "-m" and i + 1 < len(w):  # python -m pytest: the module
-                    i += 1
-                    break
-                i += 2 if w[i] in valued else 1
-            w = w[i:] or w[:1]  # all flags (sudo -E): the runner is the name
-        prog, sub = os.path.basename(w[0]), []
+        w = _strip_runners(w)
+        prog = os.path.basename(w[0])
         if prog in ("claude", "codex"):  # a subcommand only right after it, unquoted: any other word is the prompt
             m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", bare)  # quotes blanked
             return "Ran " + prog + (" " + m.group(1) if m else "")
-        if prog in SUBCOMMANDS or re.search(r"\.(py|sh|js|cjs|mjs)$", prog):
-            i = 1
-            while i < len(w) and len(sub) < (2 if prog in NOUN_VERB or sub[:1] and sub[0] in WRAPPER_VERBS else 1):
-                if w[i].startswith("-"):
-                    if sub and not (prog in NOUN_VERB and w[i] in VALUED):  # flags after the subcommand: its arguments, kept out
-                        break
-                    i += 2 if w[i] in VALUED else 1  # git -C /w status, gh pr --repo a/b list: flags before the words
-                    continue
-                if not re.match(r"^[a-z][a-z0-9_-]*$", w[i]):
-                    break
-                sub.append(w[i])
-                i += 1
-        return short(" ".join(["Ran", prog] + sub), 60)
+        return short(" ".join(["Ran", prog] + _extract_sub(prog, w)), 60)
     return "Ran a shell command"
 
 
@@ -655,7 +665,8 @@ class Norm:
                 if not isinstance(c, dict):
                     continue
                 if c.get("type") == "tool_use":
-                    inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+                    raw_inp = c.get("input")
+                    inp: dict = raw_inp if isinstance(raw_inp, dict) else {}
                     cid, cname = c.get("id") or "", c.get("name") or "tool"
                     self.cmds[cid] = inp.get("command") or ""
                     title, detail = step_title(cname, inp)
@@ -677,14 +688,17 @@ class Norm:
             self.window = (mu.get("contextWindow") if isinstance(mu, dict) else None) or self.window
             u = d.get("usage") or {}
             self.tin, self.tout = self.tin + self.usage(u), self.tout + ((u.get("output_tokens") or 0) if isinstance(u, dict) else 0)  # +=: a retry's run adds to the first's
-            if isinstance(d.get("total_cost_usd"), (int, float)) and not isinstance(d.get("total_cost_usd"), bool):
+            if isinstance(d.get("total_cost_usd"), int | float) and not isinstance(d.get("total_cost_usd"), bool):
                 self.cost = (self.cost or 0) + d["total_cost_usd"]
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
                         "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
         return out
 
     def codex(self, d):
-        t, it, out = d.get("type"), d.get("item") if isinstance(d.get("item"), dict) else {}, []
+        t = d.get("type")
+        raw_it = d.get("item")
+        it: dict = raw_it if isinstance(raw_it, dict) else {}
+        out: list = []
         if t == "thread.started":
             self.thread = d.get("thread_id") or self.thread
         elif t == "item.started" and it.get("type") == "command_execution":
@@ -1287,6 +1301,7 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
                 old_handlers[sig] = prev_h
                 signal.signal(sig, _on_sig)
 
+    assert p.stdin is not None and p.stdout is not None
     try:
         try:
             p.stdin.write(text)
@@ -1336,8 +1351,9 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
                 continue
             if not isinstance(d, dict):
                 continue
-            init = d.get("init") if isinstance(d.get("init"), dict) else {}
-            result = d.get("result") if isinstance(d.get("result"), dict) else {}
+            raw_init, raw_res = d.get("init"), d.get("result")
+            init: dict = raw_init if isinstance(raw_init, dict) else {}
+            result: dict = raw_res if isinstance(raw_res, dict) else {}
             sid = d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id") or d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
             raw = getattr(norm, engine)(d)
             for e in raw:  # before track(): the status it repeats a step's title in is the hidden one

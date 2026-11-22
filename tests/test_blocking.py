@@ -81,4 +81,22 @@ with mock.patch.object(blocking.time, "time", return_value=blocking.time.time() 
     assert blocking.cached() is None
 with mock.patch.object(blocking, "scan", side_effect=RuntimeError("502")):
     assert blocking.blocks(fresh=True) is None  # no answer, not "nothing blocked"
+
+# scan(): aggregates hits, skips transient single-MR errors, raises if ALL MR checks fail
+m1 = {"iid": 10, "web_url": "https://example.invalid/10", "title": "First"}
+m2 = {"iid": 11, "web_url": "https://example.invalid/11", "title": "Second"}
+with mock.patch.object(blocking, "open_mrs", side_effect=lambda proj, pre: [m1, m2] if proj == TN else []), \
+        mock.patch.object(blocking, "check", side_effect=lambda proj, m: (
+            [(ME, "discussion", "@bob"), (ME, "discussion", "@carol")] if m["iid"] == 10 else (_ for _ in ()).throw(RuntimeError("blip"))
+        )):
+    res = blocking.scan()
+    assert res == {f"{TN}!10": {"reason": "discussion", "why": "2 threads are waiting on you", "n": 2,
+                                "url": m1["web_url"], "title": m1["title"]}}, res
+try:
+    with mock.patch.object(blocking, "open_mrs", side_effect=lambda proj, pre: [m1] if proj == TN else []), \
+            mock.patch.object(blocking, "check", side_effect=RuntimeError("502")):
+        blocking.scan()
+    raise AssertionError("expected RuntimeError when all MR checks fail")
+except RuntimeError as e:
+    assert "all 1 MR blocking checks failed" in str(e)
 print("ok")

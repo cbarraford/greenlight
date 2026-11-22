@@ -1,11 +1,17 @@
 """Security & cross-layer contract tests for Greenlight (Python ↔ Swift ↔ HTML)."""
+import atexit
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+_SEC_HOME = tempfile.mkdtemp(prefix="gl-sec-")
+atexit.register(shutil.rmtree, _SEC_HOME, True)
+os.environ["GREENLIGHT_HOME"] = _SEC_HOME
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -184,5 +190,84 @@ with mock.patch.object(audit, "branch_diff", return_value=sample_diff), \
     assert "outbound" not in mc.call_args.kwargs, f"raw diff must not be passed as outbound=: {mc.call_args}"
 with mock.patch.object(audit, "branch_diff", return_value=None):
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 4
+
+# 7. ade_basement: atomic remember(), prefix-boundary worktrees(), -- end-of-options send(), 0o600 O_EXCL launch() brief
+import ade_basement  # noqa: E402
+import ade_herdr  # noqa: E402
+import dash  # noqa: E402
+
+with tempfile.TemporaryDirectory() as td:
+    base_tmp = Path(td)
+    with mock.patch.object(ade_basement, "REPOS", base_tmp / "repos.json"), \
+            mock.patch.object(ade_basement, "BRIEFS", base_tmp / "briefs"):
+        ade_basement.remember("/repo/a")
+        ade_basement.remember("/repo/a")
+        assert json.loads((base_tmp / "repos.json").read_text()) == ["/repo/a"]
+        fake_panes = [
+            {"handle": "%1", "cwd": "/w/app/sub", "title": "✳ Done", "at": "1700000000"},
+            {"handle": "%2", "cwd": "/w/app2", "title": "⠋ Run", "at": "1700000001"},
+        ]
+        with mock.patch.object(ade_basement, "panes", return_value=fake_panes), \
+                mock.patch.object(ade_basement, "goals", return_value={"/w/app": "g1"}), \
+                mock.patch.object(ade_basement, "git_info", side_effect=lambda p: {"repoId": "/repo/a", "path": p}), \
+                mock.patch.object(ade_basement, "git", return_value="worktree /w/app\nworktree /w/app2\n"), \
+                mock.patch.object(ade_basement, "screen", return_value=["❯ "]):
+            wts = {w["path"]: w for w in ade_basement.worktrees()}
+            assert [a["handle"] for a in wts["/w/app"]["agents"]] == ["%1"]
+            assert [a["handle"] for a in wts["/w/app2"]["agents"]] == ["%2"]
+        tmux_calls = []
+        with mock.patch.object(ade_basement, "tmux", side_effect=lambda *a: (tmux_calls.append(a), "%9")[1]), \
+                mock.patch.object(ade_basement.subprocess, "run") as mrun, \
+                mock.patch.object(ade_basement.time, "sleep"):
+            ade_basement.send("%1", "-l-flag", False)
+            assert tmux_calls[-1] == ("send-keys", "-t", "%1", "-l", "--", "-l-flag")
+            ade_basement.send("%1", "hello\nworld", True)
+            assert any("load-buffer" in c.args[0] for c in mrun.call_args_list)
+            assert any("delete-buffer" in c.args[0] for c in mrun.call_args_list)
+            ade_basement.launch("/w/app", "claude", "line1\nline2")
+            briefs = list((base_tmp / "briefs").glob("*.md"))
+            assert len(briefs) == 1 and (briefs[0].stat().st_mode & 0o777) == 0o600
+
+    # 8. ade_herdr: -- option separator on send() and 0o600 O_EXCL brief in launch()
+    with mock.patch.object(ade_herdr, "BRIEFS", base_tmp / "hbriefs"):
+        hcalls = []
+        with mock.patch.object(ade_herdr, "agents", return_value={"p1": {"pane_id": "p1"}}), \
+                mock.patch.object(ade_herdr, "herdr", side_effect=lambda *a, **kw: (hcalls.append(a), {})[1]):
+            ade_herdr.send("p1", "--evil", True)
+            ade_herdr.send("p2", "--evil", True)
+            ade_herdr.send("p2", "--evil", False)
+            assert hcalls == [
+                ("agent", "prompt", "p1", "--", "--evil"),
+                ("pane", "run", "p2", "--", "--evil"),
+                ("pane", "send-text", "p2", "--", "--evil"),
+            ]
+            res = ade_herdr.launch("ws1", "claude", "first\nsecond", pane="p:1")
+            assert res == {"terminal": {"handle": "p:1"}}
+            hbriefs = list((base_tmp / "hbriefs").glob("*.md"))
+            assert len(hbriefs) == 1 and (hbriefs[0].stat().st_mode & 0o777) == 0o600
+
+    # 9. dash._codex_entries & dash.transcript_files: defensive JSON parsing and transcript discovery
+    fake_home = base_tmp / "fakehome"
+    ws_path = "/w/demo"
+    cdir = fake_home / ".claude/projects" / "-w-demo"
+    cdir.mkdir(parents=True)
+    (cdir / "s1.jsonl").write_text("{}\n")
+    xdir = fake_home / ".codex/sessions/2026/11/21"
+    xdir.mkdir(parents=True)
+    rollout = xdir / "rollout-1.jsonl"
+    rollout.write_text("\n".join([
+        json.dumps({"payload": {"cwd": ws_path}}),
+        "not json",
+        json.dumps(["not", "a", "dict"]),
+        json.dumps({"payload": "not-a-dict"}),
+        json.dumps({"payload": {"type": "message", "role": "user", "content": ["bad", {"text": "<sys>"}, {"text": "hi"}]}}),
+        json.dumps({"payload": {"type": "function_call", "name": "bash", "arguments": "ls -la"}}),
+    ]) + "\n")
+    entries = dash._codex_entries(rollout)
+    assert entries == [("user", "hi"), ("tool", "bash ls -la")], entries
+    assert dash._codex_entries(base_tmp / "missing.jsonl") == []
+    with mock.patch.object(dash.Path, "home", return_value=fake_home):
+        tfiles = dash.transcript_files(ws_path)
+        assert {k for _, k in tfiles} == {"claude", "codex"}, tfiles
 
 print("ok  test_security.py passed")

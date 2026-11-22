@@ -29,6 +29,7 @@ widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
 import base64
 import calendar
+import contextlib
 import hashlib
 import importlib
 import json
@@ -1452,10 +1453,8 @@ def transcript_files(path):
     """Every agent session that ran in `path`, newest first: Claude Code transcripts and Codex rollouts."""
     fs = []
     for f in (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*.jsonl"):
-        try:
+        with contextlib.suppress(OSError):
             fs.append((f.stat().st_mtime, f, "claude"))
-        except OSError:
-            pass
     cutoff = time.time() - 30 * 86400
     for f in (Path.home() / ".codex/sessions").glob("*/*/*/rollout-*.jsonl"):  # ponytail: reads each recent rollout's first line; index by cwd if this gets slow
         try:
