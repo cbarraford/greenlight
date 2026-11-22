@@ -30,6 +30,8 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
         c.verbose = true  // so the log is on while files attach and go
         let t = chatFile(tiff, name: "shot.tiff"), bin = chatFile(at: tmp.appendingPathComponent("tool.bin")), dir = chatFile(at: tmp)
         let big = chatFile(Data(repeating: 0x61, count: (1 << 20) + 1), name: "big.log"), note = chatFile(at: tmp.appendingPathComponent("notes.txt"))
+        check("shellPath: preserves leading ~ expansion and quotes spaces",
+              shellPath("~") == "$HOME" && shellPath("~/.greenlight") == "$HOME/'.greenlight'" && shellPath("/tmp/a b") == "'/tmp/a b'")
         check("attach: kinds from the bytes; TIFF goes as PNG; the name has no folder",
               fileKind(png) == "image" && fileKind(Data("%PDF-1.7".utf8)) == "pdf" && fileKind(Data("héllo".utf8)) == "text"
               && t.file?.name == "shot.png" && t.file.map { fileKind($0.data) } == "image" && note.file?.name == "notes.txt" && note.file?.kind == "text")
@@ -258,7 +260,7 @@ func attachOnly() {
 /// `Greenlight.app/Contents/MacOS/Greenlight --selftest`: drives the actions the buttons call
 /// (send, Stop, answer buttons, Compact, Codex, Clear) on a scratch session where greenlight runs, plus the menubar width.
 func selfTest() {
-    let d = UserDefaults.standard
+    let d = ud
     let keep = ["model", "effort", "context", "window", "name", "seen", "sent", "verboseActivity"].map { ($0, d.object(forKey: $0)) }
     var failed = false
     func onMain<T>(_ f: () -> T) -> T { DispatchQueue.main.sync(execute: f) }
