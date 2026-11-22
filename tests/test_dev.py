@@ -115,6 +115,7 @@ for _ in range(2):
     dev.make({}, r, {})
 assert runs.read_text().count("x") == 3 and len(banners) == 1, (runs.read_text(), banners)  # the same sources aren't built again
 
+assert dev.errors("Sources/App.swift:42:10: error: boom\n") == "app/Sources/App.swift:42:10: error: boom"
 # guard against merge-conflict regressions dropping dev-copy tunneling/live pages from Swift sources
 swift = "\n".join(p.read_text() for p in sorted((pathlib.Path(__file__).resolve().parent.parent / "app/Sources").glob("*.swift")))
 for needle in ('forInfoDictionaryKey: "GreenlightDev"', "func devSsh(", "ProxyCommand=/usr/bin/nc -U", "devSsh(host)", "devSsh(at.host)", "func watchPages(", 'page("dashboard")', 'page("terminal")', 'page("stage")', '.init(name: "dev", value: devName ?? "")'):

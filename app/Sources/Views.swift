@@ -1452,7 +1452,7 @@ struct SettingsView: View {
             if !FileManager.default.isExecutableFile(atPath: whisperBin()) { return "Not ready: whisper-cli isn't at \(whisperBin())." }
             return FileManager.default.fileExists(atPath: m.path) ? "Ready · model \(m.lastPathComponent)" : "Not ready: model \(m.lastPathComponent) is missing. Choose a model below."
         case "openai":
-            let m = UserDefaults.standard.string(forKey: "openaiModel") ?? "whisper-1"
+            let m = ud.string(forKey: "openaiModel") ?? "whisper-1"
             if settingsOpenAIKey() != nil { return "Ready · key set · model \(m)" }
             guard let env = peekEnvironmentOpenAIKey() else { return "Looking for OPENAI_API_KEY in your shell…" }
             return env == nil ? "Not ready: no API key. Set one below, or export OPENAI_API_KEY and relaunch." : "Ready · key from OPENAI_API_KEY · model \(m)"

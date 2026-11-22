@@ -22,8 +22,8 @@ let appleOnDevice = SFSpeechRecognizer()?.supportsOnDeviceRecognition ?? false  
 let engines = [("apple", appleOnDevice ? "Apple (on-device)" : "Apple (Apple servers)"), ("whisper", "Whisper (local whisper.cpp)"), ("openai", "OpenAI Whisper API")]
 let voiceFile = FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-voice.wav")
 var recognizer: SFSpeechRecognizer?  // must outlive its task
-func whisperBin() -> String { UserDefaults.standard.string(forKey: "whisperBin") ?? "/opt/homebrew/bin/whisper-cli" }
-func whisperModel() -> String { UserDefaults.standard.string(forKey: "whisperModel") ?? support.deletingLastPathComponent().appendingPathComponent("Greenlight/ggml-large-v3-turbo-q5_0.bin").path }  // one model, copies included
+func whisperBin() -> String { ud.string(forKey: "whisperBin") ?? "/opt/homebrew/bin/whisper-cli" }
+func whisperModel() -> String { ud.string(forKey: "whisperModel") ?? support.deletingLastPathComponent().appendingPathComponent("Greenlight/ggml-large-v3-turbo-q5_0.bin").path }  // one model, copies included
 
 /// Reads (or with `set`, stores) a secret in the login Keychain under service "greenlight".
 /// Reads are cached for the launch: Settings asks on every redraw, voice mode every sentence, and each Keychain read can ask your password.
@@ -177,7 +177,7 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
         req.httpMethod = "POST"
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("multipart/form-data; boundary=\(b)", forHTTPHeaderField: "Content-Type")
-        let model = UserDefaults.standard.string(forKey: "openaiModel") ?? "whisper-1"
+        let model = ud.string(forKey: "openaiModel") ?? "whisper-1"
         var body = Data("--\(b)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8)
         body += Data("--\(b)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8)
         body += (try? Data(contentsOf: url)) ?? Data()

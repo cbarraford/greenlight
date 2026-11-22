@@ -16,9 +16,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND="${GREENLIGHT_VM_BACKEND:-auto}"   # auto | tart | lume
 BASE_IMAGE="${GREENLIGHT_VM_IMAGE:-greenlight-macos-base}"
 VM_USER="${GREENLIGHT_VM_USER:-admin}"
-VM_PASS="${GREENLIGHT_VM_PASS:-admin}"
 MAX_SLOTS="${GREENLIGHT_VM_SLOTS:-2}"
 LOCK_DIR="${TMPDIR:-/tmp}/greenlight-vm-locks"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 
 usage() {
   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
@@ -138,20 +138,33 @@ case "$MODE" in
         sleep 2
       done
       [ -n "$IP" ] || { echo "vm_test: timed out waiting for VM IP" >&2; kill "$VM_PID" 2>/dev/null || true; exit 1; }
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${VM_USER}@${IP}" \
-        "cd '/Volumes/My Shared Files/repo' && GREENLIGHT_VM_OUT='/Volumes/My Shared Files/out' bash $RUN_CMD"
+      for _ in $(seq 1 30); do
+        ssh "${SSH_OPTS[@]}" "${VM_USER}@${IP}" true 2>/dev/null && break
+        sleep 2
+      done
+      q_cmd="$(printf '%q' "$RUN_CMD")"
+      ssh "${SSH_OPTS[@]}" "${VM_USER}@${IP}" \
+        "cd '/Volumes/My Shared Files/repo' && GREENLIGHT_VM_OUT='/Volumes/My Shared Files/out' bash $q_cmd"
     else
       lume clone "$BASE_IMAGE" "$EPHEMERAL_VM"
       lume run "$EPHEMERAL_VM" --no-display --shared-dir "${REPO_ROOT}:rw" --shared-dir "${OUT_DIR}:rw" >/dev/null 2>&1 &
+      VM_PID=$!
       IP=""
       for _ in $(seq 1 60); do
         IP="$(lume get "$EPHEMERAL_VM" 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1 || true)"
         [ -n "$IP" ] && break
         sleep 2
       done
-      [ -n "$IP" ] || { echo "vm_test: timed out waiting for Lume VM IP" >&2; exit 1; }
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${VM_USER}@${IP}" \
-        "cd '/Volumes/My Shared Files/$(basename "$REPO_ROOT")' && GREENLIGHT_VM_OUT='/Volumes/My Shared Files/$(basename "$OUT_DIR")' bash $RUN_CMD"
+      [ -n "$IP" ] || { echo "vm_test: timed out waiting for Lume VM IP" >&2; kill "$VM_PID" 2>/dev/null || true; exit 1; }
+      for _ in $(seq 1 30); do
+        ssh "${SSH_OPTS[@]}" "${VM_USER}@${IP}" true 2>/dev/null && break
+        sleep 2
+      done
+      q_repo="$(printf '%q' "/Volumes/My Shared Files/$(basename "$REPO_ROOT")")"
+      q_out="$(printf '%q' "/Volumes/My Shared Files/$(basename "$OUT_DIR")")"
+      q_cmd="$(printf '%q' "$RUN_CMD")"
+      ssh "${SSH_OPTS[@]}" "${VM_USER}@${IP}" \
+        "cd $q_repo && GREENLIGHT_VM_OUT=$q_out bash $q_cmd"
     fi
     echo "ok  VM HID run complete; artifacts in $OUT_DIR"
     ;;
