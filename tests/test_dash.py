@@ -261,6 +261,7 @@ assert suggestion({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 
 assert suggestion({"sig": "stale", "label": "Mark ready", "prompt": "Mark #23 ready."}) is None  # the state moved on since
 assert suggestion({"sig": pk["sig"], "prompt": "Mark #23 ready."}) is None  # an old entry without a label gets rewritten
 assert suggestion({"sig": pk["sig"], "label": "", "prompt": "There's an issue with the selected model (gemini-4-hydrogen-medium).", "advice": ""}) is None  # old model errors must be regenerated
+assert suggestion({"sig": pk["sig"], "label": "", "prompt": "Mark #23 ready.", "advice": "", "ok": True}) == {"label": "", "prompt": "Mark #23 ready.", "advice": ""}  # a real one-line reply stays cached
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked the model for a cached step")):
     (dash.DASH / "suggest" / "ws-gh.json").write_text(json.dumps({"sig": pk["sig"], "label": "Mark ready", "prompt": "Mark #23 ready."}))
     assert dash.suggest("ws-gh")["label"] == "Mark ready"
@@ -276,7 +277,13 @@ with _run(0, "Mark ready\nMark #23 ready.\n"):
 (dash.DASH / "suggest" / "ws-gh.json").unlink()
 with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "facts", return_value={}), _run(1, _err):
     _s = dash.suggest("ws-gh", model="claude-gone-1")
-assert _s["prompt"] == "" and "issue" not in json.dumps(_s) and not (dash.DASH / "suggest" / "ws-gh.json").exists(), _s  # nothing cached: asked again next time
+assert "prompt" not in _s and "no answer" in _s["error"] and "issue" not in json.dumps(_s) and not (dash.DASH / "suggest" / "ws-gh.json").exists(), _s  # nothing cached: asked again next time
+# a one-line reply (no label line) is cached and answers the next call without asking again
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "facts", return_value={}), _run(0, "Mark #23 ready.\n"):
+    assert dash.suggest("ws-gh")["prompt"] == "Mark #23 ready."
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [pk]}), mock.patch.object(dash, "ask", side_effect=AssertionError("asked again for a cached one-line reply")):
+    assert dash.suggest("ws-gh")["prompt"] == "Mark #23 ready."
+(dash.DASH / "suggest" / "ws-gh.json").unlink()
 # A failed Insights refresh must leave its last good layout in the cache and show an error.
 _page_file = dash.DASH / "pages" / "ws-gh.json"
 _page_file.parent.mkdir(parents=True, exist_ok=True)
