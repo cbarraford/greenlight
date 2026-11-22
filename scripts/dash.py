@@ -36,6 +36,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -894,19 +895,39 @@ def safe(name):
     return re.sub(r"[^\w.@+-]", "_", name)
 
 
+def _write_json(path, obj):
+    """Write JSON atomically so concurrent dash.py processes never leave a torn or trailing-byte file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as tf:
+            tmp = Path(tf.name)
+            json.dump(obj, tf)
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
 def record(pucks):
     """Append a history line per puck whose (state, step, owner) moved since the last tick."""
     DASH.mkdir(parents=True, exist_ok=True)
     f = DASH / "state.json"
-    prev = json.loads(f.read_text()) if f.exists() else {}
+    try:
+        loaded = json.loads(f.read_text()) if f.exists() else {}
+        prev = loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        prev = {}
     cur = {}
     for p in pucks:
         sig = [p["state"], p["step"], p["owner"]]
         cur[p["name"]] = sig
-        if prev.get(p["name"]) not in (None, sig):
+        prev_sig = prev.get(p["name"])
+        if isinstance(prev_sig, list) and len(prev_sig) == 3 and prev_sig != sig:
             with open(DASH / f"{safe(p['name'])}.jsonl", "a") as h:
-                h.write(json.dumps({"ts": int(time.time()), "from": prev[p["name"]], "to": sig, "action": p["action"][:200]}) + "\n")
-    f.write_text(json.dumps(cur))
+                h.write(json.dumps({"ts": int(time.time()), "from": prev_sig, "to": sig, "action": p["action"][:200]}) + "\n")
+    _write_json(f, cur)
 
 
 def history(name):
@@ -916,9 +937,12 @@ def history(name):
     moves = []
     jf = DASH / f"{safe(name)}.jsonl"
     for line in jf.read_text().splitlines() if jf.exists() else []:
-        e = json.loads(line)
-        moves.append({"ts": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["ts"])),
-                      "text": f"{e['from'][0]} → {e['to'][0]} ({e['to'][1]}/{e['to'][2]}): {e['action']}", "state": e["to"][0]})
+        try:
+            e = json.loads(line)
+            moves.append({"ts": time.strftime("%Y-%m-%d %H:%M", time.localtime(e["ts"])),
+                          "text": f"{e['from'][0]} → {e['to'][0]} ({e['to'][1]}/{e['to'][2]}): {e['action']}", "state": e["to"][0]})
+        except (ValueError, KeyError, IndexError, TypeError):
+            continue
     return sorted(notes + moves, key=lambda e: e["ts"], reverse=True)[:60]
 
 
@@ -1031,8 +1055,7 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     if text:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(out))
+        _write_json(cache, out)
     return out
 
 
@@ -1181,8 +1204,7 @@ def ask_user(name, model="claude-haiku-5-5", effort="low"):
                   "If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\n" + q[-6000:], model, effort)
         m = re.search(r"\[.*\]", raw, re.S)
         out["options"] = [{"key": "", "label": str(o)[:200]} for o in (json.loads(m[0]) if m else []) if str(o).strip()][:3]
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"key": key, "out": out}))
+        _write_json(cache, {"key": key, "out": out})
     except Exception:  # no suggestions is fine: the free-text reply still works
         pass
     return out
@@ -1268,13 +1290,14 @@ def cached_page(name):
 def page(name, fresh=False, **designer):
     f = facts(name)
     cache = DASH / "pages" / f"{safe(name)}.json"
-    cached = json.loads(cache.read_text()) if cache.exists() else {}
+    cached = cached_page(name)
+    if not isinstance(cached, dict):
+        cached = {}
     s = sig(f["puck"])
     if fresh or cached.get("sig") != s or cached.get("v") != PAGE_V:
         try:
             cached = {"v": PAGE_V, "sig": s, "designed": int(time.time()), "layout": design(f, **designer)}
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(cached))
+            _write_json(cache, cached)
         except Exception as e:  # designer down / out of tokens: keep the old layout, say why
             cached = cached | {"error": f"designer failed: {str(e)[:200]}"}
     return {"name": name, "facts": f, **cached}
@@ -1584,21 +1607,34 @@ def oops(a, e):
     """A dash op's caught failure, for diag: the op, the exception type and class, never the message."""
     diag.event("dash_error", op=a[0], sub=a[1] if a[0] in ("task", "tree") else None, **diag.failure(e))
 
+
+def _stream(every):
+    while True:
+        try:
+            s = snapshot()
+            print(json.dumps(s), flush=True)
+        except BrokenPipeError:
+            return
+        except Exception as e:
+            oops(["stream"], e)
+            try:
+                print(json.dumps({"error": str(e)[:300]}), flush=True)
+            except BrokenPipeError:
+                return
+        else:
+            try:
+                record(s["pucks"])
+            except Exception as e:
+                oops(["stream"], e)
+        time.sleep(every)
+
+
 def main():
     a = sys.argv[1:]
     if a[:1] == ["snapshot"]:
         print(json.dumps(snapshot()))
     elif a[:1] == ["stream"]:
-        every = float(a[1]) if len(a) > 1 else 10
-        while True:
-            try:
-                s = snapshot()
-                record(s["pucks"])
-                print(json.dumps(s), flush=True)
-            except Exception as e:
-                oops(a, e)
-                print(json.dumps({"error": str(e)[:300]}), flush=True)
-            time.sleep(every)
+        _stream(float(a[1]) if len(a) > 1 else 10)
     elif a[:1] == ["page"] and len(a) > 1 and NAME_RE.match(a[1]):
         opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
         if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
