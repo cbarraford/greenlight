@@ -3,26 +3,113 @@ on:
   push:
     branches: [main]
   pull_request:
+
 jobs:
-  tests:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            base="origin/${{ github.base_ref }}"
+          else
+            base="HEAD~1"
+          fi
+          if git diff --name-only "$base" HEAD 2>/dev/null | grep -qE '^(app/|\.github/workflows/tests\.yml$)'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  python-and-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: pip install pytest
+      - run: pip install pytest ruff
+      - name: ruff lint & security
+        run: ruff check scripts/ tests/
+      - name: static safety checks
+        run: python3 scripts/check_safety.py
       - name: test_*.py
         run: |
           git config --global user.name ci && git config --global user.email ci@example.invalid
           fail=0
           for t in tests/test_*.py; do
+            [ "$(basename "$t")" = "test_uitest.py" ] && continue
             echo "::group::$t"
             python3 "$t" || { echo "::error::$t failed"; fail=1; }
             echo "::endgroup::"
           done
           python3 -m pytest -q tests/test_chat.py || fail=1
           exit $fail
+
+  js-playwright:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install playwright-core and browser
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw
+          npm init -y >/dev/null 2>&1
+          npm install --no-save "playwright-core@^1.65.1"
+          npx playwright-core install --with-deps ${{ matrix.browser }}
+      - name: Run JS UI & security tests (${{ matrix.browser }})
+        env:
+          NODE_PATH: /tmp/pw/node_modules
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          fail=0
+          for t in tests/test_*.cjs; do
+            echo "::group::$t (${{ matrix.browser }})"
+            node "$t" || { echo "::error::$t failed on ${{ matrix.browser }}"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  macos-swift:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Typecheck & compile Swift sources
+        run: |
+          swiftc -typecheck app/Sources/*.swift
+          swiftc -Onone app/Sources/*.swift -o /tmp/Greenlight-ci
+      - name: Run Swift --vimtest and --attachtest
+        env:
+          GREENLIGHT_HOST: local
+          GREENLIGHT_CODE: ${{ github.workspace }}
+          GREENLIGHT_HOME: /tmp/gl-ci-home
+        run: |
+          mkdir -p /tmp/gl-ci-home /tmp/gl-ci-bin
+          cat > /tmp/gl-ci-bin/claude <<'PY'
+          #!/usr/bin/env python3
+          import json, sys, time
+          prompt = sys.stdin.read()
+          if "Say one word." in prompt:
+              time.sleep(2.0)
+          reply = "Codeword is FENNEL-4821, square.png is red, got it."
+          print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}), flush=True)
+          print(json.dumps({"type": "result", "is_error": False, "result": reply, "duration_ms": 10}), flush=True)
+          PY
+          chmod +x /tmp/gl-ci-bin/claude
+          printf '{"harnesses":{"claude":{"bin":"/tmp/gl-ci-bin/claude"}}}\n' > /tmp/gl-ci-home/config.json
+          /tmp/Greenlight-ci --vimtest
+          /tmp/Greenlight-ci --attachtest

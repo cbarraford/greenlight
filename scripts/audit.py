@@ -1472,6 +1472,40 @@ def main(argv=None):
             return 4
         print("\n".join(lines(res)) or "audit passed: publish")
         return 0 if res["ok"] else 3
+    if args[:1] == ["review"]:
+        det_only = "--deterministic-only" in sys.argv
+        root = Path(path or ".").resolve()
+        errs = []
+        for label, cmd in (
+            ("ruff", ["ruff", "check", "scripts/", "tests/"]),
+            ("safety", [sys.executable, str(root / "scripts" / "check_safety.py")]),
+        ):
+            try:
+                p = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=60)
+                if p.returncode != 0:
+                    errs.append(f"{label} failed:\n{(p.stderr or p.stdout).strip()[:800]}")
+            except FileNotFoundError:
+                errs.append(f"{label}: tool not installed")
+        if errs:
+            print("\n".join(errs))
+            return 3
+        if det_only:
+            print("audit review passed (deterministic checks)")
+            return 0
+        try:
+            tgt = target or default_target(str(root))
+            sha = (git(str(root), "rev-parse", "HEAD") or "").strip()
+            diff = branch_diff(str(root), tgt, sha) or ""
+            res = contracts({"action": "review", "target": tgt, "diff": clip(diff, 24000)},
+                            ("tests_not_weakened", "no_secrets_or_pii"), outbound=diff)
+        except Exception as e:  # noqa: BLE001
+            print(f"AUDIT ERROR {type(e).__name__}: {e}")
+            return 4
+        if res.get("error"):
+            print(f"AUDIT ERROR {res['error']}")
+            return 4
+        print("\n".join(lines(res)) or "audit review passed")
+        return 0 if res["ok"] else 3
     print(__doc__.strip())
     return 2
 
