@@ -1376,6 +1376,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
+        if !l.c.hint.isEmpty, l.c.hint == greenlight.hint, !greenlight.prompting { greenlight.hint = "" }  // closed mid-hover: its hover-exit can't reach the main hint now
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
         l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
