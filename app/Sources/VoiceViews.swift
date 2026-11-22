@@ -159,13 +159,17 @@ var keychainOps = KeychainOps()
 var keys: [String: String?] = [:]
 let keyLock = NSLock()
 
-/// Transcribes a recorded file; done(text, error) runs on any thread, exactly once.
+/// Transcribes a recorded file; done(text, error) runs on any thread, exactly once, and removes the recording file afterwards.
 func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -> Void) {
     let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+    let finish: (String?, String?) -> Void = { text, err in
+        try? FileManager.default.removeItem(at: url)
+        done(text, err)
+    }
     switch engine {
     case "whisper":
         guard FileManager.default.isExecutableFile(atPath: whisperBin()) else {
-            return done(nil, "whisper-cli not found at \(whisperBin()): `brew install whisper-cpp`, or pick another engine")
+            return finish(nil, "whisper-cli not found at \(whisperBin()): `brew install whisper-cpp`, or pick another engine")
         }
         DispatchQueue.global().async {
             let p = Process(), out = Pipe()
@@ -173,42 +177,48 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
             p.arguments = ["-m", whisperModel(), "-f", url.path, "-nt", "-np"]
             p.standardOutput = out
             p.standardError = FileHandle.nullDevice
-            do { try p.run() } catch { return done(nil, error.localizedDescription) }
+            do { try p.run() } catch { return finish(nil, error.localizedDescription) }
             let text = trim(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
             p.waitUntilExit()
-            done(text, p.terminationStatus == 0 ? nil : "whisper-cli exited \(p.terminationStatus)")
+            finish(text, p.terminationStatus == 0 ? nil : "whisper-cli exited \(p.terminationStatus)")
         }
     case "openai":
-        guard let key = openAIKey() else { return done(nil, "no OpenAI key: right-click the star → Voice → Set OpenAI key…, or export OPENAI_API_KEY and relaunch") }
-        let b = UUID().uuidString
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.setValue("multipart/form-data; boundary=\(b)", forHTTPHeaderField: "Content-Type")
-        let model = ud.string(forKey: "openaiModel") ?? "whisper-1"
-        var body = Data("--\(b)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8)
-        body += Data("--\(b)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8)
-        body += (try? Data(contentsOf: url)) ?? Data()
-        body += Data("\r\n--\(b)--\r\n".utf8)
-        URLSession.shared.uploadTask(with: req, from: body) { data, _, err in
-            let j = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            if let t = j?["text"] as? String { return done(trim(t), nil) }
-            done(nil, err?.localizedDescription ?? (j?["error"] as? [String: Any])?["message"] as? String ?? "unexpected reply from OpenAI")
-        }.resume()
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let key = openAIKey() else { return finish(nil, "no OpenAI key: right-click the star → Voice → Set OpenAI key…, or export OPENAI_API_KEY and relaunch") }
+            let b = UUID().uuidString
+            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue("multipart/form-data; boundary=\(b)", forHTTPHeaderField: "Content-Type")
+            let model = ud.string(forKey: "openaiModel") ?? "whisper-1"
+            var body = Data("--\(b)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8)
+            body += Data("--\(b)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8)
+            body += (try? Data(contentsOf: url)) ?? Data()
+            body += Data("\r\n--\(b)--\r\n".utf8)
+            URLSession.shared.uploadTask(with: req, from: body) { data, _, err in
+                let j = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                if let t = j?["text"] as? String { return finish(trim(t), nil) }
+                finish(nil, err?.localizedDescription ?? (j?["error"] as? [String: Any])?["message"] as? String ?? "unexpected reply from OpenAI")
+            }.resume()
+        }
     default:
         SFSpeechRecognizer.requestAuthorization { status in
-            guard status == .authorized, let r = SFSpeechRecognizer(), r.isAvailable else {
-                return done(nil, "speech recognition is off: System Settings → Privacy & Security → Speech Recognition")
-            }
-            recognizer = r
-            let req = SFSpeechURLRecognitionRequest(url: url)
-            req.requiresOnDeviceRecognition = r.supportsOnDeviceRecognition
-            req.addsPunctuation = true
-            var fired = false
-            r.recognitionTask(with: req) { res, err in
-                guard !fired else { return }
-                if let res, res.isFinal { fired = true; done(trim(res.bestTranscription.formattedString), nil) }
-                else if let err { fired = true; done(nil, err.localizedDescription) }
+            DispatchQueue.main.async {
+                guard status == .authorized, let r = SFSpeechRecognizer(), r.isAvailable else {
+                    return finish(nil, "speech recognition is off: System Settings → Privacy & Security → Speech Recognition")
+                }
+                recognizer = r
+                let req = SFSpeechURLRecognitionRequest(url: url)
+                req.requiresOnDeviceRecognition = r.supportsOnDeviceRecognition
+                req.addsPunctuation = true
+                var fired = false
+                r.recognitionTask(with: req) { res, err in
+                    DispatchQueue.main.async {
+                        guard !fired else { return }
+                        if let res, res.isFinal { fired = true; _ = r; finish(trim(res.bestTranscription.formattedString), nil) }
+                        else if let err { fired = true; _ = r; finish(nil, err.localizedDescription) }
+                    }
+                }
             }
         }
     }

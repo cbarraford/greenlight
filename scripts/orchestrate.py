@@ -132,7 +132,7 @@ def current_mr_state(r):
     if not mr.get("iid"):
         return None
     live = greenlight.mr_details(r["project"], mr["iid"], r["forge"])
-    candidate = greenlight.release_milestone(r["project"], r["forge"]) if "milestone" in greenlight.lifecycle(r["project"])[1] else None
+    candidate = greenlight.release_milestone(r["project"], r["forge"]) if not live.get("milestone") and "milestone" in greenlight.lifecycle(r["project"])[1] else None
     nxt = greenlight.evaluate(r, live, candidate)
     threads = (hashlib.sha1(json.dumps(sorted(greenlight.thread_line(d) for d in greenlight.unresolved(live))).encode()).hexdigest()[:12]
                if (r.get("mr") or {}).get("threads_fingerprint") is not None else None)
@@ -270,8 +270,9 @@ def launch(agent, wid, prompt):
 def dispatch(r, card, first=None, why_handoff="", assignment=None, exhausted=(), peers=()):
     """Launch an agent; on a usage limit the next of config agents takes the task, with the card and a handoff note.
     Returns (agent or None, error)."""
-    order = [a for a in dict.fromkeys([first or r["next"].get("agent") or greenlight.CONFIG["agents"][0],
-                                       *greenlight.CONFIG["agents"]]) if a not in exhausted]
+    agents = greenlight.CONFIG.get("agents") or []
+    lead = first or r["next"].get("agent") or (agents[0] if agents else None)
+    order = [a for a in dict.fromkeys([*([lead] if lead else []), *agents]) if a not in exhausted]
     if not order:
         return None, "rejected: all configured agents are exhausted"
     handoff, err = why_handoff, ""
@@ -836,12 +837,21 @@ def phase_me(rows, cards):
         live_snapshot = {w["worktreeId"]: w for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]}
     except Exception:
         return sent  # no live evidence: do not resolve or publish a question from an old scan
+    all_decisions = None
     for r in rows:
         if r["next"]["owner"] != "me":
             (greenlight.STATE / "me-pings" / ws_state.safe(r["id"])).unlink(missing_ok=True)
             (greenlight.STATE / "me-pings" / (ws_state.safe(r["id"]) + ".generated")).unlink(missing_ok=True)
             continue
         if r.get("_card_error") or r.get("_mr_inconclusive"):
+            continue
+        card = cards.get(r.get("card")) or {}
+        situation = f"{r['id']}:{r['project']}:{(r.get('mr') or {}).get('iid')}:{(r.get('mr') or {}).get('sha')}:{(r.get('mr') or {}).get('target_branch')}:{r['next']['step']}:{r['next']['action']}:{card.get('handoff_epoch', '')}"
+        marker = f"me-ping:{ws_state.digest(situation)}"
+        marker_file = greenlight.STATE / "me-pings" / ws_state.safe(r["id"])
+        generated_file = marker_file.with_name(marker_file.name + ".generated")
+        already_sent = marker_file.exists() and marker_file.read_text().splitlines()[-1:] == [marker]
+        if already_sent:
             continue
         try:
             live = live_worktree(r, live_snapshot)
@@ -851,15 +861,11 @@ def phase_me(rows, cards):
                 continue
         except Exception:
             continue  # a transient forge/ADE error cannot authorize an old approval question
-        card = cards.get(r.get("card")) or {}
-        situation = f"{r['id']}:{r['project']}:{(r.get('mr') or {}).get('iid')}:{(r.get('mr') or {}).get('sha')}:{(r.get('mr') or {}).get('target_branch')}:{r['next']['step']}:{r['next']['action']}:{card.get('handoff_epoch', '')}"
-        marker = f"me-ping:{ws_state.digest(situation)}"
-        marker_file = greenlight.STATE / "me-pings" / ws_state.safe(r["id"])
-        generated_file = marker_file.with_name(marker_file.name + ".generated")
-        already_sent = marker_file.exists() and marker_file.read_text().splitlines()[-1:] == [marker]
         question_text = f"{r['name']}: {r['next']['action']} {(r.get('mr') or {}).get('web_url') or ''}"
-        if r["id"] in open_keys and not already_sent:
-            current_question = next((q for q in reversed(greenlight.decisions.load()) if q.get("key") == r["id"] and
+        if r["id"] in open_keys:
+            if all_decisions is None:
+                all_decisions = greenlight.decisions.load()
+            current_question = next((q for q in reversed(all_decisions) if q.get("key") == r["id"] and
                                      greenlight.decisions.is_open(q)), None)
             if current_question and current_question.get("worktree_id") == r["id"] and \
                     current_question.get("mr") == (r.get("mr") or {}).get("ref") and \
@@ -874,8 +880,7 @@ def phase_me(rows, cards):
                         fh.write(marker + "\n")
                     continue  # a more specific manual question already asks about this situation
             greenlight.resolve(r["id"], f"superseded by {r['next']['step']}/me")
-        if already_sent:
-            continue
+            all_decisions = None
         step = r["next"]["step"]
         kind = "merge-held" if step == "merge" else "keep-draft" if step == "ready" else step if step in ("goal", "milestone", "signoff") else "review-verdict"
         options = {"merge": "merge now | keep waiting", "ready": "mark ready | keep draft",
@@ -1006,6 +1011,7 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             return [f"left {name}: goal changed since scan"]
         if active_agent_blocks(live, r, rate_limit_handoff):
             return [f"left {name}: an agent started or is waiting since scan"]
+        current = None
         if (r.get("mr") or {}).get("iid"):
             try:
                 current = current_mr_state(r)
@@ -1040,9 +1046,9 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
         first = None
         handoff = ""
         if v and v["choice"] == FORK[1]:
-            prev = (card["dispatches"][0]["agent"] if card["dispatches"] else (r.get("agent") or {}).get("type")) or greenlight.CONFIG["agents"][0]
-            order = greenlight.CONFIG["agents"]
-            first = order[(order.index(prev) + 1) % len(order)] if prev in order else order[0]
+            order = greenlight.CONFIG.get("agents") or []
+            prev = (card["dispatches"][0]["agent"] if card["dispatches"] else (r.get("agent") or {}).get("type")) or (order[0] if order else None)
+            first = (order[(order.index(prev) + 1) % len(order)] if prev in order else order[0]) if order else None
             handoff = f"You take over from {prev}, whose attempt didn't move the step. Its card below says what was tried."
         elif v:
             handoff = f"An earlier attempt didn't move the step ({a['why']}): read the failed approaches below and try something else."
@@ -1050,11 +1056,12 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             prev = (r.get("agent") or {}).get("type") or "the last agent"
             handoff = f"You take over from {prev}, which ran out of tokens mid-task. The card below has its last message as the hypothesis."
         if (r.get("mr") or {}).get("sha"):
-            try:
-                current_state = current_mr_state(r)
-            except Exception as e:
-                return [f"dispatch failed on {name}: couldn't re-read MR state: {str(e)[:100]}"]
-            if current_state != scanned_mr_state(r):
+            if current is None:
+                try:
+                    current = current_mr_state(r)
+                except Exception as e:
+                    return [f"dispatch failed on {name}: couldn't re-read MR state: {str(e)[:100]}"]
+            if current != scanned_mr_state(r):
                 return [f"left {name}: MR head or lifecycle step changed since scan; dispatch needs a fresh plan"]
         elif not (r.get("mr") or {}).get("iid"):
             try:

@@ -97,10 +97,10 @@ assert dev.errors("a.swift:1:2: warning: w\n1 | x\n  |  `- error: e\na.swift:3:4
 pl = dev.plists({"host": "box", "sshd": "localhost:2222"})
 assert pl[dev.LABEL]["ProgramArguments"] == ["/usr/bin/python3", str(dev.ME), "run"] and pl[dev.LABEL]["KeepAlive"]
 t = pl[dev.TUNNEL]["ProgramArguments"]
-assert t[0] == "/usr/bin/ssh" and t[-3:] == ["-L", f"{dev.HOME}/ssh/box.sock:localhost:2222", "box"] and "ControlPath=none" in t
+assert t[0] == "/usr/bin/ssh" and t[-4:] == ["-L", f"{dev.HOME}/ssh/box.sock:localhost:2222", "--", "box"] and "ControlPath=none" in t
 assert all(plistlib.loads(plistlib.dumps(p)) == p for p in pl.values()) and list(dev.plists({"host": "local"})) == [dev.LABEL]
 argv = dev.on_host({"host": "box"}, "true")  # everything of ours rides that socket
-assert argv[0] == "/usr/bin/ssh" and f"ProxyCommand=/usr/bin/nc -U '{dev.HOME}/ssh/box.sock'" in argv and argv[-2:] == ["box", "true"]
+assert argv[0] == "/usr/bin/ssh" and f"ProxyCommand=/usr/bin/nc -U '{dev.HOME}/ssh/box.sock'" in argv and argv[-3:] == ["--", "box", "true"]
 assert dev.on_host({"host": "local"}, "true") == ["/bin/sh", "-c", "true"]
 # a failed build: a compiler error waits for the sources to change; any other failure (build.sh's signing) is tried again
 dev.banner = lambda *a: banners.append(a); banners = []
