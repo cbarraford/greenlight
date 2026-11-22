@@ -466,6 +466,17 @@ func selfTest() {
           liveCue("3 MRs are green. Merge?") == "mrs are" && cueHeard("mrs are", " Three M Rs are") == false && cueHeard("mrs are", " Sure. Three MRs are green") && liveCue("42.") == nil)
     check("voice: GPT-Live's sound notes stay out of captions", liveCaption("Sure—checking. [mouth noise] Three") == "Sure—checking. Three")
     check("voice: GPT-Live's silence between turns isn't speech, a tone is", !audible(Data(count: 4800)) && audible(tone) && !audible(Data()))
+    do {
+        let out44 = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        let outMono = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        let quad = AVAudioFormat(standardFormatWithSampleRate: 44100, channelLayout: AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_Quadraphonic)!)
+        let m2 = matchedVoiceOutputFormat(inputRate: 48000, outputFormat: out44)
+        let m1 = matchedVoiceOutputFormat(inputRate: 48000, outputFormat: outMono)
+        let m4 = matchedVoiceOutputFormat(inputRate: 48000, outputFormat: quad)
+        check("voice: voice-processing output format matches input rate while keeping channel count/layout",
+              m2?.sampleRate == 48000 && m2?.channelCount == 2 && m1?.sampleRate == 48000 && m1?.channelCount == 1
+              && m4?.sampleRate == 48000 && m4?.channelCount == 4 && matchedVoiceOutputFormat(inputRate: 0, outputFormat: out44) == nil)
+    }
     let sd = UserDefaults(suiteName: "greenlight-selftest-live")!
     sd.removePersistentDomain(forName: "greenlight-selftest-live"); sd.set("eleven", forKey: "speech")
     Speech.switchToLive(sd); let moved = sd.string(forKey: "speech")
@@ -679,8 +690,16 @@ func selfTest() {
         sp.keyChanged("openai", to: "sk-new")  // before it reads a key; the live check below covers one already asking
         RunLoop.main.run(until: Date() + 0.4)
         let loadingStopped = sp.phase == .idle && keyReads.count == reads0
-        check("voice: voice mode ending clears only its own preview note; saving an OpenAI key a failure or a preview still starting, removing it or another key nothing (\(failedNote))",
-              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingKept && loadingStopped)
+        sp.play("cedar", voiceOn: false, muted: false, settle: 0, key: readKey); RunLoop.main.run(until: Date() + 0.1)
+        sp.keyChanged("openai", to: "", hasFallback: true)
+        let fallbackFailCleared = sp.phase == .idle
+        let reads1 = keyReads.count
+        sp.play("juni", voiceOn: false, muted: false, settle: 0.2, key: readKey)
+        sp.keyChanged("openai", to: "", hasFallback: true)
+        RunLoop.main.run(until: Date() + 0.4)
+        let fallbackLoadingStopped = sp.phase == .idle && keyReads.count == reads1
+        check("voice: voice mode ending clears only its own preview note; saving an OpenAI key (or removing it with an env fallback) clears a failure or a preview still starting, removing it without a fallback or another key nothing (\(failedNote))",
+              voiceOnCleared && mutedKept && failKept && failedNote.contains("didn’t let Greenlight read it") && failCleared && loadingKept && loadingStopped && fallbackFailCleared && fallbackLoadingStopped)
     }
     do {  // the Keychain cache, on a fake Keychain: what a launch reads again, and what a failed save keeps
         let real = keychainOps, acct = "greenlight-selftest"

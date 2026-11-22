@@ -1969,9 +1969,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if keychain(account, set: v) == nil {
             let action = v.isEmpty ? "remove" : "save"
             greenlight.msgs.append(Msg(.note, "Couldn't \(action) the \(title) in your Keychain. Try again, or allow Greenlight if the Keychain asks."))
-        } else { LivePreview.shared.keyChanged(account, to: v) }
+            if account == "openai" { forgetEnvironmentOpenAIKey() }
+        } else if account == "openai", v.isEmpty {
+            forgetEnvironmentOpenAIKey { hasEnv in
+                if hasEnv { LivePreview.shared.keyChanged(account, to: "", hasFallback: true) }
+            }
+        } else {
+            LivePreview.shared.keyChanged(account, to: v)
+            if account == "openai" { forgetEnvironmentOpenAIKey() }
+        }
         if account == "elevenlabs" { Speech.shared.warm(); greenlight.objectWillChange.send() }
-        if account == "openai" { forgetEnvironmentOpenAIKey() }
     }
 
     /// The next key press with a modifier, while the window is open, becomes the voice shortcut. Esc cancels.
