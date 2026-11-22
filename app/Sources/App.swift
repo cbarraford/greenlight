@@ -1966,7 +1966,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
     func tick() {
-        if !window.isVisible, tab.isVisible { greenlight.hint = "" }  // window hidden mid-hover: drop the tab
+        if chat.window?.isVisible != true, tab.isVisible { greenlight.hint = "" }  // the chat's window hidden mid-hover: drop the tab
         if window.title != greenlight.name { window.title = greenlight.name }
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
@@ -2232,7 +2232,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var hintSink: AnyCancellable?
 
     func showTab(_ text: String) {
-        guard !text.isEmpty, window.isVisible, let pw = chat.window else {
+        guard !text.isEmpty, let pw = chat.window, pw.isVisible else {  // the chat's window: the main one, or its own when popped out
             tab.parent?.removeChildWindow(tab); tab.orderOut(nil); return
         }
         let host = NSHostingView(rootView: HintTab(text: text))
@@ -2240,7 +2240,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let r = pw.convertToScreen(chat.convert(chat.bounds, to: nil))
         tab.contentView = host
         tab.setFrame(NSRect(x: r.maxX - size.width - 14, y: r.minY - size.height + 1, width: size.width, height: size.height), display: true)
-        if tab.parent == nil { pw.addChildWindow(tab, ordered: .above) }  // child windows follow the window
+        if tab.parent !== pw { tab.parent?.removeChildWindow(tab); pw.addChildWindow(tab, ordered: .above) }  // child windows follow the window; the chat may have moved
     }
 
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,

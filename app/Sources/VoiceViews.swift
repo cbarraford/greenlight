@@ -932,10 +932,10 @@ struct Live {
     }
     /// The context readout as a button: its popover has the totals and Compact.
     func ctx<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
+        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
     func clearButton<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button(action: clear) { label() }.buttonStyle(.plain).help("Clear the context and start a new conversation (or say “reset”)").accessibilityLabel("Clear the context")
+        Button(action: clear) { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: "Clear the context and start a new conversation (or say “reset”)")).accessibilityLabel("Clear the context")
     }
 }
 
@@ -1366,34 +1366,59 @@ struct StageWeb: NSViewRepresentable {
 func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) {
     on ? ("End voice mode (or say “goodbye”)", "End voice mode")
         : starting ? ("Starting voice mode… click to cancel", "Cancel starting voice mode")
-        : ("Voice mode: talk with it hands-free", "Start voice mode")
+        : ("Start voice mode: talk with it hands-free", "Start voice mode")
 }
 
-/// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions.
+/// The chat header's knobs, top right, in the state they're in: what a click does now, for the hover hint (`help`) and VoiceOver (`label`).
+struct HeaderTips {
+    var on = false, starting = false, transcript = false, captions = false, out = false
+    var name = "Chief", look = "Orb", next = "Conversation"
+    var attach: (help: String, label: String) { ("Attach images, PDFs or text files to what you say next (or drop or paste them)", "Attach files") }
+    var view: (help: String, label: String) {
+        transcript ? ("Show the stage: what \(name) draws as it talks", "Show the stage") : ("Show the transcript: the conversation as text", "Show the transcript")
+    }
+    var caption: (help: String, label: String) {
+        captions ? ("Hide captions: the words said and heard", "Turn captions off") : ("Show captions: the words said and heard, as text", "Turn captions on")
+    }
+    var style: (help: String, label: String) { ("Style: \(look). Click for \(next)", "Chat style: \(look). Switch to \(next)") }
+    var voice: (help: String, label: String) { voiceButtonText(on: on, starting: starting) }
+    var pop: (help: String, label: String) {
+        out ? ("Put the chat back in the main window's right pane", "Put back in the main window")
+            : ("Pop the chat out into its own window (close it to bring it back)", "Move to its own window")
+    }
+}
+
+/// The chat header's voice controls: voice mode on/off, and while on, the transcript and captions. Each hints on hover (Tip):
+/// at once, under the pane, even while Greenlight isn't the front app (the native tooltip waits for that).
 struct VoiceButtons: View, Looked {
     @ObservedObject var v: Voice
+    @ObservedObject var c: Core
     var out = false  // the chat is in its own window
     var pop: (() -> Void)? = nil  // the chat header's pop-out (or put back), drawn as one more knob
+    var tips: HeaderTips {
+        let i = looks.firstIndex { $0.id == v.look.id } ?? 0
+        return HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out,
+                          name: c.name, look: v.look.name, next: looks[(i + 1) % looks.count].name)
+    }
     var body: some View {
+        let t = tips
         HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
             if v.on {
-                if !v.transcript, let c = v.core {  // the stage has no composer: its +. Drops on the stage and ⌘V attach too
-                    knob("paperclip", "Attach files: \(ChatFile.supported). They go with what you say next. Or drop them on the stage, or paste.", label: "Attach files") { c.pickFiles(NSApp.keyWindow) }
+                if !v.transcript {  // the stage has no composer: its +. Drops on the stage and ⌘V attach too
+                    knob("paperclip", t.attach) { c.pickFiles(NSApp.keyWindow) }
                 }
-                knob(v.transcript ? "waveform" : "text.bubble", v.transcript ? "Show the stage" : "Show the transcript") { v.transcript.toggle() }
-                knob(v.captions ? "captions.bubble.fill" : "captions.bubble", v.captions ? "Captions off" : "Captions on") { v.captions.toggle() }
+                knob(v.transcript ? "waveform" : "text.bubble", t.view) { v.transcript.toggle() }
+                knob(v.captions ? "captions.bubble.fill" : "captions.bubble", t.caption) { v.captions.toggle() }
             }
             // one style for live and standard chat
-            knob("paintpalette", "Style: \(v.look.name), click for the next") { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
-            let t = voiceButtonText(on: v.on, starting: v.starting)
+            knob("paintpalette", t.style) { v.look = looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
             Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
-                .buttonStyle(.plain).help(t.help).accessibilityLabel(t.label)
-            if let pop { out ? knob("rectangle.righthalf.inset.filled", "Put back in the main window's right pane", label: "Put back in the main window", pop)
-                : knob("arrow.up.forward.square", "Move to its own window (close it to bring it back)", label: "Move to its own window", pop) }
+                .buttonStyle(.plain).modifier(Tip(c: c, text: t.voice.help)).accessibilityLabel(t.voice.label)
+            if let pop { knob(out ? "rectangle.righthalf.inset.filled" : "arrow.up.forward.square", t.pop, pop) }
         }
     }
-    func knob(_ icon: String, _ help: String, label: String? = nil, _ act: @escaping () -> Void) -> some View {
-        Button(action: act) { shell(Image(systemName: icon)) }.buttonStyle(.plain).help(help).accessibilityLabel(label ?? help)
+    func knob(_ icon: String, _ t: (help: String, label: String), _ act: @escaping () -> Void) -> some View {
+        Button(action: act) { shell(Image(systemName: icon)) }.buttonStyle(.plain).modifier(Tip(c: c, text: t.help)).accessibilityLabel(t.label)
     }
     /// The knob in the look: a ring (Orb), a 6pt tile (Conversation), a square (On Air, HUD), a green box (Phosphor), bare (Editorial, Zen).
     func shell<V: View>(_ icon: V, on: Bool = false) -> some View {
