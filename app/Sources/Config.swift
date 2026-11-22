@@ -217,8 +217,8 @@ func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capital
 
 // MARK: Settings: repo lifecycles, instructions, memory
 
-/// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x").
-struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "" }  // ponytail: run (a sign-off step's Run: command) is kept, not editable here: edit the .md
+/// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x" | "check=x").
+struct Stage: Identifiable, Equatable { let id = UUID(); var key: String, req: String, done: String, run = "", owner = "", phase = "" }
 
 /// Settings → Repositories / Memory and the chat's instructions: each read and saved with `dash.py task <op> <arg>` where greenlight runs.
 final class RulesStore: ObservableObject {
@@ -260,7 +260,7 @@ final class RulesStore: ObservableObject {
     func call(_ op: String, _ arg: String, _ stdin: String = "", _ done: @escaping ([String: Any]) -> Void) {
         busy = true
         var out = ""
-        ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
+        ssh("\(py)/dash.py task \(shellQuote(op)) \(shellQuote(arg))", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
             self?.busy = false
             let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["error": "\(host) didn't answer (exit \(code))"]
             if let e = j["error"] as? String { self?.status = e } else { done(j) }
@@ -304,13 +304,27 @@ final class RulesStore: ObservableObject {
         call("prompt-set", "\(repo)/\(kind)", own ? review : "") { self.gotReview($0); self.status = own ? "Saved the prompt." : "Using the default prompt." }
     }
     func got(_ j: [String: Any]) {
-        stages = ((j["stages"] as? [[String: String]]) ?? []).map { Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "") }
+        stages = ((j["stages"] as? [[String: String]]) ?? []).map {
+            Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "", owner: $0["owner"] ?? "", phase: $0["phase"] ?? "")
+        }
         options = j["options"] as? [String: String] ?? [:]
         rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
         builtins = j["builtins"] as? [String: String] ?? [:]
     }
     func save() {
-        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run] }, "options": options, "rules": rules, "intro": intro]
+        for s in stages where builtins[s.key] == nil {
+            if s.done.hasPrefix("label="), s.done.dropFirst(6).trimmingCharacters(in: .whitespaces).isEmpty {
+                status = "Enter a label name for stage \(s.key)."; return
+            }
+            if s.done.hasPrefix("check="), s.done.dropFirst(6).trimmingCharacters(in: .whitespaces).isEmpty {
+                status = "Enter a CI check name for stage \(s.key)."; return
+            }
+        }
+        for (k, v) in options where v.contains("`") || v.contains("\n") || v.contains("\r") {
+            status = "Option \(k) can't contain backticks or newlines."; return
+        }
+        let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run, "owner": $0.owner, "phase": $0.phase] },
+                                  "options": options, "rules": rules, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
         call("lifecycle-set", repo, s) { self.got($0); self.status = "Saved." }
     }

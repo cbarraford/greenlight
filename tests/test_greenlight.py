@@ -554,6 +554,90 @@ try:
     greenlight.lifecycle_md("r", {"stages": [{"key": "merge"}, {"key": "ci_green"}]}); raise AssertionError("built-in after merge")
 except ValueError:
     pass
+# --- per-repo customization: qualified org__repo lookup, per-repo options, custom Done/Owner/Phase, pre-PR signoff
+(greenlight.STATE / "lifecycles/org-a__api.md").write_text(greenlight.lifecycle_md("org-a/api", {
+    "options": {"merge_method": "squash", "review_bot": "bot-a", "human_approval": "false", "auto_rebase": ""},
+    "stages": [
+        {"key": "rfc", "req": "RFC approved.", "done": "signoff", "phase": "define"},
+        {"key": "mr_open", "req": "PR open."},
+        {"key": "review_bot", "req": "Bot assigned."},
+        {"key": "e2e", "req": "E2E green.", "done": "check=e2e-suite", "phase": "verify"},
+        {"key": "qa", "req": "QA verified.", "done": "label=qa-ok", "owner": "reviewers", "phase": "review"},
+        {"key": "threads", "req": "Threads resolved."},
+        {"key": "merge", "req": "Merge."},
+    ],
+}))
+(greenlight.STATE / "lifecycles/org-b__api.md").write_text(greenlight.lifecycle_md("org-b/api", {
+    "options": {"merge_method": "rebase", "review_bot": "none"},
+    "stages": [{"key": "mr_open", "req": ""}, {"key": "review_bot", "req": ""}, {"key": "merge", "req": ""}],
+}))
+assert greenlight.lifecycle_file("org-a/api").name == "org-a__api.md"
+assert greenlight.lifecycle_file("org-b/api").name == "org-b__api.md"
+doc_a = greenlight.lifecycle_doc("org-a/api")
+assert doc_a["stages"][0]["phase"] == "define" and doc_a["stages"][3]["done"] == "check=e2e-suite" and doc_a["stages"][4]["owner"] == "reviewers"
+assert greenlight.repo_bot("org-a/api") == "bot-a" and greenlight.repo_bot("org-b/api") is None
+assert greenlight.repo_merge_method("org-a/api") == "squash" and greenlight.repo_merge_method("org-b/api") == "rebase"
+wa = {"project": "org-a/api", "forge": "github", "goal": "Add rate limiter", "branch": "feat-rl"}
+# pre-PR custom signoff stage runs before mr_open (keyed per branch)
+pre = greenlight.evaluate(wa, None, None)
+assert (pre["step"], pre["owner"], pre["phase"], pre["cmd"][-3:]) == ("rfc", "me", "define", ["org-a/api", "@feat-rl", "rfc"]), pre
+with mock.patch.object(sys, "argv", ["greenlight.py"] + pre["cmd"][2:]):
+    greenlight.main()
+assert greenlight.evaluate(wa, None, None)["step"] == "freeform"
+# per-repo review_bot, check= stage, custom owner/phase, auto_rebase, merge_method, human_approval=false
+assert greenlight.evaluate(wa, mr(assignees=[], reviewers=[]), None)["cmd"][-1] == "bot-a"
+assert greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "running"}]), None)["owner"] == "ci"
+assert greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "failed"}]), None)["step"] == "e2e"
+qa_e = greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}], labels=[]), None)
+assert (qa_e["step"], qa_e["owner"], qa_e["phase"]) == ("qa", "reviewers", "review"), qa_e
+assert greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}], labels=["qa-ok"], detailed_merge_status="need_rebase"), None)["owner"] == "agent"
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    ma = greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}], labels=["qa-ok"], _approved_by=[]), None)
+    assert ma["owner"] == "greenlight" and ma["cmd"][-1] == "--squash", ma
+wb = {"project": "org-b/api", "forge": "github", "goal": "", "branch": "b"}
+with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
+    mb = greenlight.evaluate(wb, mr(assignees=[], reviewers=[], _approved_by=["alice"]), None)
+    assert mb["owner"] == "greenlight" and mb["cmd"][-1] == "--rebase", mb
+for bad_meta in [
+    {"stages": [{"key": "x", "owner": "bogus"}]}, {"stages": [{"key": "x", "phase": "bogus"}]}, {"stages": [{"key": "x", "done": "bogus"}]},
+    {"stages": [{"key": "x", "done": "label="}]}, {"stages": [{"key": "x", "done": "check="}]},
+    {"stages": [{"key": "x", "done": "label=a"}, {"key": "mr_open"}]}, {"stages": [{"key": "merge"}, {"key": "e2e", "done": "check=e2e"}]},
+    {"stages": [{"key": "merge"}], "options": {"review_bot": "bot` `automerge"}},
+    {"stages": [{"key": "merge"}], "options": {"milestone": "Release-\n1. `pwn` — x"}},
+    {"stages": [{"key": "merge"}], "options": {"bad key": "x"}},
+]:
+    try:
+        greenlight.lifecycle_md("r", bad_meta); raise AssertionError(bad_meta)
+    except ValueError:
+        pass
+# GitLab mr_details populates _checks when the repo has a `Done: check=...` stage
+with mock.patch.object(greenlight, "gl", side_effect=[
+    {"iid": 9, "state": "opened", "head_pipeline": {"id": 77, "status": "success"}, "detailed_merge_status": "mergeable"},
+    {"approved_by": [], "approvals_required": 0, "approvals_left": 0, "user_can_approve": True},
+]), mock.patch.object(greenlight, "gl_all", side_effect=[
+    [],
+    [{"name": "e2e-suite", "stage": "test", "status": "success"}],
+]):
+    gl_mr = greenlight.mr_details("org-a/api", 9, "gitlab")
+    assert gl_mr["_checks"] == [{"name": "e2e-suite", "stage": "test", "status": "success"}], gl_mr["_checks"]
+# pre-MR signoff carries over even when local branch differs from remote source_branch, and handles empty branch cleanly
+assert greenlight.evaluate(wa, mr(source_branch="remote-rl", assignees=[], reviewers=[]), None)["step"] == "review_bot"
+empty_br = {"project": "org-a/api", "forge": "github", "goal": "No branch", "name": "nb", "branch": ""}
+pre_nb = greenlight.evaluate(empty_br, None, None)
+assert pre_nb["step"] == "rfc" and pre_nb["cmd"][-2] == "@nb"
+with mock.patch.object(sys, "argv", ["greenlight.py"] + pre_nb["cmd"][2:]):
+    greenlight.main()
+assert greenlight.evaluate(empty_br, None, None)["step"] == "freeform"
+# per-repo review_bot in threads: bot-a replied last -> waiting on reviewers (not agent)
+th_e = greenlight.evaluate(wa, mr(assignees=[U("bot-a")], reviewers=[U("bot-a")], _checks=[{"name": "e2e-suite", "status": "success"}],
+                                  labels=["qa-ok"], _discussions=[thread("alice", "bot-a")]), None)
+assert (th_e["step"], th_e["owner"]) == ("threads", "reviewers"), th_e
+(greenlight.STATE / "lifecycles/strict.md").write_text(greenlight.lifecycle_md("strict", {
+    "options": {"human_approval": "true"}, "stages": [{"key": "mr_open"}, {"key": "merge"}]}))
+old_cfg = greenlight.CONFIG
+greenlight.CONFIG = {**old_cfg, "require_human_approval": False}
+assert greenlight.evaluate({"project": "acme/strict", "goal": "", "branch": "b"}, mr(_approved_by=[]), None)["owner"] == "reviewers"
+greenlight.CONFIG = old_cfg
 print("custom stages ok")
 
 

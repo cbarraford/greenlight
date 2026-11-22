@@ -296,10 +296,11 @@ def ref(forge, n):
 
 
 def lifecycle_file(project):
-    """~/.greenlight/lifecycles/<repo>.md, else the bundled lifecycles/<repo>.md, else default.md."""
-    name = f"{project.rsplit('/', 1)[-1]}.md"
-    return next((f for f in (STATE / "lifecycles" / name, ROOT / "lifecycles" / name) if f.exists()),
-                ROOT / "lifecycles" / "default.md")
+    """~/.greenlight/lifecycles/<org>__<repo>.md or <repo>.md, else bundled, else default.md."""
+    parts = [p for p in str(project or "").strip("/").split("/") if p]
+    names = ([f"{'__'.join(parts)}.md"] if len(parts) > 1 else []) + ([f"{parts[-1]}.md"] if parts else [])
+    candidates = [d / n for d in (STATE / "lifecycles", ROOT / "lifecycles") for n in names]
+    return next((f for f in candidates if f.exists()), ROOT / "lifecycles" / "default.md")
 
 
 BUILTIN = {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipeline succeeded (or there's no CI).",
@@ -307,20 +308,27 @@ BUILTIN = {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipe
            "milestone": "A release milestone is set.", "ready": "Not a draft.", "threads": "No unresolved threads.",
            "approved": "The required approvals are in.", "merge": "The forge reports it mergeable."}
 STAGE_RE = re.compile(r"^\s*\d+\.\s+`(\w+)`[ \t]*(?:—|-)?[ \t]*(.*)$", re.M)
-DONE_RE = re.compile(r"\s*Done:\s*`(signoff|label=[^`]+)`")
+DONE_RE = re.compile(r"\s*Done:\s*`(signoff|(?:label|check)=[^`]+)`")
 RUN_RE = re.compile(r"\s*Run:\s*`([^`]+)`")  # a signoff step's command: the card's button runs it on the host, then signs it off
+OWNER_RE = re.compile(r"\s*Owner:\s*`(agent|me|reviewers|ci)`")
+PHASE_RE = re.compile(r"\s*Phase:\s*`(define|build|verify|review|land)`")
 
 
 def lifecycle_doc(project):
-    """The lifecycle as data: {stages: [{key, req, done}], options, rules, intro, file, source}.
-    A stage that isn't built in passes on `Done: `signoff`` (the user signs it off once per MR) or `Done: `label=x``."""
+    """The lifecycle as data: {stages: [{key, req, done, run, owner?, phase?}], options, rules, intro, file, source}.
+    A custom stage passes on `Done: `signoff``, `Done: `label=x``, or `Done: `check=x``, and may set `Owner:` / `Phase:`."""
     f = lifecycle_file(project)
     head, _, rules = f.read_text().partition("\n## Rules")
     stages = []
     for key, rest in STAGE_RE.findall(head):
-        m, run = DONE_RE.search(rest), RUN_RE.search(rest)
-        stages.append({"key": key, "req": RUN_RE.sub("", DONE_RE.sub("", rest)).strip(),
-                       "done": m[1] if m else ("" if key in BUILTIN else "signoff"), "run": run[1] if run else ""})
+        m, run, own, ph = DONE_RE.search(rest), RUN_RE.search(rest), OWNER_RE.search(rest), PHASE_RE.search(rest)
+        req = PHASE_RE.sub("", OWNER_RE.sub("", RUN_RE.sub("", DONE_RE.sub("", rest)))).strip()
+        stage = {"key": key, "req": req, "done": m[1] if m else ("" if key in BUILTIN else "signoff"), "run": run[1] if run else ""}
+        if own and key not in BUILTIN:
+            stage["owner"] = own[1]
+        if ph and key not in BUILTIN:
+            stage["phase"] = ph[1]
+        stages.append(stage)
     m = re.search(r"^Options:(.*)$", head, re.M)
     first = STAGE_RE.search(head) or m
     intro = "" if f.name == "default.md" and f.parent == ROOT / "lifecycles" else \
@@ -330,26 +338,55 @@ def lifecycle_doc(project):
             "source": "yours" if f.parent == STATE / "lifecycles" else "default" if f.name == "default.md" else "bundled"}
 
 
-def lifecycle_md(repo, doc):
-    """The inverse of lifecycle_doc. Raises ValueError on a bad or duplicate key, or a label with a backtick."""
+def _format_stage(i, s):
     one = lambda t: " ".join(str(t or "").split())
-    keys = [s["key"] for s in doc["stages"]]
+    done = "" if s["key"] in BUILTIN else one(s.get("done")) or "signoff"
+    if not re.fullmatch(r"|signoff|(?:label|check)=[^`\s][^`]*", done):
+        raise ValueError(f"bad Done for {s['key']}: {done}")
+    run = one(s.get("run")) if done == "signoff" else ""
+    if "`" in run:
+        raise ValueError(f"a Run command can't hold a backtick: {s['key']}")
+    own = "" if s["key"] in BUILTIN else one(s.get("owner"))
+    if own not in ("", "agent", "me", "reviewers", "ci"):
+        raise ValueError(f"bad Owner for {s['key']}: {own}")
+    phase = "" if s["key"] in BUILTIN else one(s.get("phase"))
+    if phase not in ("", "define", "build", "verify", "review", "land"):
+        raise ValueError(f"bad Phase for {s['key']}: {phase}")
+    return (f"{i}. `{s['key']}` — {one(s.get('req'))}" + (f" Done: `{done}`" if done else "")
+            + (f" Run: `{run}`" if run else "") + (f" Owner: `{own}`" if own else "") + (f" Phase: `{phase}`" if phase else ""))
+
+
+def _format_options(opts):
+    parts = []
+    for k, v in opts.items():
+        ks, vs = str(k), str(v or "")
+        if not re.fullmatch(r"\w+", ks):
+            raise ValueError(f"bad option key: {ks}")
+        if any(c in vs for c in "`\n\r"):
+            raise ValueError(f"option {ks} can't hold backticks or newlines")
+        parts.append(f"`{ks}={vs}`" if vs else f"`{ks}`")
+    return "Options: " + " ".join(parts)
+
+
+def lifecycle_md(repo, doc):
+    """The inverse of lifecycle_doc. Raises ValueError on a bad or duplicate key, or invalid stage/option metadata."""
+    stages = doc["stages"]
+    keys = [s["key"] for s in stages]
     if not keys or len(set(keys)) != len(keys) or not all(re.fullmatch(r"\w+", k) for k in keys):
         raise ValueError(f"stage keys must be unique words: {keys}")
     if late := [k for k in split_merge(keys)[1] if k in BUILTIN]:
         raise ValueError(f"only your own steps can come after merge: {late}")
+    by_key = {s["key"]: s for s in stages}
+    if late_chk := [k for k in split_merge(keys)[1] if str(by_key[k].get("done") or "").startswith("check=")]:
+        raise ValueError(f"CI check stages can't come after merge: {late_chk}")
+    if "mr_open" in keys:
+        if early_mr := [k for k in keys[:keys.index("mr_open")] if k not in BUILTIN and str(by_key[k].get("done") or "").startswith(("label=", "check="))]:
+            raise ValueError(f"only sign-off stages can come before mr_open: {early_mr}")
     out = [f"# {repo} lifecycle", ""] + ([doc["intro"].strip(), ""] if doc.get("intro", "").strip() else [])
     opts = doc.get("options") or {}
     if opts:
-        out += ["Options: " + " ".join(f"`{k}={v}`" if v else f"`{k}`" for k, v in opts.items()), ""]
-    for i, s in enumerate(doc["stages"], 1):
-        done = "" if s["key"] in BUILTIN else one(s.get("done")) or "signoff"
-        if not re.fullmatch(r"|signoff|label=[^`]+", done):
-            raise ValueError(f"bad Done for {s['key']}: {done}")
-        run = one(s.get("run")) if done == "signoff" else ""
-        if "`" in run:
-            raise ValueError(f"a Run command can't hold a backtick: {s['key']}")
-        out.append(f"{i}. `{s['key']}` — {one(s.get('req'))}" + (f" Done: `{done}`" if done else "") + (f" Run: `{run}`" if run else ""))
+        out += [_format_options(opts), ""]
+    out += [_format_stage(i, s) for i, s in enumerate(stages, 1)]
     if doc.get("rules", "").strip():
         out += ["", "## Rules", "", doc["rules"].strip()]
     return "\n".join(out) + "\n"
@@ -374,6 +411,34 @@ def lifecycle_opts(project):
     return lifecycle_doc(project)["options"]
 
 
+def opt_val(opts, key, default=""):
+    """Read an option value from lifecycle_opts() (tolerating mocked set objects in tests)."""
+    return opts.get(key, default) if isinstance(opts, dict) else default
+
+
+def repo_bot(project):
+    """Review bot for `project`: per-repo `review_bot=` option (`none` disables), else global config `review_bot`."""
+    opts = lifecycle_opts(project)
+    if "review_bot" in opts:
+        val = opt_val(opts, "review_bot").strip()
+        return None if not val or val.lower() == "none" else val
+    return BOT
+
+
+def repo_merge_method(project, opts=None):
+    """Merge method for `project`: per-repo `merge_method=` option, else global config `merge_method`."""
+    val = opt_val(lifecycle_opts(project) if opts is None else opts, "merge_method").strip().lower()
+    return val if val in ("merge", "squash", "rebase") else CONFIG["merge_method"]
+
+
+def repo_human_approval(opts):
+    """Whether `project` requires another human's approval: per-repo option overrides global config."""
+    ha = opt_val(opts, "human_approval").strip().lower()
+    if ha in ("true", "false"):
+        return ha == "true"
+    return bool(CONFIG["require_human_approval"]) and "no_human_approval" not in opts
+
+
 def signoffs():
     f = STATE / "signoffs.json"
     return json.loads(f.read_text()) if f.exists() else {}
@@ -381,7 +446,7 @@ def signoffs():
 
 def release_milestone(project, forge="gitlab"):
     """The active milestone named <prefix>x.y.z (prefix from `milestone=`, default Release-) due latest."""
-    prefix = re.escape(lifecycle_opts(project).get("milestone") or "Release-")
+    prefix = re.escape(opt_val(lifecycle_opts(project), "milestone") or "Release-")
     if forge == "github":
         ms = [{**m, "due_date": (m.get("due_on") or "")[:10]} for m in gh("api", f"repos/{project}/milestones?state=open&per_page=100")]
     else:
@@ -408,9 +473,13 @@ def mr_details(project, iid, forge="gitlab"):
         mine = [n for d in mr["_discussions"] for n in d["notes"] if n["author"]["username"] == ME and (n.get("position") or {}).get("head_sha")]
         # ponytail: the head your newest diff comment saw; an approval or a plain comment carries no sha
         mr["_reviewed_sha"] = max(mine, key=lambda n: n["created_at"])["position"]["head_sha"] if mine else None
-        if (pl := mr.get("head_pipeline") or {}).get("status") == "failed":  # the Fix CI prompt's {failed_jobs}
+        pl = mr.get("head_pipeline") or {}
+        if pl.get("status") == "failed":  # the Fix CI prompt's {failed_jobs}
             mr["_failed_jobs"] = [{"name": j["name"], "stage": j["stage"], "url": j["web_url"]}
                                   for j in gl_all(f"projects/{pid(project)}/pipelines/{pl['id']}/jobs?scope[]=failed") if not j.get("allow_failure")]
+        if pl.get("id") and any(s["done"].startswith("check=") for s in lifecycle_doc(project)["stages"]):
+            mr["_checks"] = [{"name": j["name"], "stage": j.get("stage") or "", "status": j["status"]}
+                             for j in gl_all(f"projects/{pid(project)}/pipelines/{pl['id']}/jobs")]
         if mr.get("detailed_merge_status") == "merge_request_blocked":  # depends on other MRs: name the open ones
             mr["_blocked_by"] = [b["blocking_merge_request"]["iid"] for b in gl(f"{base}/blocks")
                                  if b["blocking_merge_request"]["state"] == "opened"]
@@ -696,8 +765,38 @@ def intents(ws, mr=None):
     return out
 
 
+def _check_custom(step, mr, ws):
+    """Evaluate a repo's own custom stage: `label=x`, `check=name`, or `signoff`, respecting optional `Owner:`."""
+    proj = ws["project"]
+    stage = next(s for s in lifecycle_doc(proj)["stages"] if s["key"] == step)
+    name, req = step.replace("_", " "), stage["req"] or "done?"
+    done, own = stage["done"], stage.get("owner") or ""
+    if done.startswith("label="):
+        label = done[6:]
+        return None if mr and label in mr.get("labels", []) else (own or "agent", f"{name}: {req} (add the label `{label}` when it's met)", None)
+    if done.startswith("check="):
+        want = done[6:]
+        hits = [c for c in (mr.get("_checks") or []) if c.get("name") == want] if mr else []
+        if any(c.get("status") in ("success", "skipped") for c in hits):
+            return None
+        if any(c.get("status") in ("running", "pending", "queued", "in_progress", "created") for c in hits):
+            return "ci", f"{name}: check `{want}` running", None
+        if not hits and mr and (mr.get("head_pipeline") or {}).get("status") in ("running", "pending", "created", "waiting_for_resource", "preparing", "scheduled"):
+            return "ci", f"{name}: waiting for check `{want}`", None
+        return own or "agent", f"{name}: {req} (check `{want}` has not passed)", None
+    ws_branch, mr_branch = ws.get("branch") or "", (mr or {}).get("source_branch") or ""
+    ref_id = str(mr["iid"]) if mr else f"@{ws_branch or ws.get('name') or 'branch'}"
+    so = signoffs()
+    keys = ([f"{proj}#{mr['iid']}"] if mr else []) + [f"{proj}@{b}" for b in dict.fromkeys((mr_branch, ws_branch, "" if mr else ref_id[1:])) if b]
+    if any(step in so.get(k, []) for k in keys):
+        return None
+    return own or "me", f"{name}: {req} Sign it off?", ["python3", str(HERE / "greenlight.py"), "signoff", proj, ref_id, step]
+
+
 def check(step, mr, ws, milestone):
     """-> None when the step passes, else (owner, action, cmd|None)."""
+    if step not in BUILTIN:
+        return _check_custom(step, mr, ws)
     iid, proj = mr["iid"], ws["project"]
     github = ws.get("forge") == "github"
     upd = ["gh", "pr", "edit", str(iid), "-R", proj] if github else ["glab", "mr", "update", str(iid), "-R", proj]
@@ -713,14 +812,15 @@ def check(step, mr, ws, milestone):
     if step == "no_conflicts":
         return ("agent", "Rebase Branch (merge conflicts)", None) if mr["has_conflicts"] else None
     if step == "review_bot":
-        if not BOT:
+        bot = repo_bot(proj)
+        if not bot:
             return None
         a = {u["username"] for u in mr["assignees"]}
         r = {u["username"] for u in mr["reviewers"]}
-        if BOT in a and BOT in r:
+        if bot in a and bot in r:
             return None
-        return "greenlight", f"assign {BOT} as assignee + reviewer", upd + (["--add-assignee", BOT, "--add-reviewer", BOT] if github
-                                                                   else ["--assignee", f"+{BOT}", "--reviewer", f"+{BOT}"])
+        return "greenlight", f"assign {bot} as assignee + reviewer", upd + (["--add-assignee", bot, "--add-reviewer", bot] if github
+                                                                   else ["--assignee", f"+{bot}", "--reviewer", f"+{bot}"])
     if step == "milestone":
         if mr.get("milestone"):
             return None
@@ -735,8 +835,9 @@ def check(step, mr, ws, milestone):
             return "me", "goal says keep draft but everything else is green: take it out of draft?", ready  # the card's Mark ready runs it
         return "greenlight", "mark ready for review", ready
     if step == "threads":
+        bot = repo_bot(proj)
         ds = unresolved(mr)
-        todo = [d for d in ds if d["notes"][-1]["author"]["username"] not in (ME, BOT)]
+        todo = [d for d in ds if d["notes"][-1]["author"]["username"] not in (ME, bot)]
         if ds and not todo:  # we replied last on every one: the reviewer has to re-review
             return "reviewers", f"{len(ds)} threads answered, waiting on reviewer re-review", None
         if todo or mr.get("blocking_discussions_resolved") is False:  # GitLab's flag catches what the first-note test misses
@@ -749,12 +850,12 @@ def check(step, mr, ws, milestone):
         return None
     if step == "merge":
         st = mr.get("detailed_merge_status")
-        how = CONFIG["merge_method"]
+        opts = lifecycle_opts(proj)
+        how = repo_merge_method(proj, opts)
         merge = (["gh", "pr", "merge", str(iid), "-R", proj, f"--{how}"] if github
                  else ["glab", "mr", "merge", str(iid), "-R", proj, "--yes"] + ([f"--{how}"] if how != "merge" else []))
         if st == "mergeable" and intents(ws, mr)["is_held"]:
             return "me", "mergeable, but the goal says hold: merge now?", merge  # yes runs it (the card's Merge button too)
-        opts = lifecycle_opts(proj)
         base, default = mr.get("target_branch"), mr.get("_default_branch")
         if st == "mergeable" and default and base != default and "merge_any_base" not in opts:
             # a stacked PR: it lands with (or after) its base, never auto-merged into a side branch
@@ -764,7 +865,8 @@ def check(step, mr, ws, milestone):
         keys = [s["key"] for s in lifecycle_doc(proj)["stages"]]
         checks = [k for k in (keys[:keys.index("merge")] if "merge" in keys else keys) if k not in BUILTIN]
         auto_approval = "automerge" in opts and bool(checks)
-        if st == "mergeable" and CONFIG["require_human_approval"] and not set(mr.get("_approved_by", [])) - {ME, BOT}:
+        bot = repo_bot(proj)
+        if st == "mergeable" and repo_human_approval(opts) and not set(mr.get("_approved_by", [])) - {ME, bot}:
             if not auto_approval:
                 if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
                     return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
@@ -782,7 +884,8 @@ def check(step, mr, ws, milestone):
                 return "me", f"automerge held by the semantic audit: {audit.summary(v)}. Merge anyway?", pin or manual_pin
             return "greenlight", "merge (semantic audit passed)", pin
         if st == "need_rebase":
-            # user rule: rebase only on a real conflict, so ask rather than dispatch
+            if "auto_rebase" in opts:
+                return "agent", "Rebase Branch (behind target branch)", None
             return "me", "GitLab needs a rebase to merge (no conflict): rebase it?", None
         if st in ("ci_must_pass", "ci_still_running", "checking", "unchecked", "preparing"):
             return "ci", f"merge status {st}", None
@@ -791,14 +894,17 @@ def check(step, mr, ws, milestone):
         if st == "blocked_status":
             return "me", "GitHub blocks the merge (branch protection): check the PR", None
         return "me", f"not mergeable: {st}", None
-    stage = next(s for s in lifecycle_doc(proj)["stages"] if s["key"] == step)
-    name, req = step.replace("_", " "), stage["req"] or "done?"
-    if stage["done"].startswith("label="):
-        label = stage["done"][6:]
-        return None if label in mr.get("labels", []) else ("agent", f"{name}: {req} (add the label `{label}` when it's met)", None)
-    if step in signoffs().get(f"{proj}#{iid}", []):
-        return None
-    return "me", f"{name}: {req} Sign it off?", ["python3", str(HERE / "greenlight.py"), "signoff", proj, str(iid), step]
+    return None
+
+
+def _step_result(proj, step, hit, name):
+    owner, action, cmd = hit
+    out = {"step": step, "owner": owner, "action": action, "cmd": cmd, "lifecycle": name}
+    if step not in BUILTIN:
+        stage = next((s for s in lifecycle_doc(proj)["stages"] if s["key"] == step), None)
+        if stage and stage.get("phase"):
+            out["phase"] = stage["phase"]
+    return out
 
 
 def evaluate(ws, mr, milestone):
@@ -811,6 +917,7 @@ def evaluate(ws, mr, milestone):
         return {"step": "parked", "owner": "parked", "action": "parked until you unpark it", "hidden": True}
     if snooze and (ws.get("_revisit", {}).get("resumes_work") or REVISIT_RE.search(said(ws, mr or {}))) and snooze > time.strftime("%Y-%m-%d") and not (mr and mr["state"] in ("merged", "closed")):
         return {"step": "parked", "owner": "parked", "action": f"parked until {snooze}"}
+    name, steps = lifecycle(ws["project"])
     if not mr:
         if ws.get("branch_gone"):
             return {"step": "done", "owner": "done", "action": "its branch was deleted on the remote, so the change is over: cleanup.py removes it if its commits are on the remote, else delete it yourself"}
@@ -820,14 +927,16 @@ def evaluate(ws, mr, milestone):
             return {"step": "goal", "owner": "me", "action": "no MR and no goal: what's this workspace for?"}
         if AUTOMATION_RE.search(ws["goal"]):
             return {"step": "freeform", "owner": "working", "action": "run by an Orca automation"}
+        if "mr_open" in steps:
+            for step in steps[:steps.index("mr_open")]:
+                if step not in BUILTIN and (hit := check(step, None, ws, milestone)):
+                    return _step_result(ws["project"], step, hit, name)
         return {"step": "freeform", "owner": "agent", "action": f"work toward goal: {ws['goal']}"}
-    name, steps = lifecycle(ws["project"])
     pre, post = split_merge(steps)
     if mr["state"] == "merged" and mr["author"]["username"] == ME:
-        for step in post:  # your own steps after the merge (deploy, verify): signoff/label only, the MR is done
+        for step in post:  # your own steps after the merge (deploy, verify): signoff/label/check only, the MR is done
             if step not in BUILTIN and (hit := check(step, mr, ws, milestone)):
-                owner, action, cmd = hit
-                return {"step": step, "owner": owner, "action": action, "cmd": cmd, "lifecycle": name}
+                return _step_result(ws["project"], step, hit, name)
     if mr["state"] in ("merged", "closed"):
         return {"step": "done", "owner": "done", "action": f"MR {mr['state']}: cleanup.py removes it"}
     if mr["author"]["username"] != ME:
@@ -842,10 +951,8 @@ def evaluate(ws, mr, milestone):
             return {"step": "review", "owner": "me", "action": "author replied on your threads: re-review"}
         return {"step": "review", "owner": "author", "action": f"{len(mine)} of your threads open, waiting on author"}
     for step in pre:
-        hit = check(step, mr, ws, milestone)
-        if hit:
-            owner, action, cmd = hit
-            return {"step": step, "owner": owner, "action": action, "cmd": cmd, "lifecycle": name}
+        if hit := check(step, mr, ws, milestone):
+            return _step_result(ws["project"], step, hit, name)
     return {"step": "merge", "owner": "ci", "action": f"all steps green, waiting on {'GitHub' if ws.get('forge') == 'github' else 'GitLab'}",
             "lifecycle": name}
 
@@ -1158,6 +1265,7 @@ def scan(save=True, _backfill_retries=0):
                 r["goal"] = "" if STATUS_LINE_RE.search(r["comment"]) else r["comment"]
                 if save:
                     prune_candidates.append((r["id"], remembered, (mr or {}).get("iid")))
+            bot = repo_bot(r["project"])
             r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft")} | {
                 "ref": ref(r["forge"], mr["iid"]), "forge": r["forge"],
                 "author": mr["author"].get("login") or mr["author"]["username"], "role": "author" if mr["author"]["username"] == ME else "review",
@@ -1174,7 +1282,7 @@ def scan(save=True, _backfill_retries=0):
                 "milestone": (mr.get("milestone") or {}).get("title"), "approved_by": mr.get("_approved_by", []),
                 "pipeline_url": (mr.get("head_pipeline") or {}).get("web_url"),
                 "sha": mr.get("sha"), "reviewed_sha": mr.get("_reviewed_sha"),  # the review prompt's {sha} and {last_review_sha}
-                "todo_threads": [thread_line(d) for d in unresolved(mr) if d["notes"][-1]["author"]["username"] not in (ME, BOT)][:40],
+                "todo_threads": [thread_line(d) for d in unresolved(mr) if d["notes"][-1]["author"]["username"] not in (ME, bot)][:40],
                 "failed_jobs": mr.get("_failed_jobs", [])[:40],  # the Resolve threads / Fix CI prompts' {threads} / {failed_jobs}
                 "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable"))}
             r["branch_gone"] = not mr and upstream_gone(r)
@@ -1578,8 +1686,9 @@ def main():
         os.environ.pop("GREENLIGHT_REQUEST", None)  # not for the ADE: a tmux server started here would hand it to every pane
         print(json.dumps(orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"]), indent=1))
         return
-    if cmd == "signoff":  # greenlight.py signoff <project> <iid> <stage>: the user signed off a custom stage on this MR
-        so, k = signoffs(), f"{sys.argv[2]}#{sys.argv[3]}"
+    if cmd == "signoff":  # greenlight.py signoff <project> <iid|@branch> <stage>: the user signed off a custom stage
+        so = signoffs()
+        k = f"{sys.argv[2]}{sys.argv[3]}" if sys.argv[3].startswith("@") else f"{sys.argv[2]}#{sys.argv[3]}"
         so[k] = sorted(set(so.get(k, [])) | {sys.argv[4]})
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "signoffs.json").write_text(json.dumps(so, indent=1))
