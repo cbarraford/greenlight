@@ -370,13 +370,13 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     p.standardError = err
     err.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if d.isEmpty { return }
+        if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: a handler left on re-fires forever (a full core)
         tail.s.append(d)
         if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
     }
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if d.isEmpty { return }
+        if d.isEmpty { h.readabilityHandler = nil; return }
         buf.s.append(d)
         while let nl = buf.s.firstIndex(of: 10) {
             let l = String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self)
