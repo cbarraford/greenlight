@@ -932,7 +932,7 @@ struct Live {
     }
     /// The context readout as a button: its popover has the totals and Compact.
     func ctx<L: View>(@ViewBuilder _ label: () -> L) -> some View {
-        Button { c.ctxOpen.toggle() } label: { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
+        Button { c.ctxOpen.toggle(); c.hint = "" } label: { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: ctxTip(c))).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
     func clearButton<L: View>(@ViewBuilder _ label: () -> L) -> some View {
         Button(action: clear) { label() }.buttonStyle(.plain).modifier(Tip(c: c, text: "Clear the context and start a new conversation (or say “reset”)")).accessibilityLabel("Clear the context")
@@ -1393,8 +1393,7 @@ struct HeaderTips {
 struct VoiceButtons: View, Looked {
     @ObservedObject var v: Voice
     @ObservedObject var c: Core
-    var out = false  // the chat is in its own window
-    var pop: (() -> Void)? = nil  // the chat header's pop-out (or put back), drawn as one more knob
+    var out: Bool { c.chatOut }  // the chat is in its own window
     var nextLook: Look { looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
     var tips: HeaderTips {
         HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out, name: c.name, look: v.look.name, next: nextLook.name)
@@ -1413,7 +1412,7 @@ struct VoiceButtons: View, Looked {
             knob("paintpalette", t.style) { v.look = nextLook }
             Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
                 .buttonStyle(.plain).modifier(Tip(c: c, text: t.voice.help)).accessibilityLabel(t.voice.label)
-            if let pop { knob(out ? "rectangle.righthalf.inset.filled" : "arrow.up.forward.square", t.pop, pop) }
+            knob(out ? "rectangle.righthalf.inset.filled" : "arrow.up.forward.square", t.pop) { c.popChat(!out) }  // its own window, or back
         }
     }
     func knob(_ icon: String, _ t: (help: String, label: String), _ act: @escaping () -> Void) -> some View {
