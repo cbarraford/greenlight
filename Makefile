@@ -4,10 +4,10 @@ NATIVE := $(shell [ "$$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo 
 SWIFTC = DEVELOPER_DIR=/Library/Developer/CommandLineTools $(NATIVE) swiftc
 SWIFT_SRCS = $(wildcard app/Sources/*.swift)
 
-.PHONY: help test lint check-diff coverage setup-hooks test-py test-js test-webkit test-ui bughunt typecheck build restart report sync dev-status
+.PHONY: help test lint check-diff coverage coverage-py coverage-js coverage-swift coverage-all setup-hooks test-py test-js test-webkit test-swift test-ui bughunt typecheck build restart report sync dev-status
 
 help: ## list targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
 test: lint test-py test-js typecheck ## lint, test-py, test-js and typecheck
 
@@ -19,8 +19,19 @@ lint: ## ruff bug/security lint, static safety checks, and shellcheck
 check-diff: ## diff-scoped quality ratchet (stricter lint, mypy, function size, Swift evalJS)
 	$(PY) scripts/check_diff_quality.py
 
-coverage: ## Python tests with combined coverage.xml report
-	$(PY) scripts/run_py_tests.py --coverage coverage.xml
+coverage: coverage-py ## Python tests with combined coverage.xml report (>= 80% gate)
+
+coverage-py: ## Python coverage with subprocess tracking and >= 85% total / >= 80% per-file floor
+	$(PY) scripts/run_py_tests.py --coverage coverage.xml --fail-under 85 --min-file 80
+
+coverage-js: ## Playwright Chromium V8 JS coverage for app/*.html (>= 80% floor)
+	$(PY) scripts/js_coverage.py --fail-under 80 --min-file 80
+
+coverage-swift: ## macOS Swift llvm-cov coverage (--unittest, --vimtest, --attachtest)
+	$(PY) scripts/swift_coverage.py
+
+coverage-all: ## Run Python, JS, and Swift coverage harnesses and print unified summary
+	$(PY) scripts/coverage_summary.py
 
 setup-hooks: ## install versioned .githooks for local pre-commit/pre-push checks
 	chmod +x .githooks/pre-commit .githooks/pre-push
@@ -35,6 +46,12 @@ test-js: ## page tests on Chromium (need playwright-core)
 
 test-webkit: ## page tests on WebKit (matches macOS WKWebView)
 	@fail=0; for t in tests/test_*.cjs; do BROWSER=webkit node "$$t" || { echo "FAIL $$t"; fail=1; }; done; exit $$fail
+
+test-swift: ## compile and run offline Swift unit + vim tests (macOS)
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	$(SWIFTC) -Onone $(SWIFT_SRCS) -o "$$tmp/Greenlight-test" && \
+	"$$tmp/Greenlight-test" --unittest && \
+	"$$tmp/Greenlight-test" --vimtest
 
 test-ui: ## parallel background macOS --uitest end-to-end suite
 	$(PY) tests/test_uitest.py

@@ -15,6 +15,10 @@ import WebKit
 let app = NSApplication.shared
 let delegate = App()
 if CommandLine.arguments.contains("--vimtest") { vimTest() }
+if unittest {
+    app.setActivationPolicy(.accessory)
+    unitTest()
+}
 if selftest {
     CommandLine.arguments.contains("--attachtest") ? attachOnly() : selfTest()
     app.setActivationPolicy(.accessory)
