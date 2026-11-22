@@ -137,8 +137,16 @@ func shellVariable(_ name: String, shell: String, timeout: Double = 5) -> String
     return String(t[a.upperBound..<b.lowerBound]).nilIfEmpty
 }
 /// Read OPENAI_API_KEY again on next use: you may have exported one since launch (Set key… does this). Settings redraws to start it.
-func forgetEnvironmentOpenAIKey() {
-    envKeyQueue.async { envKeyLock.lock(); envKeyRead = (false, nil); envKeyStarted = false; envKeyLock.unlock(); DispatchQueue.main.async { (NSApp.delegate as? App)?.greenlight.objectWillChange.send() } }
+/// When `done` is provided, re-reads immediately on `envKeyQueue` and calls `done(hasKey)` on the main queue.
+func forgetEnvironmentOpenAIKey(_ done: (@Sendable (Bool) -> Void)? = nil) {
+    envKeyQueue.async {
+        envKeyLock.lock(); envKeyRead = (false, nil); envKeyStarted = done != nil; envKeyLock.unlock()
+        let found = done != nil ? readEnvironmentOpenAIKey(ProcessInfo.processInfo.environment) != nil : false
+        DispatchQueue.main.async {
+            (NSApp.delegate as? App)?.greenlight.objectWillChange.send()
+            done?(found)
+        }
+    }
 }
 /// The Keychain calls `keychain` makes; the selftest swaps in fakes.
 struct KeychainOps {
