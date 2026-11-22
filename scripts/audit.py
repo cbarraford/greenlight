@@ -1511,4 +1511,11 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import diag
+    diag.install("audit")
+    op = next((a for a in sys.argv[1:] if a in ("checked-merge", "merge", "publish", "gate")), None)  # known ops only: never a value
+    gate = next((a for a in sys.argv[sys.argv.index("gate") + 1:][:1] if a in ("post", "pr", "push")), None) if op == "gate" else None
+    with diag.span("audit", op=op, gate=gate) as d:
+        rc = main()
+        d.update(rc=rc if isinstance(rc, int) else None, verdict="pass" if not rc else "blocked")
+    sys.exit(rc)

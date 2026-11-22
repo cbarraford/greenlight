@@ -683,7 +683,8 @@ function localGet(k){ try { return localStorage.getItem(k) } catch { return null
 function localSet(k, v){ try { localStorage.setItem(k, v) } catch {} }
 function post(m){ try { webkit.messageHandlers.mc.postMessage(m) } catch {} }
 const unpick = () => { mc.pick([]); post({cmd: "unpick"}) };  // the app clears them in every window
-window.onerror = (m, src, line) => post({cmd: "error", m: `${m} @${line}`});  // into the app's log
+window.onerror = (m, src, line, col, e) => post({cmd: "error", m: `${m} @${line}`, name: e?.name || "Error", line, col});  // into the app's log (the diag trail keeps name/line/col only)
+addEventListener("unhandledrejection", ev => post({cmd: "error", m: `unhandled rejection: ${ev.reason}`, name: ev.reason?.name || "Rejection", line: 0, col: 0}));
 function c(v){ return `var(${v})` }
 function ink(v){ return /^--(orange|yellow|blue|red|green|gray|purple|teal)$/.test(v) ? `var(${v}-ink)` : c(v) }  // state text: the readable shade of the fill
 function tone(t){ return c(TONE[t] || TONE.info) }

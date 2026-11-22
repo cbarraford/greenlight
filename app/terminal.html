@@ -397,7 +397,8 @@ const worn = () => lights === "own" ? (light ? skinLight : skin) : lights === "l
 paint();
 // ponytail: the app always passes its theme's background, so in Greenlight this only fires for a page opened without one; the app re-themes on the next window
 if (own) sys.addEventListener("change", () => { paint(); panes.forEach(p => { try { p.t.renderer.setTheme({cursor: fg, ...colors, background: bg, foreground: fg}); p.t.refresh?.(0, p.t.rows - 1) } catch { } }) });
-window.onerror = (msg, src, line) => post({cmd: "error", text: `${msg} @${line}`});
+window.onerror = (msg, src, line, col, e) => post({cmd: "error", text: `${msg} @${line}`, name: e?.name || "Error", line, col});  // the diag trail keeps name/line/col only
+addEventListener("unhandledrejection", ev => post({cmd: "error", text: `unhandled rejection: ${ev.reason}`, name: ev.reason?.name || "Rejection", line: 0, col: 0}));
 const $ = id => document.getElementById(id), el = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || "", innerHTML: html || ""});
 const svg = (d, w = 14, cls = "") => `<svg class="${cls}" width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const svg16 = (d, w = 16) => `<svg width="${w}" height="${w}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;

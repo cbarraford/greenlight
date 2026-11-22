@@ -17,6 +17,7 @@ import contextlib, fcntl, glob, hashlib, json, os, random, re, signal, subproces
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import attach  # noqa: E402
 import decisions  # noqa: E402
+import diag  # noqa: E402
 import harness  # noqa: E402
 import auto  # noqa: E402
 
@@ -330,8 +331,24 @@ THINK_STATUS = {"Thinking", "Reasoning"}  # claude/pi/opencode thinking, codex's
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
 
 
+TURN = {}  # this process's turn, for its diag event: {harness, model, t, norm}
+
+
 def emit(**e):
     print(json.dumps(e), flush=True)
+    if e.get("e") == "done":  # one chat_turn per answered message: harness, timing, tokens, cost; never the text
+        diag.event("chat_turn", ok=bool(e.get("ok")), harness=TURN.get("harness"), model=TURN.get("model"),
+                   context=e.get("context") if isinstance(e.get("context"), int) else None, ms=e.get("ms"),
+                   **tokens(TURN.get("norm")), secs=time.monotonic() - TURN["t"] if "t" in TURN else None)
+
+
+def tokens(norm):
+    """A turn's diag fields from its Norm: in/out tokens, and cost in cents (clean() keeps 3 decimals, so USD would lose it)."""
+    if norm is None:
+        return {}
+    num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0  # noqa: E731
+    out = num(norm.tout) or num(norm.out) + num(norm.msg_out)
+    return {"in_tokens": num(norm.tin) or None, "out_tokens": out or None, "cost_cents": num(norm.cost) * 100 or None}
 
 
 def short(s, n=160):
@@ -450,6 +467,23 @@ def call(name, inp):
     return f"{name.split('__')[-1]}({short(a, 100)})"
 
 
+def codex_base(thread):
+    """The thread's (input, output) token totals so far, from its rollout's last token_count; None if unread."""
+    try:
+        f = max(glob.glob(os.path.join(CODEX_SESSIONS, "*", "*", "*", f"rollout-*-{glob.escape(thread)}.jsonl")), key=os.path.getmtime)
+        with open(f, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(f) - (1 << 20)))
+            for line in reversed(fh.read().splitlines()):
+                if b'"token_count"' in line:
+                    with contextlib.suppress(ValueError):
+                        t = ((json.loads(line).get("payload") or {}).get("info") or {}).get("total_token_usage") or {}
+                        if isinstance(t.get("input_tokens"), int):
+                            return t["input_tokens"], t.get("output_tokens") or 0
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None
+
+
 def codex_usage(thread, total=None):
     """(context, window) from the thread's rollout log, else (None, None).
     total: turn.completed's input_tokens. The token_count must be this turn's (its running total equals it), not one still in Codex's write queue.
@@ -492,6 +526,9 @@ class Norm:
         self.last_tps = 0.0
         self.context = 0
         self.window = None
+        self.tin = self.tout = 0  # the turn's tokens, summed over its requests: for diag's chat_turn and automation
+        self.cost = None  # the turn's USD, from the harnesses that report one (Claude)
+        self.base = (0, 0)  # codex: the thread's (in, out) totals before this turn, as its usage is the thread's running total; None: unknown
         self.thread = None  # codex's thread id, for its rollout log
         self.text = ""  # last text block, the fallback reply
         self.reply = None  # what the turn ended on, when it ended well: a question if it closes with an Options line
@@ -636,6 +673,10 @@ class Norm:
         elif t == "result":
             mu = next(iter((d.get("modelUsage") or {}).values()), {})
             self.window = mu.get("contextWindow") or self.window
+            u = d.get("usage") or {}
+            self.tin, self.tout = self.tin + self.usage(u), self.tout + (u.get("output_tokens") or 0)  # +=: a retry's run adds to the first's
+            if isinstance(d.get("total_cost_usd"), (int, float)):
+                self.cost = (self.cost or 0) + d["total_cost_usd"]
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
                         "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
         return out
@@ -676,6 +717,8 @@ class Norm:
             out.append({"e": "status", "text": short(d["message"], 80)})
         elif t == "turn.completed":
             total = d.get("usage", {}).get("input_tokens")
+            if self.base is not None and total and total >= self.base[0]:  # less: another thread's rollout
+                self.tin, self.tout = total - self.base[0], (d.get("usage", {}).get("output_tokens") or 0) - self.base[1]
             ctx, self.window = codex_usage(self.thread, total)
             if ctx is None and self.thread:  # Codex writes its rollout from a queue: give the last token_count a moment
                 time.sleep(0.1)
@@ -707,6 +750,7 @@ class Norm:
         elif t == "step_finish":
             tk = pt.get("tokens") or {}
             self.context = tk.get("input", 0) + (tk.get("cache") or {}).get("read", 0) + (tk.get("cache") or {}).get("write", 0) or self.context
+            self.tin, self.tout = self.tin + (tk.get("input", 0) + (tk.get("cache") or {}).get("read", 0) + (tk.get("cache") or {}).get("write", 0)), self.tout + tk.get("output", 0)
             out.append({"e": "usage", "context": self.context})
         elif t == "error":
             e = d.get("error") or {}
@@ -744,6 +788,7 @@ class Norm:
             self.error = d.get("message")
         elif t == "result":
             st = d.get("stats") or {}  # its input_tokens sum every request of the run, so they aren't the context size: none shown
+            self.tin, self.tout = self.tin + (st.get("input_tokens") or 0), self.tout + (st.get("output_tokens") or 0)
             ok = d.get("status") == "success"
             text = self.text if ok else (d.get("error") or {}).get("message") or getattr(self, "error", None) or self.text or "Gemini CLI failed"
             out.append({"e": "done", "ok": ok, "text": text, "context": self.context, "window": None, "ms": st.get("duration_ms")})
@@ -766,6 +811,7 @@ class Norm:
             usage = step.get("usage") or {}
             if usage:
                 self.context = usage.get("input_tokens", 0) + usage.get("cache_read_tokens", 0) or self.context
+                self.tin, self.tout = self.tin + usage.get("input_tokens", 0) + usage.get("cache_read_tokens", 0), self.tout + usage.get("output_tokens", 0)
                 out.append({"e": "usage", "context": self.context})
         elif event == "step_update" and step.get("step_type") == "tool":
             self.gem_open = False
@@ -809,6 +855,7 @@ class Norm:
         elif t == "message_end" and m.get("role") == "assistant":
             u = m.get("usage") or {}
             self.context = u.get("input", 0) + u.get("cacheRead", 0) + u.get("cacheWrite", 0) or self.context
+            self.tin, self.tout = self.tin + u.get("input", 0) + u.get("cacheRead", 0) + u.get("cacheWrite", 0), self.tout + u.get("output", 0)
             self.text = "".join(c.get("text", "") for c in m.get("content", []) if c.get("type") == "text") or self.text
             if m.get("stopReason") in ("error", "aborted"):
                 self.error = m.get("errorMessage") or m["stopReason"]
@@ -1464,6 +1511,7 @@ def discard_session_for_turn(reservation):
 
 def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
     engine, model = harness.route(model)
+    TURN.update(harness=engine, model=model, t=time.monotonic())
     stored = []
     if files:
         try:
@@ -1573,6 +1621,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                                    images=attach.images(stored))
     emit(e="start", engine=engine, model=model or "default")
     norm, guard = Norm(verbose), watch_for_attachments()
+    TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
     try:
         cmd, t = mk(sid, text)
         new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True, request_guard=request_guard)
@@ -1617,6 +1666,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         seen_forget()
         seen = seen_load(key)
         text = wrap(board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
+        norm.base = (0, 0)  # a new thread: its totals start at 0
         cmd, t = mk(None, text)
         new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
     if err == "model failed":
@@ -1750,4 +1800,5 @@ def main():
 
 
 if __name__ == "__main__":
+    diag.install("chat")
     main()
