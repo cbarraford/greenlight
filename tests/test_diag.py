@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import diag  # noqa: E402
 
 diag.app_path = lambda: Path(HOME) / "no-app.jsonl"  # don't read the real app's log
+diag.crash_dir = lambda: Path(HOME) / "crashes"  # nor the real crash reports
 PRIVATE = ["ghp_" + "A" * 36, "/Users/someone/src/x", "dev@corp.test", "zebracornium project", "zebracornium", "Fix login for ACME users"]
 
 
@@ -98,6 +99,40 @@ for _ in range(300):
 files = sorted(p.name for p in diag.path().parent.glob("events.jsonl*"))
 assert files == ["events.jsonl", "events.jsonl.1", "events.jsonl.2", "events.jsonl.3"], files
 assert diag.path().stat().st_size < 2000 + 200
+# doctor: fake forges on PATH (glab logged out), an automation whose timer never ticked, a pid file of a dead process
+bin_ = Path(HOME, "bin"); bin_.mkdir()
+(bin_ / "glab").write_text("#!/bin/sh\necho '401 Unauthorized' >&2; exit 1\n")
+(bin_ / "gh").write_text(f"#!/bin/sh\n[ \"$1\" = auth ] && exit 0\necho \"$@\" > {HOME}/gh.args; cat > {HOME}/gh.body; echo https://github.com/x/y/issues/9\n")
+for x in ("glab", "gh"):
+    (bin_ / x).chmod(0o755)
+os.environ["PATH"] = f"{bin_}:/usr/bin:/bin"
+Path(HOME, "config.json").write_text(json.dumps({"agents": ["codex"]}))
+Path(HOME, "automations.json").write_text(json.dumps({"nightly": {"schedule": "0 3 * * *"}}))
+Path(HOME, "auto").mkdir(exist_ok=True)
+dead = subprocess.Popen(["true"]); dead.wait()
+Path(HOME, "auto", "nightly.pid").write_text(str(dead.pid))
+Path(HOME, "orchestrator-phase-1.pid").write_text("{}")  # no pid in it: skipped, not a crash
+d = {c["check"]: c for c in diag.doctor()["checks"]}
+assert d["glab_auth"] == {"check": "glab_auth", "ok": False, "rc": 1, "msg_class": "auth"}, d
+assert d["gh_auth"]["ok"] and d["agent_codex"]["ok"] is False and d["disk"]["ok"] and d["home_writable"]["ok"], d
+assert d["auto_timer"] == {"check": "auto_timer", "ok": False, "state": "missing"} and d["stale_pids"]["n"] == 1, d
+import auto  # noqa: E402
+auto.tick()  # a 3am automation isn't due now, but the tick still leaves its heartbeat
+assert {c["check"]: c for c in diag.doctor()["checks"]}["auto_timer"]["state"] == "fresh"
+
+# crash reports: the crashed thread's frames by image name and symbol; a frame naming a path is dropped
+crash = Path(HOME, "crashes"); crash.mkdir()
+(crash / "Greenlight-2026-11-21-101010.ips").write_text(json.dumps({"build_version": "abc1234"}) + "\n" + json.dumps({
+    "codeSigningID": "dev.greenlight.app", "exception": {"type": "EXC_BAD_ACCESS", "signal": "SIGSEGV"}, "faultingThread": 1,
+    "usedImages": [{"name": "Greenlight", "path": "/Users/someone/Applications/Greenlight.app"}],
+    "threads": [{"frames": []}, {"frames": [{"imageIndex": 0, "symbol": "AppDelegate.scan()"},
+                                            {"imageIndex": 0, "symbol": "/Users/someone/x"}, {"imageIndex": 7, "imageOffset": 16}]}]}))
+(crash / "Greenlight-bad.ips").write_text("not json")
+(crash / "GreenlightPhotos-2026.ips").write_text("{}\n" + json.dumps({"codeSigningID": "com.other.photos"}))
+c = diag.crashes(0)
+assert c == [{"ts": c[0]["ts"], "v": "abc1234", "exc": "EXC_BAD_ACCESS", "signal": "SIGSEGV",
+              "frames": ["Greenlight:AppDelegate.scan()", "?:0x10"]}], c
+
 # export: a bundle re-checks every event, and leaves out one that now hits (a phone-shaped token, a term added to leak.re since)
 diag.MAX = 5 << 20
 diag.event("probe", name="555-234-5678")  # a token by shape, a phone number by audit's patterns
@@ -113,7 +148,8 @@ text = json.dumps(b)
 assert "555-234-5678" not in text and "quokka" not in text and "a@b.co" not in text and "zebracorn" not in text, text[-800:]
 assert b["manifest"]["left_out"] == 1 and any(e.get("name") == "TypeError" for e in b["events"]), b["manifest"]
 assert not any("to" in e for e in b["events"] if e.get("kind") == "x")  # the app's field failed the schema, so it went
-assert set(b) == {"manifest", "summary", "errors", "events"} and "top_errors" not in b["summary"]
+assert set(b) == {"manifest", "summary", "doctor", "errors", "events"} and "top_errors" not in b["summary"]
+assert b["summary"]["crashes"][0]["exc"] == "EXC_BAD_ACCESS" and "someone" not in text
 
 # report: the user's own text is checked too, and blocks; a preview files nothing; --execute runs gh on the protocol's repo
 r = diag.report("Crash on scan", "my email is dev@corp.test")
@@ -122,10 +158,6 @@ assert diag.report("quokka broke", "")["blocked"] == "title"
 r = diag.report("Crash on scan", "It crashed after Rescan.")
 assert r["ok"] and r["preview"] and r["body"].startswith("It crashed after Rescan.") and len(r["body"]) <= diag.ISSUE_MAX
 assert Path(r["bundle"]).exists() and oct(Path(r["bundle"]).stat().st_mode & 0o777) == "0o600"
-bin_ = Path(HOME, "bin"); bin_.mkdir()
-(bin_ / "gh").write_text(f"#!/bin/sh\necho \"$@\" > {HOME}/gh.args; cat > {HOME}/gh.body; echo https://github.com/x/y/issues/9\n")
-(bin_ / "gh").chmod(0o755)
-os.environ["PATH"] = f"{bin_}:{os.environ['PATH']}"
 r = diag.report("Crash on scan", "It crashed after Rescan.", execute=True)
 assert r["filed"] and r["url"] == "https://github.com/x/y/issues/9", r
 assert Path(HOME, "gh.args").read_text().split()[:4] == ["issue", "create", "--repo", diag.REPO]

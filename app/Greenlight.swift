@@ -348,6 +348,41 @@ enum Diag {
         FileManager.default.createFile(atPath: marker, contents: Data(v.utf8))
         let os = ProcessInfo.processInfo.operatingSystemVersion
         event("app_start", ["macos": "\(os.majorVersion).\(os.minorVersion)", "host_kind": host.isEmpty || host == "local" ? "local" : "remote"])
+        Thread.detachNewThread(watch)
+    }
+    /// Pings the main thread every second: a reply later than 2s is a `hang`, recorded once it's back
+    /// (one that never ends is a kill, which the next launch's prev_crash shows). Every 5 min a `sample` of memory and CPU.
+    static func watch() {
+        let t0 = Date()
+        var lastCPU = cpu(), lastAt = t0, n = 0
+        while true {
+            let sent = Date(), back = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { back.signal() }
+            if back.wait(timeout: .now() + 2) == .timedOut {
+                back.wait()
+                event("hang", ["secs": (Date().timeIntervalSince(sent) * 10).rounded() / 10])
+            }
+            Thread.sleep(forTimeInterval: 1)
+            n += 1
+            if n % 300 == 0 {
+                let c = cpu(), wall = Date().timeIntervalSince(lastAt)
+                event("sample", ["rss_mb": rss() >> 20, "cpu_pct": ((c - lastCPU) / max(wall, 1) * 1000).rounded() / 10,
+                                 "up_mins": Int(Date().timeIntervalSince(t0) / 60)])
+                lastCPU = c; lastAt = Date()
+            }
+        }
+    }
+    static func cpu() -> Double {
+        var r = rusage(); getrusage(RUSAGE_SELF, &r)
+        return Double(r.ru_utime.tv_sec + r.ru_stime.tv_sec) + Double(r.ru_utime.tv_usec + r.ru_stime.tv_usec) / 1e6
+    }
+    static func rss() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Int(info.resident_size) : 0
     }
 }
 
@@ -370,13 +405,13 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     p.standardError = err
     err.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if d.isEmpty { return }
+        if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: a handler left on re-fires forever (a full core)
         tail.s.append(d)
         if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
     }
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if d.isEmpty { return }
+        if d.isEmpty { h.readabilityHandler = nil; return }
         buf.s.append(d)
         while let nl = buf.s.firstIndex(of: 10) {
             let l = String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self)
