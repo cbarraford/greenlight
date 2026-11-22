@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """diag.py: free text never reaches the trail, hashes correlate, spans and uncaught errors record, rotation caps size.
 python3 tests/test_diag.py"""
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -141,6 +143,28 @@ assert text == "warning: plain stderr\n42\nAll green." and tok == {"in_tokens": 
 assert auto.reply("claude", "Error: not logged in") == ("Error: not logged in", {})
 assert auto.reply("codex", '{"type": "item.started", "item": {"type": "command_execution"}}\nboom') == ("boom", {})  # a parser KeyError: the line is skipped
 
+# end to end: a fake claude on PATH streams JSON; the run's record, log and event carry tokens, and a limit still falls back
+(bin_ / "claude").write_text("#!/bin/sh\ncat >/dev/null\necho 'note: plain stderr' >&2\n[ -f %s/limit ] && { echo \"You've hit your usage limit\" >&2; exit 1; }\n"
+                             "cat <<'J'\n%s\nJ\n" % (HOME, claude))
+(bin_ / "codex").write_text("#!/bin/sh\ncat >/dev/null\necho 'codex says done'\n")
+for x in ("claude", "codex"):
+    (bin_ / x).chmod(0o755)
+os.environ["PATH"] = f"{bin_}:/usr/bin:/bin"
+Path(HOME, "automations.json").write_text(json.dumps({"t": {"schedule": "0 3 * * *", "prompt": "hi", "provider": "claude", "model": "opus"}}))
+auto.execute("t")
+r = json.loads(Path(HOME, "auto", "runs.jsonl").read_text().splitlines()[-1])
+assert (r["status"], r["engine"], r["in_tokens"], r["out_tokens"], r["cost_cents"], r["model"]) == ("ok", "claude", 100, 7, 1.23, "opus"), r
+assert Path(r["log"]).read_text() == "$ claude\nnote: plain stderr\nAll green.\n[exit 0]\n", Path(r["log"]).read_text()
+ev = [e for e in diag.read(0) if e["kind"] == "automation"][-1]
+assert (ev["in_tokens"], ev["out_tokens"], ev["cost_cents"], ev["model"]) == (100, 7, 1.23, "opus"), ev
+assert diag.summary(0)["usage"]["claude.opus"]["runs"] == 1
+assert diag.automations()[-1]["in_tokens"] == 100
+Path(HOME, "limit").touch()
+auto.execute("t")
+r = json.loads(Path(HOME, "auto", "runs.jsonl").read_text().splitlines()[-1])
+assert (r["status"], r["engine"], r["summary"]) == ("ok", "codex", "codex says done") and "in_tokens" not in r, r
+os.environ["PATH"] = f"{bin_}:/usr/bin:/bin"
+
 # codex: a resumed thread's usage is the thread's total, so the turn's is the difference from its rollout's last token_count
 import chat  # noqa: E402
 chat.CODEX_SESSIONS = str(Path(HOME, "codex"))
@@ -151,6 +175,11 @@ n = chat.Norm()
 n.base = chat.codex_base("th1")
 n.codex({"type": "turn.completed", "usage": {"input_tokens": 1600, "output_tokens": 160}})
 assert (n.tin, n.tout) == (600, 60) and chat.codex_base("none") is None, (n.tin, n.tout)
+chat.TURN.update(harness="codex", model="gpt", t=0, norm=n)
+with contextlib.redirect_stdout(io.StringIO()):
+    chat.emit(e="done", ok=True, text="x", context=5, window=None, ms=None)
+ev = [e for e in diag.read(0) if e["kind"] == "chat_turn"][-1]
+assert (ev["harness"], ev["in_tokens"], ev["out_tokens"]) == ("codex", 600, 60) and "cost_cents" not in ev, ev
 
 # crash reports: the crashed thread's frames by image name and symbol; a frame naming a path is dropped
 crash = Path(HOME, "crashes"); crash.mkdir()
