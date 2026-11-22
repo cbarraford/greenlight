@@ -115,24 +115,37 @@ def main():
         ui1.action("closeSettings")
         print(f"ok  Settings window screenshot captured ({r['width']}x{r['height']}, {r['bytes']} bytes)")
 
-        # 4. Second concurrent instance (adversarial XSS fixture): real macOS WKWebView stays clean
+        # 4. Second concurrent instance (adversarial XSS fixture): real macOS WKWebView stays clean & localStorage is isolated
+        ui1.eval("dashboard", "localStorage.setItem('uitest_iso', 'from_ui1')")
         r = ui2.action("floor", to="center")
         assert r["ok"], r
         ui2.wait_for("dashboard", "document.querySelectorAll('#main .cell').length >= 1", timeout=15)
+        iso = ui2.eval("dashboard", "localStorage.getItem('uitest_iso')")
+        assert iso["ok"] and iso["result"] is None, f"localStorage leaked across --uitest instances: {iso}"
         pwn = ui2.eval("dashboard", "window.__pwned || null")
         assert pwn["ok"] and pwn["result"] is None, f"XSS executed in real WKWebView: {pwn}"
 
-        # 5. Zero uncaught JS errors in either instance
+        # 5. Send a chat turn while chat is not focused (triggers Core.finish -> Core.notify); must NOT SIGABRT!
+        r = ui1.action("sendChat", text="status")
+        assert r["ok"], r
+        time.sleep(1.5)
+        assert ui1.is_alive() and ui1.ping()["ok"], "Greenlight crashed after sendChat (Core.notify under --uitest)"
+        print("ok  sendChat completed cleanly without Core.notify SIGABRT")
+
+        # 6. Zero uncaught JS errors in either instance
         st1, st2 = ui1.state(), ui2.state()
         assert st1["ok"] and not st1["webErrors"].get("dashboard") and not st1["webErrors"].get("terminal"), st1["webErrors"]
         assert st2["ok"] and not st2["webErrors"].get("dashboard") and not st2["webErrors"].get("terminal"), st2["webErrors"]
         print(f"ok  zero WKWebView page errors across both parallel instances (shots in {shot_dir})")
 
         tmux_sock_1 = ui1.tmux_socket
+        root_1, root_2 = ui1.root, ui2.root
 
-    # 6. Verify clean teardown killed the isolated tmux server
+    # 7. Verify clean teardown killed the isolated tmux server and did not leak tempdirs
     check = subprocess.run(["tmux", "-L", tmux_sock_1, "list-sessions"], capture_output=True, text=True)
     assert check.returncode != 0, f"isolated tmux server {tmux_sock_1} survived stop()"
+    time.sleep(0.5)
+    assert not root_1.exists() and not root_2.exists(), f"leaked uitest tempdirs: {root_1.exists()}, {root_2.exists()}"
     print("ok  isolated tmux server & temp directories cleaned up")
     print("all uitest checks passed")
 

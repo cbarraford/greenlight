@@ -39,8 +39,12 @@ final class UITestServer {
     }
     """
 
+    /// Per-process in-memory web storage so `--uitest` instances never share `localStorage`/cookies with each other or the real app.
+    private static let nonPersistentStore = WKWebsiteDataStore.nonPersistent()
+
     static func installErrorCollector(_ cfg: WKWebViewConfiguration) {
         guard uitest else { return }
+        cfg.websiteDataStore = nonPersistentStore
         let script = WKUserScript(source: errorCollectorJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         cfg.userContentController.addUserScript(script)
     }
