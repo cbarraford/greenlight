@@ -2658,7 +2658,7 @@ struct ContextButton: View, Looked {
         // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
         let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
         let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
-        return Button { c.ctxOpen.toggle(); c.hint = "" } label: {  // the hint would cover the popover
+        return Button { c.ctxOpen.toggle(); c.hint = c.ctxOpen ? "" : ctxTip(c) } label: {  // the hint would cover the popover; closed, it says it again
             HStack(spacing: Theme.sp1) {
                 ZStack {
                     Circle().stroke(edge, lineWidth: 2)
