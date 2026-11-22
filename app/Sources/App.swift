@@ -2230,22 +2230,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.ignoresMouseEvents = true
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         w.level = .popUpMenu  // over Settings and the chat's own window, like a tooltip
+        w.hidesOnDeactivate = false  // a panel hides with the app by default: hovering Greenlight from another app still hints
         return w
     }()
     var hintSink: AnyCancellable?
 
     func showTab(_ text: String) {
         guard !text.isEmpty else { tab.orderOut(nil); return }
-        let host = NSHostingView(rootView: HintTab(text: text))
-        let m = NSEvent.mouseLocation, screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
+        let host = NSHostingView(rootView: HintTab(text: text)), size = hintSize(text)
+        // by the cursor; the voice-shortcut prompt (from the menu bar's menu) in the middle of the window it brought up
+        let m = greenlight.keying && window.isVisible ? NSPoint(x: window.frame.midX - size.width / 2 - 10, y: window.frame.midY) : NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
         tab.contentView = host
-        tab.setFrame(hintFrame(host.fittingSize, mouse: m, screen: screen?.visibleFrame ?? .infinite), display: true)
+        tab.setFrame(hintFrame(size, mouse: m, screen: screen?.visibleFrame ?? .infinite), display: true)
         tab.orderFront(nil)
     }
-    /// The cursor left every Greenlight window while a hint showed (a control moved or went away under it): drop the hint.
+    /// A hint whose control the cursor can't be on any more: the topmost window under the cursor isn't Greenlight's (it left,
+    /// or another app or Space came to the front mid-hover). The voice-shortcut prompt lasts while Greenlight is the front app.
     var hintStale: Bool {
-        let m = NSEvent.mouseLocation
-        return tab.isVisible && !greenlight.keying && !NSApp.windows.contains { $0 !== tab && $0.isVisible && NSMouseInRect(m, $0.frame, false) }
+        guard tab.isVisible else { return false }
+        if greenlight.keying { return !NSApp.isActive }
+        let n = NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+        return !NSApp.windows.contains { $0 !== tab && $0.isVisible && $0.windowNumber == n }
     }
 
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,

@@ -929,17 +929,22 @@ struct HintTab: View {
         let shape = RoundedRectangle(cornerRadius: Theme.r1)
         HStack(spacing: Theme.sp2) {
             Circle().fill(accent).frame(width: 6, height: 6)
-            Text(text).font(sys(size: Theme.fs1)).foregroundColor(fg).fixedSize()
+            Text(text).font(sys(size: Theme.fs1)).foregroundColor(fg).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
             .background(shape.fill(bg)).overlay(shape.stroke(edge))
             .preferredColorScheme(theme.dark ? .dark : .light)
     }
 }
+/// The hint's size: its one line, or wrapped at 480 pt (a long name), so it never runs off screen.
+func hintSize(_ text: String) -> NSSize {
+    let s = NSHostingController(rootView: HintTab(text: text)).sizeThatFits(in: NSSize(width: 480, height: 1000))
+    return NSSize(width: ceil(s.width), height: ceil(s.height))
+}
 /// Where the hint goes: just below and right of the cursor (clear of the arrow), as a tooltip does; above it near the
-/// screen's bottom, and shifted left near its right edge, so it's never off screen.
+/// screen's bottom (high enough to clear most of a control the cursor is in), and shifted left near its right edge, so it's never off screen.
 func hintFrame(_ size: NSSize, mouse m: NSPoint, screen v: NSRect) -> NSRect {
     var r = NSRect(x: m.x + 10, y: m.y - 22 - size.height, width: size.width, height: size.height)
-    if r.minY < v.minY + 4 { r.origin.y = m.y + 8 }
+    if r.minY < v.minY + 4 { r.origin.y = m.y + 24 }
     r.origin.x = max(v.minX + 4, min(r.origin.x, v.maxX - size.width - 4))
     return r
 }
@@ -2238,7 +2243,7 @@ struct ChatView: View, Looked {
                 title
                 Spacer(minLength: Theme.sp2)
                 ViewThatFits { HStack(spacing: Theme.sp2) { meta }.fixedSize(); EmptyView() }.layoutPriority(-1)  // a narrow pane drops the host, never clips
-                if c.session == 0 { VoiceButtons(v: c.voice, c: c, out: c.chatOut, pop: { c.popChat(!c.chatOut) }) }  // voice and its own window: the main chat's
+                if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
             if lk.id == "editorial" { masthead }
@@ -2653,7 +2658,7 @@ struct ContextButton: View, Looked {
         // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
         let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
         let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
-        return Button { c.ctxOpen.toggle() } label: {
+        return Button { c.ctxOpen.toggle(); c.hint = "" } label: {  // the hint would cover the popover
             HStack(spacing: Theme.sp1) {
                 ZStack {
                     Circle().stroke(edge, lineWidth: 2)
