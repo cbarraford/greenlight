@@ -901,6 +901,128 @@ def test_verification_gates_and_nightly_fault_isolation():
         assert "`baseline`:** `error`" in latest and "Clean run" not in latest, latest
 
 
+def test_upgrades_pull_playwright_stub_backend_fuzz_and_flows():
+    import datetime as _dt
+    import dash as _dash
+
+    # 1. --pull & NODE_PATH in launchd plist + _pull_repo_if_clean branches
+    xml = bughunt.build_launchd_plist(ROOT, hour=2, minute=30, max_prs=1, node_path="/opt/pw/node_modules")
+    pl = plistlib.loads(xml.encode())
+    assert "--pull" in pl["ProgramArguments"]
+    assert pl["EnvironmentVariables"]["NODE_PATH"] == "/opt/pw/node_modules"
+
+    assert bughunt._pull_repo_if_clean(ROOT, "HEAD") == "skip_head"
+    with mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="feature\n", stderr="")):
+        assert bughunt._pull_repo_if_clean(ROOT, "origin/main") == "skip_branch"
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="main\n", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout=" M dirty.py\n", stderr=""),
+    ]):
+        assert bughunt._pull_repo_if_clean(ROOT, "origin/main") == "skip_dirty"
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="main\n", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="Already up to date.\n", stderr=""),
+    ]):
+        assert bughunt._pull_repo_if_clean(ROOT, "origin/main") == "pulled"
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=OSError("no git")):
+        assert bughunt._pull_repo_if_clean(ROOT, "origin/main") == "pull_failed"
+
+    # 2. Scripted UI flows detect stuck spinners + narrow layout issues cleanly
+    class _StuckSpinnerSession(_FakeSession):
+        def eval(self, target, js, record=True):
+            if "ui.snap.pucks[0]" in js:
+                return {"ok": True, "result": "fix-auth"}
+            if "ui.page.loading" in js:
+                return {"ok": True, "result": ["workspace page still loading"]}
+            return super().eval(target, js, record=record)
+
+    t_seq = iter([0.0, 10.0])
+    with _StuckSpinnerSession(layout_issues=["empty state clipped under #dock"]) as sess, \
+         mock.patch.object(bughunt.time, "monotonic", side_effect=lambda: next(t_seq, 20.0)), \
+         mock.patch.object(bughunt.time, "sleep", return_value=None):
+        s_hits = bughunt._run_scripted_flows(sess, "default", set(), None)
+        oracles = {h["oracle"] for h in s_hits}
+        assert "hang" in oracles and "layout_issue" in oracles, s_hits
+
+    # 3. Mode-aware offline claude stub handles stream-json, Insights JSON, ask_user array, and suggest plain text
+    tmp_stub = Path(tempfile.mkdtemp(prefix="gl-stub-mode-"))
+    try:
+        uitest._install_stub_harnesses(tmp_stub)
+        cl = str(tmp_stub / "claude")
+        p_stream = subprocess.run([cl, "-p", "--output-format", "stream-json"], input="hi", capture_output=True, text=True, check=True)
+        lines = [json.loads(ln) for ln in p_stream.stdout.splitlines() if ln.strip()]
+        assert len(lines) == 2 and lines[1]["type"] == "result", lines
+
+        p_design = subprocess.run([cl, "-p"], input="Return ONLY JSON for Insights", capture_output=True, text=True, check=True)
+        lay = _dash.validate(json.loads(p_design.stdout))
+        assert len(lay["tiles"]) == 1 and lay["tiles"][0]["widget"] == "note", lay
+
+        p_ask = subprocess.run([cl, "-p"], input="Return ONLY a JSON array of strings", capture_output=True, text=True, check=True)
+        opts = json.loads(p_ask.stdout)
+        assert isinstance(opts, list) and len(opts) == 2, opts
+
+        p_sug = subprocess.run([cl, "-p"], input="Write the ONE prompt", capture_output=True, text=True, check=True)
+        lbl, body = _dash.split_label(p_sug.stdout)
+        assert lbl == "Check workspace" and "tests" in body, (lbl, body)
+    finally:
+        shutil.rmtree(tmp_stub, ignore_errors=True)
+
+    # 4. Deterministic backend parser/validator fuzzer passes cleanly on real parsers & reports exceptions
+    assert bughunt.run_backend_fuzz(seed=42) == []
+
+    def boom(_x):
+        raise ValueError("bad parser state")
+
+    with mock.patch.object(bughunt, "_backend_fuzz_cases", return_value=[("dash.py:validate", boom, ({},))]):
+        bf_hits = bughunt.run_backend_fuzz(seed=1)
+        assert len(bf_hits) == 1 and bf_hits[0]["oracle"] == "python_exception" and bf_hits[0]["reproducible"] is True
+
+    # 5. Track B memory (open PR titles), rotating daily focus, and compact diff stat
+    with mock.patch.object(bughunt.shutil, "which", return_value="/usr/bin/gh"), \
+         mock.patch.object(bughunt, "_gh_repo_args", return_value=["-R", "acme/gl"]), \
+         mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess(
+             [], 0, stdout=json.dumps([{"title": "[Nightly Bug Hunt] Existing issue"}]), stderr="",
+         )):
+        titles = bughunt.fetch_open_pr_titles(ROOT)
+        assert titles == ["[Nightly Bug Hunt] Existing issue"]
+
+    with mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="abc1234 fix\n a.py | 2 +-\n", stderr="")):
+        ds = bughunt._get_recent_diff_stat(ROOT, [{"sha": "abc1234", "subject": "fix", "files": ["a.py"]}])
+        assert "abc1234 fix" in ds
+
+    f_d1 = bughunt._daily_llm_focus(_dt.date(2026, 11, 22))
+    f_d2 = bughunt._daily_llm_focus(_dt.date(2026, 11, 23))
+    assert f_d1 != f_d2
+    prompt = bughunt._build_llm_explorer_prompt("- abc fix", Path("/tmp/s"), diff_stat=ds, known_titles=titles, focus_area=f_d1)
+    assert "Recent diff summary" in prompt and "Already tracked open bug-hunter PRs" in prompt and f_d1 in prompt
+
+    # 6. Playwright NODE_PATH auto-detection + WebKit browser probe + baseline inclusion
+    pw_tmp = Path(tempfile.mkdtemp(prefix="gl-pw-detect-"))
+    try:
+        (pw_tmp / "node_modules" / "playwright-core").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"NODE_PATH": ""}, clear=False), \
+             mock.patch.object(bughunt.shutil, "which", return_value="/usr/local/bin/node"):
+            detected = bughunt._detect_playwright_node_path(pw_tmp)
+            assert detected == str(pw_tmp / "node_modules"), detected
+            env_map = bughunt._playwright_env(pw_tmp)
+            assert env_map["NODE_PATH"] == str(pw_tmp / "node_modules")
+        assert bughunt._has_playwright_browser("firefox", pw_tmp) is False
+        with mock.patch.object(bughunt.shutil, "which", return_value="/usr/local/bin/node"), \
+             mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")):
+            assert bughunt._has_playwright_browser("webkit", pw_tmp) is True
+        seen_cmds = []
+        with mock.patch.object(bughunt, "_has_playwright", return_value=True), \
+             mock.patch.object(bughunt, "_has_playwright_browser", return_value=True), \
+             mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt.shutil, "which", return_value="/usr/bin/ruff"), \
+             mock.patch.object(bughunt.subprocess, "run", side_effect=lambda cmd, **_k: (seen_cmds.append(cmd), subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))[1]):
+            assert bughunt.run_baseline(ROOT) == []
+            assert ["make", "test-js"] in seen_cmds and ["make", "test-webkit"] in seen_cmds, seen_cmds
+    finally:
+        shutil.rmtree(pw_tmp, ignore_errors=True)
+
+
 def main():
     test_normalize_and_fingerprint()
     print("ok  normalize & fingerprint")
@@ -938,6 +1060,8 @@ def main():
     print("ok  Track B scoped permissions, blocked detection & report status")
     test_verification_gates_and_nightly_fault_isolation()
     print("ok  app/ verification gates & nightly track fault isolation")
+    test_upgrades_pull_playwright_stub_backend_fuzz_and_flows()
+    print("ok  all 6 bug-hunter upgrades (--pull, oracles, stub, backend fuzz, Track B, WebKit)")
     print("all test_bughunt checks passed")
 
 
