@@ -93,10 +93,10 @@ extension WKWebView {
 }
 
 /// The process that runs a command where greenlight lives: a login shell here (so PATH has glab/gh/orca), or ssh.
-/// Under --uitest on local host, use /bin/sh -c so login profile path_helper cannot reorder stub binaries on PATH.
+/// Under --uitest/--selftest/--attachtest on local host, use /bin/sh -c so login profile path_helper cannot reorder stub or Homebrew binaries on PATH.
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
     if host.isEmpty || host == "local" {
-        if uitest { return ("/bin/sh", ["-c", remote]) }
+        if uitest || selftest { return ("/bin/sh", ["-c", remote]) }
         return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote])
     }
     return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + ["--", host, remote])

@@ -9,7 +9,8 @@ auto-rejects whatever asks permission, gemini auto-approves edits only (`--appro
 config.json `harnesses.<name>.bypass: true` gives that one full access (unattended greenlight work
 needs it: the chat and automations run shell commands).
 pi has no permission gate at all, so it runs only once you set its bypass.
-`harnesses.<name>.bin` overrides where the binary is.
+`harnesses.<name>.bin` overrides where the binary is, `harnesses.<name>.model` the model it runs when none is asked for
+(workspace agents through Orca too: greenlight.orca_agent).
 """
 import os
 import shutil
@@ -72,6 +73,7 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     if system and not h["system"] and not sid:
         text = system + "\n\n" + text
     opt = lambda flag, v: [flag, v] if v else []
+    model = model or conf(name).get("model")  # no model asked for: this agent's own default from config.json
     b = binary(name)
     if name == "claude":
         cmd = [b, "-p", *perms, *(["--output-format", "stream-json", "--verbose", "--include-partial-messages"] if stream else []),

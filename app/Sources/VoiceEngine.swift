@@ -44,6 +44,7 @@ final class Voice: NSObject, ObservableObject {
     let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), lock = NSLock()
     var request: SFSpeechAudioBufferRecognitionRequest?, task: SFSpeechRecognitionTask?, endTurn: DispatchWorkItem?
     var vp = false  // echo cancellation took; without it Chief can't be interrupted (it would hear itself)
+    var inputTapped = false, mixerTapped = false  // avoid lazily opening inputNode/mainMixerNode in stopAll/freshEngine when never tapped
     var waitWord = "One minute"
     var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
@@ -198,8 +199,8 @@ final class Voice: NSObject, ObservableObject {
     /// Only while voice mode is off: play() reads `engine` off the main thread, and bails out first when it's off.
     func freshEngine() {
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        engine.mainMixerNode.removeTap(onBus: 0)
+        if inputTapped { engine.inputNode.removeTap(onBus: 0); inputTapped = false }
+        if mixerTapped { engine.mainMixerNode.removeTap(onBus: 0); mixerTapped = false }
         if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
         player.stop()
         if engine.attachedNodes.contains(player) { engine.detach(player) }
@@ -234,10 +235,12 @@ final class Voice: NSObject, ObservableObject {
             let l = level(m)
             DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
         }
+        inputTapped = true
         try engine.mainMixerNode.tap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
             let l = level(b)
             DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
         }
+        mixerTapped = true
         engine.prepare()
         try engine.start()
     }
@@ -536,8 +539,8 @@ final class Voice: NSObject, ObservableObject {
         task?.cancel(); task = nil
         lock.lock(); request = nil; lock.unlock()
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        engine.mainMixerNode.removeTap(onBus: 0)
+        if inputTapped { engine.inputNode.removeTap(onBus: 0); inputTapped = false }
+        if mixerTapped { engine.mainMixerNode.removeTap(onBus: 0); mixerTapped = false }
         if vp { try? engine.inputNode.setVoiceProcessingEnabled(false); vp = false }
         on = false; transcript = false; ending = false
         heard = ""; caption = ""
