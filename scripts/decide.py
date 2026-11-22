@@ -172,7 +172,7 @@ def local(q, why=None):
     return {**a, "provider": "local", **({"error": why} if why else {})}
 
 
-_BOOL = type(True)
+_BOOL = builtins.bool
 
 
 def finish(q, raw, provider):
@@ -254,7 +254,7 @@ def jev(state, qs, c):
     for n, q in qs.items():
         a = (r.get("answers") or {}).get(names[n]) or {}
         if q["type"] == "bool":
-            if isinstance(a.get("noul"), _BOOL) or not isinstance(a.get("noul"), (int, float)):
+            if isinstance(a.get("noul"), _BOOL) or not isinstance(a.get("noul"), int | float):
                 raise RuntimeError(f"jev: no answer for {n}")
             out[n] = finish(q, a["noul"], "jev")
         elif q["type"] == "choice":
@@ -304,7 +304,7 @@ def haiku_parse(qs, keys, d):
         if not isinstance(a, dict):
             raise RuntimeError(f"haiku: no answer for {n}")
         if q["type"] == "bool":
-            if isinstance(a.get("p_yes"), _BOOL) or not isinstance(a.get("p_yes"), (int, float)):
+            if isinstance(a.get("p_yes"), _BOOL) or not isinstance(a.get("p_yes"), int | float):
                 raise RuntimeError(f"haiku: no answer for {n}")
             out[n] = finish(q, a["p_yes"], "haiku")
         elif q["type"] == "choice":
@@ -373,7 +373,7 @@ def _cache_key(provider, c, state, qs):
 def _cache_get(k):
     try:
         e = json.loads(_cache_file().read_text()).get(k)
-        if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and not isinstance(e.get("t"), _BOOL) and "a" in e and time.time() - e["t"] < CACHE_TTL:
+        if isinstance(e, dict) and isinstance(e.get("t"), int | float) and not isinstance(e.get("t"), _BOOL) and "a" in e and time.time() - e["t"] < CACHE_TTL:
             return e["a"]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
@@ -394,7 +394,7 @@ def _cache_put(k, answers):
                     d = {}
                 now = time.time()
                 d = {x: e for x, e in d.items()
-                     if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) and not isinstance(e.get("t"), _BOOL)
+                     if isinstance(e, dict) and isinstance(e.get("t"), int | float) and not isinstance(e.get("t"), _BOOL)
                      and "a" in e and now - e["t"] < CACHE_TTL}
                 d[k] = {"t": now, "a": answers}
                 if len(d) > CACHE_MAX:

@@ -18,6 +18,7 @@ CLI usage:
     python3 scripts/uitest.py stop       --socket SOCK
 """
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -606,10 +607,8 @@ def main():
         pid = meta.get("pid")
         if isinstance(pid, int) and pid > 0:
             time.sleep(0.3)
-            try:
+            with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
         if meta.get("tmux_socket"):
             subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
         if meta.get("root") and Path(meta["root"]).name.startswith("gl-uitest-"):

@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+from typing import Any
 import sys
 import threading
 import time
@@ -194,7 +195,7 @@ def grammar(text, pucks, focus=None):
     """What the words alone say: {verbs, refs, names, filters, count, tokens, here, why} (why: a reason it must go to Chief)."""
     raw = " ".join(text.split())
     t = POLITE.sub("", raw).strip()
-    g = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
+    g: dict[str, Any] = {"verbs": [], "refs": [], "names": [], "filters": [], "count": None, "tokens": [], "here": False, "why": None}
     if raw.endswith("?") and not REQUEST_PREFIX.search(raw):
         g["why"] = "it's a question or has a condition"
     # the workspaces named outright, longest first, cut out of the text so their words aren't read as anything else

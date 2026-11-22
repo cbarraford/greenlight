@@ -76,7 +76,7 @@ def worktrees():
     paths = [l[9:] for repo in filter(None, repos)
              for l in git(repo, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
     by_len = sorted(set(paths), key=len, reverse=True)
-    owned = {}
+    owned: dict[str, list] = {}
     for p in ps:
         owner = next((w for w in by_len if p["cwd"] == w or p["cwd"].startswith(w + "/")), None)
         if owner is not None:

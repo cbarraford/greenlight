@@ -25,7 +25,7 @@ final class Voice: NSObject, ObservableObject {
             ud.set(look.id, forKey: "stageStyle"); chatLook = look; core?.look += 1
             if stageWebLoaded {
                 stageWeb.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)
-                stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")
+                stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
             }
         }
     }
@@ -67,7 +67,7 @@ final class Voice: NSObject, ObservableObject {
         init(_ u: URL?) { stageURL = u }
         func webView(_ w: WKWebView, didFinish navigation: WKNavigation!) {
             ready = true
-            if let q = queued { queued = nil; w.evaluateJavaScript(q) }
+            if let q = queued { queued = nil; w.evaluateJavaScript(q) }  // safety-ok: queued only by Voice.js() with JSONSerialization args
         }
         func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let u = a.request.url else { decisionHandler(.cancel); return }
@@ -96,7 +96,7 @@ final class Voice: NSObject, ObservableObject {
               let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
         let code = "(s => { \(delegate.themeVars()) \(look.vars) })(document.documentElement.style); \(f)(...\(a))"
         _ = stageWeb
-        if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }
+        if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }  // safety-ok: JSONSerialization args + hardcoded look.vars
     }
     func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way

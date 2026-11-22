@@ -1509,10 +1509,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             self.treesProc = nil
             if out.hasPrefix("{"), let d = out.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-               JSONSerialization.isValidJSONObject(obj),
-               let clean = try? JSONSerialization.data(withJSONObject: obj),
-               let js = String(data: clean, encoding: .utf8) {
-                self.termWebs.forEach { $0.evaluateJavaScript("term.workspaces(\(js))") }
+               JSONSerialization.isValidJSONObject(obj) {
+                self.termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
             }
         })
     }
@@ -1638,7 +1636,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var writtenPath = ""
             ssh("umask 077; d=\"${XDG_RUNTIME_DIR:-/tmp}/greenlight-$(id -u)\"; [ ! -L \"$d\" ] && mkdir -p \"$d\" && chmod 700 \"$d\" && [ -O \"$d\" ] && p=\"$d/\"\(shellQuote(fname)) && base64 -d > \"$p\" && printf '%s\\n' \"$p\"",
                 on: at.host, stdin: data, onLine: { writtenPath = $0 }, onExit: { [weak web] code in
-                web?.evaluateJavaScript("term.filed(\(tid), \(js(code == 0 && !writtenPath.isEmpty ? writtenPath : "")))")
+                web?.callJS("window.term && term.filed", [tid, code == 0 && !writtenPath.isEmpty ? writtenPath : ""])
             })
         case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
             guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),

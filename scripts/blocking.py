@@ -151,7 +151,8 @@ def scan():
         except Exception:  # noqa: BLE001 - ponytail: an MR whose check errored isn't orphaned; a GitLab blip
             return [], False  # shouldn't make a hex, so it's skipped until the next scan
 
-    out, errs = {}, 0
+    out: dict[str, dict] = {}
+    errs = 0
     with ThreadPoolExecutor(8) as ex:
         for (proj, m), (hits, ok) in zip(jobs, ex.map(safe, jobs)):
             if not ok:

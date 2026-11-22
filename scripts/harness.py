@@ -13,11 +13,12 @@ pi has no permission gate at all, so it runs only once you set its bypass.
 """
 import os
 import shutil
+from typing import Any
 
 from greenlight import CONFIG
 
 # safe/bypass: permission args. system: has a system-prompt flag (else it rides in the first message).
-H = {
+H: dict[str, dict[str, Any]] = {
     "claude": {"safe": ["--permission-mode", "acceptEdits"], "bypass": ["--permission-mode", "bypassPermissions"], "system": True},
     "codex": {"safe": ["-c", "sandbox_mode=workspace-write"], "bypass": ["--dangerously-bypass-approvals-and-sandbox"], "system": False},
     "opencode": {"safe": [], "bypass": ["--auto"], "system": False},
