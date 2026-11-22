@@ -1,0 +1,23 @@
+{
+  "greenlight-quality-guards": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ../scripts/agent_hook.py --agy-pre-tool",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 ../scripts/agent_hook.py --agy-stop",
+        "timeout": 30
+      }
+    ]
+  }
+}

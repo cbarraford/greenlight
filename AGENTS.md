@@ -1,6 +1,6 @@
-# Greenlight: notes for coding agents
+# Greenlight: notes & quality standards for coding agents
 
-Read by Codex, agy and other `AGENTS.md` harnesses; Claude Code reads it through `CLAUDE.md`, Gemini CLI through `GEMINI.md`.
+Read by Codex, Antigravity (`agy`), and other `AGENTS.md` harnesses; Claude Code reads it through `CLAUDE.md`, Gemini CLI through `GEMINI.md`.
 The user-facing docs are `README.md` (setup, layout, tests) and `SKILL.md` (how the skill runs).
 
 ## Troubleshooting: read the diagnostic trail first
@@ -15,7 +15,7 @@ python3 scripts/diag.py tail -n 50 [--kind cmd] [--since 1h] [--run ID]   # raw 
 python3 scripts/diag.py doctor               # setup checks: glab/gh auth, agent CLIs, disk, automations timer, dead pid files
 ```
 
-Use `uv run python` in place of `python3` when uv is there. On a remote host (the app's `GREENLIGHT_HOST`), run these on
+Use `uv run --no-project python` in place of `python3` when uv is there. On a remote host (the app's `GREENLIGHT_HOST`), run these on
 the host: the checkout is `~/.claude/skills/greenlight`.
 
 **Where it lives**
@@ -54,8 +54,31 @@ without the user's yes, and never attach anything but a bundle.
   `decisions.jsonl`, `history/`, `auto/*.log`, `report.html`) into a bug report, an issue or a commit.
 - `~/.greenlight/leak.re` lists the user's private terms: nothing in the repo may match it (`tests/test_release.py`).
 
-## Working on the code
+## Required Verification Gates (Before Commit / PR)
 
-- Python is stdlib only (`scripts/`); tests are scripts: `make test-py` (what CI runs), `make test` (adds Playwright and the
-  Swift typecheck). Tests set `GREENLIGHT_HOME` to a tempdir before importing: never touch the real `~/.greenlight`.
-- New scripts call `diag.install("<name>")` in `__main__`, and wrap their slow or failing work in `diag.span(...)`.
+Run the local verification suite before considering any change done:
+
+```bash
+make lint        # ruff (scripts/, tests/, app/kokoro.py), check_safety.py (incl. JS syntax), shellcheck
+make test-py     # all Python test suites (auto-routes script tests and pytest tests)
+make test-js     # Playwright Chromium UI & security tests (add `make test-webkit` for WKWebView parity)
+make typecheck   # macOS: Swift typecheck with -warnings-as-errors -strict-concurrency=targeted
+make check-diff  # diff-scoped quality ratchet (stricter ruff, mypy, function size, Swift evalJS)
+make coverage    # Python tests with combined coverage.xml (PR CI enforces >= 70% diff coverage)
+```
+
+- **Enable local git hooks once per clone:** `make setup-hooks` (activates `.githooks/pre-commit` and `.githooks/pre-push`). Never pass `--no-verify` to bypass hooks.
+- **Automated agent hooks:** `.agents/hooks.json` (Antigravity) and `.claude/settings.json` (Claude Code) run `scripts/agent_hook.py` automatically to catch lint/safety regressions and block `--no-verify`.
+- **UI / `app/` changes:** Also run `make test-ui` (isolated background `--uitest` instances) and visually inspect screenshots via `python3 scripts/uitest.py`. For OS-level HID checks (`⌘V` paste, Finder drag-drop, notifications), use `scripts/vm_test.sh`.
+- **Pre-PR review gate:** Run `python3 scripts/audit.py review --path . --target main` before opening or merging a PR.
+
+## Working on the code & Security Hygiene
+
+- **Python stdlib only (`scripts/`):** New scripts call `diag.install("<name>")` in `__main__` and wrap slow/failing work in `diag.span(...)`. Tests set `GREENLIGHT_HOME` to a tempdir before importing: never touch the real `~/.greenlight`.
+- **Swift ↔ JS bridge:** Never use raw string interpolation inside `evaluateJavaScript(...)`. Always use `WKWebView.callJS(_:_:)` (`app/Sources/Config.swift`), or document genuinely raw expressions with `// safety-ok`.
+- **Swift preferences & shell paths:** Always use `ud` instead of `UserDefaults.standard` (so `--uitest` stays isolated), `shellPath(_:)` for paths that may start with `~`, and `shellQuote(_:)` for arbitrary arguments.
+- **Python subprocesses:** Use argv lists; never add `shell=True` without owner-config justification and `# noqa: S602`.
+- **HTML/CSP:** Keep `<meta http-equiv="Content-Security-Policy">` intact on `app/dashboard.html`, `app/terminal.html`, and `app/stage.html`. Never add inline event handlers (`onclick=`, etc.), and keep `stageWeb` free of `WKScriptMessageHandler`.
+- **Modularity & tests:** Keep newly added Python functions in `scripts/` at or under **100 lines** and low complexity (`C901 <= 15`, enforced by `make check-diff`). Use `with open(...)` (`SIM115`), never leave `breakpoint()`/`pdb` (`T10`), and add tests in `tests/test_<module>.py` (script or `pytest` style — `scripts/run_py_tests.py` runs both and fails on empty files). Never weaken or skip existing assertions.
+- **Shell scripts:** Use `set -euo pipefail`, quote all expansions, and pass `shellcheck -S warning`.
+- **Visual design:** Always design in Greenlight's own visual language (`app/Sources/Config.swift` `struct Theme`/`themes`/`accents` and `app/dashboard.html` `:root`).

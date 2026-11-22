@@ -1477,7 +1477,7 @@ def main(argv=None):
         root = Path(path or ".").resolve()
         errs = []
         for label, cmd in (
-            ("ruff", ["ruff", "check", "scripts/", "tests/"]),
+            ("ruff", ["ruff", "check", "scripts/", "tests/", "app/kokoro.py"]),
             ("safety", [sys.executable, str(root / "scripts" / "check_safety.py")]),
         ):
             try:
@@ -1496,8 +1496,8 @@ def main(argv=None):
             tgt = requested_target or default_target(str(root))
             sha = (git(str(root), "rev-parse", "HEAD") or "").strip()
             diff = branch_diff(str(root), tgt, sha) or ""
-            res = contracts({"action": "review", "target": tgt, "diff": clip(diff, 24000)},
-                            ("tests_not_weakened", "no_secrets_or_pii"), outbound=diff)
+            res = contracts({"action": "review", "target": tgt},
+                            ("tests_not_weakened", "no_secrets_or_pii"), diff=diff)
         except Exception as e:  # noqa: BLE001
             print(f"AUDIT ERROR {type(e).__name__}: {e}")
             return 4
