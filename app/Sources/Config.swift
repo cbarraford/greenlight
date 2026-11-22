@@ -23,7 +23,8 @@ import WebKit
 
 let localDefault: String = { var b = [CChar](repeating: 0, count: 256); gethostname(&b, 255); return String(cString: b).components(separatedBy: ".")[0] }()  // "Local" in the Basement, until you rename it
 let uitest = CommandLine.arguments.contains("--uitest")
-let uitestSuiteName: String? = uitest ? "dev.greenlight.uitest.\(ProcessInfo.processInfo.processIdentifier)" : nil
+let unittest = CommandLine.arguments.contains("--unittest")
+let uitestSuiteName: String? = (uitest || unittest) ? "dev.greenlight.\(unittest ? "unittest" : "uitest").\(ProcessInfo.processInfo.processIdentifier)" : nil
 let uitestSocketPath: String? = {
     if let i = CommandLine.arguments.firstIndex(of: "--uitest-socket"), i + 1 < CommandLine.arguments.count {
         return CommandLine.arguments[i + 1]
@@ -43,7 +44,7 @@ func shellPath(_ p: String) -> String {
 }
 
 let py = "GREENLIGHT_HOME=\(shellPath(greenlightHome)) GREENLIGHT_TMUX_SOCKET=\(shellQuote(tmuxSocketName)) python3 \(shellPath(greenlightCode))/scripts"  // + "/greenlight.py ..."
-let selftest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--attachtest")  // scratch chat session + transcript, see selfTest()
+let selftest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--attachtest") || unittest  // scratch chat session + transcript, see selfTest()
 let chatCmd = (selftest ? "CHAT_DIR=\(shellPath(greenlightHome))/chat-test " : "") + "\(py)/chat.py"
 let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
 /// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
@@ -467,10 +468,14 @@ enum Diag {
 
 // MARK: ssh
 
+/// Test seam for `ssh(...)`: when non-nil (only in `--unittest`), intercepts commands without spawning real processes.
+var sshOverride: ((_ remote: String, _ host: String, _ stdin: String, _ onLine: @escaping (String) -> Void, _ onExit: @escaping (Int32) -> Void) -> Process?)?
+
 /// Runs <remote> where greenlight lives (remoteArgv), calling onLine (main thread) per stdout line and onExit when it ends.
 @discardableResult
 func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @escaping (String) -> Void = { _ in },
          onExit: @escaping (Int32) -> Void = { _ in }) -> Process {
+    if let over = sshOverride, let p = over(remote, h, stdin, onLine, onExit) { return p }
     let p = Process()
     let (exe, args) = remoteArgv(remote, on: h)
     p.executableURL = URL(fileURLWithPath: exe)

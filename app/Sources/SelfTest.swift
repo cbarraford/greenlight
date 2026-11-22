@@ -257,21 +257,9 @@ func attachOnly() {
 }
 
 
-/// `Greenlight.app/Contents/MacOS/Greenlight --selftest`: drives the actions the buttons call
-/// (send, Stop, answer buttons, Compact, Codex, Clear) on a scratch session where greenlight runs, plus the menubar width.
-func selfTest() {
-    let d = ud
-    let keep = ["model", "effort", "context", "window", "name", "seen", "sent", "verboseActivity"].map { ($0, d.object(forKey: $0)) }
-    var failed = false
-    func onMain<T>(_ f: () -> T) -> T { DispatchQueue.main.sync(execute: f) }
-    func check(_ what: String, _ ok: Bool) { print(ok ? "ok  " : "FAIL", what); fflush(stdout); failed = failed || !ok }
-    func wait(_ what: String, _ secs: Double, _ ok: () -> Bool) {
-        let end = Date() + secs
-        while !onMain(ok) {
-            if Date() > end { check("timed out: \(what)", false); return }
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-    }
+/// Deterministic, offline Swift unit tests (`Greenlight --unittest`, also run at the start of `--selftest`).
+/// Zero live agents, network, microphone, or notification permissions required.
+func runOfflineUnitTests(check: (String, Bool) -> Void) {
     let claudeErr = "There's an issue with the selected model (gemini-4-neon-high). It may not exist or you may not have access to it. Run --model to pick a different model."
     let stale = staleBackendNote(model: "gemini-4-neon-high", error: claudeErr, host: "devbox", code: "~/.claude/skills/greenlight")
     check("stale host: a Gemini model sent to Claude Code by an old chat.py says to update the host, not that the model is missing: \(stale ?? "nil")",
@@ -476,17 +464,22 @@ func selfTest() {
           voiceButtonText(on: false, starting: true).label == "Cancel starting voice mode" && voiceButtonText(on: false, starting: false).label == "Start voice mode"
           && voiceButtonText(on: true, starting: false).label == "End voice mode" && voiceButtonText(on: false, starting: true).help.contains("cancel"))
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
-    let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
-    var bufs = 0, ended = false, sc: AVAudioConverter?
-    syn.write(AVSpeechUtterance(string: "One minute.")) { b in
-        guard let b = b as? AVAudioPCMBuffer else { return }
-        if b.frameLength == 0 { ended = true; return }
-        if sc?.inputFormat != b.format { sc = AVAudioConverter(from: b.format, to: pf) }
-        if sc.flatMap({ convert(b, $0, pf) }) != nil { bufs += 1 }
+    if !AVSpeechSynthesisVoice.speechVoices().isEmpty {
+        let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
+        var bufs = 0, ended = false, sc: AVAudioConverter?
+        syn.write(AVSpeechUtterance(string: "One minute.")) { b in
+            guard let b = b as? AVAudioPCMBuffer else { return }
+            if b.frameLength == 0 { ended = true; return }
+            if sc?.inputFormat != b.format { sc = AVAudioConverter(from: b.format, to: pf) }
+            if sc.flatMap({ convert(b, $0, pf) }) != nil { bufs += 1 }
+        }
+        let until = Date() + 15
+        while !ended && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+        check("voice: speech converts for the player and ends with an empty buffer (\(bufs) buffers)", bufs > 0 && ended)
+    } else {
+        print("skip voice: no AVSpeechSynthesisVoice installed in this headless environment")
     }
-    let until = Date() + 15
-    while !ended && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
-    check("voice: speech converts for the player and ends with an empty buffer (\(bufs) buffers)", bufs > 0 && ended)
+    let pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     let tone = (0..<24000).map { Int16(10000 * sin(Double($0) / 10)) }.withUnsafeBytes { Data($0) }
     let kb = Speech.shared.buffer(tone), kc = kb.flatMap { convert($0, AVAudioConverter(from: $0.format, to: pf)!, pf, whole: true) }
     check("voice: a second of Kokoro/ElevenLabs PCM plays as about a second (\(kc?.frameLength ?? 0) frames)", kb?.frameLength == 24000 && abs(Int(kc?.frameLength ?? 0) - 22050) < 200 && (kc?.floatChannelData?[0][5] ?? 0) != 0)
@@ -689,7 +682,7 @@ func selfTest() {
         let hung = shellVariable("OPENAI_API_KEY", shell: slow.path, timeout: 0.5), hungFor = Date().timeIntervalSince(s0), h0 = Date()
         let fromHeld = shellVariable("OPENAI_API_KEY", shell: held.path), heldFor = Date().timeIntervalSince(h0)
         let leftover = { () -> String in let p = Process(), o = Pipe(); p.executableURL = URL(fileURLWithPath: "/bin/ps"); p.arguments = ["-axo", "args"]; p.standardOutput = o
-            try? p.run(); p.waitUntilExit(); return String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) }()
+            try? p.run(); let d = o.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit(); return String(decoding: d, as: UTF8.self) }()
         let killed = !leftover.contains(slow.path)
         let saved = envKeyRead
         keyLock.lock(); let savedChain = keys["openai"]; keys["openai"] = .some(nil); keyLock.unlock()
@@ -834,6 +827,776 @@ func selfTest() {
               badSave == nil && afterBadSave == "sk-2" && badRemove == nil && afterBadRemove == "sk-2" && kept == "sk-2" && keptReads == 0
               && removed == "" && afterRemove == nil && item == nil && removeReads == 0)
     }
+    // Config helpers: safeJSON, shellPath, shellQuote, paneWhere, remoteArgv, Theme, harnessOf, RulesStore, Diag, ssh
+    check("config: safeJSON preserves valid JSON objects and falls back cleanly",
+          safeJSON(#"{"ok":true,"n":1}"#).contains("\"ok\":true")
+          && safeJSON("not json", fallback: ["a": 1]) == #"{"a":1}"#
+          && safeJSON("[1,2]", fallback: [:]) == "{}")
+    check("config: shellQuote escapes single quotes safely",
+          shellQuote("plain") == "'plain'" && shellQuote("a'b") == "'a'\\''b'")
+    check("config: paneWhere validates @host and absolute paths without ..",
+          paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil
+          && paneWhere("/w/ok")?.cwd == "/w/ok" && paneWhere("/w/../etc") == nil && paneWhere("")?.cwd == "")
+    check("config: remoteArgv routes local vs ssh host",
+          remoteArgv("echo 1", on: "local").0.hasPrefix("/") && remoteArgv("echo 1", on: "devbox").0 == "/usr/bin/ssh"
+          && remoteArgv("echo 1", on: "devbox").1.contains("devbox"))
+    check("config: Theme blends, dark detection, state colors, fonts, models and effortName",
+          themes[0].dark && !themes.first(where: { $0.name == "GitHub Light" })!.dark
+          && named("missingKey", "Nord").name == "Nord" && harnessOf("claude-opus-5-5") == "claude"
+          && harnessOf("gemini-4-neon-high") == "agy" && harnessOf("codex") == "codex"
+          && effortName("xhigh") == "Extra high" && effortName("low") == "Low"
+          && !fontChoices.isEmpty && !models.isEmpty && !accents.isEmpty)
+    _ = (Theme.needs, Theme.yourMove, Theme.working, Theme.crashed, Theme.queued, Theme.done,
+         Theme.needsInk, Theme.crashedInk, Theme.workingInk, bg, fg, card, surface, line, edge, dim, sub, bubble, accent,
+         sys(size: 13), sys(size: 13, design: .monospaced), sys(size: 13, face: "Menlo"), chatFace(size: 13))
+    ud.set("gemini-4-neon", forKey: "testSavedModel")
+    check("config: savedModel migrates legacy gemini-4-neon id", savedModel("testSavedModel", fallback: "codex") == "gemini-4-neon-medium")
+    let rs = RulesStore()
+    rs.got(["stages": [["key": "qa", "req": "qa", "done": "label= "]], "builtins": ["ci": "CI"], "options": ["k": "ok"], "rules": "r", "intro": "i", "source": "default"])
+    rs.save()
+    let badLabelStatus = rs.status
+    rs.stages[0].done = "check= "
+    rs.save()
+    let badCheckStatus = rs.status
+    rs.stages[0].done = "signoff"; rs.options["k"] = "bad`tick"
+    rs.save()
+    let badOptStatus = rs.status
+    rs.gotAuto(["kinds": [["kind": "ci", "when": "fail", "gates": ["a"]]], "on": ["ci": 0]])
+    rs.kind = "review"
+    rs.gotReview(["kind": "review", "text": "custom", "default": "def", "own": true, "vars": ["mr"]])
+    rs.note = "gone"; rs.gotNotes(["notes": [["name": "keep", "text": "hi"]]])
+    check("config: RulesStore validates stage done/options and parses payloads",
+          badLabelStatus.contains("label") && badCheckStatus.contains("CI check") && badOptStatus.contains("backticks")
+          && rs.autoOn["ci"] == 0 && rs.reviewOwn && rs.reviewVars.contains("{mr}") && rs.notes.count == 1 && rs.note.isEmpty)
+    check("diag: classify and verb map stderr and scripts safely",
+          Diag.classify("Permission denied (publickey)") == "auth"
+          && Diag.classify("Connection timed out") == "timeout"
+          && Diag.classify("Connection refused") == "network"
+          && Diag.classify("command not found") == "not_found"
+          && Diag.classify("HTTP 429 rate limit") == "rate_limit"
+          && Diag.classify("Traceback (most recent)") == "traceback"
+          && Diag.classify("") == "none" && Diag.classify("weird") == "other"
+          && Diag.verb("python3 /x/scripts/dash.py task repos") == "dash.task"
+          && Diag.verb("echo hi") == "shell" && Diag.cpu() >= 0 && Diag.rss() > 0)
+    do {
+        var lines = [String](), exitCode: Int32?
+        _ = ssh("printf 'hello\\nworld\\n'", on: "local", onLine: { lines.append($0) }, onExit: { exitCode = $0 })
+        let until = Date() + 5
+        while exitCode == nil && Date() < until { RunLoop.main.run(until: Date() + 0.02) }
+        var failCode: Int32?
+        _ = ssh("echo 'Permission denied' >&2; exit 7", on: "local", onExit: { failCode = $0 })
+        let until2 = Date() + 5
+        while failCode == nil && Date() < until2 { RunLoop.main.run(until: Date() + 0.02) }
+        check("config: ssh() streams stdout lines and reports exit codes",
+              lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
+    }
+}
+
+/// Offline inbox/ping/question triage tests (used by `--unittest` without requiring a live agent).
+func runInboxUnitTests(_ c: Core, check: (String, Bool) -> Void) {
+    c.questions = []
+    let n = c.msgs.count
+    c.ping(#"{"ts": 1792700000, "text": "ws-a: merge !1?\nOptions: merge | hold", "key": "ws-a"}"#)
+    c.ping(#"{"text": "ws-b: goal for this workspace?"}"#)
+    let w = c.waiting
+    check("inbox: pings land with options: \(w.map(\.options))", w.count == 2 && w[0].options == ["merge", "hold"] && w[0].text == "ws-a: merge !1?" && w[1].options.isEmpty)
+    check("inbox: pings stay out of the chat", c.msgs.count == n)
+    c.ping(#"{"text": "ws-a: merge !1?\nOptions: hold | merge", "key": "ws-a"}"#)
+    check("inbox: changed options replace old chips", c.waiting.first { $0.text == "ws-a: merge !1?" }?.options == ["hold", "merge"])
+    c.answer(c.waiting.first { $0.text == "ws-a: merge !1?" }!, "dismissed", send: false)
+    c.answer(w[1], "(dismissed)", send: false)
+    check("inbox: dismissing clears waiting without sending", c.waiting.isEmpty && c.run == nil)
+    for t in [#"ws-k: one?\nOptions: a | b"#, #"ws-l: two?\nOptions: c | d"#, "ws-m: three?"] { c.ping("{\"text\": \"\(t)\"}") }
+    func key(_ code: Int, _ ch: String, _ m: NSEvent.ModifierFlags = []) -> Bool {
+        c.inboxKey(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: m, timestamp: 0, windowNumber: 0, context: nil,
+                                    characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: UInt16(code))!)
+    }
+    check("inbox: opens oldest and arrow moves focus", c.inboxFocus?.text == "ws-k: one?" && key(kVK_DownArrow, "") && c.inboxFocus?.text == "ws-l: two?")
+    check("inbox: Delete dismisses focused and advances", key(kVK_Delete, "\u{7f}") && c.waiting.count == 2 && c.inboxFocus?.text == "ws-m: three?")
+    check("inbox: out-of-range digit or letter ignored", !key(kVK_ANSI_1, "1") && !key(kVK_ANSI_X, "x") && c.waiting.count == 2)
+    c.ping(#"{"text": "ws-n: four?"}"#)
+    check("inbox: Shift+Delete confirms and Esc cancels", key(kVK_Delete, "\u{7f}", .shift) && c.inboxConfirm && key(kVK_Escape, "\u{1b}") && !c.inboxConfirm && c.waiting.count == 3)
+    _ = key(kVK_Delete, "\u{7f}", .shift)
+    check("inbox: Return clears all without sending", key(kVK_Return, "\r") && c.waiting.isEmpty && c.run == nil && !c.inboxConfirm
+          && c.questions.filter { $0.text.hasPrefix("ws-m") || $0.text.hasPrefix("ws-n") }.allSatisfy { $0.answer == "(dismissed)" })
+    c.ping(#"{"text": "3.22 ship?\nOptions: ship | hold", "key": "@lift", "ws": ["feat-3", "fix-1"]}"#)
+    check("inbox: asked list carries workspace names", c.asked.count == 1 && (c.asked[0]["ws"] as? [String]) == ["feat-3", "fix-1"])
+    c.ping(#"{"resolve": "@lift", "why": "shipped"}"#)
+    check("inbox: resolve empties asked", c.asked.isEmpty)
+    c.name = "  Jarvis "; c.doneNaming()
+    check("core: rename trims and persists", c.name == "Jarvis" && !c.editingName && ud.string(forKey: "name") == "Jarvis")
+    c.name = " "; c.doneNaming()
+    check("core: empty name falls back to Greenlight", c.name == "Greenlight")
+}
+
+/// Deterministic Core.swift state-machine tests using `sshOverride` (zero real subprocesses).
+func runCoreUnitTests(check: (String, Bool) -> Void) {
+    defer { sshOverride = nil }
+    var sshLog = [(remote: String, host: String, stdin: String)]()
+    var responder: (String, String, String) -> (lines: [String], code: Int32) = { _, _, _ in ([], 0) }
+    sshOverride = { remote, h, stdin, onLine, onExit in
+        sshLog.append((remote, h, stdin))
+        let (lines, code) = responder(remote, h, stdin)
+        for l in lines { onLine(l) }
+        onExit(code)
+        return Process()
+    }
+
+    // 1. Core.follow bidirectional settings sync + restyle + acted + fed + model switching
+    let mainC = Core(session: -9010), childC = Core(session: -9011)
+    defer {
+        try? FileManager.default.removeItem(at: mainC.transcriptFile)
+        try? FileManager.default.removeItem(at: mainC.questionsURL)
+        try? FileManager.default.removeItem(at: childC.transcriptFile)
+        try? FileManager.default.removeItem(at: childC.questionsURL)
+    }
+    childC.follow(mainC)
+    mainC.effort = "high"
+    childC.name = "Buddy"
+    let syncedEffort = childC.effort == "high", syncedName = mainC.name == "Buddy"
+    let look0 = mainC.look
+    mainC.restyle { fontSize = 14 }
+    mainC.verbose = true
+    mainC.acted("ws1", "merge", 0, "{}")
+    mainC.acted("ws1", "merge", 1, #"{"error":"conflict"}"#)
+    mainC.fed([["name": "w1", "state": "working", "step": "ci", "owner": "agent"]])
+    mainC.fed([["name": "w1", "state": "needs", "step": "review", "owner": "me"]])
+    mainC.model = "codex"
+    let switchedNote = mainC.msgs.last?.text.contains("separate from Claude") == true
+    mainC.model = "claude-opus-5-5"
+    check("core: follow syncs settings bidirectionally, restyle bumps look, acted/fed log, model switch resets meter",
+          syncedEffort && syncedName && mainC.look == look0 + 1 && switchedNote && mainC.context == 0
+          && mainC.feed.lines.contains { $0.kind == .failed && $0.text.contains("conflict") })
+
+    // 2. testHost, loadGreenlightEvery, setGreenlightEvery
+    mainC.runHost = "box"
+    responder = { _, _, _ in (["ok"], 0) }; mainC.testHost(); let hOk = mainC.hostCheck
+    responder = { _, _, _ in (["nopy"], 3) }; mainC.testHost(); let hNoPy = mainC.hostCheck
+    responder = { _, _, _ in ([], 255) }; mainC.testHost(); let h255 = mainC.hostCheck
+    responder = { _, _, _ in ([], 1) }; mainC.testHost(); let hMiss = mainC.hostCheck
+    check("core: testHost formats ok/nopy/ssh/missing states",
+          hOk.contains("ready") && hNoPy.contains("no python3") && h255.contains("BatchMode") && hMiss.contains("Clone"))
+
+    responder = { _, _, _ in ([#"{"schedule":"*/15 * * * *","enabled":true}"#], 0) }
+    mainC.loadGreenlightEvery()
+    RunLoop.main.run(until: Date() + 0.05)
+    let every15 = mainC.greenlightEvery == 15 && mainC.greenlightEveryNote.isEmpty
+    responder = { _, _, _ in ([#"{"schedule":"*/15 * * * *","enabled":false}"#], 0) }
+    mainC.loadGreenlightEvery()
+    RunLoop.main.run(until: Date() + 0.05)
+    let everyOff = mainC.greenlightEvery == 0
+    responder = { _, _, _ in ([], 1) }
+    mainC.loadGreenlightEvery(); mainC.setGreenlightEvery(20); mainC.setGreenlightEvery(0)
+    RunLoop.main.run(until: Date() + 0.05)
+    check("core: loadGreenlightEvery and setGreenlightEvery update interval and error notes",
+          every15 && everyOff && !mainC.greenlightEveryNote.isEmpty)
+
+    // 3. Autonomy: loadAutonomy, setAutonomy, undoAudit, gate
+    let autJSON = #"{"auto":["milestone"],"gate":0.4,"kinds":[{"kind":"milestone","eligible":true,"opted":true,"n":5,"right":5,"acc":1.0}],"candidates":[],"recent":[]}"#
+    responder = { r, _, _ in
+        if r.contains("autonomy.py settings") { return ([autJSON], 0) }
+        if r.contains("autonomy.py gate") { return ([#"{"ok": false, "score": 0.1}"#], 1) }
+        return ([], 0)
+    }
+    var qAuto = Question(text: "Set milestone?", options: ["yes", "no"], ping: true); qAuto.answer = "Auto: yes"; qAuto.auto = "aud-1"
+    mainC.questions = [qAuto]
+    mainC.loadAutonomy()
+    mainC.setAutonomy(["--gate", "0.4"])
+    mainC.undoAuto(qAuto)
+    var gateHeld: Bool?
+    mainC.gate("watch", text: "ping?") { gateHeld = !$0 }
+    responder = { _, _, _ in ([#"{"ok": true}"#], 0) }
+    var gateAllowed: Bool?
+    mainC.gate("watch", text: "ping?") { gateAllowed = $0 }
+    check("core: autonomy load/set/undoAudit and gate held/allowed work cleanly",
+          mainC.autonomy?.gate == 0.4 && mainC.questions.first?.auto == nil
+          && mainC.questions.first?.answer?.hasPrefix("Reconsidering:") == true
+          && gateHeld == true && gateAllowed == true)
+
+    // 4. System One: load, set (swap fallback), key, test
+    responder = { r, _, _ in
+        if r.contains("decide.py test") { return ([#"{"results":[{"provider":"jev","ok":true,"ms":42},{"provider":"haiku","ok":false,"error":"timeout"}]}"#], 0) }
+        return ([#"{"provider":"jev","fallback":"haiku","key":true}"#], 0)
+    }
+    mainC.loadSystemOne()
+    mainC.setSystemOne(provider: "haiku")
+    mainC.setSystemOneKey("sk-s1")
+    mainC.setSystemOneKey("")
+    mainC.testSystemOne()
+    let s1TestRes = mainC.s1Test
+    responder = { _, _, _ in ([#"{"results":[]}"#], 0) }; mainC.testSystemOne(); let s1Off = mainC.s1Test
+    responder = { _, _, _ in ([], 1) }; mainC.testSystemOne(); let s1Fail = mainC.s1Test
+    check("core: System One config, fallback swap, key, and test formatting",
+          mainC.s1Key && s1TestRes.contains("Jev answered in 42 ms") && s1TestRes.contains("Haiku: timeout")
+          && s1Off.contains("Off:") && s1Fail.contains("No answer"))
+
+    // 5. Chat streaming: send + event(start/status/step/step_done/plan/think/text_reset/text/usage/done) + compact + stop + clear + queue
+    mainC.light = { _, _ in }
+    mainC.attached = [Attached(id: "ws1", label: "ws1", color: .blue, mrs: 1, text: "Workspace ws1")]
+    mainC.focus = "the dashboard (list)"
+    responder = { r, _, _ in
+        if r.contains("chat.py send") {
+            return ([
+                #"{"e":"start","engine":"claude","model":"claude-opus-5-5"}"#,
+                #"{"e":"status","text":"Reading board","thinking":true}"#,
+                #"{"e":"step","id":"s1","title":"Ran scan","detail":"d","call":"scan()","input":"full input"}"#,
+                #"{"e":"step_done","id":"s1","ok":true,"out":"ok","full":"full output"}"#,
+                #"{"e":"plan","done":1,"total":3,"title":"Checking","eta":60}"#,
+                #"{"e":"think","delta":"Hmm"}"#,
+                #"{"e":"text_reset"}"#,
+                #"{"e":"text","delta":"Done.\nOptions: yes | no\n[hexes: ws1]"}"#,
+                #"{"e":"usage","context":4200,"tps":28.5,"out":120}"#,
+                #"{"e":"done","ok":true,"context":4200,"window":200000,"text":"Done.\nOptions: yes | no\n[hexes: ws1]"}"#,
+            ], 0)
+        }
+        if r.contains("chat.py compact") {
+            return ([#"{"e":"done","ok":true,"context":1200,"window":200000,"text":""}"#], 0)
+        }
+        return ([], 0)
+    }
+    mainC.send("Check ws1")
+    let chatMsg = mainC.msgs.last
+    let matchedQ = chatMsg.flatMap { mainC.question(for: $0) }
+    mainC.compact()
+    let compactMsg = mainC.msgs.last?.text ?? ""
+    check("core: chat streaming handles all event kinds, options, context meter, and compact",
+          chatMsg?.text == "Done." && chatMsg?.options == ["yes", "no"] && matchedQ != nil
+          && mainC.context == 1200 && mainC.window == 200000 && compactMsg.contains("Compacted"))
+
+    // 6. Watch turn & ping auto/suggest/start
+    mainC.pucks = [["name": "ws-watch", "state": "needs", "why": "ci"]]
+    responder = { r, _, _ in
+        if r.contains("autonomy.py gate") { return ([#"{"ok": true}"#], 0) }
+        if r.contains("chat.py send") { return ([#"{"e":"done","ok":true,"text":"(nothing)"}"#], 0) }
+        return ([], 0)
+    }
+    mainC.watched([["name": "ws-old", "state": "working"]])
+    mainC.watched([["name": "ws-old", "state": "working"], ["name": "ws-watch", "state": "needs", "why": "ci"]])
+    mainC.ping("#start 42")
+    let seen42 = mainC.seen == 42 && mainC.connected
+    mainC.ping(#"{"text":"Auto q?\nOptions: a | b","key":"k-auto","auto":{"id":"a9","choice":"a"}}"#)
+    mainC.ping(#"{"text":"Sug q?\nOptions: x | y","key":"k-sug","suggest":{"choice":"x","prob":0.88,"count":4,"agree":4}}"#)
+    let sugQ = mainC.waiting.first { $0.key == "k-sug" }
+    check("core: watchTurn suppresses (nothing), ping parses #start, auto, and suggest",
+          seen42 && mainC.questions.contains { $0.auto == "a9" && $0.answer == "Auto: a" }
+          && sugQ?.suggest?.choice == "x" && sugQ?.suggest?.count == 4)
+
+    // 7. DWIM direct apply -> undo (success, kept-conflict, failure), pending cancel, fallback, empty actions
+    responder = { r, _, _ in
+        if r.contains("dwim.py plan") {
+            return ([#"{"route":"direct","verb":"park","toast":"Parked ws1","say":"Parked ws1","actions":[{"verb":"park","ws":"ws1"}]}"#], 0)
+        }
+        if r.contains("dwim.py apply") { return ([#"{"done":["ws1"],"errors":[],"unchanged":[],"undo":"u123","ms":12}"#], 0) }
+        if r.contains("dwim.py undo") { return ([#"{"ok":true,"undone":["ws1"],"kept":[]}"#], 0) }
+        return ([], 0)
+    }
+    mainC.dwim("park ws1", source: "chat") { _ in }
+    let appliedToast = mainC.latestUndoableToast
+    mainC.undoToast(appliedToast?.id)
+    let undidMsg = mainC.msgs.last?.text ?? ""
+
+    // Undo failure keeps retry toast; kept-conflict keeps retry toast
+    responder = { r, _, _ in
+        if r.contains("dwim.py plan") {
+            return ([#"{"route":"direct","verb":"hold","toast":"Held ws1","actions":[{"verb":"hold","ws":"ws1"}]}"#], 0)
+        }
+        if r.contains("dwim.py apply") { return ([#"{"done":["ws1"],"errors":[],"unchanged":[],"undo":"u456","ms":9}"#], 0) }
+        if r.contains("dwim.py undo") { return ([#"{"ok":true,"undone":[],"kept":["ws1"]}"#], 0) }
+        return ([], 0)
+    }
+    mainC.dwim("hold ws1", source: "chat") { _ in }
+    mainC.undoToast()
+    let keptMsg = mainC.msgs.last?.text ?? ""
+
+    // Fallback to Chief passes verb note
+    responder = { _, _, _ in ([#"{"route":"chief","verb":"merge","why":"needs confirmation"}"#], 0) }
+    var chiefNote = ""
+    mainC.dwim("merge ws1", source: "chat") { chiefNote = $0 }
+
+    // Empty actions shows info toast
+    responder = { _, _, _ in ([#"{"route":"direct","verb":"park","toast":"Already parked","actions":[]}"#], 0) }
+    mainC.dwim("park ws1", source: "chat") { _ in }
+
+    // Pending launch toast cancelled by undoToast
+    responder = { _, _, _ in ([#"{"route":"direct","verb":"fix","launch":true,"toast":"Fixing ws1","actions":[{"verb":"fix","ws":"ws1"}]}"#], 0) }
+    mainC.dwim("fix ci ws1", source: "chat") { _ in }
+    let hadPending = mainC.toasts.contains { $0.pending }
+    mainC.undoToast()
+    let cancelledPending = !mainC.toasts.contains { $0.pending }
+    check("core: DWIM plan/apply/undo/kept/pending-cancel/fallback/empty flows",
+          appliedToast?.undo == "u123" && undidMsg.lowercased().contains("undid")
+          && keptMsg.contains("Undo the newer edit") && chiefNote.contains("read this as merge")
+          && hadPending && cancelledPending)
+
+    // 8. History key navigation (⌃R, arrows, recall, ⌃U, ⌃W, ⌥., !!)
+    mainC.sent = [Sent(t: "run unit tests", at: Date()), Sent(t: "fix lint errors", at: Date())]
+    let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 60))
+    func ev(_ code: Int, _ ch: String, _ m: NSEvent.ModifierFlags = []) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: m, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: UInt16(code))!
+    }
+    let openedSearch = mainC.historyKey(ev(kVK_ANSI_R, "r", .control), tv) && mainC.hq == ""
+    _ = mainC.historyKey(ev(kVK_DownArrow, ""), tv)
+    _ = mainC.historyKey(ev(kVK_UpArrow, ""), tv)
+    _ = mainC.historyKey(ev(kVK_Return, "\r"), tv)
+    let pickedHist = mainC.input == "run unit tests" && mainC.hq == nil
+    mainC.input = "echo !!"; let expanded = mainC.historyKey(ev(kVK_Return, "\r"), tv) && mainC.input == "echo run unit tests"
+    tv.string = "hello world"; tv.setSelectedRange(NSRange(location: 11, length: 0))
+    _ = mainC.historyKey(ev(kVK_ANSI_W, "w", .control), tv)
+    let killedWord = tv.string == "hello "
+    _ = mainC.historyKey(ev(kVK_ANSI_U, "u", .control), tv)
+    let killedLine = tv.string == ""
+    _ = mainC.historyKey(ev(kVK_ANSI_Period, ".", .option), tv)
+    let yankedLast = tv.string == "tests"
+    mainC.input = ""; let recalled = mainC.recall(0) && mainC.input == "run unit tests" && mainC.recall(-1) && mainC.input == ""
+    // ⌃C clears input, or stops active run; Esc closes ⌃R
+    mainC.input = "temp"; _ = mainC.historyKey(ev(kVK_ANSI_C, "c", .control), tv)
+    let ctrlCCleared = mainC.input.isEmpty
+    _ = mainC.historyKey(ev(kVK_ANSI_R, "r", .control), tv)
+    _ = mainC.historyKey(ev(kVK_Escape, "\u{1b}"), tv)
+    let escClosedSearch = mainC.hq == nil
+    check("core: historyKey supports Ctrl-R, arrows, bang expand, Ctrl-W/U/C, Option-. and recall",
+          openedSearch && pickedHist && expanded && killedWord && killedLine && yankedLast && recalled && ctrlCCleared && escClosedSearch)
+
+    // 9. reply(to:), choose, submit, failed/stale-backend/reset/console chat events, DWIM errors & early undo
+    mainC.questions = []
+    mainC.ping(#"{"text":"Ship !9?\nOptions: ship | hold","key":"k-ship"}"#)
+    let shipQ = mainC.waiting.first { $0.key == "k-ship" }!
+    responder = { _, _, _ in ([#"{"e":"done","ok":true,"text":"Shipped."}"#], 0) }
+    mainC.reply(to: "Ship !9?", "ship", questionID: shipQ.id)
+    let validReplyAnswered = mainC.waiting.isEmpty
+    mainC.reply(to: "Ship !9?", "stale", questionID: UUID())
+    let expiredRecorded = mainC.msgs.last?.text.contains("no longer open") == true
+    mainC.reply(to: "Ship !9?", "legacy")
+    mainC.reply(to: "Freeform alert", "noted", freeform: true)
+    let msgWithOpts = Msg(.greenlight, "Pick one"); msgWithOpts.options = ["a", "b"]
+    mainC.msgs.append(msgWithOpts)
+    mainC.choose(msgWithOpts, "a")
+    // submit with whitespace, with DWIM candidate, and with open chat question
+    mainC.input = "   "; mainC.submit()
+    mainC.attached = []
+    responder = { _, _, _ in ([#"{"route":"direct","verb":"park","toast":"Parked","actions":[]}"#], 0) }
+    mainC.input = "park #42"; mainC.submit()
+    // Failed step, stale-backend error, [chat: reset], and DWIM apply error + undo failure
+    mainC.model = "gemini-4-neon-high"
+    responder = { r, _, _ in
+        if r.contains("chat.py send") {
+            return ([
+                #"{"e":"step","id":"s2","title":"Run test","detail":"","call":"pytest"}"#,
+                #"{"e":"step_done","id":"s2","ok":false,"out":"fail"}"#,
+                #"{"e":"done","ok":false,"text":"There's an issue with the selected model (gemini-4-neon-high)."}"#,
+            ], 0)
+        }
+        return ([], 0)
+    }
+    mainC.send("Run tests")
+    let staleNoteHit = mainC.msgs.last?.text.contains("older than this app") == true
+    mainC.model = "claude-opus-5-5"
+    responder = { r, _, _ in
+        if r.contains("chat.py send") { return ([#"{"e":"done","ok":true,"text":"Fresh.\n[chat: reset]"}"#], 0) }
+        return ([], 0)
+    }
+    mainC.send("Start over")
+    RunLoop.main.run(until: Date() + 0.05)
+    // DWIM apply error + undo failure retry
+    responder = { r, _, _ in
+        if r.contains("dwim.py plan") { return ([#"{"route":"direct","verb":"park","toast":"Parked","actions":[{"verb":"park","ws":"a"}]}"#], 0) }
+        if r.contains("dwim.py apply") { return ([#"{"done":[],"errors":["locked"],"unchanged":[],"undo":"u-err","ms":5}"#], 0) }
+        if r.contains("dwim.py undo") { return ([], 1) }
+        return ([], 0)
+    }
+    mainC.dwim("park a", source: "chat") { _ in }
+    let errToast = mainC.toasts.last
+    mainC.undoToast(errToast?.id)
+    let retryMsg = mainC.msgs.last?.text.contains("Undo didn't finish") == true
+    // Queueing while busy + clear(keepQueue: true) + tailOutbox
+    var delayedExit: ((Int32) -> Void)?
+    sshOverride = { remote, _, _, _, onExit in
+        if remote.contains("chat.py send") { delayedExit = onExit } else { onExit(0) }
+        return Process()
+    }
+    mainC.send("first")
+    mainC.send("second")
+    let queuedWhileBusy = mainC.queue.count == 1
+    mainC.stop()
+    delayedExit?(1)
+    let stoppedMsg = mainC.msgs.contains { $0.text == "Stopped." }
+    mainC.clear()
+    check("core: reply, choose, submit, stale-backend, reset, DWIM error/retry, and stop/queue flows",
+          validReplyAnswered && expiredRecorded && staleNoteHit && errToast?.failed == true && retryMsg && queuedWhileBusy && stoppedMsg)
+
+    // 10. Additional Core branches: error notes, inbox R/1/Up keys, question(for:) fallback, tailOutbox, voice-on DWIM, checkInTurn
+    sshOverride = { remote, h, stdin, onLine, onExit in
+        sshLog.append((remote, h, stdin))
+        let (lines, code) = responder(remote, h, stdin)
+        for l in lines { onLine(l) }
+        onExit(code)
+        return Process()
+    }
+    responder = { _, _, _ in ([], 1) }
+    mainC.loadAutonomy(); mainC.setAutonomy(["--gate", "0.5"]); mainC.undoAudit("bad")
+    let autErr = mainC.autonomyNote.contains("Couldn't")
+    mainC.setSystemOne(provider: "jev")
+    responder = { _, _, _ in ([#"{"provider":"local","fallback":"","key":false}"#], 0) }
+    mainC.loadSystemOne()
+    let s1WriteErr = mainC.s1Note.contains("Couldn't save")
+    // inboxKey R, digit 1, Up arrow
+    mainC.questions = []
+    mainC.ping(#"{"text":"First?\nOptions: go | stay","key":"k1"}"#)
+    mainC.ping(#"{"text":"Second?\nOptions: a | b","key":"k2"}"#)
+    _ = mainC.inboxKey(ev(kVK_DownArrow, ""))
+    _ = mainC.inboxKey(ev(kVK_UpArrow, ""))
+    let openedReply = mainC.inboxKey(ev(kVK_ANSI_R, "r")) && mainC.replyingTo != nil
+    responder = { _, _, _ in ([#"{"e":"done","ok":true,"text":"Ok"}"#], 0) }
+    let pickedDigit = mainC.inboxKey(ev(kVK_ANSI_1, "1")) && mainC.waiting.count == 1
+    // question(for:) fallback by options when text differs
+    mainC.questions.append(Question(text: "Original wording", options: ["optA", "optB"], ping: false))
+    let reworded = Msg(.greenlight, "Reworded"); reworded.options = ["optA", "optB"]
+    mainC.msgs.append(reworded)
+    let matchedFallback = mainC.question(for: reworded)?.text == "Original wording"
+    // tailOutbox + DWIM with voice.on = true
+    responder = { r, _, _ in
+        if r.contains("outbox.jsonl") { return (["#start 5", #"{"text":"Tailed ping?","key":"kt"}"#], 0) }
+        if r.contains("dwim.py plan") { return ([#"{"route":"direct","verb":"park","toast":"Parked v","say":"Parked v","actions":[{"verb":"park","ws":"v"}]}"#], 0) }
+        if r.contains("dwim.py apply") { return ([#"{"done":["v"],"errors":[],"unchanged":[],"undo":"uv1","ms":4}"#], 0) }
+        if r.contains("dwim.py undo") { return ([#"{"ok":true,"undone":["v"],"kept":[]}"#], 0) }
+        return ([], 0)
+    }
+    mainC.tailOutbox()
+    mainC.voice.on = true; mainC.voice.isLive = false
+    mainC.dwim("park v", source: "voice") { _ in }
+    mainC.undoToast()
+    mainC.voice.on = false
+    // checkIn() when idle past threshold (if atMac)
+    mainC.checkInMins = 1; mainC.lastActive = Date(timeIntervalSinceNow: -120); mainC.checkedIn = false
+    responder = { _, _, _ in ([#"{"ok": true}"#], 0) }
+    mainC.checkIn()
+    check("core: error notes, inbox R/1/Up, question fallback, tailOutbox, and voice-on DWIM paths",
+          autErr && s1WriteErr && openedReply && pickedDigit && matchedFallback && mainC.waiting.contains { $0.key == "kt" })
+
+    // 11. RulesStore full sshOverride lifecycle + Core helpers (localShown, hostPending, shortcut, showDockIcon, pasteFiles, maxTotal, gemini-4-neon migration)
+    responder = { r, _, _ in
+        if r.contains("task 'repos'") { return ([#"{"repos":[{"path":"acme/widgets"}]}"#], 0) }
+        if r.contains("instructions-") { return ([#"{"text":"Be brief"}"#], 0) }
+        if r.contains("memory-") { return ([#"{"notes":[{"name":"n1","text":"hello"}]}"#], 0) }
+        if r.contains("lifecycle-") { return ([#"{"stages":[{"key":"ci","req":"ci","done":"ci"}],"options":{},"rules":"","intro":"","source":"default","builtins":{"ci":"CI"}}"#], 0) }
+        if r.contains("autorun-") { return ([#"{"on":{"ci":0},"kinds":[{"kind":"ci","when":"fail","gates":["a"]}]}"#], 0) }
+        if r.contains("prompt-") { return ([#"{"kind":"review","text":"Mine","default":"Def","own":true,"vars":["mr"]}"#], 0) }
+        return ([], 0)
+    }
+    let rs = RulesStore()
+    rs.load(); rs.setAuto("ci", 0); rs.reviewOwn = true; rs.review = "Custom"; rs.saveReview()
+    rs.save(); rs.reset(); rs.saveInstructions(); rs.note = "n1"; rs.noteText = "body"; rs.saveNote(); rs.deleteNote()
+    _ = (mainC.localShown, mainC.hostPending, mainC.shortcut, mainC.pasteFiles())
+    mainC.dockIcon = "Orb"
+    // Legacy gemini-4-neon migration on session 0 (uses isolated unittest UserDefaults)
+    ud.set("gemini-4-neon", forKey: "model")
+    let migC = Core(session: 0)
+    let migrated = ud.string(forKey: "model") == "gemini-4-neon-medium" && migC.msgs.contains { $0.text.contains("agy") }
+    // maxTotal (>20 MB) refusal in Core.attach
+    let bigChunk = Data(repeating: 0x41, count: 4 << 20)  // 4 MB text-like? No, use 4x 4.5MB image-like ChatFile directly
+    mainC.files = (0..<4).map { ChatFile(name: "f\($0).png", kind: "image", data: bigChunk, thumb: nil) }
+    mainC.attach(Data(repeating: 0x41, count: 4_500_000), name: "f5.png")
+    RunLoop.main.run(until: Date() + 0.1)
+    check("core: RulesStore round-trip, legacy gemini-4-neon migration, and helpers",
+          rs.repos.contains("widgets") && rs.instructions == "Be brief" && migrated && !bigChunk.isEmpty)
+    mainC.clear()
+}
+
+/// Deterministic VoiceEngine.swift unit tests (Speech.elevenWhy, Voice state machine, GPT-Live handlers, LivePreview).
+func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
+    defer { sshOverride = nil }
+    sshOverride = { _, _, _, onLine, onExit in
+        onLine(#"{"kind":"table","title":"Board","columns":["WS"],"rows":[["a"]]}"#)
+        onExit(0)
+        return Process()
+    }
+
+    // 1. Speech.elevenWhy across all status codes & URLErrors
+    let e401 = Speech.elevenWhy(401, Data(#"{"detail":{"message":"bad key"}}"#.utf8), nil, voice: "v")
+    let e402 = Speech.elevenWhy(402, Data(#"{"detail":"no credits"}"#.utf8), nil, voice: "v")
+    let e404 = Speech.elevenWhy(404, nil, nil, voice: "sarah")
+    let e429 = Speech.elevenWhy(429, nil, nil, voice: "v")
+    let e200 = Speech.elevenWhy(200, nil, nil, voice: "v")
+    let e0 = Speech.elevenWhy(0, nil, nil, voice: "v")
+    let e500 = Speech.elevenWhy(500, Data("oops".utf8), nil, voice: "v")
+    let eTimeout = Speech.elevenWhy(0, nil, URLError(.timedOut), voice: "v")
+    let eNet = Speech.elevenWhy(0, nil, URLError(.notConnectedToInternet), voice: "v")
+    check("voice: Speech.elevenWhy classifies all HTTP and URLError failure modes",
+          e401.1 && e401.0.contains("401") && e402.1 && e402.0.contains("402") && e404.1 && e404.0.contains("sarah")
+          && !e429.1 && e429.0.contains("429") && !e200.1 && !e0.1 && !e500.1 && e500.0.contains("500")
+          && !eTimeout.1 && eTimeout.0.contains("in time") && !eNet.1 && eNet.0.contains("Little Snitch"))
+
+    // 2. Speech.data branches (kokoro not ready, live mid-conversation, eleven stuck, default)
+    let sp = Speech.shared
+    let savedKind = ud.string(forKey: "speech")
+    defer { ud.set(savedKind, forKey: "speech"); sp.stuck = nil; sp.status = "" }
+    ud.set("kokoro", forKey: "speech"); sp.ready = false; sp.status = ""
+    let kokoroNil = sp.data("hi") == nil && sp.status.contains("still loading")
+    ud.set("live", forKey: "speech")
+    let liveNil = sp.data("hi") == nil && sp.status.contains("turn voice mode off and on")
+    ud.set("eleven", forKey: "speech"); sp.stuck = "No credits"
+    let stuckNil = sp.data("hi") == nil && sp.status == "No credits"
+    ud.set("apple", forKey: "speech")
+    let appleNil = sp.data("hi") == nil && sp.buffer(Data([1])) == nil
+    check("voice: Speech.data handles kokoro-loading, live-mid-session, stuck eleven, and empty buffer",
+          kokoroNil && liveNil && stuckNil && appleNil)
+
+    // 3. Voice state machine: began, status, stage, live, finished, failed, fellBack, hush, run, onLive, handOff, liveAudio
+    let c = Core(session: -9012)
+    defer {
+        try? FileManager.default.removeItem(at: c.transcriptFile)
+        try? FileManager.default.removeItem(at: c.questionsURL)
+    }
+    let v = c.voice
+    v.on = true; v.isLive = true
+    v.onLive(.started)
+    v.onLive(.heard(" What is"))
+    v.onLive(.heard(" status?"))
+    let heardText = v.heard
+    v.handOff("del-1")
+    let handedOff = v.delegation == "del-1" && v.heard.isEmpty && v.lastHeard == "What is status?"
+    v.liveBuf = []; v.awaiting = nil
+    v.say("Three MRs are ready.", filler: false)
+    v.flushLive()
+    let awaitingCue = v.awaiting == "three mrs"
+    v.onLive(.said(" Sure. Three MRs are ready. [click]"))
+    let cueCleared = v.awaiting == nil && !v.caption.contains("[click]")
+    // Audio: unattached player never crashes; attached player starts speaking on loud tone and stops after >0.8s quiet
+    let tone = (0..<2400).map { Int16(10000 * sin(Double($0) / 10)) }.withUnsafeBytes { Data($0) }
+    v.liveAudio(tone)  // unattached: must be a safe no-op, not SIGABRT
+    v.engine.attach(v.player)
+    try? v.engine.link(v.player, to: v.engine.mainMixerNode, format: v.speechFormat)
+    v.liveAudio(tone)
+    let startedSpeaking = v.speaking == 1
+    v.liveAudio(Data(count: 48000))  // 1.0 s of silence
+    let endedSpeaking = v.speaking == 0 && v.newCaption
+    v.onLive(.failed("rate_limit", "slow down"))
+    v.onLive(.failed("rate_limit", "slow down"))  // deduped
+    let liveErrCount = c.msgs.filter { $0.text == "GPT-Live: slow down" }.count
+    v.fellBack("no credits"); v.fellBack("no credits")  // deduped
+    let fbCount = c.msgs.filter { $0.text.contains("no credits") }.count
+    v.run(.captions(false))
+    let capOff = !v.captions
+    v.run(.captions(true))
+    let r = Run("Check CI"); r.spoken = true; c.pucks = [["name": "a", "state": "needs"]]
+    v.began(r)
+    v.status("Scanning")
+    v.stage(#"{"chart":"bar","labels":["a"],"series":[{"values":[1]}]}"#)
+    v.chiefDrew = false
+    v.stage("<b>ok</b>")
+    v.live(r)
+    v.finished(Staged(text: "All green.", stage: nil, end: false), "All green.")
+    v.failed("Stopped.")
+    v.onLive(.closed("expired"))
+    let closedStopped = !v.on && c.msgs.last?.text.contains("ran out of time") == true
+    v.freshEngine()
+    _ = outputMuted()
+
+    // 4. Non-live voice flows: partial (barge-in & turn), run(.undo/.stop/.cancel/.reset/.bye), live >300 chars, finished(end:true)
+    v.on = true; v.isLive = false; v.vp = true; v.speaking = 1; v.lastSpoken = "Three MRs are ready"
+    v.partial("wait hold on")  // triggers barge-in hush()
+    let bargedIn = v.speaking == 0 && v.heard == "wait hold on"
+    v.heard = "captions off"; v.turn()
+    let turnRanCmd = !v.captions
+    v.run(.captions(true))
+    v.heard = "park #42"; v.turn()
+    v.run(.undo)
+    v.run(.reset)
+    let longRun = Run("Tell me everything")
+    longRun.live = String(repeating: "Everything looks green today. ", count: 14) + "\n```stage\n<p>hi</p>\n```"
+    v.on = true; v.isLive = false; v.muted = false; v.chiefDrew = false
+    v.live(longRun)
+    v.finished(Staged(text: "Goodbye now.", stage: nil, end: true), "Goodbye now.")
+    v.run(.bye)
+
+    // 5. Speech.kokoro binary pipe round-trip + EOF error recovery
+    do {
+        let inPipe = Pipe(), outPipe = Pipe()
+        let pcm = Data([1, 0, 2, 0, 3, 0, 4, 0])
+        var lenLE = UInt32(pcm.count).littleEndian
+        let frame = Data(bytes: &lenLE, count: 4) + pcm
+        outPipe.fileHandleForWriting.write(frame)
+        try? outPipe.fileHandleForWriting.close()
+        sp.kin = inPipe.fileHandleForWriting; sp.kout = outPipe.fileHandleForReading; sp.ready = true
+        let gotPCM = sp.kokoro("hello")
+        let afterEOF = sp.kokoro("second")  // hits EOF -> resets ready & sets status
+        try? inPipe.fileHandleForReading.close()
+        sp.stop()
+        check("voice: Speech.kokoro reads length-prefixed PCM and recovers cleanly on EOF",
+              gotPCM == pcm && afterEOF == nil)
+    }
+
+    // 6. LivePreview full playback & refusal paths against loopback fake WebSocket server
+    do {
+        let lp = LivePreview()
+        let toneBig = (0..<2400).map { Int16(12000 * sin(Double($0) / 10)) }.withUnsafeBytes { Data($0) }
+        final class PreviewFake {
+            let l: NWListener = { let p = NWParameters.tcp; p.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any); return try! NWListener(using: p) }()
+            let q = DispatchQueue(label: "p-fake")
+            var reply: (String) -> [Data] = { _ in [] }
+            init() { l.newConnectionHandler = { [unowned self] c in c.start(queue: self.q); self.serve(c, Data()) }; l.start(queue: q) }
+            func serve(_ c: NWConnection, _ buf: Data) {
+                c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [unowned self] d, _, done, err in
+                    let b = buf + (d ?? Data())
+                    if let h = b.range(of: Data("\r\n\r\n".utf8)) {
+                        let req = String(decoding: b[..<h.upperBound], as: UTF8.self)
+                        for (i, o) in self.reply(req).enumerated() {
+                            self.q.asyncAfter(deadline: .now() + 0.03 * Double(i)) { c.send(content: o, completion: .contentProcessed { _ in }) }
+                        }
+                        return
+                    }
+                    if !done && err == nil { self.serve(c, b) }
+                }
+            }
+        }
+        let pf = PreviewFake()
+        let w0 = Date(); while pf.l.state != .ready && Date() < w0 + 3 { RunLoop.main.run(until: Date() + 0.02) }
+        pf.reply = { req in
+            let n = req.components(separatedBy: "\r\n").first { $0.hasPrefix("Sec-WebSocket-Key: ") }.map { String($0.dropFirst(19)) } ?? ""
+            let a1 = wsFrame(0x1, Data(#"{"type":"session.output_transcript.delta","delta":"Hello."}"#.utf8), mask: nil)
+            let a2 = wsFrame(0x1, Data(#"{"type":"session.output_audio.delta","delta":"\#(toneBig.base64EncodedString())"}"#.utf8), mask: nil)
+            let a3 = wsFrame(0x1, Data(#"{"type":"session.output_audio.delta","delta":"\#(Data(count: 48000).base64EncodedString())"}"#.utf8), mask: nil)
+            return [Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(wsAccept(n))\r\n\r\n".utf8) + a1, a2, a3]
+        }
+        lp.testEndpoint = ("127.0.0.1", pf.l.port?.rawValue ?? 1, false)
+        lp.play("cedar", voiceOn: false, muted: false, settle: 0, key: { "sk-test" })
+        let end = Date() + 5
+        while lp.busy && Date() < end { RunLoop.main.run(until: Date() + 0.02) }
+        let previewHint = lp.hint ?? ""
+        lp.stop(); pf.l.cancel()
+        check("voice: LivePreview streams audio, tracks speech-to-silence, and finishes cleanly (\(lp.phase) / \(previewHint))",
+              lp.said.contains("Hello.") && (lp.phase == .played("cedar") || lp.phase == .idle))
+
+        // Refusal 401 path on LivePreview
+        let pf2 = PreviewFake()
+        let w1 = Date(); while pf2.l.state != .ready && Date() < w1 + 3 { RunLoop.main.run(until: Date() + 0.02) }
+        pf2.reply = { _ in [Data("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n".utf8)] }
+        let lp2 = LivePreview()
+        lp2.testEndpoint = ("127.0.0.1", pf2.l.port?.rawValue ?? 1, false)
+        lp2.play("vesper", voiceOn: false, muted: false, settle: 0, key: { "sk-bad" })
+        let end2 = Date() + 4
+        while lp2.busy && Date() < end2 { RunLoop.main.run(until: Date() + 0.02) }
+        let refused401 = lp2.hint?.contains("401") == true
+        lp2.stop(); pf2.l.cancel()
+        check("voice: LivePreview surfaces 401 refusal in hint", refused401)
+    }
+
+    // 7. Non-live say/play/fallback, openLive missing key, onLive pre-up failure, run(.stop/.cancel/.undo), Speech.test & warm
+    do {
+        v.on = true; v.isLive = false; v.muted = false
+        v.engine.attach(v.player)
+        try? v.engine.link(v.player, to: v.engine.mainMixerNode, format: v.speechFormat)
+        ud.set("eleven", forKey: "speech"); sp.stuck = "No credits"
+        v.say("Fallback test line.", filler: false)
+        v.say("Filler line.", filler: true)
+        RunLoop.main.run(until: Date() + 0.15)
+        ud.set("apple", forKey: "speech")
+        v.say("Apple line.", filler: false)
+        RunLoop.main.run(until: Date() + 0.1)
+        // Speech.test when kind == apple returns "No audio"
+        var testErr: String?
+        sp.test("Hi") { testErr = $0 }
+        let te = Date() + 2; while testErr == nil && Date() < te { RunLoop.main.run(until: Date() + 0.02) }
+        // Voice openLive with no key + onLive pre-up failure + close_requested + .other
+        let savedEnv = envKeyRead; envKeyRead = (true, nil)
+        keyLock.lock(); let savedK = keys["openai"]; keys["openai"] = .some(nil); keyLock.unlock()
+        v.on = true; v.isLive = true; v.liveUp = false
+        v.openLive()
+        let noKeyStopped = !v.on
+        v.on = true; v.isLive = true; v.liveUp = false
+        v.onLive(.other)
+        v.onLive(.failed("bad_voice", "voice unavailable"))
+        let preUpStopped = !v.on
+        v.on = true; v.isLive = true
+        v.onLive(.closed("close_requested"))
+        keyLock.lock(); keys["openai"] = savedK; keyLock.unlock(); envKeyRead = savedEnv
+        // Voice.run(.cancel) with pending toast + .stop while chief running + toggle while starting
+        c.toasts = [DwimToast(text: "Pending launch", pending: true)]
+        v.run(.cancel)
+        let pendingCancelled = !c.toasts.contains { $0.pending }
+        v.starting = true; v.toggle()
+        let cancelledStart = !v.starting
+        // Voice.show, look switch after stageWeb load, draw fallback, Speech.warm branches, LiveVoice.why fallback
+        v.on = true; v.isLive = false
+        v.show(["kind": "list", "title": "Board", "items": []])
+        v.look = looks[0]; v.look = looks[1]
+        v.draw("summary text", last: true)
+        c.run = Run("busy"); v.run(.stop); c.run = nil
+        c.toasts = [DwimToast(text: "Done", undo: "u-9")]; v.run(.undo)
+        for k in ["live", "eleven", "kokoro", "apple"] {
+            ud.set(k, forKey: "speech")
+            sp.warm()
+        }
+        RunLoop.main.run(until: Date() + 0.1)
+        let whyOther = LiveVoice.why(0, "", NSError(domain: "x", code: 1))
+        let whyNil = LiveVoice.why(0, "", nil)
+        let why404 = LiveVoice.why(404, "missing")
+        v.freshEngine()
+        check("voice: fallback say/play, Speech.test, openLive no-key, pre-up fail, warm, and cancel/toggle paths",
+              testErr == "No audio" && noKeyStopped && preUpStopped && pendingCancelled && cancelledStart
+              && whyOther.contains("lost") && whyNil == "lost the connection" && why404.contains("404"))
+    }
+
+    check("voice: Voice state machine handles GPT-Live events, cues, audio silence, stage blocks, fallback dedupe, barge-in, and close (\(heardText) / \(handedOff) / \(awaitingCue) / \(cueCleared) / \(startedSpeaking) / \(endedSpeaking) / \(liveErrCount) / \(fbCount) / \(capOff) / \(closedStopped) / \(bargedIn) / \(turnRanCmd))",
+          heardText == "What is status?" && handedOff && awaitingCue && cueCleared
+          && startedSpeaking && endedSpeaking && liveErrCount == 1 && fbCount == 1
+          && capOff && v.captions && closedStopped && bargedIn && turnRanCmd)
+}
+
+/// `Greenlight --unittest [--filter <substr>]`: fast, deterministic Swift unit test suite for local & CI.
+func unitTest() {
+    let t0 = Date()
+    let filter: String? = {
+        if let i = CommandLine.arguments.firstIndex(of: "--filter"), i + 1 < CommandLine.arguments.count {
+            return CommandLine.arguments[i + 1].lowercased()
+        }
+        return nil
+    }()
+    var total = 0, failed = 0
+    func check(_ what: String, _ ok: Bool) {
+        if let f = filter, !what.lowercased().contains(f) { return }
+        total += 1
+        if !ok { failed += 1 }
+        print(ok ? "ok  " : "FAIL", what)
+        fflush(stdout)
+    }
+    runOfflineUnitTests(check: check)
+    let c = Core(session: -9003)
+    runInboxUnitTests(c, check: check)
+    try? FileManager.default.removeItem(at: c.transcriptFile)
+    try? FileManager.default.removeItem(at: c.questionsURL)
+    runCoreUnitTests(check: check)
+    runVoiceEngineUnitTests(check: check)
+    try? FileManager.default.removeItem(at: transcript)
+    try? FileManager.default.removeItem(at: questionsFile)
+    if let suite = uitestSuiteName { ud.removePersistentDomain(forName: suite) }
+    let elapsed = String(format: "%.2f", Date().timeIntervalSince(t0))
+    if failed > 0 {
+        print("FAILED \(failed)/\(total) Swift unit checks (\(elapsed)s)")
+        exit(1)
+    }
+    print("ok  \(total)/\(total) Swift unit checks passed (\(elapsed)s)")
+    exit(0)
+}
+
+/// `Greenlight.app/Contents/MacOS/Greenlight --selftest`: drives the actions the buttons call
+/// (send, Stop, answer buttons, Compact, Codex, Clear) on a scratch session where greenlight runs, plus the menubar width.
+func selfTest() {
+    let d = ud
+    let keep = ["model", "effort", "context", "window", "name", "seen", "sent", "verboseActivity"].map { ($0, d.object(forKey: $0)) }
+    var failed = false
+    func onMain<T>(_ f: () -> T) -> T { DispatchQueue.main.sync(execute: f) }
+    func check(_ what: String, _ ok: Bool) { print(ok ? "ok  " : "FAIL", what); fflush(stdout); failed = failed || !ok }
+    func wait(_ what: String, _ secs: Double, _ ok: () -> Bool) {
+        let end = Date() + secs
+        while !onMain(ok) {
+            if Date() > end { check("timed out: \(what)", false); return }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+    runOfflineUnitTests(check: check)
+    let syn = AVSpeechSynthesizer(), pf = AVAudioFormat(standardFormatWithSampleRate: 22050, channels: 1)!
     if ProcessInfo.processInfo.environment["GREENLIGHT_LIVE_TEST"] == "1", let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] {
         // a real preview session (a fraction of a cent): it must speak the line, and its audio must play back through the output
         let lp = LivePreview(), t0 = Date()
