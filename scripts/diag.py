@@ -314,8 +314,8 @@ def automations(n=10):
         for line in (home() / "auto" / "runs.jsonl").read_text().splitlines()[-n:]:
             with contextlib.suppress(ValueError):
                 r = json.loads(line)
-                out.append(clean({"ts": r.get("ts"), "name_h": h(r.get("name")), "status": r.get("status"),
-                                  "engine": r.get("engine"), "secs": r.get("secs")}))
+                out.append(clean({"ts": r.get("ts"), "name_h": h(r.get("name")), "status": r.get("status"), "engine": r.get("engine"),
+                                  "secs": r.get("secs"), **{k: r.get(k) for k in ("in_tokens", "out_tokens", "cost_cents")}}))
     return out
 
 
@@ -405,12 +405,14 @@ def doctor():
 
 
 def usage(events):
-    """Chat turns per harness.model: count, output tokens, cost (the harnesses that report one, Claude's)."""
+    """Chat turns and automation runs per harness.model: counts, tokens in and out, cost (Claude's; the others report none)."""
     out = {}
     for e in events:
-        if e.get("kind") == "chat_turn":
-            u = out.setdefault(f"{e.get('harness', '?')}.{e.get('model', 'default')}", {"turns": 0, "out_tokens": 0, "cost_usd": 0.0})
-            u["turns"] += 1
+        if e.get("kind") in ("chat_turn", "automation") and (e["kind"] == "chat_turn" or e.get("engine") not in (None, "orchestrator")):
+            key = f"{e.get('harness') or e.get('engine') or '?'}.{e.get('model') or 'default'}"
+            u = out.setdefault(key, {"turns": 0, "runs": 0, "in_tokens": 0, "out_tokens": 0, "cost_usd": 0.0})
+            u["turns" if e["kind"] == "chat_turn" else "runs"] += 1
+            u["in_tokens"] += e.get("in_tokens") or 0
             u["out_tokens"] += e.get("out_tokens") or 0
             u["cost_usd"] = round(u["cost_usd"] + (e.get("cost_cents") or 0) / 100, 5)
     return out

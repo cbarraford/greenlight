@@ -25,8 +25,10 @@ the host: the checkout is `~/.claude/skills/greenlight`.
   `hang {secs}` (the main thread didn't answer for over 2 s) and, every 5 min, `sample {rss_mb, cpu_pct, up_mins}`.
 - `summary.crashes`: the app's macOS crash reports (`~/Library/Logs/DiagnosticReports/Greenlight*.ips`), exception,
   signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
-- `summary.usage`: chat turns per `harness.model` with output tokens and cost. Each `chat_turn` carries `out_tokens`,
-  `context` and `cost_cents`; only Claude reports a cost.
+- `summary.usage`: chat turns and automation runs per `harness.model`, with tokens in and out and cost. `chat_turn` and
+  `automation` events (and `auto/runs.jsonl`) carry `in_tokens`, `out_tokens` and `cost_cents`; only Claude reports a cost.
+  `in_tokens` counts cache reads and sums every request of the turn, so it runs far above `context` (one request's size).
+  A resumed Codex turn is its thread's total minus the one in its rollout before the turn; none if that's unreadable.
 
 **How to read it**
 - Every event has `ts`, `v` (git short SHA), `comp` (the script, or `app`), `run`, `pid` and `kind`.
