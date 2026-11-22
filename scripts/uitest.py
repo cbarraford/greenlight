@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 import uuid
 from pathlib import Path
 
@@ -133,6 +134,8 @@ def _make_fixture(root: Path, fixture: str):
     shutil.copy2(ROOT / "app" / "vendor" / "ghostty-web.js", webdir / "ghostty-web.js")
 
     # Fixture workspace data
+    worktrees: list[dict[str, Any]]
+    rows: list[dict[str, Any]]
     if fixture == "empty":
         worktrees, rows = [], []
     elif fixture == "adversarial":
@@ -267,7 +270,7 @@ def _make_fixture(root: Path, fixture: str):
     orca_data.write_text(json.dumps({"ok": True, "result": {"worktrees": worktrees}}))
     orca_terms = root / "orca-terms.json"
     orca_terms.write_text(json.dumps({"ok": True, "result": {"terminals": []}}))
-    repo_names = sorted({wt.get("repo") or "widgets" for wt in worktrees} or {"widgets"})
+    repo_names = sorted({str(wt.get("repo") or "widgets") for wt in worktrees} or {"widgets"})
     orca_repos = root / "orca-repos.json"
     orca_repos.write_text(json.dumps({
         "ok": True,

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/bughunt.py and the extended stress/chaos fixtures in scripts/uitest.py."""
+import argparse
+import atexit
 import json
 import os
 import plistlib
@@ -12,6 +14,7 @@ from unittest import mock
 
 # Isolate GREENLIGHT_HOME before importing Greenlight modules (AGENTS.md rule).
 _TMP_HOME = Path(tempfile.mkdtemp(prefix="gl-test-bughunt-home-"))
+atexit.register(shutil.rmtree, _TMP_HOME, True)
 os.environ["GREENLIGHT_HOME"] = str(_TMP_HOME)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -251,7 +254,7 @@ def test_verify_patch_requires_test_file():
     wt = Path(tempfile.mkdtemp(prefix="gl-wt-verify-"))
     try:
         subprocess.run(["git", "init", "-q"], cwd=str(wt), check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=str(wt), check=True)
+        subprocess.run(["git", "config", "user.email", "bughunt-test"], cwd=str(wt), check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=str(wt), check=True)
         (wt / "scripts").mkdir()
         (wt / "scripts" / "foo.py").write_text("x = 1\n")
@@ -314,29 +317,343 @@ def test_remote_quoting_plist_escaping_and_pid_lock():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def main():
+def test_uitest_session_trace_and_methods():
+    sess = uitest.UITestSession(fixture="default", record_trace=True)
     try:
-        test_normalize_and_fingerprint()
-        print("ok  normalize & fingerprint")
-        test_rank_dedupe_and_top2_selection()
-        print("ok  priority ranking, dedupe & top-2 PR selection")
-        test_shrink_trace_ddmin()
-        print("ok  delta-debugging trace shrinker")
-        test_fixtures_and_offline_stubs()
-        print("ok  all 6 uitest fixtures & offline harness stubs")
-        test_perf_oracles()
-        print("ok  performance & leak oracles")
-        test_diag_reader_and_llm_parser()
-        print("ok  isolated diag reader & LLM JSON parser")
-        test_launchd_plist_and_report_and_trace_io()
-        print("ok  launchd plist, report writer & trace I/O")
-        test_verify_patch_requires_test_file()
-        print("ok  repro-first verification gate (single & multi-commit)")
-        test_remote_quoting_plist_escaping_and_pid_lock()
-        print("ok  remote path quoting, plist XML safety & atomic PID lock")
-        print("all test_bughunt checks passed")
+        assert sess.is_alive() is False
+        with mock.patch.object(uitest, "rpc", return_value={"ok": True, "result": True}):
+            assert sess.ping()["ok"] is True
+            assert sess.state()["ok"] is True
+            assert sess.action("floor", to="center")["ok"] is True
+            assert sess.eval("dashboard", "1+1")["ok"] is True
+            assert sess.click("dashboard", "#btn")["ok"] is True
+            assert sess.type_text("dashboard", "#inp", "hello")["ok"] is True
+            assert sess.wait_for("dashboard", "true", timeout=1.0) is True
+            assert sess.screenshot(sess.root / "s.png")["ok"] is True
+        assert [t["op"] for t in sess.trace] == ["action", "eval", "click", "type"]
+        tp = sess.save_trace(sess.root / "out.jsonl")
+        fx, steps = bughunt.load_trace_file(tp)
+        assert fx == "default" and len(steps) == 4
     finally:
-        shutil.rmtree(_TMP_HOME, ignore_errors=True)
+        shutil.rmtree(sess.root, ignore_errors=True)
+
+
+def test_github_dedupe_commits_and_baseline():
+    tmp = Path(tempfile.mkdtemp(prefix="gl-gh-test-"))
+    try:
+        # load_known_fingerprints (list & dict forms)
+        (tmp / "known-issues.json").write_text(json.dumps(["aaa111111111"]))
+        assert bughunt.load_known_fingerprints(tmp) == {"aaa111111111"}
+        (tmp / "known-issues.json").write_text(json.dumps({"fingerprints": ["bbb222222222"]}))
+        assert bughunt.load_known_fingerprints(tmp) == {"bbb222222222"}
+
+        # _gh_repo_args parses SSH & HTTPS remotes
+        cp_ssh = subprocess.CompletedProcess([], 0, stdout="git@github.com:acme/greenlight.git\n", stderr="")
+        with mock.patch.object(bughunt.subprocess, "run", return_value=cp_ssh):
+            assert bughunt._gh_repo_args(ROOT) == ["-R", "acme/greenlight"]
+
+        # fetch_open_pr_fingerprints extracts from body and branch
+        pr_json = json.dumps([
+            {"number": 1, "body": "footer\nbughunt-fingerprint: deadbeef1234", "headRefName": "other"},
+            {"number": 2, "body": "", "headRefName": "bughunt/2026-11-21-cafebabe5678"},
+        ])
+        with mock.patch.object(bughunt.shutil, "which", return_value="/usr/bin/gh"), \
+             mock.patch.object(bughunt, "_gh_repo_args", return_value=["-R", "acme/gl"]), \
+             mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=pr_json, stderr="")):
+            assert bughunt.fetch_open_pr_fingerprints(ROOT) == {"deadbeef1234", "cafebabe5678"}
+
+        # get_recent_commits parses git log
+        log_out = "===abc1234\tfix dashboard\napp/dashboard.html\nscripts/dash.py\n\n===def5678\ttweak\nREADME.md\n"
+        with mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=log_out, stderr="")):
+            commits, files = bughunt.get_recent_commits(ROOT, since_hours=48)
+            assert len(commits) == 2 and "app/dashboard.html" in files
+
+        # run_baseline captures failing and timed-out commands
+        seq = [
+            subprocess.CompletedProcess([], 0, stdout="ok", stderr=""),
+            subprocess.CompletedProcess([], 1, stdout="bad", stderr="err"),
+            subprocess.TimeoutExpired(["make"], 60, output=b"partial"),
+        ]
+        idx = {"i": 0}
+
+        def fake_run(*_a, **_k):
+            v = seq[min(idx["i"], len(seq) - 1)]
+            idx["i"] += 1
+            if isinstance(v, Exception):
+                raise v
+            return v
+
+        with mock.patch.object(bughunt, "_has_playwright", return_value=False), \
+             mock.patch.object(bughunt.shutil, "which", return_value="/usr/bin/ruff"), \
+             mock.patch.object(bughunt.subprocess, "run", side_effect=fake_run):
+            hits = bughunt.run_baseline(ROOT)
+            assert len(hits) >= 2 and all(h["oracle"] == "baseline_regression" for h in hits)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _FakeSession:
+    """In-memory stand-in for UITestSession to exercise fuzz, soak, replay, and oracle paths quickly."""
+
+    def __init__(self, fixture="default", binary=None, record_trace=True, alive=True,
+                 web_errors=None, console_errors=None, pwned=False, layout_issues=None):
+        self.fixture = fixture
+        self.binary = binary
+        self.record_trace = record_trace
+        self.trace = []
+        self.root = Path(tempfile.mkdtemp(prefix="gl-fake-sess-"))
+        self.home = self.root / "home"
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.tmux_socket = "gl-fake-tmux"
+        self._alive = alive
+        self.proc = mock.Mock(returncode=139 if not alive else None)
+        self._web_errors = web_errors or {"dashboard": [], "terminal": []}
+        self._console_errors = console_errors or {"dashboard": [], "terminal": []}
+        self._pwned = pwned
+        self._layout_issues = layout_issues or []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def is_alive(self):
+        return self._alive
+
+    def state(self):
+        return {
+            "ok": True,
+            "webErrors": self._web_errors,
+            "consoleErrors": self._console_errors,
+            "metrics": {"rssMb": 120.5, "cpuSecs": 0.4, "openFds": 24, "domNodes": {"dashboard": 200, "terminal": 150}},
+        }
+
+    def action(self, name, **kwargs):
+        if self.record_trace:
+            self.trace.append({"seq": len(self.trace), "op": "action", "args": {"name": name, **kwargs}})
+        return {"ok": True}
+
+    def eval(self, target, js, record=True):
+        if record and self.record_trace:
+            self.trace.append({"seq": len(self.trace), "op": "eval", "args": {"target": target, "js": js}})
+        if "__pwned" in js:
+            return {"ok": True, "result": 1 if self._pwned else None}
+        if "scrollWidth" in js:
+            return {"ok": True, "result": self._layout_issues}
+        if "querySelectorAll('button" in js:
+            return {"ok": True, "result": ["#btn-1"]}
+        if "textarea" in js:
+            return {"ok": True, "result": ["#inp-1"]}
+        return {"ok": True, "result": True}
+
+    def click(self, target, selector):
+        if self.record_trace:
+            self.trace.append({"seq": len(self.trace), "op": "click", "args": {"target": target, "selector": selector}})
+        return {"ok": True}
+
+    def type_text(self, target, selector, text):
+        if self.record_trace:
+            self.trace.append({"seq": len(self.trace), "op": "type", "args": {"target": target, "selector": selector, "text": text}})
+        return {"ok": True}
+
+    def wait_for(self, target, pred, timeout=10.0):
+        return True
+
+    def screenshot(self, out_path, window="active"):
+        Path(out_path).write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        return {"ok": True, "path": str(out_path)}
+
+    def save_trace(self, path):
+        return bughunt.save_trace_file(Path(path), self.fixture, self.trace)
+
+
+def test_oracles_fuzz_soak_replay_and_matrix():
+    run_dir = Path(tempfile.mkdtemp(prefix="gl-matrix-test-"))
+    try:
+        # 1. Dead process -> crash oracle
+        with _FakeSession(alive=False) as dead:
+            (dead.root / "app.log").write_text("Segmentation fault")
+            hits, _ = bughunt._check_session_oracles(dead, "default", "fuzz", set())
+            assert len(hits) == 1 and hits[0]["oracle"] == "crash"
+
+        # 2. Live session with JS error, console error, XSS, and diag hang
+        with _FakeSession(
+            web_errors={"dashboard": ["ReferenceError: x is not defined"], "terminal": []},
+            console_errors={"dashboard": [], "terminal": ["console fail"]},
+            pwned=True,
+        ) as sick:
+            (sick.home / "diag").mkdir(parents=True, exist_ok=True)
+            (sick.home / "diag" / "app.jsonl").write_text(json.dumps({"kind": "hang", "secs": 3.1, "comp": "app"}) + "\n")
+            hits, m = bughunt._check_session_oracles(sick, "adversarial", "fuzz", set(), shot_dir=run_dir / "shots")
+            oracles = {h["oracle"] for h in hits}
+            assert oracles == {"js_error", "console_error", "security", "hang"}, oracles
+            assert m["rssMb"] == 120.5
+
+        # 3. fuzz_session + tmux leak detection + layout issue
+        def make_fake(fixture="default", binary=None, record_trace=True):
+            return _FakeSession(
+                fixture=fixture, binary=binary, record_trace=record_trace,
+                web_errors={"dashboard": ["TypeError: boom"], "terminal": []} if fixture == "default" else None,
+                layout_issues=["horizontal overflow: scrollWidth=1500 > innerWidth=1200"],
+            )
+
+        with mock.patch.object(bughunt.uitest, "UITestSession", side_effect=make_fake), \
+             mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="")), \
+             mock.patch.object(bughunt.time, "sleep", return_value=None):
+            f_hits, trace, metrics = bughunt.fuzz_session("default", seed=7, steps=80, run_dir=run_dir)
+            assert any(h["oracle"] == "js_error" for h in f_hits)
+            assert any(h["oracle"] == "layout_issue" for h in f_hits)
+            assert len(trace) > 0 and metrics["rss_max_mb"] == 120.5
+
+            # replay_trace confirms the JS error
+            ok, r_hits = bughunt.replay_trace(trace[:4], fixture="default", target_oracle="js_error")
+            assert ok and any(h["oracle"] == "js_error" for h in r_hits)
+
+            # run_soak exercises churn & metric collection
+            s_hits, s_metrics = bughunt.run_soak(soak_secs=1, fixture="scale")
+            assert s_metrics.get("rss_max_mb") == 120.5 and isinstance(s_hits, list)
+
+            # run_fuzz_matrix runs parallel fixtures + replays & shrinks hard hits
+            with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+                 mock.patch.object(bughunt.uitest, "build_test_binary", return_value=Path("/tmp/fake-bin")):
+                m_hits, m_metrics = bughunt.run_fuzz_matrix(
+                    fixtures=("default", "empty"), seed=1, steps=8, soak_secs=0, workers=2, run_dir=run_dir,
+                )
+                repro_js = [h for h in m_hits if h["oracle"] == "js_error" and h["reproducible"]]
+                assert repro_js and repro_js[0]["trace_path"] is not None
+                assert "fuzz" in m_metrics
+
+        # tmux leak helper detects surviving session
+        with mock.patch.object(bughunt.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, stdout="0: 1 windows\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        ]):
+            leaks = bughunt._check_tmux_leak("gl-leak-sock", "default")
+            assert len(leaks) == 1 and leaks[0]["oracle"] == "process_leak"
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_agent_llm_vm_and_patcher_pipeline():
+    run_dir = Path(tempfile.mkdtemp(prefix="gl-agent-test-"))
+    try:
+        # Agent fallback on rate limit: claude hits usage limit -> falls back to codex
+        with mock.patch.object(bughunt.harness, "argv", side_effect=lambda eng, p, stream=False: ([eng], p)), \
+             mock.patch.object(bughunt.subprocess, "run", side_effect=[
+                 subprocess.CompletedProcess([], 1, stdout="You've hit your usage limit", stderr=""),
+                 subprocess.CompletedProcess([], 0, stdout='```bughunt-json\n[{"title":"Reg","oracle":"commit_regression","summary":"Broken","files":["app/dashboard.html"],"reproducible":true}]\n```', stderr=""),
+             ]):
+            out, rc, eng = bughunt.run_agent_with_fallback("hi", cwd=ROOT, agents=["claude", "codex"])
+            assert rc == 0 and eng == "codex" and "bughunt-json" in out
+
+        # LLM explorer parses structured findings
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=(
+                 '```bughunt-json\n[{"title":"Broken tab","oracle":"commit_regression","summary":"Tab blank","files":["app/terminal.html"],"reproducible":true}]\n```',
+                 0, "claude",
+             )):
+            llm_hits = bughunt.run_llm_explorer(ROOT, [{"sha": "abc", "subject": "ui", "files": ["app/terminal.html"]}], {"app/terminal.html"}, run_dir)
+            assert len(llm_hits) == 1 and llm_hits[0]["auto_pr"] is True
+
+        # Tier-2 VM HID failure becomes finding
+        with mock.patch.object(bughunt.sys, "platform", "darwin"), \
+             mock.patch.object(bughunt.shutil, "which", return_value="/opt/homebrew/bin/tart"), \
+             mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout="hid fail", stderr="")):
+            vm_hits = bughunt.run_vm_hid(ROOT, run_dir)
+            assert len(vm_hits) == 1 and vm_hits[0]["oracle"] == "baseline_regression"
+
+        # patch_and_open_draft_pr full happy path (mocked git/gh/agent/verify)
+        finding = bughunt.make_finding(
+            oracle="js_error", track="fuzz", fixture="default",
+            title="Null deref in dashboard", summary="TypeError: null", where="app/dashboard.html", reproducible=True,
+        )
+
+        def fake_subproc(cmd, **_kw):
+            if cmd[0] == "git" and "rev-list" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+            if cmd[0] == "git" and "status" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if cmd[0] == "gh" and "--label" in cmd:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="could not add label: not found")
+            if cmd[0] == "gh":
+                return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/acme/gl/pull/99\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with mock.patch.object(bughunt.subprocess, "run", side_effect=fake_subproc), \
+             mock.patch.object(bughunt, "run_agent_with_fallback", return_value=("fixed", 0, "claude")), \
+             mock.patch.object(bughunt, "verify_patch_worktree", return_value=(True, "ruff: PASS\ntest-py: PASS")), \
+             mock.patch.object(bughunt, "_gh_repo_args", return_value=["-R", "acme/gl"]):
+            res = bughunt.patch_and_open_draft_pr(finding, repo_dir=ROOT, base_ref="origin/main", run_dir=run_dir, dry_run=False)
+            assert res["status"] == "opened" and res["pr_url"].endswith("/pull/99"), res
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_remote_schedule_run_nightly_and_cli():
+    # Remote install checks Darwin and delegates over SSH
+    with mock.patch.object(bughunt, "_ssh_exec", side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="Linux\n", stderr=""),
+    ]):
+        assert bughunt.install_schedule(host="linux-box") == 1
+
+    with mock.patch.object(bughunt, "_ssh_exec", side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="Darwin\n", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="installed\n", stderr=""),
+    ]) as ssh_m:
+        assert bughunt.install_schedule(host="mac-mini", repo="~/greenlight", hour=3, minute=0, max_prs=2, with_vm=True) == 0
+        assert "cd ~/greenlight && python3 scripts/bughunt.py install --hour 3 --minute 0 --max-prs 2 --with-vm" in ssh_m.call_args_list[1][0][1]
+
+    with mock.patch.object(bughunt, "_ssh_exec", return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")) as ssh_r:
+        assert bughunt.run_remote("mac-mini", repo="~/greenlight", extra_args=["--dry-run"]) == 0
+        assert "caffeinate -i python3 scripts/bughunt.py run --dry-run" in ssh_r.call_args[0][1]
+        assert bughunt.show_status(host="mac-mini", repo="~/greenlight") == 0
+
+    # Local status + full run_nightly dry-run with mocked tracks
+    bughunt.append_perf_history({"ts": 1, "date": "2026-11-21", "findings": 0, "prs_opened": 0, "soak": {"rss_max_mb": 120, "rpc_p95_ms": 5}})
+    assert bughunt.show_status() == 0
+
+    bad_args = argparse.Namespace(fixtures="not_a_fixture")
+    assert bughunt.run_nightly(bad_args) == 2
+
+    with mock.patch.object(bughunt, "run_baseline", return_value=[]), \
+         mock.patch.object(bughunt, "run_fuzz_matrix", return_value=([], {"soak": {}})), \
+         mock.patch.object(bughunt, "run_llm_explorer", return_value=[]), \
+         mock.patch.object(bughunt, "fetch_open_pr_fingerprints", return_value=set()), \
+         mock.patch.object(bughunt.sys, "argv", ["bughunt.py", "run", "--dry-run", "--base", "HEAD", "--fixtures", "default"]):
+        assert bughunt.main() == 0
+
+
+def main():
+    test_normalize_and_fingerprint()
+    print("ok  normalize & fingerprint")
+    test_rank_dedupe_and_top2_selection()
+    print("ok  priority ranking, dedupe & top-2 PR selection")
+    test_shrink_trace_ddmin()
+    print("ok  delta-debugging trace shrinker")
+    test_fixtures_and_offline_stubs()
+    print("ok  all 6 uitest fixtures & offline harness stubs")
+    test_perf_oracles()
+    print("ok  performance & leak oracles")
+    test_diag_reader_and_llm_parser()
+    print("ok  isolated diag reader & LLM JSON parser")
+    test_launchd_plist_and_report_and_trace_io()
+    print("ok  launchd plist, report writer & trace I/O")
+    test_verify_patch_requires_test_file()
+    print("ok  repro-first verification gate (single & multi-commit)")
+    test_remote_quoting_plist_escaping_and_pid_lock()
+    print("ok  remote path quoting, plist XML safety & atomic PID lock")
+    test_uitest_session_trace_and_methods()
+    print("ok  UITestSession trace recording & RPC wrappers")
+    test_github_dedupe_commits_and_baseline()
+    print("ok  GitHub dedupe, commit parsing & baseline runner")
+    test_oracles_fuzz_soak_replay_and_matrix()
+    print("ok  oracle polling, fuzzing, soak, replay & matrix")
+    test_agent_llm_vm_and_patcher_pipeline()
+    print("ok  agent fallback, LLM explorer, VM HID & Draft PR patcher")
+    test_remote_schedule_run_nightly_and_cli()
+    print("ok  remote Mac mini scheduling, run_nightly & CLI")
+    print("all test_bughunt checks passed")
 
 
 if __name__ == "__main__":
