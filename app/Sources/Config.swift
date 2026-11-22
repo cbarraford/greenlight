@@ -208,6 +208,14 @@ let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5
               ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
 /// Gemini model ids run through agy; the Gemini CLI entry still starts that harness's default model.
 func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "agy" : model }
+/// A Gemini model that came back with Claude Code's "issue with the selected model": the host's chat.py predates agy and
+/// handed the id to `claude`, so the model is fine and the host's greenlight is older than this app. Says so, else nil.
+func staleBackendNote(model: String, error: String, host: String, code: String) -> String? {
+    guard harnessOf(model) == "agy", error.contains("issue with the selected model") else { return nil }
+    let on = host.isEmpty || host == "local" ? "this Mac" : host
+    return "Greenlight on \(on) is older than this app: its \(code) doesn't run Gemini models through agy, so it sent \(model) to Claude Code. "
+        + "Update that checkout to main (git pull there, or scripts/sync.sh from this Mac), or pick a Claude model."
+}
 func savedModel(_ key: String, fallback: String) -> String {
     let stored = ud.string(forKey: key) ?? fallback
     return stored == "gemini-4-neon" ? "gemini-4-neon-medium" : stored
