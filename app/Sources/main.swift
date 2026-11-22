@@ -1,19 +1,8 @@
 import AppKit
-import AVFoundation
-import Carbon
-import Combine
-import CoreAudio
-import CryptoKit
-import Network
-import Security
-import Speech
-import SwiftUI
-import UniformTypeIdentifiers
-import UserNotifications
-import WebKit
 
 let app = NSApplication.shared
 let delegate = App()
+#if GREENLIGHT_TESTS
 if CommandLine.arguments.contains("--vimtest") { vimTest() }
 if unittest {
     app.setActivationPolicy(.accessory)
@@ -29,4 +18,13 @@ if selftest {
     app.delegate = delegate
     app.setActivationPolicy(.regular)
 }
+#else
+if uitest {
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+} else {
+    app.delegate = delegate
+    app.setActivationPolicy(.regular)
+}
+#endif
 app.run()
