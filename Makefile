@@ -4,7 +4,7 @@ NATIVE := $(shell [ "$$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo 
 SWIFTC = DEVELOPER_DIR=/Library/Developer/CommandLineTools $(NATIVE) swiftc
 SWIFT_SRCS = $(wildcard app/Sources/*.swift)
 
-.PHONY: help test lint check-diff coverage setup-hooks test-py test-js test-webkit test-ui bughunt typecheck build report sync dev-status
+.PHONY: help test lint check-diff coverage setup-hooks test-py test-js test-webkit test-ui bughunt typecheck build restart report sync dev-status
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
@@ -47,6 +47,16 @@ typecheck: ## compile-check Swift app sources (strict concurrency, warnings as e
 
 build: ## build and install ~/Applications/Greenlight.app
 	$(NATIVE) app/build.sh
+
+restart: ## quit and reopen ~/Applications/Greenlight.app
+	@if pgrep -fx "$$HOME/Applications/Greenlight.app/Contents/MacOS/Greenlight" >/dev/null; then \
+		osascript -e 'tell application id "dev.greenlight.app" to quit' >/dev/null 2>&1 || true; \
+		for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do \
+			pgrep -fx "$$HOME/Applications/Greenlight.app/Contents/MacOS/Greenlight" >/dev/null || break; \
+			sleep 0.2; \
+		done; \
+	fi
+	open "$$HOME/Applications/Greenlight.app"
 
 report: ## scan and write ~/.greenlight/report.html
 	$(PY) scripts/greenlight.py report
