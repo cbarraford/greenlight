@@ -6,6 +6,7 @@
     diag.py summary [--since 24h]                           version, environment, config shape, span timings, recent automations
     diag.py bundle [--since 7d] [--out F|-]                 a bug-report bundle (summary, errors, recent events), re-checked for leaks
     diag.py report --title T [--body-file F|-] [--execute]  preview the GitHub issue for a bug; --execute files it (gh)
+    diag.py doctor                                          setup checks: forge auth, agent CLIs, disk, the automations timer
 
 Events go to $GREENLIGHT_HOME/diag/events.jsonl, and the app's own events go to ~/Library/Logs/Greenlight/app.jsonl.
 Both files rotate at 5 MB and keep three old copies. Nothing is uploaded.
@@ -42,7 +43,7 @@ HASH = re.compile(r"[0-9a-f]{10}")
 # string-valued keys. An identifier (a workspace, repo, MR or automation) goes under a key ending in _h, from h().
 KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "name", "gate", "verdict", "provider",
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
-        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role"}
+        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey"),
@@ -318,6 +319,91 @@ def automations(n=10):
     return out
 
 
+def crash_dir():
+    return Path.home() / "Library" / "Logs" / "DiagnosticReports"
+
+
+def crashes(after, n=5):
+    """The app's macOS crash reports since `after`: exception, signal and the crashed thread's frames as image:symbol.
+    Images by name, never path; a frame with a slash in it is dropped, and the export gate checks the rest.
+    Only this machine's: with a remote host the bundle is built there, so the Mac's reports aren't in it."""
+    out = []
+    for f in sorted(crash_dir().glob("[Gg]reenlight*.ips"), key=lambda f: f.stat().st_mtime)[-n:]:
+        try:
+            if f.stat().st_mtime < after:
+                continue
+            head, body = f.read_text(errors="replace").split("\n", 1)
+            hd, b = json.loads(head), json.loads(body)
+            if not str(b.get("codeSigningID") or "").startswith("dev.greenlight."):
+                continue  # another app whose name starts with Greenlight
+            imgs = [i.get("name") or "?" for i in b.get("usedImages", [])]
+            th = b.get("threads", [])[b.get("faultingThread", 0)]
+            frames = []
+            for fr in th.get("frames", [])[:12]:
+                i = fr.get("imageIndex")
+                x = f"{imgs[i] if isinstance(i, int) and i < len(imgs) else '?'}:{fr.get('symbol', hex(fr.get('imageOffset', 0)))}"[:160]
+                if "/" not in x:
+                    frames.append(x)
+            ex = b.get("exception") or {}
+            out.append({"ts": round(f.stat().st_mtime), "v": str(hd.get("build_version") or "")[:12], "exc": ex.get("type"),
+                        "signal": ex.get("signal"), "frames": frames})
+        except (OSError, ValueError, IndexError, AttributeError, TypeError):
+            continue  # ponytail: an unreadable report is skipped, not reported
+    return out
+
+
+def doctor():
+    """Setup checks an AI can read: each {check, ok, ...}, numbers and enums only."""
+    out = []
+
+    def add(check, ok, **kw):
+        out.append(clean({"check": check, "ok": ok, **kw}))
+    for tool in ("glab", "gh"):
+        if not shutil.which(tool):
+            add(f"{tool}_auth", None, state="missing")
+            continue
+        try:
+            p = subprocess.run([tool, "auth", "status"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+            add(f"{tool}_auth", p.returncode == 0, rc=p.returncode, msg_class=classify(p.stderr + p.stdout) if p.returncode else None)
+        except (OSError, subprocess.SubprocessError) as e:
+            add(f"{tool}_auth", False, **{k: v for k, v in failure(e).items() if k != "ok"})
+    try:
+        agents = json.loads((home() / "config.json").read_text()).get("agents") or ["claude"]
+    except (OSError, ValueError, AttributeError):
+        agents = ["claude"]
+    for a in agents if isinstance(agents, list) else []:
+        if a in ("claude", "codex", "opencode", "pi", "gemini"):
+            add(f"agent_{a}", bool(shutil.which(a)))
+    with contextlib.suppress(OSError):
+        free = shutil.disk_usage(home() if home().exists() else Path.home()).free / 1e9
+        add("disk", free > 1, free_gb=round(free, 1))
+    add("home_writable", os.access(home(), os.W_OK) if home().exists() else os.access(home().parent, os.W_OK))
+    try:
+        autos = json.loads((home() / "automations.json").read_text())
+    except (OSError, ValueError):
+        autos = {}
+    if any(isinstance(a, dict) and a.get("enabled", True) for a in autos.values()):
+        tick = home() / "auto" / "last_tick"
+        age = time.time() - tick.stat().st_mtime if tick.exists() else None
+        add("auto_timer", age is not None and age < 600, state="missing" if age is None else "stale" if age >= 600 else "fresh",
+            age_secs=round(age) if age is not None else None)
+    dead = 0
+    for f in [*(home() / "auto").glob("*.pid"), *home().glob("orchestrator-phase-*.pid")]:
+        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+            t = f.read_text()
+            pid = int(json.loads(t).get("phase") if t.lstrip().startswith("{") else t)
+            if pid <= 0:
+                continue
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                dead += 1
+            except PermissionError:
+                pass
+    add("stale_pids", dead == 0, n=dead)
+    return {"ok": all(c.get("ok") is not False for c in out), "checks": out}
+
+
 def summary(after, events=None):
     events = read(after) if events is None else events
     now = time.time()
@@ -333,6 +419,7 @@ def summary(after, events=None):
         "top_errors": errors(events)[:10],
         "spans": spans(events),
         "automations": automations(),
+        "crashes": crashes(after),
     }
 
 
@@ -379,10 +466,11 @@ def bundle(after, app_events=(), hit=None):
             kept.append(c)
     summ = summary(after, kept)  # over the checked events only, the app's from a remote host included
     summ.pop("top_errors", None)  # the same as errors below
+    summ["crashes"] = [c for c in summ["crashes"] if not any(hit(x) for x in strings(c))]
     b = {"manifest": {"format": 1, "created": round(time.time()), "version": version(), "since": round(after),
                       "events": len(kept), "left_out": left_out},
-         "summary": summ, "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
-    why = next((w for w in map(hit, strings({"summary": b["summary"], "errors": b["errors"]})) if w), None)
+         "summary": summ, "doctor": doctor(), "errors": errors(kept), "events": kept[-BUNDLE_EVENTS:]}
+    why = next((w for w in map(hit, strings({k: b[k] for k in ("summary", "doctor", "errors")})) if w), None)
     if why:
         raise SystemExit(f"diag: the summary would export {why}; nothing written")
     return b
@@ -403,7 +491,7 @@ def issue_body(text, b):
         f" ({b['manifest']['events']} events, {b['manifest']['left_out']} left out by the privacy check).\n\n"
 
     def render(ev):
-        d = {"summary": b["summary"], "errors": b["errors"][:20], "events": ev}
+        d = {"summary": b["summary"], "doctor": b.get("doctor"), "errors": b["errors"][:20], "events": ev}
         return head + "<details><summary>Diagnostics</summary>\n\n```json\n" + json.dumps(d, indent=1) + "\n```\n</details>\n"
     ev = b["events"][-200:]
     out = render(ev)
@@ -457,6 +545,7 @@ def main(argv=None):
     b = sub.add_parser("bundle")
     b.add_argument("--since", default="7d")
     b.add_argument("--out", help="a file, or - for stdout (default: a new file in $GREENLIGHT_HOME/diag)")
+    sub.add_parser("doctor")
     r = sub.add_parser("report")
     r.add_argument("--title", default="")
     r.add_argument("--body-file", help="the description: a file, or - for stdin")
@@ -469,6 +558,10 @@ def main(argv=None):
             print(json.dumps(e))
     elif a.cmd == "errors":
         print(json.dumps(errors(read(since(a.since))), indent=1))
+    elif a.cmd == "doctor":
+        d = doctor()
+        print(json.dumps(d, indent=1))
+        sys.exit(0 if d["ok"] else 1)
     elif a.cmd == "bundle":
         bd = bundle(since(a.since))
         if a.out == "-":

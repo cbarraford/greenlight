@@ -227,6 +227,11 @@ def spawn(name):
 
 def tick(now=None):
     t = time.localtime(now)
+    try:
+        DIR.mkdir(parents=True, exist_ok=True)
+        (DIR / "last_tick").touch()  # diag.py doctor: a timer that stopped firing shows as a stale file
+    except OSError:
+        pass  # a heartbeat never stops the tick
     # ponytail: a minute the timer misses (machine down) is skipped, not caught up; add a last-run check if that matters
     for name, a in load().items():
         if a.get("enabled", True) and due(a["schedule"], t):
