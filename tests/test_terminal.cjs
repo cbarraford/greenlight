@@ -4,8 +4,7 @@
 //
 // The browser is $CHROME, else Playwright's own. No ptys: the app's side is a stub that records what the page posts.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-const {chromium, webkit} = require("playwright-core");
-const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
+const { launchBrowser } = require("./js_harness.cjs");
 
 // the page loads ghostty-web.js beside it, as the app bundle has it
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "term-"));
@@ -925,7 +924,7 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
 });
 
 (async () => {
-  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch(process.env.CHROME ? {executablePath: process.env.CHROME} : {});
+  const browser = await launchBrowser();
   let failed = 0;
   for (const t of tests.filter(t => t.name.includes(process.env.ONLY || ""))) {
     const page = await boot(browser, null, t.query);

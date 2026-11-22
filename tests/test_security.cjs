@@ -2,11 +2,7 @@
 // Runs on Chromium (default) or WebKit (BROWSER=webkit).
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
 const {execFileSync} = require("child_process");
-let pw;
-try { pw = require("playwright-core") } catch { try { pw = require("playwright") } catch {
-  console.error("needs playwright-core"); process.exit(2) } }
-const {chromium, webkit} = pw;
-const ENGINE = (process.env.BROWSER || "chromium").toLowerCase();
+const { launchBrowser, ENGINE } = require("./js_harness.cjs");
 
 const ROOT = path.join(__dirname, "..");
 const XSS_IMG = '"><img src=x onerror="window.__pwned=1"><svg onload="window.__pwned=2">';
@@ -15,7 +11,7 @@ const XSS_ATTR = '" autofocus onfocus="window.__pwned=4" style="background:url(j
 const XSS_URL = 'javascript:window.__pwned=6';
 
 (async () => {
-  const browser = ENGINE === "webkit" ? await webkit.launch() : await chromium.launch(process.env.CHROME ? {executablePath: process.env.CHROME} : {});
+  const browser = await launchBrowser();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-sec-"));
   fs.copyFileSync(path.join(ROOT, "app/terminal.html"), path.join(dir, "terminal.html"));
   fs.copyFileSync(path.join(ROOT, "app/vendor/ghostty-web.js"), path.join(dir, "ghostty-web.js"));
