@@ -309,6 +309,18 @@ test("L1's project list: each project's paths are the trees this window shows un
   assert.deepEqual([at("p1").repos, at("p2").repos, at("").repos], [["acme/widgets"], [], []], "a repo with a tree filed under another project's folder isn't No Man's Land's");
   assert.deepEqual([at("p1").busy, at("p2").busy, at("").busy], [1, 0, 0], "working agents counted where they're shown");
 });
+test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
+  const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await fresh.goto(PAGE);
+  await fresh.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
+  await fresh.evaluate(p => term.projects(p), PROJ);
+  assert.equal((await posts(fresh, "title")).some(m => "list" in m), false, "no partial list before treesIn");
+  await fresh.evaluate(t => term.workspaces(t), TREES);
+  const last = (await posts(fresh, "title")).pop();
+  assert.ok(Array.isArray(last.list) && last.list.some(p => p.id === "p1" && p.repos.includes("acme/widgets")), "full list once treesIn");
+  await fresh.close();
+});
 
 test("a repo's .greenlight.json: its project, and a window of it wears its look, hosts and host; Save to repo writes it", async page => {
   const cfg = {name: "Acme", look: {strip: "#112233", bg: "#000"}, host: "mini", hosts: ["mini"]};
