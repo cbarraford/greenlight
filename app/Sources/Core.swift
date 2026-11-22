@@ -45,6 +45,7 @@ final class Core: ObservableObject {
         }
         both(\.model, \.$model); both(\.effort, \.$effort); both(\.name, \.$name); both(\.verbose, \.$verbose)
         both(\.liveLine, \.$liveLine); both(\.vim, \.$vim); both(\.vimStart, \.$vimStart); both(\.look, \.$look); both(\.sent, \.$sent)
+        both(\.hint, \.$hint); both(\.keying, \.$keying)  // hover hints show by the cursor from any window (App.showTab reads the main chat's)
         $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
     }
     lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
