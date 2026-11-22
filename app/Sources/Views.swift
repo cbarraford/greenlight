@@ -680,7 +680,7 @@ struct Tip: ViewModifier {
     @ObservedObject var c: Core
     let text: String
     func body(content: Content) -> some View {
-        content.accessibilityHint(text).onHover { on in  // writes only what changes: a second window forwards every write (Core.follow)
+        content.accessibilityHint(text).onHover { on in  // writes only what changes: App.hint takes each write as this window speaking
             guard !c.prompting else { return }
             if on { c.hint = text } else if c.hint == text { c.hint = "" }
         }
