@@ -783,6 +783,7 @@ final class Core: ObservableObject {
 
     private func start(_ r: Run, _ remote: String, stdin: String) {
         run = r
+        r.model = model
         tps = 0; outTok = 0
         log(.chief, name, .status, r.watch ? "watch: \(r.question)" : r.checkIn ? "check-in: \(r.question)" : "asked: \(r.question)")
         if !r.watch && !r.checkIn { voice.began(r) }
@@ -839,7 +840,7 @@ final class Core: ObservableObject {
             let ok = j["ok"] as? Bool ?? false, w = j["window"] as? Int ?? 0
             if w > 0 || ok, !r.meterStale { window = w }  // a good turn without a window (codex unread, opencode, pi): unknown, not the last harness's
             var text = j["text"] as? String ?? ""
-            if !ok, let note = staleBackendNote(model: model, error: text, host: host, code: greenlightCode) { text = note }
+            if !ok, let note = staleBackendNote(model: r.model, error: text, host: host, code: greenlightCode) { text = note }
             if r.question == "Compact context" { text = text.isEmpty ? "Compacted. Context is now \(kfmt(context))." : text }
             finish(r, ok: ok, text: r.stopping ? "Stopped." : text)
         default: break

@@ -1082,10 +1082,11 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
          "puck.action, they see it), " if want else "") +
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
+    if not text:  # the model run failed: an error makes the card's button a retry instead of "Please wait…" for this state
+        return {"name": name, "sig": s, "error": f"{model} gave no answer (a usage limit, or a model this host can't run)"}
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
-    if text:
-        _write_json(cache, out)
+    _write_json(cache, out | {"ok": True})  # ask() succeeded: a one-line reply (no label) is real too
     return out
 
 
@@ -1097,8 +1098,9 @@ def cached_suggest(name):
 
 
 def fresh_suggest(sg, p):
-    """The cached suggestion is complete for this state, including a button label."""
-    return (sg.get("sig") == p["sig"] and bool(sg.get("label"))
+    """The cached suggestion is complete for this state. An entry from before ask() rejected failed runs (no "ok")
+    with an empty label may be a cached model error ("There's an issue with the selected model ..."): ask again."""
+    return (sg.get("sig") == p["sig"] and "label" in sg and (bool(sg["label"]) or sg.get("ok") is True)
             and (p.get("advice") is not None or "advice" in sg))
 
 
