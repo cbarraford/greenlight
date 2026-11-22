@@ -568,7 +568,7 @@ test("the bar offers Overview and List only; a stored view that's gone (the old 
   }
 });
 test("Agents show by default; Hide sticks, and a window that was told to hide them stays hidden", async page => {
-  assert.deepEqual(await page.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["plan-b"], "a fresh window shows its working agent (plan-a's question is listed above it)");
+  assert.deepEqual(await page.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["plan-a", "plan-b"], "a fresh window shows every live agent, the one waiting on a 'needs' workspace too");
   assert.equal(await page.getAttribute(".agents button.fold", "aria-expanded"), "true");
   await page.click(".agents button.fold");
   assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
@@ -576,8 +576,43 @@ test("Agents show by default; Hide sticks, and a window that was told to hide th
   const hid = await boot(page.context().browser(), {agentsFolded: "1"});
   try {
     assert.equal(await hid.locator(".agents .acard").count(), 0, "a stored Hide is kept");
-    assert.match(await hid.textContent(".agents button.fold"), /^Show 1 agent\b/);
+    assert.match(await hid.textContent(".agents button.fold"), /^Show 2 agents\b/);
   } finally { await hid.close() }
+});
+
+test("Agents strip: working and waiting agents on 'needs' and 'raised' workspaces show, and the counts match the cards", async page => {
+  const ws = (name, state, agent, type = "claude") => ({...puck(name, name, agent === "waiting" ? "waiting" : "working"), state, agent: {...SNAP.pucks[0].agent, state: agent, type, last: ""}});
+  const pucks = [ws("ask-work", "needs", "working"), ws("ask-wait", "needs", "waiting"), ws("raise-work", "raised", "working"), ws("raise-wait", "raised", "waiting"),
+    ws("quiet-work", "quiet", "working"), ws("idle-a", "working", "idle"), ws("idle-b", "done", "idle"), ws("down", "crashed", "idle"), ws("none", "working", "idle", "")];
+  await page.evaluate(s => { window.mc.update(s); ui.agentsFolded = false; ui.q = ""; render() }, {...SNAP, pucks});
+  const cards = () => page.$$eval(".agents .acard", es => es.map(e => e.dataset.name).sort());
+  const pills = () => page.$$eval(".agents .shead .pill", es => es.map(e => e.textContent));
+  const live = ["ask-wait", "ask-work", "quiet-work", "raise-wait", "raise-work"];
+  assert.deepEqual(await cards(), live, "the overview hid agents whose workspace needs the user");
+  assert.deepEqual(await pills(), ["Working 3", "2 awaiting answer"], "the pills count the cards");
+  assert.equal(await page.textContent(".agents .crash"), "1 crashed");
+  assert.equal(await page.locator(".agents .shead .muted").count(), 0, "'No agents working' beside working agents");
+  for (const n of ["ask-work", "raise-work"]) {  // the hover card and the strip agree
+    await page.mouse.move(1, 1); await page.waitForSelector("#hcard", {state: "hidden"}).catch(() => {});  // the last card can cover the next hex
+    await page.hover(`.cell[data-name='${n}']`);
+    assert.match(await page.textContent("#hcard"), /Claude is working/, n);
+    assert.equal(await page.locator(`.agents .acard[data-name='${n}']`).count(), 1, n);
+  }
+  await page.click(".agents button.fold");
+  assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
+  assert.match(await page.textContent(".agents button.fold"), /^Show 5 agents\b/, "the fold counts them all");
+  await page.evaluate(() => { ui.agentsFolded = false; ui.q = "zzz-nothing"; renderMain() });
+  assert.equal(await page.textContent(".agents .shead .muted"), "No agents match the search", "a search that hides them isn't 'No agents working'");
+  await page.evaluate(() => { ui.q = ""; window.mc.update({...ui.snap, pucks: ui.snap.pucks.filter(p => !["working", "waiting"].includes(p.agent.state))}); render() });
+  assert.equal(await page.textContent(".agents .shead .muted"), "No agents working · 3 idle", "idle: agents that are neither working nor waiting");
+  const det = await boot(page.context().browser());
+  try {  // the detached Agents window: the same agents, plus the crashed ones as cards
+    await det.evaluate(s => { window.mc.update(s); ui.only = "agents"; ui.agentsFolded = false; render() }, {...SNAP, pucks});
+    assert.deepEqual(await det.$$eval(".agents .acard", es => es.map(e => e.dataset.name).sort()), [...live, "down"].sort());
+    assert.deepEqual(await det.$$eval(".agents .shead .pill", es => es.map(e => e.textContent)), ["Working 3", "2 awaiting answer"]);
+    assert.deepEqual(det._errs, []);
+  } finally { await det.close() }
+  assert.deepEqual(page._errs, []);
 });
 
 test("Agent cards keep one size in a grid; the shelf folds back; no null in the bar", async page => {
@@ -586,7 +621,7 @@ test("Agent cards keep one size in a grid; the shelf folds back; no null in the 
   await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [...SNAP.pucks, ...["c", "d", "e"].map(run), ...Array.from({length: 14}, (_, k) => wait(k))]});
   await page.evaluate(() => { ui.agentsFolded = false; render() });
   const box = await page.$$eval(".acard", es => es.map(e => e.getBoundingClientRect()).map(r => [Math.round(r.width), Math.round(r.top)]));
-  assert.equal(box.length, 4);
+  assert.equal(box.length, 5, "plan-a's waiting agent, plan-b's and the three runs");
   assert.ok(new Set(box.map(b => b[1])).size < 4 && box.every(b => b[0] >= 420), `a wide pane puts cards side by side: ${JSON.stringify(box)}`);
   assert.equal(await page.locator(".acard[data-name='run-c'] .segs span").count(), 3, "the progress bar has a segment per step");
   await page.click(".shrow .chip.more");
@@ -693,7 +728,7 @@ test("L1's pick takes in a workspace made after the terminal page's last trees: 
   assert.equal(await page.locator("#main .cell, #main .lrow").count(), 0, "not in the snapshot's trees yet: hidden");
   await page.evaluate(s => mc.update(s), snap);
   assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-a"], "the fresh trees bring it in; beta stays out");
-  assert.equal(await page.locator(`#main [data-name="plan-a"]`).count(), 1, "and it's drawn");
+  assert.equal(await page.locator(`#main .cell[data-name="plan-a"], #main .lrow[data-name="plan-a"]`).count(), 1, "and it's drawn");
   assert.deepEqual(await page.evaluate(() => mc.focus().paths), [a.path], "Chief's window scope sees it too");
   await page.evaluate(s => { mc.update(s); mc.paths([s.pucks[1].path]) }, snap);  // an app without repos: paths only, as before
   assert.deepEqual(await page.evaluate(s => s.pucks.filter(inView).map(p => p.name), snap), ["plan-b"]);
