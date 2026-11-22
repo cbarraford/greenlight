@@ -124,6 +124,11 @@ def main():
         assert iso["ok"] and iso["result"] is None, f"localStorage leaked across --uitest instances: {iso}"
         pwn = ui2.eval("dashboard", "window.__pwned || null")
         assert pwn["ok"] and pwn["result"] is None, f"XSS executed in real WKWebView: {pwn}"
+        # Opening a workspace whose name fails App.swift's shell-safe regex must error cleanly, never spin forever
+        ui2.eval("dashboard", "(() => { const p = ui.snap.pucks[0]; openPage(p.name); return p.name; })()")
+        ui2.wait_for("dashboard", "Boolean(ui.page && !ui.page.loading && ui.page.resp && ui.page.resp.error)", timeout=8)
+        ui2.wait_for("dashboard", "Boolean(ui.ask[ui.page.name] && !ui.ask[ui.page.name].loading && ui.ask[ui.page.name].err)", timeout=8)
+        print("ok  invalid workspace name returns error cleanly instead of hanging page/ask")
 
         # 5. Send a chat turn while chat is not focused (triggers Core.finish -> Core.notify); must NOT SIGABRT!
         r = ui1.action("sendChat", text="status")

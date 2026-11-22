@@ -2240,14 +2240,29 @@ struct ChatView: View, Looked {
 
     var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.sp2) {
-                title
-                Spacer(minLength: Theme.sp2)
-                ViewThatFits { HStack(spacing: Theme.sp2) { meta }.fixedSize(); EmptyView() }.layoutPriority(-1)  // a narrow pane drops the host, never clips
-                if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
+            Group {
+                if c.editingName {
+                    headerRow(showMeta: false, showState: false, fixedTitle: false)
+                } else {
+                    ViewThatFits(in: .horizontal) {  // narrow pane drops host, then state tag, before truncating the assistant name
+                        headerRow(showMeta: true, showState: true, fixedTitle: true)
+                        headerRow(showMeta: false, showState: true, fixedTitle: true)
+                        headerRow(showMeta: false, showState: false, fixedTitle: true)
+                        headerRow(showMeta: false, showState: false, fixedTitle: false)
+                    }
+                }
             }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
                 .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
             if lk.id == "editorial" { masthead }
+        }
+    }
+
+    @ViewBuilder func headerRow(showMeta: Bool, showState: Bool, fixedTitle: Bool) -> some View {
+        HStack(spacing: Theme.sp2) {
+            HStack(spacing: Theme.sp2) { title(showState: showState) }.fixedSize(horizontal: fixedTitle, vertical: false)
+            Spacer(minLength: Theme.sp2)
+            if showMeta { HStack(spacing: Theme.sp2) { meta }.fixedSize() }
+            if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
         }
     }
 
@@ -2256,12 +2271,12 @@ struct ChatView: View, Looked {
         if c.editingName {
             TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } }).textFieldStyle(.plain).font(f).frame(width: 160).onSubmit(c.doneNaming)
         } else {
-            Text(shown).font(f).tracking(track).lineLimit(1).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
+            Text(shown).font(f).tracking(track).lineLimit(1).truncationMode(.tail).layoutPriority(1).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
         }
     }
 
     /// Who and how it is: an avatar (Conversation), the orb (Orb), a tally (On Air), a prompt (Phosphor), a masthead (Editorial), a callsign (HUD), a whisper (Zen).
-    @ViewBuilder var title: some View {
+    @ViewBuilder func title(showState: Bool = true) -> some View {
         let n = c.name
         switch lk.id {
         case "conversation":
@@ -2289,16 +2304,16 @@ struct ChatView: View, Looked {
             nameView("The \(n)", sys(size: Theme.fs6 + 2, weight: .bold, design: .serif).italic())
         case "hud":
             nameView("\(n.uppercased())//CHAT", sys(size: Theme.fs1, design: .monospaced), track: 1.3).foregroundColor(accent)
-            tag(!c.connected ? "✕ Offline" : busy ? "▶ Working" : "◌ Idle").foregroundColor(stateInk).shadow(color: busy ? accent.opacity(0.55) : .clear, radius: 5)
+            if showState { tag(!c.connected ? "✕ Offline" : busy ? "▶ Working" : "◌ Idle").foregroundColor(stateInk).shadow(color: busy ? accent.opacity(0.55) : .clear, radius: 5) }
         case "zen":
             nameView(n.lowercased(), sys(size: Theme.fs3))
-            Text("· \(stateWord)").font(sys(size: Theme.fs3)).foregroundColor(stateInk)
+            if showState { Text("· \(stateWord)").font(sys(size: Theme.fs3)).foregroundColor(stateInk) }
         default:  // orb: an amber orb, a second ring while it works
             Circle().fill(c.connected ? AnyShapeStyle(RadialGradient(colors: [hx("FFD27A"), accent, hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 9)) : AnyShapeStyle(crashed))
                 .frame(width: 14, height: 14).background(Circle().fill(accent.opacity(c.connected ? 0.14 : 0)).padding(-4))
                 .background(Circle().fill(accent.opacity(busy ? 0.06 : 0)).padding(-9)).padding(.horizontal, 4).accessibilityHidden(true)
             nameView(n.uppercased(), sys(size: Theme.fs2, weight: .semibold), track: 1.7)
-            tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk).lineLimit(1).fixedSize()
+            if showState { tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk).lineLimit(1).fixedSize() }
         }
     }
 
