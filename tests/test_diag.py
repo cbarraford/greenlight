@@ -243,3 +243,37 @@ for f in (lambda: diag.bundle(0), lambda: diag.report("t", "x")):
 assert len(list(Path(HOME, "diag").glob("bundle-*"))) == n
 del sys.modules["audit"]
 print("test_diag ok")
+
+# review fixes: a codex limit is still seen as one (the first done, not turn.failed's dict)
+codex_limit = "\n".join(json.dumps(x) for x in [{"type": "thread.started", "thread_id": "t"}, {"type": "error", "message": "You've hit your usage limit"},
+                                                 {"type": "turn.failed", "error": {"message": "You've hit your usage limit"}}])
+import auto as _auto  # noqa: E402
+txt, _ = _auto.reply("codex", codex_limit)
+assert _auto.LIMIT_RE.search(txt), txt
+# an empty salt (a crash mid-write) is replaced, not used
+(Path(HOME) / "diag" / "salt").write_bytes(b"")
+assert len(diag.salt()) == 32 and diag.salt() == diag.salt()
+# a malformed line doesn't break the readers
+with open(diag.path(), "a") as f:
+    f.write(json.dumps({"ts": "x", "kind": "cmd"}) + "\n" + json.dumps({"ts": 9e12, "secs": 1}) + "\n")
+diag.summary(0), diag.errors(diag.read()), diag.spans(diag.read())
+# a too-long report keeps its fence and details closed
+fake = {"manifest": {"version": "v", "events": 0, "left_out": 0}, "summary": {"x": "y" * (diag.ISSUE_MAX + 10)}, "errors": [], "events": []}
+body = diag.issue_body("t", fake)
+assert len(body) <= diag.ISSUE_MAX and body.endswith("```\n</details>\n"), body[-80:]
+# a missing body file is a JSON reason, not a traceback
+p = subprocess.run([sys.executable, str(ROOT / "scripts/diag.py"), "report", "--title", "t", "--body-file", "/nonexistent/x"],
+                   capture_output=True, text=True, env={**os.environ, "GREENLIGHT_HOME": HOME})
+assert p.returncode == 1 and json.loads(p.stdout)["ok"] is False and "Traceback" not in p.stderr, (p.stdout, p.stderr)
+print("ok  review fixes")
+# a cmd span that fails once (transient) and then succeeds is ok, with no stale rc or msg_class
+import greenlight as _gl  # noqa: E402
+flag = Path(HOME, "flaky")
+_gl.time.sleep, _sleep = (lambda s: None), _gl.time.sleep
+try:
+    assert _gl.run(["/bin/sh", "-c", f'PATH=/bin:/usr/bin; [ -e {flag} ] && echo fine || {{ touch {flag}; echo "502 Bad Gateway" >&2; exit 1; }}'], tries=2).strip() == "fine"
+finally:
+    _gl.time.sleep = _sleep
+last = [e for e in diag.read() if e.get("kind") == "cmd"][-1]
+assert last.get("ok") is True and last["tries"] == 2 and "rc" not in last and "msg_class" not in last, last
+print("ok  cmd retry span")

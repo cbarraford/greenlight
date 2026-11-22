@@ -423,15 +423,16 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     let inPipe = Pipe(), out = Pipe()
     p.standardInput = inPipe
     p.standardOutput = out
-    final class Buf { var s = Data() }
+    final class Buf { var s = Data(); let l = NSLock() }  // tail: its handler's queue writes, terminationHandler reads
     let buf = Buf(), err = Pipe(), tail = Buf(), t0 = Date()
     // stderr's last 4 KB, in memory only: classified into the diag trail, never written
     p.standardError = err
     err.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
         if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: a handler left on re-fires forever (a full core)
-        tail.s.append(d)
+        tail.l.lock(); tail.s.append(d)
         if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
+        tail.l.unlock()
     }
     out.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
@@ -451,8 +452,9 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
             let sem = DispatchSemaphore(value: 0), drained = Buf()
             DispatchQueue.global().async { drained.s = err.fileHandleForReading.readDataToEndOfFile(); sem.signal() }
             let more = sem.wait(timeout: .now() + 0.3) == .success ? drained.s : Data()  // ponytail: a held pipe leaks that one reader thread
+            tail.l.lock(); let seen = tail.s; tail.l.unlock()
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": Int(rc), "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
-                                    "msg_class": Diag.classify(String(decoding: (tail.s + more).suffix(4096), as: UTF8.self))])
+                                    "msg_class": Diag.classify(String(decoding: (seen + more).suffix(4096), as: UTF8.self))])
         } else {
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
         }
