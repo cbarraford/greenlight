@@ -2263,7 +2263,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// or another app or Space came to the front mid-hover). Never the voice-shortcut prompt: tick hides it while Greenlight's away.
     var hintStale: Bool {
         guard tab.isVisible, !greenlight.prompting else { return false }
-        let n = NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+        let p = NSEvent.mouseLocation
+        var n = NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: 0)
+        if n == tab.windowNumber { n = NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: n) }  // the cursor slid onto the hint: judge the window under it
         return !NSApp.windows.contains { $0 !== tab && $0.isVisible && $0.windowNumber == n }
     }
 
