@@ -80,6 +80,7 @@ test("Enter starts the task with its project, the whole text and the files; Shif
   assert.equal(await page.isDisabled("#ps-go"), false, "Start task stayed disabled after typing");
   await page.setInputFiles(".tdrop input[type=file]", {name: "panic.log", mimeType: "text/plain", buffer: Buffer.from("boom")});
   await page.waitForSelector(".tfile");
+  await page.waitForFunction(() => !document.getElementById("ps-go").disabled);
   assert.match(await page.textContent("#ps-foot"), /Creates retry-stuck-txs in widgets/);
   await page.press("#ps-task", "Enter");
   const n = (await posts(page, "task")).filter(m => m.op === "new");
@@ -249,6 +250,7 @@ test("a late reply preserves edited attachments, and Reopen keeps the current sh
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "task-a", repo: "widgets"}));
   assert.ok(await sheet(page));
   assert.deepEqual(await page.$$eval(".tfile .mono", e => e.map(x => x.textContent)), ["later.txt"]);
+  await page.waitForFunction(() => !document.getElementById("ps-go").disabled);
   await page.press("#ps-task", "Enter");
   await page.fill("#ps-task", "Task B");
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", error: "old task failed"}));
