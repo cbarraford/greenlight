@@ -339,7 +339,7 @@ final class UITestServer {
                 let target = req["window"] as? String ?? "active"
                 guard let win = window(for: target, app: app) else { return done(["ok": false, "error": "no window"]) }
                 var f = win.frame
-                f.size = NSSize(width: w, height: h)
+                f.size = NSSize(width: max(w, Double(win.minSize.width)), height: max(h, Double(win.minSize.height)))
                 win.setFrame(f, display: true)
                 done(["ok": true, "width": Int(win.frame.width), "height": Int(win.frame.height)])
             case "quit":

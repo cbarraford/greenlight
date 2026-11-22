@@ -1326,8 +1326,11 @@ struct SettingsView: View {
     @ViewBuilder var general: some View {
         heading("General", "How Greenlight starts and how it shows up on this Mac.")
         box("Opens to", aside: "New windows (⌘N) always open to the Pipe.") {
-            HStack(spacing: Theme.sp3) {
-                ForEach([("greenlight", "Greenlight", "L1"), ("basement", "Basement", "B1"), ("pipe", "Pipe", "B2")], id: \.0) { floorCard($0.0, $0.1, $0.2) }
+            let floors = [("greenlight", "Greenlight", "L1"), ("basement", "Basement", "B1"), ("pipe", "Pipe", "B2")]
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.sp3) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: false) } }
+                HStack(spacing: Theme.sp2) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: true) } }
+                VStack(spacing: Theme.sp2) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: false) } }
             }.padding(Theme.sp3)
         }
         box("Assistant") {
@@ -1342,17 +1345,22 @@ struct SettingsView: View {
     }
 
     /// A floor the app opens to, with the three floors stacked and its own lit.
-    func floorCard(_ id: String, _ name: String, _ floor: String) -> some View {
+    func floorCard(_ id: String, _ name: String, _ floor: String, compact: Bool = false) -> some View {
         let on = c.termOpens == id
+        let labelW = ceil(72 * fontSize / 13)
+        let bars = VStack(spacing: 3) { ForEach(["L1", "B1", "B2"], id: \.self) { f in RoundedRectangle(cornerRadius: 2).fill(f == floor ? accent : edge).frame(width: 30, height: 8) } }
+        let label = VStack(alignment: compact ? .center : .leading, spacing: 1) {
+            Text(name).font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            Text(floor).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(dim).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+        }
         return Button { c.termOpens = id } label: {
-            HStack(spacing: Theme.sp3) {
-                VStack(spacing: 3) { ForEach(["L1", "B1", "B2"], id: \.self) { f in RoundedRectangle(cornerRadius: 2).fill(f == floor ? accent : edge).frame(width: 30, height: 8) } }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(name).font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
-                    Text(floor).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(dim)
+            Group {
+                if compact {
+                    VStack(spacing: Theme.sp2) { bars; label }.padding(.vertical, Theme.sp3).padding(.horizontal, Theme.sp2)
+                } else {
+                    HStack(spacing: Theme.sp3) { bars; label; Spacer(minLength: 0) }.padding(Theme.sp3)
                 }
-                Spacer(minLength: 0)
-            }.padding(Theme.sp3).frame(maxWidth: .infinity).contentShape(Rectangle())
+            }.frame(minWidth: compact ? labelW + 16 : labelW + 74, maxWidth: .infinity).contentShape(Rectangle())
                 .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
                 .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
         }.buttonStyle(.plain).accessibilityLabel("Open to \(name), \(floor)").accessibilityAddTraits(on ? .isSelected : [])
@@ -1363,7 +1371,7 @@ struct SettingsView: View {
         return Button { c.dockIcon = id } label: {
             VStack(spacing: Theme.sp2) {
                 Image(nsImage: Bundle.main.image(forResource: id) ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
-                Text(name).font(sys(size: Theme.fs2, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub)
+                Text(name).font(sys(size: Theme.fs2, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub).multilineTextAlignment(.center)
             }.padding(Theme.sp3).frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
                 .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))

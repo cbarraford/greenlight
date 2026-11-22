@@ -707,8 +707,30 @@ with mock.patch.object(dash, "live_agents", return_value=_live_corrupt), \
     _corrupt_snap = dash.snapshot()
     assert len(_corrupt_snap["pucks"]) == 2
     assert {p["name"] for p in _corrupt_snap["pucks"]} == {"null-msg", "bare-row"}
+# trees() also tolerates corrupt/partial last.json rows missing agent/next/name or non-dict entries
+_lj3.write_text(json.dumps({
+    "ts": 1,
+    "rows": [
+        "not-a-dict",
+        {"id": "wt-bare", "path": "/w/bare", "project": "", "goal": "broken"},
+        {"id": "wt-null", "name": "null-msg", "path": "/w/null", "project": "acme/w", "agent": None, "next": None},
+    ],
+}))
+_corrupt_ws = {
+    "worktrees": [
+        {"worktreeId": "wt-bare", "displayName": "bare-row", "path": "/w/bare", "repo": "w", "branch": "main", "agents": []},
+        {"worktreeId": "wt-null", "displayName": "null-msg", "path": "/w/null", "repo": "w", "branch": "feat", "agents": [{"state": "waiting"}]},
+    ]
+}
+with mock.patch.object(dash, "ADES", ("orca",)), \
+     mock.patch.object(dash.greenlight, "orca_cli", return_value=_corrupt_ws), \
+     mock.patch.object(dash.blocking, "cached", return_value={}):
+    _corrupt_trees = {t["name"]: t for t in dash.trees()}
+    assert set(_corrupt_trees) == {"bare-row", "null-msg"}
+    assert _corrupt_trees["bare-row"]["puck"] == "bare-row" and _corrupt_trees["bare-row"]["step"] == "freeform"
+    assert _corrupt_trees["null-msg"]["state"] == "needs" and _corrupt_trees["null-msg"]["owner"] == "parked"
 _lj3.write_text(_prev_lj3) if _prev_lj3 is not None else _lj3.unlink()
-print("corrupt snapshot ok")
+print("corrupt snapshot & trees ok")
 
 # CLI `dash.py page` catches backend failures via oops() and emits JSON error instead of crashing
 _page_out = _io.StringIO()
