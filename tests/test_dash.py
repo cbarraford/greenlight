@@ -684,3 +684,38 @@ with mock.patch.object(dash.greenlight, "run", return_value=""):
     assert dash.tree_signoff("/w/pre") == {"op": "signoff", "path": "/w/pre", "ref": "pre-ws", "step": "rfc", "ok": True, "ran": ""}
 _lj2.write_text(_prev_lj2) if _prev_lj2 is not None else _lj2.unlink()
 print("per-repo lifecycle ok")
+
+# snapshot() tolerates corrupt rows with None lastAssistantMessage/last or missing agent/next dicts
+_lj3 = dash.greenlight.STATE / "last.json"
+_prev_lj3 = _lj3.read_text() if _lj3.exists() else None
+_lj3.write_text(json.dumps({
+    "ts": 1,
+    "rows": [
+        {"id": "wt-null", "name": "null-msg", "path": "/w/null", "project": "acme/w", "goal": None,
+         "agent": {"state": "waiting", "type": "claude", "last": None}, "mr": None,
+         "next": {"step": "unknown", "owner": None, "action": None}},
+        {"id": "wt-bare", "name": "bare-row", "path": "/w/bare", "project": "", "goal": "broken"},
+    ],
+}))
+_live_corrupt = {
+    "wt-null": ({"worktreeId": "wt-null", "displayName": "null-msg", "path": "/w/null", "repo": "w", "branch": "b"},
+                {"state": "waiting", "agentType": "claude", "lastAssistantMessage": None}),
+    "wt-bare": ({"worktreeId": "wt-bare", "displayName": "bare-row", "path": "/w/bare", "repo": "w", "branch": ""}, {}),
+}
+with mock.patch.object(dash, "live_agents", return_value=_live_corrupt), \
+     mock.patch.object(dash.blocking, "cached", return_value={}):
+    _corrupt_snap = dash.snapshot()
+    assert len(_corrupt_snap["pucks"]) == 2
+    assert {p["name"] for p in _corrupt_snap["pucks"]} == {"null-msg", "bare-row"}
+_lj3.write_text(_prev_lj3) if _prev_lj3 is not None else _lj3.unlink()
+print("corrupt snapshot ok")
+
+# CLI `dash.py page` catches backend failures via oops() and emits JSON error instead of crashing
+_page_out = _io.StringIO()
+with mock.patch.object(sys, "argv", ["dash.py", "page", "fix-auth"]), \
+     mock.patch.object(dash, "page", side_effect=RuntimeError("orca down")), \
+     mock.patch.object(dash, "oops") as _page_oops, \
+     mock.patch.object(sys, "stdout", _page_out):
+    dash.main()
+assert json.loads(_page_out.getvalue().strip()) == {"name": "fix-auth", "error": "orca down"} and _page_oops.call_count == 1
+print("page cli resilience ok")
