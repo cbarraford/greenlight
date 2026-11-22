@@ -14,7 +14,7 @@ test: lint test-py test-js typecheck ## lint, test-py, test-js and typecheck
 lint: ## ruff bug/security lint, static safety checks, and shellcheck
 	ruff check scripts/ tests/ app/kokoro.py
 	$(PY) scripts/check_safety.py
-	shellcheck -S warning app/build.sh scripts/*.sh
+	shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
 
 check-diff: ## diff-scoped quality ratchet (stricter lint, mypy, function size, Swift evalJS)
 	$(PY) scripts/check_diff_quality.py
