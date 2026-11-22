@@ -330,7 +330,6 @@ def answered(recs, row, key, since=0, allow_untagged=True):
     """The user's answers about this workspace, newest first: 'question → answer'."""
     out = []
     for r in recs:
-        ids = [r.get("worktree_id")] + [w.get("worktree_id") for w in r.get("workspaces") or []]
         targets = [r] + (r.get("workspaces") or [])
         mr_ref = (row.get("mr") or {}).get("ref")
         matched = False
@@ -720,7 +719,7 @@ def search(db, query, k=5, kinds=("card", "note"), allow=None):
     df = {t: db.execute("SELECT count(*) FROM postings WHERE term = ?", (t,)).fetchone()[0] for t in terms}  # O(log P + p_t) each
     useful = ([t for t in terms if df[t]] if allow is not None else
               [t for t in terms if df[t] and df[t] <= n / 2] or [t for t in terms if df[t]])  # scoped matches come first
-    scores, lens = {}, {}
+    scores = {}
     for t in useful:
         idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
         for doc, tf, ln, kind in db.execute("SELECT p.doc, p.tf, d.len, d.kind FROM postings p JOIN docs d ON d.id = p.doc WHERE p.term = ?", (t,)):

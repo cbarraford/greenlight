@@ -98,7 +98,7 @@ A model can only add to what the patterns find: it can add a hold or a draft but
 
 ## Diagnostics & privacy
 
-Greenlight keeps a local diagnostic trail so an AI can troubleshoot it: `scripts/diag.py summary | errors | tail` (JSON).
+Greenlight keeps a local diagnostic trail so an AI can troubleshoot it: `scripts/diag.py summary | errors | tail | doctor` (JSON).
 It records structured events only (which command ran, how long it took, its exit code, the exception type and a class
 such as `auth` or `timeout`, the code location, the app's menu and button commands) in `~/.greenlight/diag/events.jsonl` and
 `~/Library/Logs/Greenlight/app.jsonl`, each capped at 5 MB × 4. It never records message text, titles, goals, argv,
