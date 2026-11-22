@@ -108,18 +108,24 @@ def version():
 
 def salt():
     f = home() / "diag" / "salt"
+    with contextlib.suppress(OSError):
+        s = f.read_bytes()
+        if len(s) >= 16:
+            return s
+    # written whole, then linked in: a reader never sees it half-written, and two first runs agree on one salt
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f"salt.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as w:
+        w.write(secrets.token_bytes(32))
     try:
-        return f.read_bytes()
-    except OSError:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        s = secrets.token_bytes(32)
-        try:
-            fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:  # another process just wrote it
-            return f.read_bytes()
-        with os.fdopen(fd, "wb") as w:
-            w.write(s)
-        return s
+        os.link(tmp, f)
+    except FileExistsError:  # another process won, or an empty one is left from a crash mid-write
+        if len(f.read_bytes()) < 16:
+            os.replace(tmp, f)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return f.read_bytes()
 
 
 def h(value):
@@ -252,7 +258,7 @@ def read(after=0):
                 for line in f.read_text(errors="replace").splitlines():
                     with contextlib.suppress(ValueError):
                         e = json.loads(line)
-                        if isinstance(e, dict) and e.get("ts", 0) >= after:
+                        if isinstance(e, dict) and isinstance(e.get("ts", 0), (int, float)) and e.get("ts", 0) >= after:
                             out.append(e)
     return sorted(out, key=lambda e: e.get("ts", 0))
 
@@ -281,9 +287,9 @@ def spans(events):
     """Timing and failure rate per span kind (cmd split by tool, phase by name, audit by gate)."""
     groups = {}
     for e in events:
-        if "secs" not in e:
+        if not isinstance(e.get("secs"), (int, float)) or isinstance(e.get("secs"), bool):
             continue
-        label = e["kind"] + "".join(f".{e[k]}" for k in ("tool", "name", "gate") if k in e)
+        label = str(e.get("kind")) + "".join(f".{e[k]}" for k in ("tool", "name", "gate") if k in e)
         groups.setdefault(label, []).append(e)
     return {k: {"n": len(v), "p50": pct([e["secs"] for e in v], .5), "p95": pct([e["secs"] for e in v], .95),
                 "fail": round(sum(failed(e) for e in v) / len(v), 3)} for k, v in sorted(groups.items())}
@@ -513,7 +519,10 @@ def issue_body(text, b):
     while len(out) > ISSUE_MAX and ev:  # ponytail: drops events in halves, oldest first; fine at 200
         ev = ev[len(ev) // 2 + 1:]
         out = render(ev)
-    return out[:ISSUE_MAX]
+    if len(out) > ISSUE_MAX:  # still too long without events: cut the JSON, and keep the fence and details closed
+        tail = "\n…(cut: the full data is in `diag.py bundle`)\n```\n</details>\n"
+        out = out[:ISSUE_MAX - len(tail)] + tail
+    return out
 
 
 def report(title, text, app_events=(), execute=False, inline=False, shown=None):
@@ -528,14 +537,14 @@ def report(title, text, app_events=(), execute=False, inline=False, shown=None):
         return {"ok": False, "blocked": "title", "reason": "a bug report needs a title"}
     b = bundle(since("7d"), app_events, hit)
     out = {"ok": True, "repo": REPO, "title": title.strip(), "body": shown[:ISSUE_MAX] if execute and shown else issue_body(text or "", b),
-           "bundle": str(save(b))}
+           "bundle": str(save(b, home() / "diag" / "bundle-report.json"))}  # one file, overwritten: previews don't pile up
     if inline:
         out["data"] = b
     if not execute:
         return {**out, "preview": True}
     if not shutil.which("gh"):
         import urllib.parse
-        q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip() + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
+        q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip()[:4000] + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
         return {**out, "filed": False, "url": f"https://github.com/{REPO}/issues/new?{q}"}
     with span("report", tool="gh") as d:
         p = subprocess.run(["gh", "issue", "create", "--repo", REPO, "--title", out["title"], "--body-file", "-"],
@@ -588,11 +597,16 @@ def main(argv=None):
     elif a.cmd == "report":
         if a.json:
             j = json.loads(sys.stdin.read() or "{}")
+            j = j if isinstance(j, dict) else {}
             title, text, app = str(j.get("title") or ""), str(j.get("body") or ""), j.get("app_events") or []
             shown = j.get("shown") if isinstance(j.get("shown"), str) else None
         else:
             title, app, shown = a.title, [], None
-            text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
+            try:
+                text = sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text() if a.body_file else ""
+            except OSError as e:
+                print(json.dumps({"ok": False, "reason": f"can't read the description: {e.strerror or type(e).__name__}"}))
+                sys.exit(1)
         try:
             res = report(title, text, app if isinstance(app, list) else [], a.execute, inline=a.json, shown=shown)
         except ImportError:  # failed closed: say why, as JSON, so the app can show it

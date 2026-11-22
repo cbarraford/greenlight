@@ -119,7 +119,7 @@ def reply(engine, raw):
             for e in getattr(norm, engine)(d):
                 if e.get("e") == "step":
                     lines.append(f"› {e.get('title', '')}")
-                elif e.get("e") == "done":
+                elif e.get("e") == "done" and final is None:  # the first, as chat.run(): codex's turn.failed repeats an error as a dict
                     final = e.get("text")
         except Exception:
             continue

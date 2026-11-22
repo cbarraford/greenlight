@@ -900,7 +900,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func bugReport(_ title: String, _ body: String, execute: Bool, shown: String? = nil) {
         let app = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n").suffix(500)
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) }
-        let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown ?? NSNull()])) ?? Data("{}".utf8)
+        let input = (try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "app_events": app, "shown": shown.map { $0 as Any } ?? NSNull()])) ?? Data("{}".utf8)
         var out = ""
         _ = ssh("\(py)/diag.py report --json\(execute ? " --execute" : "")", stdin: String(decoding: input, as: UTF8.self),
                 onLine: { out += $0 }, onExit: { [weak self] code in
