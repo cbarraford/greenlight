@@ -5,6 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 name=${GREENLIGHT_APP:-Greenlight} dev=${GREENLIGHT_DEV:-}
+case "$name" in
+  ''|*[!A-Za-z0-9._-]*|.*|-*) echo "build.sh: error: invalid GREENLIGHT_APP: $name" >&2; exit 1 ;;
+esac
+[ "${#name}" -le 61 ] || { echo "build.sh: error: GREENLIGHT_APP too long" >&2; exit 1; }
 id=dev.greenlight.app
 [ "$name" = Greenlight ] || id=$id.$(printf %s "${name#greenlight-}" | tr -c 'A-Za-z0-9-' -)
 dest=~/Applications/$name.app
@@ -18,25 +22,26 @@ done
 find ~ -maxdepth 1 -name '.greenlight-stage.??????' -mmin +60 -exec rm -rf {} + 2>/dev/null || true  # this PR's earlier naming, without the pid
 mkdir -p ~/Applications; stage=$(mktemp -d ~/.greenlight-stage.$$.XXXXXX) app=$stage/$name.app
 bin=$(mktemp -t greenlight-build)
-trap 'rm -rf "$bin" "$stage"' EXIT
+t=""
+trap 'rm -rf "$bin" "$stage" ${t:+"$t"}' EXIT
 # The signer first: a cert that can't sign fails the build in a second, not after the compile.
 # Ad-hoc signing changes the app's identity every build, so macOS asks for the mic and speech again. Without an Apple
 # Development cert (below), a self-signed "Greenlight Dev" one keeps those, though not the Keychain keys. It lives in its own
 # keychain (password in a 0600 file), because codesign can't use a key in the login keychain over ssh (errSecInternalComponent).
 d=~/.config/greenlight kc=~/.config/greenlight/signing.keychain-db
 if [ ! -f "$kc" ]; then
-  (umask 077; mkdir -p "$d"; openssl rand -hex 16 > "$d/signing.pass"); t=$(mktemp -d)
+  (umask 077; mkdir -p "$d"; openssl rand -hex 16 > "$d/signing.pass"); t=$(umask 077; mktemp -d)
   security create-keychain -p "$(cat "$d/signing.pass")" "$kc" && security set-keychain-settings "$kc"
   openssl req -x509 -newkey rsa:2048 -nodes -keyout "$t/k" -out "$t/c" -days 3650 -subj "/CN=Greenlight Dev" -addext basicConstraints=critical,CA:false \
     -addext keyUsage=critical,digitalSignature -addext extendedKeyUsage=critical,codeSigning 2>/dev/null
   openssl pkcs12 -export -legacy -inkey "$t/k" -in "$t/c" -out "$t/p.p12" -passout pass:x 2>/dev/null || openssl pkcs12 -export -inkey "$t/k" -in "$t/c" -out "$t/p.p12" -passout pass:x
-  security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc" && security import "$t/p.p12" -k "$kc" -P x -T /usr/bin/codesign >/dev/null; rm -rf "$t"
+  security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc" && security import "$t/p.p12" -k "$kc" -P x -T /usr/bin/codesign >/dev/null; rm -rf "$t"; t=""
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$(cat "$d/signing.pass")" "$kc" >/dev/null
 fi
 security unlock-keychain -p "$(cat "$d/signing.pass")" "$kc"
 # codesign only finds identities in keychains on the search list (--keychain alone says "no identity found"): add it once, keeping the rest
 kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
-case " ${kcs[*]} " in *" $kc "*) ;; *) security list-keychains -d user -s "${kcs[@]}" "$kc" ;; esac
+case " ${kcs[*]:-} " in *" $kc "*) ;; *) security list-keychains -d user -s ${kcs[@]+"${kcs[@]}"} "$kc" ;; esac
 devid=$(security find-identity -p codesigning "$kc" | awk '/"Greenlight Dev"/{print $2; exit}')
 # The Keychain pins a key Greenlight saves to the build that saved it, unless the build has a Team ID: its partition list says
 # `cdhash:<this build>` (seen in a login keychain on macOS 26.5), so every rebuild of Greenlight or of a dev copy asked for your
@@ -64,22 +69,26 @@ if [ -n "$apple" ] && [ -z "$team" ]; then echo "build.sh: error: couldn't read 
 DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && echo -Onone || echo -O)" Sources/*.swift -o "$bin"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 mv "$bin" "$app/Contents/MacOS/$name"
-cat > "$app/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>$id</string>
-  <key>CFBundleName</key><string>$name</string>
-  <key>CFBundleExecutable</key><string>$name</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>Orb</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo unknown)</string>
-  <key>NSMicrophoneUsageDescription</key><string>Speak to Greenlight: your voice is transcribed into the message box.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>Transcribes what you say to Greenlight, on this Mac.</string>
-  ${dev:+<key>GreenlightDev</key><string>$dev</string>}
-</dict></plist>
-EOF
+ver=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+python3 - "$app/Contents/Info.plist" "$id" "$name" "$ver" "$dev" <<'PY'
+import plistlib, sys
+out, bid, name, ver, dev = sys.argv[1:]
+pl = {
+    "CFBundleIdentifier": bid,
+    "CFBundleName": name,
+    "CFBundleExecutable": name,
+    "CFBundlePackageType": "APPL",
+    "CFBundleIconFile": "Orb",
+    "CFBundleShortVersionString": "1.0",
+    "CFBundleVersion": ver,
+    "NSMicrophoneUsageDescription": "Speak to Greenlight: your voice is transcribed into the message box.",
+    "NSSpeechRecognitionUsageDescription": "Transcribes what you say to Greenlight, on this Mac.",
+}
+if dev:
+    pl["GreenlightDev"] = dev
+with open(out, "wb") as f:
+    plistlib.dump(pl, f)
+PY
 mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data: blob:; font-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agents</title>
 <!-- Greenlight's left pane. Data arrives from the app: mc.update(snapshot) every ~10s from `dash.py stream`,
@@ -855,14 +855,6 @@ function widget(spec, small){
 }
 
 /* ---------- hexes ---------- */
-function ringSvg(size, st, prog, width){
-  const r = size / 2 - width / 2, col = c(STATE[st].color);
-  const dash = st === "queued" ? "4 5" : null;
-  return s("svg", {class:"ring", width:size, height:size, viewBox:`0 0 ${size} ${size}`},
-    s("circle", {cx:size / 2, cy:size / 2, r, fill:"none", stroke:"color-mix(in srgb, var(--text) 10%, transparent)", "stroke-width":width, "stroke-dasharray":dash}),
-    prog != null && st !== "queued" ? s("circle", {cx:size / 2, cy:size / 2, r, fill:"none", stroke:col, "stroke-width":width, "stroke-linecap":"round",
-      pathLength:100, "stroke-dasharray":`${Math.max(prog * 100, 2)} 100`}) : null);
-}
 /* greenlight asked about these workspaces (mc.bell's asked, from `greenlight.py ping --ws`): they read "Needs you", never shelved or stacked,
    until the question is answered, superseded or resolved. Applied to the whole snapshot so every view, count and page agrees. */
 function lift(p){
@@ -1111,7 +1103,7 @@ function agentsStrip(asked){  // asked: the overview lists the human requests ab
  icon(ui.agentsFolded ? "chevron-right" : "chevron-down", 12))), popBtn("agents")),
     live.length && !(ui.agentsFolded && !ui.only) ? h("div", {class:"acards"}, live.map(agentCard)) : null);
 }
-setInterval(() => document.querySelectorAll("[data-since]").forEach(e => e.textContent = clock(Number(e.dataset.since) || null)), 1000);
+setInterval(() => { if (!document.hidden) document.querySelectorAll("[data-since]").forEach(e => e.textContent = clock(Number(e.dataset.since) || null)) }, 1000);
 
 /* ---------- views ---------- */
 function counts(){
@@ -1126,12 +1118,12 @@ function topBar(){
       h("span", {class:"muted", "aria-hidden":"true"}, "›"), h("span", {class:"mono bcrumb", title: ui.page.name}, ui.page.name),
       h("span", {style:"flex-grow:1"}));
     const busy = p && p.agent && p.agent.state === "working" ? "Its agent is working" : null;
-    if (p && mr.iid) for (const y of arr(p.moves).filter(y => MOVE[y.kind] && y.kind !== "review")) {  // the MR's fixes, as on the hover card: threads, CI, conflicts
+    if (p && mr.iid) for (const y of arr(p.moves).filter(y => Object.hasOwn(MOVE, y.kind) && y.kind !== "review")) {  // the MR's fixes, as on the hover card: threads, CI, conflicts
       const [l, sub, short] = MOVE[y.kind](mr, y);
       bar.append(h("button", {class:"btn", disabled: !!busy, title: busy || `${l}\n${sub}`, onclick: () => runFor(p.name, y.prompt)}, h("i", {class:"mdot", style:"background:" + DOT[y.kind]}), y.kind === "threads" ? l : short));
     }
     if (p) bar.append(h("button", {class:"btn", title:"Open this workspace in the Basement (B1)", onclick: () => toBasement(p.name)}, h("span", {class:"mono muted"}, "›_"), "Basement"));
-    if (mr.web_url) bar.append(h("a", {class:"btn pri", href: mr.web_url}, `Open ${mrRef(mr)} in ${forgeName(mr)}`));
+    if (safeHttpUrl(mr.web_url)) bar.append(h("a", {class:"btn pri", href: mr.web_url}, `Open ${mrRef(mr)} in ${forgeName(mr)}`));
     return;
   }
   const n = ui.snap ? counts() : {}, live = !!ui.snap && ui.snap.pucks.length > 0;  // not live: nothing to switch or search; the page's own button starts the first task
@@ -1181,8 +1173,9 @@ function footer(){
   const np = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)).length : 0;
   if (np && !ui.page) f.append(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
     onclick: () => { ui.showParked = !ui.showParked; render() }}, `${ui.showParked ? "Hide" : "Show"} parked (${np})`));
-  if (!ui.page) f.append(h("span", {style:"flex-grow:1"}), ui.snap && !shows("hex") ? h("span", {class:"fscope", title:"These counts cover all workspaces"}, "All", h("span", {class:"w"}, " workspaces"), ":") : "", ...ORDER.filter(k => ui.snap && counts()[k] && !shows("hex")).map(k =>  // the map's header counts them; a detached window keeps them here
-    h("span", {class:"fst" + (["needs", "raised", "crashed"].includes(k) ? " ask" : ""), title: STATE[k].label}, h("span", {style:`color:${c(STATE[k].color)};display:flex`}, icon("hex", 12)), `${counts()[k]}`, h("span", {class:"lbl"}, " " + STATE[k].label.toLowerCase()), h("span", {class:"sh"}, " " + (FOOT_SHORT[k] || STATE[k].label.toLowerCase())))));
+  const fn = ui.snap && !shows("hex") ? counts() : null;
+  if (!ui.page) f.append(h("span", {style:"flex-grow:1"}), fn ? h("span", {class:"fscope", title:"These counts cover all workspaces"}, "All", h("span", {class:"w"}, " workspaces"), ":") : "", ...ORDER.filter(k => fn && fn[k]).map(k =>  // the map's header counts them; a detached window keeps them here
+    h("span", {class:"fst" + (["needs", "raised", "crashed"].includes(k) ? " ask" : ""), title: STATE[k].label}, h("span", {style:`color:${c(STATE[k].color)};display:flex`}, icon("hex", 12)), `${fn[k]}`, h("span", {class:"lbl"}, " " + STATE[k].label.toLowerCase()), h("span", {class:"sh"}, " " + (FOOT_SHORT[k] || STATE[k].label.toLowerCase())))));
   f.classList.remove("tight", "tighter", "tightest"); if (f.scrollWidth > f.clientWidth) f.classList.add("tight");  // past the width: short words, never bare numbers
   if (f.scrollWidth > f.clientWidth) f.classList.add("tighter");  // still past it: only the counts that need you stay
   if (f.scrollWidth > f.clientWidth) f.classList.add("tightest");  // and last, the scan age
@@ -1199,8 +1192,9 @@ function renderOverview(main){
   if (st) shelf.length = 0;
   const crumbs = st ? [h("button", {class:"crumb", onclick: () => drill(null)}, "Workspaces"), h("span", {class:"sep"}, "›"),
     h("h2", {}, `${STEP_NAMES[st.step] || st.step} · ${STATE[st.state].label}`), h("span", {}, `${st.members.length} workspaces`)] : [h("h2", {class:"sect"}, "Workspaces")];
+  const on = counts();
   const head = h("div", {class:"whead"}, ...crumbs, h("span", {class:"sp"}),
-    ...ORDER.filter(k => !SHELF.includes(k) && counts()[k]).map(k => h("span", {class:"lg"}, h("i", {style:`background:${c(STATE[k].color)}`}), STATE[k].label, h("b", {}, counts()[k]))));  // the shelf counts its own
+    ...ORDER.filter(k => !SHELF.includes(k) && on[k]).map(k => h("span", {class:"lg"}, h("i", {style:`background:${c(STATE[k].color)}`}), STATE[k].label, h("b", {}, on[k]))));  // the shelf counts its own
   main.append(head);
   const rows = SHELF.map(k => [k, shelf.filter(p => p.state === k)]).filter(([, ps]) => ps.length);
   const shelfEl = rows.length ? main.appendChild(h("div", {class:"shelf" + (ui.shelfAll ? " all" : "")}, rows.map(([k, ps]) => h("div", {class:"shrow"},
@@ -1401,6 +1395,7 @@ function factsLine(p, ml){  // the facts panel in one sentence
   return (by.length ? `Approved by ${andJoin(by)}. ` : "") + rest[0].toUpperCase() + rest.slice(1) + ".";
 }
 const BRIEF = {merge: () => "Ready for your merge review.", milestone: () => "Needs a milestone before it can merge.", review: mr => `${mr.author || "Someone"} asked for your review.`};
+function safeHttpUrl(u){ return typeof u === "string" && /^https?:\/\//i.test(u) }
 function mrFacts(p, ml){
   const mr = p.mr || {};
   if (!mr.iid) return h("section", {class:"panel"}, h("h2", {}, "Workspace"), h("dl", {class:"facts"},
@@ -1409,12 +1404,12 @@ function mrFacts(p, ml){
     icon(ic, 14), (tn === "run" ? "running" : tn === "bad" ? "failed" : tn === "ok" ? "passed" : "") + (tn && arr(ml.jobs).length ? " · " : "") + (arr(ml.jobs).length || !tn ? ci : ""));
   const appr = ml.approved_by || [], need = Math.max(mr.approvals_required || 0, appr.length), un = ml.unresolved != null ? ml.unresolved : mr.threads || 0;
   const rows = [
-    ["Pipeline", ml.pipeline_url ? h("a", {href: ml.pipeline_url}, cis) : cis],
+    ["Pipeline", safeHttpUrl(ml.pipeline_url) ? h("a", {href: ml.pipeline_url}, cis) : cis],
     ["Conflicts", (ml.conflicts != null ? ml.conflicts : mr.conflicts) ? h("span", {style:`color:${ink("--orange")}`}, "yes, with the target branch") : "none"],
     ["Threads", h("span", {style: un ? `color:${ink("--orange")}` : null}, `${un} unresolved` + (mr.threads_total ? ` of ${mr.threads_total}` : ""))],
     ["Approvals", appr.length ? h("span", {}, h("span", {style: need ? `color:${ink(appr.length >= need ? "--green" : "--orange")}` : null}, need ? `${appr.length} of ${need}` + (appr.length < need ? ` · ${need - appr.length} needed` : "") : `${appr.length}`), ` · ${appr.join(", ")}`) : need ? `0 of ${need} · nobody yet` : "nobody yet"],
     ["Milestone", ml.milestone || "none"], ["Labels", arr(ml.labels).join(", ") || "none"],
-    ["MR", h("a", {href: mr.web_url}, mrRef(mr), mr.author ? h("span", {class:"muted"}, ` by ${mr.author}`) : null)]];
+    ["MR", safeHttpUrl(mr.web_url) ? h("a", {href: mr.web_url}, mrRef(mr), mr.author ? h("span", {class:"muted"}, ` by ${mr.author}`) : null) : h("span", {}, mrRef(mr), mr.author ? h("span", {class:"muted"}, ` by ${mr.author}`) : null)]];
   if (ml.error) rows.push([forgeName(mr), h("span", {style:`color:${c("--red")}`}, short(ml.error, 120))]);
   return h("section", {class:"panel"}, h("h2", {class:"sect"}, mr.role === "reviewer" ? "Merge request you review" : "Merge request"),
     h("dl", {class:"facts"}, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])));
@@ -1460,7 +1455,7 @@ function renderPage(main){
         h("div", {class:"meta"}, [mr.iid && h("span", {class:"mono"}, mrRef(mr)), m && h("span", {class:"mono"}, m[1]), p.project, mr.author, mr.draft && "draft"].filter(Boolean)
 .flatMap((x, k) => k ? [h("span", {}, "·"), typeof x === "string" ? h("span", {}, x) : x] : [typeof x === "string" ? h("span", {}, x) : x])))),
     wait ? null : h("div", {class:"panel now" + (st === "raised" ? " yellow" : "")}, h("div", {class:"tx"}, h("b", {}, brief), fl ? h("span", {class:"why"}, fl) : null),
-      mr.web_url ? h("a", {class:"btn nact" + (st === "raised" ? " yellow" : ""), href: mr.web_url}, `${you ? "Review" : "Open"} in ${forgeName(mr)}`, icon("external", 13)) : null),
+      safeHttpUrl(mr.web_url) ? h("a", {class:"btn nact" + (st === "raised" ? " yellow" : ""), href: mr.web_url}, `${you ? "Review" : "Open"} in ${forgeName(mr)}`, icon("external", 13)) : null),
     p.asked ? h("section", {class:"needs"}, pingBox(p.asked)) : null,
     wait ? h("section", {class:"needs"}, answerBox(p, true)) : null,
     p.steps && p.steps.length ? lifecycle(p, ml) : null,
@@ -1642,6 +1637,11 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
       if (note) note.remove();  // "No output yet" was true until now
       if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
       list.append(...add.map(e => outEntry(e, e.other)));
+      if (o.follow && o.entries.length > 500) {
+        const drop = o.entries.length - 500;
+        o.entries.splice(0, drop);
+        for (let k = 0; k < drop && list.firstChild; k++) list.firstChild.remove();
+      }
       if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
@@ -1729,7 +1729,7 @@ function renderMain(){
   const main = document.getElementById("main");
   const keep = main.scrollTop, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
   const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
-  main.replaceChildren(); main.classList.remove("ov");
+  main.replaceChildren(); main.classList.remove("ov"); ui.dk = {};
   if (!ui.snap) { main.classList.add("ov"); const bad = CONN.failed, retrying = !bad && CONN.tries > 0;
     const retry = () => { CONN.tries++; CONN.refocus = true; post({cmd: "ready"}); armConn(); renderMain(); footer(); document.querySelector("#main .empty").focus() };  // the page's own hello again: the app answers with the latest update
     main.append(h("div", {class:"empty" + (bad ? " bad" : ""), role: bad ? "alert" : "status", tabindex: "-1"},  // Retry's focus waits here, and comes back to Retry if this try fails too
@@ -1752,14 +1752,16 @@ function renderMain(){
 }
 function render(){
   const ae = document.activeElement, q = document.hasFocus() && ae && (["q", "areply", "preply"].includes(ae.id) || /^ps-/.test(ae.id)) && ae.id;
-  const sel = q && /^ps-/.test(q) && [ae.selectionStart, ae.selectionEnd, ae.scrollTop];
+  const sel = q && [ae.selectionStart, ae.selectionEnd, ae.scrollTop];
   document.querySelectorAll(".toast").forEach(e => e.remove());
-  topBar(); renderDock(); renderPark(); renderMain(); footer();  // the dock first: it sets the gutter the field is laid out in
+  topBar(); renderDock(true); renderPark(true); renderMain(); footer();  // the dock first: it sets the gutter the field is laid out in
   const t = toastEl(); if (t) { const m = document.getElementById("main").getBoundingClientRect(); t.style.bottom = `${innerHeight - m.bottom + 12}px`; t.style.left = `${m.left + m.width / 2}px`; document.body.append(t) }  // floats at the map's foot
   document.querySelectorAll(".sheetbg").forEach(e => e.remove());
   const sh = answerSheet() || taskSheetEl(); if (sh) document.body.append(sh);
   if (ui.task.fresh) hl(ui.task.fresh, true);  // the task just started: ring its card and hex until the toast goes
-  if (q) { const i = document.getElementById(q); if (i) { i.focus(); try { if (sel && sel[0] != null) { i.setSelectionRange(sel[0], sel[1]); i.scrollTop = sel[2] }
+  if (q) { const i = document.getElementById(q); if (i) {
+    if (i.tagName === "TEXTAREA") grow(i);
+    i.focus(); try { if (sel && sel[0] != null) { i.setSelectionRange(sel[0], sel[1]); i.scrollTop = sel[2] }
     else i.setSelectionRange(i.value.length, i.value.length) } catch {} } }
 }
 
@@ -1830,7 +1832,7 @@ function hoverCard(p){
     h("div", {class: "hf"}, glyph(gs),
       h("span", {class: "hfx"}, gs === "crashed" ? `${a.type ? who : "Agent"} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
         a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · ${ago(a.idle_h)}`) : null),
-      mr ? h("a", {class: "lk", href: mr.web_url}, "Open ", h("span", {}, mrRef(mr)), h("span", {"aria-hidden": "true"}, "↗")) : null));
+      mr && safeHttpUrl(mr.web_url) ? h("a", {class: "lk", href: mr.web_url}, "Open ", h("span", {}, mrRef(mr)), h("span", {"aria-hidden": "true"}, "↗")) : null));
 }
 // the recommendation: dash.py's rule (p.advice), or when no rule covers the step (null) the suggestion's advice line
 function recEl(p){
@@ -1875,7 +1877,7 @@ const MI = {review: "M15.5 15.5L20 20M11 17.5a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0
 const MTONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {review: "#FF9F0A", threads: "#BF5AF2", ci: "#FF453A", conflicts: "#FF453A"};
 // the most urgent move as one big solid button (its own color; blue when several fixes apply; green: merge); the rest as "Also"
 function movesEl(p, mv){
-  const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y));
+  const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y) && Object.hasOwn(MOVE, y.kind));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
   const run = y => () => { hideCard(); runFor(p.name, y.prompt) };  // as a new agent in that workspace, like the Next step
   let top = null;
@@ -2014,14 +2016,14 @@ function dockSync(){
     mrs: (d.item.members || [d.item]).length, text: dockText(d.item)}))});
   renderDock(); if (ui.snap) renderMain();  // the field's in-dock halos
 }
-function renderDock(){
+function renderDock(fromRender){
   let d = document.getElementById("dock");
   if (!d) { d = h("aside", {id: "dock", "aria-label": "Context dock"}); document.body.append(h("div", {class: "dedge"}), d) }
   const R = DOCK_R, dr = ui.drag, on = !!ui.snap;  // always drawn, as on main: an empty dock still shows where to drop
   const gut = dr ? document.body.classList.contains("hasdock") : on, flip = gut !== document.body.classList.contains("hasdock");  // mid-drag the map holds still: the rail floats over it
   document.body.classList.toggle("hasdock", gut);
   d.hidden = !on;
-  if (flip && ui.snap) renderMain();  // the field lays out in the width that's left
+  if (!fromRender && flip && ui.snap) renderMain();  // the field lays out in the width that's left
   if (!on) return d.replaceChildren();
   const n = dr ? ui.dock.length + 1 : Math.max(1, ui.dock.length);  // one socket mid-drag: where it lands
   d.replaceChildren(h("div", {class: "dhint"}, dr ? [h("span", {class: "idle"}, "Add to chat"), h("span", {class: "hot"}, "Release to add")] : ui.dock.length ? "In chat" : "Context"),
@@ -2044,7 +2046,7 @@ function park(names, on){
   for (const n of names) { ui.parking[n] = on; post({cmd: "park", name: n, on}) }
   render();
 }
-function renderPark(){
+function renderPark(fromRender){
   let d = document.getElementById("park");
   if (!d) { d = h("aside", {id: "park", "aria-label": "Parked workspaces"}); document.body.append(h("div", {class: "pedge"}), d) }
   const R = PARK_R, step = 2 * R + 24, dr = ui.drag, all = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)) : [];
@@ -2053,7 +2055,7 @@ function renderPark(){
   const gut = dr ? document.body.classList.contains("haspark") : !!ps.length, flip = gut !== document.body.classList.contains("haspark");
   document.body.classList.toggle("haspark", gut);  // as the dock: the gutter follows the column, after the drop
   d.hidden = !(ps.length || dr);
-  if (flip && ui.snap) renderMain();  // the field lays out in the width that's left
+  if (!fromRender && flip && ui.snap) renderMain();  // the field lays out in the width that's left
   if (d.hidden) return d.replaceChildren();
   d.replaceChildren(h("div", {class: "dhint"}, dr ? [h("span", {class: "idle"}, "Park"), h("span", {class: "hot"}, "Release to park")] : "Parked"),
     ...ps.map(p => h("button", {type: "button", class: "dslot full", "data-unpark": p.name, "data-name": p.name, "aria-label": `${p.name}, parked`, title: `${p.name}\nParked. Click to open, drag out to unpark.`,
@@ -2096,13 +2098,19 @@ document.addEventListener("pointerdown", e => {
     if (phot !== ui.drag.phot) { ui.drag.phot = phot; document.body.classList.toggle("parkhot", phot) }
   };
   let dead = false;
+  const off = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", cancelDrag); removeEventListener("blur", cancelDrag); removeEventListener("keydown", esc, true) };
+  const cancelDrag = () => {
+    off();
+    if (!ui.drag) return;
+    ui.drag.ghost.remove(); ui.drag = null; dead = true; document.body.classList.remove("dragging", "dockhot", "parkhot"); renderDock(); renderPark();
+  };
   const esc = ev => {  // Esc drops it back where it came from: nothing moves
     if (ev.key !== "Escape" || !ui.drag) return;
     ev.preventDefault(); ev.stopImmediatePropagation(); removeEventListener("pointermove", move);
     ui.drag.ghost.remove(); ui.drag = null; dead = true; document.body.classList.remove("dragging", "dockhot", "parkhot"); renderDock(); renderPark();
   };
   const up = () => {
-    removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("keydown", esc, true);
+    off();
     const d = ui.drag;
     const eat = ev => { ev.stopPropagation(); ev.preventDefault() };  // the drop isn't a click
     if (dead) { addEventListener("click", eat, true); setTimeout(() => removeEventListener("click", eat, true), 0) }
@@ -2115,7 +2123,7 @@ document.addEventListener("pointerdown", e => {
     else if (!d.hot && d.out) ui.dock = ui.dock.filter(x => x.key !== d.out);
     dockSync(); renderPark();  // the drag's sockets go
   };
-  addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("keydown", esc, true);
+  addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", cancelDrag); addEventListener("blur", cancelDrag); addEventListener("keydown", esc, true);
 });
 
 /* ---------- to the Basement: Basement on a page, Open in Basement after New task ---------- */
@@ -2221,7 +2229,7 @@ function taskSheetEl(){
     return h("div", {class:"pclar", id:"ps-ask", role:"group", "aria-labelledby":"ps-askh"},
       h("div", {class:"pch"}, h("b", {id:"ps-askh"}, n > 1 ? "Two questions before it starts" : "One question before it starts"),
         h("span", {class:"ast"}, `The goal reads as ambiguous${ask.p != null ? ` (${Math.round(ask.p * 100)}% sure)` : ""}. The answers go to the agent.`)),
-      ...ask.qs.map(q => { const own = h("input", {type:"text", maxlength:"300", placeholder:"Or in your own words", "aria-label":`${q.q} In your own words`,
+      ...ask.qs.map(q => { const own = h("input", {type:"text", id:`ps-own-${q.id}`, maxlength:"300", placeholder:"Or in your own words", "aria-label":`${q.q} In your own words`,
           value: q.options.includes(ask.ans[q.id]) ? "" : ask.ans[q.id] || "",
           oninput: e => { ask.ans[q.id] = e.target.value; e.target.closest(".pq").querySelectorAll(".pchips button").forEach(b => b.setAttribute("aria-pressed", "false")); syncGo() }});
         return h("div", {class:"pq"}, h("span", {class:"pql", id:`ps-q-${q.id}`}, q.q),
@@ -2293,7 +2301,7 @@ function popBtn(v){ return ui.only ? document.createTextNode("") : h("button", {
 // Open projects on L1: the terminal page's dialog (terminal.html pickProjects), the same tiles and buttons; list comes from the app (a terminal page's projects, "" No Man's Land last)
 function pickProjects(list, only, here = true){
   const E = (t, c, x) => Object.assign(document.createElement(t), {className: c || "", innerHTML: x || ""}), es = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-  const nR = n => `${n} repo${n === 1 ? "" : "s"}`, sq = c => `<i class="sq" style="background:${es(c)}"></i>`;
+  const nR = n => `${n} repo${n === 1 ? "" : "s"}`, okCol = c => typeof c === "string" && !/[;{}()]/.test(c.replace(/var\(--[a-z0-9-]+\)/gi, "")) && CSS.supports("color", c) ? c : "transparent", sq = c => `<i class="sq" style="background:${es(okCol(c))}"></i>`;
   const tile = (v, name, sub, on, c) => `<label class="tile"><input type="checkbox" value="${es(v)}" ${on ? "checked" : ""}>${sq(c)}<span><b>${es(name)}</b><small>${es(sub)}</small></span></label>`;
   const d = document.getElementById("pp") || document.body.appendChild(Object.assign(E("div"), {id: "pp", hidden: true}));
   const f = E("form", "big nw"), body = E("div", "nwb"), grid = E("div", "tiles"), find = Object.assign(E("input"), {type: "text", placeholder: "Filter projects"});
@@ -2347,7 +2355,7 @@ window.mc = {
     render(); renderDock();
   },
   openPage(name){ openPage(name) },
-  undock(key){ ui.dock = ui.dock.filter(d => d.key !== key); renderDock() },  // × on the chat's chip
+  undock(key){ ui.dock = ui.dock.filter(d => d.key !== key); renderDock(); if (ui.snap) renderMain() },  // × on the chat's chip
   builds(b){ ui.builds = b; footer() },
   suggest(r){ ui.sug[r.name] = r.error ? {error: r.error, sig: (puckOf(r.name) || {}).sig} : r;
     if (ui.autorun.delete(r.name) && r.prompt) runFor(r.name, r.prompt);  // the hover card's Next step was waiting on it
@@ -2377,7 +2385,7 @@ window.mc = {
   },
   asked(r){
     const st = ui.ask[r.name]; if (!st) return;
-    st.loading = false; st.resp = r.error ? null : r; st.err = r.error || null; st.picks = st.other = null; st.at = 0; render();  // a new ask never keeps old picks
+    st.loading = false; st.resp = r.error ? null : r; st.err = r.error || null; render();
   },
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;
@@ -2406,7 +2414,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "/" && !ui.page && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { const i = document.getElementById("q"); if (i) { e.preventDefault(); i.focus() } }
 });
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderMain, 60) });
-setInterval(footer, 5000);
+setInterval(() => { if (!document.hidden) footer() }, 5000);
 armConn(); render(); renderDock(); renderPark();  // armed first: the Waiting clock starts at 0:00, not at the epoch
 post({cmd: "ready"});
 </script>

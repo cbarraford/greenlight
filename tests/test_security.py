@@ -1,11 +1,17 @@
 """Security & cross-layer contract tests for Greenlight (Python ↔ Swift ↔ HTML)."""
+import atexit
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+_SEC_HOME = tempfile.mkdtemp(prefix="gl-sec-")
+atexit.register(shutil.rmtree, _SEC_HOME, True)
+os.environ["GREENLIGHT_HOME"] = _SEC_HOME
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -18,14 +24,85 @@ def swift_text():
     return "\n".join(p.read_text() for p in check_safety.swift_files())
 
 
-# 1. decide.post rejects non-HTTP(S) URL schemes (prevents file:// SSRF/read)
-for bad_url in ("file:///etc/passwd", "ftp://example.com/x", "javascript:alert(1)"):
+# 1. decide.post rejects non-HTTP(S) URL schemes and non-loopback cleartext http://
+for bad_url in ("file:///etc/passwd", "ftp://example.com/x", "javascript:alert(1)", "http://api.example.com/v1"):
     try:
         decide.post(bad_url, {}, {}, 1)
     except ValueError as e:
-        assert "unsupported URL scheme" in str(e), e
+        assert "unsupported URL scheme" in str(e) or "cleartext http://" in str(e), e
     else:
-        raise AssertionError(f"decide.post accepted unsafe scheme: {bad_url}")
+        raise AssertionError(f"decide.post accepted unsafe URL: {bad_url}")
+
+# 1b. decide.finish rejects Python booleans (isinstance(True, int) == True)
+try:
+    decide.finish({"type": "bool"}, True, "jev")
+except ValueError:
+    pass
+else:
+    raise AssertionError("decide.finish accepted bool as probability")
+
+# 1c. harness.argv: bypass requires strict True, tools=False disables tools/bypass, interactive uses --
+import harness
+harness.CONFIG.setdefault("harnesses", {})["claude"] = {"bypass": "false"}
+cmd_safe, _ = harness.argv("claude", "hi")
+assert "--permission-mode" in cmd_safe and "acceptEdits" in cmd_safe, cmd_safe
+harness.CONFIG["harnesses"]["claude"] = {"bypass": True}
+cmd_toolless, _ = harness.argv("claude", "hi", tools=False)
+assert "--tools" in cmd_toolless and "" in cmd_toolless and "bypassPermissions" not in cmd_toolless, cmd_toolless
+assert "--" in harness.interactive("claude", "--dangerously-skip-permissions")
+harness.CONFIG["harnesses"].pop("claude", None)
+
+# 1d. audit.py: non-LF line separators cannot bypass published_lines / secrets / test_signals, and origin_push_url blocks options/schemes
+import audit
+cr_diff = "diff --git a/a.py b/a.py\n@@ -0,0 +1,2 @@\n+foo\rdiff --git a/b.py b/b.py\n+glpat-1234567890abcdefghij\n"
+assert audit.secrets(cr_diff, diff=True), "CR diff header injection bypassed audit.secrets!"
+ls_diff = "diff --git a/a.py b/a.py\n@@ -0,0 +1,1 @@\n+hello\u2028glpat-1234567890abcdefghij\n"
+assert audit.secrets(ls_diff, diff=True), "Unicode line separator bypassed audit.secrets!"
+try:
+    audit.live_thread_snapshot("o/r", 1, "github", "@/etc/passwd")
+except ValueError:
+    pass
+else:
+    raise AssertionError("audit.live_thread_snapshot accepted @file thread_id")
+from unittest import mock
+for bad_remote in ("--upload-pack=id@github.com:o/r.git", "ext://github.com/o/r.git", "file://github.com/o/r.git"):
+    with mock.patch.object(audit, "git", return_value=bad_remote + "\n"):
+        assert audit.origin_push_url("/tmp", "o/r", "github") is None, f"accepted unsafe push URL: {bad_remote}"
+
+# 1e. diag.py: leak(strict=True) fails closed on broken leak.re; clean() rejects free-text keys and NaN
+import diag
+with tempfile.TemporaryDirectory() as dtmp:
+    old_home, old_leak = os.environ.get("GREENLIGHT_HOME"), diag._leak
+    try:
+        os.environ["GREENLIGHT_HOME"] = dtmp
+        (Path(dtmp) / "leak.re").write_text("SECRET_WORD\n[unclosed\n")
+        diag._leak = False
+        try:
+            diag.gate()
+        except re.error:
+            pass
+        else:
+            raise AssertionError("diag.gate() failed open on invalid leak.re!")
+        diag._leak = False
+        (Path(dtmp) / "leak.re").unlink()
+        c = diag.clean({"kind": "x", "/Users/alice/secret": 1, "bad_float": float("nan"), "secs": 1.25})
+        assert "/Users/alice/secret" not in c and "bad_float" not in c and c["secs"] == 1.25, c
+    finally:
+        if old_home is None:
+            os.environ.pop("GREENLIGHT_HOME", None)
+        else:
+            os.environ["GREENLIGHT_HOME"] = old_home
+        diag._leak = old_leak
+
+# 1f. auto.py rejects path traversal automation names
+import auto
+for bad_name in ("../pwn", "/tmp/pwn", "a/b", "-flag"):
+    try:
+        auto.valid_name(bad_name)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"auto.valid_name accepted {bad_name!r}")
 
 # 2. Swift ↔ HTML bridge contract: every cmd emitted by dashboard.html / terminal.html
 #    must be handled by Swift's userContentController (mc) / termMessage (term).
@@ -103,15 +180,94 @@ for sf in check_safety.swift_files():
             assert allowed, f"stray UserDefaults.standard in {sf.name}:{i}: {line.strip()}"
 
 # 6. audit.py review handles argv cleanly and passes diff= (not outbound=) to contracts()
-import audit
-from unittest import mock
 assert audit.main(["review", "--path", str(ROOT), "--deterministic-only"]) == 0
 sample_diff = "diff --git a/scripts/foo.py b/scripts/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
 with mock.patch.object(audit, "branch_diff", return_value=sample_diff), \
-     mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
+        mock.patch.object(audit, "contracts", return_value={"ok": True, "failed": []}) as mc:
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 0
     assert mc.called
     assert mc.call_args.kwargs.get("diff") == sample_diff, f"expected diff= kwarg, got {mc.call_args}"
     assert "outbound" not in mc.call_args.kwargs, f"raw diff must not be passed as outbound=: {mc.call_args}"
+with mock.patch.object(audit, "branch_diff", return_value=None):
+    assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 4
+
+# 7. ade_basement: atomic remember(), prefix-boundary worktrees(), -- end-of-options send(), 0o600 O_EXCL launch() brief
+import ade_basement  # noqa: E402
+import ade_herdr  # noqa: E402
+import dash  # noqa: E402
+
+with tempfile.TemporaryDirectory() as td:
+    base_tmp = Path(td)
+    with mock.patch.object(ade_basement, "REPOS", base_tmp / "repos.json"), \
+            mock.patch.object(ade_basement, "BRIEFS", base_tmp / "briefs"):
+        ade_basement.remember("/repo/a")
+        ade_basement.remember("/repo/a")
+        assert json.loads((base_tmp / "repos.json").read_text()) == ["/repo/a"]
+        fake_panes = [
+            {"handle": "%1", "cwd": "/w/app/sub", "title": "✳ Done", "at": "1700000000"},
+            {"handle": "%2", "cwd": "/w/app2", "title": "⠋ Run", "at": "1700000001"},
+        ]
+        with mock.patch.object(ade_basement, "panes", return_value=fake_panes), \
+                mock.patch.object(ade_basement, "goals", return_value={"/w/app": "g1"}), \
+                mock.patch.object(ade_basement, "git_info", side_effect=lambda p: {"repoId": "/repo/a", "path": p}), \
+                mock.patch.object(ade_basement, "git", return_value="worktree /w/app\nworktree /w/app2\n"), \
+                mock.patch.object(ade_basement, "screen", return_value=["❯ "]):
+            wts = {w["path"]: w for w in ade_basement.worktrees()}
+            assert [a["handle"] for a in wts["/w/app"]["agents"]] == ["%1"]
+            assert [a["handle"] for a in wts["/w/app2"]["agents"]] == ["%2"]
+        tmux_calls = []
+        with mock.patch.object(ade_basement, "tmux", side_effect=lambda *a: (tmux_calls.append(a), "%9")[1]), \
+                mock.patch.object(ade_basement.subprocess, "run") as mrun, \
+                mock.patch.object(ade_basement.time, "sleep"):
+            ade_basement.send("%1", "-l-flag", False)
+            assert tmux_calls[-1] == ("send-keys", "-t", "%1", "-l", "--", "-l-flag")
+            ade_basement.send("%1", "hello\nworld", True)
+            assert any("load-buffer" in c.args[0] for c in mrun.call_args_list)
+            assert any("delete-buffer" in c.args[0] for c in mrun.call_args_list)
+            ade_basement.launch("/w/app", "claude", "line1\nline2")
+            briefs = list((base_tmp / "briefs").glob("*.md"))
+            assert len(briefs) == 1 and (briefs[0].stat().st_mode & 0o777) == 0o600
+
+    # 8. ade_herdr: -- option separator on send() and 0o600 O_EXCL brief in launch()
+    with mock.patch.object(ade_herdr, "BRIEFS", base_tmp / "hbriefs"):
+        hcalls = []
+        with mock.patch.object(ade_herdr, "agents", return_value={"p1": {"pane_id": "p1"}}), \
+                mock.patch.object(ade_herdr, "herdr", side_effect=lambda *a, **kw: (hcalls.append(a), {})[1]):
+            ade_herdr.send("p1", "--evil", True)
+            ade_herdr.send("p2", "--evil", True)
+            ade_herdr.send("p2", "--evil", False)
+            assert hcalls == [
+                ("agent", "prompt", "p1", "--", "--evil"),
+                ("pane", "run", "p2", "--", "--evil"),
+                ("pane", "send-text", "p2", "--", "--evil"),
+            ]
+            res = ade_herdr.launch("ws1", "claude", "first\nsecond", pane="p:1")
+            assert res == {"terminal": {"handle": "p:1"}}
+            hbriefs = list((base_tmp / "hbriefs").glob("*.md"))
+            assert len(hbriefs) == 1 and (hbriefs[0].stat().st_mode & 0o777) == 0o600
+
+    # 9. dash._codex_entries & dash.transcript_files: defensive JSON parsing and transcript discovery
+    fake_home = base_tmp / "fakehome"
+    ws_path = "/w/demo"
+    cdir = fake_home / ".claude/projects" / "-w-demo"
+    cdir.mkdir(parents=True)
+    (cdir / "s1.jsonl").write_text("{}\n")
+    xdir = fake_home / ".codex/sessions/2026/11/21"
+    xdir.mkdir(parents=True)
+    rollout = xdir / "rollout-1.jsonl"
+    rollout.write_text("\n".join([
+        json.dumps({"payload": {"cwd": ws_path}}),
+        "not json",
+        json.dumps(["not", "a", "dict"]),
+        json.dumps({"payload": "not-a-dict"}),
+        json.dumps({"payload": {"type": "message", "role": "user", "content": ["bad", {"text": "<sys>"}, {"text": "hi"}]}}),
+        json.dumps({"payload": {"type": "function_call", "name": "bash", "arguments": "ls -la"}}),
+    ]) + "\n")
+    entries = dash._codex_entries(rollout)
+    assert entries == [("user", "hi"), ("tool", "bash ls -la")], entries
+    assert dash._codex_entries(base_tmp / "missing.jsonl") == []
+    with mock.patch.object(dash.Path, "home", return_value=fake_home):
+        tfiles = dash.transcript_files(ws_path)
+        assert {k for _, k in tfiles} == {"claude", "codex"}, tfiles
 
 print("ok  test_security.py passed")

@@ -24,7 +24,7 @@ while that worktree lasts). Stdlib only, and Python 3.9: the Mac runs it on the 
 import base64, hashlib, json, os, plistlib, re, shlex, shutil, signal, subprocess, sys, threading, time, traceback
 from pathlib import Path
 
-NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")  # a workspace: it names an app, a folder and a defaults domain
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}\Z")  # a workspace: it names an app, a folder and a defaults domain
 SRC = ("app", "brand/icons")  # what build.sh reads
 MARK = "GREENLIGHT_DEV"  # a build.sh that knows this builds a copy; an older one would build over Greenlight.app
 REPORT = "greenlight-dev.json"  # in the worktree's git dir: {sig, ok, what, secs, at, errors}
@@ -193,12 +193,16 @@ def sock(c):
     return HOME / "ssh" / (c["host"] + ".sock")
 
 
+def _sq(s):
+    return "'" + str(s).replace("'", "'\"'\"'") + "'"
+
+
 def on_host(c, cmd):
     """The argv for a shell command where the worktrees are. Over ssh it rides the tunnel's socket: no connection of our own."""
     if local(c):
         return ["/bin/sh", "-c", cmd]
     return ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ControlPath=none", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=2", "-o", f"ProxyCommand=/usr/bin/nc -U '{sock(c)}'", c["host"], cmd]
+            "-o", "ServerAliveCountMax=2", "-o", f"ProxyCommand=/usr/bin/nc -U {_sq(sock(c))}", "--", c["host"], cmd]
 
 
 class Copy:
@@ -221,8 +225,10 @@ class Copy:
 
     def stop(self):
         pids = self.pids()
+        if not pids:
+            return False
         for s in (signal.SIGTERM, signal.SIGKILL):
-            for p in pids:
+            for p in self.pids():
                 try:
                     os.kill(p, s)
                 except OSError:
@@ -232,7 +238,7 @@ class Copy:
                 time.sleep(0.1)
             if not self.pids():
                 break
-        return bool(pids)
+        return True
 
     def front(self):
         asn = subprocess.run(["/usr/bin/lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
@@ -312,7 +318,7 @@ def drop(k):
     if k.app.is_dir():
         subprocess.run([LSREGISTER, "-u", str(k.app)], capture_output=True)
         shutil.rmtree(k.app, ignore_errors=True)
-    if re.match(re.escape(PROD) + r"\.[A-Za-z0-9-]+$", bid):  # a copy's id, never Greenlight's own
+    if re.fullmatch(re.escape(PROD) + r"\.[A-Za-z0-9-]+", bid):  # a copy's id, never Greenlight's own
         subprocess.run(["/usr/bin/defaults", "delete", bid], capture_output=True)
         for d in (f"Preferences/{bid}.plist", f"WebKit/{bid}", f"Caches/{bid}", f"HTTPStorages/{bid}", f"Saved Application State/{bid}.savedState"):
             f = SUPPORT.parent / d
@@ -345,6 +351,8 @@ def make(c, k, ev):
     """Builds the copy if what a build bakes in has moved, relaunches it if it was open, and answers the worktree."""
     snap = k.dir / "build"  # the build reads a snapshot: the mirror keeps moving under a 15s compile
     with LOCK:
+        if not k.src.is_dir():
+            return
         shutil.rmtree(snap, ignore_errors=True)
         shutil.copytree(k.src, snap)
     read = lambda f: (k.dir / f).read_text() if (k.dir / f).is_file() else ""
@@ -427,7 +435,8 @@ def run():
             for d in (HOME / "ws").iterdir():
                 if d.name not in ev["names"] and NAME.match(d.name):
                     with busy:
-                        pending.pop(d.name, None)
+                        with cv:
+                            pending.pop(d.name, None)
                         drop(Copy(d.name))
         elif ev["ev"] == "ws" and NAME.match(ev["name"]):
             if not ev["ok"]:
@@ -483,7 +492,7 @@ def plists(c):
     if not local(c):
         out[TUNNEL] = dict(AGENT, Label=TUNNEL, StandardErrorPath=str(HOME / "tunnel.log"), ProgramArguments=[
             "/usr/bin/ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-            "-o", "StreamLocalBindUnlink=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-L", f"{sock(c)}:{c['sshd']}", c["host"]])
+            "-o", "StreamLocalBindUnlink=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-L", f"{sock(c)}:{c['sshd']}", "--", c["host"]])
     return out
 
 
@@ -497,17 +506,18 @@ def install(host, repo):
         sys.exit("dev.py install runs on the Mac the copies are for.")
     if not Path("/Library/Developer/CommandLineTools/usr/bin/swiftc").exists():
         sys.exit("No Command Line Tools swiftc: xcode-select --install")
-    if not re.match(r"^[\w.-]+$", host) or not re.match(r"^[~\w./@+-]+$", repo):
+    if not re.fullmatch(r"[A-Za-z0-9][\w.-]*", host) or not re.fullmatch(r"[~\w./@+-]+", repo) or repo.startswith("-"):
         sys.exit("usage: dev.py install <ssh host|local> <repo path there>")
     c = {"host": host}
-    direct = (lambda cmd: ["/bin/sh", "-c", cmd]) if local(c) else (lambda cmd: ["/usr/bin/ssh", "-o", "BatchMode=yes", host, cmd])  # this once, from your terminal
-    r = subprocess.run(direct(f"cd {repo} && git rev-parse --show-toplevel && git worktree list --porcelain | head -1 && cat scripts/dev.py"), capture_output=True)
+    direct = (lambda cmd: ["/bin/sh", "-c", cmd]) if local(c) else (lambda cmd: ["/usr/bin/ssh", "-o", "BatchMode=yes", "--", host, cmd])  # this once, from your terminal
+    cd_repo = '"$HOME"' if repo == "~" else '"$HOME"/' + shlex.quote(repo[2:]) if repo.startswith("~/") else shlex.quote(repo)
+    r = subprocess.run(direct(f"cd -- {cd_repo} && git rev-parse --show-toplevel && git worktree list --porcelain | head -1 && cat scripts/dev.py"), capture_output=True)
     lines = r.stdout.split(b"\n", 2)
     if r.returncode or len(lines) < 3 or not lines[1].startswith(b"worktree "):
         sys.exit(f"No checkout with scripts/dev.py at {host}:{repo}\n{r.stderr.decode(errors='replace')}")
     c.update(tool=lines[0].decode(), repo=lines[1].decode()[9:])
     if not local(c):
-        port = re.search(r"^port (\d+)$", subprocess.run(["/usr/bin/ssh", "-G", host], capture_output=True, text=True).stdout, re.M)
+        port = re.search(r"^port (\d+)$", subprocess.run(["/usr/bin/ssh", "-G", "--", host], capture_output=True, text=True).stdout, re.M)
         c["sshd"] = "localhost:" + (port[1] if port else "22")  # the host's own sshd, as the far end of the tunnel sees it
     if len(str(sock(c))) > 100:
         sys.exit(f"{sock(c)} is too long a path for a socket: give the host a shorter name in ~/.ssh/config.")
@@ -548,7 +558,9 @@ def status():
         print(f"{label}: " + (re.search(r"state = (\w+)", on.stdout) or [0, "not loaded"])[1])
     if not local(c):
         print("tunnel: " + ("up" if subprocess.run(on_host(c, "true"), capture_output=True, timeout=30).returncode == 0 else "down (see tunnel.log)"))
-    for d in sorted((HOME / "ws").iterdir()):
+    for d in sorted((HOME / "ws").iterdir()) if (HOME / "ws").is_dir() else []:
+        if not d.is_dir() or not NAME.match(d.name):
+            continue
         k = Copy(d.name)
         print(f"{k.title}: " + ("no build yet" if not k.app.is_dir() else "build failed (dev.py log, in its worktree)" if (d / "failed").exists() else "running" if k.pids() else "built"))
 

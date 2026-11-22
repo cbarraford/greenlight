@@ -41,7 +41,7 @@ extension NSTextView: VimBuffer {
 /// Vim keys for the input: normal, insert and visual modes over the field's text.
 /// ponytail: no counts, marks, text objects or linewise paste; add them if they're missed.
 final class Vim {
-    var mode = "insert" { didSet { if mode != oldValue { onMode(mode) } } }
+    var mode = "insert" { didSet { if mode != oldValue { pending = ""; onMode(mode) } } }
     var onMode: (String) -> Void = { _ in }
     var pending = ""
     var reg = ""
@@ -50,6 +50,14 @@ final class Vim {
     /// One key ("\u{1b}" is Esc, "^r" is ⌃R). Returns true when vim used it, so it never reaches the field.
     func key(_ k: String, _ b: VimBuffer) -> Bool {
         let s = b.vimText, n = s.length
+        if mode == "visual" {
+            if n == 0 {
+                mode = "normal"; anchor = 0; cur = 0; b.vimSel = NSRange(location: 0, length: 0)
+                return k == "\u{1b}" || k == "v"
+            }
+            anchor = min(max(anchor, 0), n - 1)
+            cur = min(max(cur, 0), n - 1)
+        }
         let p = mode == "visual" ? cur : min(b.vimSel.location, n)
         let ls = lineStart(s, p), le = lineEnd(s, p)
         if k == "\u{1b}" {
@@ -118,7 +126,7 @@ final class Vim {
             if p < le {
                 let ch = s.substring(with: NSRange(location: p, length: 1))
                 b.vimReplace(NSRange(location: p, length: 1), ch == ch.uppercased() ? ch.lowercased() : ch.uppercased())
-                b.vimSel = NSRange(location: clamp(s, p + 1), length: 0)
+                b.vimSel = NSRange(location: clamp(b.vimText, p + 1), length: 0)
             }
         case "v": mode = "visual"; anchor = p; cur = p; select(b)
         case "j", "k": b.vimVertical(seq == "j")
@@ -172,8 +180,10 @@ final class Vim {
     }
 
     func select(_ b: VimBuffer) {
-        let n = b.vimText.length, lo = min(anchor, cur)
-        b.vimSel = NSRange(location: lo, length: min(max(anchor, cur) + 1, n) - lo)
+        let n = b.vimText.length
+        guard n > 0 else { b.vimSel = NSRange(location: 0, length: 0); return }
+        let a = min(max(anchor, 0), n - 1), c = min(max(cur, 0), n - 1), lo = min(a, c)
+        b.vimSel = NSRange(location: lo, length: min(max(a, c) + 1, n) - lo)
     }
 
     /// Normal mode sits on a character, never past the line's last one.
