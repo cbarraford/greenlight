@@ -1012,7 +1012,7 @@ final class Core: ObservableObject {
 
     /// Same `id` (a workspace key) replaces that workspace's earlier banner in Notification Center instead of stacking.
     func notify(title: String, body: String, subtitle: String?, reply: Bool = true, id: String? = nil, questionID: UUID? = nil, freeform: Bool = false) {
-        if selftest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
+        if selftest || uitest || devDir != nil { return }  // fake pings shouldn't pop banners on the real Mac, nor a copy repeat Greenlight's
         let c = UNMutableNotificationContent()
         c.title = title
         if let subtitle { c.subtitle = subtitle }

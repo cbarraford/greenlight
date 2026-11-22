@@ -83,8 +83,9 @@ def parse_llvm_cov_export(data: dict[str, Any]) -> dict[str, Any]:
     logic_cov = logic_tot = 0
     for block in data.get("data") or []:
         for fobj in block.get("files") or []:
-            fname = Path(fobj.get("filename", "")).name
-            if not fname.endswith(".swift") or fname in EXCLUDE_PROD:
+            fpath = Path(fobj.get("filename", ""))
+            fname = fpath.name
+            if not fname.endswith(".swift") or fname in EXCLUDE_PROD or fpath.parent.name == "Tests":
                 continue
             lines = (fobj.get("summary") or {}).get("lines") or {}
             covered = int(lines.get("covered", 0))
@@ -164,12 +165,17 @@ def main(argv: list[str] | None = None) -> int:
         print("FAIL xcrun swiftc / llvm-profdata / llvm-cov required (install Xcode)", file=sys.stderr)
         return 2
 
-    srcs = sorted(str(p) for p in (ROOT / "app" / "Sources").glob("*.swift"))
+    prod_srcs = sorted(str(p) for p in (ROOT / "app" / "Sources").glob("*.swift"))
+    test_srcs = sorted(str(p) for p in (ROOT / "app" / "Tests").glob("*.swift")) if (ROOT / "app" / "Tests").is_dir() else []
+    srcs = [*prod_srcs, *test_srcs]
     with tempfile.TemporaryDirectory(prefix="gl-swiftcov-") as tmp:
         tmp_dir = Path(tmp)
         binary, prof_dir = tmp_dir / "Greenlight-cov", tmp_dir / "prof"
         prof_dir.mkdir()
-        compile_cmd = [*_arch_prefix(), *swiftc, "-Onone", "-profile-generate", "-profile-coverage-mapping", *srcs, "-o", str(binary)]
+        compile_cmd = [
+            *_arch_prefix(), *swiftc, "-Onone", "-DGREENLIGHT_TESTS",
+            "-profile-generate", "-profile-coverage-mapping", *srcs, "-o", str(binary),
+        ]
         if not _run_step("swiftc (coverage-instrumented)", compile_cmd, dict(os.environ)):
             return 1
         runs = _build_runs(binary, prof_dir, _setup_stub_home(tmp_dir), args.skip_attach, args.include_ui)
@@ -183,11 +189,11 @@ def main(argv: list[str] | None = None) -> int:
                              capture_output=True, text=True, check=True)
         summary = parse_llvm_cov_export(json.loads(exp.stdout))
         if args.lcov:
-            lcov = subprocess.run([*llvm_cov, "export", str(binary), f"-instr-profile={merged}", "-format=lcov", *srcs],
+            lcov = subprocess.run([*llvm_cov, "export", str(binary), f"-instr-profile={merged}", "-format=lcov", *prod_srcs],
                                   capture_output=True, text=True, check=True)
             Path(args.lcov).write_text(lcov.stdout, encoding="utf-8")
 
-    print("\n=== Swift Line Coverage (app/Sources/*.swift, excl. SelfTest.swift) ===")
+    print("\n=== Swift Line Coverage (app/Sources/*.swift) ===")
     for rel, info in summary["files"].items():
         tag = "[logic]" if info["core_logic"] else "[ui]   "
         print(f"  {tag} {rel:28s} {info['pct']:6.2f}%  ({info['covered']:4d}/{info['total']:4d})")
