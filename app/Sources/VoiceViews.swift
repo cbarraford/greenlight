@@ -901,16 +901,24 @@ func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
 enum Talk { case speaking, listening, thinking, muted }
 /// Who has the floor: Chief speaking or thinking comes first; with neither, you're heard unless you muted the mic.
 func voiceTalk(speaking: Bool, thinking: Bool, micMuted: Bool) -> Talk { speaking ? .speaking : thinking ? .thinking : micMuted ? .muted : .listening }
-func voiceTalkLabel(_ t: Talk) -> String {
-    switch t { case .speaking: return "Speaking"; case .thinking: return "Thinking"; case .muted: return "Muted"; case .listening: return "Listening" }
+/// The status every look shows: muted is said even while Chief speaks or thinks, since some looks show only this.
+func voiceTalkLabel(_ t: Talk, micMuted: Bool = false) -> String {
+    switch t {
+    case .speaking: return micMuted ? "Speaking · muted" : "Speaking"
+    case .thinking: return micMuted ? "Thinking · muted" : "Thinking"
+    case .muted: return "Muted"
+    case .listening: return "Listening"
+    }
 }
+/// Window ▸ the mic's item, by what choosing it does now.
+func micMenuTitle(muted: Bool) -> String { muted ? "Unmute Microphone" : "Mute Microphone" }
 /// Every look's hint line while the mic is muted, whoever has the floor.
 let mutedHint = "mic muted · ⇧⌘M or the mic button unmutes"
 /// What every look shows, from Voice and Core.
 struct Live {
     let v: Voice, c: Core
     var talk: Talk { voiceTalk(speaking: v.speaking > 0, thinking: c.run != nil, micMuted: v.micMuted) }
-    var label: String { voiceTalkLabel(talk) }
+    var label: String { voiceTalkLabel(talk, micMuted: v.micMuted) }
     var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
     var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
@@ -1138,7 +1146,7 @@ struct OnAirLook: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : s.talk == .muted ? "MUTED" : "STANDBY") }
+                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : s.v.micMuted ? "MUTED" : "STANDBY") }
                     .font(.system(size: 12, weight: .heavy)).tracking(1.4).foregroundColor(.white).padding(.horizontal, 10).padding(.vertical, 6)
                     .background(s.talk == .speaking ? hx("D1242F") : s.talk == .listening ? hx("1A7F37") : hx("3A3A40"))
                 Leds(m: s.v.meter)
@@ -1428,7 +1436,7 @@ struct VoiceButtons: View, Looked {
                 knob(v.captions ? "captions.bubble.fill" : "captions.bubble", t.caption) { v.captions.toggle() }
                 Button(action: v.toggleMic) {  // muted: filled in a warning color the look's accent (the voice button's) isn't
                     shell(Image(systemName: v.micMuted ? "mic.slash.fill" : "mic"), on: v.micMuted, fill: v.micMuted ? hx(mutedFill(lk)) : nil)
-                }.buttonStyle(.plain).modifier(Tip(c: c, text: t.mic.help)).accessibilityLabel(t.mic.label).accessibilityAddTraits(v.micMuted ? .isSelected : [])
+                }.buttonStyle(.plain).modifier(Tip(c: c, text: t.mic.help)).accessibilityLabel(t.mic.label)
             }
             // one style for live and standard chat
             knob("paintpalette", t.style) { v.look = nextLook }

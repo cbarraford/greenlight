@@ -64,7 +64,9 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: muted shows when nobody else has the floor, and says so",
           voiceTalk(speaking: false, thinking: false, micMuted: true) == .muted && voiceTalk(speaking: true, thinking: false, micMuted: true) == .speaking
           && voiceTalk(speaking: false, thinking: true, micMuted: true) == .thinking && voiceTalk(speaking: false, thinking: false, micMuted: false) == .listening
-          && voiceTalkLabel(.muted) == "Muted" && voiceTalkLabel(.listening) == "Listening" && mutedHint.contains("unmute"))
+          && voiceTalkLabel(.muted) == "Muted" && voiceTalkLabel(.listening) == "Listening" && mutedHint.contains("unmute")
+          && voiceTalkLabel(.thinking, micMuted: true) == "Thinking · muted" && voiceTalkLabel(.speaking, micMuted: true) == "Speaking · muted"
+          && voiceTalkLabel(.thinking) == "Thinking" && micMenuTitle(muted: false) == "Mute Microphone" && micMenuTitle(muted: true) == "Unmute Microphone")
     do {  // muting drops the half-heard turn and the recognition request: nothing more reaches the recognizer until unmute
         let v = Voice()
         v.setMicMuted(true)
@@ -74,9 +76,28 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
         v.request = r; v.heard = "park the"; v.endTurn = w; v.meter.you = v.meter.you.map { _ in 0.5 }
         v.setMicMuted(true)
         let muted = v.micMuted && v.request == nil && v.heard.isEmpty && w.isCancelled && v.meter.you.allSatisfy { $0 == 0 }
+        v.isLive = false; v.listen()  // Apple's recognizer: no new request while muted, so nothing is transcribed
+        let noRequest = v.request == nil
+        v.isLive = true
         v.toggleMic()
-        check("voice: mute only while voice mode is on; it drops the turn, the request and the meter; toggling unmutes",
-              offStaysUnmuted && muted && !v.micMuted)
+        check("voice: mute only while voice mode is on; it drops the turn, the request and the meter; no recognizer while muted; toggling unmutes",
+              offStaysUnmuted && muted && noRequest && !v.micMuted)
+        v.on = false
+    }
+    do {  // GPT-Live: what it transcribes or hands off around a mute never reaches Chief (lastHeard is set just before Core.spoken)
+        let c = Core(), v = c.voice
+        v.on = true; v.isLive = true
+        v.onLive(.heard("park the"))
+        v.setMicMuted(true)
+        v.onLive(.heard(" auth ones"))  // its transcript of audio sent before the mute, arriving after it
+        let ignoredWhileMuted = v.heard.isEmpty
+        v.handOff("d1")  // a hand-off while muted
+        let mutedHandOff = v.lastHeard.isEmpty && v.delegation == "d1"
+        v.setMicMuted(false)
+        v.onLive(.heard("hold 42"))
+        v.handOff("d2", dropped: true)  // scheduled before a mute, run after the unmute
+        check("voice: GPT-Live's transcript and hand-offs from a muted turn are dropped, not sent to Chief",
+              ignoredWhileMuted && mutedHandOff && v.lastHeard.isEmpty && v.heard.isEmpty && v.delegation == "d2")
         v.on = false
     }
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))

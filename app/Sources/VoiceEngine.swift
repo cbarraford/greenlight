@@ -53,6 +53,7 @@ final class Voice: NSObject, ObservableObject {
     /// so macOS still shows the mic in use. Each voice mode starts unmuted.
     @Published private(set) var micMuted = false
     private var micOff = false  // micMuted for the mic's tap on the audio thread, under `lock`
+    var mutes = 0  // each mute bumps it: a GPT-Live hand-off scheduled before one is dropped
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     /// GPT-Live mode (Speech kind "live", fixed as voice mode starts): it listens, takes turns and speaks; Chief does the work.
@@ -473,6 +474,7 @@ final class Voice: NSObject, ObservableObject {
         guard on, isLive else { return }
         switch e {
         case .started: liveUp = true; wait("Listening", "Say something, or “goodbye” to stop.")
+        case .heard where micMuted: break  // GPT-Live still transcribing what it got before the mute: not your turn any more
         case .heard(let d): heard = heard.isEmpty ? String(d.drop { $0.isWhitespace }) : heard + d
         case .said(let d):
             if let c = awaiting { liveSaid += d; if cueHeard(c, liveSaid) { awaiting = nil; flushLive() } }
@@ -481,8 +483,8 @@ final class Voice: NSObject, ObservableObject {
             caption = String(liveCaption(caption.isEmpty ? String(d.drop { $0.isWhitespace }) : caption + d).suffix(240))
         case .audio(let d): liveAudio(d)
         case .delegated(let id):  // its transcript of your turn can trail the hand-off a little
-            let g = startGen
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id) } }
+            let g = startGen, m = mutes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id, dropped: self.mutes != m) } }
         case .failed(let code, let m):
             liveLog.error("GPT-Live: \(code, privacy: .public) \(m, privacy: .public)")
             guard liveUp else { return liveFailed("refused the session: \(m)") }  // e.g. a voice it doesn't have
@@ -492,11 +494,12 @@ final class Voice: NSObject, ObservableObject {
         }
     }
     /// GPT-Live handed your turn off: Chief gets it (or voice mode does, for a command), and Chief's answer is read under this hand-off.
-    func handOff(_ id: String) {
+    /// A turn from while the mic was muted, or one you muted before it was handed off (`dropped`), goes nowhere.
+    func handOff(_ id: String, dropped: Bool = false) {
         guard on, isLive, let c = core else { return }
         let t = heard.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""; delegation = id; liveDrop = false
-        guard !t.isEmpty else { return }
+        guard !t.isEmpty, !micMuted, !dropped else { return }
         if let cmd = voiceCommand(t) { return run(cmd) }
         if c.run != nil { muted = true; liveBuf = [] }  // a new request mid-answer: the rest of the old one goes unsaid (spoken() queues the new one)
         lastHeard = t
@@ -544,11 +547,12 @@ final class Voice: NSObject, ObservableObject {
         guard m != micMuted, on || !m else { return }
         lock.lock(); micOff = m; if m { request = nil }; lock.unlock()
         micMuted = m
+        live.mute(m)
         Diag.event("voice", ["mic_muted": m])
         if m {
+            mutes += 1
             endTurn?.cancel(); task?.cancel(); task = nil
             heard = ""
-            live.dropMic()
             meter.you = meter.you.map { _ in 0 }
         } else if on { listen() }
     }
@@ -563,7 +567,7 @@ final class Voice: NSObject, ObservableObject {
         endTurn?.cancel()
         task?.cancel(); task = nil
         lock.lock(); request = nil; micOff = false; lock.unlock()
-        micMuted = false
+        micMuted = false; live.mute(false)
         engine.stop()
         if inputTapped { engine.inputNode.removeTap(onBus: 0); inputTapped = false }
         if mixerTapped { engine.mainMixerNode.removeTap(onBus: 0); mixerTapped = false }
@@ -1069,7 +1073,7 @@ final class LiveVoice {
         guard let p = b.int16ChannelData, b.frameLength > 0 else { return }
         let d = Data(bytes: p[0], count: Int(b.frameLength) * 2)
         q.async {
-            guard let k = self.sock, !k.dead, k.up else { self.pending = Data(); return }
+            guard !self.muted, let k = self.sock, !k.dead, k.up else { self.pending = Data(); return }
             self.pending += d
             guard self.pending.count >= 4800 else { return }
             let o = ["type": "session.input_audio.append", "audio": self.pending.base64EncodedString()]
@@ -1077,8 +1081,10 @@ final class LiveVoice {
             if let j = try? JSONSerialization.data(withJSONObject: o), let s = String(data: j, encoding: .utf8) { self.write(k, s) }
         }
     }
-    /// Mute: the bit of mic audio not yet sent is never sent.
-    func dropMic() { q.async { self.pending = Data() } }
+    /// Voice mode's mute, on `q` like the audio itself: a buffer the tap let through just before the mute, queued after this, is
+    /// dropped here with whatever wasn't sent yet.
+    private var muted = false
+    func mute(_ m: Bool) { q.async { self.muted = m; if m { self.pending = Data() } } }
     func close() {
         genLock.lock(); liveGen += 1; genLock.unlock()
         on = nil
