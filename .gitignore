@@ -9,3 +9,6 @@ coverage.xml
 CLAUDE.local.md
 .claude/design/
 .claude/worktrees/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

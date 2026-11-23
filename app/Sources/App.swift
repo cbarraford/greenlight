@@ -2319,7 +2319,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         l1s.values.forEach { $0.c.proc?.terminate(); if !$0.c.voice.idle { $0.c.voice.stopAll() } }
         Speech.shared.stop()
         uitestServer?.stop()
-        if let suite = uitestSuiteName, uitestSuiteKept == nil { UserDefaults.standard.removePersistentDomain(forName: suite) }  // a kept one is the test's to remove
+        if let suite = uitestSuiteName, uitestSuiteKept == nil { dropDomain(suite) }  // a kept one is the test's to remove
         try? FileManager.default.removeItem(atPath: Diag.marker)  // a clean quit: no prev_crash next launch
     }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }

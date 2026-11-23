@@ -611,6 +611,7 @@ class UITestSession:
         subprocess.run(["tmux", "-L", self.tmux_socket, "kill-server"], capture_output=True, timeout=5)
         if self.suite:  # the kept defaults: macOS keeps a plist per suite
             subprocess.run(["defaults", "delete", self.suite], capture_output=True, timeout=5)
+            (Path.home() / "Library" / "Preferences" / f"{self.suite}.plist").unlink(missing_ok=True)  # `defaults delete` leaves it, empty
         shutil.rmtree(self.root, ignore_errors=True)
 
     def _quit(self):
