@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 import time
 import urllib.parse
@@ -63,7 +64,8 @@ DEFAULTS = {
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
-    "require_human_approval": True,   # False: a mergeable MR with no other human's approval merges anyway
+    "require_human_approval": True,   # a human signs off: a reviewer where the forge requires approvals, else you ("merge it?");
+                                      # False: a mergeable MR with no other human's approval merges anyway
     "adopt": {"cap": 10, "roles": ["author", "reviewer"]},  # adopt.py: creates per run, which of your MRs get a workspace
     "blocking": None,                 # blocking.py roster ({repos, people, teams, lead}); None turns it off
     "suggest_rules": [],              # extra rules for the dashboard's suggested prompts
@@ -554,33 +556,43 @@ def linked_number(v):
 
 
 APPROVAL_RULES_TTL = 3600  # a repo's required-approval count, cached per repo and base branch
+APPROVAL_RULES_MISS_TTL = 300  # GitHub couldn't say (no rulesets on the server, no access): ask again in 5 minutes
+
+
+def _save_approval_rules(f, cache):
+    """Atomic: mr_details runs on 8 threads, and a reader must never see half a file."""
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, f)
+    except OSError:
+        pass
 
 
 def gh_required_approvals(project, branch):
     """Approving reviews GitHub's rulesets require on `branch` (classic protection comes in the PR query):
-    an int, cached an hour per repo and branch in approval_rules.json, or None when GitHub couldn't say."""
+    an int, cached an hour per repo and branch in approval_rules.json, or None (cached 5 minutes) when GitHub couldn't say."""
     f, key = STATE / "approval_rules.json", f"{project}@{branch}"
     try:
         cache = json.loads(f.read_text()) if f.exists() else {}
     except (OSError, ValueError):
         cache = {}
     hit = cache.get(key) or {}
-    if isinstance(hit.get("n"), int) and time.time() - (hit.get("at") or 0) < APPROVAL_RULES_TTL:
+    age = time.time() - (hit.get("at") or 0)
+    if isinstance(hit.get("n"), int) and age < APPROVAL_RULES_TTL:
         return hit["n"]
+    if "n" in hit and hit["n"] is None and age < APPROVAL_RULES_MISS_TTL:
+        return None
     try:
-        rules = json.loads(run(["gh", "api", f"repos/{project}/rules/branches/{branch}"], timeout=45, tries=2))
+        rules = gh("api", f"repos/{project}/rules/branches/{urllib.parse.quote(branch, safe='')}?per_page=100")
     except Exception:  # noqa: BLE001 - unknown, not zero: the PR's reviewDecision still says when one is required
-        return None
-    if not isinstance(rules, list):
-        return None
-    n = max([(r.get("parameters") or {}).get("required_approving_review_count") or 0
-             for r in rules if isinstance(r, dict) and r.get("type") == "pull_request"] or [0])
+        rules = None
+    n = None if not isinstance(rules, list) else max(
+        [(r.get("parameters") or {}).get("required_approving_review_count") or 0
+         for r in rules if isinstance(r, dict) and r.get("type") == "pull_request"] or [0])
     cache[key] = {"n": n, "at": int(time.time())}
-    try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(cache))
-    except OSError:
-        pass
+    _save_approval_rules(f, cache)
     return n
 
 
@@ -934,7 +946,9 @@ def check(step, mr, ws, milestone):
             if not auto_approval:
                 if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
                     return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
-                explicit = opt_val(opts, "human_approval").strip().lower() == "true"  # the repo's own "wait for a reviewer"
+                # require_human_approval means "a human signs off": a reviewer where the forge requires one, else you, by
+                # merging. Only the repo's own human_approval=true waits for a reviewer the forge doesn't require.
+                explicit = opt_val(opts, "human_approval").strip().lower() == "true"
                 if not approvals_needed(mr) and not explicit:  # the forge requires no approval: no reviewer is waited on, the merge is yours
                     return "me", "mergeable, nothing blocks it: merge it?", merge
                 return "reviewers", "mergeable but no human approval yet (only a bot or you approved)", None

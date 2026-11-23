@@ -334,9 +334,17 @@ with mock.patch.object(greenlight, "run", return_value=_rules) as _r:
     assert greenlight.gh_required_approvals("octo/rules", "main") == 2 and _r.call_count == 1  # second read is the cache
 with mock.patch.object(greenlight, "run", return_value="[]"):
     assert greenlight.gh_required_approvals("octo/none", "main") == 0
-with mock.patch.object(greenlight, "run", side_effect=RuntimeError("404")):
+with mock.patch.object(greenlight, "run", side_effect=RuntimeError("404")) as _r:
     assert greenlight.gh_required_approvals("octo/err", "main") is None
-assert "octo/err@main" not in json.loads((greenlight.STATE / "approval_rules.json").read_text())
+    assert greenlight.gh_required_approvals("octo/err", "main") is None and _r.call_count == 1  # a miss waits 5 minutes
+_c = json.loads((greenlight.STATE / "approval_rules.json").read_text())
+_c["octo/err@main"]["at"] -= greenlight.APPROVAL_RULES_MISS_TTL + 1
+(greenlight.STATE / "approval_rules.json").write_text(json.dumps(_c))
+with mock.patch.object(greenlight, "run", return_value=_rules):
+    assert greenlight.gh_required_approvals("octo/err", "main") == 2  # then asks again: an unknown never sticks as 0
+with mock.patch.object(greenlight, "run", return_value="[]") as _r:
+    greenlight.gh_required_approvals("octo/slash", "rel/1#x")
+assert _r.call_args.args[0][2] == "repos/octo/slash/rules/branches/rel%2F1%23x?per_page=100"  # the branch is one path segment
 assert gh_pr()["_approvals_required"] == 0  # the PR query's JSON isn't a rule list: unknown counts as 0, the decision still rules
 with mock.patch.object(greenlight, "gh_required_approvals", return_value=1):
     assert gh_pr()["_approvals_required"] == 1

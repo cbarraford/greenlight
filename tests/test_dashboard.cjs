@@ -1118,6 +1118,15 @@ test("custom lifecycle stages show step_meta requirements and pre-MR signoff but
   ], custom), ["needs sign-off", "needs label qa-ok", "needs check e2e-suite", "e2e-suite running", "bad"]);
 });
 
+test("the approved step reads 'none required' when the forge asks no approvals, never '0 approvals'", async page => {
+  const p = {...puck("no-appr", "No approvals", "idle"), mr: {approvals: 0, approvals_required: 0}};
+  assert.deepEqual(await page.evaluate(p => [
+    stepNote("approved", 1, 1, p, {})[0],
+    stepNote("approved", 1, 1, {...p, mr: {approvals: 1, approvals_required: 2}}, {})[0],
+    stepNote("approved", 1, 1, {...p, mr: {approvals: 1, approvals_required: 0}}, {})[0],
+  ], p), ["none required", "1 of 2", "1 of 1"]);
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));
