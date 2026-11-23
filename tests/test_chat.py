@@ -77,11 +77,13 @@ def test_unscoped_answer_rejects_question_for_previous_head(tmp_path, monkeypatc
     monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
     (tmp_path / "asked").write_text("Approve old head?")
+    (tmp_path / "session").write_text("old-session")
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is False and "earlier request or commit" in events[-1]["text"]
-    assert forgotten and not (tmp_path / "asked").exists()
+    assert "ask again" in events[-1]["text"] and events[-1]["text"].endswith(chat.CHAT_RESET)
+    assert forgotten and not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
 
 
 def test_answer_rejects_question_for_changed_goal_on_same_head(tmp_path, monkeypatch):
@@ -166,11 +168,13 @@ def test_question_rejects_head_changed_during_reply(tmp_path, monkeypatch):
         norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
         return None, None
     monkeypatch.setattr(chat, "run", reply)
+    (tmp_path / "session").write_text("old-session")
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("review #42", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is False and "request changed" in events[-1]["text"]
-    assert not (tmp_path / "asked").exists()
+    assert events[-1]["text"].endswith(chat.CHAT_RESET)
+    assert not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
 
 
 def test_question_store_failure_prevents_publication(tmp_path, monkeypatch):
@@ -266,6 +270,7 @@ def test_live_goal_change_rejects_answer_and_discards_old_session(tmp_path, monk
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is False and "earlier commit or target" in events[-1]["text"]
+    assert "ask again" in events[-1]["text"] and events[-1]["text"].endswith(chat.CHAT_RESET)  # the session is gone: the user is told
     assert not (tmp_path / "session").exists() and not (tmp_path / "asked").exists()
 
 
@@ -315,6 +320,7 @@ def test_interrupted_question_is_discarded_before_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is False and "interrupted question" in events[-1]["text"]
+    assert events[-1]["text"].endswith(chat.CHAT_RESET)
     assert not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
 
 
@@ -468,6 +474,72 @@ def test_final_verification_outage_discards_answered_session_but_keeps_question(
     chat.turn("yes", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is False and "could not be verified" in events[-1]["text"]
     assert not (tmp_path / "session").exists() and (tmp_path / "asked").exists() and rec["answer"] is None
+
+
+def test_mid_and_post_turn_request_change_rejects_and_notes_chat_reset(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "A", "Merge #42", "main", "id-qa", "feature")})
+    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "mr": "#42", "sha": "A", "target_branch": "main"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale answer heard")))
+
+    cases = [
+        ("first_run", [(None, "request changed")], ["valid"]),
+        ("retry_run", [(None, "retry"), (None, "request changed")], ["valid"]),
+        ("session_lost_run", [(None, "session missing"), (None, "request changed")], ["valid"]),
+        ("post_status_stale", [("new-sid", None)], ["valid", "stale"]),
+    ]
+    for name, run_results, live_states in cases:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        monkeypatch.setattr(chat, "DIR", str(case_dir))
+        (case_dir / "asked").write_text("Approve #42?")
+        (case_dir / "session").write_text("old-session")
+        forgotten = []
+        monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
+        states = iter(live_states)
+        monkeypatch.setattr(chat, "live_question_status", lambda snapshot: next(states))
+        results = iter(run_results)
+        def fake_run(cmd, engine, text, norm, **kw):
+            sid, err = next(results)
+            if not err:
+                norm.reply = "Done."
+                norm.pending_done = {"e": "done", "ok": True, "text": "Done.", "context": 0, "window": None, "ms": None}
+            return sid, err
+        monkeypatch.setattr(chat, "run", fake_run)
+        events = []
+        monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+        chat.turn("yes", "claude-haiku-5-5", None)
+        assert events[-1]["ok"] is False and "request changed while you answered" in events[-1]["text"], (name, events[-1])
+        assert events[-1]["text"].endswith(chat.CHAT_RESET), (name, events[-1])
+        assert forgotten and not (case_dir / "session").exists() and not (case_dir / "asked").exists(), name
+
+
+def test_stale_question_after_save_rejects_and_notes_chat_reset(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    monkeypatch.setattr(chat, "asked_question", lambda reply: "Approve?")
+    def reply(cmd, engine, text, norm, **kw):
+        norm.reply = "Approve?"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return None, None
+    monkeypatch.setattr(chat, "run", reply)
+    monkeypatch.setattr(decisions, "asked", lambda *a, **kw: None)
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    monkeypatch.setattr(chat, "stale_pending_question", lambda snap: True)
+    (tmp_path / "session").write_text("old-session")
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("approve", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and "while this question was composed" in events[-1]["text"]
+    assert events[-1]["text"].endswith(chat.CHAT_RESET)
+    assert not (tmp_path / "session").exists() and not (tmp_path / "asked").exists()
 
 
 def test_old_turn_cannot_clear_new_question_after_replacement(tmp_path, monkeypatch):
