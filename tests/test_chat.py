@@ -688,6 +688,109 @@ def test_done_workspace_cleanup_question_binds_worktree_id_in_scope(tmp_path, mo
     assert not (tmp_path / (chat.QUESTION_DELIVERY + chat.scope_suffix())).exists()
 
 
+def test_done_cleanup_question_turns_stale_when_workspace_leaves_done(tmp_path, monkeypatch):
+    import dash, decisions, greenlight
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    done_allow = dash.BoardAllow()
+    done_allow.done = {"feat": ("github", "octo/app", "#42", "aaa111", "Merge #42", "main", "wt-done", "feat", "done/done")}
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "wt-done",
+           "mr": "#42", "sha": "aaa111", "target_branch": "main", "repo": "octo/app", "forge": "github",
+           "goal": "Merge #42", "branch": "feat", "step": "done", "owner": "done", "role": "author"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(greenlight, "orca", lambda *a: {"worktrees": [{"worktreeId": "wt-done", "branch": "feat", "comment": "Merge #42"}]})
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "closed"})
+    assert chat.stale_pending_question(("", done_allow)) is False
+    assert chat.live_question_status(("", done_allow)) == "valid"
+
+    # Reopened PR on forge invalidates done cleanup question even before next scan
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened"})
+    assert chat.live_question_status(("", done_allow)) == "stale"
+
+    # Approved open review MR stays valid while approved, turns stale when approval is dismissed
+    review_rec = {**rec, "role": "review"}
+    monkeypatch.setattr(decisions, "load", lambda: [review_rec])
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened", "_approved_by": [greenlight.ME]})
+    assert chat.live_question_status(("", done_allow)) == "valid"
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened", "_approved_by": []})
+    assert chat.live_question_status(("", done_allow)) == "stale"
+
+    # Scan moving workspace from done back to active invalidates done cleanup question
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    active_allow = dash.BoardAllow({"feat": ("github", "octo/app", "#42", "aaa111", "Merge #42", "main", "wt-done", "feat", "review/me")})
+    assert chat.stale_pending_question(("", active_allow)) is True
+
+    # Normal active step progression does NOT falsely mark active question stale
+    active_rec = {**rec, "step": "ci_green", "owner": "ci"}
+    monkeypatch.setattr(decisions, "load", lambda: [active_rec])
+    assert chat.stale_pending_question(("", active_allow)) is False
+
+
+def test_cancelled_turn_after_question_commit_preserves_delivery_marker(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(decisions, "STATE", tmp_path)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    (tmp_path / "session").write_text("old-session")
+    orig_save = chat._save_reply_question_unlocked
+    def cancel_after_save(*a, **kw):
+        orig_save(*a, **kw)
+        active_path = tmp_path / chat.ACTIVE_TURN
+        active = json.loads(active_path.read_text())
+        active["cancelled"] = True
+        active_path.write_text(json.dumps(active))
+    monkeypatch.setattr(chat, "_save_reply_question_unlocked", cancel_after_save)
+    def ask_run(cmd, engine, text, norm, **kw):
+        norm.reply = "Proceed with this?\nOptions: Yes | No"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "old-session", None
+    monkeypatch.setattr(chat, "run", ask_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("check", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
+    marker = tmp_path / chat.QUESTION_DELIVERY
+    assert marker.exists() and marker.read_text() != "stale"
+
+    monkeypatch.setattr(chat, "_save_reply_question_unlocked", orig_save)
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "interrupted before its question reached the user" in captured[0]["text"]
+    assert not marker.exists() and (tmp_path / "session").read_text() == "old-session"
+
+
+def test_broken_pipe_after_clearing_stale_question_preserves_stale_marker(tmp_path, monkeypatch):
+    import dash, decisions, pytest
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "new-head", "Merge #42", "main", "id-qa", "feature", "ready/me")})
+    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa (#42, octo/app): ready", allowed))
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "mr": "#42", "sha": "old-head", "target_branch": "main"}
+    recs = [rec]
+    monkeypatch.setattr(decisions, "load", lambda: list(recs))
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: recs.clear())
+    (tmp_path / "asked").write_text("Approve old head?")
+    (tmp_path / "session").write_text("old-session")
+    monkeypatch.setattr(chat, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("harness down")))
+    def fail_emit(**e):
+        if e.get("e") == "done":
+            raise BrokenPipeError("client disconnected")
+    monkeypatch.setattr(chat, "emit", fail_emit)
+    with pytest.raises(BrokenPipeError):
+        chat.turn("yes", "claude-haiku-5-5", None)
+    assert not recs and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert not (tmp_path / chat.QUESTION_DELIVERY).exists()
+
+
 def test_answer_checks_live_head_and_preserves_session(tmp_path, monkeypatch):
     import dash, decisions, greenlight
     monkeypatch.setattr(chat, "DIR", str(tmp_path))

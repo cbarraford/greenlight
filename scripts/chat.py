@@ -1006,6 +1006,27 @@ def _allow_identities(allow):
     return dict(allow) | dict(getattr(allow, "done", None) or {})
 
 
+def _stage_done(stage):
+    step, _, owner = (stage or "").split(" ")[-1].partition("/")
+    return step == "done" or owner == "done"
+
+
+def _target_stale(target, identity, backfilled):
+    if identity is None or (target.get("mr") or "") != identity[2] or \
+            (target.get("sha") or "") != identity[3] or \
+            (target.get("target_branch") or "") != identity[5] or \
+            target.get("repo") not in (None, identity[1]) or target.get("forge") not in (None, identity[0]) or \
+            (target.get("goal") is not None and target.get("goal") != identity[4] and
+             not (target.get("goal") == "" and target.get("worktree_id") in backfilled)) or \
+            (target.get("branch") is not None and len(identity) > 7 and target["branch"] != identity[7]):
+        return True
+    if (target.get("step") is not None or target.get("owner") is not None) and len(identity) > 8 and identity[8]:
+        asked_done = target.get("step") == "done" or target.get("owner") == "done"
+        if asked_done != _stage_done(identity[8]):
+            return True
+    return False
+
+
 def stale_pending_question(snapshot):
     """A yes/no answer may only settle a chat question about the current request head and target."""
     if snapshot is None:
@@ -1018,11 +1039,13 @@ def stale_pending_question(snapshot):
             rows = json.load(fh)["rows"]
         for row in rows:
             mr = row.get("mr") or {}
+            nxt = row.get("next") or {}
+            stage = f"{nxt.get('step', '?')}/{nxt.get('owner', '?')}" if nxt else ""
             if row.get("_goal_backfill"):
                 backfilled.add(row.get("id"))
             current.setdefault(row.get("id"), (row.get("forge") or "", row.get("project") or "", mr.get("ref") or "",
                                                mr.get("sha") or "", row.get("goal") or "", mr.get("target_branch") or "",
-                                               row.get("id"), row.get("branch") or ""))
+                                               row.get("id"), row.get("branch") or "", stage))
     except (OSError, ValueError, KeyError, TypeError):
         pass
     for rec in decisions.load():
@@ -1031,14 +1054,7 @@ def stale_pending_question(snapshot):
         for target in [rec] + (rec.get("workspaces") or []):
             if not target.get("worktree_id"):
                 continue
-            identity = current.get(target.get("worktree_id"))
-            if identity is None or (target.get("mr") or "") != identity[2] or \
-                    (target.get("sha") or "") != identity[3] or \
-                    (target.get("target_branch") or "") != identity[5] or \
-                    target.get("repo") not in (None, identity[1]) or target.get("forge") not in (None, identity[0]) or \
-                    (target.get("goal") is not None and target.get("goal") != identity[4] and
-                     not (target.get("goal") == "" and target.get("worktree_id") in backfilled)) or \
-                    (target.get("branch") is not None and len(identity) > 7 and target["branch"] != identity[7]):
+            if _target_stale(target, current.get(target.get("worktree_id")), backfilled):
                 return True
     return False
 
@@ -1127,9 +1143,15 @@ def live_question_status(snapshot):
                 live = greenlight.mr_details(project, int(ref[1:]), forge)
             except Exception:
                 return "unavailable"
-            # a question about an already-merged MR (cleanup) stays valid once merged; one asked while open does not
+            # a question about an already-done MR stays valid while still done; open questions don't survive close/merge,
+            # and done cleanup questions don't survive an MR reopening or review approval dismissal
+            is_open = live.get("state") in ("opened", "open")
+            asked_done = target.get("step") == "done" or target.get("owner") == "done"
+            done_reopened = is_open and asked_done and (
+                target.get("role") != "review" or ("_approved_by" in live and greenlight.ME not in live["_approved_by"])
+            )
             if live.get("sha") != target["sha"] or (live.get("target_branch") or "") != (target.get("target_branch") or "") or \
-                    live.get("state") not in ("opened", "open") and target.get("step") != "done":
+                    (not is_open and not asked_done) or done_reopened:
                 return "stale"
     return "valid"
 
@@ -1475,21 +1497,31 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 SCOPE_TURN_TOKEN = None
             had_stale = TURN.pop("stale_cleared", False)
             TURN.pop("stale_note", None)
-            if terminal:
-                if terminal.get("ok") and not owned:
-                    terminal = {"e": "done", "ok": False, "text": "Stopped",
-                                "context": 0, "window": None, "ms": None}
-                emit(**terminal)
-                if terminal.get("ok"):
-                    try:
-                        with open(delivery) as df:
-                            if df.read() == token:
-                                os.remove(delivery)
-                    except OSError:
-                        pass
-            if had_stale and (not terminal or not terminal.get("ok")) and \
-                    not os.path.exists(os.path.join(DIR, RESETTING)) and generation_unlocked() == reserved_gen:
+            _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token)
+
+
+def _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token):
+    if terminal and terminal.get("ok") and not owned:
+        terminal = {"e": "done", "ok": False, "text": "Stopped",
+                    "context": 0, "window": None, "ms": None}
+    stale_rearm = (had_stale and not os.path.exists(os.path.join(DIR, RESETTING))
+                   and generation_unlocked() == reserved_gen)
+    if stale_rearm and (not terminal or not terminal.get("ok")) and not os.path.exists(delivery):
+        _mark_question_stale_unlocked()
+    if terminal:
+        try:
+            emit(**terminal)
+        except BaseException:
+            if stale_rearm and not os.path.exists(delivery):
                 _mark_question_stale_unlocked()
+            raise
+        if terminal.get("ok"):
+            try:
+                with open(delivery) as df:
+                    if df.read() == token:
+                        os.remove(delivery)
+            except OSError:
+                pass
 
 
 def reservation_current(token, generation):
