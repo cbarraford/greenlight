@@ -134,7 +134,12 @@ def test_keep_defaults_relaunch_reuses_one_suite_and_stop_removes_it(tmp_path, m
         home = sess.home
         sess.relaunch()
         assert sess.home == home and (home / "app-support" / "projects.json").is_file(), "relaunch keeps the home"
+        prefs = tmp_path / "user" / "Library" / "Preferences"
+        prefs.mkdir(parents=True)
+        (prefs / f"{sess.suite}.plist").write_text("{}")
+        monkeypatch.setenv("HOME", str(tmp_path / "user"))
         sess.stop()
+        assert not (prefs / f"{sess.suite}.plist").exists(), "stop() removes the empty plist `defaults delete` leaves"
     assert len(envs) == 2 and envs[0]["GREENLIGHT_UITEST_SUITE"] == envs[1]["GREENLIGHT_UITEST_SUITE"] == sess.suite
     assert sess.suite.startswith("dev.greenlight.uitest.s")
     assert ["defaults", "delete", sess.suite] in runs, runs
