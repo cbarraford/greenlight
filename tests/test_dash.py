@@ -300,6 +300,8 @@ _r = lambda step, owner, action="", cmd=None, ag="none", mr=None: {"next": {"ste
 assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "failed"})).startswith("CI failed, so read the diff")
 assert dash.advice(_r("review", "me", "review it", mr={"pipeline": "success"})).startswith("Read the diff")
 assert "replies" in dash.advice(_r("review", "me", "author replied on your threads: re-review"))
+assert "approv" not in dash.advice(_r("merge", "me", "mergeable, nothing blocks it: merge it?")).lower()  # no-approval repo
+assert dash.advice(_r("merge", "me", "mergeable, nothing blocks it: merge it?")).startswith("Nothing blocks it")
 assert "sign off deploy" in dash.advice(_r("deploy", "me", "deploy: x Sign it off?", ["python3", "g.py", "signoff", "p", "1", "deploy"]))
 assert "rebase" in dash.advice(_r("merge", "me", "GitLab needs a rebase to merge (no conflict): rebase it?"))
 assert dash.advice(_r("ci_green", "agent")) == "No agent is on it: run Fix CI."

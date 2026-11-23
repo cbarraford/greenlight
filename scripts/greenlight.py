@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 import time
 import urllib.parse
@@ -63,7 +64,8 @@ DEFAULTS = {
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
-    "require_human_approval": True,   # False: a mergeable MR with no other human's approval merges anyway
+    "require_human_approval": True,   # without automerge a human signs off: a reviewer where the forge requires approvals, else you ("merge it?");
+                                      # False: a mergeable MR with no other human's approval merges anyway
     "adopt": {"cap": 10, "roles": ["author", "reviewer"]},  # adopt.py: creates per run, which of your MRs get a workspace
     "blocking": None,                 # blocking.py roster ({repos, people, teams, lead}); None turns it off
     "suggest_rules": [],              # extra rules for the dashboard's suggested prompts
@@ -553,6 +555,63 @@ def linked_number(v):
     return v.get("number") if isinstance(v, dict) else v
 
 
+APPROVAL_RULES_TTL = 3600  # a repo's required-approval count, cached per repo and base branch
+APPROVAL_RULES_MISS_TTL = 300  # GitHub couldn't say (no rulesets on the server, no access): ask again in 5 minutes
+
+
+_APPROVAL_RULES_LOCK = threading.Lock()
+
+
+def _load_approval_rules(f):
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_approval_rules(f, key, entry):
+    """mr_details runs on 8 threads: re-read and merge under a lock (no entries lost within one process; two processes
+    can still race, which only costs a refetch), then replace atomically (a reader never sees half a file)."""
+    with _APPROVAL_RULES_LOCK:
+        cache = _load_approval_rules(f) | {key: entry}
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(cache))
+            os.replace(tmp, f)
+        except OSError:
+            pass
+
+
+def gh_required_approvals(project, branch):
+    """Approving reviews GitHub's rulesets require on `branch` (classic protection comes in the PR query):
+    an int, cached an hour per repo and branch in approval_rules.json, or None (cached 5 minutes) when GitHub couldn't say."""
+    f, key = STATE / "approval_rules.json", f"{project}@{branch}"
+    hit = _load_approval_rules(f).get(key) or {}
+    age = time.time() - (hit.get("at") or 0)
+    if isinstance(hit.get("n"), int) and age < APPROVAL_RULES_TTL:
+        return hit["n"]
+    if "n" in hit and hit["n"] is None and age < APPROVAL_RULES_MISS_TTL:
+        return None
+    try:
+        pages = gh("api", "--paginate", "--slurp", f"repos/{project}/rules/branches/{urllib.parse.quote(branch, safe='')}?per_page=100")
+        rules = [r for pg in pages for r in pg] if isinstance(pages, list) and all(isinstance(pg, list) for pg in pages) else None
+    except Exception:  # noqa: BLE001 - unknown, not zero: the PR's reviewDecision still says when one is required
+        rules = None
+    n = None if not isinstance(rules, list) else max(
+        [(r.get("parameters") or {}).get("required_approving_review_count") or 0
+         for r in rules if isinstance(r, dict) and r.get("type") == "pull_request"] or [0])
+    _save_approval_rules(f, key, {"n": n, "at": int(time.time())})
+    return n
+
+
+def approvals_needed(mr):
+    """Whether the forge needs any approval on this MR/PR before it can merge: GitLab's count, or on GitHub the
+    branch protection / rulesets count and reviewDecision. False means approvals are no blocker and nothing says otherwise."""
+    return bool(mr.get("_approvals_required") or mr.get("_approvals_left")
+                or mr.get("detailed_merge_status") in ("not_approved", "requested_changes"))
+
+
 def gh_pr(project, number):
     """A GitHub PR in the GitLab MR shape mr_details returns. The gh user (the viewer) becomes ME,
     so every author/approver test in check() and evaluate() reads the same for both forges."""
@@ -605,8 +664,11 @@ def gh_pr(project, number):
         "detailed_merge_status": status, "blocking_discussions_resolved": all(t["isResolved"] for t in p["reviewThreads"]["nodes"]),
         "source_branch": p["headRefName"], "target_branch": p["baseRefName"], "sha": p["headRefOid"], "updated_at": p["updatedAt"],
         "_discussions": threads, "_approved_by": [u for s, u in reviews if s == "APPROVED"],
-        # ponytail: classic branch protection only (null unless you can read it); rulesets aren't counted
-        "_approvals_required": (((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0), "_approvals_left": int(decision == "REVIEW_REQUIRED"),
+        # classic branch protection (null unless you can read it) or the base branch's rulesets, whichever asks more
+        "_approvals_required": max((((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0),
+                                   (gh_required_approvals(project, p["baseRefName"]) or 0) if p["state"] == "OPEN" else 0,
+                                   int(decision == "REVIEW_REQUIRED")),  # display only: the rail reads "0 of 1", not "none required", on an unreadable count
+        "_approvals_left": int(decision == "REVIEW_REQUIRED"),
         "_can_approve": p["author"] is None or p["author"]["login"] != me,  # GitHub won't let you approve your own PR
         "_reviewed_sha": next((r["commit"]["oid"] for r in reversed((p.get("myReviews") or {}).get("nodes") or [])
                                if (r.get("author") or {}).get("login") == me and r.get("commit")), None),
@@ -894,7 +956,12 @@ def check(step, mr, ws, milestone):
             if not auto_approval:
                 if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
                     return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
-                return "reviewers", "mergeable but no human approval yet (repo doesn't require one)", None
+                # require_human_approval means "a human signs off": a reviewer where the forge requires one, else you, by
+                # merging. Only the repo's own human_approval=true waits for a reviewer the forge doesn't require.
+                explicit = opt_val(opts, "human_approval").strip().lower() == "true"
+                if not approvals_needed(mr) and not explicit:  # the forge requires no approval: no reviewer is waited on, the merge is yours
+                    return "me", "mergeable, nothing blocks it: merge it?", merge
+                return "reviewers", "mergeable but no human approval yet (only a bot or you approved)", None
         if st == "mergeable":
             import audit  # every unattended merge goes through the semantic audit, regardless of approval route
             v = audit.merge_verdict(ws, mr)

@@ -18,7 +18,7 @@ A lifecycle can add an `Options:` line of backticked flags:
 - `merge_any_base`: greenlight may merge an MR/PR whose target isn't the default branch. Without it a stacked GitHub PR waits on the PR its base branch comes from (`dependency`), or asks the user when there is none.
 - `merge_method=merge|squash|rebase`: overrides global `merge_method` from config.json for this repository.
 - `review_bot=<username|none>`: overrides global `review_bot` from config.json for this repository (`none` disables it).
-- `human_approval=true|false` (or `no_human_approval`): overrides global `require_human_approval` for this repository.
+- `human_approval=true|false` (or `no_human_approval`): overrides global `require_human_approval` for this repository. With `require_human_approval: true` and no per-repo override, a repo whose forge requires no approvals asks you to merge ("mergeable, nothing blocks it: merge it?") instead of waiting on reviewers; `human_approval=true` waits for another human's approval anyway.
 - `auto_rebase`: dispatch an agent to rebase when the forge reports `need_rebase` (no conflicts), instead of asking the user.
 - `milestone=<prefix>`: prefix for the active release milestone step (default `Release-`).
 
