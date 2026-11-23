@@ -695,20 +695,57 @@ _lj3.write_text(json.dumps({
          "agent": {"state": "waiting", "type": "claude", "last": None}, "mr": None,
          "next": {"step": "unknown", "owner": None, "action": None}},
         {"id": "wt-bare", "name": "bare-row", "path": "/w/bare", "project": "", "goal": "broken"},
+        # wrong types: a number where the agent's last message and the next action's text go
+        {"id": "wt-num", "name": "num-row", "path": "/w/num", "project": "acme/w", "goal": "g",
+         "agent": {"state": "waiting", "last": 5}, "next": {"step": "ci_green", "owner": "agent", "action": 1}},
+        {"id": "wt-list", "name": "list-path", "path": ["/w/list"], "project": "acme/w", "goal": "g"},  # takes the live path
     ],
 }))
 _live_corrupt = {
     "wt-null": ({"worktreeId": "wt-null", "displayName": "null-msg", "path": "/w/null", "repo": "w", "branch": "b"},
                 {"state": "waiting", "agentType": "claude", "lastAssistantMessage": None}),
     "wt-bare": ({"worktreeId": "wt-bare", "displayName": "bare-row", "path": "/w/bare", "repo": "w", "branch": ""}, {}),
+    "wt-num": ({"worktreeId": "wt-num", "displayName": "num-row", "path": "/w/num", "repo": "w", "branch": "n"},
+               {"state": "waiting", "agentType": "codex"}),
+    "wt-list": ({"worktreeId": "wt-list", "displayName": "list-path", "path": "/w/list", "repo": "w", "branch": "l"}, {}),
 }
 with mock.patch.object(dash, "live_agents", return_value=_live_corrupt), \
      mock.patch.object(dash.blocking, "cached", return_value={}):
     _corrupt_snap = dash.snapshot()
-    assert len(_corrupt_snap["pucks"]) == 2
-    assert {p["name"] for p in _corrupt_snap["pucks"]} == {"null-msg", "bare-row"}
+    assert len(_corrupt_snap["pucks"]) == 4
+    assert {p["name"] for p in _corrupt_snap["pucks"]} == {"null-msg", "bare-row", "num-row", "list-path"}
+    assert next(p for p in _corrupt_snap["pucks"] if p["name"] == "list-path")["path"] == "/w/list"
+# trees() also tolerates corrupt/partial last.json rows missing agent/next/name or non-dict entries
+_lj3.write_text(json.dumps({
+    "ts": 1,
+    "rows": [
+        "not-a-dict",
+        {"id": "wt-list", "name": "list-path", "path": ["/w/list"]},  # a path that can't be a dict key is skipped
+        {"id": "wt-num", "name": "num-row", "path": "/w/num", "project": "acme/w", "next": {"step": "ci_green", "owner": "agent", "action": 1}},
+        {"id": "wt-bare", "path": "/w/bare", "project": "", "goal": "broken"},
+        {"id": "wt-null", "name": "null-msg", "path": "/w/null", "project": "acme/w", "agent": None, "next": None},
+        # a forge and an open MR but no project: progress() and moves() read r["project"]
+        {"id": "wt-noproj", "name": "no-project", "path": "/w/noproj", "forge": "gitlab", "mr": {"state": "opened", "ref": "!7"}},
+    ],
+}))
+_corrupt_ws = {
+    "worktrees": [
+        {"worktreeId": "wt-bare", "displayName": "bare-row", "path": "/w/bare", "repo": "w", "branch": "main", "agents": []},
+        {"worktreeId": "wt-null", "displayName": "null-msg", "path": "/w/null", "repo": "w", "branch": "feat", "agents": [{"state": "waiting"}]},
+        {"worktreeId": "wt-noproj", "displayName": "no-project", "path": "/w/noproj", "repo": "w", "branch": "fix", "agents": []},
+        {"worktreeId": "wt-num", "displayName": "num-row", "path": "/w/num", "repo": "w", "branch": "n", "agents": []},
+    ]
+}
+with mock.patch.object(dash, "ADES", ("orca",)), \
+     mock.patch.object(dash.greenlight, "orca_cli", return_value=_corrupt_ws), \
+     mock.patch.object(dash.blocking, "cached", return_value={}):
+    _corrupt_trees = {t["name"]: t for t in dash.trees()}
+    assert set(_corrupt_trees) == {"bare-row", "null-msg", "no-project", "num-row"}
+    assert _corrupt_trees["no-project"]["puck"] == "no-project" and _corrupt_trees["no-project"]["steps"], _corrupt_trees["no-project"]
+    assert _corrupt_trees["bare-row"]["puck"] == "bare-row" and _corrupt_trees["bare-row"]["step"] == "freeform"
+    assert _corrupt_trees["null-msg"]["state"] == "needs" and _corrupt_trees["null-msg"]["owner"] == "parked"
 _lj3.write_text(_prev_lj3) if _prev_lj3 is not None else _lj3.unlink()
-print("corrupt snapshot ok")
+print("corrupt snapshot & trees ok")
 
 # CLI `dash.py page` catches backend failures via oops() and emits JSON error instead of crashing
 _page_out = _io.StringIO()
