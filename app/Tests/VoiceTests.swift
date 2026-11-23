@@ -102,8 +102,11 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
         v.onLive(.delegated("d4")); v.setMicMuted(true); v.setMicMuted(false)  // handed off, then a quick mute within its 0.4 s
         v.onLive(.heard("hold 42"))
         let until = Date() + 0.7; while Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+        let droppedBoth = v.lastHeard.isEmpty && v.heard == "hold 42" && v.delegation == nil
+        v.heard = ""; v.onLive(.delegated("d5"))  // control: an unmuted hand-off does go through the same delay (nothing heard: no Chief turn)
+        let until2 = Date() + 0.7; while Date() < until2 && v.delegation == nil { RunLoop.main.run(until: Date() + 0.05) }
         check("voice: GPT-Live's transcript and hand-offs from a muted turn are dropped, not sent to Chief, and don't eat the next turn",
-              ignoredWhileMuted && mutedHandOff && keptNewTurn && v.lastHeard.isEmpty && v.heard == "hold 42" && v.delegation == nil)
+              ignoredWhileMuted && mutedHandOff && keptNewTurn && droppedBoth && v.delegation == "d5")
         v.on = false
     }
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
