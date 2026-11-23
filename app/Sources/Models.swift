@@ -93,7 +93,9 @@ struct AutonomyReport: Decodable {
 
 /// The transcript survives restarts; the conversation itself lives in chat.py's session file on greenlight's host.
 let support: URL = {
-    let dir = uitest
+    // --unittest gets a per-process dir: its fixed-session transcripts outlived cancelled CI runs and failed the next one
+    let dir = unittest ? FileManager.default.temporaryDirectory.appendingPathComponent("greenlight-unittest-\(ProcessInfo.processInfo.processIdentifier)")
+        : uitest
         ? URL(fileURLWithPath: (greenlightHome as NSString).expandingTildeInPath).appendingPathComponent("app-support")
         : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(appName)")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

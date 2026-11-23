@@ -601,8 +601,30 @@ def live_rows(rows, live):
                      "next": {"step": "freeform", "owner": "parked","action": "no lifecycle: goal only"},
                      "agent": {"state": "none", "type": None, "last": ""}})
     for r in rows:
-        r["repo"] = live[r["id"]][0].get("repo") or ""
+        w = live[r["id"]][0]
+        r["repo"] = w.get("repo") or ""
+        if not (isinstance(r.get("path"), str) and r["path"]):  # a corrupt scan row: the live worktree knows where it is
+            r["path"] = w["path"]
     return rows
+
+
+def _normalize_row(r):
+    """Ensure a scan row's agent/next dicts exist with safe defaults (handles corrupt/partial last.json rows)."""
+    if not isinstance(r.get("project"), str):
+        r["project"] = ""  # progress(), moves() and the sign-off move read r["project"] once a row has a forge or an MR
+    ag = r.get("agent")
+    r["agent"] = ag if isinstance(ag, dict) else {"state": "none", "type": None, "last": ""}
+    r["agent"].setdefault("state", "none")
+    r["agent"].setdefault("type", None)
+    last = r["agent"].get("last")
+    r["agent"]["last"] = last if isinstance(last, str) else ""
+    nx = r.get("next")
+    r["next"] = nx if isinstance(nx, dict) else {"step": "freeform", "owner": "parked", "action": ""}
+    r["next"].setdefault("step", "freeform")
+    r["next"].setdefault("owner", "parked")
+    action = r["next"].get("action")
+    r["next"]["action"] = action if isinstance(action, str) else ""
+    return r
 
 
 def snapshot(full=False):  # full: the agent's whole last message (pages); the 5s stream keeps the tail
@@ -613,14 +635,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     pucks, blk = [], blocking.cached()
     for r in rows:
         w, ag = live[r["id"]]
-        r["agent"] = r.get("agent") if isinstance(r.get("agent"), dict) else {"state": "none", "type": None, "last": ""}
-        r["agent"].setdefault("state", "none")
-        r["agent"].setdefault("type", None)
-        r["agent"]["last"] = r["agent"].get("last") or ""
-        r["next"] = r.get("next") if isinstance(r.get("next"), dict) else {"step": "freeform", "owner": "parked", "action": ""}
-        r["next"].setdefault("step", "freeform")
-        r["next"].setdefault("owner", "parked")
-        r["next"]["action"] = r["next"].get("action") or ""
+        _normalize_row(r)
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=ag.get("agentType") or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
@@ -678,8 +693,10 @@ def trees():
     app isn't running raises, and is skipped."""
     out, seen = [], set()
     try:  # greenlight's last scan: the MR, CI, threads and "needs you" for the workspaces it tracks (no API calls here)
-        scan, blk = {r["path"]: r for r in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}, blocking.cached()
-    except (OSError, ValueError, KeyError):
+        raw_rows = json.loads((greenlight.STATE / "last.json").read_text()).get("rows")
+        scan = {r["path"]: r for r in (raw_rows if isinstance(raw_rows, list) else []) if isinstance(r, dict) and isinstance(r.get("path"), str) and r["path"]}
+        blk = blocking.cached()
+    except (OSError, ValueError, KeyError, AttributeError):
         scan, blk = {}, None
     for ade in ADES:
         try:
@@ -700,7 +717,8 @@ def trees():
             if out[-1]["main"] and (c := repo_cfg(w["path"])):
                 out[-1]["cfg"] = c
             if r := scan.get(w["path"]):
-                out[-1]["puck"] = r["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
+                _normalize_row(r)
+                out[-1]["puck"] = r.get("name") or out[-1]["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
                 r["agent"] = {**r["agent"], "state": out[-1]["agent"]}  # the live agent, not the scan's
                 out[-1]["state"], out[-1]["why"] = state_of(r, blk)
                 _, out[-1]["steps"], out[-1]["step_index"] = progress(r)  # the card's lifecycle checklist

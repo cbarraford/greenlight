@@ -14,6 +14,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import diag  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _offline_doctor(monkeypatch):
+    # report and bundle run doctor, which calls the host's real `gh/glab auth status` (network, up to 15 s each);
+    # test_diag.py covers doctor itself with stub CLIs
+    monkeypatch.setattr(diag, "doctor", lambda: {"ok": True, "checks": []})
+
+
 def test_issue_body_truncates_large_bundles():
     big_events = [{"ts": i, "kind": "ping", "note": "x" * 600} for i in range(180)]
     bundle = {

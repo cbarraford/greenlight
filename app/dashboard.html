@@ -1584,9 +1584,11 @@ function closeOut(refocus){
 }
 function outKeys(e){
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeOut(true); return }
-  if (e.key !== "Tab") return;  // a modal: Tab cycles inside it
+  if (e.key !== "Tab") return;  // a modal: Tab cycles inside it (also WebKit, where native Tab skips buttons)
   const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
-  if (k < 0 || (e.shiftKey ? k === 0 : k === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus() }
+  if (!f.length) return;
+  e.preventDefault();
+  f[k < 0 ? (e.shiftKey ? f.length - 1 : 0) : (k + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
 }
 function pollOut(){
   const o = ui.out; if (!o) return;

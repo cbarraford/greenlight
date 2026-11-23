@@ -204,14 +204,15 @@ def _make_fixture(root: Path, fixture: str):
             Path(ws_path).mkdir(exist_ok=True)
             agent_type = "claude" if i % 2 == 0 else "codex"
             last_msg = f"Completed step {step} on {name}; " + ("checking edge cases and logs. " * ((i % 4) + 1))
+            goal = f"Ship {name} and merge !{100 + i}" + (" (parked)" if i % 11 == 0 else "")
             worktrees.append({
                 "worktreeId": f"wt-{i:02d}", "displayName": name, "path": ws_path,
-                "repo": repo, "branch": f"feat/{name}", "comment": f"Ship {name} and merge !{100 + i}",
+                "repo": repo, "branch": f"feat/{name}", "comment": goal,
                 "agents": [{"state": st, "agentType": agent_type, "lastAssistantMessage": last_msg}],
             })
             rows.append({
                 "id": f"wt-{i:02d}", "name": name, "path": ws_path, "project": f"acme/{repo}",
-                "goal": f"Ship {name} and merge !{100 + i}" + (" (parked)" if i % 11 == 0 else ""),
+                "goal": goal,
                 "branch": f"feat/{name}",
                 "agent": {"state": st, "type": agent_type, "last": last_msg, "since": 1700000000000 + i * 60000},
                 "mr": {"ref": f"!{100 + i}", "title": f"Change {i:02d}: {name}", "state": "opened",

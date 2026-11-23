@@ -233,7 +233,9 @@ def test_crash_reports_bundle_and_report_flow(diag_env, monkeypatch):
     bin_ = diag_env / "bin"
     bin_.mkdir()
     (bin_ / "gh").write_text(f'#!/bin/sh\n[ "$1" = auth ] && exit 0\necho "$@" > {diag_env}/gh.args; cat > {diag_env}/gh.body; echo https://github.com/x/y/issues/9\n')
-    (bin_ / "gh").chmod(0o755)
+    (bin_ / "glab").write_text("#!/bin/sh\nexit 1\n")  # else bundle's doctor runs a host /usr/bin/glab, which waits on gitlab.com
+    for x in ("glab", "gh"):
+        (bin_ / x).chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_}:/usr/bin:/bin")
 
     # crash reports: the crashed thread's frames by image name and symbol; a frame naming a path is dropped
