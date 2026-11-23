@@ -43,7 +43,16 @@ def test_board_announces_head_change_even_when_line_is_unchanged(monkeypatch):
     assert "Earlier head-specific approvals" in chat.board_note("qa", "claude:old", seen, (updated_board, allow))
 
 
-def test_scoped_answer_rejects_question_for_previous_head(tmp_path, monkeypatch):
+def _stub_run(monkeypatch, captured):
+    def fake_run(cmd, engine, text, norm, **kw):
+        captured.append({"text": text, "req": os.environ.get("GREENLIGHT_REQUEST", "")})
+        norm.reply = "Handled in same session."
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return None, None
+    monkeypatch.setattr(chat, "run", fake_run)
+
+
+def test_scoped_stale_question_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
@@ -57,14 +66,18 @@ def test_scoped_answer_rejects_question_for_previous_head(tmp_path, monkeypatch)
     monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
     (tmp_path / ("asked" + chat.scope_suffix())).write_text("Approve old head?")
-    events = []
+    (tmp_path / ("session" + chat.scope_suffix())).write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier request or commit" in events[-1]["text"]
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert captured[0]["req"] == "yes"
     assert forgotten and not (tmp_path / ("asked" + chat.scope_suffix())).exists()
+    assert (tmp_path / ("session" + chat.scope_suffix())).read_text() == "old-session"
 
 
-def test_unscoped_answer_rejects_question_for_previous_head(tmp_path, monkeypatch):
+def test_unscoped_stale_question_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -78,15 +91,16 @@ def test_unscoped_answer_rejects_question_for_previous_head(tmp_path, monkeypatc
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
     (tmp_path / "asked").write_text("Approve old head?")
     (tmp_path / "session").write_text("old-session")
-    events = []
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier request or commit" in events[-1]["text"]
-    assert "ask again" in events[-1]["text"] and events[-1]["text"].endswith(chat.CHAT_RESET)
-    assert forgotten and not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert captured[0]["req"] == "yes"
+    assert forgotten and not (tmp_path / "asked").exists() and (tmp_path / "session").read_text() == "old-session"
 
 
-def test_answer_rejects_question_for_changed_goal_on_same_head(tmp_path, monkeypatch):
+def test_changed_goal_on_same_head_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -98,11 +112,13 @@ def test_answer_rejects_question_for_changed_goal_on_same_head(tmp_path, monkeyp
     forgotten = []
     monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
-    events = []
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier request or commit" in events[-1]["text"]
-    assert forgotten
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert forgotten and (tmp_path / "session").read_text() == "old-session"
 
 
 def test_second_turn_cannot_settle_first_turn_question(tmp_path, monkeypatch):
@@ -151,20 +167,20 @@ def test_clear_during_turn_setup_prevents_old_turn_launch(tmp_path, monkeypatch)
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("old message", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "window changed" in events[-1]["text"]
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
 
 
-def test_question_rejects_head_changed_during_reply(tmp_path, monkeypatch):
+def test_question_skips_saving_when_head_changed_during_reply_and_keeps_session(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
     head = ["A"]
     monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", dash.BoardAllow({"qa": ("github", "octo/app", "#42", head[0], "Merge #42", "main", "id-qa", "feature")})))
-    monkeypatch.setattr(chat, "asked_question", lambda reply: "Approve this commit?")
+    monkeypatch.setattr(chat, "asked_question", lambda reply: "Approve #42?")
     def reply(cmd, engine, text, norm, **kw):
         head[0] = "B"
-        norm.reply = "Approve this commit?"
+        norm.reply = "Approve #42?"
         norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
         return None, None
     monkeypatch.setattr(chat, "run", reply)
@@ -172,12 +188,11 @@ def test_question_rejects_head_changed_during_reply(tmp_path, monkeypatch):
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("review #42", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "request changed" in events[-1]["text"]
-    assert events[-1]["text"].endswith(chat.CHAT_RESET)
-    assert not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
+    assert events[-1]["ok"] is True and events[-1]["text"] == "Approve #42?"
+    assert not (tmp_path / "asked").exists() and (tmp_path / "session").read_text() == "old-session"
 
 
-def test_question_store_failure_prevents_publication(tmp_path, monkeypatch):
+def test_question_store_failure_keeps_reply_and_session(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
@@ -194,9 +209,9 @@ def test_question_store_failure_prevents_publication(tmp_path, monkeypatch):
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("approve", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "question could not be saved" in events[-1]["text"]
+    assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
     assert not (tmp_path / "asked").exists()
-    assert not (tmp_path / "session").exists()
+    assert (tmp_path / "session").read_text() == "old-session"
 
 
 def test_question_file_failure_does_not_open_decision(tmp_path, monkeypatch):
@@ -218,10 +233,11 @@ def test_question_file_failure_does_not_open_decision(tmp_path, monkeypatch):
             raise OSError("disk full")
         return real_open(path, mode, *a, **kw)
     monkeypatch.setattr(builtins, "open", fail_question_file)
+    (tmp_path / "session").write_text("old-session")
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("approve", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "disk full" in events[-1]["text"]
+    assert events[-1]["ok"] is True and (tmp_path / "session").read_text() == "old-session"
 
 
 def test_question_targets_ignore_unrelated_request_head():
@@ -230,9 +246,11 @@ def test_question_targets_ignore_unrelated_request_head():
     assert selected == {"first": allow["first"]}
     fresh = dict(allow) | {"second": ("github", "octo/app", "#99", "new")}
     assert all(fresh.get(name) == identity for name, identity in selected.items())
+    # Untargeted casual questions must not lock onto the entire board.
+    assert chat.question_targets("Want me to check the logs?", allow) == {}
 
 
-def test_freeform_answer_rejects_changed_branch(tmp_path, monkeypatch):
+def test_freeform_changed_branch_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -244,14 +262,16 @@ def test_freeform_answer_rejects_changed_branch(tmp_path, monkeypatch):
     forgotten = []
     monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
-    events = []
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier request or commit" in events[-1]["text"]
-    assert forgotten
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert forgotten and (tmp_path / "session").read_text() == "old-session"
 
 
-def test_live_goal_change_rejects_answer_and_discards_old_session(tmp_path, monkeypatch):
+def test_live_goal_change_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions, greenlight
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -260,18 +280,20 @@ def test_live_goal_change_rejects_answer_and_discards_old_session(tmp_path, monk
     rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
            "mr": "#42", "sha": "A", "target_branch": "main", "branch": "feature", "goal": "Merge #42"}
     monkeypatch.setattr(decisions, "load", lambda: [rec])
-    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale answer heard")))
     monkeypatch.setattr(greenlight, "orca", lambda *a: {"worktrees": [{"worktreeId": "id-qa", "branch": "feature", "comment": "Hold #42"}]})
     monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "A", "target_branch": "main", "state": "opened"})
     (tmp_path / "asked").write_text("Approve #42?")
     (tmp_path / "session").write_text("old-session")
-    events = []
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier commit or target" in events[-1]["text"]
-    assert "ask again" in events[-1]["text"] and events[-1]["text"].endswith(chat.CHAT_RESET)  # the session is gone: the user is told
-    assert not (tmp_path / "session").exists() and not (tmp_path / "asked").exists()
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert captured[0]["req"] == "yes"
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
 
 
 def test_live_merge_rejects_open_question_but_not_cleanup_question(monkeypatch):
@@ -288,7 +310,7 @@ def test_live_merge_rejects_open_question_but_not_cleanup_question(monkeypatch):
     assert chat.live_question_status(("- qa", allowed)) == "stale"  # the head check still holds
 
 
-def test_live_goal_clear_rejects_old_approval(tmp_path, monkeypatch):
+def test_live_goal_clear_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions, greenlight
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(greenlight, "STATE", tmp_path)
@@ -299,29 +321,38 @@ def test_live_goal_clear_rejects_old_approval(tmp_path, monkeypatch):
     rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
            "mr": "#42", "sha": "A", "target_branch": "main", "branch": "feature", "goal": "Merge #42"}
     monkeypatch.setattr(decisions, "load", lambda: [rec])
-    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(greenlight, "orca", lambda *a: {"worktrees": [{"worktreeId": "id-qa", "branch": "feature", "comment": ""}]})
     (tmp_path / "asked").write_text("Approve #42?")
-    events = []
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier commit or target" in events[-1]["text"]
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
 
 
-def test_interrupted_question_is_discarded_before_answer(tmp_path, monkeypatch):
+def test_interrupted_question_clears_asked_and_continues_in_same_session(tmp_path, monkeypatch):
     import decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     (tmp_path / chat.QUESTION_DELIVERY).write_text("old-turn")
     (tmp_path / "asked").write_text("Approve #42?")
     (tmp_path / "session").write_text("old-session")
-    monkeypatch.setattr(chat, "_turn_owned", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("unseen question answered")))
+    received = []
+    def fake_turn_owned(*a, **kw):
+        received.append(chat.TURN.pop("stale_note", ""))
+        return {"e": "done", "ok": True, "text": "Continued."}
+    monkeypatch.setattr(chat, "_turn_owned", fake_turn_owned)
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "interrupted question" in events[-1]["text"]
-    assert events[-1]["text"].endswith(chat.CHAT_RESET)
-    assert not (tmp_path / "asked").exists() and not (tmp_path / "session").exists()
+    assert events[-1]["ok"] is True and received and "STALE QUESTION" in received[0]
+    assert forgotten and not (tmp_path / "asked").exists() and not (tmp_path / chat.QUESTION_DELIVERY).exists()
+    assert (tmp_path / "session").read_text() == "old-session"
 
 
 def test_clear_crash_marker_blocks_old_session_resume(tmp_path, monkeypatch):
@@ -340,19 +371,6 @@ def test_clear_crash_marker_blocks_old_session_resume(tmp_path, monkeypatch):
     assert events[-1]["ok"] is False and "Clear was interrupted" in events[-1]["text"]
 
 
-def test_scope_check_rejects_scan_published_during_board_read(tmp_path, monkeypatch):
-    import dash, pytest
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
-    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "A")})
-    allowed.members = [("id-qa", "feature", "github", "octo/app", "#42", "main")]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
-    markers = iter(["before", "after"])
-    monkeypatch.setattr(chat, "published_scan_marker", lambda: next(markers))
-    with pytest.raises(OSError, match="scan changed"):
-        chat.check_session_scope("claude")
-
-
 def test_clear_during_attachment_validation_cannot_restore_old_files(tmp_path, monkeypatch):
     import attach, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
@@ -368,7 +386,7 @@ def test_clear_during_attachment_validation_cannot_restore_old_files(tmp_path, m
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("look", "claude-haiku-5-5", None, files=["file"])
-    assert events[-1]["ok"] is False and "window changed" in events[-1]["text"]
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
 
 
 def test_all_head_changes_are_eventually_announced():
@@ -381,7 +399,7 @@ def test_all_head_changes_are_eventually_announced():
     assert "w10" not in first and "w10" in second
 
 
-def test_scope_reset_rejects_pending_normal_reply(tmp_path, monkeypatch):
+def test_generation_rotation_stops_pending_turn(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
@@ -390,13 +408,13 @@ def test_scope_reset_rejects_pending_normal_reply(tmp_path, monkeypatch):
     def reset(*a, **kw):
         chat.SCOPE_SNAPSHOT = ("", allowed)
         chat.rotate_generation_unlocked()
-        return True
+        return False
     monkeypatch.setattr(chat, "check_session_scope", reset)
     monkeypatch.setattr(chat, "run", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("old approval launched")))
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "window changed" in events[-1]["text"]
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
 
 
 def test_failed_launch_keeps_question_retryable(tmp_path, monkeypatch):
@@ -417,7 +435,7 @@ def test_failed_launch_keeps_question_retryable(tmp_path, monkeypatch):
     assert "heard" not in heard and (tmp_path / "asked").exists() and rec["answer"] is None
 
 
-def test_silent_scoped_run_stops_after_membership_change(tmp_path, monkeypatch):
+def test_silent_scoped_run_stops_after_cancellation(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.setenv("GREENLIGHT_ONLY", "{}")
@@ -425,33 +443,11 @@ def test_silent_scoped_run_stops_after_membership_change(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "scope_current_unlocked", lambda: time.monotonic() - started < 0.15)
     monkeypatch.setattr(chat, "emit", lambda **e: None)
     _, err = chat.run([sys.executable, "-c", "import time; time.sleep(10)"], "claude", "prompt", Norm())
-    assert err == "window changed"
+    assert err == "Stopped"
     assert time.monotonic() - started < 2
 
 
-def test_silent_answer_run_stops_after_request_change(tmp_path, monkeypatch):
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
-    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    monkeypatch.setattr(chat, "live_question_status", lambda snapshot: "stale")
-    monkeypatch.setattr(chat, "emit", lambda **e: None)
-    started = time.monotonic()
-    _, err = chat.run([sys.executable, "-c", "import time; time.sleep(10)"], "claude", "yes", Norm(), request_guard=("", {}))
-    assert err == "request changed"
-    assert time.monotonic() - started < 2
-
-
-def test_request_lookup_failure_is_retryable(tmp_path, monkeypatch):
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
-    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    monkeypatch.setattr(chat, "live_question_status", lambda snapshot: "unavailable")
-    monkeypatch.setattr(chat, "emit", lambda **e: None)
-    _, err = chat.run([sys.executable, "-c", "import time; time.sleep(10)"], "claude", "yes", Norm(), request_guard=("", {}))
-    assert err == "request unavailable"
-
-
-def test_final_verification_outage_discards_answered_session_but_keeps_question(tmp_path, monkeypatch):
+def test_live_verification_outage_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -460,65 +456,60 @@ def test_final_verification_outage_discards_answered_session_but_keeps_question(
     rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
            "mr": "#42", "sha": "A", "target_branch": "main"}
     monkeypatch.setattr(decisions, "load", lambda: [rec])
-    states = iter(["valid", "unavailable"])
-    monkeypatch.setattr(chat, "live_question_status", lambda snapshot: next(states))
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("unverified answer heard")))
+    monkeypatch.setattr(chat, "live_question_status", lambda snapshot: "unavailable")
     (tmp_path / "asked").write_text("Approve #42?")
-    def replied(cmd, engine, text, norm, **kw):
-        (tmp_path / "session").write_text("answer already in transcript")
-        norm.reply = "Done."
-        norm.pending_done = {"e": "done", "ok": True, "text": "Done.", "context": 0, "window": None, "ms": None}
-        return None, None
-    monkeypatch.setattr(chat, "run", replied)
-    events = []
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "could not be verified" in events[-1]["text"]
-    assert not (tmp_path / "session").exists() and (tmp_path / "asked").exists() and rec["answer"] is None
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert "could not be verified" in captured[0]["text"] and captured[0]["req"] == "yes"
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
 
 
-def test_mid_and_post_turn_request_change_rejects_and_notes_chat_reset(tmp_path, monkeypatch):
+def test_board_outage_with_pending_question_preserves_session_and_injects_notice(tmp_path, monkeypatch):
     import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "A", "Merge #42", "main", "id-qa", "feature")})
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
+    monkeypatch.setattr(dash, "board", lambda **kw: (_ for _ in ()).throw(RuntimeError("offline")))
     rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
            "mr": "#42", "sha": "A", "target_branch": "main"}
     monkeypatch.setattr(decisions, "load", lambda: [rec])
-    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale answer heard")))
-
-    cases = [
-        ("first_run", [(None, "request changed")], ["valid"]),
-        ("retry_run", [(None, "retry"), (None, "request changed")], ["valid"]),
-        ("session_lost_run", [(None, "session missing"), (None, "request changed")], ["valid"]),
-        ("post_status_stale", [("new-sid", None)], ["valid", "stale"]),
-    ]
-    for name, run_results, live_states in cases:
-        case_dir = tmp_path / name
-        case_dir.mkdir()
-        monkeypatch.setattr(chat, "DIR", str(case_dir))
-        (case_dir / "asked").write_text("Approve #42?")
-        (case_dir / "session").write_text("old-session")
-        forgotten = []
-        monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
-        states = iter(live_states)
-        monkeypatch.setattr(chat, "live_question_status", lambda snapshot: next(states))
-        results = iter(run_results)
-        def fake_run(cmd, engine, text, norm, **kw):
-            sid, err = next(results)
-            if not err:
-                norm.reply = "Done."
-                norm.pending_done = {"e": "done", "ok": True, "text": "Done.", "context": 0, "window": None, "ms": None}
-            return sid, err
-        monkeypatch.setattr(chat, "run", fake_run)
-        events = []
-        monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
-        chat.turn("yes", "claude-haiku-5-5", None)
-        assert events[-1]["ok"] is False and "request changed while you answered" in events[-1]["text"], (name, events[-1])
-        assert events[-1]["text"].endswith(chat.CHAT_RESET), (name, events[-1])
-        assert forgotten and not (case_dir / "session").exists() and not (case_dir / "asked").exists(), name
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("unverified answer heard")))
+    (tmp_path / "asked").write_text("Approve #42?")
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
 
 
-def test_stale_question_after_save_rejects_and_notes_chat_reset(tmp_path, monkeypatch):
+def test_orphan_asked_file_is_cleaned_without_blocking_turn(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    monkeypatch.setattr(decisions, "load", list)
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: None)
+    (tmp_path / "asked").write_text("Old orphan?")
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("status", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and captured[0]["req"] == "status"
+    assert not (tmp_path / "asked").exists() and (tmp_path / "session").read_text() == "old-session"
+
+
+def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_session(tmp_path, monkeypatch):
     import dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
@@ -530,28 +521,43 @@ def test_stale_question_after_save_rejects_and_notes_chat_reset(tmp_path, monkey
         norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
         return None, None
     monkeypatch.setattr(chat, "run", reply)
+    monkeypatch.setattr(decisions, "load", list)
     monkeypatch.setattr(decisions, "asked", lambda *a, **kw: None)
-    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(chat, "stale_pending_question", lambda snap: True)
     (tmp_path / "session").write_text("old-session")
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("approve", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "while this question was composed" in events[-1]["text"]
-    assert events[-1]["text"].endswith(chat.CHAT_RESET)
-    assert not (tmp_path / "session").exists() and not (tmp_path / "asked").exists()
+    assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
+
+    # Double failure while saving question writes RESETTING without losing the reply or session.
+    d2 = tmp_path / "double_fail"
+    d2.mkdir()
+    monkeypatch.setattr(chat, "DIR", str(d2))
+    monkeypatch.setattr(chat, "PIDFILE", str(d2 / "pid"))
+    monkeypatch.setattr(decisions, "asked", lambda *a, **kw: (_ for _ in ()).throw(OSError("store busy")))
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: (_ for _ in ()).throw(OSError("forget failed")))
+    (d2 / "session").write_text("old-session")
+    events = []
+    chat.turn("approve", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and (d2 / chat.RESETTING).exists() and (d2 / "session").read_text() == "old-session"
+
+    # Missing request_snapshot drops asked without wiping session.
+    d3 = tmp_path / "no_snap"
+    d3.mkdir()
+    monkeypatch.setattr(chat, "DIR", str(d3))
+    monkeypatch.setattr(chat, "PIDFILE", str(d3 / "pid"))
+    monkeypatch.setattr(dash, "board", lambda **kw: (_ for _ in ()).throw(RuntimeError("offline")))
+    (d3 / "session").write_text("old-session")
+    events = []
+    chat.turn("approve", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and not (d3 / "asked").exists() and (d3 / "session").read_text() == "old-session"
 
 
-def test_old_turn_cannot_clear_new_question_after_replacement(tmp_path, monkeypatch):
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    with chat.scope_lock():
-        generation = chat.generation_unlocked()
-        (tmp_path / chat.ACTIVE_TURN).write_text(json.dumps({"id": "new-turn", "pid": os.getpid()}))
-    monkeypatch.setattr(chat, "reject_stale_question_unlocked", lambda: (_ for _ in ()).throw(AssertionError("new question deleted")))
-    assert chat.reject_stale_for_turn(("old-turn", generation)) is False
-
-
-def test_answer_checks_live_head_before_next_scan(tmp_path, monkeypatch):
+def test_answer_checks_live_head_and_preserves_session(tmp_path, monkeypatch):
     import dash, decisions, greenlight
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
@@ -560,14 +566,115 @@ def test_answer_checks_live_head_before_next_scan(tmp_path, monkeypatch):
     rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
            "mr": "#42", "sha": "old-head", "target_branch": "main", "repo": "octo/app", "forge": "github"}
     monkeypatch.setattr(decisions, "load", lambda: [rec])
-    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    forgotten = []
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: forgotten.append(kw))
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
     monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "new-head", "target_branch": "main", "state": "opened"})
     (tmp_path / "asked").write_text("Approve old head?")
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
+    assert "STALE QUESTION" in chat.PROMPT and "checked-merge" in chat.PROMPT
+
+
+def test_untargeted_casual_question_never_triggers_stale_notice_when_prs_move(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    head = ["A"]
+    monkeypatch.setattr(dash, "board", lambda **kw: (
+        f"- feature-one (#42, octo/app): ready ({head[0]})",
+        dash.BoardAllow({"feature-one": ("github", "octo/app", "#42", head[0], "Merge #42", "main", "id-1", "feat")}),
+    ))
+    open_recs = []
+    monkeypatch.setattr(decisions, "load", lambda: list(open_recs))
+    def record_asked(question, via="chat", chat=None, kind=None, ws=()):
+        assert ws == []
+        open_recs.append({"via": via, "chat": chat, "question": question, "answer": None, "closed": None})
+    monkeypatch.setattr(decisions, "asked", record_asked)
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: None)
+    prompts = []
+    def fake_run(cmd, engine, text, norm, **kw):
+        prompts.append(text)
+        norm.reply = "Want me to check the logs?" if len(prompts) == 1 else "All clear."
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "sess-1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("status", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and (tmp_path / "session").read_text() == "sess-1"
+    head[0] = "B"  # unrelated PR moved while the casual question was open
+    chat.turn("sure", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and events[-1]["text"] == "All clear."
+    assert "STALE QUESTION" not in prompts[-1]
+    assert (tmp_path / "session").read_text() == "sess-1"
+
+
+def test_scoped_turn_survives_workspace_departure_without_window_changed_error(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
+    monkeypatch.setattr(decisions, "load", list)
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: None)
+    members = {"feature-one": ("github", "octo/app", "#42", "A", "Merge #42", "main", "id-1", "feat")}
+    monkeypatch.setattr(dash, "board", lambda **kw: (
+        "- feature-one (#42, octo/app): ready" if members else "",
+        dash.BoardAllow(members.copy()),
+    ))
+    prompts = []
+    def fake_run(cmd, engine, text, norm, **kw):
+        prompts.append(text)
+        norm.reply = "Keeping context."
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "scoped-sess", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("check feature-one", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and chat.session("claude") == "scoped-sess"
+    members.clear()  # workspace merged and cleaned up
+    chat.turn("what next?", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and events[-1]["text"] == "Keeping context."
+    assert not any("window changed" in e.get("text", "") for e in events)
+    assert chat.session("claude") == "scoped-sess"
+    assert "(no workspaces in this window)" in prompts[-1]
+
+
+def test_session_lost_retry_keeps_stale_question_notice(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "new-head", "Merge #42", "main", "id-qa", "feature")})
+    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa (#42, octo/app): ready", allowed))
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "mr": "#42", "sha": "old-head", "target_branch": "main"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("stale yes was heard")))
+    (tmp_path / "session").write_text("corrupt-session")
+    prompts = []
+    calls = iter([(None, "session missing"), ("fresh-session", None)])
+    def fake_run(cmd, engine, text, norm, **kw):
+        prompts.append(text)
+        sid, err = next(calls)
+        if not err:
+            norm.reply = "Recovered with notice."
+            norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return sid, err
+    monkeypatch.setattr(chat, "run", fake_run)
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "earlier commit or target" in events[-1]["text"]
+    assert events[-1]["ok"] is True and len(prompts) == 2
+    assert "STALE QUESTION" in prompts[0] and "STALE QUESTION" in prompts[1]
+    assert (tmp_path / "session").read_text() == "fresh-session"
 
 
 def test_norm():
@@ -759,7 +866,7 @@ def test_board_context_uses_current_card_identity(tmp_path, monkeypatch):
     assert "The dependency lock is stale" not in note
 
 
-def test_scoped_session_forgets_departed_workspace(tmp_path, monkeypatch):
+def test_scoped_session_preserves_history_when_workspace_departs(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
@@ -772,61 +879,19 @@ def test_scoped_session_forgets_departed_workspace(tmp_path, monkeypatch):
     chat.check_session_scope("codex")
     assert chat.session("codex") == "old-session"
     members.clear()
-    chat.check_session_scope("codex")
-    assert chat.session("codex") is None and not seen.exists()
+    assert not chat.check_session_scope("codex")
+    assert chat.session("codex") == "old-session" and seen.exists()
 
 
-def test_scoped_session_tracks_rows_without_cards_and_clears_question(tmp_path, monkeypatch):
-    import dash
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
-    allowed = dash.BoardAllow()
-    allowed.members = ["id-qa"]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
-    chat.check_session_scope("codex")
-    chat.session("codex", "old-session")
-    (tmp_path / os.path.basename(chat.asked_path())).write_text("Deploy to production?")
-    allowed.members = []
-    chat.check_session_scope("codex")
-    assert chat.session("codex") is None and not (tmp_path / os.path.basename(chat.asked_path())).exists()
-
-
-def test_scoped_questions_and_failed_session_reset(tmp_path, monkeypatch):
-    import dash
+def test_scoped_windows_isolate_asked_and_chat_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/a"]}))
     first_asked, first_chat = chat.asked_path(), chat.chat_identity()
-    open(first_asked, "w").write("Deploy to production?")
+    with open(first_asked, "w") as fh:
+        fh.write("Deploy to production?")
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/b"]}))
     assert chat.asked_path() != first_asked and chat.chat_identity() != first_chat
     assert not os.path.exists(chat.asked_path())
-    members = dash.BoardAllow()
-    members.members = ["id-b"]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- b", members))
-    chat.check_session_scope("codex")
-    chat.session("codex", "old-session")
-    marker = str(tmp_path / ("members" + chat.scope_suffix()))
-    before = open(marker).read()
-    members.members = []
-    remove = chat.os.remove
-    monkeypatch.setattr(chat.os, "remove", lambda path: (_ for _ in ()).throw(OSError("refused")) if path == chat.session_path("codex") else remove(path))
-    try:
-        chat.check_session_scope("codex")
-        assert False, "session deletion failure must block the scoped turn"
-    except OSError:
-        pass
-    assert open(marker).read() == before and chat.session("codex") == "old-session"
-    open(chat.asked_path(), "w").write("Deploy?")
-    monkeypatch.setattr(chat.os, "remove", lambda path: (_ for _ in ()).throw(OSError("refused")) if path == chat.asked_path() else remove(path))
-    try:
-        chat.check_session_scope("codex")
-        assert False, "pending-question deletion failure must block the scoped turn"
-    except OSError:
-        pass
-    assert open(marker).read() == before and os.path.exists(chat.asked_path())
-    monkeypatch.setattr(chat.os, "remove", remove)
-    assert chat.check_session_scope("codex") and not os.path.exists(chat.asked_path())
-    assert not os.path.exists(marker + ".reset")
 
 
 def test_scope_addition_and_engine_switch_preserve_question(tmp_path, monkeypatch):
@@ -838,7 +903,8 @@ def test_scope_addition_and_engine_switch_preserve_question(tmp_path, monkeypatc
     monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
     chat.check_session_scope("claude")
     chat.session("claude", "claude-session")
-    open(chat.asked_path(), "w").write("Use staging?")
+    with open(chat.asked_path(), "w") as fh:
+        fh.write("Use staging?")
     assert not chat.check_session_scope("codex")
     allowed.members.append("id-new")
     assert not chat.check_session_scope("codex")
@@ -854,7 +920,8 @@ def test_scoped_board_failure_preserves_session_and_question(tmp_path, monkeypat
     monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
     chat.check_session_scope("claude")
     chat.session("claude", "old-session")
-    open(chat.asked_path(), "w").write("Use staging?")
+    with open(chat.asked_path(), "w") as fh:
+        fh.write("Use staging?")
     monkeypatch.setattr(dash, "board", lambda **kw: (_ for _ in ()).throw(OSError("scan busy")))
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e) or e)
@@ -863,20 +930,7 @@ def test_scoped_board_failure_preserves_session_and_question(tmp_path, monkeypat
     assert chat.session("claude") == "old-session" and open(chat.asked_path()).read() == "Use staging?"
 
 
-def test_scoped_session_resets_when_request_relinks(tmp_path, monkeypatch):
-    import dash
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
-    allowed = dash.BoardAllow()
-    allowed.members = [("id-qa", "github", "octo/app", "#12", "head", "main", "Fix CI")]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
-    chat.check_session_scope("claude")
-    chat.session("claude", "old-session")
-    allowed.members = [("id-qa", "github", "octo/app", "#34", "head", "main", "Fix CI")]
-    assert chat.check_session_scope("claude") and chat.session("claude") is None
-
-
-def test_scoped_session_survives_first_pr_on_same_branch(tmp_path, monkeypatch):
+def test_scoped_session_survives_request_relink_and_first_pr(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
@@ -887,10 +941,12 @@ def test_scoped_session_survives_first_pr_on_same_branch(tmp_path, monkeypatch):
     chat.session("claude", "old-session")
     allowed.members = [("id-qa", "feature-a", "github", "octo/app", "#42", "main")]
     assert not chat.check_session_scope("claude") and chat.session("claude") == "old-session"
+    allowed.members = [("id-qa", "feature-a", "github", "octo/app", "#99", "main")]
+    assert not chat.check_session_scope("claude") and chat.session("claude") == "old-session"
 
 
-def test_stale_turn_cannot_restore_session_after_scope_reset(tmp_path, monkeypatch):
-    import dash
+def test_stale_turn_cannot_restore_session_after_clear(tmp_path, monkeypatch):
+    import attach, dash, decisions
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
     allowed = dash.BoardAllow()
@@ -899,18 +955,15 @@ def test_stale_turn_cannot_restore_session_after_scope_reset(tmp_path, monkeypat
     chat.check_session_scope("claude")
     old_generation = chat.SCOPE_EXPECTED
     chat.session("claude", "old-session")
-    allowed.members = []
-    chat.check_session_scope("claude")
+    monkeypatch.setattr(chat.sys, "argv", ["chat.py", "new"])
+    monkeypatch.setattr(attach, "clear", lambda *a: None)
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    chat.main()
     assert chat.session("claude") is None
-    monkeypatch.setattr(chat, "SCOPE_EXPECTED", old_generation)  # the first turn finishes after the second reset
+    monkeypatch.setattr(chat, "SCOPE_EXPECTED", old_generation)  # old turn finishes after Clear
     chat.session("claude", "late-old-session")
     chat.seen_save({"key": "claude:late-old-session", "lines": {}})
     assert chat.session("claude") is None and not (tmp_path / chat.SEEN).exists()
-    allowed.members = [("id-qa", "feature-a", "github", "octo/app", "#1", "main")]
-    chat.check_session_scope("claude")  # A+B-style membership can return without reviving the old generation
-    monkeypatch.setattr(chat, "SCOPE_EXPECTED", old_generation)
-    chat.session("claude", "late-after-aba")
-    assert chat.session("claude") is None
 
 
 def test_clear_invalidates_running_unscoped_turn(tmp_path, monkeypatch):
@@ -927,22 +980,6 @@ def test_clear_invalidates_running_unscoped_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "SCOPE_EXPECTED", old_generation)
     chat.session("claude", "late-old-session")
     assert chat.session("claude") is None
-
-
-def test_stale_board_snapshot_cannot_readd_departed_workspace(tmp_path, monkeypatch):
-    import dash
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
-    old = dash.BoardAllow(); old.members = ["id-a", "id-b"]
-    current = dash.BoardAllow(); current.members = ["id-a"]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- a", current))
-    chat.check_session_scope("claude")
-    marker = tmp_path / ("members" + chat.scope_suffix())
-    before = marker.read_text()
-    import pytest
-    with pytest.raises(OSError, match="board changed"):
-        chat.check_session_scope("claude", ("- old board", old))
-    assert marker.read_text() == before
 
 
 def test_old_turn_cannot_remove_new_turn_pid_marker(tmp_path, monkeypatch):
@@ -993,7 +1030,7 @@ def test_stop_cancels_reserved_turn_before_harness_starts(tmp_path, monkeypatch)
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("yes", "claude-haiku-5-5", None)
-    assert events[-1]["ok"] is False and "window changed" in events[-1]["text"]
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
 
 
 def test_failed_model_done_is_error_and_not_published_twice(tmp_path, monkeypatch):
@@ -1042,42 +1079,16 @@ def test_second_turn_cannot_replace_active_pid(tmp_path, monkeypatch):
         launch.assert_not_called()
 
 
-def test_running_scope_detects_scan_departure_without_new_chat_turn(tmp_path, monkeypatch):
+def test_running_turn_survives_workspace_departure_in_scoped_window(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
     allowed = dash.BoardAllow(); allowed.members = ["id-a", "id-b"]
     monkeypatch.setattr(dash, "board", lambda **kw: ("- board", allowed))
-    marker = ["scan-a"]
-    monkeypatch.setattr(chat, "published_scan_marker", lambda: marker[0])
     chat.check_session_scope("claude")
-    marker[0] = "scan-b"
     allowed.members = ["id-a"]
     with chat.scope_lock():
-        assert not chat.scope_current_unlocked()
-
-
-def test_scoped_reset_waits_for_decision_close(tmp_path, monkeypatch):
-    import dash
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
-    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
-    allowed = dash.BoardAllow()
-    allowed.members = ["id-qa"]
-    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa", allowed))
-    chat.check_session_scope("claude")
-    marker = tmp_path / ("members" + chat.scope_suffix())
-    before = marker.read_text()
-    allowed.members = []
-    close = chat.decisions.forget_chat
-    monkeypatch.setattr(chat.decisions, "forget_chat", lambda **kw: (_ for _ in ()).throw(OSError("store busy")))
-    try:
-        chat.check_session_scope("claude")
-        assert False, "decision write failure must stop scope reset"
-    except OSError:
-        pass
-    assert marker.read_text() == before
-    monkeypatch.setattr(chat.decisions, "forget_chat", close)
-    assert chat.check_session_scope("claude") and not (tmp_path / ("members" + chat.scope_suffix() + ".reset")).exists()
+        assert chat.scope_current_unlocked()
 
 
 def test_clear_closes_questions_in_every_scope_of_center(tmp_path, monkeypatch):
@@ -1112,7 +1123,7 @@ def test_clear_keeps_transcript_when_decisions_cannot_close(tmp_path, monkeypatc
     assert marker.exists() and asked.exists() and session.exists()
 
 
-def test_scoped_turn_uses_one_board_snapshot_and_compaction_checks_scope(tmp_path, monkeypatch):
+def test_scoped_turn_uses_board_snapshot_and_compaction_keeps_session(tmp_path, monkeypatch):
     import dash
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
     reads = []
@@ -1121,13 +1132,13 @@ def test_scoped_turn_uses_one_board_snapshot_and_compaction_checks_scope(tmp_pat
         return ("- qa (#7, octo/app): ci_green · on agent", {"qa": ("github", "octo/app", "#7", "abc", "Fix CI")})
     monkeypatch.setattr(dash, "board", board)
     turn(tmp_path, monkeypatch, "what happened?")
-    assert len(reads) == 3  # revalidate under the scope lock and before hearing the reply
+    assert len(reads) == 2
     chat.session("claude", "old-session")
     monkeypatch.setattr(dash, "board", lambda **kw: ("", {}))
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e) or e)
     chat.turn("/compact", "claude-haiku-5-5", None, compact=True)
-    assert chat.session("claude") is None and events[-1]["ok"]
+    assert chat.session("claude") is not None and events[-1]["ok"]
 
 
 def shown(events):

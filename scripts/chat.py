@@ -78,6 +78,10 @@ PROMPT = (
     "and the workspace already on it; `dash.py forge <owner/repo>` lists everything open in one repo. Suggest from the statuses: "
     "reviews others wait on first, then their MRs one step from merge (fix CI, a rebase, conflicts, threads), then issues with no "
     "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
+    "When a message includes a STALE QUESTION or BOARD head update notice, never treat the user's reply as approval for the "
+    "changed commit, target branch, branch, or goal: explain what changed and confirm again (or answer their new topic if they moved on). "
+    "Before merging, approving, pushing, or deleting an MR or workspace, verify its current head SHA and target branch against the live forge "
+    "(use `audit.py checked-merge` for merges so the forge enforces the exact head commit). "
     "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
     "session on `tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: you can open those, not read them). "
     "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
@@ -901,7 +905,6 @@ def session_path(engine):
 SCOPE_EXPECTED = None
 SCOPE_SNAPSHOT = None
 SCOPE_DIR = None
-SCOPE_SCAN_MARKER = None
 SCOPE_TURN_TOKEN = None
 GENERATION = "conversation.gen"
 ACTIVE_TURN = "turn.active"
@@ -968,90 +971,34 @@ def scope_lock():
 
 
 def scope_current_unlocked():
-    global SCOPE_SCAN_MARKER
     if os.path.exists(os.path.join(DIR, RESETTING)):
         return False
     if SCOPE_TURN_TOKEN and SCOPE_DIR == DIR:
         try:
-            active = json.load(open(os.path.join(DIR, ACTIVE_TURN)))
+            with open(os.path.join(DIR, ACTIVE_TURN)) as af:
+                active = json.load(af)
             if active.get("id") != SCOPE_TURN_TOKEN or active.get("cancelled"):
                 return False
         except (OSError, ValueError):
             return False
     if SCOPE_EXPECTED is None or SCOPE_DIR != DIR:
         return True
-    expected_generation, expected_members = SCOPE_EXPECTED
-    if expected_members is not None and not os.environ.get("GREENLIGHT_ONLY"):
-        return True  # this process has since left the scoped window
-    if generation_unlocked() != expected_generation:
-        return False
-    if expected_members is None:
-        return True
-    try:
-        if open(os.path.join(DIR, "members" + scope_suffix())).read() != expected_members:
-            return False
-        latest = published_scan_marker()
-        if latest != SCOPE_SCAN_MARKER:
-            import dash
-            fresh = dash.board(with_ids=True)
-            allow = fresh[1]
-            current = sorted(json.dumps(m, sort_keys=True) for m in getattr(allow, "members", allow.keys()))
-            if not all(member_still_present(old, current) for old in json.loads(expected_members)):
-                return False
-            SCOPE_SCAN_MARKER = latest
-        return True
-    except Exception:
-        return False
-
-
-def published_scan_marker():
-    try:
-        stat = os.stat(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json"))
-        return (stat.st_ino, stat.st_mtime_ns)
-    except OSError:
-        return None
-
-
-def member_still_present(old, current):
-    if old in current:
-        return True
-    try:
-        member = json.loads(old)
-        return len(member) == 6 and member[4] is None and member[5] is None and any(
-            (new_member := json.loads(new))[:4] == member[:4] and len(new_member) == 6 and new_member[4] and new_member[5]
-            for new in current)
-    except (TypeError, ValueError):
-        return False
+    return generation_unlocked() == SCOPE_EXPECTED[0]
 
 
 def check_session_scope(engine, snapshot=None):
-    global SCOPE_EXPECTED, SCOPE_SNAPSHOT, SCOPE_DIR, SCOPE_SCAN_MARKER
+    global SCOPE_EXPECTED, SCOPE_SNAPSHOT, SCOPE_DIR
     with scope_lock():
         SCOPE_DIR = DIR
+        SCOPE_EXPECTED = (generation_unlocked(), None)
         if not os.environ.get("GREENLIGHT_ONLY"):
-            SCOPE_EXPECTED = (generation_unlocked(), None)
             SCOPE_SNAPSHOT = None
             return False
-        import dash
-        marker_before = published_scan_marker()
-        fresh = dash.board(with_ids=True)
-        marker_after = published_scan_marker()
-        if marker_after != marker_before:
-            raise OSError("scan changed during scope check")
-        if snapshot is not None:
-            def members(value):
-                allow = value[1]
-                return sorted(json.dumps(m, sort_keys=True) for m in getattr(allow, "members", (allow or {}).keys()))
-            if members(snapshot) != members(fresh):
-                raise OSError("board changed before scope check")
-        snapshot = fresh
-        SCOPE_SNAPSHOT = fresh
-        changed = _check_session_scope(engine, snapshot)
-        if changed:
-            rotate_generation_unlocked()
-        SCOPE_EXPECTED = (generation_unlocked(), open(os.path.join(DIR, "members" + scope_suffix())).read())
-        SCOPE_SCAN_MARKER = marker_after
-        return changed
+        if snapshot is None:
+            import dash
+            snapshot = dash.board(with_ids=True)
+        SCOPE_SNAPSHOT = snapshot
+        return False
 
 
 def stale_pending_question(snapshot):
@@ -1097,38 +1044,32 @@ def has_request_question():
                for rec in decisions.load())
 
 
-def discard_sessions_unlocked():
-    """A rejected question must not survive in a resumable model transcript."""
-    suffix = scope_suffix()
-    for path in glob.glob(os.path.join(DIR, "session*")):
-        name = os.path.basename(path)
-        if name.endswith(suffix) and (suffix or "_scope-" not in name):
-            os.remove(path)
-    with contextlib.suppress(OSError):
-        os.remove(os.path.join(DIR, SEEN))
-
-
-# a stale rejection discards the session (reject_stale_question_unlocked): say so, or the next reply looks like amnesia
-CHAT_RESET = " This chat has started over, so earlier messages are gone; restate what you need."
-
-
-def reject_stale_question_unlocked():
-    """Close the old approval and discard sessions that still contain its question."""
+def clear_stale_question_unlocked():
+    """Close a stale or undelivered chat question and drop `asked`, keeping the chat session intact."""
     decisions.forget_chat(chat=chat_identity())
     with contextlib.suppress(OSError):
         os.remove(asked_path())
-    discard_sessions_unlocked()
+
+
+def stale_question_notice(reason):
+    """Prompt notice injected into the existing session when a prior pending question is invalidated."""
+    return (
+        f"STALE QUESTION ({reason}): Your previous pending question has been closed. "
+        "Do NOT treat the user's message below as approval for the current commit, target branch, branch, or goal. "
+        "If they are answering that old question, explain what changed and ask again; "
+        "if they moved on to a new topic, answer it normally.\n\n"
+    )
 
 
 def question_targets(question, allow):
-    """Select the cards explicitly named by a question; a generic question covers the window."""
+    """Select only the cards explicitly named by a question; untargeted questions bind to no workspace."""
     hits = {}
     for name, identity in allow.items():
         ref = identity[2] if isinstance(identity, tuple) and len(identity) > 2 else ""
         if (ref and re.search(rf"(?<![\w#!]){re.escape(ref)}(?!\d)", question)) or \
                 (len(name) > 3 and re.search(rf"(?<![\w/.-]){re.escape(name)}(?![\w/-])", question)):
             hits[name] = identity
-    return hits or dict(allow)
+    return hits
 
 
 def live_question_status(snapshot):
@@ -1186,49 +1127,6 @@ def live_question_status(snapshot):
     return "valid"
 
 
-def _check_session_scope(engine, snapshot=None):
-    """A scoped window must not resume a transcript after a workspace leaves its effective board."""
-    if not os.environ.get("GREENLIGHT_ONLY"):
-        return False
-    marker = os.path.join(DIR, "members" + scope_suffix())
-    resetting = marker + ".reset"
-    sessions = [p for p in glob.glob(os.path.join(DIR, "session*" + scope_suffix())) if not p.endswith(".members")]
-    try:
-        if snapshot is None:
-            import dash
-            snapshot = dash.board(with_ids=True)
-        _, allow = snapshot
-        current = sorted(json.dumps(member, sort_keys=True) for member in getattr(allow, "members", (allow or {}).keys()))
-    except Exception:
-        current = None  # an unreadable board cannot authorize resuming a scoped transcript
-    if current is None:
-        raise OSError("scoped board unavailable")
-    try:
-        previous = json.load(open(marker))
-    except (OSError, ValueError):
-        previous = None
-    departed = os.path.exists(resetting) or previous is None and bool(sessions) or \
-        previous is not None and not all(member_still_present(old, current) for old in previous)
-    if departed:
-        cancel_running_unlocked()
-        with open(resetting, "w") as out:
-            out.write("resetting")  # survive failure after a session file was already deleted
-        for f in sessions:
-            os.remove(f)  # fail closed: never advance the marker while an old transcript survives
-        with contextlib.suppress(OSError):
-            os.remove(os.path.join(DIR, SEEN))
-        if os.path.exists(asked_path()):
-            os.remove(asked_path())  # fail closed before advancing the membership marker
-        decisions.forget_chat(chat=chat_identity())  # do not advance membership until old questions are closed
-    if previous != current:
-        with open(marker, "w") as out:
-            json.dump(current, out)
-    if departed:
-        os.remove(resetting)
-        return True
-    return False
-
-
 def session(engine, val=None):
     f = session_path(engine)
     if val is not None:
@@ -1254,7 +1152,7 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
     check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
     with scope_lock():
         if not scope_current_unlocked():
-            return None, "window changed"
+            return None, "Stopped"
         if pid_matches(pid_record()):
             return None, "another turn running"
         with contextlib.suppress(OSError):
@@ -1315,22 +1213,12 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
             with contextlib.suppress(OSError):
                 p.stdin.close()
             p.wait()
-            return None, "window changed"
-        request_stale = threading.Event()
-        request_status = ["valid"]
-        if os.environ.get("GREENLIGHT_ONLY") or request_guard is not None:
+            return None, "Stopped"
+        if os.environ.get("GREENLIGHT_ONLY"):
             def watch_scope():
-                next_request_check = 0.0
                 while p.poll() is None:
                     with scope_lock():
                         stale = not scope_current_unlocked()
-                    if request_guard is not None and time.monotonic() >= next_request_check:
-                        status = live_question_status(request_guard)
-                        if status != "valid":
-                            request_status[0] = status
-                            request_stale.set()
-                            stale = True
-                        next_request_check = time.monotonic() + 0.5
                     if stale:
                         _kill_child()
                         return
@@ -1349,7 +1237,7 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
             if stale:
                 _kill_child()
                 p.wait()
-                return sid, "window changed"
+                return sid, "Stopped"
             try:
                 d = json.loads(line)
             except ValueError:
@@ -1411,11 +1299,9 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
                 if s:
                     s.close()
         cleanup_run(p.pid, birth)
-    if request_stale.is_set():
-        return sid, "request unavailable" if request_status[0] == "unavailable" else "request changed"
     with scope_lock():
         if not scope_current_unlocked():
-            return sid, "window changed"
+            return sid, "Stopped"
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
         if sid:
             session(engine, sid)
@@ -1540,20 +1426,21 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 return emit(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
         except (OSError, ValueError, KeyError, TypeError):
             pass
+        TURN["stale_note"] = ""
         if os.path.exists(delivery):
             try:
-                reject_stale_question_unlocked()
+                clear_stale_question_unlocked()
                 os.remove(delivery)
             except OSError as e:
                 return emit(e="done", ok=False, text=f"The interrupted question could not be closed ({e}); clear this chat.",
                             context=0, window=None, ms=None)
-            return emit(e="done", ok=False, text="An interrupted question was discarded; review the current state and ask again." + CHAT_RESET,
-                        context=0, window=None, ms=None)
+            TURN["stale_note"] = stale_question_notice("the previous reply was interrupted before its question reached the user")
         birth = auto.process_start(os.getpid())
         if not birth:
             return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
                         context=0, window=None, ms=None)
-        open(path, "w").write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
+        with open(path, "w") as af:
+            af.write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
         reserved_gen = generation_unlocked()
         SCOPE_EXPECTED, SCOPE_DIR = (reserved_gen, None), DIR
         SCOPE_TURN_TOKEN = token
@@ -1575,7 +1462,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 SCOPE_TURN_TOKEN = None
             if terminal:
                 if terminal.get("ok") and not owned:
-                    terminal = {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.",
+                    terminal = {"e": "done", "ok": False, "text": "Stopped",
                                 "context": 0, "window": None, "ms": None}
                 emit(**terminal)
                 try:
@@ -1598,24 +1485,40 @@ def reservation_current_unlocked(token, generation):
         return False
 
 
-def reject_stale_for_turn(reservation):
-    with scope_lock():
-        if reservation and not reservation_current_unlocked(*reservation):
-            return False
-        reject_stale_question_unlocked()
-        return True
-
-
-def discard_session_for_turn(reservation):
-    """Keep the approval retryable without resuming a transcript that already used it."""
-    with scope_lock():
-        if reservation and not reservation_current_unlocked(*reservation):
-            return False
-        discard_sessions_unlocked()
-        return True
+def _save_reply_question_unlocked(question, request_snapshot, reservation, kind):
+    """Persist a fresh pending question if its named targets haven't moved; never wipe the chat session."""
+    asked = asked_path()
+    if request_snapshot is None:
+        with contextlib.suppress(OSError):
+            os.remove(asked)
+        return
+    try:
+        import dash
+        fresh = dash.board(with_ids=True)
+        targets = question_targets(question, request_snapshot[1])
+        if any(fresh[1].get(name) != identity for name, identity in targets.items()):
+            with contextlib.suppress(OSError):
+                os.remove(asked)
+            return
+        with open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as qdf:
+            qdf.write(reservation[0] if reservation else "pending")
+        with open(asked, "w") as af:
+            af.write((os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)[-16384:])
+        decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=list(targets))
+        if stale_pending_question(request_snapshot):
+            clear_stale_question_unlocked()
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.remove(asked)
+        try:
+            decisions.forget_chat(chat=chat_identity())
+        except OSError:
+            with open(os.path.join(DIR, RESETTING), "w") as rf:
+                rf.write("question recovery needed")
 
 
 def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
+    stale_note = str(TURN.pop("stale_note", "") or "")
     engine, model = harness.route(model)
     TURN.update(harness=engine, model=model, t=time.monotonic())
     stored = []
@@ -1624,7 +1527,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
             checked = attach.check(files)
             with scope_lock():
                 if reservation and not scope_current_unlocked():
-                    return dict(e="done", ok=False, text="The workspace window changed; retry this message.",
+                    return dict(e="done", ok=False, text="Stopped",
                                 context=0, window=None, ms=None)
                 stored = attach.store(DIR, checked)
                 attach.prune(DIR)
@@ -1655,82 +1558,72 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         except Exception:
             pass
     if reservation and not reservation_current(*reservation):
-        return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.", "context": 0, "window": None, "ms": None}
+        return {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
     try:
-        scope_changed = check_session_scope(engine, snapshot)
+        check_session_scope(engine, snapshot)
     except OSError as e:
         return dict(e="done", ok=False, text=f"Scoped chat could not reset: {e}", context=0, window=None, ms=None)
     if snapshot is not None:
         snapshot = SCOPE_SNAPSHOT
         request_snapshot = snapshot
-    if scope_changed and reservation:
-        with scope_lock():
-            try:
-                if json.load(open(os.path.join(DIR, ACTIVE_TURN))).get("id") == reservation[0]:
-                    reservation = (reservation[0], generation_unlocked())
-            except (OSError, ValueError):
-                pass
     if reservation and not reservation_current(*reservation):
-        return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.", "context": 0, "window": None, "ms": None}
-    if scope_changed:
-        return dict(e="done", ok=bool(compact), text="The window changed; this chat will start fresh." if compact else
-                    "The workspace window changed; review it and retry this message.", context=0, window=None, ms=None)
+        return {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
     sid = session(engine)
     key = f"{engine}:{sid or 'new'}"  # what's been sent is per session: another engine's, or a new one, has seen nothing
     seen = seen_load(key) if not compact else None
     msg = text
     answer_text = text
     kind = decisions.turn_kind(text)  # the app's idle check-in or watch: its question is that kind (autonomy.py gates them)
-    request_guard = None
+    stale_cleared = bool(stale_note)
     if not compact:
         needs_request_check = snapshot is not None or has_request_question()
         with scope_lock():
             if not scope_current_unlocked():
-                return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
+                return dict(e="done", ok=False, text="Stopped", context=0, window=None, ms=None)
             if needs_request_check:
                 import dash
                 try:
                     fresh = dash.board(with_ids=True)
                 except Exception:
-                    return dict(e="done", ok=False, text="The current request could not be checked; retry this message.", context=0, window=None, ms=None)
-                if snapshot is not None:
-                    members_now = sorted(json.dumps(m, sort_keys=True) for m in getattr(fresh[1], "members", fresh[1].keys()))
-                    if json.dumps(members_now) != SCOPE_EXPECTED[1]:
-                        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-                if stale_pending_question(fresh):
-                    reject_stale_question_unlocked()
-                    return dict(e="done", ok=False, text="That question referred to an earlier request or commit. Review the current state and ask again." + CHAT_RESET, context=0, window=None, ms=None)
-                snapshot = fresh
-                request_snapshot = fresh
-        live_status = live_question_status(snapshot) if needs_request_check else "valid"
+                    fresh = None
+                if fresh is not None:
+                    if stale_pending_question(fresh):
+                        clear_stale_question_unlocked()
+                        stale_note += stale_question_notice("the pending question referred to an earlier request, commit, branch, or goal")
+                        stale_cleared = True
+                        needs_request_check = False
+                    snapshot = fresh
+                    request_snapshot = fresh
+                elif has_request_question():
+                    clear_stale_question_unlocked()
+                    stale_note += stale_question_notice("the current board could not be checked to verify the previous question")
+                    stale_cleared = True
+                    needs_request_check = False
+        live_status = live_question_status(snapshot) if needs_request_check and snapshot is not None else "valid"
         with scope_lock():
             if not scope_current_unlocked():
-                return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-            if needs_request_check:
-                if live_status == "unavailable":
-                    return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
-                if live_status == "stale":
-                    reject_stale_question_unlocked()
-                    return dict(e="done", ok=False, text="That question referred to an earlier commit or target. Review the current state and ask again." + CHAT_RESET, context=0, window=None, ms=None)
+                return dict(e="done", ok=False, text="Stopped", context=0, window=None, ms=None)
+            if needs_request_check and live_status in ("stale", "unavailable"):
+                clear_stale_question_unlocked()
+                reason = ("the pending question referred to an earlier commit, target branch, goal, or MR state"
+                          if live_status == "stale" else "live state for the previous question could not be verified")
+                stale_note += stale_question_notice(reason)
+                stale_cleared = True
             asked = asked_path()
             if os.path.exists(asked) and not any(rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)
                                                  for rec in decisions.load()):
                 os.remove(asked)
-                return dict(e="done", ok=False, text="The previous question could not be verified; ask again.",
-                            context=0, window=None, ms=None)
             if os.path.exists(asked):
                 with open(asked) as af:
                     question_context = af.read()
             else:
                 question_context = None
-        if question_context and needs_request_check:
-            request_guard = snapshot
         # the turn's tools inherit it: `greenlight.py ade worktree create` refuses a read-only one. An answer to the
         # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
         req_val = question_context + ANSWER + text if question_context else text
         os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
         wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
-        text = wrap(board_note(msg, key, seen, request_snapshot))
+        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
@@ -1739,82 +1632,50 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
     try:
         cmd, t = mk(sid, text)
-        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True, request_guard=request_guard)
+        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True)
     except (ValueError, OSError) as e:  # unknown harness, pi without bypass, binary missing
         seen_forget()
         return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
-    if err == "window changed":
-        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
     if err == "another turn running":
         return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
     if err == "model failed":
         return norm.pending_done
-    if err == "request unavailable":
-        discard_session_for_turn(reservation)
-        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
-    if err == "request changed":
-        if not reject_stale_for_turn(reservation):
-            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
         try:
             cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
         except (ValueError, OSError) as e:
             seen_forget()
             return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
         sid = None  # don't fall into the session-lost retry below
-    if err == "window changed":
-        return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
     if err == "another turn running":
         return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
     if err == "model failed":
         return norm.pending_done
-    if err == "request unavailable":
-        discard_session_for_turn(reservation)
-        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
-    if err == "request changed":
-        if not reject_stale_for_turn(reservation):
-            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
         emit(e="status", text="Session lost, starting a new one")
         key = f"{engine}:new"
         seen_forget()
         seen = seen_load(key)
-        text = wrap(board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
+        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         norm.base = (0, 0)  # a new thread: its totals start at 0
         try:
             cmd, t = mk(None, text)
-            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True, request_guard=request_guard)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
         except (ValueError, OSError) as e:
             seen_forget()
             return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     if err == "model failed":
         return norm.pending_done
-    if err == "request unavailable":
-        discard_session_for_turn(reservation)
-        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
-    if err == "request changed":
-        if not reject_stale_for_turn(reservation):
-            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
-    post_status = live_question_status(request_guard) if request_guard is not None and not err else "valid"
-    if post_status == "unavailable":
-        discard_session_for_turn(reservation)
-        return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
-    if post_status == "stale":
-        if not reject_stale_for_turn(reservation):
-            return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     with scope_lock():
         if reservation and not reservation_current_unlocked(*reservation) or not scope_current_unlocked():
-            return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.",
+            return {"e": "done", "ok": False, "text": "Stopped",
                     "context": 0, "window": None, "ms": None}
         if new_sid:
-            open(session_path(engine), "w").write(new_sid)
+            with open(session_path(engine), "w") as sf:
+                sf.write(new_sid)
         if err and not compact or compact and not err:
             with contextlib.suppress(OSError):
                 os.remove(os.path.join(DIR, SEEN))
@@ -1823,42 +1684,11 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                 with open(os.path.join(DIR, SEEN), "w") as f:
                     json.dump(seen | {"key": f"{engine}:{actual_sid}"}, f)
         if not compact and not err:
-            decisions.quiet("heard", answer_text, chat=chat_identity())
+            if not stale_cleared:
+                decisions.quiet("heard", answer_text, chat=chat_identity())
             asked, question = asked_path(), asked_question(norm.reply)
             if question:
-                if request_snapshot is None:
-                    discard_sessions_unlocked()
-                    return {"e": "done", "ok": False, "text": "The current request could not be checked; retry this message.",
-                            "context": 0, "window": None, "ms": None}
-                try:
-                    import dash
-                    fresh = dash.board(with_ids=True)
-                    targets = question_targets(question, request_snapshot[1])
-                    if any(fresh[1].get(name) != identity for name, identity in targets.items()):
-                        discard_sessions_unlocked()
-                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again." + CHAT_RESET,
-                                "context": 0, "window": None, "ms": None}
-                    with open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as qdf:
-                        qdf.write(reservation[0] if reservation else "pending")
-                    with open(asked, "w") as af:
-                        af.write((os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)[-16384:])
-                    decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=list(targets))
-                    if stale_pending_question(request_snapshot):
-                        decisions.forget_chat(chat=chat_identity())
-                        os.remove(asked)
-                        discard_sessions_unlocked()
-                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again." + CHAT_RESET,
-                                "context": 0, "window": None, "ms": None}
-                except Exception as e:
-                    with contextlib.suppress(OSError):
-                        os.remove(asked)
-                    try:
-                        decisions.forget_chat(chat=chat_identity())
-                    except OSError:
-                        open(os.path.join(DIR, RESETTING), "w").write("question recovery needed")
-                    discard_sessions_unlocked()
-                    return {"e": "done", "ok": False, "text": f"The question could not be saved ({e}); ask again.",
-                            "context": 0, "window": None, "ms": None}
+                _save_reply_question_unlocked(question, request_snapshot, reservation, kind)
             elif os.path.exists(asked):
                 os.remove(asked)
     if err:
