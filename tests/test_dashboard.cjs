@@ -899,6 +899,22 @@ test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [
   assert.ok(!(await page.$(".cell.picked")), "clicking a picked hex clears the picks");
 });
 
+test("a selected hex whose workspace drops out of a refresh closes its card and leaves the selection", async page => {
+  await page.evaluate(() => window.mc.pick(["plan-b"], true));
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-b", "the picked hex's card is open");
+  await page.evaluate(s => window.mc.update({...s, ts: 2, pucks: s.pucks}), SNAP);
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-b", "a refresh that still has it keeps the card");
+  await page.evaluate(s => window.mc.update({...s, ts: 3, pucks: s.pucks.filter(p => p.name !== "plan-b")}), SNAP);
+  assert.equal(await page.$("#hcard"), null, "its workspace is gone: the card closes on its own");
+  assert.deepEqual(await page.evaluate(() => [...ui.picked]), [], "and the selection clears");
+  assert.ok(!(await page.$(".fieldwrap.picking")), "the hive no longer dims around a gone pick");
+  await page.evaluate(s => window.mc.update({...s, ts: 4}), SNAP);
+  assert.ok(!(await page.$(".cell.picked")) && !(await page.$("#hcard")), "it coming back doesn't revive the old pick");
+  await page.evaluate(() => window.mc.pick(["plan-a"], true));
+  await page.evaluate(s => window.mc.update({...s, ts: 5, pucks: s.pucks.filter(p => p.name !== "plan-b")}), SNAP);
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-a", "another workspace leaving doesn't close this card");
+});
+
 const STAGES = ["mr_open", "ci_green", "threads", "merge"];
 const staged = (k, i) => ({...SNAP.pucks[1], name: "stg-" + k, path: "/w/stg-" + k, sig: "s" + k, steps: STAGES, step_index: i, step: STAGES[i] || "merge"});
 test("agent card: hovering (or tabbing to) the progress bar lists every stage: done ones ticked, where it is now, what's next", async page => {
