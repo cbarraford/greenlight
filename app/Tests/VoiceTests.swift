@@ -92,12 +92,18 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
         v.onLive(.heard(" auth ones"))  // its transcript of audio sent before the mute, arriving after it
         let ignoredWhileMuted = v.heard.isEmpty
         v.handOff("d1")  // a hand-off while muted
-        let mutedHandOff = v.lastHeard.isEmpty && v.delegation == "d1"
+        let mutedHandOff = v.lastHeard.isEmpty && v.delegation == nil
         v.setMicMuted(false)
         v.onLive(.heard("hold 42"))
-        v.handOff("d2", dropped: true)  // scheduled before a mute, run after the unmute
-        check("voice: GPT-Live's transcript and hand-offs from a muted turn are dropped, not sent to Chief",
-              ignoredWhileMuted && mutedHandOff && v.lastHeard.isEmpty && v.heard.isEmpty && v.delegation == "d2")
+        v.handOff("d2", dropped: true)  // came while muted (or before a mute), run after the unmute: the new turn's words stay
+        let keptNewTurn = v.lastHeard.isEmpty && v.heard == "hold 42" && v.delegation == nil
+        v.heard = ""
+        v.setMicMuted(true); v.onLive(.delegated("d3")); v.setMicMuted(false)  // handed off while muted, unmuted within its 0.4 s
+        v.onLive(.delegated("d4")); v.setMicMuted(true); v.setMicMuted(false)  // handed off, then a quick mute within its 0.4 s
+        v.onLive(.heard("hold 42"))
+        let until = Date() + 0.7; while Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+        check("voice: GPT-Live's transcript and hand-offs from a muted turn are dropped, not sent to Chief, and don't eat the next turn",
+              ignoredWhileMuted && mutedHandOff && keptNewTurn && v.lastHeard.isEmpty && v.heard == "hold 42" && v.delegation == nil)
         v.on = false
     }
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))

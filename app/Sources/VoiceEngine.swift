@@ -48,8 +48,8 @@ final class Voice: NSObject, ObservableObject {
     var waitWord = "One minute"
     var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
-    /// You muted the mic (the header's mic button, ⇧⌘M): nothing it hears reaches Apple's recognizer or GPT-Live, and the turn you
-    /// were in the middle of is dropped. The engine keeps running so Chief can still speak (and its echo cancellation stays set up),
+    /// You muted the mic (the header's mic button, ⇧⌘M): nothing it hears reaches Apple's recognizer or GPT-Live (which gets silence),
+    /// and the turn you were in the middle of is dropped. The engine keeps running so Chief can still speak (and its echo cancellation stays set up),
     /// so macOS still shows the mic in use. Each voice mode starts unmuted.
     @Published private(set) var micMuted = false
     private var micOff = false  // micMuted for the mic's tap on the audio thread, under `lock`
@@ -236,8 +236,10 @@ final class Voice: NSObject, ObservableObject {
         try input.tap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
             guard let self else { return }
             self.lock.lock(); let r = self.request, off = self.micOff; self.lock.unlock()
-            guard !off, let conv, let m = convert(b, conv, self.micFormat) else { return }  // muted: the audio goes nowhere
-            if let lconv { convert(b, lconv, self.live.fmt).map(self.live.mic) }  // GPT-Live: the mic goes to it, not to Apple's recognizer
+            // GPT-Live: the mic goes to it, not to Apple's recognizer. Muted, it gets silence instead (zeros, never your audio), so its
+            // turn detection ends the turn you muted in, and that turn's transcript and hand-off land while muted and are dropped.
+            if let lconv { convert(b, lconv, self.live.fmt).map { self.live.mic($0, silent: off) } }
+            guard !off, let conv, let m = convert(b, conv, self.micFormat) else { return }  // muted: nothing for Apple's recognizer or the meter
             r?.append(m)
             let l = level(m)
             DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
@@ -483,8 +485,8 @@ final class Voice: NSObject, ObservableObject {
             caption = String(liveCaption(caption.isEmpty ? String(d.drop { $0.isWhitespace }) : caption + d).suffix(240))
         case .audio(let d): liveAudio(d)
         case .delegated(let id):  // its transcript of your turn can trail the hand-off a little
-            let g = startGen, m = mutes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id, dropped: self.mutes != m) } }
+            let g = startGen, m = mutes, wasMuted = micMuted
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if let self, self.startGen == g { self.handOff(id, dropped: wasMuted || self.mutes != m) } }
         case .failed(let code, let m):
             liveLog.error("GPT-Live: \(code, privacy: .public) \(m, privacy: .public)")
             guard liveUp else { return liveFailed("refused the session: \(m)") }  // e.g. a voice it doesn't have
@@ -494,12 +496,13 @@ final class Voice: NSObject, ObservableObject {
         }
     }
     /// GPT-Live handed your turn off: Chief gets it (or voice mode does, for a command), and Chief's answer is read under this hand-off.
-    /// A turn from while the mic was muted, or one you muted before it was handed off (`dropped`), goes nowhere.
+    /// A hand-off while muted, or one that came while muted or before a mute (`dropped`), is the muted turn's: it changes nothing,
+    /// so what you've said since unmuting stays for your next turn's hand-off.
     func handOff(_ id: String, dropped: Bool = false) {
-        guard on, isLive, let c = core else { return }
+        guard on, isLive, !micMuted, !dropped, let c = core else { return }
         let t = heard.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""; delegation = id; liveDrop = false
-        guard !t.isEmpty, !micMuted, !dropped else { return }
+        guard !t.isEmpty else { return }
         if let cmd = voiceCommand(t) { return run(cmd) }
         if c.run != nil { muted = true; liveBuf = [] }  // a new request mid-answer: the rest of the old one goes unsaid (spoken() queues the new one)
         lastHeard = t
@@ -1069,20 +1072,21 @@ final class LiveVoice {
     }
     /// Mic audio, already 24 kHz 16-bit mono, sent in 100 ms pieces once the WebSocket upgrade is up.
     /// Dropped before upgrade so a slow TCP/TLS connect never flushes a >5 s burst that trips input_audio_rate_limit_exceeded.
-    func mic(_ b: AVAudioPCMBuffer) {
+    /// `silent`: voice mode is muted, so zeros of the same length go instead (as they do for any buffer reaching `q` after the mute).
+    func mic(_ b: AVAudioPCMBuffer, silent: Bool = false) {
         guard let p = b.int16ChannelData, b.frameLength > 0 else { return }
-        let d = Data(bytes: p[0], count: Int(b.frameLength) * 2)
+        let n = Int(b.frameLength) * 2, d = silent ? Data(count: n) : Data(bytes: p[0], count: n)
         q.async {
-            guard !self.muted, let k = self.sock, !k.dead, k.up else { self.pending = Data(); return }
-            self.pending += d
+            guard let k = self.sock, !k.dead, k.up else { self.pending = Data(); return }
+            self.pending += self.muted ? Data(count: n) : d
             guard self.pending.count >= 4800 else { return }
             let o = ["type": "session.input_audio.append", "audio": self.pending.base64EncodedString()]
             self.pending = Data()
             if let j = try? JSONSerialization.data(withJSONObject: o), let s = String(data: j, encoding: .utf8) { self.write(k, s) }
         }
     }
-    /// Voice mode's mute, on `q` like the audio itself: a buffer the tap let through just before the mute, queued after this, is
-    /// dropped here with whatever wasn't sent yet.
+    /// Voice mode's mute, on `q` like the audio itself: a buffer the tap let through just before the mute, queued after this, goes as
+    /// silence, and whatever wasn't sent yet is dropped.
     private var muted = false
     func mute(_ m: Bool) { q.async { self.muted = m; if m { self.pending = Data() } } }
     func close() {

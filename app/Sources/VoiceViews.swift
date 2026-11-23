@@ -913,7 +913,7 @@ func voiceTalkLabel(_ t: Talk, micMuted: Bool = false) -> String {
 /// Window ▸ the mic's item, by what choosing it does now.
 func micMenuTitle(muted: Bool) -> String { muted ? "Unmute Microphone" : "Mute Microphone" }
 /// Every look's hint line while the mic is muted, whoever has the floor.
-let mutedHint = "mic muted · ⇧⌘M or the mic button unmutes"
+let mutedHint = "mic muted · ⇧⌘M unmutes"
 /// What every look shows, from Voice and Core.
 struct Live {
     let v: Voice, c: Core
@@ -1066,7 +1066,7 @@ struct ConversationLook: View {
                 Text(String(s.name.prefix(1))).font(.system(size: 14, weight: .bold)).foregroundColor(.white).frame(width: 32, height: 32).background(Circle().fill(hx(l.accent)))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(s.name).font(.system(size: 14, weight: .semibold)).foregroundColor(hx(l.text))
-                    Text("\(s.label) · \(s.hint)").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)
+                    Text("\(voiceTalkLabel(s.talk)) · \(s.hint)")  // the hint says muted.font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)
                 }
                 Spacer()
             }
@@ -1202,7 +1202,7 @@ struct PhosphorLook: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("\(s.name.lowercased())@greenlight"); Text("~/voice").foregroundColor(faint)
-                Spacer(); Text("[\(s.label.uppercased())]").foregroundColor(faint)
+                Spacer(); Text("[\((s.v.micMuted ? "Muted" : s.label).uppercased())]")  // short: the line is full; "wait" below says thinking.foregroundColor(faint)
             }.padding(.horizontal, 14).padding(.vertical, 11)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
             VStack(alignment: .leading, spacing: 8) {
