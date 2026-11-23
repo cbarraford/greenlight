@@ -448,6 +448,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
     v.on = true; v.isLive = false; v.vp = true; v.speaking = 1; v.lastSpoken = "Three MRs are ready"
     v.partial("wait hold on")  // triggers barge-in hush()
     let bargedIn = v.speaking == 0 && v.heard == "wait hold on"
+    v.vp = false  // forced on above without opening the mic: left on, stopAll() opens inputNode to undo it, minutes in coreaudiod on a headless runner
     v.heard = "captions off"; v.turn()
     let turnRanCmd = !v.captions
     v.run(.captions(true))
