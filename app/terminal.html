@@ -1350,6 +1350,7 @@ function pickProjects(here){
   mode();
 }
 function newWindow(){ pickProjects(false) }  // ⌘⇧N, or the picker's New window (the title opens it): the sidebar head has no button for it
+function newWindowIfFree(){ if (!editing && $("pal").hidden && $("dlg").hidden) newWindow() }  // the app's File › Open Projects… (⌘⇧N): never over a dialog, the palette or a rename, as the key isn't
 // Customize look: your words → Claude (the app runs claude -p) → CSS colors over this window's chrome; Undo walks back, one restyle at a time
 let restyling = false, toastT;
 // opt: true (an Undo for the look), or {sub: a second line, act: [button label, its fn]}

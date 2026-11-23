@@ -24,7 +24,11 @@ import WebKit
 let localDefault: String = { var b = [CChar](repeating: 0, count: 256); gethostname(&b, 255); return String(cString: b).components(separatedBy: ".")[0] }()  // "Local" in the Basement, until you rename it
 let uitest = CommandLine.arguments.contains("--uitest")
 let unittest = CommandLine.arguments.contains("--unittest")
-let uitestSuiteName: String? = (uitest || unittest) ? "dev.greenlight.\(unittest ? "unittest" : "uitest").\(ProcessInfo.processInfo.processIdentifier)" : nil
+/// --uitest: its own defaults, per process; GREENLIGHT_UITEST_SUITE (a dev.greenlight.uitest.* name) keeps them across a relaunch.
+let uitestSuiteKept: String? = ProcessInfo.processInfo.environment["GREENLIGHT_UITEST_SUITE"].flatMap {
+    uitest && $0.range(of: #"^dev\.greenlight\.uitest\.[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil
+}
+let uitestSuiteName: String? = (uitest || unittest) ? uitestSuiteKept ?? "dev.greenlight.\(unittest ? "unittest" : "uitest").\(ProcessInfo.processInfo.processIdentifier)" : nil
 let uitestSocketPath: String? = {
     if let i = CommandLine.arguments.firstIndex(of: "--uitest-socket"), i + 1 < CommandLine.arguments.count {
         return CommandLine.arguments[i + 1]

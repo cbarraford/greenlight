@@ -97,6 +97,62 @@ def test_session_start_and_stop_lifecycle(tmp_path):
     assert not sess.root.exists()
 
 
+def test_keep_defaults_relaunch_reuses_one_suite_and_stop_removes_it(tmp_path, monkeypatch):
+    """keep_defaults: every launch gets the same GREENLIGHT_UITEST_SUITE, relaunch() keeps the home, stop() deletes the suite;
+    without it, a suite inherited from the caller's shell is dropped."""
+    monkeypatch.setenv("GREENLIGHT_UITEST_SUITE", "dev.greenlight.uitest.inherited")
+    fake_bin = tmp_path / "Greenlight-fake"
+    fake_bin.write_text("#!/bin/sh\nsleep 1\n")
+    fake_bin.chmod(0o755)
+    envs, runs = [], []
+
+    def session(**kw):
+        sess = uitest.UITestSession(fixture="projects", binary=fake_bin, **kw)
+
+        def fake_popen(*_a, **k):
+            envs.append(k["env"])
+            sess.socket_path.write_text("")
+            p = mock.MagicMock(pid=99999)
+            p.poll.return_value = None
+            return p
+        return sess, fake_popen
+
+    def no_group(_pgid, sig):  # the fake pid is no process group of ours: never signalled, and gone when probed
+        if sig == 0:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(uitest.os, "killpg", no_group)
+    sess, fake_popen = session(keep_defaults=True)
+    with (
+        mock.patch.object(uitest.subprocess, "Popen", side_effect=fake_popen),
+        mock.patch.object(uitest, "rpc", return_value={"ok": True}),
+        mock.patch.object(uitest.subprocess, "run", side_effect=lambda a, **_k: runs.append(a) or subprocess.CompletedProcess(a, 0, "", "")),
+    ):
+        sess.start()
+        projects = json.loads((sess.home / "app-support" / "projects.json").read_text())
+        assert [p["id"] for p in projects] == ["pauth", "pmetrics"], projects
+        home = sess.home
+        sess.relaunch()
+        assert sess.home == home and (home / "app-support" / "projects.json").is_file(), "relaunch keeps the home"
+        sess.stop()
+    assert len(envs) == 2 and envs[0]["GREENLIGHT_UITEST_SUITE"] == envs[1]["GREENLIGHT_UITEST_SUITE"] == sess.suite
+    assert sess.suite.startswith("dev.greenlight.uitest.s")
+    assert ["defaults", "delete", sess.suite] in runs, runs
+    assert not sess.root.exists()
+
+    plain, fake_popen = session()
+    with (
+        mock.patch.object(uitest.subprocess, "Popen", side_effect=fake_popen),
+        mock.patch.object(uitest, "rpc", return_value={"ok": True}),
+        mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["x"], 0, "", "")),
+    ):
+        plain.start()
+        with pytest.raises(AssertionError):
+            plain.relaunch()  # relaunch needs keep_defaults
+        plain.stop()
+    assert "GREENLIGHT_UITEST_SUITE" not in envs[-1], "an inherited suite must not reach a fresh session"
+
+
 def test_cli_subcommands(tmp_path, monkeypatch, capsys):
     sock = tmp_path / "ctl.sock"
     (tmp_path / "meta.json").write_text(json.dumps({"pid": 0, "tmux_socket": "gl-test", "root": str(tmp_path / "gl-uitest-x")}))

@@ -782,6 +782,22 @@ test("L1's Open projects returns to All when the last project is unticked", asyn
   await page.click("#pp button.pri");
   assert.deepEqual(await page.evaluate(() => __posts.filter(m => m.cmd === "project").pop()), {cmd: "project", only: null});
 });
+test("L1's Open projects, New window: posts window with the ticked projects (not project), ⌘⇧N asks the app for it", async page => {
+  const L = [{id: "a", name: "Alpha", color: "#FF9F0A", repos: ["x/a"], busy: 0}, {id: "b", name: "Beta", color: "#0969DA", repos: ["x/b"], busy: 0}];
+  await page.evaluate(() => { __posts.length = 0 });
+  await page.evaluate(L => mc.pickProjects(L, ["a"], false), L);  // ⌘⇧N's dialog: New window pressed, this window's pick ticked
+  assert.equal(await page.getAttribute("#pp .seg button >> nth=0", "aria-pressed"), "true", "New window is the mode");
+  assert.match(await page.textContent("#pp button.pri"), /Open window/);
+  await page.click("#pp .tile input >> nth=1"); await page.click("#pp .tile input >> nth=2");  // untick Alpha, tick Beta
+  await page.click("#pp button.pri");
+  const posts = await page.evaluate(() => __posts.filter(m => m.cmd === "window" || m.cmd === "project"));
+  assert.deepEqual(posts, [{cmd: "window", only: ["b"]}], "a new window with Beta; this window's pick untouched");
+  await page.evaluate(L => mc.pickProjects(L, null, true), L);
+  await page.click("#pp .seg button >> nth=0"); await page.click("#pp button.pri");
+  assert.deepEqual(await page.evaluate(() => __posts.filter(m => m.cmd === "window").pop()), {cmd: "window", only: null}, "All projects: null");
+  await page.keyboard.press("Meta+Shift+N");
+  assert.ok(await page.evaluate(() => __posts.some(m => m.cmd === "pickNew")), "⌘⇧N posts pickNew");
+});
 test("terminal: arrows move between tabs, Enter opens the focused one", async page => {
   const tp = await page.context().browser().newPage({viewport: {width: 760, height: 460}});
   await tp.addInitScript(() => { window.webkit = {messageHandlers: {term: {postMessage: m => (window.__term = window.__term || []).push(m)}}} });
