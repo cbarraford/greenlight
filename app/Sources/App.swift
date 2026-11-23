@@ -321,6 +321,34 @@ func livePick(_ only: [String]?, known: [String]?) -> [String]? {
     let k = known.map { ids in only.filter(ids.contains) } ?? only
     return k.isEmpty ? nil : k
 }
+/// A restored window's frame, kept on a screen that's still there: a monitor unplugged since quit would leave it out of reach. It stays
+/// where it was while 60pt of its title bar (half its height) is on some screen; else it keeps its size (at most that screen's) and goes to the
+/// middle of `screens[0]` (the main screen's visible frame). No screens (headless): unchanged.
+func fitOnScreen(_ f: NSRect, screens: [NSRect]) -> NSRect {
+    guard let home = screens.first else { return f }
+    let bar = NSRect(x: f.minX, y: f.maxY - 24, width: f.width, height: 24)  // its title bar
+    if screens.contains(where: { let i = $0.intersection(bar); return i.width >= min(60, f.width) && i.height >= 12 }) { return f }
+    let w = min(f.width, home.width), h = min(f.height, home.height)
+    return NSRect(x: home.midX - w / 2, y: home.midY - h / 2, width: w, height: h)
+}
+/// The rect in an NSWindow frame string ("x y w h screenX screenY screenW screenH "), as saved: `setFrameUsingName` rescales it
+/// onto the screen with focus when that's another monitor, so a relaunch moved a window off the laptop onto the external.
+func savedFrame(_ s: String?) -> NSRect? {
+    let n = (s ?? "").split(separator: " ").prefix(4).compactMap { Double($0) }
+    return n.count == 4 && n[2] > 0 && n[3] > 0 ? NSRect(x: n[0], y: n[1], width: n[2], height: n[3]) : nil
+}
+/// A new window cascaded 30pt right and down from `f`: at least `min` (a small view window's size is too small for a whole
+/// Greenlight Center), at most the screen, and inside it, so ⌘N after ⌘N doesn't walk windows off the edge. No screen: just cascaded.
+func cascadeFrame(_ f: NSRect, min m: NSSize, in screen: NSRect?) -> NSRect {
+    var r = NSRect(x: f.minX + 30, y: 0, width: max(f.width, m.width), height: max(f.height, m.height))
+    r.origin.y = f.maxY - 30 - r.height
+    guard let s = screen else { return r }
+    r.size = NSSize(width: min(r.width, s.width), height: min(r.height, s.height))
+    r.origin.y = f.maxY - 30 - r.height
+    r.origin.x = min(max(r.minX, s.minX), s.maxX - r.width)
+    r.origin.y = min(max(r.minY, s.minY), s.maxY - r.height)
+    return r
+}
 /// Whether a dashboard window may render snapshots yet: All-projects windows don't wait; filtered ones wait until the project list is loaded
 /// so the UI doesn't flash another project's hexes before narrowing to the saved pick.
 func canShowDashboard(only: [String]?, projectsLoaded: Bool) -> Bool { only == nil || projectsLoaded }
@@ -708,7 +736,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         split.setPosition(split.bounds.width - 440, ofDividerAt: 0)
         split.autosaveName = "chatSplit"  // restores a dragged divider over the default
         loadFluid()
-        if !w.setFrameUsingName("main") { w.center() }
+        if w.setFrameUsingName("main") { onScreen(w) } else { w.center() }
         w.setFrameAutosaveName("main")
         return w
     }()
@@ -891,7 +919,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
             newL1(only, from: from.window)
         }
-        if cmd == "pickNew" { l1Pick(here: false, in: l) }  // ⌘⇧N on L1
+        if cmd == "pickNew" { l1Pick(here: false, in: l, on: from) }  // ⌘⇧N on L1 (a detached view: there)
         if cmd == "editProjects" {  // L1's Edit projects…: down to the Basement, where the editor lives
             wantFloor = "basement"; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('basement'); window.editProjects && editProjects()"); ride(up: false)
         }
@@ -1061,7 +1089,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         _ = menu("Greenlight", [("Settings…", "appSettings", ","), ("-", "", ""),
                                  ("Hide Greenlight", "hide:", "h"), ("Quit Greenlight", "terminate:", "q")], target: self)
-        _ = menu("File", [("New Window", "appNewWindow", "n"), ("New Greenlight Center Window", "appNewL1", "")], target: self)
+        _ = menu("File", [("New Window", "appNewWindow", "n"), ("New Greenlight Center Window", "appNewL1", ""), ("Open Projects…", "appOpenProjects", "N")], target: self)
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
@@ -1071,8 +1099,33 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("Help", [("Report a Bug…", "appReportBug", "")], target: self)
         NSApp.mainMenu = bar
     }
-    @objc func appNewWindow() { newTermWindow(sharedOnly, from: NSApp.keyWindow.flatMap { termWins.values.contains($0) ? $0 : nil }) }  // the shared pick
-    @objc func appNewL1() { newL1(l1s.values.first { $0.w.isKeyWindow }?.only ?? sharedOnly, from: NSApp.keyWindow) }  // the projects of the one you're in
+    /// The Greenlight Center window `k` is: the main one (nil L1; a view it gave its own window, or its popped-out chat, too) or another;
+    /// nil for any other window.
+    func l1Of(_ k: NSWindow?) -> (l: L1?, w: NSWindow)? {
+        guard let k else { return nil }
+        if k === window || k === chat.window || viewWindows.values.contains(k) { return (nil, k) }  // the main chat, popped out, is its too
+        return l1s.values.first { $0.w === k }.map { ($0, k) }
+    }
+    @objc func appNewWindow() { newWindow(in: NSApp.keyWindow) }
+    /// ⌘N makes another of the window you're in: in Greenlight Center, another Greenlight Center with its projects; else a terminal window.
+    func newWindow(in k: NSWindow?) {
+        if let c = l1Of(k) { newL1(c.l.map(\.only) ?? sharedOnly, from: c.w); return }  // an L1 on All projects (nil) stays All
+        newTermWindow(sharedOnly, from: k.flatMap { termWins.values.contains($0) ? $0 : nil })  // the shared pick
+    }
+    @objc func appNewL1() { newL1(l1Of(NSApp.keyWindow)?.l.map(\.only) ?? sharedOnly, from: NSApp.keyWindow) }  // the projects of the one you're in
+    /// ⌘⇧N: Open projects, on New window, in the window you're in. Its pages answer the key themselves; this is for the chat pane, a
+    /// title bar or the Window menu. Anywhere else: Greenlight Center's.
+    @objc func appOpenProjects() { openProjects(in: NSApp.keyWindow) }
+    /// Greenlight Center up and key, for a dialog in it: show() leaves a popped-out chat in front (placeChat), so the main window comes after.
+    func frontMain() { show(); if !window.isKeyWindow { presentWindow(window, activate: false) } }  // --uitest: ordered back, as ever
+    func openProjects(in k: NSWindow?) {
+        if let c = l1Of(k) {
+            if c.l == nil, c.w !== window, !viewWindows.values.contains(c.w) { frontMain() }  // the popped-out chat: its dialog is the main window's, so up it comes
+            l1Pick(here: false, in: c.l, on: c.w.contentView as? WKWebView); return
+        }
+        if let k, termWins.values.contains(k) { (k.contentView as? WKWebView)?.callJS("window.newWindowIfFree"); return }  // not over its dialog, palette or a rename
+        frontMain(); l1Pick(here: false)  // Settings, the inbox…: Greenlight Center's, in front
+    }
     @objc func appSettings() { greenlight.settingsOpen = true; greenlight.inboxOpen = false }
     @objc func appReload() { loadFluid(l1s.values.first { $0.w.isKeyWindow }?.web) }
 
@@ -1311,6 +1364,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var pickScope: String? {
         windowScope(paths: l1Paths, repos: l1Repos, shown: window.isVisible || termWins.values.contains(where: \.isVisible) || viewWindows.values.contains(where: \.isVisible))
     }
+    func l1Title(_ project: String) -> String { project.isEmpty ? greenlight.name : "\(greenlight.name) · \(project)" }
     func syncL1() {
         for (f, raw) in [(l1Floor, sharedOnly)] + l1s.values.map({ ($0.floor, $0.only) }) {
             let chip = projectChip(only: raw, projList: projList, projectsLoaded: projectsLoaded)
@@ -1318,10 +1372,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             f.colors = chip.colors
         }
     }
-    func l1Pick(here: Bool = true, in l: L1? = nil) {
+    /// Open projects, for L1 window `l` (nil: the main one), shown in `web` when that's one of the main one's detached views: the window you're in.
+    func l1Pick(here: Bool = true, in l: L1? = nil, on web: WKWebView? = nil) {
         let shownList = projectsLoaded ? projList : buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true)
         let o = l == nil ? l1Only : live(l!.only)
-        (l?.web ?? fluid).callJS("window.mc && mc.pickProjects", [shownList, o ?? NSNull(), here])
+        let view = l == nil ? web.flatMap { w in viewWindows.values.contains { $0.contentView === w } ? w : nil } : nil
+        if l == nil, view == nil, !window.isVisible { frontMain() }  // the main window, closed: up again, or its dialog opens unseen
+        (l?.web ?? view ?? fluid).callJS("window.mc && mc.pickProjects", [shownList, o ?? NSNull(), here])
     }
 
     // MARK: more Greenlight Center windows (L1's Open projects → New window): each with its own projects and its own Chief (Core(session:)),
@@ -1376,16 +1433,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = v.widthAnchor.constraint(greaterThanOrEqualToConstant: wd); k.priority = pr; k.isActive = true
         }
         w.contentView = sp
-        if !w.setFrameUsingName("main-\(id)") {
-            if let f = (from ?? (window.isVisible ? window : nil))?.frame { w.setFrame(f, display: false); w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)) } else { w.center() }
+        let saved = savedFrame(UserDefaults.standard.string(forKey: "NSWindow Frame \(l1FrameName(id))"))  // AppKit's, never --uitest's ud
+        if saved == nil {
+            if let src = from ?? (window.isVisible ? window : nil) {  // cascaded off the one you asked from, on its screen
+                w.setFrame(cascadeFrame(src.frame, min: w.minSize, in: (src.screen ?? NSScreen.main)?.visibleFrame), display: false)
+            } else { w.center() }
         }
+        w.setFrameAutosaveName(l1FrameName(id))  // applies AppKit's copy, rescaled onto the focused screen: put it back as saved
+        if let f = saved { w.setFrame(f, display: false); onScreen(w) }
         App.widen(w, to: w.minSize.width, display: false)
-        w.setFrameAutosaveName("main-\(id)")
         sp.layoutSubtreeIfNeeded()
         sp.setPosition(max(480, sp.bounds.width - 440), ofDividerAt: 0)
-        sp.autosaveName = "chatSplit-\(id)"
+        if !uitest { sp.autosaveName = l1FrameName(id, "chatSplit") }  // AppKit keeps it where --uitest's ud can't remove it
         loadFluid(l.web)
         return l
+    }
+    /// Where AppKit keeps an L1 window's frame (and its chat divider): the app's standard defaults, which every --uitest run of one binary shares
+    /// while their ids all start at 1, so a run's are its own there.
+    func l1FrameName(_ id: Int, _ kind: String = "main") -> String { uitest ? "\(kind)-\(uitestSuiteName ?? "")-\(id)" : "\(kind)-\(id)" }
+    /// A saved frame on a monitor that's gone: back on the main screen (multi-monitor setups unplug).
+    func onScreen(_ w: NSWindow) {
+        let f = fitOnScreen(w.frame, screens: NSScreen.screens.map(\.visibleFrame))
+        if f != w.frame { w.setFrame(f, display: false) }
     }
     func newL1(_ only: [String]?, from: NSWindow?) {
         // never a closed window's id: its chat-<n> cleanup is one ssh that may not have landed (host asleep) or may land late
@@ -1403,7 +1472,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
     func closeL1(_ l: L1) {
         l.c.queue = []; l.c.proc?.terminate(); l.c.run = nil  // its turn's late result writes nothing (onExit checks run)
-        l.c.voice.stopAll()
+        if !l.c.voice.idle { l.c.voice.stopAll() }
         l.c.recorder?.stop(); l.c.recorder = nil; l.c.meter?.invalidate(); l.c.meter = nil; l.c.recording = nil
         l.c.cancelPlans()
         for work in l.c.launchWorks.values { work.cancel() }
@@ -1415,8 +1484,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
         floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
-        l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: "main-\(l.id)")
-        l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames chatSplit-\(l.id)")
+        l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: l1FrameName(l.id))
+        l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames \(l1FrameName(l.id, "chatSplit"))")
     }
 
     // MARK: the T orb and its terminal: login shells in tabs in their own window; the close button keeps them
@@ -2008,7 +2077,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func tick() {
         if hintStale { (hintCore ?? greenlight).hint = "" }  // a window hidden or moved mid-hover: drop the hint
         if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
-        if window.title != greenlight.name { window.title = greenlight.name }
+        if case let t = l1Title(l1Floor.project), window.title != t { window.title = t }  // the Window menu tells the Greenlight Centers apart
         if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
         let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
         for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
@@ -2034,7 +2103,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         for l in l1s.values {  // the other Greenlight Center windows: their own projects, their chat always in its pane
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
             if l.w.appearance?.name != look?.name { l.w.appearance = look; l.web.appearance = look }
-            if case let t = l.floor.project.isEmpty ? greenlight.name : "\(greenlight.name) · \(l.floor.project)", l.w.title != t { l.w.title = t }  // the Window menu tells them apart
+            if case let t = l1Title(l.floor.project), l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
             if l.c.run == nil, l.c.connected != greenlight.connected { l.c.connected = greenlight.connected }  // ponytail: same host, so the main chat's online light stands in until this one runs a turn
         }
@@ -2236,10 +2305,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.outboxProc?.terminate(); greenlight.outboxProc = nil
         greenlight.proc?.terminate(); greenlight.proc = nil
         treesProc?.terminate(); treesProc = nil
-        l1s.values.forEach { $0.c.proc?.terminate(); $0.c.voice.stopAll() }
+        l1s.values.forEach { $0.c.proc?.terminate(); if !$0.c.voice.idle { $0.c.voice.stopAll() } }
         Speech.shared.stop()
         uitestServer?.stop()
-        if let suite = uitestSuiteName { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        if let suite = uitestSuiteName, uitestSuiteKept == nil { UserDefaults.standard.removePersistentDomain(forName: suite) }  // a kept one is the test's to remove
         try? FileManager.default.removeItem(atPath: Diag.marker)  // a clean quit: no prev_crash next launch
     }  // port tunnels die with the app
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }

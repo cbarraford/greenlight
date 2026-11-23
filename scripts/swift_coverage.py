@@ -130,11 +130,11 @@ def _build_runs(binary: Path, prof_dir: Path, stub_env: dict[str, str], skip_att
     if not skip_attach:
         runs.append(("Swift --attachtest", [str(binary), "--attachtest"], {**stub_env, "LLVM_PROFILE_FILE": str(prof_dir / "attach-%p.profraw")}))
     if include_ui:
-        runs.append((
-            "Swift --uitest",
-            [sys.executable, str(ROOT / "tests" / "test_uitest.py")],
+        runs.extend((
+            f"Swift --uitest ({name})",
+            [sys.executable, str(ROOT / "tests" / name)],
             {**os.environ, "UITEST_BINARY": str(binary), "LLVM_PROFILE_FILE": str(prof_dir / "ui-%p.profraw")},
-        ))
+        ) for name in ("test_uitest.py", "test_uitest_l1.py"))
     return runs
 
 
@@ -149,7 +149,7 @@ def _check_swift_thresholds(summary: dict[str, Any], fail_under: float | None, f
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Run instrumented Swift tests and report llvm-cov coverage.")
-    ap.add_argument("--include-ui", action="store_true", help="Also run tests/test_uitest.py with coverage")
+    ap.add_argument("--include-ui", action="store_true", help="Also run the tests/test_uitest*.py suites with coverage")
     ap.add_argument("--skip-attach", action="store_true", help="Skip --attachtest (only run --unittest and --vimtest)")
     ap.add_argument("--json", default=None, help="Write coverage summary JSON to this path")
     ap.add_argument("--lcov", default=None, help="Write LCOV report to this path")

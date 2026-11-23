@@ -36,7 +36,7 @@ jobs:
           fi
           if ! changed="$(git diff --name-only "$range" 2>/dev/null)"; then
             echo "app=true" >> "$GITHUB_OUTPUT"
-          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$|scripts/|tests/test_uitest\.py$)'; then
+          elif printf '%s\n' "$changed" | grep -qE '^(app/|\.github/workflows/tests\.yml$|scripts/|tests/test_uitest(_l1)?\.py$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "app=false" >> "$GITHUB_OUTPUT"
@@ -167,6 +167,9 @@ jobs:
         run: |
           command -v tmux >/dev/null 2>&1 || { echo "::error::tmux is not on the runner PATH (actions-runner/.path); install it on the host, CI does not"; exit 1; }
           UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest.py
+      - name: Run macOS --uitest L1 multi-window suite
+        timeout-minutes: 5
+        run: UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest_l1.py
 
   ci-gate:
     needs: [changes, python-and-lint, js-playwright, macos-swift]

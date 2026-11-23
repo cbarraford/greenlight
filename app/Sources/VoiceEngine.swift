@@ -531,6 +531,9 @@ final class Voice: NSObject, ObservableObject {
         stopAll()
     }
 
+    /// Never started (or long since stopped): nothing for stopAll to stop. It touches engine.inputNode, which on a Mac that hasn't
+    /// granted the microphone asks for it (or, with nobody to answer, blocks): closing a window that never used voice mustn't.
+    var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
         hush()
