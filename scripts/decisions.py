@@ -91,12 +91,12 @@ def situation(r):
             "target_branch": mr.get("target_branch"), "forge": r.get("forge"), "branch": r.get("branch")}
 
 
-def situations(names=(), text=""):
+def situations(names=(), text="", infer_ws=True):
     """The scanned workspaces a question is about: the ones named (name or id), else the ones its text names."""
     scanned = rows()
     by = {r["id"]: r for r in scanned} | {r["name"]: r for r in scanned}
     hit = [by[n] for n in names if n in by]
-    if not hit and text:
+    if not hit and infer_ws and text:
         # ponytail: a name counts when it stands alone in the text; a 3-letter workspace called "fix" would over-match
         hit = [r for r in scanned if len(r["name"]) > 3 and re.search(rf"(?<![\w/.-]){re.escape(r['name'])}(?![\w/-])", text)]
     return [situation(r) for r in {r["id"]: r for r in hit}.values()]
@@ -122,10 +122,10 @@ def choice(options, answer):
     return low.index(a) if a in low else None
 
 
-def record(text, via, key=None, ws=(), kind=None, also=""):
+def record(text, via, key=None, ws=(), kind=None, also="", infer_ws=True):
     """An unanswered record for a question just asked (not yet saved). also: more text that may name its workspaces."""
     question, options = split_options(text)
-    sits = situations(ws, f"{question}\n{also}")
+    sits = situations(ws, f"{question}\n{also}", infer_ws=infer_ws)
     now = time.time()
     rec = {"id": f"{time.time_ns():x}-{os.getpid():x}", "ts": int(now), "via": via, "key": key, "kind": kind_of(kind, key, sits),
            "question": question, "options": options}
@@ -140,11 +140,11 @@ def is_open(r):
     return r["answer"] is None and not r["closed"]
 
 
-def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None):
+def asked(text, via="ping", key=None, ws=(), kind=None, chat=None, proposal=None, infer_ws=True):
     """Greenlight asked something. Returns the record's id. A newer question on the same key (or a newer chat
     question, in the same chat) supersedes the open one, as in the app's inbox; the same open ping asked again isn't recorded twice.
     chat: which chat asked (chat.py's CHAT_DIR name, a second L1 window's); None: the main one."""
-    rec = record(text, via, key, ws, kind) | ({"chat": chat} if chat else {}) | ({"proposal": proposal} if proposal else {})
+    rec = record(text, via, key, ws, kind, infer_ws=infer_ws) | ({"chat": chat} if chat else {}) | ({"proposal": proposal} if proposal else {})
     with book() as recs:
         for r in recs:
             if not is_open(r) or r["via"] != via:
