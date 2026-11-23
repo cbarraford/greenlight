@@ -29,6 +29,32 @@ let uitestSuiteKept: String? = ProcessInfo.processInfo.environment["GREENLIGHT_U
     uitest && $0.range(of: #"^dev\.greenlight\.uitest\.[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil
 }
 let uitestSuiteName: String? = (uitest || unittest) ? uitestSuiteKept ?? "dev.greenlight.\(unittest ? "unittest" : "uitest").\(ProcessInfo.processInfo.processIdentifier)" : nil
+/// Test defaults a killed or `exit()`ed run left behind: a dev.greenlight.(uitest|unittest).<pid> whose process is gone, or a
+/// uitest.py cached binary's AppKit autosave domain (Greenlight-<key>), or a kept suite (…uitest.s<hex>) a killed session never deleted, untouched for a day.
+func staleTestDomains(_ files: [(name: String, modified: Date)], alive: (Int32) -> Bool, now: Date = Date()) -> [String] {
+    files.compactMap { f in
+        guard f.name.hasSuffix(".plist") else { return nil }
+        let d = String(f.name.dropLast(6))
+        if d.range(of: #"^dev\.greenlight\.(uitest|unittest)\.\d+$"#, options: .regularExpression) != nil, let pid = Int32(d.split(separator: ".").last ?? "") {
+            return alive(pid) ? nil : d
+        }
+        return d.range(of: #"^(Greenlight-[0-9a-f]{16}|dev\.greenlight\.uitest\.s[0-9a-f]{8})$"#, options: .regularExpression) != nil && now.timeIntervalSince(f.modified) > 86400 ? d : nil
+    }
+}
+
+/// A test launch clears what earlier test launches leaked (the app's own removal only runs on a clean quit).
+func sweepTestDomains() {
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences")
+    let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+    let files = urls.map { (name: $0.lastPathComponent, modified: (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()) }
+    for d in staleTestDomains(files, alive: { kill($0, 0) == 0 || errno == EPERM }) { dropDomain(d) }
+}
+
+/// removePersistentDomain empties a domain but leaves its plist on disk (an empty dict, one file per test run): remove both.
+func dropDomain(_ d: String) {
+    UserDefaults.standard.removePersistentDomain(forName: d)
+    try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(d).plist"))
+}
 let uitestSocketPath: String? = {
     if let i = CommandLine.arguments.firstIndex(of: "--uitest-socket"), i + 1 < CommandLine.arguments.count {
         return CommandLine.arguments[i + 1]

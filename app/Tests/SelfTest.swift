@@ -68,7 +68,7 @@ func unitTest() {
     runVoiceEngineUnitTests(check: check)
     try? FileManager.default.removeItem(at: transcript)
     try? FileManager.default.removeItem(at: questionsFile)
-    if let suite = uitestSuiteName { ud.removePersistentDomain(forName: suite) }
+    if let suite = uitestSuiteName { dropDomain(suite) }  // exit() skips applicationWillTerminate
     let elapsed = String(format: "%.2f", Date().timeIntervalSince(t0))
     if failed > 0 {
         print("FAILED \(failed)/\(total) Swift unit checks (\(elapsed)s)")
