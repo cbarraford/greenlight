@@ -1108,6 +1108,10 @@ def discard_sessions_unlocked():
         os.remove(os.path.join(DIR, SEEN))
 
 
+# a stale rejection discards the session (reject_stale_question_unlocked): say so, or the next reply looks like amnesia
+CHAT_RESET = " This chat has started over, so earlier messages are gone; restate what you need."
+
+
 def reject_stale_question_unlocked():
     """Close the old approval and discard sessions that still contain its question."""
     decisions.forget_chat(chat=chat_identity())
@@ -1543,7 +1547,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             except OSError as e:
                 return emit(e="done", ok=False, text=f"The interrupted question could not be closed ({e}); clear this chat.",
                             context=0, window=None, ms=None)
-            return emit(e="done", ok=False, text="An interrupted question was discarded; review the current state and ask again.",
+            return emit(e="done", ok=False, text="An interrupted question was discarded; review the current state and ask again." + CHAT_RESET,
                         context=0, window=None, ms=None)
         birth = auto.process_start(os.getpid())
         if not birth:
@@ -1695,7 +1699,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                         return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
                 if stale_pending_question(fresh):
                     reject_stale_question_unlocked()
-                    return dict(e="done", ok=False, text="That question referred to an earlier request or commit. Review the current state and answer again.", context=0, window=None, ms=None)
+                    return dict(e="done", ok=False, text="That question referred to an earlier request or commit. Review the current state and ask again." + CHAT_RESET, context=0, window=None, ms=None)
                 snapshot = fresh
                 request_snapshot = fresh
         live_status = live_question_status(snapshot) if needs_request_check else "valid"
@@ -1707,7 +1711,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                     return dict(e="done", ok=False, text="The request could not be verified; retry this answer.", context=0, window=None, ms=None)
                 if live_status == "stale":
                     reject_stale_question_unlocked()
-                    return dict(e="done", ok=False, text="That question referred to an earlier commit or target. Review the current state and answer again.", context=0, window=None, ms=None)
+                    return dict(e="done", ok=False, text="That question referred to an earlier commit or target. Review the current state and ask again." + CHAT_RESET, context=0, window=None, ms=None)
             asked = asked_path()
             if os.path.exists(asked) and not any(rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)
                                                  for rec in decisions.load()):
@@ -1751,7 +1755,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if err == "request changed":
         if not reject_stale_for_turn(reservation):
             return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     if err == "retry":  # once only: the retry runs unchecked
         emit(e="status", text="Reply ignored your message, asking again")
         norm.text = ""
@@ -1774,7 +1778,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if err == "request changed":
         if not reject_stale_for_turn(reservation):
             return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
         emit(e="status", text="Session lost, starting a new one")
         key = f"{engine}:new"
@@ -1796,7 +1800,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if err == "request changed":
         if not reject_stale_for_turn(reservation):
             return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     post_status = live_question_status(request_guard) if request_guard is not None and not err else "valid"
     if post_status == "unavailable":
         discard_session_for_turn(reservation)
@@ -1804,7 +1808,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if post_status == "stale":
         if not reject_stale_for_turn(reservation):
             return dict(e="done", ok=False, text="The workspace window changed; retry this message.", context=0, window=None, ms=None)
-        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again.", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text="The request changed while you answered; review it and ask again." + CHAT_RESET, context=0, window=None, ms=None)
     with scope_lock():
         if reservation and not reservation_current_unlocked(*reservation) or not scope_current_unlocked():
             return {"e": "done", "ok": False, "text": "The workspace window changed; retry this message.",
@@ -1832,7 +1836,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                     targets = question_targets(question, request_snapshot[1])
                     if any(fresh[1].get(name) != identity for name, identity in targets.items()):
                         discard_sessions_unlocked()
-                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again.",
+                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again." + CHAT_RESET,
                                 "context": 0, "window": None, "ms": None}
                     with open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as qdf:
                         qdf.write(reservation[0] if reservation else "pending")
@@ -1843,7 +1847,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                         decisions.forget_chat(chat=chat_identity())
                         os.remove(asked)
                         discard_sessions_unlocked()
-                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again.",
+                        return {"e": "done", "ok": False, "text": "The request changed while this question was composed; ask again." + CHAT_RESET,
                                 "context": 0, "window": None, "ms": None}
                 except Exception as e:
                     with contextlib.suppress(OSError):
