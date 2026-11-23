@@ -898,13 +898,28 @@ func agentsOf(_ pucks: [[String: Any]]) -> [Agent] {
     }.sorted { ($0.state == "waiting" ? 0 : 1, $0.name) < ($1.state == "waiting" ? 0 : 1, $1.name) }
 }
 
-enum Talk { case speaking, listening, thinking }
+enum Talk { case speaking, listening, thinking, muted }
+/// Who has the floor: Chief speaking or thinking comes first; with neither, you're heard unless you muted the mic.
+func voiceTalk(speaking: Bool, thinking: Bool, micMuted: Bool) -> Talk { speaking ? .speaking : thinking ? .thinking : micMuted ? .muted : .listening }
+/// The status every look shows: muted is said even while Chief speaks or thinks, since some looks show only this.
+func voiceTalkLabel(_ t: Talk, micMuted: Bool = false) -> String {
+    switch t {
+    case .speaking: return micMuted ? "Speaking · muted" : "Speaking"
+    case .thinking: return micMuted ? "Thinking · muted" : "Thinking"
+    case .muted: return "Muted"
+    case .listening: return "Listening"
+    }
+}
+/// Window ▸ the mic's item, by what choosing it does now.
+func micMenuTitle(muted: Bool) -> String { muted ? "Unmute Microphone" : "Mute Microphone" }
+/// Every look's hint line while the mic is muted, whoever has the floor.
+let mutedHint = "mic muted · ⇧⌘M unmutes"
 /// What every look shows, from Voice and Core.
 struct Live {
     let v: Voice, c: Core
-    var talk: Talk { v.speaking > 0 ? .speaking : c.run != nil ? .thinking : .listening }
-    var label: String { talk == .speaking ? "Speaking" : talk == .thinking ? "Thinking" : "Listening" }
-    var hint: String { talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
+    var talk: Talk { voiceTalk(speaking: v.speaking > 0, thinking: c.run != nil, micMuted: v.micMuted) }
+    var label: String { voiceTalkLabel(talk, micMuted: v.micMuted) }
+    var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
     var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
@@ -1051,7 +1066,7 @@ struct ConversationLook: View {
                 Text(String(s.name.prefix(1))).font(.system(size: 14, weight: .bold)).foregroundColor(.white).frame(width: 32, height: 32).background(Circle().fill(hx(l.accent)))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(s.name).font(.system(size: 14, weight: .semibold)).foregroundColor(hx(l.text))
-                    Text("\(s.label) · \(s.hint)").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)
+                    Text("\(voiceTalkLabel(s.talk)) · \(s.hint)").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)  // the hint says muted
                 }
                 Spacer()
             }
@@ -1131,7 +1146,7 @@ struct OnAirLook: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : "STANDBY") }
+                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : s.v.micMuted ? "MUTED" : "STANDBY") }
                     .font(.system(size: 12, weight: .heavy)).tracking(1.4).foregroundColor(.white).padding(.horizontal, 10).padding(.vertical, 6)
                     .background(s.talk == .speaking ? hx("D1242F") : s.talk == .listening ? hx("1A7F37") : hx("3A3A40"))
                 Leds(m: s.v.meter)
@@ -1187,7 +1202,7 @@ struct PhosphorLook: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("\(s.name.lowercased())@greenlight"); Text("~/voice").foregroundColor(faint)
-                Spacer(); Text("[\(s.label.uppercased())]").foregroundColor(faint)
+                Spacer(); Text("[\((s.v.micMuted ? "Muted" : s.label).uppercased())]").foregroundColor(faint)  // short: the line is full; "wait" below says thinking
             }.padding(.horizontal, 14).padding(.vertical, 11)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
             VStack(alignment: .leading, spacing: 8) {
@@ -1197,7 +1212,7 @@ struct PhosphorLook: View {
                 if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
                 s.activity(l, accent: ink, size: 13)
             }.lineLimit(4).padding(14)
-            HStack(spacing: 10) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
+            HStack(spacing: 10) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : s.talk == .muted ? "muted" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
                 .padding(.horizontal, 14).padding(.bottom, 10)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
             HStack(spacing: 10) {
@@ -1282,7 +1297,7 @@ struct HUDLook: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Text("\(s.name.uppercased())//VOICE").foregroundColor(cyan)
-                Text(s.talk == .speaking ? "▶ TX" : s.talk == .listening ? "● RX" : "◌ PROC").foregroundColor(faint)
+                Text(s.talk == .speaking ? "▶ TX" : s.talk == .listening ? "● RX" : s.talk == .muted ? "◌ MUTE" : "◌ PROC").foregroundColor(faint)
                 Spacer()
                 Text(s.hint.uppercased()).foregroundColor(faint).lineLimit(1)
             }.font(mono).tracking(1.2)
@@ -1362,6 +1377,14 @@ struct StageWeb: NSViewRepresentable {
     func updateNSView(_ v: WKWebView, context: Context) {}
 }
 
+/// The muted mic knob's fill: Theme.needs' orange (you have to unmute to be heard), or Theme.crashed's red in a look whose accent is
+/// already orange (Orb, On Air, Zen), so it never reads as the voice button lit beside it.
+func mutedFill(_ l: Look) -> String {
+    let c = hex(l.accent).usingColorSpace(.sRGB) ?? hex(l.accent), hue = c.hueComponent * 360
+    let orangeAccent = c.saturationComponent > 0.4 && hue >= 20 && hue <= 50
+    return orangeAccent ? (l.dark ? "FF453A" : "E5392F") : (l.dark ? "FF9F0A" : "F08A00")
+}
+
 /// The voice button's help and accessibility label. While a start is under way (its retries take up to ~3 s) a press cancels it, so it says so.
 func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) {
     on ? ("End voice mode (or say “goodbye”)", "End voice mode")
@@ -1371,7 +1394,7 @@ func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) 
 
 /// The chat header's knobs, top right, in the state they're in: what a click does now, for the hover hint (`help`) and VoiceOver (`label`).
 struct HeaderTips {
-    var on = false, starting = false, transcript = false, captions = false, out = false
+    var on = false, starting = false, transcript = false, captions = false, out = false, micMuted = false
     var name = "Chief", look = "Orb", next = "Conversation"
     var attach: (help: String, label: String) { ("Attach \(ChatFile.supported) to what you say next", "Attach files") }
     var view: (help: String, label: String) {
@@ -1379,6 +1402,10 @@ struct HeaderTips {
     }
     var caption: (help: String, label: String) {
         captions ? ("Hide captions: the words said and heard", "Turn captions off") : ("Show captions: the words said and heard, as text", "Turn captions on")
+    }
+    var mic: (help: String, label: String) {
+        micMuted ? ("Unmute the mic: \(name) hears you again (⇧⌘M)", "Unmute the microphone")
+            : ("Mute the mic: nothing you say is heard or sent until you unmute (⇧⌘M)", "Mute the microphone")
     }
     var style: (help: String, label: String) { ("Style: \(look). Click for \(next)", "Chat style: \(look). Switch to \(next)") }
     var voice: (help: String, label: String) { voiceButtonText(on: on, starting: starting) }
@@ -1396,7 +1423,7 @@ struct VoiceButtons: View, Looked {
     var out: Bool { c.chatOut }  // the chat is in its own window
     var nextLook: Look { looks[((looks.firstIndex { $0.id == v.look.id } ?? 0) + 1) % looks.count] }
     var tips: HeaderTips {
-        HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out, name: c.name, look: v.look.name, next: nextLook.name)
+        HeaderTips(on: v.on, starting: v.starting, transcript: v.transcript, captions: v.captions, out: out, micMuted: v.micMuted, name: c.name, look: v.look.name, next: nextLook.name)
     }
     var body: some View {
         let t = tips
@@ -1407,6 +1434,9 @@ struct VoiceButtons: View, Looked {
                 }
                 knob(v.transcript ? "waveform" : "text.bubble", t.view) { v.transcript.toggle() }
                 knob(v.captions ? "captions.bubble.fill" : "captions.bubble", t.caption) { v.captions.toggle() }
+                Button(action: v.toggleMic) {  // muted: filled in a warning color the look's accent (the voice button's) isn't
+                    shell(Image(systemName: v.micMuted ? "mic.slash.fill" : "mic"), on: v.micMuted, fill: v.micMuted ? hx(mutedFill(lk)) : nil)
+                }.buttonStyle(.plain).modifier(Tip(c: c, text: t.mic.help)).accessibilityLabel(t.mic.label)
             }
             // one style for live and standard chat
             knob("paintpalette", t.style) { v.look = nextLook }
@@ -1419,11 +1449,11 @@ struct VoiceButtons: View, Looked {
         Button(action: act) { shell(Image(systemName: icon)) }.buttonStyle(.plain).modifier(Tip(c: c, text: t.help)).accessibilityLabel(t.label)
     }
     /// The knob in the look: a ring (Orb), a 6pt tile (Conversation), a square (On Air, HUD), a green box (Phosphor), bare (Editorial, Zen).
-    func shell<V: View>(_ icon: V, on: Bool = false) -> some View {
+    func shell<V: View>(_ icon: V, on: Bool = false, fill: Color? = nil) -> some View {
         let s: CGFloat = lk.id == "zen" ? 28 : lk.id == "phosphor" ? 26 : 30, r: CGFloat = lk.id == "orb" ? s / 2 : lk.id == "conversation" ? Theme.r1 : 0
         let tile = lk.id == "conversation" || lk.id == "onair", bare = lk.id == "zen" || lk.id == "editorial"
-        return icon.font(sys(size: Theme.fs3)).frame(width: s, height: s).foregroundColor(on ? bg : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
-            .background(RoundedRectangle(cornerRadius: r).fill(on ? accent : tile ? card : .clear))
+        return icon.font(sys(size: Theme.fs3)).frame(width: s, height: s).foregroundColor(on ? (fill == nil ? bg : hx("1C1C1E")) : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+            .background(RoundedRectangle(cornerRadius: r).fill(on ? fill ?? accent : tile ? card : .clear))
             .overlay(RoundedRectangle(cornerRadius: r).stroke(on || bare ? .clear : line)).contentShape(Rectangle())
     }
 }
