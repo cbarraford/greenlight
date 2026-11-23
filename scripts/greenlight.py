@@ -133,7 +133,7 @@ def _run(cmd, timeout, tries, d):
             err = (p.stderr or p.stdout).strip()
             d.update(rc=p.returncode, msg_class=diag.classify(err))  # the class of stderr, not the message (it has argv)
             if last or not TRANSIENT_RE.search(err):
-                raise RuntimeError(f"{' '.join(cmd)}: {err[:300]}")
+                raise RuntimeError(f"{' '.join(cmd)}: {err[:2000]}")  # orca's JSON error puts its cause last
         time.sleep(2 * 2 ** i)
 
 

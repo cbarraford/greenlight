@@ -88,6 +88,8 @@ def test_parse_remote_and_repo_map(gl_home):
 
     repos = {
         "repos": [
+            # a renamed checkout Orca still lists, first, with the same remote: its missing path must not win
+            {"id": "r-old", "path": "/w/old-widgets", "gitRemoteIdentity": {"canonicalKey": "gitlab.com/acme/widgets"}},
             {"id": "r-tn", "path": "/w/widgets", "gitRemoteIdentity": {"canonicalKey": "gitlab.com/acme/widgets"}},
             {"id": "r-nl", "path": "/w/deployer"},  # no identity (cmux/T3 shim shape): origin URL decides
             {"id": "r-gh", "path": "/w/jetty", "gitRemoteIdentity": {"canonicalKey": "github.com/glass-harbor/jetty"}},
@@ -98,7 +100,8 @@ def test_parse_remote_and_repo_map(gl_home):
     def fake_git(path, *a, check=True):
         return origin.get(path, "") if a[:2] == ("remote", "get-url") else ""
 
-    with mock.patch.object(greenlight, "orca", return_value=repos), mock.patch.object(adopt, "git", side_effect=fake_git):
+    with mock.patch.object(greenlight, "orca", return_value=repos), mock.patch.object(adopt, "git", side_effect=fake_git), \
+            mock.patch.object(adopt.os.path, "isdir", side_effect=lambda p: p != "/w/old-widgets"):
         assert adopt.repo_map() == {
             "acme/widgets": {"id": "r-tn", "path": "/w/widgets", "forge": "gitlab"},
             "acme/ops/deployer": {"id": "r-nl", "path": "/w/deployer", "forge": "gitlab"},
