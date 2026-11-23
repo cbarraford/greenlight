@@ -168,3 +168,7 @@ ssh <host> cat <repo>/scripts/dev.py | python3 - install <host> <repo>
 for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done   # test_chat.py needs pytest: uv run --with pytest python -m pytest tests/test_chat.py
 node tests/test_dashboard.cjs; node tests/test_terminal.cjs; node tests/test_stage.cjs       # need playwright-core and Chrome
 ```
+
+## Contributing & license
+
+Greenlight is early and moves fast. See [CONTRIBUTING.md](CONTRIBUTING.md), and report security problems privately per [SECURITY.md](SECURITY.md). MIT licensed, see [LICENSE](LICENSE).

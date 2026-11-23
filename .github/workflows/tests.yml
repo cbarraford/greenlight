@@ -13,9 +13,11 @@ concurrency:
   group: tests-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Trusted runs (pushes to main, PRs from branches in this repo) use the self-hosted runners.
+# PRs from forks run on GitHub-hosted runners, so outside code never executes on our machines.
 jobs:
   changes:
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       app: ${{ steps.filter.outputs.app }}
@@ -43,7 +45,7 @@ jobs:
           fi
 
   python-and-lint:
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     env:
       # Name the slowest tests, and dump the stack of any test stuck past 60 s, in the log.
@@ -84,7 +86,7 @@ jobs:
         run: diff-cover "$RUNNER_TEMP/coverage.xml" --compare-branch="origin/$GITHUB_BASE_REF" --fail-under=80
 
   js-playwright:
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -130,7 +132,7 @@ jobs:
   macos-swift:
     needs: changes
     if: needs.changes.outputs.app == 'true'
-    runs-on: [self-hosted, macOS]
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "macOS"]') || 'macos-latest' }}
     timeout-minutes: 10  # ~3 min when healthy; a hung audio/UI test must not hold the only macOS runner
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -165,6 +167,7 @@ jobs:
       - name: Run parallel background macOS --uitest E2E suite
         timeout-minutes: 5
         run: |
+          if [ "$RUNNER_ENVIRONMENT" = "github-hosted" ] && ! command -v tmux >/dev/null 2>&1; then brew install tmux; fi
           command -v tmux >/dev/null 2>&1 || { echo "::error::tmux is not on the runner PATH (actions-runner/.path); install it on the host, CI does not"; exit 1; }
           UITEST_BINARY="$RUNNER_TEMP/Greenlight-ci" python3 tests/test_uitest.py
       - name: Run macOS --uitest L1 multi-window suite
@@ -174,7 +177,7 @@ jobs:
   ci-gate:
     needs: [changes, python-and-lint, js-playwright, macos-swift]
     if: always() && !cancelled()
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Verify all required checks passed
