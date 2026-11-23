@@ -120,7 +120,8 @@ def _rel(path):
 def _run_grouped(label, cmd, gh, env=None):
     if gh:
         print(f"::group::{label}", flush=True)
-    p = subprocess.run(cmd, cwd=ROOT, env=env)
+    # as conftest.py does for pytest: without a username, `import greenlight` asks the host's glab/gh (network, 20 s each)
+    p = subprocess.run(cmd, cwd=ROOT, env={"GREENLIGHT_ME": "octo", **(env or os.environ)})
     if p.returncode != 0:
         if gh:
             print(f"::error::{label} failed", flush=True)
