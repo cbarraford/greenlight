@@ -190,6 +190,14 @@ def test_question_skips_saving_when_head_changed_during_reply_and_keeps_session(
     chat.turn("review #42", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and events[-1]["text"] == "Approve #42?"
     assert not (tmp_path / "asked").exists() and (tmp_path / "session").read_text() == "old-session"
+    assert (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+    # Next turn ("yes") must receive STALE QUESTION notice for the dropped question while keeping the session.
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert "composed" in captured[0]["text"] and (tmp_path / "session").read_text() == "old-session"
+    assert not (tmp_path / chat.QUESTION_DELIVERY).exists()
 
 
 def test_question_store_failure_keeps_reply_and_session(tmp_path, monkeypatch):
@@ -212,6 +220,7 @@ def test_question_store_failure_keeps_reply_and_session(tmp_path, monkeypatch):
     assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
     assert not (tmp_path / "asked").exists()
     assert (tmp_path / "session").read_text() == "old-session"
+    assert (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
 
 
 def test_question_file_failure_does_not_open_decision(tmp_path, monkeypatch):
@@ -248,6 +257,9 @@ def test_question_targets_ignore_unrelated_request_head():
     assert all(fresh.get(name) == identity for name, identity in selected.items())
     # Untargeted casual questions must not lock onto the entire board.
     assert chat.question_targets("Want me to check the logs?", allow) == {}
+    # Qualified duplicate-name card keys still match their display name.
+    dup = {"feature-one@id-1234": ("github", "octo/app", "", "", "", "", "id-1234")}
+    assert chat.question_targets("Approve feature-one?", dup) == dup
 
 
 def test_freeform_changed_branch_preserves_session_and_injects_notice(tmp_path, monkeypatch):
@@ -506,7 +518,73 @@ def test_orphan_asked_file_is_cleaned_without_blocking_turn(tmp_path, monkeypatc
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn("status", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and captured and captured[0]["req"] == "status"
+    assert "STALE QUESTION" in captured[0]["text"] and "no open decision" in captured[0]["text"]
     assert not (tmp_path / "asked").exists() and (tmp_path / "session").read_text() == "old-session"
+
+
+def test_ping_reply_still_marked_heard_when_stale_chat_question_cleared(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "new-head", "Merge #42", "main", "id-qa", "feature")})
+    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa (#42, octo/app): ready", allowed))
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "mr": "#42", "sha": "old-head", "target_branch": "main"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    heard = []
+    monkeypatch.setattr(decisions, "quiet", lambda action, *a, **kw: heard.append((action, a[0])))
+    (tmp_path / "session").write_text("old-session")
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    ping_reply = '(Replying to your question: "Delete merged?")\nyes'
+    chat.turn(ping_reply, "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and ("heard", ping_reply) in heard
+    assert (tmp_path / "session").read_text() == "old-session"
+
+
+def test_delivery_marker_survives_birth_failure_and_compact(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    (tmp_path / chat.QUESTION_DELIVERY).write_text("stale")
+    (tmp_path / "session").write_text("old-session")
+    monkeypatch.setattr(chat.auto, "process_start", lambda pid: None)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+    monkeypatch.setattr(chat.auto, "process_start", lambda pid: "birth-1")
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    monkeypatch.setattr(decisions, "load", list)
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("/compact", "claude-haiku-5-5", None, compact=True)
+    assert events[-1]["ok"] is True and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+
+
+def test_scoped_untargeted_question_does_not_bind_out_of_scope_workspace(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(decisions, "STATE", tmp_path)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/in-scope"]}))
+    out_row = {"id": "wt-out", "name": "secret-other-repo", "project": "octo/other", "forge": "github",
+               "branch": "main", "goal": "Hold", "mr": {"ref": "#99", "sha": "aaa", "target_branch": "main"},
+               "next": {"step": "ready", "owner": "me"}}
+    (tmp_path / "last.json").write_text(json.dumps({"rows": [out_row]}))
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    def fake_run(cmd, engine, text, norm, **kw):
+        norm.reply = "Should we ignore secret-other-repo?"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "scoped-s1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("hello", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True
+    recs = decisions.load()
+    assert recs and recs[-1].get("worktree_id") is None and not recs[-1].get("workspaces")
 
 
 def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_session(tmp_path, monkeypatch):
@@ -532,6 +610,7 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
     assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
+    assert (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
 
     # Double failure while saving question writes RESETTING without losing the reply or session.
     d2 = tmp_path / "double_fail"
@@ -544,8 +623,9 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     events = []
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and (d2 / chat.RESETTING).exists() and (d2 / "session").read_text() == "old-session"
+    assert (d2 / chat.QUESTION_DELIVERY).read_text() == "stale"
 
-    # Missing request_snapshot drops asked without wiping session.
+    # Missing request_snapshot drops asked and leaves stale marker without wiping session.
     d3 = tmp_path / "no_snap"
     d3.mkdir()
     monkeypatch.setattr(chat, "DIR", str(d3))
@@ -555,6 +635,160 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     events = []
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and not (d3 / "asked").exists() and (d3 / "session").read_text() == "old-session"
+    assert (d3 / chat.QUESTION_DELIVERY).read_text() == "stale"
+
+
+def test_failed_turn_preserves_stale_marker_for_retry(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    monkeypatch.setattr(decisions, "load", list)
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    (tmp_path / chat.QUESTION_DELIVERY).write_text("stale")
+    (tmp_path / "session").write_text("old-session")
+    monkeypatch.setattr(chat, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("harness down")))
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert not (tmp_path / chat.QUESTION_DELIVERY).exists()
+
+
+def test_done_workspace_cleanup_question_binds_worktree_id_in_scope(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(dash.greenlight, "STATE", tmp_path)
+    monkeypatch.setattr(decisions, "STATE", tmp_path)
+    monkeypatch.setattr(dash, "live_agents", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr(dash.blocking, "cached", dict)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
+    done_row = {"id": "wt-done", "name": "merged-feature", "card": "merged-feature", "repo": "octo/app",
+                "project": "octo/app", "forge": "github", "path": "/w/merged", "branch": "feat",
+                "goal": "Merge #42", "agent": {"state": "idle"},
+                "mr": {"ref": "#42", "sha": "aaa111", "target_branch": "main", "state": "merged"},
+                "next": {"step": "done", "owner": "done", "action": "cleanup"}}
+    (tmp_path / "last.json").write_text(json.dumps({"rows": [done_row]}))
+    def fake_run(cmd, engine, text, norm, **kw):
+        norm.reply = "Delete merged-feature (#42)?"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "scoped-s1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("cleanup?", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True
+    recs = decisions.load()
+    assert recs and decisions.is_open(recs[-1]) and recs[-1].get("worktree_id") == "wt-done" and recs[-1].get("step") == "done"
+    assert (tmp_path / os.path.basename(chat.asked_path())).exists()
+    assert not (tmp_path / (chat.QUESTION_DELIVERY + chat.scope_suffix())).exists()
+
+
+def test_done_cleanup_question_turns_stale_when_workspace_leaves_done(tmp_path, monkeypatch):
+    import dash, decisions, greenlight
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    done_allow = dash.BoardAllow()
+    done_allow.done = {"feat": ("github", "octo/app", "#42", "aaa111", "Merge #42", "main", "wt-done", "feat", "done/done")}
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "wt-done",
+           "mr": "#42", "sha": "aaa111", "target_branch": "main", "repo": "octo/app", "forge": "github",
+           "goal": "Merge #42", "branch": "feat", "step": "done", "owner": "done", "role": "author"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(greenlight, "orca", lambda *a: {"worktrees": [{"worktreeId": "wt-done", "branch": "feat", "comment": "Merge #42"}]})
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "closed"})
+    assert chat.stale_pending_question(("", done_allow)) is False
+    assert chat.live_question_status(("", done_allow)) == "valid"
+
+    # Reopened PR on forge invalidates done cleanup question even before next scan
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened"})
+    assert chat.live_question_status(("", done_allow)) == "stale"
+
+    # Approved open review MR stays valid while approved, turns stale when approval is dismissed
+    review_rec = {**rec, "role": "review"}
+    monkeypatch.setattr(decisions, "load", lambda: [review_rec])
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened", "_approved_by": [greenlight.ME]})
+    assert chat.live_question_status(("", done_allow)) == "valid"
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "aaa111", "target_branch": "main", "state": "opened", "_approved_by": []})
+    assert chat.live_question_status(("", done_allow)) == "stale"
+
+    # Scan moving workspace from done back to active invalidates done cleanup question
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    active_allow = dash.BoardAllow({"feat": ("github", "octo/app", "#42", "aaa111", "Merge #42", "main", "wt-done", "feat", "review/me")})
+    assert chat.stale_pending_question(("", active_allow)) is True
+
+    # Normal active step progression does NOT falsely mark active question stale
+    active_rec = {**rec, "step": "ci_green", "owner": "ci"}
+    monkeypatch.setattr(decisions, "load", lambda: [active_rec])
+    assert chat.stale_pending_question(("", active_allow)) is False
+
+
+def test_cancelled_turn_after_question_commit_preserves_delivery_marker(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(decisions, "STATE", tmp_path)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    (tmp_path / "session").write_text("old-session")
+    orig_save = chat._save_reply_question_unlocked
+    def cancel_after_save(*a, **kw):
+        orig_save(*a, **kw)
+        active_path = tmp_path / chat.ACTIVE_TURN
+        active = json.loads(active_path.read_text())
+        active["cancelled"] = True
+        active_path.write_text(json.dumps(active))
+    monkeypatch.setattr(chat, "_save_reply_question_unlocked", cancel_after_save)
+    def ask_run(cmd, engine, text, norm, **kw):
+        norm.reply = "Proceed with this?\nOptions: Yes | No"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "old-session", None
+    monkeypatch.setattr(chat, "run", ask_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("check", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
+    marker = tmp_path / chat.QUESTION_DELIVERY
+    assert marker.exists() and marker.read_text() != "stale"
+
+    monkeypatch.setattr(chat, "_save_reply_question_unlocked", orig_save)
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "interrupted before its question reached the user" in captured[0]["text"]
+    assert not marker.exists() and (tmp_path / "session").read_text() == "old-session"
+
+
+def test_broken_pipe_after_clearing_stale_question_preserves_stale_marker(tmp_path, monkeypatch):
+    import dash, decisions, pytest
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "new-head", "Merge #42", "main", "id-qa", "feature", "ready/me")})
+    monkeypatch.setattr(dash, "board", lambda **kw: ("- qa (#42, octo/app): ready", allowed))
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "mr": "#42", "sha": "old-head", "target_branch": "main"}
+    recs = [rec]
+    monkeypatch.setattr(decisions, "load", lambda: list(recs))
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: recs.clear())
+    (tmp_path / "asked").write_text("Approve old head?")
+    (tmp_path / "session").write_text("old-session")
+    monkeypatch.setattr(chat, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("harness down")))
+    def fail_emit(**e):
+        if e.get("e") == "done":
+            raise BrokenPipeError("client disconnected")
+    monkeypatch.setattr(chat, "emit", fail_emit)
+    with pytest.raises(BrokenPipeError):
+        chat.turn("yes", "claude-haiku-5-5", None)
+    assert not recs and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+
+    captured, events = [], []
+    _stub_run(monkeypatch, captured)
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert not (tmp_path / chat.QUESTION_DELIVERY).exists()
 
 
 def test_answer_checks_live_head_and_preserves_session(tmp_path, monkeypatch):
@@ -593,8 +827,8 @@ def test_untargeted_casual_question_never_triggers_stale_notice_when_prs_move(tm
     ))
     open_recs = []
     monkeypatch.setattr(decisions, "load", lambda: list(open_recs))
-    def record_asked(question, via="chat", chat=None, kind=None, ws=()):
-        assert ws == []
+    def record_asked(question, via="chat", chat=None, kind=None, ws=(), infer_ws=True):
+        assert ws == [] and infer_ws is False
         open_recs.append({"via": via, "chat": chat, "question": question, "answer": None, "closed": None})
     monkeypatch.setattr(decisions, "asked", record_asked)
     monkeypatch.setattr(decisions, "quiet", lambda *a, **kw: None)
@@ -1132,7 +1366,7 @@ def test_scoped_turn_uses_board_snapshot_and_compaction_keeps_session(tmp_path, 
         return ("- qa (#7, octo/app): ci_green · on agent", {"qa": ("github", "octo/app", "#7", "abc", "Fix CI")})
     monkeypatch.setattr(dash, "board", board)
     turn(tmp_path, monkeypatch, "what happened?")
-    assert len(reads) == 2
+    assert len(reads) == 1
     chat.session("claude", "old-session")
     monkeypatch.setattr(dash, "board", lambda **kw: ("", {}))
     events = []
