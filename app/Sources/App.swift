@@ -422,7 +422,7 @@ func buildProjectList(saved: [[String: Any]], trees: [[String: Any]], dark: Bool
         return ["id": id, "name": name, "color": color, "repos": rs, "paths": paths, "busy": busy]
     }
 }
-final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSMenuItemValidation {
     /// A window with chat docked: 480pt of dashboard, a 320pt chat pane and the thin divider between them.
     static let paneMinWidth: CGFloat = 480 + 320 + 1
 
@@ -1093,7 +1093,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
-                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
+                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"), (micMenuTitle(muted: false), "appMuteMic", "M"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
         _ = menu("Help", [("Report a Bug…", "appReportBug", "")], target: self)
@@ -1211,6 +1211,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     @objc func appLive() {  // ⇧⌘L: live chat on (showing the chat first) or off
         if !greenlight.voice.on && !greenlight.voice.starting { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
         greenlight.voice.toggle()
+    }
+    @objc func appMuteMic() {  // ⇧⌘M: voice mode's mic, muted or not. Shows the chat, whose mic knob and status say which
+        guard greenlight.voice.on else { return }
+        if !chatShown { setChat(hidden: false) }
+        greenlight.voice.toggleMic()
+    }
+    /// The menu items aimed at the app: only the mic's depends on state (off while voice mode is; its title says what it does now).
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(appMuteMic) else { return true }
+        item.title = micMenuTitle(muted: greenlight.voice.micMuted)
+        return greenlight.voice.on
     }
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
         if Date().timeIntervalSince(lastToggle) < 0.3 { return }
