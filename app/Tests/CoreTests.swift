@@ -14,6 +14,14 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           stale?.contains("Greenlight on devbox is older than this app") == true && stale?.contains("~/.claude/skills/greenlight") == true
           && staleBackendNote(model: "claude-opus-5-5", error: claudeErr, host: "devbox", code: "x") == nil
           && staleBackendNote(model: "gemini-4-neon-high", error: "quota exhausted", host: "devbox", code: "x") == nil)
+    let old = Date(timeIntervalSinceNow: -2 * 86400)
+    let swept = staleTestDomains([("dev.greenlight.uitest.111.plist", old), ("dev.greenlight.unittest.222.plist", Date()),
+                                  ("dev.greenlight.uitest.333.plist", old), ("dev.greenlight.uitest.s0dfd05a6.plist", old), ("dev.greenlight.uitest.sbbd5e53b.plist", Date()),
+                                  ("Greenlight-00c56d0114dede37.plist", old), ("Greenlight-0eeb385cf124934f.plist", Date()),
+                                  ("dev.greenlight.app.plist", old), ("dev.greenlight.app.l1-multi-window.plist", old)],
+                                 alive: { $0 == 333 })
+    check("test defaults sweep: dead pids' suites and day-old binary and kept domains go; live, fresh, app and dev-copy ones stay: \(swept)",
+          swept == ["dev.greenlight.uitest.111", "dev.greenlight.unittest.222", "dev.greenlight.uitest.s0dfd05a6", "Greenlight-00c56d0114dede37"])
     let fz = fuzzy("evm test", "run the evm unit tests")
     check("!! and !$ expand as whole words only", expandBang("cat !$ again: !!", "open x/y.go") == "cat x/y.go again: open x/y.go" && expandBang("now!! !4521", "z") == "now!! !4521")
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)

@@ -2,6 +2,7 @@ import AppKit
 
 let app = NSApplication.shared
 let delegate = App()
+if uitest || unittest { sweepTestDomains() }
 #if GREENLIGHT_TESTS
 if CommandLine.arguments.contains("--vimtest") { vimTest() }
 if unittest {
