@@ -269,6 +269,20 @@ def test_live_goal_change_rejects_answer_and_discards_old_session(tmp_path, monk
     assert not (tmp_path / "session").exists() and not (tmp_path / "asked").exists()
 
 
+def test_live_merge_rejects_open_question_but_not_cleanup_question(monkeypatch):
+    import dash, decisions, greenlight
+    allowed = dash.BoardAllow({"qa": ("github", "octo/app", "#42", "A", "Merge #42", "main", "id-qa", "feature")})
+    rec = {"via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None, "worktree_id": "id-qa",
+           "repo": "octo/app", "forge": "github", "mr": "#42", "sha": "A", "target_branch": "main", "step": "review"}
+    monkeypatch.setattr(decisions, "load", lambda: [rec])
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "A", "target_branch": "main", "state": "merged"})
+    assert chat.live_question_status(("- qa", allowed)) == "stale"  # asked while open, merged since
+    rec["step"] = "done"  # already merged when asked: "delete these merged workspaces?"
+    assert chat.live_question_status(("- qa", allowed)) == "valid"
+    monkeypatch.setattr(greenlight, "mr_details", lambda *a: {"sha": "B", "target_branch": "main", "state": "merged"})
+    assert chat.live_question_status(("- qa", allowed)) == "stale"  # the head check still holds
+
+
 def test_live_goal_clear_rejects_old_approval(tmp_path, monkeypatch):
     import dash, decisions, greenlight
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
