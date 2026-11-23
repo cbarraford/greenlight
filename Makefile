@@ -69,15 +69,25 @@ typecheck: ## compile-check Swift app and test sources (strict concurrency, warn
 build: ## build and install ~/Applications/Greenlight.app
 	$(NATIVE) app/build.sh
 
+# -n on open: ssh ControlPersist muxes keep the exited app's LaunchServices ASN in (exited-with-subordinates), making plain `open` fail with -600
 restart: ## quit and reopen ~/Applications/Greenlight.app
-	@if pgrep -fx "$$HOME/Applications/Greenlight.app/Contents/MacOS/Greenlight" >/dev/null; then \
+	@bin="$$HOME/Applications/Greenlight.app/Contents/MacOS/Greenlight"; \
+	if pgrep -fx "$$bin" >/dev/null; then \
 		osascript -e 'tell application id "dev.greenlight.app" to quit' >/dev/null 2>&1 || true; \
 		for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do \
-			pgrep -fx "$$HOME/Applications/Greenlight.app/Contents/MacOS/Greenlight" >/dev/null || break; \
+			pgrep -fx "$$bin" >/dev/null || break; \
 			sleep 0.2; \
 		done; \
+		if pgrep -fx "$$bin" >/dev/null; then \
+			pkill -TERM -fx "$$bin" 2>/dev/null || true; \
+			for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -fx "$$bin" >/dev/null || break; sleep 0.2; done; \
+		fi; \
+		if pgrep -fx "$$bin" >/dev/null; then \
+			pkill -KILL -fx "$$bin" 2>/dev/null || true; \
+			for _ in 1 2 3 4 5; do pgrep -fx "$$bin" >/dev/null || break; sleep 0.2; done; \
+		fi; \
 	fi
-	open "$$HOME/Applications/Greenlight.app"
+	open -n "$$HOME/Applications/Greenlight.app"
 
 report: ## scan and write ~/.greenlight/report.html
 	$(PY) scripts/greenlight.py report
