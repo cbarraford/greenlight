@@ -108,6 +108,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: [self-hosted, macOS]
+    timeout-minutes: 10  # ~3 min when healthy; a hung audio/UI test must not hold mini, the only macOS runner
     steps:
       - uses: actions/checkout@v4
       - name: Typecheck & compile Swift sources
