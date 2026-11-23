@@ -10,6 +10,11 @@ import Speech
 func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
+    check("voice: contrast is WCAG's ratio", abs(contrast("FFFFFF", "000000") - 21) < 0.01 && abs(contrast("777777", "777777") - 1) < 0.01 && abs(contrast("0969DA", "FFFFFF") - 5.2) < 0.1)
+    check("voice: every look inks your words in a hue apart from Chief's, legible on its stage", looks.allSatisfy { l in
+        let y = hueSat(l.you), t = hueSat(l.text), d = abs(y.hue - t.hue)
+        return y.sat >= 0.4 && (t.sat < 0.3 || min(d, 360 - d) >= 45) && contrast(l.you, l.stage) >= 4.5 && contrast(l.you, l.page) >= 4.5 && l.you != l.text
+    })
     check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })

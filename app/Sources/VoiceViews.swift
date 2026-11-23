@@ -814,17 +814,18 @@ final class Meter: ObservableObject {
 }
 
 /// Voice mode's looks, switched by the header's style button: each frames the same parts (the stage, captions, who's talking,
-/// context and Clear) its own way, and the stage takes its colors and type.
-struct Look { let id, name, page, stage, card, text, text2, dim, line, accent, font: String; let dark: Bool }
+/// context and Clear) its own way, and the stage takes its colors and type. `you` inks what you said (the captions' heard line, your
+/// turns in the transcript): a hue apart from the look's text, which inks what Chief says, so the two read apart at a glance.
+struct Look { let id, name, page, stage, card, text, text2, dim, line, accent, you, font: String; let dark: Bool }
 let sansCSS = "-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif", monoCSS = "ui-monospace,'SF Mono',Menlo,monospace", serifCSS = "ui-serif,'New York',Georgia,serif"
 let looks = [
-    Look(id: "conversation", name: "Conversation", page: "FFFFFF", stage: "FFFFFF", card: "F6F8FA", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D1D9E0", accent: "0969DA", font: sansCSS, dark: false),
-    Look(id: "orb", name: "Orb", page: "111113", stage: "1C1C1F", card: "26262A", text: "ECECEE", text2: "C9C9CF", dim: "9A9AA1", line: "34343A", accent: "F5A524", font: sansCSS, dark: true),
-    Look(id: "onair", name: "On Air", page: "0B0B0C", stage: "0B0B0C", card: "1A1A1D", text: "F4F4F5", text2: "C9C9CF", dim: "A1A1AA", line: "26262A", accent: "F5A524", font: sansCSS, dark: true),
-    Look(id: "phosphor", name: "Phosphor", page: "000000", stage: "000000", card: "061A04", text: "28FE14", text2: "28FE14", dim: "1DA80F", line: "1DA80F", accent: "28FE14", font: monoCSS, dark: true),
-    Look(id: "editorial", name: "Editorial", page: "F7F5F0", stage: "F7F5F0", card: "EFEBE3", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D5D1C7", accent: "B42318", font: serifCSS, dark: false),
-    Look(id: "hud", name: "HUD", page: "0A0F14", stage: "0D151C", card: "14212B", text: "D7E3EA", text2: "B4C4CE", dim: "7F95A3", line: "1B2C36", accent: "39C5CF", font: sansCSS, dark: true),
-    Look(id: "zen", name: "Zen", page: "121214", stage: "121214", card: "1C1C1F", text: "ECECEE", text2: "C9C9CF", dim: "8E8E96", line: "26262A", accent: "F5A524", font: sansCSS, dark: true),
+    Look(id: "conversation", name: "Conversation", page: "FFFFFF", stage: "FFFFFF", card: "F6F8FA", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D1D9E0", accent: "0969DA", you: "0969DA", font: sansCSS, dark: false),
+    Look(id: "orb", name: "Orb", page: "111113", stage: "1C1C1F", card: "26262A", text: "ECECEE", text2: "C9C9CF", dim: "9A9AA1", line: "34343A", accent: "F5A524", you: "7AA2F7", font: sansCSS, dark: true),
+    Look(id: "onair", name: "On Air", page: "0B0B0C", stage: "0B0B0C", card: "1A1A1D", text: "F4F4F5", text2: "C9C9CF", dim: "A1A1AA", line: "26262A", accent: "F5A524", you: "2AC3DE", font: sansCSS, dark: true),
+    Look(id: "phosphor", name: "Phosphor", page: "000000", stage: "000000", card: "061A04", text: "28FE14", text2: "28FE14", dim: "1DA80F", line: "1DA80F", accent: "28FE14", you: "FFB000", font: monoCSS, dark: true),
+    Look(id: "editorial", name: "Editorial", page: "F7F5F0", stage: "F7F5F0", card: "EFEBE3", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D5D1C7", accent: "B42318", you: "0969DA", font: serifCSS, dark: false),
+    Look(id: "hud", name: "HUD", page: "0A0F14", stage: "0D151C", card: "14212B", text: "D7E3EA", text2: "B4C4CE", dim: "7F95A3", line: "1B2C36", accent: "39C5CF", you: "BD93F9", font: sansCSS, dark: true),
+    Look(id: "zen", name: "Zen", page: "121214", stage: "121214", card: "1C1C1F", text: "ECECEE", text2: "C9C9CF", dim: "8E8E96", line: "26262A", accent: "F5A524", you: "7AA2F7", font: sansCSS, dark: true),
 ]
 extension Look {
     /// The stage page's CSS variables (stage.html reads --mc-*), set on document.documentElement.style as `s`.
@@ -834,6 +835,17 @@ extension Look {
     }
 }
 func hx(_ h: String, _ o: Double = 1) -> Color { Color(nsColor: hex(h)).opacity(o) }
+/// WCAG contrast ratio of two hex colors (1…21): the captions keep your words at 4.5 or more on the look's stage.
+func contrast(_ a: String, _ b: String) -> Double {
+    func lum(_ h: String) -> Double {
+        let c = hex(h), ch = [c.redComponent, c.greenComponent, c.blueComponent].map { v -> Double in let v = Double(v); return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    }
+    let x = lum(a), y = lum(b)
+    return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+}
+/// A hex color's hue in degrees and its saturation (0…1).
+func hueSat(_ h: String) -> (hue: Double, sat: Double) { let c = hex(h); return (Double(c.hueComponent) * 360, Double(c.saturationComponent)) }
 /// The chat window (standard and live) wears the same look. Chat views adopt Looked: its members shadow the app-wide color
 /// globals (bg, fg, accent, card…, theme) and chatFace, so their bodies read the look's tokens unchanged.
 var chatLook = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1]
@@ -851,6 +863,7 @@ extension Looked {
     var edge: Color { hx(lk.line) }
     var dim: Color { hx(lk.dim) }
     var sub: Color { hx(lk.text2) }
+    var youInk: Color { hx(lk.you) }  // what you said, apart from Chief's words in fg
     var bubble: Color { hx(lk.card) }
     var mono: Bool { lk.id == "phosphor" }
     /// State colors for the look's lightness (Theme.needs… follow the app theme, not the look).
@@ -1072,7 +1085,7 @@ struct ConversationLook: View {
             }
             s.stage(l, border: hx(l.line))
             VStack(spacing: 8) {
-                if !s.heard.isEmpty { HStack { Spacer(minLength: 40); bubble(s.heard, fill: hx(l.accent), ink: .white) } }
+                if !s.heard.isEmpty { HStack { Spacer(minLength: 40); bubble(s.heard, fill: hx(l.you), ink: .white) } }
                 if !s.said.isEmpty { HStack { bubble(s.said, fill: hx(l.card), ink: hx(l.text)); Spacer(minLength: 40) } }
                 s.activity(l).padding(.horizontal, 4)
             }
@@ -1108,7 +1121,7 @@ struct OrbLook: View {
             if !s.said.isEmpty || !s.heard.isEmpty {
                 VStack(spacing: 8) {
                     if !s.said.isEmpty { Text(s.said).font(.system(size: 20, weight: .medium)).foregroundColor(hx(l.text)) }
-                    if !s.heard.isEmpty { Text("“\(s.heard)”").font(.system(size: 13)).foregroundColor(hx(l.dim)) }
+                    if !s.heard.isEmpty { Text("“\(s.heard)”").font(.system(size: 13)).foregroundColor(hx(l.you)) }
                 }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 20)
             }
             s.activity(l).padding(.horizontal, 20)
@@ -1159,7 +1172,7 @@ struct OnAirLook: View {
             }.padding(16)
             VStack(spacing: 0) {
                 if !s.said.isEmpty { third("CHIEF", s.said, tag: hx(l.accent), tagInk: hx(l.page), fill: hx(l.text), ink: hx(l.page), size: 15) }
-                if !s.heard.isEmpty { third("YOU", s.heard, tag: hx(l.line), tagInk: hx(l.text), fill: hx(l.card), ink: hx(l.text2), size: 13) }
+                if !s.heard.isEmpty { third("YOU", s.heard, tag: hx(l.you), tagInk: hx(l.page), fill: hx(l.card), ink: hx(l.you), size: 13) }
                 s.activity(l).padding(.horizontal, 16).padding(.top, 8)
             }.padding(.bottom, 12)
             HStack(spacing: 12) {
@@ -1208,7 +1221,7 @@ struct PhosphorLook: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("$ stage --live").foregroundColor(faint)
                 s.stage(l, r: 0, pad: 0)
-                if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(s.heard)") }
+                if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(Text(s.heard).foregroundColor(hx(l.you)))") }
                 if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
                 s.activity(l, accent: ink, size: 13)
             }.lineLimit(4).padding(14)
@@ -1257,7 +1270,7 @@ struct EditorialLook: View {
             if !s.said.isEmpty {
                 Text("“\(s.said)”").font(.system(size: 19, design: .serif).italic()).lineSpacing(3).lineLimit(4).padding(.top, 16)
             }
-            if !s.heard.isEmpty { Text("In reply to “\(s.heard)”").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 6) }
+            if !s.heard.isEmpty { Text("In reply to “\(s.heard)”").font(.system(size: 12)).foregroundColor(hx(l.you)).lineLimit(2).padding(.top, 6) }
             s.activity(l).padding(.top, 8)
             Scope(m: s.v.meter, ink: s.talk == .speaking ? red : ink, rule: hx(l.line)).frame(height: 44).padding(.top, 12)
             Rectangle().fill(ink).frame(height: 1)
@@ -1306,7 +1319,7 @@ struct HUDLook: View {
                 s.stage(l, r: 0, pad: 0)
             }.padding(14).background(hx(l.stage)).overlay(Rectangle().stroke(hx(l.line)))
             if !s.said.isEmpty { Text("\(Text("\(s.name.uppercased()) ▸ ").font(mono).foregroundColor(cyan))\(Text(s.said).font(.system(size: 16)))").lineLimit(3) }
-            if !s.heard.isEmpty { Text("\(Text("YOU ▸ ").font(mono))\(Text(s.heard).font(.system(size: 13)))").foregroundColor(faint).lineLimit(2) }
+            if !s.heard.isEmpty { Text("\(Text("YOU ▸ ").font(mono))\(Text(s.heard).font(.system(size: 13)))").foregroundColor(hx(l.you)).lineLimit(2) }
             s.activity(l)
             VStack(spacing: 1) {
                 Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573"))
@@ -1347,7 +1360,7 @@ struct ZenLook: View {
             GeometryReader { g in Rectangle().fill(s.high ? hx("FF9F0A") : hx(l.accent)).frame(width: g.size.width * s.frac) }.frame(height: 2).accessibilityHidden(true)
             s.stage(l, r: 0, pad: 0).padding(.horizontal, 32).padding(.top, 24)
             if !s.said.isEmpty { Text(s.said).font(.system(size: 24, weight: .light)).foregroundColor(hx(l.text)).multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 40).padding(.top, 20) }
-            if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.dim)).lineLimit(2).padding(.top, 8) }
+            if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.you)).lineLimit(2).padding(.top, 8) }
             s.activity(l).padding(.horizontal, 40).padding(.top, 10)
             Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
             Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)

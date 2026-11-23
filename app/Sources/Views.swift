@@ -400,16 +400,16 @@ struct MsgView: View, Looked {
         let t = Text(m.text), f = chatFace(size: Theme.fs3 + 1)
         switch lk.id {
         case "phosphor":
-            Text("\(Text("you> ").foregroundColor(dim))\(t)").font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(Text("you> ").foregroundColor(dim))\(t.foregroundColor(youInk))").font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         case "editorial":
             VStack(alignment: .leading, spacing: Theme.sp1) {
                 Text("LETTERS · YOU ASKED").font(sys(size: 10, weight: .bold)).tracking(1.4).foregroundColor(dim)
-                Text("“\(m.text)”").font(chatFace(size: Theme.fs5 + 1).italic()).foregroundColor(fg).textSelection(.enabled)
+                Text("“\(m.text)”").font(chatFace(size: Theme.fs5 + 1).italic()).foregroundColor(youInk).textSelection(.enabled)
             }.frame(maxWidth: .infinity, alignment: .leading)
         case "hud":
             VStack(alignment: .leading, spacing: Theme.sp1) {
-                Text("YOU ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(dim)
-                t.font(f).foregroundColor(sub).textSelection(.enabled)
+                Text("YOU ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(youInk)
+                t.font(f).foregroundColor(youInk).textSelection(.enabled)
             }.padding(.leading, Theme.sp3).background(rule(line)).frame(maxWidth: .infinity, alignment: .leading)
         default:
             HStack {
@@ -417,15 +417,15 @@ struct MsgView: View, Looked {
                 switch lk.id {
                 case "onair":
                     VStack(alignment: .trailing, spacing: 0) {
-                        Text("YOU").font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(fg).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(line)
-                        t.font(f).foregroundColor(fg).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(card)
+                        Text("YOU").font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(youInk)
+                        t.font(f).foregroundColor(youInk).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(card)
                     }
-                case "zen": t.font(f).foregroundColor(dim).multilineTextAlignment(.trailing).textSelection(.enabled)
+                case "zen": t.font(f).foregroundColor(youInk).multilineTextAlignment(.trailing).textSelection(.enabled)
                 case "conversation":
                     t.font(f).foregroundColor(.white).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                        .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).fill(accent))
+                        .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).fill(youInk))
                 default:
-                    t.font(f).foregroundColor(fg).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
+                    t.font(f).foregroundColor(youInk).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
                         .background(RoundedRectangle(cornerRadius: 18).fill(card))
                 }
             }
@@ -2365,10 +2365,10 @@ struct ChatView: View, Looked {
     /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
     @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
         let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
-        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
+        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : lk.id == "zen" ? Text(q).italic() : Text(q)
         VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
             if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
-            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(lk.id == "conversation" ? accent : lk.id == "zen" ? dim : lk.id == "phosphor" ? fg : sub)
+            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk)  // your color at full strength (fading it fell under 4.5:1); the label, dashes or Zen's italic say queued
                 .multilineTextAlignment(.trailing).padding(.horizontal, boxed ? 14 : 0).padding(.vertical, boxed ? 10 : 0)
                 .background {
                     switch lk.id {
