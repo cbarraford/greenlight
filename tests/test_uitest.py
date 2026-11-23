@@ -214,6 +214,22 @@ def verify_chat_and_inbox(ui1: uitest.UITestSession, shot_dir: Path) -> None:
     print(f"ok  Inbox ping -> openInbox -> inboxConfirm -> clearInbox -> closeInbox verified ({r_ishot['bytes']} bytes)")
 
 
+def verify_dashboard_min_width(ui1: uitest.UITestSession) -> None:
+    """Dashboard keeps 801pt min-width with chat open, shrinks to 682pt with chat hidden, and widens again when chat reopens."""
+    r = ui1.action("resize", window="dashboard", width=682, height=520)
+    assert r["ok"] and r["width"] >= 801, f"dashboard shrank below 801pt with chat open: {r}"
+    r = ui1.action("toggleChat")
+    assert r["ok"] and not r["chatShown"], r
+    r = ui1.action("resize", window="dashboard", width=682, height=520)
+    assert r["ok"] and r["width"] == 682, f"dashboard failed to shrink with chat hidden: {r}"
+    r = ui1.action("toggleChat")
+    assert r["ok"] and r["chatShown"], r
+    st = ui1.state()
+    assert st["ok"] and st["windows"]["dashboard"]["width"] >= 801, f"dashboard did not expand when chat reopened: {st['windows']['dashboard']}"
+    ui1.action("resize", window="dashboard", width=1280, height=800)
+    print("ok  dashboard min-width protects 320pt chat pane when open and allows 682pt when hidden")
+
+
 def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path) -> None:
     """Verify dashboard viewport resize (small -> large), rescan, and Settings open/screenshot/close."""
     r_small = ui1.action("resize", window="dashboard", width=860, height=520)
@@ -240,6 +256,12 @@ def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path)
     r_set = ui1.screenshot(s_settings, window="settings")
     assert r_set["ok"], r_set
     assert_png(s_settings)
+    r_narrow = ui1.action("resize", window="settings", width=560, height=460)
+    assert r_narrow["ok"] and r_narrow["width"] == 620, r_narrow  # minSize 620x460
+    time.sleep(0.2)
+    s_narrow = shot_dir / "settings-narrow.png"
+    assert ui1.screenshot(s_narrow, window="settings")["ok"]
+    assert_png(s_narrow)
     r_close = ui1.action("closeSettings")
     assert r_close["ok"] and r_close["settingsOpen"] is False, r_close
     wait_state(ui1, lambda s: s.get("settingsOpen") is False, desc="settings closed")
@@ -299,6 +321,7 @@ def main() -> None:
 
         # 3. Chat send -> stub reply -> clear -> toggleChat, plus Inbox ping -> confirm -> clear -> close
         verify_chat_and_inbox(ui1, shot_dir)
+        verify_dashboard_min_width(ui1)
 
         # 4. Viewport resize (small/large) + rescan + Settings open/close
         verify_resize_rescan_and_settings(ui1, shot_dir)
