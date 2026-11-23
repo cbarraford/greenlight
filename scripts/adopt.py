@@ -88,6 +88,8 @@ def repo_map():
     ponytail: keyed by path alone, so the same owner/repo on both forges collides (first one wins)"""
     out = {}
     for r in greenlight.orca("repo", "list")["repos"]:
+        if r.get("path") and not os.path.isdir(r["path"]):  # a moved/renamed checkout Orca still lists shares its remote
+            continue
         key = (r.get("gitRemoteIdentity") or {}).get("canonicalKey")
         if not key and r.get("path"):  # cmux/herdr/T3 shims, or an Orca repo without the field
             key = git(r["path"], "remote", "get-url", "origin", check=False)

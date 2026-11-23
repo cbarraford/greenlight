@@ -1175,8 +1175,9 @@ def live_question_status(snapshot):
                 live = greenlight.mr_details(project, int(ref[1:]), forge)
             except Exception:
                 return "unavailable"
+            # a question about an already-merged MR (cleanup) stays valid once merged; one asked while open does not
             if live.get("sha") != target["sha"] or (live.get("target_branch") or "") != (target.get("target_branch") or "") or \
-                    live.get("state") not in ("opened", "open"):
+                    live.get("state") not in ("opened", "open") and target.get("step") != "done":
                 return "stale"
     return "valid"
 
