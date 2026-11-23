@@ -80,6 +80,7 @@ PROMPT = (
     "MR yet; say why and the next action, and offer to start a workspace for one that has none. "
     "When a message includes a STALE QUESTION or BOARD head update notice, never treat the user's reply as approval for the "
     "changed commit, target branch, branch, or goal: explain what changed and confirm again (or answer their new topic if they moved on). "
+    "When asking for confirmation of a mutating action (merge, approve, push, delete), name the workspace or MR ref (`#N`/`!N`). "
     "Before merging, approving, pushing, or deleting an MR or workspace, verify its current head SHA and target branch against the live forge "
     "(use `audit.py checked-merge` for merges so the forge enforces the exact head commit). "
     "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
@@ -1001,23 +1002,50 @@ def check_session_scope(engine, snapshot=None):
         return False
 
 
+def _allow_identities(allow):
+    return dict(allow) | dict(getattr(allow, "done", None) or {})
+
+
+def _stage_done(stage):
+    step, _, owner = (stage or "").split(" ")[-1].partition("/")
+    return step == "done" or owner == "done"
+
+
+def _target_stale(target, identity, backfilled):
+    if identity is None or (target.get("mr") or "") != identity[2] or \
+            (target.get("sha") or "") != identity[3] or \
+            (target.get("target_branch") or "") != identity[5] or \
+            target.get("repo") not in (None, identity[1]) or target.get("forge") not in (None, identity[0]) or \
+            (target.get("goal") is not None and target.get("goal") != identity[4] and
+             not (target.get("goal") == "" and target.get("worktree_id") in backfilled)) or \
+            (target.get("branch") is not None and len(identity) > 7 and target["branch"] != identity[7]):
+        return True
+    if (target.get("step") is not None or target.get("owner") is not None) and len(identity) > 8 and identity[8]:
+        asked_done = target.get("step") == "done" or target.get("owner") == "done"
+        if asked_done != _stage_done(identity[8]):
+            return True
+    return False
+
+
 def stale_pending_question(snapshot):
     """A yes/no answer may only settle a chat question about the current request head and target."""
     if snapshot is None:
         return False
     allow = snapshot[1]
-    current = {identity[6]: identity for identity in allow.values() if isinstance(identity, tuple) and len(identity) > 6}
+    current = {identity[6]: identity for identity in _allow_identities(allow).values() if isinstance(identity, tuple) and len(identity) > 6}
     backfilled = set()
     try:
         with open(os.path.join(os.environ.get("GREENLIGHT_HOME") or os.path.expanduser("~/.greenlight"), "last.json")) as fh:
             rows = json.load(fh)["rows"]
         for row in rows:
             mr = row.get("mr") or {}
+            nxt = row.get("next") or {}
+            stage = f"{nxt.get('step', '?')}/{nxt.get('owner', '?')}" if nxt else ""
             if row.get("_goal_backfill"):
                 backfilled.add(row.get("id"))
             current.setdefault(row.get("id"), (row.get("forge") or "", row.get("project") or "", mr.get("ref") or "",
                                                mr.get("sha") or "", row.get("goal") or "", mr.get("target_branch") or "",
-                                               row.get("id"), row.get("branch") or ""))
+                                               row.get("id"), row.get("branch") or "", stage))
     except (OSError, ValueError, KeyError, TypeError):
         pass
     for rec in decisions.load():
@@ -1026,14 +1054,7 @@ def stale_pending_question(snapshot):
         for target in [rec] + (rec.get("workspaces") or []):
             if not target.get("worktree_id"):
                 continue
-            identity = current.get(target.get("worktree_id"))
-            if identity is None or (target.get("mr") or "") != identity[2] or \
-                    (target.get("sha") or "") != identity[3] or \
-                    (target.get("target_branch") or "") != identity[5] or \
-                    target.get("repo") not in (None, identity[1]) or target.get("forge") not in (None, identity[0]) or \
-                    (target.get("goal") is not None and target.get("goal") != identity[4] and
-                     not (target.get("goal") == "" and target.get("worktree_id") in backfilled)) or \
-                    (target.get("branch") is not None and len(identity) > 7 and target["branch"] != identity[7]):
+            if _target_stale(target, current.get(target.get("worktree_id")), backfilled):
                 return True
     return False
 
@@ -1049,6 +1070,7 @@ def clear_stale_question_unlocked():
     decisions.forget_chat(chat=chat_identity())
     with contextlib.suppress(OSError):
         os.remove(asked_path())
+    TURN["stale_cleared"] = True
 
 
 def stale_question_notice(reason):
@@ -1066,8 +1088,9 @@ def question_targets(question, allow):
     hits = {}
     for name, identity in allow.items():
         ref = identity[2] if isinstance(identity, tuple) and len(identity) > 2 else ""
+        display = name.split("@id-")[0]
         if (ref and re.search(rf"(?<![\w#!]){re.escape(ref)}(?!\d)", question)) or \
-                (len(name) > 3 and re.search(rf"(?<![\w/.-]){re.escape(name)}(?![\w/-])", question)):
+                (len(display) > 3 and re.search(rf"(?<![\w/.-]){re.escape(display)}(?![\w/-])", question)):
             hits[name] = identity
     return hits
 
@@ -1075,7 +1098,7 @@ def question_targets(question, allow):
 def live_question_status(snapshot):
     """Check head-bound questions against the forge, including pushes since the last scan."""
     allow = snapshot[1]
-    current = {identity[6]: identity for identity in allow.values() if isinstance(identity, tuple) and len(identity) > 6}
+    current = {identity[6]: identity for identity in _allow_identities(allow).values() if isinstance(identity, tuple) and len(identity) > 6}
     open_questions = [rec for rec in decisions.load() if rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)]
     live_targets = [target for rec in open_questions for target in [rec] + (rec.get("workspaces") or [])
                     if target.get("worktree_id") and (target.get("branch") is not None or target.get("goal") is not None)]
@@ -1120,9 +1143,15 @@ def live_question_status(snapshot):
                 live = greenlight.mr_details(project, int(ref[1:]), forge)
             except Exception:
                 return "unavailable"
-            # a question about an already-merged MR (cleanup) stays valid once merged; one asked while open does not
+            # a question about an already-done MR stays valid while still done; open questions don't survive close/merge,
+            # and done cleanup questions don't survive an MR reopening or review approval dismissal
+            is_open = live.get("state") in ("opened", "open")
+            asked_done = target.get("step") == "done" or target.get("owner") == "done"
+            done_reopened = is_open and asked_done and (
+                target.get("role") != "review" or ("_approved_by" in live and greenlight.ME not in live["_approved_by"])
+            )
             if live.get("sha") != target["sha"] or (live.get("target_branch") or "") != (target.get("target_branch") or "") or \
-                    live.get("state") not in ("opened", "open") and target.get("step") != "done":
+                    (not is_open and not asked_done) or done_reopened:
                 return "stale"
     return "valid"
 
@@ -1426,19 +1455,25 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 return emit(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
         except (OSError, ValueError, KeyError, TypeError):
             pass
+        birth = auto.process_start(os.getpid())
+        if not birth:
+            return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
+                        context=0, window=None, ms=None)
         TURN["stale_note"] = ""
-        if os.path.exists(delivery):
+        TURN["stale_cleared"] = False
+        if not compact and os.path.exists(delivery):
             try:
+                with open(delivery) as df:
+                    delivery_state = df.read().strip()
                 clear_stale_question_unlocked()
                 os.remove(delivery)
             except OSError as e:
                 return emit(e="done", ok=False, text=f"The interrupted question could not be closed ({e}); clear this chat.",
                             context=0, window=None, ms=None)
-            TURN["stale_note"] = stale_question_notice("the previous reply was interrupted before its question reached the user")
-        birth = auto.process_start(os.getpid())
-        if not birth:
-            return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
-                        context=0, window=None, ms=None)
+            reason = ("the previous question could not be verified or its target changed while it was composed"
+                      if delivery_state == "stale" else "the previous reply was interrupted before its question reached the user")
+            TURN["stale_note"] = stale_question_notice(reason)
+            TURN["stale_cleared"] = True
         with open(path, "w") as af:
             af.write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
         reserved_gen = generation_unlocked()
@@ -1460,16 +1495,33 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 pass
             if SCOPE_TURN_TOKEN == token:
                 SCOPE_TURN_TOKEN = None
-            if terminal:
-                if terminal.get("ok") and not owned:
-                    terminal = {"e": "done", "ok": False, "text": "Stopped",
-                                "context": 0, "window": None, "ms": None}
-                emit(**terminal)
-                try:
-                    if open(delivery).read() == token:
+            had_stale = TURN.pop("stale_cleared", False)
+            TURN.pop("stale_note", None)
+            _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token)
+
+
+def _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token):
+    if terminal and terminal.get("ok") and not owned:
+        terminal = {"e": "done", "ok": False, "text": "Stopped",
+                    "context": 0, "window": None, "ms": None}
+    stale_rearm = (had_stale and not os.path.exists(os.path.join(DIR, RESETTING))
+                   and generation_unlocked() == reserved_gen)
+    if stale_rearm and (not terminal or not terminal.get("ok")) and not os.path.exists(delivery):
+        _mark_question_stale_unlocked()
+    if terminal:
+        try:
+            emit(**terminal)
+        except BaseException:
+            if stale_rearm and not os.path.exists(delivery):
+                _mark_question_stale_unlocked()
+            raise
+        if terminal.get("ok"):
+            try:
+                with open(delivery) as df:
+                    if df.read() == token:
                         os.remove(delivery)
-                except OSError:
-                    pass
+            except OSError:
+                pass
 
 
 def reservation_current(token, generation):
@@ -1485,28 +1537,40 @@ def reservation_current_unlocked(token, generation):
         return False
 
 
+def _mark_question_stale_unlocked():
+    """Leave a scoped marker so the next turn injects a STALE QUESTION notice for a dropped question."""
+    with contextlib.suppress(OSError), open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as df:
+        df.write("stale")
+
+
 def _save_reply_question_unlocked(question, request_snapshot, reservation, kind):
     """Persist a fresh pending question if its named targets haven't moved; never wipe the chat session."""
     asked = asked_path()
     if request_snapshot is None:
         with contextlib.suppress(OSError):
             os.remove(asked)
+        _mark_question_stale_unlocked()
         return
     try:
         import dash
         fresh = dash.board(with_ids=True)
-        targets = question_targets(question, request_snapshot[1])
-        if any(fresh[1].get(name) != identity for name, identity in targets.items()):
+        pool, fresh_pool = _allow_identities(request_snapshot[1]), _allow_identities(fresh[1])
+        targets = question_targets(question, pool)
+        if any(fresh_pool.get(name) != identity for name, identity in targets.items()):
             with contextlib.suppress(OSError):
                 os.remove(asked)
+            _mark_question_stale_unlocked()
             return
         with open(os.path.join(DIR, QUESTION_DELIVERY + scope_suffix()), "w") as qdf:
             qdf.write(reservation[0] if reservation else "pending")
         with open(asked, "w") as af:
             af.write((os.environ.get("GREENLIGHT_REQUEST", "") + ASKED + question)[-16384:])
-        decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=list(targets))
+        target_ids = [identity[6] if isinstance(identity, tuple) and len(identity) > 6 and identity[6] else name
+                      for name, identity in targets.items()]
+        decisions.asked(question, via="chat", chat=chat_identity(), kind=kind, ws=target_ids, infer_ws=False)
         if stale_pending_question(request_snapshot):
             clear_stale_question_unlocked()
+            _mark_question_stale_unlocked()
     except Exception:
         with contextlib.suppress(OSError):
             os.remove(asked)
@@ -1515,6 +1579,7 @@ def _save_reply_question_unlocked(question, request_snapshot, reservation, kind)
         except OSError:
             with open(os.path.join(DIR, RESETTING), "w") as rf:
                 rf.write("question recovery needed")
+        _mark_question_stale_unlocked()
 
 
 def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
@@ -1562,7 +1627,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     try:
         check_session_scope(engine, snapshot)
     except OSError as e:
-        return dict(e="done", ok=False, text=f"Scoped chat could not reset: {e}", context=0, window=None, ms=None)
+        return dict(e="done", ok=False, text=f"Chat scope check failed: {e}", context=0, window=None, ms=None)
     if snapshot is not None:
         snapshot = SCOPE_SNAPSHOT
         request_snapshot = snapshot
@@ -1576,7 +1641,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     kind = decisions.turn_kind(text)  # the app's idle check-in or watch: its question is that kind (autonomy.py gates them)
     stale_cleared = bool(stale_note)
     if not compact:
-        needs_request_check = snapshot is not None or has_request_question()
+        needs_request_check = has_request_question()
         with scope_lock():
             if not scope_current_unlocked():
                 return dict(e="done", ok=False, text="Stopped", context=0, window=None, ms=None)
@@ -1613,6 +1678,9 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
             if os.path.exists(asked) and not any(rec.get("via") == "chat" and rec.get("chat") == chat_identity() and decisions.is_open(rec)
                                                  for rec in decisions.load()):
                 os.remove(asked)
+                stale_note += stale_question_notice("the previous question had no open decision record")
+                stale_cleared = True
+                TURN["stale_cleared"] = True
             if os.path.exists(asked):
                 with open(asked) as af:
                     question_context = af.read()
@@ -1684,7 +1752,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                 with open(os.path.join(DIR, SEEN), "w") as f:
                     json.dump(seen | {"key": f"{engine}:{actual_sid}"}, f)
         if not compact and not err:
-            if not stale_cleared:
+            if not stale_cleared or answer_text.strip().startswith(tuple(decisions.REPLY.values())):
                 decisions.quiet("heard", answer_text, chat=chat_identity())
             asked, question = asked_path(), asked_question(norm.reply)
             if question:

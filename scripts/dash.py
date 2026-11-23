@@ -348,7 +348,9 @@ def tree_signoff(path):
 
 
 class BoardAllow(dict):
-    """Card identities plus every displayed worktree ID for scoped session isolation."""
+    """Card identities plus displayed worktree IDs and in-scope done targets."""
+    members: list
+    done: dict
 
 
 def board(only=None, with_ids=False):
@@ -381,6 +383,7 @@ def board(only=None, with_ids=False):
         rows = [r for r in rows if r.get("path") in paths or r.get("repo") and r["repo"] in repos]
     lines, done, allowed = [], 0, BoardAllow()
     allowed.members = []
+    allowed.done = {}
     for r in rows:
         st, why = state_of(r, blk)
         mr = r.get("mr") or {}
@@ -388,6 +391,11 @@ def board(only=None, with_ids=False):
                                 mr.get("target_branch")))
         if st == "done":
             done += 1
+            if r.get("card"):
+                import ws_state
+                allowed.done[r["card"]] = (r.get("forge") or "", r.get("project") or "", mr.get("ref") or "",
+                                           mr.get("sha") or "", r.get("goal") or "", mr.get("target_branch") or "",
+                                           r.get("id") or "", r.get("branch") or "", ws_state.stage_of(r))
             continue
         if r.get("card"):
             import ws_state
