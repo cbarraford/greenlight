@@ -2368,7 +2368,7 @@ struct ChatView: View, Looked {
         let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
         VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
             if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
-            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk)  // your words, as once sent: the dashes and label say queued
+            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk.opacity(0.7))  // your color, faded until it sends (Zen has no box or dashes to say so)
                 .multilineTextAlignment(.trailing).padding(.horizontal, boxed ? 14 : 0).padding(.vertical, boxed ? 10 : 0)
                 .background {
                     switch lk.id {
