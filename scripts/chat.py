@@ -1433,6 +1433,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
                         context=0, window=None, ms=None)
         TURN["stale_note"] = ""
+        TURN["stale_cleared"] = False
         if not compact and os.path.exists(delivery):
             try:
                 with open(delivery) as df:
@@ -1445,6 +1446,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
             reason = ("the previous question could not be verified or its target changed while it was composed"
                       if delivery_state == "stale" else "the previous reply was interrupted before its question reached the user")
             TURN["stale_note"] = stale_question_notice(reason)
+            TURN["stale_cleared"] = True
         with open(path, "w") as af:
             af.write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
         reserved_gen = generation_unlocked()
@@ -1466,16 +1468,22 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 pass
             if SCOPE_TURN_TOKEN == token:
                 SCOPE_TURN_TOKEN = None
+            had_stale = TURN.pop("stale_cleared", False)
+            TURN.pop("stale_note", None)
             if terminal:
                 if terminal.get("ok") and not owned:
                     terminal = {"e": "done", "ok": False, "text": "Stopped",
                                 "context": 0, "window": None, "ms": None}
                 emit(**terminal)
                 try:
-                    if open(delivery).read() == token:
-                        os.remove(delivery)
+                    with open(delivery) as df:
+                        if df.read() == token:
+                            os.remove(delivery)
                 except OSError:
                     pass
+            if had_stale and (not terminal or not terminal.get("ok")) and \
+                    not os.path.exists(os.path.join(DIR, RESETTING)) and generation_unlocked() == reserved_gen:
+                _mark_question_stale_unlocked()
 
 
 def reservation_current(token, generation):
@@ -1508,8 +1516,10 @@ def _save_reply_question_unlocked(question, request_snapshot, reservation, kind)
     try:
         import dash
         fresh = dash.board(with_ids=True)
-        targets = question_targets(question, request_snapshot[1])
-        if any(fresh[1].get(name) != identity for name, identity in targets.items()):
+        pool = dict(request_snapshot[1]) | dict(getattr(request_snapshot[1], "done", None) or {})
+        fresh_pool = dict(fresh[1]) | dict(getattr(fresh[1], "done", None) or {})
+        targets = question_targets(question, pool)
+        if any(fresh_pool.get(name) != identity for name, identity in targets.items()):
             with contextlib.suppress(OSError):
                 os.remove(asked)
             _mark_question_stale_unlocked()
@@ -1633,6 +1643,8 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                 os.remove(asked)
                 stale_note += stale_question_notice("the previous question had no open decision record")
                 stale_cleared = True
+            if stale_cleared:
+                TURN["stale_cleared"] = True
             if os.path.exists(asked):
                 with open(asked) as af:
                     question_context = af.read()

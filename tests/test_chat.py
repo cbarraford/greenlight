@@ -220,6 +220,7 @@ def test_question_store_failure_keeps_reply_and_session(tmp_path, monkeypatch):
     assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
     assert not (tmp_path / "asked").exists()
     assert (tmp_path / "session").read_text() == "old-session"
+    assert (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
 
 
 def test_question_file_failure_does_not_open_decision(tmp_path, monkeypatch):
@@ -609,6 +610,7 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and events[-1]["text"] == "Approve?"
     assert forgotten and (tmp_path / "session").read_text() == "old-session" and not (tmp_path / "asked").exists()
+    assert (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
 
     # Double failure while saving question writes RESETTING without losing the reply or session.
     d2 = tmp_path / "double_fail"
@@ -621,8 +623,9 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     events = []
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and (d2 / chat.RESETTING).exists() and (d2 / "session").read_text() == "old-session"
+    assert (d2 / chat.QUESTION_DELIVERY).read_text() == "stale"
 
-    # Missing request_snapshot drops asked without wiping session.
+    # Missing request_snapshot drops asked and leaves stale marker without wiping session.
     d3 = tmp_path / "no_snap"
     d3.mkdir()
     monkeypatch.setattr(chat, "DIR", str(d3))
@@ -632,6 +635,55 @@ def test_stale_question_after_save_drops_pending_question_but_keeps_reply_and_se
     events = []
     chat.turn("approve", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True and not (d3 / "asked").exists() and (d3 / "session").read_text() == "old-session"
+    assert (d3 / chat.QUESTION_DELIVERY).read_text() == "stale"
+
+
+def test_failed_turn_preserves_stale_marker_for_retry(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    monkeypatch.setattr(decisions, "load", list)
+    monkeypatch.setattr(decisions, "forget_chat", lambda **kw: None)
+    (tmp_path / chat.QUESTION_DELIVERY).write_text("stale")
+    (tmp_path / "session").write_text("old-session")
+    monkeypatch.setattr(chat, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("harness down")))
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is False and (tmp_path / chat.QUESTION_DELIVERY).read_text() == "stale"
+    captured = []
+    _stub_run(monkeypatch, captured)
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True and captured and "STALE QUESTION" in captured[0]["text"]
+    assert not (tmp_path / chat.QUESTION_DELIVERY).exists()
+
+
+def test_done_workspace_cleanup_question_binds_worktree_id_in_scope(tmp_path, monkeypatch):
+    import dash, decisions
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(dash.greenlight, "STATE", tmp_path)
+    monkeypatch.setattr(decisions, "STATE", tmp_path)
+    monkeypatch.setattr(dash, "live_agents", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr(dash.blocking, "cached", dict)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"repos": ["octo/app"]}))
+    done_row = {"id": "wt-done", "name": "merged-feature", "card": "merged-feature", "repo": "octo/app",
+                "project": "octo/app", "forge": "github", "path": "/w/merged", "branch": "feat",
+                "goal": "Merge #42", "agent": {"state": "idle"},
+                "mr": {"ref": "#42", "sha": "aaa111", "target_branch": "main", "state": "merged"},
+                "next": {"step": "done", "owner": "done", "action": "cleanup"}}
+    (tmp_path / "last.json").write_text(json.dumps({"rows": [done_row]}))
+    def fake_run(cmd, engine, text, norm, **kw):
+        norm.reply = "Delete merged-feature (#42)?"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "scoped-s1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    chat.turn("cleanup?", "claude-haiku-5-5", None)
+    assert events[-1]["ok"] is True
+    recs = decisions.load()
+    assert recs and recs[-1].get("worktree_id") == "wt-done" and recs[-1].get("step") == "done"
 
 
 def test_answer_checks_live_head_and_preserves_session(tmp_path, monkeypatch):
