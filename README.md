@@ -1,10 +1,44 @@
 # Greenlight
 
-An agent manager for coding-agent workspaces. Every workspace gets a **goal** ("Merge !42", "Review #17", or free-form). Greenlight walks each one through its repo's MR/PR lifecycle, works out the next step and who owns it, does the mechanical steps itself (mark ready, set a milestone, assign a review bot, merge), dispatches an agent to anything idle, cleans up finished workspaces, and only asks you what only you can answer.
+**An agent manager for coding-agent workspaces.** Run a dozen Claude Code, Codex, Gemini, opencode or pi agents in
+parallel worktrees, and let Greenlight keep every one of them moving until its change merges.
 
-It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**, a macOS menubar app with a dashboard, a chat with Greenlight, and replyable notifications. Greenlight opens in **the Pipe**: the terminal alone, dark. Its level pill, which names where it goes (the Pipe in dark copper, the Basement in amber), or ⌘B switches to **the Basement**, the same window with its sidebar, where the green light at the bottom right rides up to **Greenlight Center** (the dashboard and chat, light), whose terminal button rides back down. ⌘⇧G goes up, ⌘⇧T down.
+Each workspace gets a **goal** ("Merge !42", "Review #17", or anything free-form). Greenlight walks it through its
+repo's MR/PR lifecycle: it works out the next step and who owns it, does the mechanical steps itself (mark ready, set a
+milestone, assign a review bot, merge), dispatches an agent to anything idle, cleans up finished workspaces, and only
+asks you what only you can answer.
 
-**Verbose activity** (Settings › Chat & voice, off by default) adds a live log above the chat's message box, and its newest lines under the live line in voice mode: Chief's every command in full with its output and thinking, each workspace agent's state, tool and last words, and every move Greenlight makes (a workspace's lifecycle step moving, the dashboard's Merge, Park, Run and Answer buttons). Off, the chat is the concise view and `chat.py` streams what it always has.
+> **Status: alpha.** Greenlight is built and used daily by one person, against GitLab and GitHub. Expect rough edges
+> and fast change. Issues and PRs are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## What you get
+
+- **A Claude Code skill** (`SKILL.md` + stdlib Python): run `/greenlight` and it scans every workspace, reports what
+  each needs and does the safe steps.
+- **A scheduler** (`auto.py`): the same work on a timer, with or without an LLM session, so nothing sits idle overnight.
+- **A macOS menubar app** with three floors:
+  - **the Pipe**: just the terminal, dark;
+  - **the Basement** (⌘B): the terminal with a sidebar of hosts and workspaces;
+  - **Greenlight Center** (⌘⇧G): the dashboard of every workspace and its lifecycle stage, plus a chat (text or voice)
+    with **Chief**, Greenlight's own agent, which can answer questions about the board and act on it.
+- **Replyable notifications**: when Greenlight needs you, answer from the banner.
+- **Pluggable everything**: forges (`glab`, `gh`), agent CLIs, and workspace managers (Orca, cmux, herdr, T3 Code).
+
+## How it works
+
+```
+ your MRs/PRs ──adopt.py──▶ workspaces (git worktrees + an agent each)
+                                   │
+              scan (greenlight.py) │  lifecycle step, owner, next move
+                                   ▼
+        mechanical step? ──▶ Greenlight does it (ready, milestone, review bot, merge)
+        agent's turn?    ──▶ dispatch the next agent with the workspace's state card
+        your turn?       ──▶ one question, in the app, a notification or the chat
+        merged / closed? ──▶ cleanup.py removes the workspace once nothing can be lost
+```
+
+A repo's lifecycle is a short Markdown file (`lifecycles/default.md`), so a team's own process (review bots, release
+milestones, required approvals) is a config change, not a code change.
 
 ## Requirements
 
@@ -12,13 +46,14 @@ It ships as a Claude Code skill (`SKILL.md` + stdlib Python), and **Greenlight**
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
 - At least one coding agent CLI: `claude`, `codex`, `opencode`, `pi` or `gemini` (Gemini CLI). Gemini chat model choices additionally require `agy` on the Greenlight host.
 - One workspace manager (ADE): Orca (default), cmux, herdr, or T3 Code. Pick it with `GREENLIGHT_ADE=orca|cmux|herdr|t3`.
-- The menubar app: macOS with the Command Line Tools (`swiftc`).
+- The menubar app: macOS with the Command Line Tools (`swiftc`). The backend also runs on Linux.
 
-## Install
+## Quick start
 
 ```bash
 git clone https://github.com/cbarraford/greenlight ~/.claude/skills/greenlight   # Claude Code's personal-skill path
 cd ~/.claude/skills/greenlight
+python3 scripts/diag.py doctor         # checks glab/gh auth, agent CLIs and the rest of the setup
 python3 scripts/greenlight.py report   # first scan: writes ~/.greenlight/report.html
 python3 scripts/auto.py install        # the scheduler (systemd user timer, or launchd on macOS)
 app/build.sh                           # optional: ~/Applications/Greenlight.app
@@ -28,6 +63,11 @@ Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add`
 with no LLM session, `auto.py add greenlight --schedule "*/30 * * * *" --orchestrator` runs `orchestrate.py tick`.
 
 Greenlight can run on another machine (a dev box that's always on): put the checkout there, and pick it in the app's **Settings › Hosts** (any `Host` in `~/.ssh/config`; **Test** checks it, then relaunch), or set `GREENLIGHT_HOST`. `scripts/sync.sh` copies a local checkout to that host.
+
+> **Safety.** Agents run with safe permissions by default. Setting `bypass` for a harness (below) lets an agent run any
+> command unattended: only do that on a machine you're comfortable letting an agent drive.
+
+**Verbose activity** (Settings › Chat & voice, off by default) adds a live log above the chat's message box: Chief's every command with its output and thinking, each workspace agent's state, and every move Greenlight makes.
 
 ## Configuration
 
@@ -168,3 +208,7 @@ ssh <host> cat <repo>/scripts/dev.py | python3 - install <host> <repo>
 for t in tests/test_*.py; do python3 "$t" || echo "FAIL $t"; done   # test_chat.py needs pytest: uv run --with pytest python -m pytest tests/test_chat.py
 node tests/test_dashboard.cjs; node tests/test_terminal.cjs; node tests/test_stage.cjs       # need playwright-core and Chrome
 ```
+
+## Contributing & license
+
+Greenlight is early and moves fast. See [CONTRIBUTING.md](CONTRIBUTING.md), and report security problems privately per [SECURITY.md](SECURITY.md). MIT licensed, see [LICENSE](LICENSE).
