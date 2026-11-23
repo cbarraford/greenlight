@@ -2365,10 +2365,10 @@ struct ChatView: View, Looked {
     /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
     @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
         let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
-        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : Text(q)
+        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : lk.id == "zen" ? Text(q).italic() : Text(q)
         VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
             if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
-            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk.opacity(0.7))  // your color, faded until it sends (Zen has no box or dashes to say so)
+            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk)  // your color at full strength (fading it fell under 4.5:1); the label, dashes or Zen's italic say queued
                 .multilineTextAlignment(.trailing).padding(.horizontal, boxed ? 14 : 0).padding(.vertical, boxed ? 10 : 0)
                 .background {
                     switch lk.id {
