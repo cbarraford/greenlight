@@ -1962,16 +1962,16 @@ function nextStep(name){
 let hcT;
 function hideCard(){ clearTimeout(hcT); const e = document.getElementById("hcard"); if (e) e.remove() }
 function leaveCard(){ clearTimeout(hcT); hcT = setTimeout(hideCard, 150) }  // time to cross the gap into the card
-function dropGone(snap){  // a refresh without a workspace (merged, cleaned up): its card closes and it leaves the selection
-  const live = new Set(snap.pucks.map(p => p.name)), card = document.getElementById("hcard");
-  if (card && !live.has(card.dataset.name)) hideCard();
-  if (![...ui.picked].some(n => !live.has(n))) return;
+const hexOn = n => document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`);  // a workspace's hex in the hive or a fan
+function dropGone(snap){  // a refresh without a workspace (merged, cleaned up): it leaves the selection, here and in the app
+  const live = new Set(snap.pucks.map(p => p.name)), gone = [...ui.picked].filter(n => !live.has(n));
+  if (!gone.length) return;
   ui.picked = new Set([...ui.picked].filter(n => live.has(n)));
-  if (!ui.picked.size) post({cmd: "unpick"});  // none left: the app forgets them too, or a reload would light them again
+  post({cmd: "unpick", gone});  // the app forgets just these (not a pick Chief made since), or a reload would light them again
 }
-function orphanCard(){  // still in the data but its hex left this window (parked elsewhere, filtered): the card goes with it
-  const card = document.getElementById("hcard"), n = card && CSS.escape(card.dataset.name);
-  if (card && !document.querySelector(`.cell[data-dock="${n}"],.fp[data-dock="${n}"]`)) hideCard();
+function orphanCard(){  // after a refresh: a card whose hex is gone (workspace done, parked elsewhere, filtered) goes with it
+  const card = document.getElementById("hcard");
+  if (card && !hexOn(card.dataset.name)) hideCard();
 }
 document.addEventListener("mouseover", e => {
   const el = e.target.closest(".cell[data-dock],.fp[data-dock]"), p = el && ui.dk[el.dataset.dock];
@@ -2002,7 +2002,7 @@ document.addEventListener("mouseout", e => {
 document.addEventListener("pointerdown", e => { if (!e.target.closest("#hcard")) hideCard() }, true);
 document.addEventListener("keydown", e => {
   const card = document.getElementById("hcard"); if (!card) return;
-  const from = document.querySelector(`.cell[data-dock="${CSS.escape(card.dataset.name)}"],.fp[data-dock="${CSS.escape(card.dataset.name)}"]`);
+  const from = hexOn(card.dataset.name);
   if (e.key === "Tab" && !e.shiftKey && from && document.activeElement === from) { const b = card.querySelector("button:not([disabled]),a[href]"); if (b) { e.preventDefault(); clearTimeout(hcT); b.focus() } }
   else if (e.key === "Escape" && card.contains(document.activeElement)) { e.preventDefault(); e.stopImmediatePropagation(); hideCard(); if (from) { ui.cardBack = true; from.focus({preventScroll: true}); ui.cardBack = false } }
 }, true);
@@ -2349,7 +2349,7 @@ window.mc = {
   focus: () => ({page: ui.page?.name || "", view: ui.view, paths: viewPaths(), repos: ui.paths && arr(ui.repos)}),  // for Chief: what this window shows (paths: its projects' workspaces, repos: their repos, so a workspace made after this is in it too; null for all)
   pick(names, open){  // the hexes Chief's last reply is about; [] clears. Just one on screen: its card opens too, unless open is false (the app wasn't sure enough)
     const was = ui.picked; ui.picked = new Set(arr(names)); render();
-    const on = [...ui.picked].map(n => [document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`), ui.dk[n]]).filter(([e, p]) => e && p && !p.members);
+    const on = [...ui.picked].map(n => [hexOn(n), ui.dk[n]]).filter(([e, p]) => e && p && !p.members);
     const card = document.getElementById("hcard");
     if (on.length === 1 && open !== false) showCard(...on[0]); else if (card && was.has(card.dataset.name)) hideCard();
   },

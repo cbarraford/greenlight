@@ -908,7 +908,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
         if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
-        if cmd == "unpick" { if let l { l.c.light([], false) } else { pick([]) } }  // a click on a lit hex clears them in every window (on its chat's)
+        if cmd == "unpick" {  // a click on a lit hex clears them in every window (on its chat's); gone: just the workspaces a refresh dropped
+            let gone = (b["gone"] as? [String]).map(Set.init)
+            if let l { l.c.light(gone.map { g in l.picked.filter { !g.contains($0) } } ?? [], gone != nil && l.pickOpen) }
+            else { pick(gone.map { g in picked.filter { !g.contains($0) } } ?? [], open: gone != nil && pickOpen) }
+        }
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
