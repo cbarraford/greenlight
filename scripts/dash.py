@@ -559,6 +559,8 @@ def _advice_me(r):
             return "Merge from here when the hold is over, or take the hold out of the goal."
         if "nobody else reviews" in a:
             return "Read the diff yourself, then merge from here."
+        if "nothing blocks it" in a:
+            return "Nothing blocks it: merge from here when you're happy with it."
         if "rebase" in a:
             return "There's no real conflict: say yes to a rebase in the chat and greenlight runs it."
         if "branch protection" in a:

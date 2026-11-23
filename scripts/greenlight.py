@@ -553,6 +553,44 @@ def linked_number(v):
     return v.get("number") if isinstance(v, dict) else v
 
 
+APPROVAL_RULES_TTL = 3600  # a repo's required-approval count, cached per repo and base branch
+
+
+def gh_required_approvals(project, branch):
+    """Approving reviews GitHub's rulesets require on `branch` (classic protection comes in the PR query):
+    an int, cached an hour per repo and branch in approval_rules.json, or None when GitHub couldn't say."""
+    f, key = STATE / "approval_rules.json", f"{project}@{branch}"
+    try:
+        cache = json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        cache = {}
+    hit = cache.get(key) or {}
+    if isinstance(hit.get("n"), int) and time.time() - (hit.get("at") or 0) < APPROVAL_RULES_TTL:
+        return hit["n"]
+    try:
+        rules = json.loads(run(["gh", "api", f"repos/{project}/rules/branches/{branch}"], timeout=45, tries=2))
+    except Exception:  # noqa: BLE001 - unknown, not zero: the PR's reviewDecision still says when one is required
+        return None
+    if not isinstance(rules, list):
+        return None
+    n = max([(r.get("parameters") or {}).get("required_approving_review_count") or 0
+             for r in rules if isinstance(r, dict) and r.get("type") == "pull_request"] or [0])
+    cache[key] = {"n": n, "at": int(time.time())}
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(cache))
+    except OSError:
+        pass
+    return n
+
+
+def approvals_needed(mr):
+    """Whether the forge needs any approval on this MR/PR before it can merge: GitLab's count, or on GitHub the
+    branch protection / rulesets count and reviewDecision. False means approvals are no blocker and nothing says otherwise."""
+    return bool(mr.get("_approvals_required") or mr.get("_approvals_left")
+                or mr.get("detailed_merge_status") in ("not_approved", "requested_changes"))
+
+
 def gh_pr(project, number):
     """A GitHub PR in the GitLab MR shape mr_details returns. The gh user (the viewer) becomes ME,
     so every author/approver test in check() and evaluate() reads the same for both forges."""
@@ -605,8 +643,10 @@ def gh_pr(project, number):
         "detailed_merge_status": status, "blocking_discussions_resolved": all(t["isResolved"] for t in p["reviewThreads"]["nodes"]),
         "source_branch": p["headRefName"], "target_branch": p["baseRefName"], "sha": p["headRefOid"], "updated_at": p["updatedAt"],
         "_discussions": threads, "_approved_by": [u for s, u in reviews if s == "APPROVED"],
-        # ponytail: classic branch protection only (null unless you can read it); rulesets aren't counted
-        "_approvals_required": (((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0), "_approvals_left": int(decision == "REVIEW_REQUIRED"),
+        # classic branch protection (null unless you can read it) or the base branch's rulesets, whichever asks more
+        "_approvals_required": max((((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0),
+                                   (gh_required_approvals(project, p["baseRefName"]) or 0) if p["state"] == "OPEN" else 0),
+        "_approvals_left": int(decision == "REVIEW_REQUIRED"),
         "_can_approve": p["author"] is None or p["author"]["login"] != me,  # GitHub won't let you approve your own PR
         "_reviewed_sha": next((r["commit"]["oid"] for r in reversed((p.get("myReviews") or {}).get("nodes") or [])
                                if (r.get("author") or {}).get("login") == me and r.get("commit")), None),
@@ -894,7 +934,10 @@ def check(step, mr, ws, milestone):
             if not auto_approval:
                 if "solo" in opts:  # nobody else reviews this repo: I do, then greenlight runs the cmd
                     return "me", "mergeable, and nobody else reviews this repo: review it, then merge?", merge
-                return "reviewers", "mergeable but no human approval yet (repo doesn't require one)", None
+                explicit = opt_val(opts, "human_approval").strip().lower() == "true"  # the repo's own "wait for a reviewer"
+                if not approvals_needed(mr) and not explicit:  # the forge requires no approval: no reviewer is waited on, the merge is yours
+                    return "me", "mergeable, nothing blocks it: merge it?", merge
+                return "reviewers", "mergeable but no human approval yet (only a bot or you approved)", None
         if st == "mergeable":
             import audit  # every unattended merge goes through the semantic audit, regardless of approval route
             v = audit.merge_verdict(ws, mr)

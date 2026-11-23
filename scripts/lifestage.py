@@ -379,6 +379,9 @@ def _place(r, nxt, ck):
         if "nobody else reviews" in why:
             return spot("land", "merge-gate", "author", "you", "Review it, then merge",
                         f"{Ref} is ready to merge and nobody else reviews this repo. Read the diff yourself, then merge it.", why)
+        if "nothing blocks it" in why:
+            return spot("land", "merge-gate", "author", "you", f"Merge {ref}?",
+                        f"{Ref} is ready to merge and nothing blocks it. Merge it when you're happy with it.", why)
         if "by hand" in why:
             return spot("land", "merge-gate", "author", "you", "Merge it by hand?",
                         f"{Ref} is ready to merge into {into}, which is not the default branch. Merge it by hand if that is what you want.", why)
