@@ -683,7 +683,9 @@ def test_done_workspace_cleanup_question_binds_worktree_id_in_scope(tmp_path, mo
     chat.turn("cleanup?", "claude-haiku-5-5", None)
     assert events[-1]["ok"] is True
     recs = decisions.load()
-    assert recs and recs[-1].get("worktree_id") == "wt-done" and recs[-1].get("step") == "done"
+    assert recs and decisions.is_open(recs[-1]) and recs[-1].get("worktree_id") == "wt-done" and recs[-1].get("step") == "done"
+    assert (tmp_path / os.path.basename(chat.asked_path())).exists()
+    assert not (tmp_path / (chat.QUESTION_DELIVERY + chat.scope_suffix())).exists()
 
 
 def test_answer_checks_live_head_and_preserves_session(tmp_path, monkeypatch):
