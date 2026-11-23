@@ -48,6 +48,11 @@ final class Voice: NSObject, ObservableObject {
     var waitWord = "One minute"
     var ending = false  // Chief said [voice: off]: stop once it's done speaking
     var muted = false  // you cut in or said stop: the rest of this reply stays unspoken
+    /// You muted the mic (the header's mic button, ⇧⌘M): nothing it hears reaches Apple's recognizer or GPT-Live, and the turn you
+    /// were in the middle of is dropped. The engine keeps running so Chief can still speak (and its echo cancellation stays set up),
+    /// so macOS still shows the mic in use. Each voice mode starts unmuted.
+    @Published private(set) var micMuted = false
+    private var micOff = false  // micMuted for the mic's tap on the audio thread, under `lock`
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     /// GPT-Live mode (Speech kind "live", fixed as voice mode starts): it listens, takes turns and speaks; Chief does the work.
@@ -228,9 +233,10 @@ final class Voice: NSObject, ObservableObject {
         if inFormat.channelCount > 1 { conv?.channelMap = [0]; lconv?.channelMap = [0] }
         input.removeTap(onBus: 0)
         try input.tap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
-            guard let self, let conv, let m = convert(b, conv, self.micFormat) else { return }
+            guard let self else { return }
+            self.lock.lock(); let r = self.request, off = self.micOff; self.lock.unlock()
+            guard !off, let conv, let m = convert(b, conv, self.micFormat) else { return }  // muted: the audio goes nowhere
             if let lconv { convert(b, lconv, self.live.fmt).map(self.live.mic) }  // GPT-Live: the mic goes to it, not to Apple's recognizer
-            self.lock.lock(); let r = self.request; self.lock.unlock()
             r?.append(m)
             let l = level(m)
             DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
@@ -247,7 +253,7 @@ final class Voice: NSObject, ObservableObject {
 
     /// A fresh recognition request: after each of your turns, after Chief speaks (its echo is in the old one), after an error.
     func listen() {
-        guard !isLive else { return }
+        guard !isLive, !micMuted else { return }  // muted: unmuting listens again
         task?.cancel()
         let r = SFSpeechAudioBufferRecognitionRequest()
         r.shouldReportPartialResults = true
@@ -531,6 +537,22 @@ final class Voice: NSObject, ObservableObject {
         stopAll()
     }
 
+    func toggleMic() { setMicMuted(!micMuted) }
+    /// Mutes or unmutes the mic, only while voice mode is on (unmuting always works). Muting cuts the tap off first, then drops the
+    /// recognition request and the half-heard turn with it, so nothing said while muted is transcribed or sent.
+    func setMicMuted(_ m: Bool) {
+        guard m != micMuted, on || !m else { return }
+        lock.lock(); micOff = m; if m { request = nil }; lock.unlock()
+        micMuted = m
+        Diag.event("voice", ["mic_muted": m])
+        if m {
+            endTurn?.cancel(); task?.cancel(); task = nil
+            heard = ""
+            live.dropMic()
+            meter.you = meter.you.map { _ in 0 }
+        } else if on { listen() }
+    }
+
     /// Never started (or long since stopped): nothing for stopAll to stop. It touches engine.inputNode, which on a Mac that hasn't
     /// granted the microphone asks for it (or, with nobody to answer, blocks): closing a window that never used voice mustn't.
     var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
@@ -540,7 +562,8 @@ final class Voice: NSObject, ObservableObject {
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
-        lock.lock(); request = nil; lock.unlock()
+        lock.lock(); request = nil; micOff = false; lock.unlock()
+        micMuted = false
         engine.stop()
         if inputTapped { engine.inputNode.removeTap(onBus: 0); inputTapped = false }
         if mixerTapped { engine.mainMixerNode.removeTap(onBus: 0); mixerTapped = false }
@@ -1054,6 +1077,8 @@ final class LiveVoice {
             if let j = try? JSONSerialization.data(withJSONObject: o), let s = String(data: j, encoding: .utf8) { self.write(k, s) }
         }
     }
+    /// Mute: the bit of mic audio not yet sent is never sent.
+    func dropMic() { q.async { self.pending = Data() } }
     func close() {
         genLock.lock(); liveGen += 1; genLock.unlock()
         on = nil

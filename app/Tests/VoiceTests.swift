@@ -2,6 +2,7 @@ import AVFoundation
 import CoreAudio
 import Foundation
 import Network
+import Speech
 
 // MARK: voice & GPT-Live unit tests
 
@@ -46,11 +47,37 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
               && off.pop.label == "Move to its own window" && live.pop.label == "Put back in the main window"
               && live.style.help == "Style: Zen. Click for Orb" && live.style.label.contains("Orb")
               && [off.attach, off.view, off.caption, off.style, off.voice, off.pop, live.view, live.caption, live.pop].allSatisfy { !$0.help.isEmpty && $0.help.count <= 100 && !$0.label.isEmpty })
+        let unmuted = HeaderTips(on: true, name: "Ada"), muted = HeaderTips(on: true, micMuted: true, name: "Ada")
+        check("chat header: the mic knob says what a click does now: mute, or unmute",
+              unmuted.mic.label == "Mute the microphone" && muted.mic.label == "Unmute the microphone" && muted.mic.help.contains("Ada")
+              && [unmuted.mic, muted.mic].allSatisfy { $0.help.contains("⇧⌘M") && $0.help.count <= 100 })
+        let red = ["FF453A", "E5392F"], orange = ["FF9F0A", "F08A00"], byId = Dictionary(uniqueKeysWithValues: looks.map { ($0.id, mutedFill($0)) })
+        check("chat header: the muted mic is red where the look's accent is orange, orange elsewhere, never the accent",
+              ["orb", "onair", "zen"].allSatisfy { red.contains(byId[$0] ?? "") } && ["conversation", "editorial", "hud", "phosphor"].allSatisfy { orange.contains(byId[$0] ?? "") }
+              && looks.allSatisfy { mutedFill($0) != $0.accent })
         let scr = NSRect(x: 0, y: 0, width: 1000, height: 800), sz = NSSize(width: 200, height: 24)
         let mid = hintFrame(sz, mouse: NSPoint(x: 500, y: 400), screen: scr), low = hintFrame(sz, mouse: NSPoint(x: 500, y: 20), screen: scr)
         let edge = hintFrame(sz, mouse: NSPoint(x: 990, y: 400), screen: scr)
         check("hover hint: by the cursor, below it, flipped above near the bottom, kept on screen at the right edge",
               mid.minX == 510 && mid.maxY < 400 && mid.maxY > 360 && low.minY > 20 && scr.contains(low) && scr.contains(edge) && edge.maxX <= 996)
+    }
+    check("voice: muted shows when nobody else has the floor, and says so",
+          voiceTalk(speaking: false, thinking: false, micMuted: true) == .muted && voiceTalk(speaking: true, thinking: false, micMuted: true) == .speaking
+          && voiceTalk(speaking: false, thinking: true, micMuted: true) == .thinking && voiceTalk(speaking: false, thinking: false, micMuted: false) == .listening
+          && voiceTalkLabel(.muted) == "Muted" && voiceTalkLabel(.listening) == "Listening" && mutedHint.contains("unmute"))
+    do {  // muting drops the half-heard turn and the recognition request: nothing more reaches the recognizer until unmute
+        let v = Voice()
+        v.setMicMuted(true)
+        let offStaysUnmuted = !v.micMuted  // voice mode off: nothing to mute
+        v.on = true; v.isLive = true  // GPT-Live: listen() doesn't start Apple's recognizer here
+        let r = SFSpeechAudioBufferRecognitionRequest(), w = DispatchWorkItem {}
+        v.request = r; v.heard = "park the"; v.endTurn = w; v.meter.you = v.meter.you.map { _ in 0.5 }
+        v.setMicMuted(true)
+        let muted = v.micMuted && v.request == nil && v.heard.isEmpty && w.isCancelled && v.meter.you.allSatisfy { $0 == 0 }
+        v.toggleMic()
+        check("voice: mute only while voice mode is on; it drops the turn, the request and the meter; toggling unmutes",
+              offStaysUnmuted && muted && !v.micMuted)
+        v.on = false
     }
     check("voice: you cutting in, not its own echo", isBargeIn("wait hold on a second", "Three MRs are ready") && !isBargeIn("three MRs are", "Three MRs are ready") && !isBargeIn("hold on", ""))
     if !AVSpeechSynthesisVoice.speechVoices().isEmpty {

@@ -1093,7 +1093,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
-                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"),
+                                            ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"), ("Mute/Unmute Microphone", "appMuteMic", "M"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
                                             ("Reload Dashboard", "appReload", "r")], target: self)
         _ = menu("Help", [("Report a Bug…", "appReportBug", "")], target: self)
@@ -1212,6 +1212,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !greenlight.voice.on && !greenlight.voice.starting { setChat(hidden: false); NSApp.activate(ignoringOtherApps: true) }
         greenlight.voice.toggle()
     }
+    @objc func appMuteMic() { greenlight.voice.toggleMic() }  // ⇧⌘M: voice mode's mic, muted or not (nothing while voice mode is off)
     @objc func appToggleChat() {  // the menu and the page can both catch one ⌘⇧C: count it once
         if Date().timeIntervalSince(lastToggle) < 0.3 { return }
         lastToggle = Date()
