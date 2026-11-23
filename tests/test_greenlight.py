@@ -328,7 +328,7 @@ assert gh_pr(mergeable="UNKNOWN", mergeStateStatus="UNKNOWN")["detailed_merge_st
 assert gh_pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")["_approvals_left"] == 1
 # rulesets: the base branch's pull_request rule count, cached per repo and branch; unknown (an error) is never cached
 (greenlight.STATE / "approval_rules.json").unlink(missing_ok=True)
-_rules = json.dumps([{"type": "required_signatures"}, {"type": "pull_request", "parameters": {"required_approving_review_count": 2}}])
+_rules = json.dumps([[{"type": "required_signatures"}], [{"type": "pull_request", "parameters": {"required_approving_review_count": 2}}]])  # two pages
 with mock.patch.object(greenlight, "run", return_value=_rules) as _r:
     assert greenlight.gh_required_approvals("octo/rules", "main") == 2
     assert greenlight.gh_required_approvals("octo/rules", "main") == 2 and _r.call_count == 1  # second read is the cache
@@ -344,10 +344,18 @@ with mock.patch.object(greenlight, "run", return_value=_rules):
     assert greenlight.gh_required_approvals("octo/err", "main") == 2  # then asks again: an unknown never sticks as 0
 with mock.patch.object(greenlight, "run", return_value="[]") as _r:
     greenlight.gh_required_approvals("octo/slash", "rel/1#x")
-assert _r.call_args.args[0][2] == "repos/octo/slash/rules/branches/rel%2F1%23x?per_page=100"  # the branch is one path segment
+assert _r.call_args.args[0][2:] == ["--paginate", "--slurp", "repos/octo/slash/rules/branches/rel%2F1%23x?per_page=100"]  # the branch is one path segment
 assert gh_pr()["_approvals_required"] == 0  # the PR query's JSON isn't a rule list: unknown counts as 0, the decision still rules
 with mock.patch.object(greenlight, "gh_required_approvals", return_value=1):
     assert gh_pr()["_approvals_required"] == 1
+with mock.patch.object(greenlight, "gh_required_approvals", return_value=None):  # count unreadable, GitHub still says required
+    assert gh_pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")["_approvals_required"] == 1  # the rail says "0 of 1"
+# 8 scan threads saving at once lose no entry
+import threading as _th
+with mock.patch.object(greenlight, "run", return_value="[]"):
+    _ts = [_th.Thread(target=greenlight.gh_required_approvals, args=(f"octo/t{i}", "main")) for i in range(8)]
+    [t.start() for t in _ts]; [t.join() for t in _ts]
+assert all(f"octo/t{i}@main" in json.loads((greenlight.STATE / "approval_rules.json").read_text()) for i in range(8))
 roll = lambda state, *ctx: {"nodes": [{"commit": {"statusCheckRollup": {"state": state, "contexts": {"nodes": list(ctx)}}}}]}
 run_ = lambda name, status, concl=None: {"__typename": "CheckRun", "name": name, "status": status, "conclusion": concl,
                                          "checkSuite": {"workflowRun": {"workflow": {"name": "test"}}}}

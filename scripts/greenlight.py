@@ -64,7 +64,7 @@ DEFAULTS = {
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
-    "require_human_approval": True,   # a human signs off: a reviewer where the forge requires approvals, else you ("merge it?");
+    "require_human_approval": True,   # without automerge a human signs off: a reviewer where the forge requires approvals, else you ("merge it?");
                                       # False: a mergeable MR with no other human's approval merges anyway
     "adopt": {"cap": 10, "roles": ["author", "reviewer"]},  # adopt.py: creates per run, which of your MRs get a workspace
     "blocking": None,                 # blocking.py roster ({repos, people, teams, lead}); None turns it off
@@ -559,40 +559,49 @@ APPROVAL_RULES_TTL = 3600  # a repo's required-approval count, cached per repo a
 APPROVAL_RULES_MISS_TTL = 300  # GitHub couldn't say (no rulesets on the server, no access): ask again in 5 minutes
 
 
-def _save_approval_rules(f, cache):
-    """Atomic: mr_details runs on 8 threads, and a reader must never see half a file."""
+_APPROVAL_RULES_LOCK = threading.Lock()
+
+
+def _load_approval_rules(f):
     try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(cache))
-        os.replace(tmp, f)
-    except OSError:
-        pass
+        return json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_approval_rules(f, key, entry):
+    """mr_details runs on 8 threads: re-read and merge under a lock (no lost entries), then replace atomically
+    (a reader never sees half a file)."""
+    with _APPROVAL_RULES_LOCK:
+        cache = _load_approval_rules(f) | {key: entry}
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(cache))
+            os.replace(tmp, f)
+        except OSError:
+            pass
 
 
 def gh_required_approvals(project, branch):
     """Approving reviews GitHub's rulesets require on `branch` (classic protection comes in the PR query):
     an int, cached an hour per repo and branch in approval_rules.json, or None (cached 5 minutes) when GitHub couldn't say."""
     f, key = STATE / "approval_rules.json", f"{project}@{branch}"
-    try:
-        cache = json.loads(f.read_text()) if f.exists() else {}
-    except (OSError, ValueError):
-        cache = {}
-    hit = cache.get(key) or {}
+    hit = _load_approval_rules(f).get(key) or {}
     age = time.time() - (hit.get("at") or 0)
     if isinstance(hit.get("n"), int) and age < APPROVAL_RULES_TTL:
         return hit["n"]
     if "n" in hit and hit["n"] is None and age < APPROVAL_RULES_MISS_TTL:
         return None
     try:
-        rules = gh("api", f"repos/{project}/rules/branches/{urllib.parse.quote(branch, safe='')}?per_page=100")
+        pages = gh("api", "--paginate", "--slurp", f"repos/{project}/rules/branches/{urllib.parse.quote(branch, safe='')}?per_page=100")
+        rules = [r for pg in pages for r in pg] if isinstance(pages, list) and all(isinstance(pg, list) for pg in pages) else None
     except Exception:  # noqa: BLE001 - unknown, not zero: the PR's reviewDecision still says when one is required
         rules = None
     n = None if not isinstance(rules, list) else max(
         [(r.get("parameters") or {}).get("required_approving_review_count") or 0
          for r in rules if isinstance(r, dict) and r.get("type") == "pull_request"] or [0])
-    cache[key] = {"n": n, "at": int(time.time())}
-    _save_approval_rules(f, cache)
+    _save_approval_rules(f, key, {"n": n, "at": int(time.time())})
     return n
 
 
@@ -657,7 +666,8 @@ def gh_pr(project, number):
         "_discussions": threads, "_approved_by": [u for s, u in reviews if s == "APPROVED"],
         # classic branch protection (null unless you can read it) or the base branch's rulesets, whichever asks more
         "_approvals_required": max((((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0),
-                                   (gh_required_approvals(project, p["baseRefName"]) or 0) if p["state"] == "OPEN" else 0),
+                                   (gh_required_approvals(project, p["baseRefName"]) or 0) if p["state"] == "OPEN" else 0,
+                                   int(decision == "REVIEW_REQUIRED")),  # GitHub says one is needed, though the count is unreadable
         "_approvals_left": int(decision == "REVIEW_REQUIRED"),
         "_can_approve": p["author"] is None or p["author"]["login"] != me,  # GitHub won't let you approve your own PR
         "_reviewed_sha": next((r["commit"]["oid"] for r in reversed((p.get("myReviews") or {}).get("nodes") or [])
