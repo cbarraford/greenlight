@@ -112,6 +112,7 @@ def check_swift_user_defaults(root=ROOT):
             allowed = (
                 (path.name == "Config.swift" and "let ud:" in line)
                 or (path.name == "App.swift" and "removePersistentDomain" in line)
+                or (path.name == "App.swift" and "NSWindow Frame" in line)  # AppKit keeps frames there, --uitest or not
             )
             if not allowed:
                 errs.append(f"{path.relative_to(root)}:{i}: stray UserDefaults.standard (use `ud` so --uitest stays isolated)")

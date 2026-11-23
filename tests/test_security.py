@@ -176,7 +176,8 @@ assert "func shellPath(" in config_swift and "shellPath(greenlightHome)" in conf
 for sf in check_safety.swift_files():
     for i, line in enumerate(sf.read_text().splitlines(), 1):
         if "UserDefaults.standard" in line:
-            allowed = (sf.name == "Config.swift" and "let ud:" in line) or (sf.name == "App.swift" and "removePersistentDomain" in line)
+            allowed = (sf.name == "Config.swift" and "let ud:" in line) or (sf.name == "App.swift" and "removePersistentDomain" in line) \
+                or (sf.name == "App.swift" and "NSWindow Frame" in line)  # AppKit keeps window frames there, --uitest or not
             assert allowed, f"stray UserDefaults.standard in {sf.name}:{i}: {line.strip()}"
 
 # 6. audit.py review handles argv cleanly and passes diff= (not outbound=) to contracts()

@@ -331,6 +331,12 @@ func fitOnScreen(_ f: NSRect, screens: [NSRect]) -> NSRect {
     let w = min(f.width, home.width), h = min(f.height, home.height)
     return NSRect(x: home.midX - w / 2, y: home.midY - h / 2, width: w, height: h)
 }
+/// The rect in an NSWindow frame string ("x y w h screenX screenY screenW screenH "), as saved: `setFrameUsingName` rescales it
+/// onto the screen with focus when that's another monitor, so a relaunch moved a window off the laptop onto the external.
+func savedFrame(_ s: String?) -> NSRect? {
+    let n = (s ?? "").split(separator: " ").prefix(4).compactMap { Double($0) }
+    return n.count == 4 && n[2] > 0 && n[3] > 0 ? NSRect(x: n[0], y: n[1], width: n[2], height: n[3]) : nil
+}
 /// A new window cascaded 30pt right and down from `f`: at least `min` (a small view window's size is too small for a whole
 /// Greenlight Center), at most the screen, and inside it, so ⌘N after ⌘N doesn't walk windows off the edge. No screen: just cascaded.
 func cascadeFrame(_ f: NSRect, min m: NSSize, in screen: NSRect?) -> NSRect {
@@ -1427,13 +1433,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = v.widthAnchor.constraint(greaterThanOrEqualToConstant: wd); k.priority = pr; k.isActive = true
         }
         w.contentView = sp
-        if w.setFrameUsingName(l1FrameName(id)) { onScreen(w) } else {
+        let saved = savedFrame(UserDefaults.standard.string(forKey: "NSWindow Frame \(l1FrameName(id))"))  // AppKit's, never --uitest's ud
+        if saved == nil {
             if let src = from ?? (window.isVisible ? window : nil) {  // cascaded off the one you asked from, on its screen
                 w.setFrame(cascadeFrame(src.frame, min: w.minSize, in: (src.screen ?? NSScreen.main)?.visibleFrame), display: false)
             } else { w.center() }
         }
+        w.setFrameAutosaveName(l1FrameName(id))  // applies AppKit's copy, rescaled onto the focused screen: put it back as saved
+        if let f = saved { w.setFrame(f, display: false); onScreen(w) }
         App.widen(w, to: w.minSize.width, display: false)
-        w.setFrameAutosaveName(l1FrameName(id))
         sp.layoutSubtreeIfNeeded()
         sp.setPosition(max(480, sp.bounds.width - 440), ofDividerAt: 0)
         if !uitest { sp.autosaveName = l1FrameName(id, "chatSplit") }  // AppKit keeps it where --uitest's ud can't remove it

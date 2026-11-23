@@ -147,6 +147,10 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && fitOnScreen(NSRect(x: 1300, y: 100, width: 800, height: 600), screens: [mainScr]) == NSRect(x: 1300, y: 100, width: 800, height: 600)
           && fitOnScreen(NSRect(x: 100, y: 870, width: 800, height: 600), screens: [mainScr]) != NSRect(x: 100, y: 870, width: 800, height: 600)  // bar above the top
           && fitOnScreen(NSRect(x: 5, y: 5, width: 10, height: 10), screens: []) == NSRect(x: 5, y: 5, width: 10, height: 10))
+    check("windows: a saved frame is read as saved, not rescaled onto another screen",
+          savedFrame("70 90 1300 900 0 0 1728 1084 ") == NSRect(x: 70, y: 90, width: 1300, height: 900)
+          && savedFrame("-960 -578 1000 700 0 0 1728 1084") == NSRect(x: -960, y: -578, width: 1000, height: 700)
+          && savedFrame(nil) == nil && savedFrame("") == nil && savedFrame("1 2 3") == nil && savedFrame("0 0 0 0 0 0 1 1") == nil)
     check("windows: a new window cascades off the one you're in, at least its minimum and inside that screen",
           cascadeFrame(NSRect(x: 100, y: 100, width: 800, height: 600), min: NSSize(width: 480, height: 520), in: mainScr) == NSRect(x: 130, y: 70, width: 800, height: 600)
           && cascadeFrame(NSRect(x: 100, y: 300, width: 900, height: 420), min: NSSize(width: 480, height: 520), in: mainScr) == NSRect(x: 130, y: 170, width: 900, height: 520)  // a view window's size: grown to L1's
