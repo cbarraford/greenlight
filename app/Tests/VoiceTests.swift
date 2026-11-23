@@ -15,7 +15,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
         let y = hueSat(l.you), t = hueSat(l.text), d = abs(y.hue - t.hue)
         return y.sat >= 0.4 && (t.sat < 0.3 || min(d, 360 - d) >= 45) && contrast(l.you, l.stage) >= 4.5 && contrast(l.you, l.page) >= 4.5 && l.you != l.text
     })
-    check("voice: every look has its own id and themes the stage",Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
+    check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
