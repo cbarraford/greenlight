@@ -570,8 +570,8 @@ def _load_approval_rules(f):
 
 
 def _save_approval_rules(f, key, entry):
-    """mr_details runs on 8 threads: re-read and merge under a lock (no lost entries), then replace atomically
-    (a reader never sees half a file)."""
+    """mr_details runs on 8 threads: re-read and merge under a lock (no entries lost within one process; two processes
+    can still race, which only costs a refetch), then replace atomically (a reader never sees half a file)."""
     with _APPROVAL_RULES_LOCK:
         cache = _load_approval_rules(f) | {key: entry}
         try:
@@ -667,7 +667,7 @@ def gh_pr(project, number):
         # classic branch protection (null unless you can read it) or the base branch's rulesets, whichever asks more
         "_approvals_required": max((((p.get("baseRef") or {}).get("branchProtectionRule") or {}).get("requiredApprovingReviewCount") or 0),
                                    (gh_required_approvals(project, p["baseRefName"]) or 0) if p["state"] == "OPEN" else 0,
-                                   int(decision == "REVIEW_REQUIRED")),  # GitHub says one is needed, though the count is unreadable
+                                   int(decision == "REVIEW_REQUIRED")),  # display only: the rail reads "0 of 1", not "none required", on an unreadable count
         "_approvals_left": int(decision == "REVIEW_REQUIRED"),
         "_can_approve": p["author"] is None or p["author"]["login"] != me,  # GitHub won't let you approve your own PR
         "_reviewed_sha": next((r["commit"]["oid"] for r in reversed((p.get("myReviews") or {}).get("nodes") or [])
