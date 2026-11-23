@@ -1965,7 +1965,13 @@ function leaveCard(){ clearTimeout(hcT); hcT = setTimeout(hideCard, 150) }  // t
 function dropGone(snap){  // a refresh without a workspace (merged, cleaned up): its card closes and it leaves the selection
   const live = new Set(snap.pucks.map(p => p.name)), card = document.getElementById("hcard");
   if (card && !live.has(card.dataset.name)) hideCard();
-  if ([...ui.picked].some(n => !live.has(n))) ui.picked = new Set([...ui.picked].filter(n => live.has(n)));
+  if (![...ui.picked].some(n => !live.has(n))) return;
+  ui.picked = new Set([...ui.picked].filter(n => live.has(n)));
+  if (!ui.picked.size) post({cmd: "unpick"});  // none left: the app forgets them too, or a reload would light them again
+}
+function orphanCard(){  // still in the data but its hex left this window (parked elsewhere, filtered): the card goes with it
+  const card = document.getElementById("hcard"), n = card && CSS.escape(card.dataset.name);
+  if (card && !document.querySelector(`.cell[data-dock="${n}"],.fp[data-dock="${n}"]`)) hideCard();
 }
 document.addEventListener("mouseover", e => {
   const el = e.target.closest(".cell[data-dock],.fp[data-dock]"), p = el && ui.dk[el.dataset.dock];
@@ -2389,9 +2395,9 @@ window.mc = {
     if (ui.rescan && snap.scanned !== ui.rescan) ui.rescan = 0;  // the new scan landed
     if (ui.page) {
       const sg = sigOf(snap.pucks.find(x => x.name === ui.page.name));
-      if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); outHead(); return }  // it moved: refresh facts + layout
+      if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); outHead(); orphanCard(); return }  // it moved: refresh facts + layout
     }
-    render(); outHead();
+    render(); outHead(); orphanCard();
   },
   asked(r){
     const st = ui.ask[r.name]; if (!st) return;

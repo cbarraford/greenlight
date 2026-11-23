@@ -902,17 +902,28 @@ test("Chief's picks: the hexes its reply is about get the ring, the rest dims; [
 test("a selected hex whose workspace drops out of a refresh closes its card and leaves the selection", async page => {
   await page.evaluate(() => window.mc.pick(["plan-b"], true));
   assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-b", "the picked hex's card is open");
-  await page.evaluate(s => window.mc.update({...s, ts: 2, pucks: s.pucks}), SNAP);
+  await page.evaluate(s => window.mc.update({...s, ts: 2}), SNAP);
   assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-b", "a refresh that still has it keeps the card");
   await page.evaluate(s => window.mc.update({...s, ts: 3, pucks: s.pucks.filter(p => p.name !== "plan-b")}), SNAP);
   assert.equal(await page.$("#hcard"), null, "its workspace is gone: the card closes on its own");
   assert.deepEqual(await page.evaluate(() => [...ui.picked]), [], "and the selection clears");
+  assert.equal((await posts(page, "unpick")).length, 1, "the app is told, so a reload doesn't light it again");
   assert.ok(!(await page.$(".fieldwrap.picking")), "the hive no longer dims around a gone pick");
   await page.evaluate(s => window.mc.update({...s, ts: 4}), SNAP);
   assert.ok(!(await page.$(".cell.picked")) && !(await page.$("#hcard")), "it coming back doesn't revive the old pick");
   await page.evaluate(() => window.mc.pick(["plan-a"], true));
   await page.evaluate(s => window.mc.update({...s, ts: 5, pucks: s.pucks.filter(p => p.name !== "plan-b")}), SNAP);
   assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-a", "another workspace leaving doesn't close this card");
+  assert.equal((await posts(page, "unpick")).length, 1, "nor clear the app's picks");
+});
+
+test("an open card whose hex a refresh hides (parked from another window) closes; the pick stays for when it's shown again", async page => {
+  await page.evaluate(() => window.mc.pick(["plan-b"], true));
+  assert.equal(await page.$eval("#hcard", e => e.dataset.name), "plan-b");
+  await page.evaluate(s => window.mc.update({...s, ts: 2, pucks: s.pucks.map(p => p.name === "plan-b" ? {...p, hidden: true} : p)}), SNAP);
+  assert.equal(await page.$("#hcard"), null, "its hex left the hive: the card goes too");
+  assert.deepEqual(await page.evaluate(() => [...ui.picked]), ["plan-b"], "still in the data: still picked");
+  assert.equal((await posts(page, "unpick")).length, 0);
 });
 
 const STAGES = ["mr_open", "ci_green", "threads", "merge"];
