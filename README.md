@@ -41,7 +41,7 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 | `harnesses` | `{}` | per agent: `{"bypass": true}` for full access, `{"bin": "/path"}` |
 | `llm_harness` | `"claude"` | runs the dashboard's own LLM calls (page design, suggestions) |
 | `merge_method` | `"merge"` | `merge`, `squash` or `rebase` |
-| `require_human_approval` | `true` | `false`: a mergeable MR with no other human's approval merges anyway |
+| `require_human_approval` | `true` | without `automerge`, a human signs off every merge: a reviewer where the forge requires approvals, else you ("merge it?"); `false`: a mergeable MR with no other human's approval merges anyway |
 | `adopt` | `{"cap": 10, "roles": ["author", "reviewer"]}` | workspaces `adopt.py` creates per run, and for which of your MRs |
 | `blocking` | `null` | GitLab only: a team roster for `blocking.py` (see its docstring); `null` turns it off |
 | `suggest_rules` | `[]` | extra rules for the dashboard's suggested prompts |

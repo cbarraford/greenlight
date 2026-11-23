@@ -36,6 +36,8 @@ Then, if config `blocking` is set, list what the user is blocking: `python3 ~/.c
 
 Read `~/.greenlight/last.json`. Each row has `next = {step, owner, action, cmd?, agent?}`. Don't re-derive what it decided.
 
+When you describe an MR/PR (the summary, a chat reply), name only its real merge blockers: CI, conflicts, open threads, draft, a needed rebase, requested changes. Mention approvals only when the forge requires them (`approvals_required` > 0, a `not_approved` / `review required` status). An empty review decision or zero approvals in a repo that requires none is no blocker: say nothing about approvals.
+
 Each row also has `life`: where the change is in its lifecycle and who holds it. `python3 ~/.claude/skills/greenlight/scripts/lifestage.py [<workspace>]` prints it by pile. The stages are Define, Build, Verify, Review and Land, each with sub-stages (`at` is its number, e.g. `4.3` Review › Respond). `pile` is `yours` (the user's side holds it and something should start: `suggestion.label` says what; the hover card's button shows it until the agent's prompt for it is written), `working` (their side is already on it), `waiting` (someone else holds it: say nothing), `done` or `parked`. `blocker` is the side holding it (`author`, `reviewers`, `ci`, `dependency`) and `holder` says who in words. When you tell the user where a workspace stands, use these words.
 
 ## 2. Act by owner

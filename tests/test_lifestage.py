@@ -132,7 +132,11 @@ def test_define_build_verify_review_land_and_done(lifestage_env):
     assert _life(_mr(_discussions=[_thread("alice", "octo")])) == ("4.4", "waiting", "reviewers", None)
     assert _life(_mr(_approvals_left=2, _approved_by=[])) == ("4.2", "waiting", "reviewers", None)
     assert _life(_mr(_approvals_left=1)) == ("4.5", "waiting", "reviewers", None)
-    assert _life(_mr(_approved_by=[])) == ("4.5", "waiting", "reviewers", None)
+    assert _life(_mr(_approved_by=[], _approvals_required=1)) == ("4.5", "waiting", "reviewers", None)  # required, met by nobody human
+    # a repo that requires no approvals: nobody to wait on, and nothing says "approval"
+    nb = _row(_mr(_approved_by=[]))["life"]
+    assert (nb["at"], nb["pile"], nb["holder"], nb["suggestion"]["label"]) == ("5.1", "yours", "you", "Merge !7?")
+    assert "approv" not in nb["do"] and "review" not in nb["do"], nb
 
     # Land
     assert _life(_mr()) == ("5.1", "working", "Greenlight", "Merge !7")

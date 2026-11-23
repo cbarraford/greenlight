@@ -1329,7 +1329,7 @@ function stepNote(k, i, cur, p, ml){
     case "milestone": return [ml.milestone || "not set", null];
     case "ready": return [mr.draft ? "still a draft" : "ready", null];
     case "threads": return threads ? [`${threads} unresolved`, "warn"] : ["none open", null];
-    case "approved": return [need ? `${appr} of ${need}` : `${appr} approvals`, null];
+    case "approved": return [need ? `${appr} of ${need}` : "none required", null];  // the forge asks none: no blocker
     case "merge": return ["greenlight merges", null];
     case "review": return ["your review", null];
     default: {

@@ -113,7 +113,9 @@ assert nxt(mr(**other, _discussions=[thread(greenlight.ME, greenlight.ME)])) == 
 assert nxt(mr(**other, _discussions=[thread(greenlight.ME, "someone")])) == ("review", "me")
 assert nxt(None) == ("goal", "me") and nxt(None, ws("build x")) == ("freeform", "agent")
 assert nxt(mr(draft=True), ws() | {"comment": "Rebase !5008 (stay draft) — dispatched 2026-10-17"}) == ("ready", "me")
-assert nxt(mr(_approved_by=[greenlight.BOT])) == ("merge", "reviewers")
+assert nxt(mr(_approved_by=[greenlight.BOT], _approvals_required=1)) == ("merge", "reviewers")  # a required approval met only by the bot
+assert nxt(mr(_approved_by=[greenlight.BOT])) == ("merge", "me")  # the repo requires none: no reviewer to wait on, the merge is mine
+assert "approv" not in greenlight.evaluate(ws(), mr(_approved_by=[greenlight.BOT]), None)["action"]
 assert nxt(mr(draft=True), ws("Merge !5008 (stay draft, revisit 2999-01-01)")) == ("parked", "parked")
 assert nxt(mr(draft=True), ws("Merge !5008 (stay draft, revisit 2000-01-01)")) == ("ready", "me")
 # threads: only my reply hands a thread back to the reviewer; whoever else spoke last (a person or the review bot) waits on an agent
@@ -324,6 +326,36 @@ assert gh_pr(state="MERGED")["state"] == "merged" and gh_pr(state="CLOSED")["sta
 assert gh_pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")["has_conflicts"]
 assert gh_pr(mergeable="UNKNOWN", mergeStateStatus="UNKNOWN")["detailed_merge_status"] == "checking"
 assert gh_pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")["_approvals_left"] == 1
+# rulesets: the base branch's pull_request rule count, cached per repo and branch; unknown (an error) is never cached
+(greenlight.STATE / "approval_rules.json").unlink(missing_ok=True)
+_rules = json.dumps([[{"type": "required_signatures"}], [{"type": "pull_request", "parameters": {"required_approving_review_count": 2}}]])  # two pages
+with mock.patch.object(greenlight, "run", return_value=_rules) as _r:
+    assert greenlight.gh_required_approvals("octo/rules", "main") == 2
+    assert greenlight.gh_required_approvals("octo/rules", "main") == 2 and _r.call_count == 1  # second read is the cache
+with mock.patch.object(greenlight, "run", return_value="[]"):
+    assert greenlight.gh_required_approvals("octo/none", "main") == 0
+with mock.patch.object(greenlight, "run", side_effect=RuntimeError("404")) as _r:
+    assert greenlight.gh_required_approvals("octo/err", "main") is None
+    assert greenlight.gh_required_approvals("octo/err", "main") is None and _r.call_count == 1  # a miss waits 5 minutes
+_c = json.loads((greenlight.STATE / "approval_rules.json").read_text())
+_c["octo/err@main"]["at"] -= greenlight.APPROVAL_RULES_MISS_TTL + 1
+(greenlight.STATE / "approval_rules.json").write_text(json.dumps(_c))
+with mock.patch.object(greenlight, "run", return_value=_rules):
+    assert greenlight.gh_required_approvals("octo/err", "main") == 2  # then asks again: an unknown never sticks as 0
+with mock.patch.object(greenlight, "run", return_value="[]") as _r:
+    greenlight.gh_required_approvals("octo/slash", "rel/1#x")
+assert _r.call_args.args[0][2:] == ["--paginate", "--slurp", "repos/octo/slash/rules/branches/rel%2F1%23x?per_page=100"]  # the branch is one path segment
+assert gh_pr()["_approvals_required"] == 0  # the PR query's JSON isn't a rule list: unknown counts as 0, the decision still rules
+with mock.patch.object(greenlight, "gh_required_approvals", return_value=1):
+    assert gh_pr()["_approvals_required"] == 1
+with mock.patch.object(greenlight, "gh_required_approvals", return_value=None):  # count unreadable, GitHub still says required
+    assert gh_pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")["_approvals_required"] == 1  # the rail says "0 of 1"
+# 8 scan threads saving at once lose no entry
+import threading as _th
+with mock.patch.object(greenlight, "run", return_value="[]"):
+    _ts = [_th.Thread(target=greenlight.gh_required_approvals, args=(f"octo/t{i}", "main")) for i in range(8)]
+    [t.start() for t in _ts]; [t.join() for t in _ts]
+assert all(f"octo/t{i}@main" in json.loads((greenlight.STATE / "approval_rules.json").read_text()) for i in range(8))
 roll = lambda state, *ctx: {"nodes": [{"commit": {"statusCheckRollup": {"state": state, "contexts": {"nodes": list(ctx)}}}}]}
 run_ = lambda name, status, concl=None: {"__typename": "CheckRun", "name": name, "status": status, "conclusion": concl,
                                          "checkSuite": {"workflowRun": {"workflow": {"name": "test"}}}}
@@ -387,7 +419,7 @@ assert ev(gh_pr(labels={"nodes": [{"name": "reviewed"}]}))["step"] == "tried"
 with mock.patch.object(greenlight, "lifecycle_opts", return_value={"solo"}):
     assert ev(gh_pr())["owner"] == "me"  # solo without automerge: the user reviews, then merges
 with mock.patch.object(greenlight, "lifecycle_opts", return_value={"automerge"}):
-    assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # automerge with no checking steps (default.md) merges nothing
+    assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "me"  # automerge with no checking steps (default.md) merges nothing by itself
 assert ev(gh_pr(), gws("Merge MR for #20 (hold)"))["action"].endswith("merge now?")
 with mock.patch.object(audit, "merge_verdict", return_value={"ok": True, "failed": [], "target_oid": "base1"}):
     e = ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))
@@ -396,7 +428,24 @@ with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "faile
     assert ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))["owner"] == "ci"
 with mock.patch.object(audit, "merge_verdict", return_value={"ok": False, "failed": [], "error": "model unavailable"}):
     assert ev(gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": "alice"}}]}), gws(project="someone/tool"))["owner"] == "me"
-assert ev(gh_pr(), gws(project="someone/tool"))["owner"] == "reviewers"  # no human approval, not solo
+# a repo that requires no approvals (empty reviewDecision, no protection or ruleset count): approvals are no blocker
+e = ev(gh_pr(), gws(project="someone/tool"))
+assert (e["owner"], e["cmd"][:3]) == ("me", ["gh", "pr", "merge"]) and "approv" not in e["action"], e  # the merge is yours, nothing says "approval"
+assert not greenlight.approvals_needed(gh_pr())
+# one required approval: GitHub says REVIEW_REQUIRED, and the step waits on reviewers
+need = gh_pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")
+assert greenlight.approvals_needed(need) and ev(need, gws(project="someone/tool"))["step"] == "approved"
+assert ev(need, gws(project="someone/tool"))["owner"] == "reviewers"
+# one required (a ruleset), met only by a bot: still a human approval to wait for, with an empty decision
+with mock.patch.object(greenlight, "gh_required_approvals", return_value=1):
+    botted = gh_pr(latestOpinionatedReviews={"nodes": [{"state": "APPROVED", "author": {"login": greenlight.BOT or "bot"}}]})
+assert botted["_approvals_required"] == 1 and greenlight.approvals_needed(botted)
+with mock.patch.object(greenlight, "repo_bot", return_value=greenlight.BOT or "bot"):
+    assert ev(botted, gws(project="someone/tool"))["owner"] == "reviewers"
+# GitLab: approvals_required 0 and none left is no blocker; 1 required is
+assert not greenlight.approvals_needed({"_approvals_required": 0, "_approvals_left": 0, "detailed_merge_status": "mergeable"})
+assert greenlight.approvals_needed({"_approvals_required": 1, "_approvals_left": 0, "detailed_merge_status": "mergeable"})
+assert greenlight.approvals_needed({"_approvals_required": 1, "_approvals_left": 1, "detailed_merge_status": "not_approved"})
 stacked = gh_pr(baseRefName="plan-view") | {"_base_mr": 13}
 assert (ev(stacked)["owner"], ev(stacked)["action"]) == ("dependency", "targets plan-view: waiting on #13 to merge first")
 assert ev(gh_pr(baseRefName="plan-view"))["owner"] == "me" and not ev(gh_pr(baseRefName="plan-view")).get("cmd")
