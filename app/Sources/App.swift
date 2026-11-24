@@ -2140,7 +2140,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+            guard let op = b["op"] as? String, sidebarOps.contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             let h = workspaceHost(path: path, fallback: greenlight.chatHost)

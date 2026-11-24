@@ -1061,7 +1061,7 @@ def test_buttons_go_ahead_of_the_message_not_into_it(tmp_path, monkeypatch):
     kinds = []
     monkeypatch.setattr(chat.decisions, "turn_kind", lambda m: kinds.append(m))
     _, prompts = turn(tmp_path, monkeypatch, "(Greenlight's watch, not typed by the user: x)", done=done)
-    assert prompts[0].startswith(chat.done_note(done)) and "/greenlight.py scan >/dev/null; python3 " in prompts[0], prompts
+    assert prompts[0].startswith(chat.done_note(done)) and chat.RESCAN in prompts[0], prompts
     assert "- mark ready on b: failed: exit 1\n\n" in prompts[0] and prompts[0].endswith(chat.WRAP + "(Greenlight's watch, not typed by the user: x)")
     assert kinds == ["(Greenlight's watch, not typed by the user: x)"] and "merge on" not in os.environ.get("GREENLIGHT_REQUEST", "")
     sent, args = [], ["send", "--done", "- park on a: done"]

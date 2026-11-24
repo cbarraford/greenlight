@@ -41,6 +41,7 @@ PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_SESSIONS = os.path.join(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions")
 SCRIPTS = os.path.dirname(os.path.realpath(__file__))
+RESCAN = f"python3 {SCRIPTS}/greenlight.py scan >/dev/null; python3 {SCRIPTS}/dash.py board"  # Chief's refresh: PROMPT, done_note
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "SKILL.md") + " and its memory notes. "
@@ -71,7 +72,7 @@ PROMPT = (
     "when it matters. Asked what to work on (or checked in on), pick 1–3 from it: blocks on the user first (others wait on them), "
     "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
     "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
-    "`python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS + "/dash.py board` rescans every workspace, "
+    "`" + RESCAN + "` rescans every workspace, "
     "updates the user's dashboard and prints the fresh board. "
     "To see the user's GitHub and GitLab work beyond the workspaces (asked what to pick up, what's waiting on them, about an issue "
     "or MR, or when the board is thin): `python3 " + SCRIPTS + "/dash.py forge` lists the open MRs/PRs they're asked to review, "
@@ -330,8 +331,8 @@ def done_note(lines):
     lines = "\n".join(line for line in (lines or "").splitlines() if line.strip())[:8000]
     return ("(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; "
             "each line is how it ended. Don't ask about or redo what's done, and say so if they ask whether you saw it. "
-            "The board below may lag behind a button: run `python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS
-            + "/dash.py board` before you say where these stand.)\n" + lines + "\n\n") if lines else ""
+            "The BOARD you have may lag behind a button: run `" + RESCAN + "` before you say where these stand.)\n"
+            + lines + "\n\n") if lines else ""
 
 
 WRAP = "USER MESSAGE (reply to this): "

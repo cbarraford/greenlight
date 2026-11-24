@@ -133,6 +133,8 @@ func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]
     return "- \(what) on \(who)" + (at.isEmpty ? "" : " (\(at.joined(separator: ", ")))") + ": " + end
 }
 
+/// The sidebar menu's dash.py tree ops (App's "tree" message): all but info and diff change something, so actedVerb names them.
+let sidebarOps = ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"]
 /// The buttons Chief hears about (Core.acted), by dash.py's op: the popover's and the sidebar's say the same.
 let actedVerb = ["merge": "merge", "ready": "mark ready", "signoff": "sign off", "rm": "delete the workspace", "new": "new workspace", "goal": "set the goal",
                  "cfg": "save the repo's .greenlight.json"]
