@@ -1733,7 +1733,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // the inner app's own title (Claude Code's "✳ name"); else the folder, not tmux's default (the hostname); "⌬ " when it runs codex
         "set -g set-titles-string '#{?#{m:*codex*,#{pane_current_command}},⌬ ,}#{?#{==:#{pane_title},#{host}},#{pane_current_path},#{pane_title}}'",
         "set -g default-terminal tmux-256color", "set -s 'terminal-features[90]' 'xterm-256color:RGB'", "set -g allow-passthrough on",
-        "set -g history-limit 50000", "set -s 'terminal-overrides[90]' '*:smcup@:rmcup@'"]  // no alternate screen: output scrolls in the page's own scrollback
+        "set -g history-limit 50000", "set -s 'terminal-overrides[90]' '*:smcup@:rmcup@'",  // no alternate screen: slow output also lands in the page's own scrollback
+        // tmux draws screens, not lines: a fast burst reaches the page as its last screenful, so the history is tmux's. The page's
+        // wheel sends SGR wheel events: copy-mode (-e: out again at the bottom), a line each; ⌃⌥⇧-wheel down leaves copy-mode
+        // before a keystroke, ⌃⌥⇧-wheel up is ⌘K's clear-history. ghostty-web sends no other mouse events, so clicks stay the page's.
+        "set -g mouse on", "bind -T copy-mode WheelUpPane send -X scroll-up", "bind -T copy-mode WheelDownPane send -X scroll-down",
+        "bind -T copy-mode-vi WheelUpPane send -X scroll-up", "bind -T copy-mode-vi WheelDownPane send -X scroll-down",
+        "bind -T copy-mode C-M-S-WheelDownPane send -X cancel", "bind -T copy-mode-vi C-M-S-WheelDownPane send -X cancel",
+        "bind -n C-M-S-WheelDownPane if -F '#{pane_in_mode}' 'send -X cancel'", "bind -n C-M-S-WheelUpPane clear-history",
+        // the alternate screen (less, man) without the mouse gets arrow keys, as Ghostty's alternate scroll; an app that asked for the mouse, its events
+        "bind -n WheelUpPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Up\" \"copy-mode -e\"'",
+        "bind -n WheelDownPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Down\"'"]
     // ponytail: the two lists are set at a fixed index, as an append (-as) grew them on every attach
     static var tmux: String { "tmux -L \(shellQuote(tmuxSocketName)) -f /dev/null" }
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.

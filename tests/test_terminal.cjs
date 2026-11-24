@@ -918,6 +918,26 @@ test("auto-run: only the main window runs it", async page => {
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 0);
 });
 
+test("the wheel goes to tmux's history when the app asks for the mouse; typing after a wheel up leaves it; ⇧ scrolls the page's own", async page => {
+  await page.evaluate(() => newTab()); await page.waitForTimeout(300);
+  const id = await page.evaluate(() => [...panes.keys()].pop());
+  const feed = s => page.evaluate(([i, b]) => term.feed(i, b), [id, Buffer.from(s).toString("base64")]);
+  const ins = async () => (await posts(page, "in")).filter(m => m.id === id).map(m => m.d);
+  const wheel = (dy, shift = false) => page.evaluate(([dy, shift]) => { const h = panes.get([...panes.keys()].pop()).box.querySelector(".t"), r = h.getBoundingClientRect();
+    h.querySelector("canvas").dispatchEvent(new WheelEvent("wheel", {deltaY: dy, deltaMode: 1, shiftKey: shift, clientX: r.left + 5, clientY: r.top + 5, bubbles: true, cancelable: true})) }, [dy, shift]);
+  await feed(Array.from({length: 60}, (_, i) => `line ${i}\r\n`).join(""));
+  await wheel(-3); assert.deepEqual(await ins(), [], "no mouse asked for: ghostty-web scrolls its own, nothing to the pty");
+  await feed("\x1b[?1000h\x1b[?1002h\x1b[?1006h");  // tmux's mouse on
+  await wheel(-3); assert.deepEqual(await ins(), ["\x1b[<64;1;1M".repeat(3)], "three lines up: three SGR wheel-up reports");
+  await wheel(2); assert.equal((await ins()).pop(), "\x1b[<65;1;1M".repeat(2));
+  await wheel(-5, true); assert.equal((await ins()).length, 2, "⇧-wheel: the page's own scrollback");
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("x", true));
+  assert.equal((await ins()).pop(), "\x1b[<93;1;1Mx", "the next key leaves copy-mode first");
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("y", true)); assert.equal((await ins()).pop(), "y", "once");
+  await page.evaluate(() => clearPane(panes.get([...panes.keys()].pop())));
+  assert.ok((await ins()).includes("\x1b[<93;1;1M\x1b[<92;1;1M"), "⌘K clears tmux's history too");
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));

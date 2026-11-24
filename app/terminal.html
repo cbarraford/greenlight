@@ -489,15 +489,38 @@ function newPane(tab, cmd, session = sid()){
   return {p, mount(){
     t.loadAddon(fit); t.open(host); ownBlocks(t); fit.fit(); fit.observeResize();
     t.attachCustomKeyEventHandler(e => { const s = e.metaKey || e.isComposing ? null : ghostKey(t, e); if (s) t.input(s, true); return typeof s === "string" });
+    t.attachCustomWheelEventHandler(e => wheel(p, e, host));
     host.addEventListener("mousemove", e => { clearTimeout(p.lnkT); p.lnkT = setTimeout(() => linkHover(p, e), 40) });  // after ghostty-web's own 16ms-throttled hover
     host.addEventListener("mouseleave", lnkHide);
     host.addEventListener("click", e => { const l = t.currentHoveredLink;  // a plain click opens it too; ⌘-click is ghostty-web's own
       if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
-    t.onData(d => { if (!p.dead) return post({cmd: "in", id, d}); p.dead = false; t.write("\r\n"); post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows}) });
+    t.onData(d => { if (!p.dead) { if (p.hist) { p.hist = false; d = HIST_EXIT + d } return post({cmd: "in", id, d}) } p.dead = false; t.write("\r\n"); post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows}) });
     t.onResize(({cols, rows}) => post({cmd: "size", id, cols, rows}));
     post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
     if (cmd) post({cmd: "in", id, d: cmd + "\r"});
   }};
+}
+// The wheel: ghostty-web only ever scrolls its own scrollback (arrow keys on the alternate screen) and never reports the
+// mouse. Inside tmux that scrollback is mostly empty: tmux scrolls the screen with CSI n S and redraws only what ends up
+// on it, so the history lives in tmux. When the app asks for the mouse (tmux's `mouse on`, vim, htop) the wheel goes to it
+// as button 4/5 reports, a line at a time; tmux then scrolls its own history (App.tmuxOpts). ⇧ scrolls the page's own,
+// so ⌃⌥⇧ wheel events never come from a hand: App.tmuxOpts binds them, down to leave copy-mode, up to clear tmux's history.
+const HIST_EXIT = "\x1b[<93;1;1M", HIST_CLEAR = "\x1b[<92;1;1M";  // SGR ⌃⌥⇧-wheel down / up; outside copy-mode the exit is a no-op
+const mouseOn = t => [1000, 1002, 1003].some(m => t.getMode(m));
+function wheel(p, e, host){
+  const t = p.t;
+  if (e.shiftKey || p.dead || !mouseOn(t)) return false;  // ghostty-web's own scrolling
+  const lh = t.renderer?.getMetrics?.()?.height || 17;
+  p.wheel = (p.wheel || 0) + (e.deltaMode === 1 ? e.deltaY : e.deltaMode === 2 ? e.deltaY * t.rows : e.deltaY / lh);
+  const n = Math.trunc(p.wheel); p.wheel -= n;
+  if (!n) return true;
+  const r = host.getBoundingClientRect(), cw = r.width / t.cols, ch = r.height / t.rows;
+  const x = Math.max(1, Math.min(t.cols, Math.floor((e.clientX - r.left) / cw) + 1)), y = Math.max(1, Math.min(t.rows, Math.floor((e.clientY - r.top) / ch) + 1));
+  const b = (n < 0 ? 64 : 65) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
+  const one = t.getMode(1006) ? `\x1b[<${b};${x};${y}M` : x < 224 && y < 224 ? "\x1b[M" + String.fromCharCode(32 + b, 32 + x, 32 + y) : "";
+  if (n < 0 && t.getMode(1006)) p.hist = true;  // the next keystroke leaves copy-mode first
+  if (one) post({cmd: "in", id: p.id, d: one.repeat(Math.min(Math.abs(n), 20))});
+  return true;
 }
 // Keys ghostty-web gets wrong next to Ghostty's defaults (ghostty +list-keybinds --default): the bytes to send, "" when
 // handled here with nothing to send, null to leave it to ghostty-web. ⌘ keys are in the window listener below.
@@ -1830,8 +1853,8 @@ function nudge(p, key){  // ⌘⌃arrows: the nearest divider that way moves 40p
 // ponytail: halves every split, so three panes in a row come out 50/25/25; weigh splits by their pane count if that matters
 function equalize(tab){ tab.r.querySelectorAll(".pane,.split").forEach(x => x.style.flex = ""); refit(tab); save() }
 function zoomPane(tab){ tab.r.classList.toggle("zoom", !tab.r.classList.contains("zoom") && paneOf(tab).length > 1); refit(tab) }
-// ⌘K: the screen and scrollback go, and ^L has the shell (or the app in it) draw itself again; tmux's own history stays
-function clearPane(p){ p.t.scrollToBottom(); p.t.write("\x1b[H\x1b[2J\x1b[3J"); p.t.input("\x0c", true) }
+// ⌘K: the screen and scrollback go, tmux's history too (App.tmuxOpts' ⌃⌥⇧-wheel up), and ^L has the shell (or the app in it) draw itself again
+function clearPane(p){ p.t.scrollToBottom(); p.t.write("\x1b[H\x1b[2J\x1b[3J"); if (mouseOn(p.t) && p.t.getMode(1006)) { p.hist = false; post({cmd: "in", id: p.id, d: HIST_EXIT + HIST_CLEAR}) } p.t.input("\x0c", true) }
 // ghostty-web's own selectAll takes just a screenful from the top of the history; Ghostty's takes it all
 function selectAll(t){ const sm = t.selectionManager; sm.selectionStart = {col: 0, absoluteRow: 0}; sm.selectionEnd = {col: t.cols - 1, absoluteRow: t.buffer.active.length - 1}; sm.requestRender() }
 
