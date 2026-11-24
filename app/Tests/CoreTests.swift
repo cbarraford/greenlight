@@ -345,6 +345,53 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         while failCode == nil && Date() < until2 { RunLoop.main.run(until: Date() + 0.02) }
         check("config: ssh() streams stdout lines and reports exit codes",
               lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
+        func isClosed(_ h: FileHandle?) -> Bool {
+            guard let h else { return false }
+            do { _ = try h.readToEnd(); return false } catch { return true }
+        }
+        let probe = Pipe()
+        try? probe.fileHandleForWriting.close()
+        let openNotClosed = !isClosed(probe.fileHandleForReading)
+        try? probe.fileHandleForReading.close()
+        let closedIsClosed = isClosed(probe.fileHandleForReading)
+        check("config: isClosed distinguishes an open EOF pipe from a closed handle (open=\(openNotClosed), closed=\(closedIsClosed))",
+              openNotClosed && closedIsClosed)
+        // a daemon keeps both pipes: finish() times out promptly and closes both read handles even while Process is retained
+        var heldCode: Int32?
+        let heldT0 = Date()
+        let heldProc = ssh("sleep 2 & exit 3", on: "local", onExit: { heldCode = $0 })
+        let until3 = Date() + 5
+        while heldCode == nil && Date() < until3 { RunLoop.main.run(until: Date() + 0.02) }
+        let heldElapsed = Date().timeIntervalSince(heldT0)
+        let drainDone = heldT0 + 2.4
+        while Date() < drainDone { RunLoop.main.run(until: Date() + 0.05) }  // let sleep 2 close write ends (avoids EAGAIN) while heldProc stays retained
+        let heldOutClosed = isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
+        let heldErrClosed = isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading)
+        check("config: ssh() survives a held pipe, times out promptly, and closes read handles even while Process is retained (rc=\(heldCode ?? -1), secs=\(String(format: "%.2f", heldElapsed)), out=\(heldOutClosed), err=\(heldErrClosed))",
+              heldCode == 3 && heldElapsed < 1.5 && heldOutClosed && heldErrClosed)
+        var rc0ErrDone = 0
+        for _ in 0..<10 {
+            _ = ssh("printf 'stderr noise\\n' >&2; printf 'ok\\n'", on: "local", onExit: { if $0 == 0 { rc0ErrDone += 1 } })
+        }
+        let until4 = Date() + 5
+        while rc0ErrDone < 10 && Date() < until4 { RunLoop.main.run(until: Date() + 0.02) }
+        check("config: ssh() survives rc=0 with active stderr without a close race", rc0ErrDone == 10)
+        let buffered = Pipe()
+        var got = Data()
+        let bufQ = DispatchQueue(label: "greenlight.test.pipe.buf")
+        let bufReader = PipeReader(buffered.fileHandleForReading, on: bufQ) { got.append($0) }
+        try? buffered.fileHandleForWriting.write(contentsOf: Data("hello".utf8))
+        try? buffered.fileHandleForWriting.close()
+        bufReader.finish(within: 2)
+        check("config: PipeReader reads buffered data to EOF and closes the handle",
+              got == Data("hello".utf8) && isClosed(buffered.fileHandleForReading))
+        let heldPipe = Pipe()
+        let heldQ = DispatchQueue(label: "greenlight.test.pipe.held")
+        let heldReader = PipeReader(heldPipe.fileHandleForReading, on: heldQ) { _ in }
+        heldReader.finish(within: 0.05)
+        try? heldPipe.fileHandleForWriting.close()
+        check("config: PipeReader.finish() times out and closes a held pipe without waiting for the writer",
+              isClosed(heldPipe.fileHandleForReading))
     }
 }
 
