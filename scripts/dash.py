@@ -37,6 +37,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -658,7 +659,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         _normalize_row(r)
         card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r["name"])
         if ag:
-            r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=ag.get("agentType") or r["agent"]["type"],
+            r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=greenlight.canonical_agent(ag.get("agentType")) or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
                               task=(ag.get("taskTitle") or ag.get("prompt") or "")[:160], tool=ag.get("toolName") or "",
                               input=(ag.get("toolInput") or "")[:160], since=ag.get("stateStartedAt"))
@@ -829,12 +830,20 @@ def tree(path, every=False):
 
 def turn(session):
     """How a Basement pane's agent ended its turn, read off its screen the way greenlight reads any agent's: ade_common.agent_state
-    (System One when set up, else the patterns). The page asks once Claude's spinner has stayed gone a few seconds, so its
+    (System One when set up, else the patterns). The page asks once the agent's spinner has stayed gone a few seconds, so its
     "Finished" means finished, not a question in prose, a loop, a usage limit or a logout."""
     import ade_basement  # here: its tmux socket is the app's (GREENLIGHT_TMUX_SOCKET)
     lines = ade_basement.tmux("capture-pane", "-p", "-t", f"={session}:").splitlines()
+    agent_label = "Claude Code"
+    try:
+        meta = ade_basement.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_title}\t#{pane_current_command}").strip()
+        title, _, cmd = meta.partition("\t")
+        kind = ade_basement.agent_type(title, cmd)
+        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}.get(kind or "", "Claude Code")
+    except Exception:
+        pass
     with diag.span("turn") as sp:
-        r = ade_common.agent_state(lines, "Claude Code")
+        r = ade_common.agent_state(lines, agent_label)
         sp["provider"], sp["state"] = r["provider"], r["state"]
     return {"state": r["state"], "prob": r["prob"]}
 
@@ -1178,7 +1187,7 @@ def facts(name):
     return f
 
 
-def design(f, model="claude-haiku-5-5", effort="low"):
+def design(f, model=None, effort="low"):
     pick = lambda ks: "\n".join(f"- {k} {CATALOG[k][0]}: {CATALOG[k][1].removeprefix('P ')}" for k in ks)
     prompt = (
         "You pick the Insights for one workspace's page in a developer's Mac app. The page already shows, as fixed parts: "
@@ -1200,32 +1209,14 @@ def design(f, model="claude-haiku-5-5", effort="low"):
 
 
 def ask(prompt, model, effort):
-    """One headless answer: a gemini-* model runs on agy, anything else on config llm_harness
-    (a Claude model name means nothing to another harness, so that one uses its default).
+    """One headless answer from the harness `model` names (harness.route: claude-*, gpt-*, gemini-*, <harness>:<model>);
+    an id that names none, or no model, runs on config llm_harness.
     Runs toolless/sandboxed in an empty tempdir so untrusted PR/commit/agent text cannot execute tools.
-    A failed run answers "": `claude -p` prints its errors ("There's an issue with the selected model ...", a usage limit)
-    on stdout and exits 1, and that text must not become a suggestion the console sends to an agent as its task."""
-    h, model = harness.route(model, greenlight.CONFIG["llm_harness"])
-    cmd, text = harness.argv(h, prompt, model=model, effort=effort, tools=False)
-    with tempfile.TemporaryDirectory(prefix="greenlight-llm-") as empty_cwd:
-        p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=180, cwd=empty_cwd)
-    if p.returncode:
-        return ""
-    output = p.stdout
-    if h == "agy":
-        for line in reversed(output.splitlines()):
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if event.get("event") == "result":
-                result = event.get("result") or {}
-                return result.get("response", "") if result.get("status") == "SUCCESS" else ""
-        return ""
-    return output
+    A failed run answers "", so an error a CLI prints on stdout never becomes a suggestion sent to an agent as its task."""
+    return harness.ask(prompt, model=model, effort=effort, default=greenlight.CONFIG["llm_harness"])
 
 
-def suggest(name, model="claude-haiku-5-5", effort="low"):
+def suggest(name, model=None, effort="low"):
     """The console drawer's ghost prompt: greenlight's next step, written as a task for an agent in that workspace."""
     p = next((p for p in snapshot()["pucks"] if p["name"] == name), None)
     if not p:
@@ -1250,7 +1241,7 @@ def suggest(name, model="claude-haiku-5-5", effort="low"):
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
     if not text:  # the model run failed: an error makes the card's button a retry instead of "Please wait…" for this state
-        return {"name": name, "sig": s, "error": f"{model} gave no answer (a usage limit, or a model this host can't run)"}
+        return {"name": name, "sig": s, "error": f"{model or greenlight.CONFIG['llm_harness']} gave no answer (a usage limit, or a model this host can't run)"}
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     _write_json(cache, out | {"ok": True})  # ask() succeeded: a one-line reply (no label) is real too
@@ -1331,7 +1322,7 @@ def run(name, prompt, worktree_id=None):
     return {"ok": True, "agent": a}
 
 
-MENU_RE = re.compile(r"^\s*(?:❯\s*)?(\d)\.\s+(\S.*)$")
+MENU_RE = re.compile(r"^\s*(?:[❯›●▸]\s*)?(\d)\.\s+(\S.*)$")
 
 
 def waiting_term(name):
@@ -1352,9 +1343,9 @@ def waiting_term(name):
 
 
 def menu(tail):
-    """A Claude question menu on screen: [(digit, label)], or [] when the agent waits at its normal prompt."""
+    """An agent question menu on screen: [(digit, label)], or [] when the agent waits at its normal prompt."""
     lines = [str(x).rstrip() for x in tail][-30:]
-    if any(x.strip() == "❯" for x in lines):  # the empty input box: a plain end-of-turn question
+    if any(re.fullmatch(r"(?:[│┃|]\s*)?[❯›>](?:\s*[│┃|])?", x.strip()) for x in lines):  # empty input box: plain end-of-turn question
         return []
     opts = [(m[1], m[2].strip()) for x in lines if (m := MENU_RE.match(x))]
     return opts if len(opts) >= 2 else []
@@ -1378,7 +1369,7 @@ def picker(tail):
     return " ".join(q), details
 
 
-def ask_user(name, model="claude-haiku-5-5", effort="low"):
+def ask_user(name, model=None, effort="low"):
     t = waiting_term(name)
     if isinstance(t, str):
         return {"name": name, "error": t}
@@ -1387,7 +1378,8 @@ def ask_user(name, model="claude-haiku-5-5", effort="low"):
     opts = menu(rd.get("tail") or [])
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "questions": pending_questions(w.get("path") or ""),
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu",
+                "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something."]}
     cache = DASH / "ask" / f"{safe(name)}.json"
     key = hashlib.sha1(q.encode()).hexdigest()[:12]
@@ -1410,14 +1402,10 @@ def ask_user(name, model="claude-haiku-5-5", effort="low"):
     return out
 
 
-def pending_questions(path):
-    """The questions of an AskUserQuestion call still waiting on its result in the newest Claude transcript, else None."""
-    fs = [f for f, kind in transcript_files(path) if kind == "claude"] if path else []
-    if not fs:
-        return None
+def _claude_pending_questions(f):
     pend = None
     try:
-        with fs[0].open(errors="replace") as fh:
+        with f.open(errors="replace") as fh:
             for line in fh:  # ponytail: rescans the whole transcript per ask; tail-read if screenshot-heavy ones get slow
                 try:
                     d = json.loads(line)
@@ -1435,6 +1423,50 @@ def pending_questions(path):
         return None
     qs = ((pend or {}).get("input") or {}).get("questions")
     return qs if isinstance(qs, list) and qs else None
+
+
+def _agy_pending_questions(f):
+    pend = None
+    try:
+        with f.open(errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                kind = d.get("type")
+                if kind in ("USER_INPUT", "GENERIC"):
+                    pend = None
+                elif kind == "PLANNER_RESPONSE":
+                    asked = next((tc for tc in (d.get("tool_calls") or [])
+                                  if isinstance(tc, dict) and tc.get("name") == "ask_question"), None)
+                    raw_qs = (asked.get("args") or {}).get("questions") if asked else None
+                    if isinstance(raw_qs, str):
+                        try:
+                            raw_qs = json.loads(raw_qs)
+                        except ValueError:
+                            raw_qs = None
+                    pend = raw_qs if isinstance(raw_qs, list) else None
+    except OSError:
+        return None
+    return pend if isinstance(pend, list) and pend else None
+
+
+def pending_questions(path, agent_type=None):
+    """The questions of an unanswered ask tool in the recent Claude or agy transcripts, else None."""
+    fs = [(f, kind) for f, kind in transcript_files(path) if kind in ("claude", "agy")] if path else []
+    if not fs:
+        return None
+    want = greenlight.canonical_agent(agent_type) if agent_type else None
+    if want in ("claude", "agy"):
+        fs = [x for x in fs if x[1] == want] + [x for x in fs if x[1] != want]
+    for f, kind in fs[:5]:
+        qs = _claude_pending_questions(f) if kind == "claude" else _agy_pending_questions(f)
+        if qs:
+            return qs
+    return None
 
 
 def answer(name, text):
@@ -1571,14 +1603,99 @@ def _codex_entries(f):
     return out
 
 
+_AGY_ARG_KEYS = ("CommandLine", "Path", "AbsolutePath", "FilePath", "TargetFile", "Query", "Pattern", "Url", "Prompt",
+                 "command", "file_path", "path", "pattern", "url", "prompt")
+
+
+def _agy_entries(f):
+    out = []
+    try:
+        with f.open(errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                kind = d.get("type")
+                if kind == "USER_INPUT":
+                    t = str(d.get("content") or "").strip()
+                    if t and not t.startswith("<"):
+                        out.append(("user", t))
+                elif kind == "PLANNER_RESPONSE":
+                    t = str(d.get("content") or "").strip()
+                    if t:
+                        out.append(("assistant", t))
+                    for tc in d.get("tool_calls") or []:
+                        if not isinstance(tc, dict):
+                            continue
+                        raw_args = tc.get("args")
+                        args = raw_args if isinstance(raw_args, dict) else {}
+                        arg = next((args[k] for k in _AGY_ARG_KEYS if args.get(k)), "")
+                        label = f"{tc.get('name') or 'tool'} {' '.join(str(arg).split())}".strip()
+                        out.append(("tool", label))
+    except OSError:
+        pass
+    return out
+
+
+def _agy_transcript_files(path, cutoff):
+    from urllib.parse import unquote
+    root = Path(os.environ.get("AGY_HOME") or Path.home() / ".gemini/antigravity-cli")
+    db_path = root / "conversation_summaries.db"
+    if not db_path.is_file():
+        return []
+    norm = path.rstrip("/")
+    encoded_uri = Path(norm).as_uri().rstrip("/") if norm.startswith("/") else f"file://{norm}"
+    want = {norm, f"file://{norm}", encoded_uri}
+    out = []
+    try:
+        db = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = db.execute("select conversation_id, workspace_uris from conversation_summaries "
+                              "where workspace_uris like ? or workspace_uris like ?",
+                              (f"%{norm}%", f"%{encoded_uri}%")).fetchall()
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error):
+        return []
+    for cid, uris_raw in rows:
+        try:
+            uris = json.loads(uris_raw) if isinstance(uris_raw, str) else []
+        except ValueError:
+            uris = []
+        if not any(isinstance(u, str) and (u.rstrip("/") in want or unquote(u).rstrip("/") in want) for u in uris):
+            continue
+        tr = root / "brain" / str(cid) / ".system_generated" / "logs" / "transcript.jsonl"
+        try:
+            mt = tr.stat().st_mtime
+            if mt > cutoff:
+                out.append((mt, tr, "agy"))
+        except OSError:
+            pass
+    return out
+
+
+def _transcript_stem(path, kind):
+    if kind == "agy" and path.stem == "transcript" and len(path.parents) >= 3:
+        return path.parents[2].name
+    return path.stem
+
+
+def _entries_for(path, kind):
+    return {"claude": _claude_entries, "codex": _codex_entries, "agy": _agy_entries}.get(kind, _claude_entries)(path)
+
+
 def transcript_files(path):
-    """Every agent session that ran in `path`, newest first: Claude Code transcripts and Codex rollouts."""
+    """Every agent session that ran in `path`, newest first: Claude Code transcripts, Codex rollouts, and agy transcripts."""
     fs = []
     for f in (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*.jsonl"):
         with contextlib.suppress(OSError):
             fs.append((f.stat().st_mtime, f, "claude"))
     cutoff = time.time() - 30 * 86400
-    for f in (Path.home() / ".codex/sessions").glob("*/*/*/rollout-*.jsonl"):  # ponytail: reads each recent rollout's first line; index by cwd if this gets slow
+    codex_root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
+    for f in codex_root.glob("*/*/*/rollout-*.jsonl"):  # ponytail: reads each recent rollout's first line; index by cwd if this gets slow
         try:
             mt = f.stat().st_mtime
             if mt > cutoff:
@@ -1588,6 +1705,7 @@ def transcript_files(path):
                     fs.append((mt, f, "codex"))
         except (OSError, ValueError, KeyError, AttributeError, TypeError):
             pass
+    fs.extend(_agy_transcript_files(path, cutoff))
     return [(f, kind) for _, f, kind in sorted(fs, key=lambda x: x[0], reverse=True)[:40]]
 
 
@@ -1604,28 +1722,29 @@ def transcript(name, before=None, limit=60):
     f, i = 0, None
     if before:
         stem, _, idx = before.rpartition(":")
-        f = next((n for n, (x, _) in enumerate(files) if x.stem == stem), len(files))
+        f = next((n for n, (x, k) in enumerate(files) if _transcript_stem(x, k) == stem), len(files))
         i = int(idx)
     page = []
     while f < len(files) and len(page) < limit:
         path, kind = files[f]
-        es = (_claude_entries if kind == "claude" else _codex_entries)(path)
+        st = _transcript_stem(path, kind)
+        es = _entries_for(path, kind)
         i = len(es) if i is None else min(i, len(es))
         take = max(0, i - (limit - len(page)))
-        page[:0] = [{"id": f"{path.stem}:{n}", "role": r, "text": t[:8000], "kind": kind} for n, (r, t) in enumerate(es[take:i], take)]
+        page[:0] = [{"id": f"{st}:{n}", "role": r, "text": t[:8000], "kind": kind} for n, (r, t) in enumerate(es[take:i], take)]
         if take == 0:
-            page.insert(0, {"id": f"{path.stem}:start", "role": "sep",
+            page.insert(0, {"id": f"{st}:start", "role": "sep",
                             "text": f"{kind} session · {time.strftime('%b %-d %H:%M', time.localtime(path.stat().st_ctime))}"})
             f, i = f + 1, None
         else:
             i = take
             break
-    more = f"{files[f][0].stem}:{999999999 if i is None else i}" if f < len(files) else None  # 999999999: from that session's end
+    more = f"{_transcript_stem(*files[f])}:{999999999 if i is None else i}" if f < len(files) else None  # 999999999: from that session's end
     # the newest page: also the tails of other sessions written to in the last RECENT seconds (a Codex review the main agent
     # started, say), so a busy newest session never starves them out of All output's refresh
-    recent = [] if before else [{"id": f"{path.stem}:{n}", "role": r, "text": t[:8000], "kind": kind}
+    recent = [] if before else [{"id": f"{_transcript_stem(path, kind)}:{n}", "role": r, "text": t[:8000], "kind": kind}
                                 for path, kind in files[1:] if time.time() - path.stat().st_mtime < RECENT
-                                for es in [(_claude_entries if kind == "claude" else _codex_entries)(path)]
+                                for es in [_entries_for(path, kind)]
                                 for n, (r, t) in enumerate(es[-20:], max(0, len(es) - 20))]
     return {"entries": page, "more": more, "before": before, "recent": recent}
 
@@ -1906,6 +2025,14 @@ def _stream(every):
         time.sleep(every)
 
 
+def _model_opts(a):
+    opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
+    if ("model" in opt and not re.fullmatch(r"[\w.:/-]{1,80}", opt["model"])) or (
+            "effort" in opt and not re.fullmatch(r"[\w.-]{1,40}", opt["effort"])):
+        sys.exit("bad --model/--effort")
+    return opt
+
+
 def main():
     a = sys.argv[1:]
     if a[:1] == ["snapshot"]:
@@ -1917,18 +2044,14 @@ def main():
             every = 10.0
         _stream(every)
     elif a[:1] == ["page"] and len(a) > 1 and NAME_RE.match(a[1]):
-        opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
-        if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
-            sys.exit("bad --model/--effort")
+        opt = _model_opts(a)
         try:
             print(json.dumps(page(a[1], "--fresh" in a, **opt)))
         except Exception as e:
             oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["suggest"] and len(a) > 1 and NAME_RE.match(a[1]):
-        opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
-        if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
-            sys.exit("bad --model/--effort")
+        opt = _model_opts(a)
         try:
             print(json.dumps(suggest(a[1], **opt)))
         except Exception as e:
@@ -1938,9 +2061,7 @@ def main():
         prompt = sys.stdin.read().strip()[:8000]
         print(json.dumps({"name": a[1], **(run(a[1], prompt) if prompt else {"error": "empty prompt"})}))
     elif a[:1] in (["ask"], ["answer"]) and len(a) > 1 and NAME_RE.match(a[1]):
-        opt = {k: a[a.index("--" + k) + 1] for k in ("model", "effort") if "--" + k in a[:-1]}
-        if not all(re.fullmatch(r"[\w.-]{1,40}", v) for v in opt.values()):
-            sys.exit("bad --model/--effort")
+        opt = _model_opts(a)
         try:
             if a[0] == "ask":
                 print(json.dumps(ask_user(a[1], **opt)))
@@ -1972,7 +2093,8 @@ def main():
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
-        print(json.dumps({"trees": trees(), "panes": basement_panes()}))
+        print(json.dumps({"trees": trees(), "panes": basement_panes(),
+                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"]}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
             out = turn(a[1])

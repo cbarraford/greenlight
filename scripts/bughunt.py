@@ -1387,7 +1387,12 @@ def run_fuzz_matrix(
 def _augment_agent_cmd(
     eng: str, cmd: list[str], mode: str = "default", add_dirs: list[Path] | None = None,
 ) -> list[str]:
-    """Add scoped tool permissions so headless Claude can run uitest/tests safely without global bypass."""
+    """Add scoped tool permissions so headless agents can run uitest/tests safely without global bypass."""
+    if eng == "agy":
+        extra: list[str] = []
+        for d in add_dirs or ():
+            extra.extend(["--add-dir", str(d)])
+        return [*cmd, *extra]
     if eng != "claude":
         return cmd
     is_bypass = bool(harness and harness.conf(eng).get("bypass") is True)

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import harness
 import last_agent
-from ade_common import MENU_ITEM_RE, default_agent, flags, git, git_info, goals, plain, draft, repo_list, set_goal, worktree_add, worktree_remove
+from ade_common import MENU_ITEM_RE, default_agent, draft, flags, git, git_info, goals, plain, repo_list, screen_state, set_goal, worktree_add, worktree_remove
 
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
@@ -35,23 +35,57 @@ def tmux(*args):
 
 def panes(cmd=False):
     """Every pane: handle (%id), session, folder, title, last activity (s); cmd: also what runs in it (#{pane_current_command})."""
-    keys = ("handle", "session", "cwd", "title", "at", *(("cmd",) if cmd else ()))
     f = SEP.join(("#{pane_id}", "#{session_name}", "#{pane_current_path}", "#{pane_title}", "#{window_activity}",
-                  *(("#{pane_current_command}",) if cmd else ())))
-    return [dict(zip(keys, l.split(SEP))) for l in tmux("list-panes", "-a", "-F", f).splitlines() if l.count(SEP) == len(keys) - 1]
+                  "#{pane_current_command}"))
+    out = []
+    for l in tmux("list-panes", "-a", "-F", f).splitlines():
+        parts = l.split(SEP)
+        if len(parts) == 5 and not cmd:
+            parts.append("")
+        if len(parts) == 6:
+            out.append(dict(zip(("handle", "session", "cwd", "title", "at", "cmd"), parts)))
+    return out
 
 
 SPIN = re.compile(r"^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)")  # Claude's "✶ Skedaddling… (3s · …)" line: inside tmux it doesn't animate its title
 
 
-def state(title, tail=None):
-    """Claude's title glyph and screen → Orca's agent state; None when the pane isn't an agent."""
-    g, tail = title[:1], [x.strip() for x in (tail or [])[-15:]]
-    if "⠀" <= g <= "⣿" or (g == "✳" and any(SPIN.match(x) for x in tail)):
-        return "working"
-    if g != "✳":  # ponytail: Claude only; codex/opencode panes read as plain shells
+def agent_type(title, cmd=""):
+    """Identify a Basement pane's agent (claude, codex, agy) from its title glyph or tmux command, else None."""
+    g = (title or "")[:1]
+    if "⠀" <= g <= "⣿" or g == "✳":
+        return "claude"
+    if g == "⌬":
+        return "codex"
+    if g == "◈":
+        return "agy"
+    low = os.path.basename((cmd or "").strip()).lower()
+    if low == "claude" or low.startswith("claude-"):
+        return "claude"
+    if low == "codex" or low.startswith("codex-"):
+        return "codex"
+    if low in ("agy", "antigravity") or low.startswith("agy-"):
+        return "agy"
+    return None
+
+
+def state(title, tail=None, cmd=""):
+    """Agent title/command and screen → Orca's agent state; None when the pane isn't an agent."""
+    kind = agent_type(title, cmd)
+    if not kind:
         return None
-    return "waiting" if any(MENU_ITEM_RE.search(x) for x in tail) else "done"
+    if kind == "claude":
+        g, lines = (title or "")[:1], [x.strip() for x in (tail or [])[-15:]]
+        if "⠀" <= g <= "⣿" or (g == "✳" and any(SPIN.match(x) for x in lines)):
+            return "working"
+        if g == "✳":
+            return "waiting" if any(MENU_ITEM_RE.search(x) for x in lines) else "done"
+    seen = screen_state(tail or [])["state"]
+    if seen == "working":
+        return "working"
+    if seen == "waiting_for_user":
+        return "waiting"
+    return "done"
 
 
 def screen(handle):
@@ -59,18 +93,25 @@ def screen(handle):
 
 
 _STATE_PRIO = {"done": 0, "working": 1, "waiting": 2}
+_TITLE_PREFIX = {"codex": "⌬ ", "agy": "◈ "}
 
 
 def pane_states():
     """Map Basement tmux session -> {state, title} for every agent pane on TMUX_SOCKET."""
     out: dict[str, dict[str, str]] = {}
     for p in panes():
-        s = state(p["title"], screen(p["handle"]) if p["title"][:1] == "✳" else None)
+        kind = agent_type(p["title"], p.get("cmd", ""))
+        if not kind:
+            continue
+        needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
+        s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
         if not s:
             continue
+        pref = _TITLE_PREFIX.get(kind, "")
+        title = p["title"] if not pref or p["title"].startswith(pref) else pref + p["title"]
         prev = out.get(p["session"])
         if prev is None or _STATE_PRIO[s] >= _STATE_PRIO[prev["state"]]:
-            out[p["session"]] = {"state": s, "title": p["title"]}
+            out[p["session"]] = {"state": s, "title": title}
     return out
 
 
@@ -103,8 +144,16 @@ def worktrees():
     out = []
     for path in dict.fromkeys(paths):
         mine = owned.get(path, [])
-        ags = [{"state": s, "agentType": "claude", "updatedAt": int(p["at"] or 0) * 1000, "stateStartedAt": int(p["at"] or 0) * 1000,
-                "handle": p["handle"]} for p in mine if (s := state(p["title"], screen(p["handle"]) if p["title"][:1] == "✳" else None))]
+        ags = []
+        for p in mine:
+            kind = agent_type(p["title"], p.get("cmd", ""))
+            if not kind:
+                continue
+            needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
+            s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
+            if s:
+                ags.append({"state": s, "agentType": kind, "updatedAt": int(p["at"] or 0) * 1000,
+                            "stateStartedAt": int(p["at"] or 0) * 1000, "handle": p["handle"]})
         out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
                     "isPinned": False, "linkedGitLabMR": None, "agents": ags,
                     "lastOutputAt": max((int(p["at"] or 0) * 1000 for p in mine), default=None)})
@@ -155,7 +204,7 @@ def call(*args):
     if noun == "terminal" and verb == "list":
         trees = worktrees()
         return {"terminals": [{"handle": p["handle"], "title": p["title"], "lastOutputAt": int(p["at"] or 0) * 1000,
-                               "agentIdentity": "claude" if state(p["title"]) else None,
+                               "agentIdentity": agent_type(p["title"], p.get("cmd", "")),
                                "worktreeId": next((w["path"] for w in sorted(trees, key=lambda w: -len(w["path"]))
                                                    if p["cwd"] == w["path"] or p["cwd"].startswith(w["path"] + "/")), None)}
                               for p in panes()]}

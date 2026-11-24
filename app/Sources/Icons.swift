@@ -6,6 +6,7 @@ import SwiftUI
 enum DSIcons {
     /// name → (grid, stroked, inner SVG markup in black for a template image)
     static let all: [String: (Int, Bool, String)] = [
+        "agy": (24, false, "<path d=\"M12 1.5l2.7 7.8L22.5 12l-7.8 2.7L12 22.5l-2.7-7.8L1.5 12l7.8-2.7L12 1.5z\"/>"),
         "alert": (16, true, "<path d=\"M7.13 2.5a1 1 0 0 1 1.74 0l5.4 9.5a1 1 0 0 1-.87 1.5H2.6a1 1 0 0 1-.87-1.5zM8 6.25v3M8 11.25h.01\"/>"),
         "arrow-up": (16, true, "<path d=\"M8 13.5v-11M3.5 7 8 2.5 12.5 7\"/>"),
         "attach": (16, true, "<path d=\"M13 7.25 7.9 12.35a3.2 3.2 0 0 1-4.53-4.53l5.3-5.3a2.13 2.13 0 0 1 3.02 3.02L6.4 10.83a1.07 1.07 0 0 1-1.51-1.51l4.6-4.6\"/>"),

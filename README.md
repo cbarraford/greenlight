@@ -44,7 +44,7 @@ milestones, required approvals) is a config change, not a code change.
 
 - Python 3.10+ (stdlib only).
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
-- At least one coding agent CLI: `claude`, `codex`, `opencode`, `pi` or `gemini` (Gemini CLI). Gemini chat model choices additionally require `agy` on the Greenlight host.
+- At least one coding agent CLI: `claude`, `codex`, `agy` (Antigravity), `opencode`, `pi` or `gemini` (Gemini CLI).
 - One workspace manager (ADE): Orca (default), cmux, herdr, or T3 Code. Pick it with `GREENLIGHT_ADE=orca|cmux|herdr|t3`.
 - The menubar app: macOS with the Command Line Tools (`swiftc`). The backend also runs on Linux.
 
@@ -109,6 +109,7 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 |---|---|---|
 | claude | `--permission-mode acceptEdits` | `--permission-mode bypassPermissions` |
 | codex | workspace-write sandbox | `--dangerously-bypass-approvals-and-sandbox` |
+| agy | `--mode accept-edits` | `--dangerously-skip-permissions` |
 | opencode | permission asks are rejected | `--auto` |
 | pi | **refuses to run** | no flags (pi has no permission gate or sandbox) |
 | gemini | `--approval-mode auto_edit --skip-trust` (headless Gemini CLI won't start in an untrusted folder; trusting it loads that folder's `.gemini` settings) | `--approval-mode yolo --skip-trust` |
@@ -116,10 +117,9 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 Unattended work (automations, the menubar chat) runs shell commands, so in safe mode some tasks stop at a refused permission. Only set `bypass` on a machine you're comfortable letting an agent drive.
 
 Support differs by harness:
-- The five coding agent CLIs: dispatch, automations, the menubar chat, limit fallback, cmux launch.
-- Gemini model selections in Chat & voice and Background agents run through `agy`. The selected Gemini model ID includes its effort level, so the separate Effort setting does not apply. The plain **Gemini CLI** entry still runs that CLI's default model.
-- Claude and codex only: the dashboard's transcript mirror and question picker, herdr's `--kind`, T3 providers.
-- All five: Greenlight reads an agent's terminal (its last ~60 lines, `ade_common.agent_state`) as one of working, waiting for you, finished, stuck in a loop, rate limited, logged out or an unsent draft. Claude, Codex and Gemini drafts are recognised (`ade_common.draft`); opencode and pi drafts read as empty.
+- Claude, Codex and agy (Antigravity): first-class everywhere — dispatch, automations, menubar chat, background agents (workspace pages, suggestions, tab naming), System One (`decide.py`), Basement pane detection/launch/alerts, dashboard avatars and transcript mirror (`All output`), limit fallback, and dynamic model discovery (`harness.py models`; `<harness>:<model>` pins any model to a specific harness).
+- opencode, pi and Gemini CLI: dispatch, automations, the menubar chat, limit fallback, cmux launch. The plain **Gemini CLI** entry runs that CLI's default model; `gemini-*` model IDs run through `agy`.
+- All six: Greenlight reads an agent's terminal (its last ~60 lines, `ade_common.agent_state`) as one of working, waiting for you, finished, stuck in a loop, rate limited, logged out or an unsent draft. Claude, Codex, agy and Gemini drafts are recognised (`ade_common.draft`); opencode and pi drafts read as empty.
 - Claude only: conversations can be compacted from the chat.
 
 ## System One

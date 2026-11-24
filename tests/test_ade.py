@@ -62,3 +62,16 @@ def test_basement_state():
     assert ade_basement.state("bash") is None
     assert ade_basement.state("✳ Claude", ["Pick one", "❯ 1. Yes", "  2. No"]) == "waiting"
     assert ade_basement.state("✳ Claude", ["❯ "]) == "done"
+    # Codex and agy panes are detected by tmux prefix glyph or pane_current_command
+    assert ade_basement.agent_type("⌬ review") == "codex" and ade_basement.agent_type("◈ fix") == "agy"
+    assert ade_basement.agent_type("zsh", "codex") == "codex" and ade_basement.agent_type("zsh", "agy") == "agy"
+    assert ade_basement.agent_type("zsh", "zsh") is None
+    assert ade_basement.state("⌬ Codex", ["Working (12s · esc to interrupt)"]) == "working"
+    assert ade_basement.state("⌬ Codex", ["› 1. Apply", "  2. Cancel"]) == "waiting"
+    assert ade_basement.state("⌬ Codex", ["› "]) == "done"
+    assert ade_basement.state("◈ Antigravity", ["Thinking (esc to cancel, 3s)"]) == "working"
+    assert ade_basement.state("◈ Antigravity", ["▸ 1. Yes", "  2. No"]) == "waiting"
+    assert ade_basement.state("◈ Antigravity", ["> "]) == "done"
+    assert ade_common.DEAD_RE.search("Run agy login to continue")
+    assert ade_common.BUSY_RE.search("Working (esc to cancel, 2s)")
+    assert not ade_common.BUSY_RE.search("Esc to cancel")

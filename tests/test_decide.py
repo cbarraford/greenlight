@@ -779,3 +779,45 @@ def test_agent_overlay_local_and_model(decide_env, monkeypatch):
     terms.clear()
     w = overlay(["You've hit your usage limit."])
     assert w["next"] == {"owner": "agent", "action": "Fix CI"}
+
+
+def test_haiku_provider_on_codex_and_agy(decide_env, monkeypatch):
+    # haiku_model may be any model: a Codex or agy one runs on that CLI, toolless, never the Messages API
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    asked = []
+    def ask(prompt, model=None, effort=None, timeout=None, cwd=None, **kw):
+        asked.append((model, cwd, timeout))
+        props = json.loads(prompt.split("JSON schema, no prose and no code fence:\n", 1)[1].split("\n\n", 1)[0])["properties"]
+        return "Sure:\n" + json.dumps({k: {"p_yes": 0.8} for k in props}) + "\n"
+    monkeypatch.setattr(harness, "ask", ask)
+    for model, want in (("gpt-6-luna", "codex:gpt-6-luna"), ("gemini-3.8-flash-low", "agy:gemini-3.8-flash-low"),
+                        ("agy:claude-sonnet-5-5-low", "agy:claude-sonnet-5-5-low")):
+        decide_env.configure(provider="haiku", haiku_model=model)
+        r = decide.bool("state", "Is it?")
+        assert r["provider"] == "haiku" and r["value"] and asked[-1][0] == want and asked[-1][1] is None, (model, r, asked)
+    assert decide_env.seen == []  # no Messages API call for a non-Claude model
+    # _deadline caps timeout for agent_answer; manual haiku_model=None falls back to HAIKU cleanly
+    decide_env.configure(provider="haiku", haiku_model="gpt-6-luna")
+    decide.batch("state_dl", {"q": {"kind": "bool", "question": "ok?"}}, timeout=12)
+    assert asked[-1][2] <= 12
+    # claude:<model> still takes the Messages API fast path, and haiku_model=None doesn't crash
+    decide_env.reply["fn"] = lambda path, body: (200, {
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": json.dumps({k: {"p_yes": 0.9} for k in body["output_config"]["format"]["schema"]["properties"]})}],
+    })
+    decide_env.configure(provider="haiku", haiku_model="claude:claude-haiku-5-5")
+    r_api = decide.bool("state", "Is it?")
+    assert r_api["provider"] == "haiku" and r_api["value"] and len(decide_env.seen) == 1
+    assert decide_env.seen[0]["body"]["model"] == "claude-haiku-5-5"
+    decide_env.configure(provider="haiku", haiku_model=None)
+    assert decide.bool("state2", "Is it?")["provider"] == "haiku"
+    monkeypatch.setattr(harness, "ask", lambda *a, **k: "not json")
+    decide_env.configure(provider="haiku", haiku_model="gpt-6-luna")
+    r = decide.bool("state", "Is it?")
+    assert r["provider"] == "local" and "wasn't JSON" in r["error"], r
+
+
+def test_config_sets_haiku_model(decide_env, capsys):
+    assert decide.main(["config", "--haiku-model", "gpt-6-luna"]) == 0
+    assert json.loads(capsys.readouterr().out)["haiku_model"] == "gpt-6-luna"
+    assert decide.conf()["haiku_model"] == "gpt-6-luna"

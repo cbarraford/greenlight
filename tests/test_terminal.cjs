@@ -1200,6 +1200,45 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
   page._errs.splice(0);  // the rejection is the point
 });
 
+test("Basement supports Codex and agy: tab icons, configured default agent launch, and diff notes", async page => {
+  const b64 = s => Buffer.from(s, "utf8").toString("base64");
+  const id = await page.evaluate(() => cur.focus.id);
+  await page.evaluate(([id, data]) => term.feed(id, data), [id, b64("\x1b]0;◈ Antigravity task\x07")]);
+  assert.equal(await page.$eval("#tabs .tab.on .nm", e => e.textContent), "Antigravity task", "◈ prefix stripped from title");
+  assert.ok(await page.$("#tabs .tab.on svg[data-icon='agy'].ic-agy"), "agy icon uses ds-icons mark with ic-agy class");
+  await page.evaluate(() => term.workspaces({
+    agents: ["agy", "codex", "claude"],
+    trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
+      mr: {ref: "!99", state: "opened", sha: "s1"}, moves: [{kind: "ci", prompt: "Fix CI now", jobs: ["lint"]}]}],
+  }));
+  await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"});
+  assert.ok(await page.$("#card button:text-is('Antigravity')"), "primary agent button follows configured default agent");
+  await page.click("#card .rv .go");
+  assert.equal((await posts(page, "in")).pop().d, "agy -i $'Fix CI now'\r", "agy launches with -i");
+  await page.evaluate(() => term.workspaces({
+    agents: ["codex", "claude"],
+    trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
+      mr: {ref: "!99", state: "opened", sha: "s1"}, moves: [{kind: "ci", prompt: "Fix CI now", jobs: ["lint"]}]}],
+  }));
+  await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"});
+  assert.ok(await page.$("#card button:text-is('Codex')"), "primary agent button switches to Codex");
+  await page.click("#card .rv .go");
+  assert.equal((await posts(page, "in")).pop().d, "codex $'Fix CI now'\r", "codex launches with positional prompt");
+  // Diff note pastes directly into an open Codex or agy pane, not only Claude
+  const codexId = await page.evaluate(() => cur.focus.id);
+  await page.evaluate(([id, data]) => term.feed(id, data), [codexId, b64("\x1b]0;⌬ Codex session\x07")]);
+  await page.evaluate(() => { diffs.add("/w/fix-agy"); diffShow({op: "diff", path: "/w/fix-agy", mode: "branch", base: "origin/main", files: [["a.py", "1", "0"]], status: ["M"],
+    patch: "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+x = 1\n"}); });
+  await page.click("#dlg .dl.ad");
+  await page.fill("#dlg .dn textarea", "check this");
+  assert.match(await page.textContent("#dlg button.pri"), /Paste 1 note into Codex/);
+  assert.match(await page.textContent("#dlg .dn .lb"), /Note to Codex on a\.py:1/);
+  // syncPanes preserves agy/codex identity even when pane_states sends an unprefixed title + agent field
+  const sess = await page.evaluate(() => { cur.focus.out = 0; return cur.focus.session; });
+  await page.evaluate(s => term.workspaces({agents: ["agy"], trees: [], panes: {[s]: {state: "working", title: "raw-agy", agent: "agy"}}}), sess);
+  assert.equal(await page.evaluate(() => agentOf(cur.focus)), "agy", "syncPanes keeps agy identity via prefix");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

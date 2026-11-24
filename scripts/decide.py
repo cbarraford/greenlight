@@ -16,8 +16,9 @@ Providers, from config.json's "system_one" ({"provider": "jev"|"haiku"|"local", 
 "url": ..., "haiku_model": "claude-haiku-5-5", "timeout": 20}; a bare string names the provider):
   jev    TypeSafe's System One API (https://api.typesafe.ai/v1/systemone). Key: TYPESAFE_API_KEY, else
          $GREENLIGHT_HOME/secrets/typesafe (`decide.py key` writes it from stdin).
-  haiku  Claude Haiku with structured JSON output: the Messages API when ANTHROPIC_API_KEY (or
-         $GREENLIGHT_HOME/secrets/anthropic) is set, else `claude -p --json-schema`.
+  haiku  A fast model with structured JSON output, haiku_model (any id harness.route takes: claude-*, gpt-*, gemini-*,
+         <harness>:<model>). A Claude one: the Messages API when ANTHROPIC_API_KEY (or $GREENLIGHT_HOME/secrets/anthropic)
+         is set, else `claude -p --json-schema`. Any other: its harness, toolless, the schema in the prompt.
   local  No model: every answer is uninformative (bool 0.5, uniform choice, score 0.5) and says provider "local", so callers
          keep their own deterministic rules. It's the default, and what any failure falls back to.
 Answers from a model are cached in $GREENLIGHT_HOME/decide-cache.json (same state + questions → no new call for a day).
@@ -27,7 +28,7 @@ Answers from a model are cached in $GREENLIGHT_HOME/decide-cache.json (same stat
     decide.py score <rubric> [--context C] [--state S]
     decide.py batch                                               stdin {"state": ..., "questions": {...}}
     decide.py test                                                ask each configured provider a known question
-    decide.py config [--provider P] [--fallback F|none] [--model M]  print (or change) system_one, as JSON
+    decide.py config [--provider P] [--fallback F|none] [--model M] [--haiku-model M]  print (or change) system_one, as JSON
     decide.py key [--clear]                                       store the TypeSafe key read from stdin
 
 Stdlib only, Python 3.10+.
@@ -320,10 +321,13 @@ def haiku_parse(qs, keys, d):
 
 def haiku(state, qs, c):
     text, schema, keys = haiku_prompt(state, qs)
+    import harness  # here, not at the top: harness imports greenlight, which may import us
+    h, model = harness.route(c.get("haiku_model") or HAIKU)
+    api_model = model or HAIKU
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or _secret("anthropic")
-    if key:
+    if key and h == "claude" and api_model.startswith("claude-"):  # the Messages API only serves Claude; another model runs on its CLI
         r = post(c["anthropic_url"], {
-            "model": c["haiku_model"], "max_tokens": 1024, "thinking": {"type": "disabled"},
+            "model": api_model, "max_tokens": 1024, "thinking": {"type": "disabled"},
             "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": schema}},
             "system": HAIKU_SYSTEM, "messages": [{"role": "user", "content": text}]},
             {"x-api-key": key, "anthropic-version": "2026-10-21"}, c["timeout"])
@@ -336,8 +340,9 @@ def haiku(state, qs, c):
             raise RuntimeError("haiku: reply wasn't JSON") from None
     if c.get("_deadline") is not None and c["_deadline"] < 2.0:
         raise RuntimeError("haiku via claude -p: deadline too short for CLI startup")
-    import harness  # here, not at the top: harness imports greenlight, which may import us
-    cmd = [harness.binary("claude"), "-p", "--model", c["haiku_model"], "--output-format", "json", "--json-schema", json.dumps(schema),
+    if h != "claude":
+        return agent_answer(h, model, text, schema, qs, keys, c)
+    cmd = [harness.binary("claude"), "-p", "--model", api_model, "--output-format", "json", "--json-schema", json.dumps(schema),
            "--tools", "", "--no-session-persistence", "--append-system-prompt", HAIKU_SYSTEM]
     try:
         p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=max(c["timeout"], 60), cwd=str(HOME) if HOME.is_dir() else None)
@@ -350,6 +355,28 @@ def haiku(state, qs, c):
     if d.get("is_error") or not isinstance(d.get("structured_output"), dict):
         raise RuntimeError(f"haiku via claude -p: {str(d.get('result') or d.get('subtype'))[:200]}")
     return haiku_parse(qs, keys, d["structured_output"])
+
+
+def agent_answer(h, model, text, schema, qs, keys, c):
+    """The haiku provider on another harness (codex, agy, ...): toolless, the schema in the prompt, the JSON out of the reply."""
+    import harness
+    prompt = (HAIKU_SYSTEM + "\n\nReply with only a JSON object matching this JSON schema, no prose and no code fence:\n"
+              + json.dumps(schema) + "\n\n" + text)
+    cli_timeout = max(c["timeout"], 90)
+    if c.get("_deadline") is not None:
+        cli_timeout = min(cli_timeout, max(c["_deadline"], 1.0))
+    try:
+        out = harness.ask(prompt, model=f"{h}:{model}" if model else h, effort="low", timeout=cli_timeout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        raise RuntimeError(f"haiku via {h}: {e}") from None
+    start, end = out.find("{"), out.rfind("}")
+    try:
+        d = json.loads(out[start:end + 1]) if start >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict):
+        raise RuntimeError(f"haiku via {h}: reply wasn't JSON")
+    return haiku_parse(qs, keys, d)
 
 
 BACKENDS = {"jev": jev, "haiku": haiku}
@@ -510,7 +537,7 @@ def main(argv):
     if cmd == "test":
         return test()
     if cmd == "config":
-        kw = {k: (None if f[k] in ("none", "") else f[k]) for k in ("provider", "fallback", "model") if k in f}
+        kw = {k.replace("-", "_"): (None if f[k] in ("none", "") else f[k]) for k in ("provider", "fallback", "model", "haiku-model") if k in f}
         if kw.get("provider") not in (None, *PROVIDERS) or kw.get("fallback") not in (None, "jev", "haiku"):
             print("provider: jev|haiku|local; fallback: jev|haiku|none", file=sys.stderr)
             return 2

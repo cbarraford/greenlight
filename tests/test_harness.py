@@ -11,6 +11,7 @@ from chat import Norm
 @pytest.fixture()
 def harness_env(gl_home, monkeypatch):
     monkeypatch.setattr(harness, "binary", lambda n: n)
+    monkeypatch.setenv("CODEX_HOME", str(gl_home / "codex"))  # no models cache: an effort passes as asked
     return harness.CONFIG.setdefault("harnesses", {})
 
 
@@ -21,7 +22,7 @@ def test_argv_safe_defaults(harness_env):
     cmd, text = harness.argv("codex", "hi", effort="max", system="SYS", stream=True)
     assert cmd == [
         "codex", "exec", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write",
-        "--json", "-c", "model_reasoning_effort=high", "-",
+        "--json", "-c", "model_reasoning_effort=max", "-",
     ], cmd
     assert text == "SYS\n\nhi"  # no system flag: the first message carries it...
     assert harness.argv("codex", "hi", sid="t1", system="SYS") == (
@@ -108,7 +109,82 @@ def test_route_model_to_harness(harness_env):
     assert harness.route("gemini-4-neon") == ("agy", "gemini-4-neon-medium")  # old saved choice
     assert harness.route("codex") == ("codex", None)
     assert harness.route("gemini-4-neon-medium", "codex") == ("agy", "gemini-4-neon-medium")  # a Gemini pick wins over llm_harness
-    assert harness.route("claude-haiku-5-5", "codex") == ("codex", None)  # a Claude name means nothing to codex: its default
+    # every pick runs on the harness it names, whatever llm_harness is: claude, codex and agy for any model
+    assert harness.route("claude-haiku-5-5", "codex") == ("claude", "claude-haiku-5-5")
+    assert harness.route("gpt-6-luna") == ("codex", "gpt-6-luna") and harness.route("o4-mini", "agy") == ("codex", "o4-mini")
+    assert harness.route("codex-mini-latest") == ("codex", "codex-mini-latest")
+    assert harness.route("gpt-oss-120b-medium") == ("agy", "gpt-oss-120b-medium")  # agy's, not Codex's
+    assert harness.route("agy:claude-opus-5-5-high") == ("agy", "claude-opus-5-5-high")  # a Claude model on agy
+    assert harness.route("codex:some-new-model") == ("codex", "some-new-model") and harness.route("claude:opus") == ("claude", "opus")
+    assert harness.route("opencode:p/m") == ("opencode", "p/m") and harness.route("agy:") == ("agy", None)
+    assert harness.route("mystery-7", "codex") == ("codex", "mystery-7")  # an id that names no harness: llm_harness gets it
+    assert harness.route("nope:x") == ("claude", "nope:x")  # not a harness prefix
+    assert harness.harness_of("ollama") is None and harness.harness_of("") is None and harness.harness_of("orbit") is None
+
+
+def test_codex_effort_follows_models_cache(harness_env, gl_home):
+    (gl_home / "codex").mkdir()
+    lv = lambda *e: [{"effort": x} for x in e]
+    (gl_home / "codex" / "models_cache.json").write_text(json.dumps({"models": [
+        {"slug": "gpt-old", "supported_reasoning_levels": lv("low", "medium", "high")},
+        {"slug": "gpt-new", "supported_reasoning_levels": lv("low", "medium", "high", "xhigh", "max")},
+        {"slug": "gpt-hidden", "visibility": "hide", "supported_reasoning_levels": lv("medium", "high")}]}))
+    assert harness.codex_effort("gpt-old", "max") == "high" and harness.codex_effort("gpt-old", "xhigh") == "high"
+    assert harness.codex_effort("gpt-new", "max") == "max" and harness.codex_effort("gpt-unknown", "max") == "max"
+    assert harness.codex_effort("gpt-hidden", "low") == "medium"  # nothing at or below: its lowest, not highest
+    assert harness.codex_effort(None, None) is None
+    assert "model_reasoning_effort=high" in harness.argv("codex", "x", model="gpt-old", effort="max")[0]
+    assert harness.argv("agy", "x", model="claude-opus-5-5", effort="high")[0][-2:] == ["--effort", "high"]
+    assert "--effort" not in harness.argv("agy", "x", model="gemini-4-neon-low", effort="high")[0]  # its id carries one
+    assert "--effort" not in harness.argv("agy", "x", model="gemini-4-neon-low")[0]
+
+
+def test_models_lists_every_installed_harness(harness_env, gl_home, monkeypatch):
+    (gl_home / "codex").mkdir()
+    (gl_home / "codex" / "models_cache.json").write_text(json.dumps({"models": [
+        {"slug": "gpt-6-luna", "display_name": "GPT-6-Luna"}, {"slug": "secret", "visibility": "hide"}, {"slug": "astra-9"}]}))
+    monkeypatch.setattr(harness, "installed", lambda n: n in ("claude", "codex", "agy"))
+    agy_out = "Fetching available models...\ngemini-4-neon-low\tGemini 4 Neon (Low)\nclaude-opus-5-5-high\tClaude Opus 5.5 (High)\n"
+    calls = []
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return harness.subprocess.CompletedProcess(cmd, 0, stdout=agy_out, stderr="")
+    monkeypatch.setattr(harness.subprocess, "run", run)
+    ms = {m["id"]: m for m in harness.models()}
+    assert ms["claude-opus-5-5"]["harness"] == "claude" and ms["gpt-6-luna"] == {"id": "gpt-6-luna", "name": "GPT-6-Luna", "harness": "codex"}
+    assert "secret" not in ms and "codex:secret" not in ms and ms["codex:astra-9"]["harness"] == "codex" and "codex" in ms
+    assert ms["gemini-4-neon-low"]["name"] == "Gemini 4 Neon (Low)"
+    assert ms["agy:claude-opus-5-5-high"] == {"id": "agy:claude-opus-5-5-high", "name": "Claude Opus 5.5 (High) · agy", "harness": "agy"}
+    assert ms["agy"] == {"id": "agy", "name": "Antigravity default", "harness": "agy"}
+    assert "opencode" not in ms and all(harness.route(i)[0] == m["harness"] for i, m in ms.items())
+    harness.models()
+    assert len(calls) == 1  # agy's list is cached for a day
+
+
+def test_ask_runs_the_picked_harness_toolless(harness_env, monkeypatch):
+    seen = []
+    def run(cmd, **kw):
+        seen.append(cmd)
+        out = '{"event":"result","result":{"status":"SUCCESS","response":"hi"}}' if cmd[0] == "agy" else "plain\n"
+        return harness.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+    monkeypatch.setattr(harness.subprocess, "run", run)
+    assert harness.ask("p", "agy:claude-sonnet-5-5-low") == "hi" and seen[-1][:2] == ["agy", "--input-format"]
+    assert harness.ask("p", "gpt-6-luna", effort="low") == "plain\n"
+    assert seen[-1][:2] == ["codex", "exec"] and "sandbox_mode=read-only" in seen[-1] and "gpt-6-luna" in seen[-1]
+    assert harness.ask("p", None) == "plain\n" and seen[-1][-2:] == ["--model", "claude-haiku-5-5"]  # claude's cheap default
+    assert harness.ask("p", None, default="codex") == "plain\n" and "-m" not in seen[-1]  # codex: its own default
+    assert harness.answer("agy", '{"event":"result","result":{"status":"ERROR","response":"x"}}') == ""
+    # Codex-only host: missing claude binary falls back cleanly to default harness
+    monkeypatch.setattr(harness, "installed", lambda n: n == "codex")
+    def missing_claude(cmd, **kw):
+        seen.append(cmd)
+        if cmd[0] == "claude":
+            raise FileNotFoundError("claude")
+        return harness.subprocess.CompletedProcess(cmd, 0, stdout="codex fallback\n", stderr="")
+    monkeypatch.setattr(harness.subprocess, "run", missing_claude)
+    assert harness.ask("p", "claude-haiku-5-5", default="codex") == "codex fallback\n" and seen[-1][:2] == ["codex", "exec"]
+    monkeypatch.setattr(harness.subprocess, "run", lambda cmd, **kw: harness.subprocess.CompletedProcess(cmd, 1, stdout="error text", stderr=""))
+    assert harness.ask("p", "claude-gone-1") == ""
 
 
 def test_norm_gemini_events_and_retry():
@@ -208,3 +284,26 @@ def test_harness_default_model(harness_env):
     assert greenlight.orca_agent(("agent", "launch", "--agent", "agy", "--model", "x"))[-2:] == ["--model", "x"]
     assert greenlight.orca_agent(("agent", "launch", "--agent", "claude")) == ["agent", "launch", "--agent", "claude"]
     assert greenlight.orca_agent(("worktree", "ps")) == ["worktree", "ps"]
+
+
+def test_canonical_interactive_and_failover(harness_env, monkeypatch):
+    # agy uses -i for interactive prompts; antigravity alias normalizes to agy; configured default models pass through
+    assert harness.canonical("antigravity") == "agy" and harness.canonical("Claude") == "claude"
+    assert harness.interactive("agy", "ship it") == ["agy", "-i", "ship it"]
+    assert harness.interactive("antigravity", "ship it") == ["agy", "-i", "ship it"]
+    assert harness.interactive("codex", "ship it") == ["codex", "--", "ship it"]
+    harness_env["agy"] = {"model": "gemini-4-neon-high"}
+    harness_env["codex"] = {"model": "gpt-6-luna"}
+    assert harness.interactive("agy", "hi") == ["agy", "--model", "gemini-4-neon-high", "-i", "hi"]
+    assert harness.interactive("codex", "hi") == ["codex", "-m", "gpt-6-luna", "--", "hi"]
+    assert harness.interactive("agy", "") == ["agy", "--model", "gemini-4-neon-high"]
+
+    # greenlight normalizes Orca's "antigravity" so rate-limit failover moves to the next agent instead of looping on agy
+    assert greenlight.canonical_agent("antigravity") == "agy" and greenlight.canonical_agent("codex") == "codex"
+    monkeypatch.setitem(greenlight.CONFIG, "agents", ["claude", "agy", "codex"])
+    ws = {"id": "w1", "next": {"owner": "agent", "step": "ci_green", "action": "Fix CI"},
+          "agent": {"state": "done", "type": "antigravity", "pane_key": None, "last": ""}}
+    terms = {"w1": [{"handle": "t1", "agentIdentity": "antigravity", "lastOutputAt": 100}]}
+    monkeypatch.setattr(greenlight, "orca", lambda *a, **k: {"terminal": {"tail": "You've hit your usage limit."}})
+    greenlight.agent_overlay(ws, terms)
+    assert ws["next"]["agent"] == "claude" and "agy out of tokens" in ws["next"]["action"]

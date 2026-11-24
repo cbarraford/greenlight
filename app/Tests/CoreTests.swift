@@ -315,6 +315,18 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           themes[0].dark && !themes.first(where: { $0.name == "GitHub Light" })!.dark
           && named("missingKey", "Nord").name == "Nord" && harnessOf("claude-opus-5-5") == "claude"
           && harnessOf("gemini-4-neon-high") == "agy" && harnessOf("codex") == "codex"
+          && harnessOf("gpt-6-luna") == "codex" && harnessOf("o4-mini") == "codex"
+          && harnessOf("gpt-oss-120b-medium") == "agy" && harnessOf("agy:claude-opus-5-5-high") == "agy"
+          && routeModel("agy:claude-opus-5-5-high").harness == "agy" && routeModel("agy:claude-opus-5-5-high").id == "claude-opus-5-5-high"
+          && routeModel("mystery-7").harness == "claude" && routeModel("mystery-7").id == "mystery-7"
+          && modelSupportsEffort("claude-opus-5-5") && modelSupportsEffort("codex") && modelSupportsEffort("gpt-6-luna")
+          && modelSupportsEffort("agy") && !modelSupportsEffort("gemini-4-neon-high")
+          && llmInvocation("hi", model: "claude-haiku-5-5").args.contains("--tools")
+          && llmInvocation("hi", model: "gpt-6-luna", effort: "max").args.contains("model_reasoning_effort=high")
+          && llmInvocation("hi", model: "gpt-6-luna").args.contains("sandbox_mode=read-only")
+          && llmInvocation("hi", model: "agy:claude-sonnet-5-5-low").harness == "agy"
+          && parseAgyStreamResult("{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ok\"}}") == "ok"
+          && parseAgyStreamResult("{\"event\":\"result\",\"result\":{\"status\":\"ERROR\",\"response\":\"no\"}}") == ""
           && effortName("xhigh") == "Extra high" && effortName("low") == "Low"
           && !fontChoices.isEmpty && !models.isEmpty && !accents.isEmpty)
     _ = (StatusInk.needs, StatusInk.yourMove, StatusInk.working, StatusInk.crashed, StatusInk.queued, StatusInk.done,

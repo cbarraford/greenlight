@@ -1753,18 +1753,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             done(String(String(out.split(separator: "\n").first ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*. ").union(.whitespaces)).prefix(40)))
         }
     }
-    /// claude -p on this Mac at low effort: its stdout, "" when it fails.
+    /// Headless LLM call (Claude, Codex, or agy) at low effort: its stdout reply, "" when it fails.
     func claudeP(_ prompt: String, model: String, done: @escaping (String) -> Void) {
-        if !devSsh(host).isEmpty {  // a dev copy asks the host's claude: one here would connect in the copy's name
+        let inv = llmInvocation(prompt, model: model, effort: "low")
+        let finish: (String) -> String = { inv.harness == "agy" ? parseAgyStreamResult($0) : $0 }
+        if !devSsh(host).isEmpty {  // a dev copy asks the host's CLI: one here would connect in the copy's name
             var out = ""
-            ssh("exec $SHELL -lc " + shellQuote("cd /tmp && exec claude -p --model \(shellQuote(model)) --effort low"), stdin: prompt,
-                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? out : "") })
+            ssh("exec $SHELL -lc " + shellQuote(inv.shell), stdin: inv.stdin,
+                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? finish(out) : "") })
             return
         }
         DispatchQueue.global().async {
             let p = Process(), inPipe = Pipe(), out = Pipe()
-            p.executableURL = URL(fileURLWithPath: ud.string(forKey: "claudeBin") ?? NSHomeDirectory() + "/.local/bin/claude")
-            p.arguments = ["-p", "--model", model, "--effort", "low"]
+            p.executableURL = URL(fileURLWithPath: inv.bin)
+            p.arguments = inv.args
             p.currentDirectoryURL = FileManager.default.temporaryDirectory
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
@@ -1773,11 +1775,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var text = ""
             if (try? p.run()) != nil {
                 DispatchQueue.global(qos: .userInitiated).async {
-                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
+                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(inv.stdin.utf8))
                     try? inPipe.fileHandleForWriting.close()
                 }
                 let d = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
-                if p.terminationStatus == 0 { text = String(decoding: d, as: UTF8.self) }
+                if p.terminationStatus == 0 { text = finish(String(decoding: d, as: UTF8.self)) }
             }
             DispatchQueue.main.async { done(text) }
         }
@@ -1785,8 +1787,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Each pane is a tmux session on its own socket, so quitting the app only detaches: relaunch reattaches, and
     /// after a reboot `new-session -A` starts it fresh in the workspace. Options go inline: no config on either host.
     static let tmuxOpts = ["set -g status off", "set -g prefix None", "set -s escape-time 0", "set -g set-titles on",
-        // the inner app's own title (Claude Code's "✳ name"); else the folder, not tmux's default (the hostname); "⌬ " when it runs codex
-        "set -g set-titles-string '#{?#{m:*codex*,#{pane_current_command}},⌬ ,}#{?#{==:#{pane_title},#{host}},#{pane_current_path},#{pane_title}}'",
+        // the inner app's own title (Claude Code's "✳ name"); else the folder, not tmux's default (the hostname); "⌬ " for codex, "◈ " for agy
+        "set -g set-titles-string '#{?#{m:*codex*,#{pane_current_command}},⌬ ,#{?#{m:*agy*,#{pane_current_command}},◈ ,}}#{?#{==:#{pane_title},#{host}},#{pane_current_path},#{pane_title}}'",
         "set -g default-terminal tmux-256color", "set -s 'terminal-features[90]' 'xterm-256color:RGB'", "set -g allow-passthrough on",
         "set -g history-limit 50000", "set -s 'terminal-overrides[90]' '*:smcup@:rmcup@'",  // no alternate screen: slow output also lands in the page's own scrollback
         // tmux draws screens, not lines: a fast burst reaches the page as its last screenful, so the history is tmux's. The page's
