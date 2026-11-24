@@ -917,7 +917,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
             Diag.event("js_error", ["page": "dashboard", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
         } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
-        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt"].contains(cmd) { greenlight.active() }
+        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt", "steward"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "unpick" {  // a click on a lit hex clears them in every window (on its chat's)
             if let gone = b["gone"] as? [String] {  // a refresh dropped these: every window already let go of them, so just forget them, or a reload lights them again
@@ -1018,6 +1018,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 self.greenlight.acted(name, on ? "park" : "unpark", code, out)
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.parked(\(js))")
+            })
+        }
+        // Steward mode & drift confirmation on a workspace card: dash.py steward on|off|confirm <name>
+        if cmd == "steward", let op = b["op"] as? String, ["on", "off", "confirm"].contains(op),
+           let name = b["name"] as? String {
+            guard isWsName(name) else { from.callJS("window.mc && mc.steward", [["name": name, "error": badNameErr]]); return }
+            var out = ""
+            greenlight.log(.greenlight, name, .action, "steward \(op)")
+            ssh("\(py)/dash.py steward \(op) \(shellQuote(name))", onLine: { out += $0 }, onExit: { [weak self] code in
+                self?.greenlight.acted(name, "steward \(op)", code, out)
+                let obj = (out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+                    ?? ["op": op, "name": name, "error": "\(host) didn't answer (exit \(code))"]
+                for w in self?.webs ?? [] where self?.readyDash.contains(ObjectIdentifier(w)) == true {
+                    w.callJS("window.mc && mc.steward", [obj])
+                }
             })
         }
         // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.

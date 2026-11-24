@@ -54,6 +54,7 @@ import last_agent  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
 import placement  # noqa: E402
+import ws_state  # noqa: E402
 
 DASH = greenlight.STATE / "dash"
 NAME_RE = re.compile(r"^[\w.@+/-]{1,200}$")
@@ -257,6 +258,9 @@ def tree_merge(path, automatic=False):
     if not m or not r["mr"].get("sha") or automatic and not m.get("auto"):
         return {"error": "greenlight doesn't say this can merge now"}
     mr_identity = (r.get("id"), r.get("forge"), r.get("project"), r["mr"].get("iid"), r["mr"].get("sha"))
+    if drift_err := audit.check_merge_drift(r.get("forge"), r.get("project"), r["mr"].get("iid"),
+                                            r["mr"].get("target_branch") or "", r["mr"].get("sha") or ""):
+        return {"error": drift_err}
     cmd = r["next"]["cmd"]
     # The card is a human Merge click even when an unattended auto action is
     # also available. Keep the source-head pin, but leave semantic target
@@ -645,13 +649,14 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     snap = json.loads((greenlight.STATE / "last.json").read_text())
     live = live_agents()
     now = time.time() * 1000
-    rows = live_rows(snap["rows"], live)
+    rows = ws_state.keyed(live_rows(snap["rows"], live), migrate=False)
     pucks, blk = [], blocking.cached()
     ms = placement.machines()
     home = placement.expected(ms)  # where the agents belong: a workspace elsewhere is flagged `away` (#160)
     for r in rows:
         w, ag = live[r["id"]]
         _normalize_row(r)
+        card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r["name"])
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=ag.get("agentType") or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
@@ -678,6 +683,9 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                                                      "pipeline_url", "threads_total")},
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
             "host": (h := placement.host_of(w, ms)), "away": not greenlight.same_host(h, home),
+            "steward": bool(card.get("steward")),
+            **({"steward_drift": card["steward_drift"]} if card.get("steward_drift") else {}),
+            "activity": ws_state.activity_of(card, limit=25),
             "puck": page.get("layout", {}).get("puck"),
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
             # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
@@ -1847,9 +1855,34 @@ def settings(op, arg, stdin):
 
 
 
+def steward_op(op, arg):
+    """Toggle steward mode, confirm head/target drift, or read per-MR activity on a workspace card."""
+    key, row = ws_state.resolve_card_key(arg)
+    ping_key = None
+    if op in ("on", "off"):
+        c, ping_key = ws_state.set_steward(key, op == "on", row=row)
+    elif op == "confirm":
+        c, ping_key = ws_state.confirm_drift(key)
+    elif op == "log":
+        c = ws_state.load(key)
+    else:
+        return {"error": f"unknown steward op: {op}"}
+    if ping_key or op == "off":
+        with contextlib.suppress(Exception):
+            open_pings = greenlight.pinged()
+            to_close = ([ping_key] if ping_key and ping_key in open_pings else []) + (
+                [k for k in open_pings if k.startswith(f"@rereview:{key}:")] if op == "off" else []
+            )
+            for pk in dict.fromkeys(to_close):
+                greenlight.resolve(pk, f"steward {op}")
+    return {"ok": True, "name": (row or {}).get("name") or arg, "card": key,
+            "steward": bool(c.get("steward")), "steward_drift": c.get("steward_drift"),
+            "activity": ws_state.activity_of(c, limit=40)}
+
+
 def oops(a, e):
     """A dash op's caught failure, for diag: the op, the exception type and class, never the message."""
-    diag.event("dash_error", op=a[0], sub=a[1] if a[0] in ("task", "tree") else None, **diag.failure(e))
+    diag.event("dash_error", op=a[0], sub=a[1] if a[0] in ("task", "tree", "steward") else None, **diag.failure(e))
 
 
 def _stream(every):
@@ -1947,6 +1980,13 @@ def main():
             oops(a, e)
             out = {"error": str(e)[:200]}
         print(json.dumps({"session": a[1], **out}))
+    elif a[:1] == ["steward"] and len(a) == 3 and a[1] in ("on", "off", "confirm", "log") and (NAME_RE.match(a[2]) or ws_state.MR_REF_RE.match(a[2])):
+        try:
+            out = steward_op(a[1], a[2])
+        except Exception as e:
+            oops(a, e)
+            out = {"error": str(e)[:300]}
+        print(json.dumps({"op": a[1], "name": a[2], **out}))
     elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "auto-merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]

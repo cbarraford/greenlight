@@ -224,7 +224,7 @@ COURTESY_RE = re.compile(r"\W*(please|thanks?|thank you)?\W*", re.I)  # "…, pl
 CHANGES = (r"fix|change|add|implement|update|delete|remove|create|make|write|rename|merge|deploy|ship|set ?up|set|"
            r"refactor|build|rebase|push|commit|edit|install|configure|enable|disable|cancel|send|post|reply|respond|"
            r"comment|open (?:a|an|the|it|up|new)|close|move|bump|upgrade|downgrade|migrate|patch|revert|label|assign|approve|review|restart|"
-           r"kill|stop|start|run|launch|dispatch|retry|re-?run|draft|publish|resolve|address|tag|release|save|record|"
+           r"kill|stop|start|run|launch|dispatch|retry|re-?run|draft|publish|resolve|address|tag|release|save|record|steward|"
            r"archive|clean|turn (on|off)|hold|park|rotate|revoke|pay|buy|order|schedule|book|undo|apply|land|split|"
            r"squash|rewrite|document|test|grant|give|invite|share|allow|deny|block|unblock|take over|pick up|handle|"
            r"spin up|try|continue|proceed|finish|resume|do|go ahead|keep|use|switch|replace|reset|clear|mark|ping|"
@@ -1813,19 +1813,20 @@ def close_stale(rows):
     if not open_pings:
         return
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
+    ws_prefixes = ("@stuck:", "@drift:", "@rereview:")
     undo_ws, stuck_ws, stuck_ids = {}, {}, {}
-    if any(k.startswith(("@undo:", "@stuck:")) for k in open_pings):
+    if any(k.startswith(("@undo:", *ws_prefixes)) for k in open_pings):
         for e in outbox_events():
             k = str(e.get("key", ""))
             if k.startswith("@undo:") and e.get("ws"):
                 undo_ws[k] = e["ws"]
-            elif k.startswith("@stuck:") and e.get("ws"):
+            elif k.startswith(ws_prefixes) and e.get("ws"):
                 stuck_ws[k] = e["ws"]
-    if any(k.startswith("@stuck:") for k in open_pings):
+    if any(k.startswith(ws_prefixes) for k in open_pings):
         stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
-                     for r in decisions.load() if str(r.get("key", "")).startswith("@stuck:")}
+                     for r in decisions.load() if str(r.get("key", "")).startswith(ws_prefixes)}
     for key in open_pings:
-        if key.startswith("@stuck:"):
+        if key.startswith(ws_prefixes):
             names = stuck_ids.get(key) or stuck_ws.get(key, [])
             if names and not any(name in by_key for name in names):
                 resolve(key, "workspace removed")

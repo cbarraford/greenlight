@@ -1494,6 +1494,44 @@ test("hexes with no MR: needs-you and crashed keep their solid fill, and every l
   }
 });
 
+test("steward hex badge and popover Log tab show per-MR activity and toggle steward mode", async page => {
+  const p = {
+    ...puck("st-ws", "Merge #42: Steward mode", "raised"),
+    mr: {iid: 42, ref: "#42", state: "opened", title: "Steward mode", target_branch: "main", web_url: "https://github.com/octo/greenlight/pull/42"},
+    steward: true,
+    steward_drift: {kind: "head_changed", sha: "deadbeef1234", target: "main", old_value: "aaaa1111"},
+    activity: [
+      {ts: 1700000100, kind: "drift", step: "merge", sha: "deadbeef", target: "main", summary: "Paused: head changed", detail: "aaaa1111 → deadbeef", ok: false},
+      {ts: 1700000000, kind: "rereview", step: "ci_green", sha: "aaaa1111", target: "main", summary: "Re-reviewed diff at aaaa1111", detail: "all contracts passed", ok: true},
+    ],
+  };
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [p, puck("plain-ws", "Plain goal", "working")]});
+  assert.equal(await page.$("section.stewards"), null, "no separate stewards lane");
+  assert.ok(await page.$(".cell[data-name='st-ws'] .stbadge.drift"), "stewarded hex shows small drift badge");
+  assert.equal(await page.$(".cell[data-name='plain-ws'] .stbadge"), null, "non-stewarded hex has no badge");
+
+  // Hovering opens #hcard with Overview + Log (2) tabs, drift banner, and Steward toggle
+  await page.hover(".cell[data-name='st-ws']");
+  await page.waitForSelector("#hcard");
+  assert.ok(await page.$("#hcard .hcdrift"), "drift alert banner shown in popover");
+  await page.click("#hcard [role='tab']:has-text('Log (2)')");
+  assert.equal(await page.locator("#hcard .hclog li").count(), 2);
+  assert.match(await page.locator("#hcard .hclog").textContent(), /Re-reviewed diff/);
+  assert.equal(await page.locator("#hcard .hclog li.err").count(), 1);
+
+  // Confirm drift and toggle steward post structured steward commands and update UI via mc.steward
+  await page.click("#hcard .hcdrift button:has-text('Confirm')");
+  assert.ok((await posts(page, "steward")).some(m => m.op === "confirm" && m.name === "st-ws"));
+  await page.evaluate(r => window.mc.steward(r), {op: "confirm", name: "st-ws", ok: true, steward: true, steward_drift: null, activity: p.activity});
+  assert.equal(await page.$("#hcard .hcdrift"), null, "drift banner clears after confirmation");
+  assert.ok(await page.$(".cell[data-name='st-ws'] .stbadge:not(.drift)"), "badge returns to normal steward tone");
+
+  await page.click("#hcard .sttog");
+  assert.ok((await posts(page, "steward")).some(m => m.op === "off" && m.name === "st-ws"));
+  await page.evaluate(r => window.mc.steward(r), {op: "off", name: "st-ws", ok: true, steward: false, steward_drift: null, activity: p.activity});
+  assert.equal(await page.$(".cell[data-name='st-ws'] .stbadge"), null, "badge disappears when steward mode turns off");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

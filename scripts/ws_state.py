@@ -57,7 +57,7 @@ DIR = STATE / "state"
 ROOT = Path(__file__).resolve().parent.parent  # the skill dir
 MEMORY = Path(os.environ.get("GREENLIGHT_MEMORY") or ROOT / "memory")  # the owner's notes (SKILL.md)
 CAPS = {"decisions_made": 15, "noted_decisions": 15, "failed_approaches": 10, "touched_files": 40, "open_risks": 12, "noted_risks": 8,
-        "touched_committed": 40, "touched_dirty": 40, "transitions": 20, "dispatches": 12}
+        "touched_committed": 40, "touched_dirty": 40, "transitions": 20, "dispatches": 12, "activity": 50}
 FIELDS = ("goal_contract", "current_hypothesis", "decisions_made", "failed_approaches", "touched_files", "open_risks", "last_stage")
 BRIEF_CAP = 3000  # chars of card in a dispatch prompt
 STOP = set("the a an and or of to in on for is are was be it its this that with by at as from not no do does did what which "
@@ -157,8 +157,11 @@ def keyed(rows, migrate=True):
 
 
 def blank(name):
-    return {"ws": name, **{k: [] if k in CAPS else "" for k in FIELDS}, "goal_source": "", "situation_source": "", "mr_ref": "", "noted_risks": [], "noted_decisions": [], "transitions": [], "dispatches": [],
-            "forks": {}, "updated": 0}
+    return {"ws": name, **{k: [] if k in CAPS else "" for k in FIELDS}, "goal_source": "", "situation_source": "", "mr_ref": "",
+            "noted_risks": [], "noted_decisions": [], "transitions": [], "dispatches": [], "forks": {}, "updated": 0,
+            "steward": False, "steward_head": "", "steward_target": "", "steward_reviewed_sha": "",
+            "steward_pending_rereview_sha": "", "steward_expecting_from_sha": "", "steward_last_agent_state": "",
+            "steward_drift": None, "steward_confirmed_prev": {}, "activity": []}
 
 
 def load(name):
@@ -244,6 +247,221 @@ def update(name, **kw):
 
 def merge(*lists):
     return list(dict.fromkeys(x for lst in lists for x in lst))
+
+
+def append_activity(card, summary, *, kind="event", step="", sha="", target="", detail="", ok=True):
+    """Prepend a structured per-MR activity entry to a card dict in place."""
+    text = " ".join(str(summary or "").split())[:200]
+    if not text:
+        return card
+    entry = {
+        "ts": int(time.time()), "kind": str(kind or "event"), "step": str(step or ""),
+        "sha": str(sha or "")[:12], "target": str(target or ""),
+        "summary": text, "detail": " ".join(str(detail or "").split())[:300], "ok": bool(ok),
+    }
+    card["activity"] = [entry] + list(card.get("activity") or [])[:CAPS["activity"] - 1]
+    return card
+
+
+def record_activity(name, summary, **kw):
+    """Atomically record a per-MR activity entry on a workspace card."""
+    with lock():
+        c = load(name)
+        append_activity(c, summary, **kw)
+        save(c)
+        return c
+
+
+def activity_of(card, limit=30):
+    """Return the card's per-MR activity entries (newest first), falling back to stage transitions."""
+    items = list(card.get("activity") or [])
+    if not items and card.get("transitions"):
+        items = [{"ts": t.get("ts", 0), "kind": "stage", "step": "", "sha": "", "target": "",
+                  "summary": f"{t.get('from') or '(new)'} → {t.get('to') or ''}", "detail": "", "ok": True}
+                 for t in card["transitions"]]
+    return items[:limit]
+
+
+MR_REF_RE = re.compile(r"^(?:(?P<proj>[\w.-]+(?:/[\w.-]+)+))?(?P<sigil>[#!])(?P<iid>\d+)$")
+
+
+def _scan_rows(rows=None):
+    if rows is None:
+        try:
+            rows = json.loads((STATE / "last.json").read_text()).get("rows") or []
+        except (OSError, ValueError):
+            rows = []
+    return keyed([dict(r) for r in rows], migrate=False) if rows else []
+
+
+def cards_for_mr(forge, project, iid, rows=None):
+    """Return all scanned (card_key, row) pairs matching (forge, project, iid) — supports multi-worktree MRs."""
+    if not (forge and project and iid is not None):
+        return []
+    iid_int = int(iid)
+    return [(r["card"], r) for r in _scan_rows(rows)
+            if (r.get("mr") or {}).get("iid") == iid_int and r.get("forge") == forge and r.get("project") == project]
+
+
+def is_stale_confirmed(card, sha="", target=""):
+    """True while a scan row still carries the pre-confirmation SHA/target within the 5-minute grace window."""
+    prev = card.get("steward_confirmed_prev") or {}
+    if not prev or int(time.time()) - int(prev.get("ts") or 0) >= 300:
+        return False
+    stale_t = bool(target and prev.get("target") == target and target != card.get("steward_target"))
+    stale_s = bool(sha and prev.get("sha") == sha and sha != card.get("steward_head"))
+    return stale_t or stale_s
+
+
+def resolve_card_key(arg, project=None, rows=None):
+    """Resolve a workspace name, exact card key, or #N/!N MR ref against last.json. Returns (card_key, row|None)."""
+    rows = _scan_rows(rows)
+    m = MR_REF_RE.match((arg or "").strip())
+    if m:
+        forge = "github" if m.group("sigil") == "#" else "gitlab"
+        iid, proj = int(m.group("iid")), (project or m.group("proj") or "").strip()
+        hits = [r for r in rows if (r.get("mr") or {}).get("iid") == iid and r.get("forge") == forge
+                and (not proj or r.get("project") == proj or str(r.get("project") or "").endswith("/" + proj))]
+        if not hits:
+            raise LookupError(f"no scanned workspace found for {arg}")
+        if len(hits) > 1:
+            raise ValueError(f"ambiguous MR {arg}: pass --project ({', '.join(sorted(r.get('project') or r['name'] for r in hits))})")
+        return hits[0]["card"], hits[0]
+    exact = [r for r in rows if r.get("card") == arg]
+    if len(exact) == 1:
+        return exact[0]["card"], exact[0]
+    by_name = [r for r in rows if r.get("name") == arg]
+    if len(by_name) > 1:
+        raise ValueError(f"ambiguous workspace {arg!r}: pass the exact card key")
+    if len(by_name) == 1:
+        return by_name[0]["card"], by_name[0]
+    if arg and path(arg).exists():
+        return arg, None
+    raise LookupError(f"no scanned workspace or card found for {arg!r}")
+
+
+def set_steward(name, enabled, *, row=None):
+    """Toggle steward mode ('watch this MR to merge') on a workspace card. Returns (card, ping_key_to_resolve)."""
+    mr = (row or {}).get("mr") or {}
+    with lock():
+        c = load(name)
+        sha = mr.get("sha") or c.get("sha") or ""
+        target = mr.get("target_branch") or c.get("target_branch") or ""
+        step = ((row or {}).get("next") or {}).get("step") or ""
+        ping_key = (c.get("steward_drift") or {}).get("ping_key")
+        if enabled:
+            was = bool(c.get("steward"))
+            c["steward"] = True
+            if not c.get("steward_drift"):  # never silently drop or overwrite an unconfirmed drift pause
+                if not was or not c.get("steward_head"):
+                    c["steward_head"] = sha
+                    c["steward_reviewed_sha"] = sha
+                if not was or not c.get("steward_target"):
+                    c["steward_target"] = target
+                c["steward_confirmed_prev"] = {}
+            ag_state = ((row or {}).get("agent") or {}).get("state") or ""
+            c["steward_last_agent_state"] = ag_state
+            if ag_state in ("working", "waiting") and sha and not c.get("steward_expecting_from_sha"):
+                c["steward_expecting_from_sha"] = sha
+            ref = mr.get("ref") or c.get("mr_ref") or name
+            append_activity(c, "Steward mode enabled", kind="steward", step=step, sha=sha, target=target,
+                            detail=f"watching {ref} to merge")
+            resolve_key = None
+        else:
+            c.update(steward=False, steward_head="", steward_target="", steward_reviewed_sha="",
+                     steward_pending_rereview_sha="", steward_expecting_from_sha="",
+                     steward_last_agent_state="", steward_drift=None, steward_confirmed_prev={})
+            append_activity(c, "Steward mode disabled", kind="steward", step=step, sha=sha, target=target)
+            resolve_key = ping_key
+        save(c)
+        return c, resolve_key
+
+
+def confirm_drift(name):
+    """Confirm a pending head-SHA or target-branch drift on a workspace card. Returns (card, ping_key_to_resolve)."""
+    with lock():
+        c = load(name)
+        drift = c.get("steward_drift")
+        if not drift:
+            raise ValueError(f"{name} has no pending head/target drift")
+        kind, ping_key, now = drift.get("kind"), drift.get("ping_key"), int(time.time())
+        prev = dict(c.get("steward_confirmed_prev") or {})
+        prev["ts"] = now
+        if kind == "target_changed":
+            new_target = drift.get("target") or c.get("steward_target") or ""
+            if c.get("steward"):
+                c["steward_target"] = new_target
+                prev["target"] = drift.get("old_value") or ""
+            else:
+                c["steward_head"] = ""
+                c["steward_target"] = ""
+            msg = f"Confirmed target branch {new_target}"
+        else:
+            new_sha = drift.get("sha") or ""
+            if c.get("steward"):
+                c["steward_head"] = new_sha
+                c["steward_reviewed_sha"] = ""
+                c["steward_pending_rereview_sha"] = new_sha
+                prev["sha"] = drift.get("old_value") or ""
+            else:
+                c["steward_head"] = ""
+                c["steward_target"] = ""
+            msg = f"Confirmed new head {new_sha[:8]}"
+        c["steward_confirmed_prev"] = prev if c.get("steward") else {}
+        c["steward_drift"] = None
+        append_activity(c, msg, kind="confirm", sha=drift.get("sha") or "", target=drift.get("target") or "")
+        save(c)
+        return c, ping_key
+
+
+def _clear_steward_state(c, *, reset_activity=False):
+    pk = (c.get("steward_drift") or {}).get("ping_key")
+    if pk:
+        c["stale_pings"] = merge(c.get("stale_pings", []), [pk])[:40]
+    c.update(steward=False, steward_head="", steward_target="", steward_reviewed_sha="",
+             steward_pending_rereview_sha="", steward_expecting_from_sha="",
+             steward_last_agent_state="", steward_drift=None, steward_confirmed_prev={})
+    if reset_activity:
+        c["activity"] = []
+
+
+def _observe_steward(c, row, old_mr, new_mr, sha, target):
+    """Maintain steward mode baselines and agent-completion re-review triggers on card observe."""
+    if old_mr is not None and new_mr != old_mr:
+        _clear_steward_state(c, reset_activity=True)
+        return
+    mr = row.get("mr") or {}
+    if mr.get("state") in ("merged", "closed"):
+        was_steward = bool(c.get("steward"))
+        if was_steward or c.get("steward_drift") or c.get("steward_head") or c.get("steward_target"):
+            _clear_steward_state(c)
+        if was_steward:
+            append_activity(c, f"MR {mr['state']} — steward finished", kind="steward", step="done", sha=sha, target=target or "")
+        return
+    if not c.get("steward"):
+        return
+    if sha and not c.get("steward_head"):
+        c["steward_head"] = sha
+        c["steward_reviewed_sha"] = c.get("steward_reviewed_sha") or sha
+    if target and not c.get("steward_target"):
+        c["steward_target"] = target
+    ag_state = (row.get("agent") or {}).get("state") or "none"
+    if ag_state in ("working", "waiting"):
+        if ag_state == "working":
+            c["steward_last_agent_state"] = "working"
+        if sha and not c.get("steward_expecting_from_sha"):
+            c["steward_expecting_from_sha"] = sha
+        return
+    agent_done = c.get("steward_last_agent_state") == "working" or (
+        bool(c.get("steward_expecting_from_sha")) and bool(sha) and sha != c.get("steward_reviewed_sha")
+    )
+    if agent_done and sha:
+        c["steward_pending_rereview_sha"] = sha
+        c["steward_head"] = sha
+        c["steward_expecting_from_sha"] = ""
+    elif c.get("steward_expecting_from_sha"):
+        c["steward_expecting_from_sha"] = ""
+    c["steward_last_agent_state"] = ag_state
 
 
 # ---- observe: a scan row → its card
@@ -484,12 +702,13 @@ def observe(row, contract=None, recs=None):
                 new_situation[2] = old_situation[2]
         situation = json.dumps(new_situation)
         row["_state_reset"] = bool(step_changed or goal_changed or branch_changed or situation_changed)
+        row["_goal_changed"] = goal_changed
         if row["_state_reset"]:
             c["stale_pings"] = merge(c.get("stale_pings", []), [v["ping_key"] for v in c["forks"].values() if v.get("ping_key")])[:40]
             if step_changed or goal_changed or branch_changed or mr_changed:
                 c["handoff_epoch"] = uuid.uuid4().hex
             if step_changed or goal_changed or branch_changed or mr_changed:
-                c["dispatches"] = [d for d in c["dispatches"] if d.get("pending")]
+                c["dispatches"] = [d for d in c["dispatches"] if d.get("pending") or (sha and not mr_changed and not goal_changed and d.get("sig") == f"rereview@{sha}")]
                 c["current_hypothesis"] = ""
                 c.pop("hypothesis_by", None)
                 c.pop("hypothesis_stage", None)
@@ -532,9 +751,13 @@ def observe(row, contract=None, recs=None):
                  mr_ref=(row.get("mr") or {}).get("ref") or "", target_branch=(row.get("mr") or {}).get("target_branch"),
                  goal_contract=goal, goal_source=source, situation_source=situation)
         c["assignment_goal_source"] = assignment_goal if row.get("_goal_backfill") and touch_prior.get("id") else source
+        _observe_steward(c, row, old_mr, new_situation[3], sha, new_target or "")
         if moved:
-            c["transitions"] = [{"ts": now, "from": c["last_stage"], "to": stage}] + c["transitions"]
+            prev_stage = c["last_stage"]
+            c["transitions"] = [{"ts": now, "from": prev_stage, "to": stage}] + c["transitions"]
             c["last_stage"] = stage
+            append_activity(c, f"{prev_stage or '(new)'} → {stage}", kind="stage",
+                            step=(row.get("next") or {}).get("step") or "", sha=sha, target=new_target or "")
         if touch is not None and touch_current:
             c["touched_files"], c["touched_committed"], c["touched_dirty"] = touch
         elif touch is None and not same_files_scope and touch_current and touch_scope_current:
@@ -836,6 +1059,46 @@ def observe_all(scan=None):
     return moves
 
 
+def _print_steward_log(key, c, as_json):
+    entries = activity_of(c, limit=50)
+    if as_json:
+        print(json.dumps({"ws": key, "steward": bool(c.get("steward")), "drift": c.get("steward_drift"), "activity": entries}, indent=1))
+        return
+    for e in entries:
+        ts = time.strftime("%m-%d %H:%M", time.localtime(e.get("ts") or 0))
+        print(f"{ts} {'ok' if e.get('ok', True) else 'ERR'} {e.get('summary', '')}" + (f" — {e['detail']}" if e.get("detail") else ""))
+    if not entries:
+        print("(no activity)")
+
+
+def _cli_steward(args, opt):
+    """CLI handler: ws_state.py steward <ws|#N|!N> on|off|confirm|status|log [--project P] [--json]."""
+    if len(args) < 3 or args[2] not in ("on", "off", "confirm", "status", "log"):
+        sys.exit("usage: ws_state.py steward <ws|#N|!N> on|off|confirm|status|log [--project P] [--json]")
+    key, row = resolve_card_key(args[1], project=opt("--project"))
+    op, as_json = args[2], "--json" in args
+    c, ping_key = (set_steward(key, op == "on", row=row) if op in ("on", "off")
+                   else confirm_drift(key) if op == "confirm" else (load(key), None))
+    if ping_key or op == "off":
+        with contextlib.suppress(Exception):
+            import greenlight
+            open_pings = greenlight.pinged()
+            to_close = ([ping_key] if ping_key and ping_key in open_pings else []) + (
+                [k for k in open_pings if k.startswith(f"@rereview:{key}:")] if op == "off" else []
+            )
+            for pk in dict.fromkeys(to_close):
+                greenlight.resolve(pk, f"steward {op}")
+    if op == "log":
+        return _print_steward_log(key, c, as_json)
+    if as_json:
+        print(json.dumps({"ws": key, "steward": bool(c.get("steward")), "head": c.get("steward_head", ""),
+                          "target": c.get("steward_target", ""), "drift": c.get("steward_drift"),
+                          "activity": activity_of(c, limit=10)}, indent=1))
+    else:
+        drift = f" [drift: {c['steward_drift']['kind']}]" if c.get("steward_drift") else ""
+        print(f"{key}: steward={'on' if c.get('steward') else 'off'}{drift}")
+
+
 def main():
     args = sys.argv[1:]
     cmd = args[0] if args else "help"
@@ -851,6 +1114,8 @@ def main():
                    hypothesis=opt("--hypothesis"), decision=many("--decision"), failed=many("--failed"),
                    risk=many("--risk"), clear_risks="--clear-risks" in args, if_situation=opt("--if-situation"))
         print(brief(c))
+    elif cmd == "steward":
+        _cli_steward(args, opt)
     elif cmd == "top" and len(args) > 1:
         k = int(opt("-k") or 5)
         q = " ".join(a for i, a in enumerate(args[1:], 1) if a not in ("-k", "--json") and args[i - 1] != "-k")
