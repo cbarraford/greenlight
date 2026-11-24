@@ -98,10 +98,15 @@ def test_reserved_status_glyphs(repo):
     found = icons.load(repo)[0]
     assert any("'reserved-x' is never used" in e for e in icons.check_usage(found, repo))
     spec = repo / "brand/DESIGN.md"
-    spec.write_text(spec.read_text() + "\n    extra: { glyph: reserved-x }\n")
-    assert not any("reserved-x" in e for e in icons.check_usage(found, repo))
+    text = spec.read_text()
+    status = "  status:"
+    assert status in text
+    spec.write_text(text.replace(status, f"{status}\n    extra:    {{ hue: neutral, glyph: reserved-x }}", 1)
+                    + "\nProse after the front matter, e.g. `glyph: not-a-status`, is not the spec.\n")
+    errs = icons.check_usage(found, repo)
+    assert not any("reserved-x" in e or "not-a-status" in e for e in errs), errs
     spec.write_text(spec.read_text().replace("glyph: reserved-x", "glyph: no-such-glyph"))
-    assert any("status glyph 'no-such-glyph' has no icon" in e for e in icons.run_check(repo))
+    assert any("status glyph 'no-such-glyph' has no icon" in e for e in icons.check_usage(found, repo))
 
 
 def test_swift_source(repo):
@@ -151,6 +156,7 @@ def test_named_skips_non_names():
     assert [n for _, n in icons.named('SettingsView.icon("General") x.ico("nope")')] == []  # methods, not icon calls
     assert [n for _, n in icons.named('icon(x ? "a b" : `${t}`, 14) icon(k)')] == []
     assert [n for _, n in icons.named('icon(f("x", y) ? "done" : "ring", 14)')] == ["x", "done", "ring"]
+    assert [n for _, n in icons.named('icon("a` + \'b", 14) const G = {a: `zz-top`}')] == ["zz-top"]  # pairs must match
 
 
 def test_check_stale_generate_and_question_fallback(repo):

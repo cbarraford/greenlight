@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import diag  # noqa: E402
+import tokens  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SETS = {"brand/icons/ui": 16, "brand/icons/marks": 24}
@@ -40,7 +41,8 @@ CALLS = re.compile(r"(?<![\w.])(?:dsIcon|dsIconHTML|ico|icon|g16|DSIcon\.image|b
                    r"\blistItem\(.*?\bicon:")
 # The pages' name maps (a meaning → an icon): every value must exist.
 MAPS = re.compile(r"\bconst (?:GLYPH|MI|G) = \{([^}]*)\}")
-NAME = re.compile(r"""["'`]([a-z0-9]+(?:-[a-z0-9]+)*)["'`]""")  # comments inside the argument aren't understood
+QUOTED = r"""(["'`]){}\1"""  # a name in matching quotes, backticks included
+NAME = re.compile(QUOTED.format("([a-z0-9]+(?:-[a-z0-9]+)*)"))
 GENERATED = re.compile(r'<script id="ds-icons">.*?</script><!-- /ds-icons -->', re.S)
 
 
@@ -204,7 +206,10 @@ def sources(root=ROOT):
 
 
 def first_arg(text, i):
-    """The source of the call argument starting at text[i]: up to its top-level `,` or closing bracket."""
+    """The source of the call argument starting at text[i]: up to its top-level `,` or closing bracket.
+
+    Quotes are followed, comments aren't: an argument with a comment in it can be cut short or misread.
+    """
     depth, quote, j = 0, None, i
     while j < len(text):
         c = text[j]
@@ -226,15 +231,15 @@ def first_arg(text, i):
 def named(text):
     """(offset, name) for every icon name the text passes to an icon call or puts in a name map."""
     for m in CALLS.finditer(text):
-        yield from ((m.start(), n) for n in NAME.findall(first_arg(text, m.end())))
+        yield from ((m.start(), n) for _q, n in NAME.findall(first_arg(text, m.end())))
     for m in MAPS.finditer(text):
-        yield from ((m.start(), v) for v in re.findall(r""":\s*["']([a-z0-9-]+)["']""", m.group(1)))
+        yield from ((m.start(), n) for _q, n in re.findall(r":\s*" + NAME.pattern, m.group(1)))
 
 
 def reserved(root=ROOT):
     """The status glyphs DESIGN.md's front matter names: part of the set before a surface draws them."""
-    spec = Path(root) / "brand/DESIGN.md"
-    return set(re.findall(r"\bglyph: ([a-z0-9-]+)", spec.read_text())) if spec.exists() else set()
+    spec = tokens.load(root) if (Path(root) / tokens.SPEC).exists() else {}
+    return {s["glyph"] for s in spec.get("semantic", {}).get("status", {}).values() if "glyph" in s}
 
 
 def check_usage(icons, root=ROOT):
@@ -249,8 +254,9 @@ def check_usage(icons, root=ROOT):
             if name not in icons:
                 errs.append(f"{rel}:{text.count(chr(10), 0, at) + 1}: no icon named '{name}' in brand/icons")
     everything, keep = "\n".join(texts.values()), reserved(root)
+    errs.extend(f"brand/DESIGN.md: status glyph '{n}' has no icon in brand/icons" for n in sorted(keep - set(icons)))
     errs.extend(f"brand/icons: '{name}' is never used; delete it or use it" for name in sorted(icons)
-                if name != "question" and name not in keep and not re.search(rf"""["'`]{re.escape(name)}["'`]""", everything))
+                if name != "question" and name not in keep and not re.search(QUOTED.format(re.escape(name)), everything))
     return errs
 
 
@@ -259,7 +265,6 @@ def run_check(root=ROOT):
     if "question" not in icons:
         errs.append("brand/icons/ui/question.svg is the fallback for unknown names and must exist")
     errs += check_usage(icons, root)
-    errs += [f"brand/DESIGN.md: status glyph '{n}' has no icon in brand/icons" for n in sorted(reserved(root) - set(icons))]
     try:
         want_all = expected(icons, root)
     except ValueError as e:
