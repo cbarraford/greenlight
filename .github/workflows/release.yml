@@ -87,8 +87,8 @@ jobs:
           if [ -n "$floor_build" ]; then floor=(--floor "$floor_build" --floor-version "$floor_ver"); fi
           python3 scripts/release.py guard --build "$BUILD" --version "$VER" "${cur[@]}" "${floor[@]}"
           # This build's own release. Published: keep its files (the live feed may point at them) and only point the feed
-          # at its own signed feed again. A draft holding some of this build's files and nothing else (a run stopped
-          # mid-upload) is deleted and built again. An empty draft (a run stopped before its first upload, or one made by
+          # at its own signed feed again. A draft holding one or more of this build's files and nothing else (a run
+          # stopped before publishing) is deleted and built again. An empty draft (a run stopped before its first upload, or one made by
           # hand: no telling which) or one holding anything else stops the build untouched.
           ours=("Greenlight-$VER.zip" "greenlight-backend-$VER.tar.gz" "channel-$CHANNEL.json")
           if rel=$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets --jq '(.isDraft | tostring), .assets[].name' 2>&1); then
@@ -97,7 +97,7 @@ jobs:
               if [ -z "$assets" ]; then
                 echo "::error::$TAG has an empty draft release (a run stopped before uploading, or one made by hand): delete it on GitHub, then re-run"; exit 1
               elif grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets"; then
-                echo "::error::$TAG has a draft release with other files (not a stopped run's): publish or delete it on GitHub, then re-run"; exit 1
+                echo "::error::$TAG has a draft release with other files (not a stopped run's): save what you need from it, delete it on GitHub, then re-run"; exit 1
               fi
               echo "::warning::$TAG is a draft left by a run that stopped: deleting it to build it again"
               gh release delete "$TAG" --repo "$REPO" --yes
