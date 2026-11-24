@@ -1295,9 +1295,35 @@ const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as 
 // what this window lists: in-view trees, plus each in-view project's folders that aren't a tree already
 const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !activeOnly() || activeOnly().includes(p.id)).flatMap(p => p.dirs)
   .filter((d, i, a) => a.indexOf(d) === i && !wsInfo(d)).map(d => ({project: "", name: d.split("/").pop() || d, path: d, dir: true}))];
-function openWs(ws){
+// a harness continuing its last session in the folder it starts in (harness.py's names; the app passes no others); r.bin, config.json's
+// harnesses.<name>.bin, replaces the name
+const RESUME = {claude: "claude --continue", codex: "codex resume --last", opencode: "opencode --continue", gemini: "gemini --resume latest", pi: "pi --continue", agy: "agy --continue"};
+const SESSION_OK = s => typeof s === "string" && /^mc-[\w-]{1,64}$/.test(s);  // App.swift resumeOf, and its open
+const BIN_OK = b => typeof b === "string" && DIR_OK(b);
+// a tab running that harness, by its title: only codex's ⌬ (tmux's, from what the pane runs now). A Claude tab is already its
+// session (dash.py records each live one), and a quit Claude leaves its ✳ title behind
+const RUNS = {codex: p => (p.title || "")[0] === "⌬"};
+const latestTab = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0];
+// A workspace page's Basement button (issue 157), r = its puck's resume (dash.py add_resume): a tab on its last agent's session,
+// else that session attached (its agent still runs there), else a tab of that worktree running that harness, else the harness
+// continuing its last session there. false: nothing to resume, so the plain Basement button.
+function resumeWs(ws, r){
+  if (!r || typeof r !== "object" || !ws.startsWith("/")) return false;
+  const s = SESSION_OK(r.session) ? r.session : "", t = s && latestTab(t => paneOf(t).some(p => p.session === s));
+  if (t) return show(t), true;
+  if (s) return newTab(ws, undefined, false, s), true;
+  if (!Object.hasOwn(RESUME, r.harness)) return false;
+  // ...or one this started in the last minute: until the next snapshot records its pane, a second click would start a second copy
+  const ag = latestTab(t => t.ws === ws && (t.resumed?.h === r.harness && Date.now() - t.resumed.at < 60e3
+    || Object.hasOwn(RUNS, r.harness) && paneOf(t).some(RUNS[r.harness])));
+  if (ag) return show(ag), true;
+  newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]);
+  return cur.resumed = {h: r.harness, at: Date.now()}, true;
+}
+function openWs(ws, r){
+  if (resumeWs(ws, r)) return;
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
-  const latest = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0], q = ws.toLowerCase();
+  const latest = latestTab, q = ws.toLowerCase();
   const t = latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
     || latest(t => (t.name || "").toLowerCase().includes(q));
   t ? show(t) : (ws === "" || ws.startsWith("/") || ws.startsWith("@")) && newTab(ws) }
@@ -1771,7 +1797,7 @@ $("sdv").onmousedown = e => {
 
 // the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
 const ser = n => n.classList.contains("pane")
-  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && isClaude(n._p) ? {title: n._p.title} : {})}
+  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && (isClaude(n._p) || RUNS.codex(n._p)) ? {title: n._p.title} : {})}
   : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
 let saveT, lastSaved = "";
 const snap = () => JSON.stringify({cur: tabs.indexOf(cur), side: sideW, shut: [...shut], noAskDel, uses, lights, skin, skinLight, skinHist, acct: acctCfg,
@@ -1814,7 +1840,7 @@ function restore(st){
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
   restored = true;
-  if (pendingWs) { const w = pendingWs; pendingWs = null; openWs(w); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
+  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; openWs(w, r); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
@@ -2313,7 +2339,7 @@ window.term = {
   slide: v => { slide = +v || 0 },
   localName: v => { LOCALNAME = v || "Local"; render() },
   opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide() },  // Settings → Terminal → App opens to
-  ws: path => { if (typeof path !== "string") return; if (restored) openWs(path); else pendingWs = path },  // Greenlight's Basement button: that worktree's latest tab, or a new shell in it
+  ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
   suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
   exited: (id, code) => {

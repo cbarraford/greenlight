@@ -1142,7 +1142,7 @@ function topBar(){
       const [l, sub, short] = MOVE[y.kind](mr, y);
       bar.append(h("button", {class:"btn", disabled: !!busy, title: busy || `${l}\n${sub}`, onclick: () => runFor(p.name, y.prompt)}, h("i", {class:"mdot", style:"background:" + DOT[y.kind]}), y.kind === "threads" ? l : short));
     }
-    if (p) bar.append(h("button", {class:"btn", title:"Open this workspace in the Basement (B1)", onclick: () => toBasement(p.name)}, h("span", {class:"mono muted"}, "›_"), "Basement"));
+    if (p) bar.append(h("button", {class:"btn", title: basementTip(p), onclick: () => toBasement(p.name)}, h("span", {class:"mono muted"}, "›_"), "Basement"));
     if (safeHttpUrl(mr.web_url)) bar.append(h("a", {class:"btn pri", href: mr.web_url}, `Open ${mrRef(mr)} in ${forgeName(mr)}`));
     return;
   }
@@ -2158,7 +2158,13 @@ document.addEventListener("pointerdown", e => {
 /* ---------- to the Basement: Basement on a page, Open in Basement after New task ---------- */
 // B1 opens on the workspace's worktree: its latest tab there, or a new shell in it (Greenlight.swift: basement).
 ui.sug = {}; ui.autorun = new Set();  // sug: greenlight's next step per workspace (the hover card's Next step); autorun: ones to run once it's written
-function toBasement(name){ const path = pathOf(name); if (path) post({cmd: "basement", path}) }
+// resume (dash.py add_resume, issue 157): its last agent's tmux session to attach to, or the harness to continue there (terminal.html openWs)
+function toBasement(name){ const path = pathOf(name), r = (puckOf(name) || {}).resume; if (path) post({cmd: "basement", path, resume: r && typeof r === "object" ? r : {}}) }
+const HARNESS = {claude: "Claude Code", codex: "Codex", opencode: "opencode", gemini: "Gemini CLI", pi: "pi", agy: "Antigravity"};
+function basementTip(p){
+  const r = p.resume || {}, n = Object.hasOwn(HARNESS, r.harness) ? HARNESS[r.harness] : "";
+  return !n ? "Open this workspace in the Basement (B1)" : r.session ? `Attach to its ${n} session in the Basement (B1)` : `Continue its last ${n} session in the Basement (B1)`;
+}
 const UP = dsIconHTML("arrow-up", 14);
 const svg = s => { const t = document.createElement("template"); t.innerHTML = s; return t.content.firstChild };
 function puckOf(name, raw){ const sn = raw ? ui.raw : ui.snap; return sn && sn.pucks.find(p => p.name === name) }

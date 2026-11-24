@@ -50,6 +50,7 @@ import audit  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
+import last_agent  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
 
@@ -687,6 +688,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
+    add_resume(pucks, [(r["path"], live[r["id"]][1]) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -750,6 +752,35 @@ def trees():
                                                              "rebase", "threads", "mergeable", "by", "assignees",
                                                              "target_branch", "labels", "milestone", "description", "sha")}
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
+
+
+BIN_RE = re.compile(r"/[\w./@+-]{1,300}")  # fullmatch  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
+
+
+def harness_bin(h):
+    """config.json's harnesses.<h>.bin when it's a plain absolute path (the page types it), else None: the PATH's."""
+    hs = greenlight.CONFIG.get("harnesses")
+    c = hs.get(h) if isinstance(hs, dict) else None
+    b = c.get("bin") if isinstance(c, dict) else None  # a malformed config.json must not take the snapshot down
+    return b if isinstance(b, str) and BIN_RE.fullmatch(b) and ".." not in b else None
+
+
+def add_resume(pucks, agents):
+    """Each puck's `resume`, what its page's Basement button opens (last_agent.py): the last agent's own tmux session while it
+    still runs there, else its harness to continue there. Records what's running now first: the ADE's agents and the app's
+    Claude panes."""
+    try:
+        ab = importlib.import_module("ade_basement")
+        tm, is_agent = ab.panes(cmd=True), lambda t: ab.state(t) is not None
+    except Exception:  # no tmux, or no server yet: nothing to attach to
+        tm, is_agent = [], lambda t: False
+    with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
+        last_agent.observe(agents, tm, is_agent)
+    recs, now = last_agent.load(), dict(agents)  # now: the live agent (a puck's own may be the last scan's)
+    for p in pucks:
+        rec = recs.get(p["path"])
+        p["resume"] = last_agent.resume(rec, tm, busy=(now.get(p["path"]) or {}).get("state") in ("working", "waiting"),
+                                        created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 
 def basement_panes():

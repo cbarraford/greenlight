@@ -30,6 +30,7 @@ atexit.register(shutil.rmtree, _BOOT_DEV_HOME, True)
 os.environ["GREENLIGHT_HOME"] = str(_BOOT_HOME)
 os.environ["GREENLIGHT_DEV_HOME"] = str(_BOOT_DEV_HOME)
 os.environ.setdefault("GREENLIGHT_ME", "octo")
+os.environ["GREENLIGHT_TMUX_SOCKET"] = f"gl-pytest-{os.getpid()}"  # dash.snapshot lists the app's tmux panes: never the real Basement's
 os.environ.pop("GREENLIGHT_RUN", None)
 
 
@@ -59,6 +60,7 @@ def _patch_loaded_modules(monkeypatch, home: Path) -> None:
         "decisions": {"STATE": home},
         "diag": {"_leak": False, "MAX": 5 << 20},
         "dwim": {"STATE": home, "DWIM": home / "dwim"},
+        "last_agent": {"HOME": home, "FILE": home / "last_agent.json"},
         "lifestage": {"STATE": home, "CHECKS": home / "checks"},
         "ws_state": {"STATE": home, "DIR": home / "state", "MEMORY": home / "memory"},
     }

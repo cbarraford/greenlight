@@ -1,6 +1,6 @@
 """uv run python test_dash.py: the state table and layout validation (the page trusts both)."""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
+import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo", GREENLIGHT_TMUX_SOCKET=f"gl-test-{os.getpid()}")  # before greenlight: never the real ~/.greenlight or glab
 import dash
 
 

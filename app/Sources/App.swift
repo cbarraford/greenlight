@@ -943,7 +943,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             fluid.callJS("window.mc && mc.openPage", [name]); show()  // the hive lives in the main window
         }
         // A workspace's Basement button: down to B1, on that worktree.
-        if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path) }
+        if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path, resume: resumeOf(b["resume"])) }
         if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
         if cmd == "inbox" { greenlight.settingsOpen = false; if l != nil { show(); greenlight.inboxOpen = true } else { greenlight.inboxOpen.toggle() } }  // one inbox, the main window's
@@ -1545,6 +1545,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return p
     }()
     var ptys = [String: Pty]()  // one shell per tab, by "window:tab"
+    var ptySession = [String: String]()  // the tmux session each of those attached ("window:tab" → mc-…)
+    /// Whether a pane other than `key` (any window) still shows this session: a workspace page's Basement button can attach
+    /// an agent's session that another window already has open, and closing one of them must not kill the agent in the other.
+    func heldElsewhere(_ session: String, except key: (String) -> Bool) -> Bool {
+        ptySession.contains { !key($0.key) && $0.value == session && ptys[$0.key] != nil }
+    }
     /// Terminal windows by id: 0 is the orb's (every project, its close button hides it); the rest you made with
     /// New window (some projects, its close button kills its shells), remembered in termWindows.
     var termWins = [Int: NSWindow]()
@@ -1627,10 +1633,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             for p in r as? [[String: Any]] ?? [] {
                 guard let s = p["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil,
-                      let at = paneWhere(p["ws"] as? String ?? "") else { continue }
+                      !self.heldElsewhere(s, except: { $0.hasPrefix("\(wid):") }), let at = paneWhere(p["ws"] as? String ?? "") else { continue }
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
-            for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop() }
+            for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
             self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
@@ -1699,13 +1705,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
     /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
     func toConsole(_ w: String) { toWorkspace(w) }
-    var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
-    /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
-    func toWorkspace(_ path: String) {
-        wantFloor = "basement"; wantWs = path
-        let p = String(data: (try? JSONSerialization.data(withJSONObject: path, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "\"\""
-        (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term ? (term.opens('basement'), term.ws(\(p)), 1) : 0") { [weak self] r, _ in
-            if r as? Int == 1 { self?.wantWs = nil; self?.wantFloor = nil }
+    var wantWs: String?, wantResume: [String: String] = [:]  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
+    /// A puck's `resume` (dash.py add_resume) as the page may get it: a harness greenlight knows, a tmux session's name and a plain absolute binary path, nothing else.
+    func resumeOf(_ o: Any?) -> [String: String] {
+        let d = o as? [String: Any] ?? [:]
+        var out: [String: String] = [:]
+        if let h = d["harness"] as? String, ["claude", "codex", "opencode", "gemini", "pi", "agy"].contains(h) { out["harness"] = h }
+        if let s = d["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}\z"#, options: .regularExpression) != nil { out["session"] = s }  // as open's; \z: not before a final newline
+        if let b = d["bin"] as? String, b.range(of: #"^/[\w./@+-]{1,300}\z"#, options: .regularExpression) != nil, !b.contains("..") { out["bin"] = b }
+        return out
+    }
+    /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree. resume (a workspace page's button, issue 157):
+    /// its last agent's live tmux session, else that agent continuing its last session there; else its latest tab or a new shell.
+    func toWorkspace(_ path: String, resume: [String: String] = [:]) {
+        wantFloor = "basement"; wantWs = path; wantResume = resume
+        (termWindow.contentView as? WKWebView)?.callJS("window.term && ((p, r) => (term.opens('basement'), term.ws(p, r), 1))", [path, resume]) { [weak self] r, _ in
+            if r as? Int == 1 { self?.wantWs = nil; self?.wantResume = [:]; self?.wantFloor = nil }
         }
         upstairs ? ride(up: false) : basement()
     }
@@ -1829,7 +1844,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         switch b["cmd"] as? String {
         case "ready":
-            for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop() }  // a (re)loaded page starts with no tabs: detach, restore reattaches
+            for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop(); ptySession[k] = nil }  // a (re)loaded page starts with no tabs: detach, restore reattaches
             // ponytail: a reattach shows tmux's current screen only (older scrollback stays in tmux), and sessions a crash
             // orphaned before a save stay on the socket; reap ones not in the saved layout here if they pile up
             termLoaded = true
@@ -1838,7 +1853,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.slide(\(greenlight.sidebarSlide))")
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
             web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
-            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.evaluateJavaScript("term.ws(\(js(p)))") } }
+            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
             if let obj = lastTreesObj { web?.callJS("window.term && term.workspaces", [obj]) }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":
@@ -1846,13 +1861,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
-            ptys[id] = p; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
+            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
         case "in":
             ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
-            ptys.removeValue(forKey: id)?.stop()
-            if let session, let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
+            ptys.removeValue(forKey: id)?.stop(); ptySession[id] = nil
+            if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
         case "hide": if wid == 0 { termWindow.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }  // its last tab closed
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }

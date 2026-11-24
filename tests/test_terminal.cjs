@@ -1137,6 +1137,63 @@ test("appearance: the chrome follows the system, the window's Light/Dark holds i
   assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue("--strip")), "", "no look worn: the tokens, nothing inline");
 });
 
+test("a workspace page's Basement button: its agent's live session, else a tab running it, else the harness continuing (issue 157)", async page => {
+  const opens = async () => (await posts(page, "open")).filter(o => o.ws === "/w/review");
+  const typed = async id => (await posts(page, "in")).filter(m => m.id === id).map(m => m.d);
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // exited: a new tab there continuing its last session
+  let [o] = await opens(); assert.ok(o, "a tab in the worktree");
+  assert.deepEqual(await typed(o.id), ["codex resume --last\r"]);
+  await page.evaluate(() => term.ws("/w/review", {harness: "nope; rm -rf ~"}));  // not a harness: the plain button, its latest tab
+  assert.equal((await opens()).length, 1, "no command for an unknown harness");
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // alive: attach to it, type nothing
+  const at = (await opens()).pop(); assert.equal(at.session, "mc-1a2b3c4d"); assert.deepEqual(await typed(at.id), []);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // its tab is open: show it, no new one
+  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;⌬ review\x07")))), at.id);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // a tab there runs codex (tmux's ⌬): that one, not a second copy
+  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;✳ review\x07")))), at.id);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a ✳ title with no live session is a quit Claude: continue it
+  const cl = (await opens()).pop(); assert.equal((await opens()).length, 3); assert.deepEqual(await typed(cl.id), ["claude --continue\r"]);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // clicked again before the next snapshot: that tab, no second copy
+  assert.equal((await opens()).length, 3); assert.equal(await page.evaluate(() => cur.focus.session), cl.session);
+  await page.evaluate(() => term.ws("/w/shipped", {harness: "claude", session: "bad session; x"}));  // a bad session name: ignored
+  const sh = (await posts(page, "open")).filter(o => o.ws === "/w/shipped");
+  assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.deepEqual(await typed(sh[0].id), ["claude --continue\r"]);
+  await page.evaluate(() => term.ws("/w/fix-login", {}));  // never ran an agent: as before, a plain shell
+  const pl = (await posts(page, "open")).filter(o => o.ws === "/w/fix-login");
+  assert.equal(pl.length, 1); assert.deepEqual(await typed(pl[0].id), []);
+  // /w/review has a newer plain tab than its Claude one: nothing recorded keeps the old button (its latest tab)
+  await page.evaluate(() => { newTab("/w/review"); show(tabs[0]) });
+  const plain = await page.evaluate(() => latestTab(t => t.ws === "/w/review").focus.session);
+  await page.evaluate(() => term.ws("/w/review", {}));
+  assert.equal(await page.evaluate(() => cur.focus.session), plain, "the latest tab, not the agent's");
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(id => term.feed(id, btoa("\x1b]0;zsh\x07")), at.id);  // codex quit there
+  await page.evaluate(() => tabs.forEach(t => { if (t.resumed) t.resumed.at -= 61e3 }));  // and the ones this started are a minute old
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // no tab runs codex: continue it
+  const cx = (await opens()).pop(); assert.deepEqual(await typed(cx.id), ["/opt/cx/codex resume --last\r"]);
+  await page.evaluate(() => term.ws("/w/review", {harness: "pi", bin: "/x/../pi; rm"}));  // a bad bin: the PATH's
+  assert.deepEqual(await typed((await opens()).pop().id), ["pi --continue\r"]);
+});
+
+test("a codex tab's ⌬ title is saved, so after a relaunch the Basement button shows it rather than start a second codex (issue 157)", async page => {
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));
+  const o = (await posts(page, "open")).filter(x => x.ws === "/w/review").pop();
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;⌬ review\x07")))), o.id);
+  const st = await lastSave(page);
+  const again = await boot(page.context().browser(), st);
+  const before = (await posts(again, "open")).length;
+  await again.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // before any output: the saved title says codex runs there
+  assert.equal((await posts(again, "open")).length, before, "no new tab");
+  assert.equal(await again.evaluate(() => cur.focus.session), o.session);
+  assert.deepEqual(again._errs, []); await again.close();
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));
