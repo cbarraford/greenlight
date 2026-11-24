@@ -1781,7 +1781,8 @@ def test_send_attach_reads_json_and_clear_deletes_files(tmp_path):
     assert "see this\n\nATTACHED FILES" in prompt and re.search(r"<<<(\w{8})\nhello\n\1>>>", prompt)
     assert os.listdir(tmp_path / "chat" / "attachments")
     bad = subprocess.run([sys.executable, script, "send", "--attach"], input="not json", env=env, capture_output=True, text=True)
-    assert json.loads(bad.stdout)["ok"] is False and "form greenlight understands" in bad.stdout
+    first, last = (json.loads(x) for x in (bad.stdout.splitlines()[0], bad.stdout.splitlines()[-1]))
+    assert first["e"] == "turn" and last["ok"] is False and "form greenlight understands" in last["text"]
     subprocess.run([sys.executable, script, "new"], env=env, check=True)  # Clear: the files go with the conversation
     assert not os.path.exists(tmp_path / "chat" / "attachments")
 
