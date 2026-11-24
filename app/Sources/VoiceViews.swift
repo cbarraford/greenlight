@@ -526,11 +526,23 @@ func dwimSkipped(_ plan: [String: Any]) -> String {
 }
 
 /// A stage block's JSON, past the fence's own label (```stage json, ```Stage JSON, ```stage-card). nil when it isn't JSON:
-/// notes that open with a link or a checkbox ("[!12](…) green", "- [ ] rebase") aren't, though they start with a bracket.
+/// notes that open with a link, timestamp, bullet or placeholder ("[!12](…) green", "[10:30] standup", "Plan {draft}") aren't.
 func stageJSON(_ s: String) -> String? {
     let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-    let start = #"^[A-Za-z_.:-]*\s*(?=\{|\[(?:\]|\s*(?:["'\[{\d-]|(?:true|false|null)\b)))"#  // { anything; [ only as a JSON value starts
+    let start = #"^(?:[._:-]?[A-Za-z][A-Za-z0-9_-]*)?\s*(?=\{\s*(?:\}|\z|["']|[A-Za-z_]\w*\s*:)|\[\s*(?:\z|\]\s*\z|["'\[{]|(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|(?:true|false|null)\b)\s*(?:,|\]\s*\z|\z)))"#
     return t.range(of: start, options: .regularExpression).map { String(t[$0.upperBound...]) }
+}
+
+/// A stage block's HTML/SVG fragment, past an optional ```stage html/svg label. nil for plain notes ("Note:\n<foo>").
+func stageHTML(_ s: String) -> String? {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.hasPrefix("<") { return t }
+    return t.range(of: #"^(?i)[_.:-]?(?:html|svg)\s+(?=<[A-Za-z!])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
+}
+
+/// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
+func isStageChart(_ o: [String: Any]) -> Bool {
+    (o["chart"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
 }
 
 /// A markdown link whose target is a URL or a path, for its text: [!12](https://…). Not fns[0](x).
@@ -556,25 +568,34 @@ func cardText(_ v: Any?, unnumber: Bool = false) -> String {
 /// A card item from a line or an object: label, detail and tone by their usual names, any other values kept in the detail.
 func cardItem(_ v: Any, unnumber: Bool) -> [String: String]? {
     guard let d = v as? [String: Any] else { let l = cardText(v, unnumber: unnumber); return l.isEmpty ? nil : ["label": l, "detail": "", "tone": ""] }
-    let named = ["label", "title", "name", "mr", "ref", "id", "ws", "workspace", "path"].first { d[$0] != nil }  // else the first by key
-    let said = ["detail", "value", "text"].first { d[$0] != nil }
-    var rest = d.keys.filter { $0 != "tone" && $0 != named && $0 != said }.sorted().map { cardText(d[$0]) }.filter { !$0.isEmpty }
-    var label = cardText(named.flatMap { d[$0] })
-    if label.isEmpty, !rest.isEmpty { label = rest.removeFirst() }
+    let named = ["label", "title", "name", "mr", "ref", "id", "ws", "workspace", "path"].first { !cardText(d[$0]).isEmpty }  // else the first by key
+    let said = ["detail", "value", "text"].first { !cardText(d[$0]).isEmpty }
+    var rest = d.keys.filter { $0 != "tone" && $0 != named && $0 != said }.sorted().compactMap { k -> String? in
+        let t = cardText(d[k])
+        guard !t.isEmpty else { return nil }
+        return d[k] is NSNumber ? "\(k): \(t)" : t
+    }
+    let strip = { (s: String) in unnumber ? s.replacingOccurrences(of: #"^\s*\d+[.)]\s+"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) : s }
+    var label = strip(cardText(named.flatMap { d[$0] }))
+    if label.isEmpty, !rest.isEmpty { label = strip(rest.removeFirst()) }
     var detail = ([cardText(said.flatMap { d[$0] })] + rest).filter { !$0.isEmpty }.joined(separator: " · ")
-    if label.isEmpty { (label, detail) = (detail, "") }
+    if label.isEmpty { (label, detail) = (strip(detail), "") }
     let tone = d["tone"] as? String ?? ""
     return label.isEmpty ? nil : ["label": label, "detail": detail, "tone": ["needs", "bad", "now", "ok"].contains(tone) ? tone : ""]
 }
 
-/// A native template kind (stage.html's TEMPLATES) that has its facts to draw; else the block is read as a card.
+/// A native template kind (stage.html's TEMPLATES) that has the fields stage.html reads; else the block is read as a card.
 func templateDraws(_ o: [String: Any]) -> Bool {
     let all = { (k: String, ok: (Any) -> Bool) in (o[k] as? [Any]).map { !$0.isEmpty && $0.allSatisfy(ok) } ?? false }
+    let has = { (v: Any, k: String) in (v as? [String: Any]).map { !cardText($0[k]).isEmpty } ?? false }
     switch o["kind"] as? String {
-    case "table": return all("rows") { $0 is [Any] }
-    case "timeline": return all("items") { $0 is [String: Any] }
-    case "lifecycle": return all("stages") { $0 is [String: Any] }
-    case "diff": return all("files") { $0 is [String: Any] } || all("lines") { $0 is [String: Any] }
+    case "table": return all("rows") { ($0 as? [Any]).map { !$0.isEmpty } ?? false }
+    case "timeline": return all("items") { has($0, "label") }
+    case "lifecycle": return all("stages") { has($0, "label") }
+    case "diff":
+        let okF = all("files") { has($0, "path") }, okL = all("lines") { ($0 as? [String: Any])?["s"] is String }
+        let emptyOrNil = { (v: Any?) in v == nil || v is NSNull || (v as? [Any])?.isEmpty == true }
+        return (okF || okL) && (emptyOrNil(o["files"]) || okF) && (emptyOrNil(o["lines"]) || okL)
     default: return false
     }
 }
@@ -595,32 +616,78 @@ func cardClean(_ v: Any) -> Any {
 func stageCard(_ s: String) -> [String: Any]? {
     guard let j = stageJSON(s), let any = try? JSONSerialization.jsonObject(with: Data(j.utf8)) else { return nil }
     let o = (any as? [String: Any]) ?? (any as? [Any]).map { ["items": $0] } ?? [:]
-    guard o["chart"] == nil else { return nil }
+    guard !isStageChart(o) else { return nil }
     if templateDraws(o) { return cardClean(o) as? [String: Any] }
-    let head = ["title", "heading", "kind", "eyebrow", "stat", "tone"], listKey = ["items", "steps", "notes", "list", "lines"].first { o[$0] != nil }
-    let rest = o.keys.filter { !head.contains($0) && $0 != listKey }.sorted()
+    let head = ["title", "heading", "kind", "eyebrow", "stat", "tone", "chart"]
+    let listKey = ["items", "steps", "notes", "list", "lines"].first { o[$0] != nil && !(o[$0] is NSNull) }
+    let rest = o.keys.filter { !head.contains($0) && $0 != listKey && !(o[$0] is NSNull) }.sorted()
     let list: [Any]? = listKey.map { o[$0] as? [Any] } ?? []  // nil: a list given as text or an object
     guard rest.allSatisfy({ o[$0] is String || o[$0] is NSNumber }), let raw = list else { return nil }
     let numbered = !raw.isEmpty && raw.allSatisfy { ($0 as? String)?.range(of: #"^\s*\d+[.)]\s"#, options: .regularExpression) != nil }
-    let given = o["kind"] as? String ?? "", kind = ["list", "steps", "stat", "flow", "compare", "quote"].contains(given) ? given : numbered ? "steps" : "list"
+    let given = o["kind"] as? String ?? ""
+    let kind = ["list", "steps", "stat", "flow", "compare", "quote"].contains(given) ? given : (numbered || (listKey == "steps" && !raw.isEmpty)) ? "steps" : "list"
     let prose = ["sub", "subtitle", "note", "summary", "body", "text", "detail"]  // said, not named: the value is the line
     let extra = rest.compactMap { k -> [String: String]? in
         let v = cardText(o[k])
         return v.isEmpty ? nil : prose.contains(k) ? ["label": v, "detail": "", "tone": ""] : ["label": k, "detail": v, "tone": ""]
     }
-    let items = Array((raw.compactMap { cardItem($0, unnumber: numbered && kind == "steps") } + extra).prefix(8))
-    let title = cardText(o["title"] ?? o["heading"])
+    let items = Array((raw.compactMap { cardItem($0, unnumber: kind == "steps") } + extra).prefix(8))
+    let title = [o["title"], o["heading"]].map { cardText($0) }.first { !$0.isEmpty } ?? ""
     guard !(title.isEmpty && items.isEmpty) else { return nil }
     return ["title": title, "kind": kind, "eyebrow": cardText(o["eyebrow"]), "stat": cardText(o["stat"]), "items": items]
 }
 
-/// Every string and number in a JSON value, in order (an object's title first): what a block the stage can't draw still says.
+/// Stage-schema enum values (kind/tone/chart) that aren't user facts when falling back to plain lines.
+func isStageMeta(_ key: String, _ v: Any) -> Bool {
+    guard let s = v as? String else { return false }
+    switch key {
+    case "kind": return ["list", "steps", "stat", "flow", "compare", "quote", "table", "timeline", "diff", "lifecycle"].contains(s)
+    case "tone": return ["needs", "bad", "now", "ok"].contains(s)
+    case "chart": return ["bar", "line", "pie"].contains(s)
+    default: return false
+    }
+}
+
+/// Every string and number in a JSON value, in order (an object's title/heading first): what a block the stage can't draw still says.
 func jsonLines(_ v: Any) -> [String] {
     if let s = v as? String { return [s] }
     if let n = v as? NSNumber { return [cardText(n)] }
     if let a = v as? [Any] { return a.flatMap(jsonLines) }
-    if let d = v as? [String: Any] { return d.keys.sorted { ($0 == "title" ? 0 : 1, $0) < ($1 == "title" ? 0 : 1, $1) }.flatMap { jsonLines(d[$0]!) } }
+    if let d = v as? [String: Any] {
+        let rank = { (k: String) in k == "title" ? 0 : k == "heading" ? 1 : 2 }
+        return d.keys.sorted { (rank($0), $0) < (rank($1), $1) }.flatMap { isStageMeta($0, d[$0]!) ? [] : jsonLines(d[$0]!) }
+    }
     return []
+}
+
+/// Single-pass unescape for a broken JSON string token: keeps \\n literal as \n, turns \n/\t/\r into spaces, decodes \uXXXX.
+func unescapeJSON(_ s: String) -> String {
+    var out = "", i = s.startIndex
+    let hex4 = { (from: String.Index) -> (UInt32, String.Index)? in
+        guard let end = s.index(from, offsetBy: 4, limitedBy: s.endIndex), let v = UInt32(s[from..<end], radix: 16) else { return nil }
+        return (v, end)
+    }
+    while i < s.endIndex {
+        let ch = s[i], next = s.index(after: i)
+        guard ch == "\\", next < s.endIndex else { out.append(ch); i = next; continue }
+        let esc = s[next], after = s.index(after: next)
+        switch esc {
+        case "\"", "'", "\\", "/": out.append(esc); i = after
+        case "n", "t", "r", "b", "f": out.append(" "); i = after
+        case "u":
+            if let (u1, e1) = hex4(after) {
+                if (0xD800...0xDBFF).contains(u1), e1 < s.endIndex, s[e1...].hasPrefix("\\u"),
+                   let (u2, e2) = hex4(s.index(e1, offsetBy: 2)), (0xDC00...0xDFFF).contains(u2),
+                   let sc = UnicodeScalar(0x10000 + ((u1 - 0xD800) << 10) + (u2 - 0xDC00)) {
+                    out.append(Character(sc)); i = e2; continue
+                }
+                if let sc = UnicodeScalar(u1) { out.append(Character(sc)); i = e1; continue }
+            }
+            out.append("\\u"); i = after
+        default: out.append("\\"); out.append(esc); i = after
+        }
+    }
+    return out
 }
 
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
@@ -630,11 +697,21 @@ func fallbackSpec(_ text: String) -> [String: Any] {
     if let c = stageCard(text) { return c }
     let ss: [String]
     if let j = stageJSON(text) {
-        let quoted = { () -> [String] in  // malformed: every string in turn ("…" or '…'), left to right, then the keys (a colon after) out
-            let re = try! NSRegularExpression(pattern: #"(["'])((?:(?!\1)[^\\]|\\.)*)\1(\s*:)?"#)
-            return re.matches(in: j, range: NSRange(j.startIndex..., in: j)).filter { $0.range(at: 3).location == NSNotFound }
-                .compactMap { Range($0.range(at: 2), in: j).map { j[$0].replacingOccurrences(of: #"\\(["'\\/])"#, with: "$1", options: .regularExpression)
-                    .replacingOccurrences(of: #"\\[ntr]"#, with: " ", options: .regularExpression) } }
+        let quoted = { () -> [String] in  // malformed: quoted values left to right, title/heading first, metadata enum values out
+            let re = try! NSRegularExpression(pattern: #"(["'])((?:(?!\1)[^\\]|\\.)*)\1(\s*:)?|([A-Za-z_]\w*)\s*:"#)
+            var titled: String?, vals = [String](), key: (name: String, end: String.Index)?
+            for m in re.matches(in: j, range: NSRange(j.startIndex..., in: j)) {
+                guard let full = Range(m.range, in: j) else { continue }
+                if m.range(at: 3).location != NSNotFound, let r = Range(m.range(at: 2), in: j) { key = (unescapeJSON(String(j[r])), full.upperBound); continue }
+                if m.range(at: 4).location != NSNotFound, let r = Range(m.range(at: 4), in: j) { key = (String(j[r]), full.upperBound); continue }
+                guard let r = Range(m.range(at: 2), in: j) else { continue }
+                let val = unescapeJSON(String(j[r]))
+                let direct = key.flatMap { j[$0.end..<full.lowerBound].allSatisfy(\.isWhitespace) ? $0.name : nil }
+                key = nil
+                if let direct, isStageMeta(direct, val) { continue }
+                if titled == nil, let direct, direct == "title" || direct == "heading", !cardText(val).isEmpty { titled = val } else { vals.append(val) }
+            }
+            return (titled.map { [$0] } ?? []) + vals
         }
         ss = ((try? JSONSerialization.jsonObject(with: Data(j.utf8))).map(jsonLines) ?? quoted()).map { cardText($0) }.filter { !$0.isEmpty }
     } else { ss = sentences(plain(text) + "\n", from: 0).said }  // JSON with nothing to say draws blank, never its source

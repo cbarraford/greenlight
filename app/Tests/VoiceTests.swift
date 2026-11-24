@@ -102,6 +102,45 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: broken JSON's escapes read as text; unquoted keys still give their values (#153 review 3)",
           (fallbackSpec("{\"title\": \"a\\nb\\/c\", \"x\": [1")["title"] as? String) == "a b/c"
           && fallbackSpec("{title: \"x\", items: [\"a\"]}")["title"] as? String == "x")
+    check("voice: notes with brackets, timestamps, bullets or {placeholders} stay notes in fallback, never blank or garbled (#153 review 4)",
+          ["[10:30] standup\n- review !12", "[12 MRs](https://x) waiting", "[1] Merge !5415\n[2] Rebase !5416",
+           "- [148](https://github.com/x/y/issues/148) open", "[2/3] Checks passing", "[2026-11-24] Deploy finished",
+           "[-] skipped", "- [-] cancelled", "Note: {branch} is ready", "Plan {draft} first",
+           "[2 MRs] don't merge, it's red", "Today: [2 green, 1 red]"].allSatisfy { stageJSON($0) == nil }
+          && fallbackSpec("[10:30] standup\n- review !12")["title"] as? String == "[10:30] standup"
+          && fallbackSpec("[2 MRs] don't merge, it's red")["title"] as? String == "[2 MRs] don't merge, it's red"
+          && fallbackSpec("Plan {draft} first")["title"] as? String == "Plan {draft} first"
+          && fallbackSpec("- [148](https://github.com/x/y/issues/148) open")["title"] as? String == "148 open")
+    check("voice: native templates require the fields stage.html reads; malformed ones fall back cleanly (#153 review 4)",
+          stageCard("{\"kind\":\"timeline\",\"title\":\"Release\",\"items\":[{\"name\":\"Ship\",\"date\":\"Monday\"}]}")?["kind"] as? String == "list"
+          && labels("{\"kind\":\"timeline\",\"title\":\"Release\",\"items\":[{\"name\":\"Ship\",\"date\":\"Monday\"}]}") == ["Ship=Monday"]
+          && stageCard("{\"kind\":\"lifecycle\",\"title\":\"!12\",\"stages\":[{\"name\":\"Build\",\"status\":\"done\"}]}") == nil
+          && stageCard("{\"kind\":\"diff\",\"title\":\"Changes\",\"files\":[{\"path\":\"a.swift\",\"add\":1}],\"lines\":[\"+foo\",\"-bar\"]}") == nil
+          && stageCard("{\"kind\":\"diff\",\"files\":[{\"name\":\"a.swift\",\"added\":5}]}") == nil
+          && stageCard("{\"kind\":\"table\",\"title\":\"CI\",\"rows\":[[]]}") == nil
+          && stageCard("{\"kind\":\"diff\",\"files\":[{\"path\":\"a.swift\",\"add\":1}],\"lines\":[]}")?["kind"] as? String == "diff"
+          && stageCard("{\"kind\":\"timeline\",\"title\":\"Lately\",\"items\":[{\"at\":\"10:00\",\"label\":\"Merged !12\"}]}")?["kind"] as? String == "timeline")
+    check("voice: JSON null and falsy chart don't break cards or chart routing; numeric rest fields keep their keys (#153 review 4)",
+          !isStageChart(["chart": NSNull()]) && !isStageChart(["chart": ""]) && !isStageChart(["chart": false]) && isStageChart(["chart": "bar"])
+          && stageCard("{\"chart\":null,\"title\":\"Status\",\"items\":[\"All green\"]}")?["title"] as? String == "Status"
+          && stageCard("{\"title\":\"x\",\"items\":[\"a\"],\"note\":null}")?["title"] as? String == "x"
+          && labels("{\"title\":\"Status\",\"items\":null,\"notes\":[\"Merge !12\"]}") == ["Merge !12"]
+          && stageCard("{\"title\":null,\"heading\":\"Status\",\"items\":[\"a\"]}")?["title"] as? String == "Status"
+          && labels("{\"items\":[{\"title\":null,\"ws\":\"auth-fix\",\"author\":\"alice\"}]}") == ["auth-fix=alice"]
+          && labels("{\"items\":[{\"path\":\"app/a.py\",\"add\":1,\"del\":2}]}") == ["app/a.py=add: 1 · del: 2"])
+    check("voice: steps key makes a steps card and object items lose leading step numbers; labelled HTML fences strip their tag (#153 review 4)",
+          stageCard("{\"title\":\"Plan\",\"steps\":[\"Rebase\",\"Merge\"]}")?["kind"] as? String == "steps"
+          && stageCard("{\"title\":\"Plan\",\"kind\":\"list\",\"steps\":[\"Rebase\",\"Merge\"]}")?["kind"] as? String == "list"
+          && labels("{\"title\":\"Plan\",\"kind\":\"steps\",\"items\":[{\"label\":\"1. Rebase\",\"detail\":\"main\"}]}") == ["Rebase=main"]
+          && stageHTML("html\n<div>hi</div>") == "<div>hi</div>" && stageHTML("-svg\n<svg/>") == "<svg/>"
+          && stageHTML("Note:\n<something>") == nil && stageHTML("html\n< 50ms") == nil)
+    check("voice: broken JSON unescapes in one pass (\\n vs \\\\n, \\uXXXX); fallback skips kind/tone/chart metadata and puts title first (#153 review 4)",
+          (fallbackSpec("{\"path\": \"C:\\\\new\\\\test\", \"x\": [1")["title"] as? String) == "C:\\new\\test"
+          && (fallbackSpec("{\"title\": \"one\\u2014two\", \"x\": [1")["title"] as? String) == "one\u{2014}two"
+          && fallbackSpec("{\"kind\":\"steps\",\"title\":\"Work on first\",\"items\":[\"merge !5415\",\"rebase")["title"] as? String == "Work on first"
+          && fallbackSpec("{\"chart\":\"bar\",\"title\":\"Deploys\",\"labels\":[\"Mon\",\"Tue")["title"] as? String == "Deploys"
+          && (fallbackSpec("{\"title\":\"MRs\",\"kind\":\"table\",\"rows\":[]}")["items"] as? [[String: String]])?.isEmpty == true
+          && (fallbackSpec("{\"title\":\"Audit\",\"kind\":\"list\",\"findings\":[{\"label\":\"Bug\",\"tone\":\"bad\"}]}")["items"] as? [[String: String]])?.map { $0["label"]! } == ["Bug"])
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
