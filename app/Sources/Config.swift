@@ -696,13 +696,14 @@ private func stripEffortLabel(from name: String) -> String {
 func modelIcon(for baseID: String, harness: String) -> String {
     if knownHarnesses.contains(baseID) { return "terminal" }
     let low = (routeModel(baseID).id ?? baseID).lowercased()
-    if low.contains("orchestrator") { return "grid" }
+    let tokens = Set(low.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+    if tokens.contains("orchestrator") { return "grid" }
     if low.contains("gpt-oss") { return "branch" }
-    if low.contains("haiku") || low.contains("flash") || low.contains("mini") || low.contains("luna") { return "bolt" }
-    if low.contains("opus") || low.contains("neon") || low.contains("sol") || low.contains("ultra") { return "sparkles" }
-    if low.contains("fable") || low.contains("daybreak") { return "wand" }
-    if low.contains("sonnet") || low.contains("carbon") || low.contains("argon") || low.contains("hydrogen")
-        || low.contains("astra") || low.contains("terra") { return "spark" }
+    if tokens.contains("haiku") || tokens.contains("flash") || tokens.contains("mini") || tokens.contains("luna") { return "bolt" }
+    if tokens.contains("opus") || tokens.contains("neon") || tokens.contains("sol") || tokens.contains("ultra") { return "sparkles" }
+    if tokens.contains("fable") || tokens.contains("daybreak") { return "wand" }
+    if tokens.contains("sonnet") || tokens.contains("carbon") || tokens.contains("argon") || tokens.contains("hydrogen")
+        || tokens.contains("astra") || tokens.contains("terra") { return "spark" }
     switch harness {
     case "claude": return "claude"
     case "codex": return "openai"
