@@ -414,12 +414,38 @@ def test_tree_new_places_an_orca_create(monkeypatch, tmp_path):
     assert dash.tree_new("/srv/gadgets", {"name": "fix-3"})["path"] == "/w/fix-3"
     assert ["worktree", "create", "--repo", "id:r-only", "--name", "fix-3"] in calls
     # two hosts at one path, laptop's listed first: the click didn't say which, so this machine's checkout is used
-    rows({"repoId": "r-there", "path": "/srv/w", "hostId": "ssh:t1"}, {"repoId": "r-here", "path": "/srv/w", "hostId": "local"})
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-here", "repo": "widgets", "path": "/srv/w", "hostId": "local"})
     assert dash.tree_new("/srv/w", {"name": "fix-4"})["path"] == "/w/fix-3"
     assert ["worktree", "create", "--repo", "id:r-here", "--name", "fix-4"] in calls
-    # twins and none of them here (no hostId is not "local"): checked like any create, and refused
-    rows({"repoId": "r-only", "path": "/srv/g"}, {"repoId": "r-only", "path": "/srv/g"})
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-here", "repo": "widgets", "path": "/srv/w"})  # no hostId is this machine, as everywhere else
+    dash.tree_new("/srv/w", {"name": "fix-6"})
+    assert ["worktree", "create", "--repo", "id:r-here", "--name", "fix-6"] in calls
+    # another repo at the same path here: not what was shown, so no swap; laptop's row is checked, and refused
+    rows({"repoId": "r-only", "repo": "gadgets", "path": "/srv/g", "hostId": "ssh:t1"},
+         {"repoId": "r-here", "repo": "widgets", "path": "/srv/g", "hostId": "local"})
     assert "on laptop" in dash.tree_new("/srv/g", {"name": "fix-5"})["error"]
+    assert not any(c[:2] == ["worktree", "create"] and "fix-5" in c for c in calls)
+    # the same folder name, but another project (a fork here): not the one shown, so no swap
+    cli_with(monkeypatch, paired=True, setups=SETUPS + [{"id": "s-fork", "repoId": "r-fork", "path": "/srv/w", "hostId": "local", "projectId": "p-fork"}])
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-fork", "repo": "widgets", "path": "/srv/w", "hostId": "local"})
+    assert "on laptop" in dash.tree_new("/srv/w", {"name": "fix-7"})["error"]
+    # the same project under another folder name here: Orca's projectId says it's the one, so it swaps
+    calls = cli_with(monkeypatch, paired=True, setups=SETUPS + [{"id": "s-alias", "repoId": "r-alias", "path": "/srv/w", "hostId": "local", "projectId": "p1"}],
+             created={"worktree": {"path": "/w/fix-8"}})
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-alias", "repo": "widgets-acme", "path": "/srv/w", "hostId": "local"})
+    assert dash.tree_new("/srv/w", {"name": "fix-8"})["path"] == "/w/fix-8"
+    assert ["worktree", "create", "--repo", "id:r-alias", "--name", "fix-8"] in calls
+    # the shown row's project is known and this machine's twin has no setup entry: the name alone doesn't make it the
+    # same project (placement.local_repo's rule), so no swap, and laptop's row is refused
+    calls = cli_with(monkeypatch, paired=True)
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-unlisted", "repo": "widgets", "path": "/srv/w", "hostId": "local"})
+    assert "on laptop" in dash.tree_new("/srv/w", {"name": "fix-9"})["error"]
+    assert not any(c[:2] == ["worktree", "create"] for c in calls)
     other = []
     monkeypatch.setattr(dash, "tree", lambda path, every=False: (lambda *a: other.append(a) or {"worktree": {"path": "/w/fix-2"}}, {"repoId": "r1"}, [{"repoId": "r1"}]))
     assert dash.tree_new("/src/widgets", {"name": "fix-2"})["path"] == "/w/fix-2" and other  # another ADE's call: as before
