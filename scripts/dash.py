@@ -694,7 +694,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                      "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "agent": (ag or {}).get("state") or "none"}
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
-    return {"ts": int(time.time()), "scanned": snap["ts"], "pucks": pucks, "trees": trees}
+    return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees}
 
 
 ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in

@@ -374,9 +374,6 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--fill-hover)}
 #hcard .mg .go:hover{background:var(--accent-hover)}
 #hcard .mg .go i{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--on-accent);opacity:.6;animation:drain 5s linear forwards} @keyframes drain{to{width:0}}
 #hcard .mg .lnk{border:0;background:none;color:var(--text2);font:inherit;font-size:var(--fs-2);text-decoration:underline}
-#hcard .mg.st,#hcard .mg.ok,#hcard .mg.no{padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1)} #hcard .mg.st{background:var(--blue-tint);color:var(--blue-ink)}
-#hcard .mg.ok{flex-direction:column;align-items:flex-start;gap:2px;background:var(--fill);color:var(--text)}
-#hcard .mg.no{flex-direction:column;align-items:flex-start;gap:var(--sp-1);background:var(--red-tint);color:var(--red-ink)} #hcard .mg.no code{font:var(--fs-1)/var(--lh-1) var(--mono);white-space:pre-wrap;word-break:break-word}
 #hcard .hf i{width:6px;height:6px;border-radius:var(--r-full);flex-shrink:0}
 #hcard .hf .hfx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 div.ghost{position:fixed;left:0;top:0;z-index:50;pointer-events:none;display:flex;align-items:center;gap:var(--sp-2);opacity:.9}
@@ -634,6 +631,7 @@ body:has(>main.ov){background:var(--canvas)}
 .toast .tbadge{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:inherit} .toast.bad .tbadge{color:inherit}
 .toast .tmsg{display:flex;flex-direction:column;gap:1px;flex:1 1 160px;min-width:0;line-height:var(--lh-2)} .toast .tmsg b{font-weight:600} .toast .tmsg>span{opacity:.75;font-size:var(--fs-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .toast.bad .tmsg>span{white-space:normal;overflow-wrap:anywhere} .toast .tmsg .mono{font-size:var(--fs-2)}
 .toast .btn{flex-shrink:0;background:none;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--bg) 35%,transparent);color:inherit;font-size:var(--fs-2)} .toast .btn:hover:not(:disabled){background:color-mix(in srgb,var(--bg) 14%,transparent)}
+.toast.note .tmsg{flex-basis:auto} .toast.note code{font:var(--fs-2)/var(--lh-2) var(--mono);opacity:.75;white-space:pre-wrap;overflow-wrap:anywhere;max-height:12em;overflow:auto} /* only a ×: a short line must not wrap it under */
 .toast .btn.x{width:28px;padding:0;justify-content:center;box-shadow:none;opacity:.75} .toast .btn.x:hover{opacity:1}
 @media (max-width:520px){.toast .btn.x{order:2;align-self:flex-start} .toast .btn:not(.x){order:3;margin-left:var(--sp-6)}}
 .sheet.plain{width:560px;max-width:calc(100% - 2 * var(--sp-5));padding:var(--sp-5)}
@@ -726,7 +724,7 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {view: localGet("view") === "list" ? "list" : "overview",  // a view no longer offered (the old CI view) opens on Overview
-  listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
+  listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, acting: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -892,7 +890,7 @@ const viewPaths = () => ui.paths && [...new Set([...ui.paths, ...arr(ui.snap?.pu
   ...arr(ui.snap?.trees).filter(w => inRepos({repo: w.project})).map(w => w.path)])];
 const inView = p => !ui.paths || ui.paths.includes(p.path) || inRepos(p) || arr(ui.snap?.trees).some(w => w.path === p.path && inRepos({repo: w.project}));
 function shown(){  // the workspaces in the picked project (all of them when none is picked), minus "(parked)" ones unless shown
-  return ui.snap.pucks.filter(p => inView(p) && (ui.showParked || !isParked(p)));
+  return ui.snap.pucks.filter(p => inView(p) && (ui.showParked || !isParked(p)) && !(p.name in ui.acting));  // acting: a card action is on it
 }
 function isParked(p){ return p.name in ui.parking ? ui.parking[p.name] : !!p.hidden }  // parking: sent from the dock, not yet in a snapshot
 function matches(p){
@@ -1183,7 +1181,7 @@ function footer(){
       title: "When greenlight last checked GitLab, GitHub and Orca for every workspace. It rescans when Greenlight opens and on the scan interval in Settings."},
       ui.rescan ? "Refreshing…" : !isFinite(hrs) ? "Not scanned yet" : hrs < 1 / 60 ? "Scanned just now" : `Scanned ${ago(hrs)} ago`),
       h("button", {class: "rescan" + (ui.rescan ? " on" : ""), title: "Refresh now (~40s)", "aria-label": "Refresh now", disabled: !!ui.rescan,
-        onclick: () => { ui.rescan = ui.snap.scanned; post({cmd: "rescan"}); footer() }}, icon("refresh", 13)));
+        onclick: () => { ui.rescanFail = 0; rescanFor(); footer() }}, icon("refresh", 13)));
   }
   const np = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)).length : 0;
   if (np && !ui.page) f.append(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
@@ -1493,6 +1491,8 @@ function sendAnswer(name, text){
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
   st.sending = true; st.err = null; st.sentText = text;
+  const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
+  if (p) act(p, "The answer didn't send");
   post({cmd: "answer", name, text}); render();
 }
 function answerBox(p, onPage){
@@ -1733,8 +1733,10 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
 }
 function renderNone(main){  // no workspaces at all: start one; all hidden by the project or parked filter: clear them
-  const none = !ui.snap.pucks.length;
+  const none = !ui.snap.pucks.length, busy = !none && ui.snap.pucks.some(p => p.name in ui.acting && inView(p));
   main.classList.add("ov");
+  if (busy) return main.append(h("div", {class:"empty"}, icon("hex", 56, "ehx"), h("h2", {class:"eh"}, "Working on it"),
+    h("p", {class:"ep"}, "The workspace comes back here once a fresh scan shows where it stands.")));  // the last one in view is mid-action: no filter to clear
   main.append(h("div", {class:"empty"},
     icon("hex", 56, "ehx"),
     h("h2", {class:"eh"}, none ? "No workspaces yet" : "No workspaces in this view"),
@@ -1892,7 +1894,7 @@ const MTONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {r
 function movesEl(p, mv){
   const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y) && Object.hasOwn(MOVE, y.kind));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
-  const run = y => () => { hideCard(); runFor(p.name, y.prompt) };  // as a new agent in that workspace, like the Next step
+  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt}) : note("The agent didn't start", "This step has no prompt yet.", true);  // the app ignores an empty prompt (no reply): nothing hides  // as a new agent in that workspace, like the Next step
   let top = null;
   if (x) { const [l, sub] = MOVE[x.kind](p.mr, x);
     top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
@@ -1907,17 +1909,17 @@ function movesEl(p, mv){
 // Mark ready: out of draft with greenlight's own ready cmd; one click (marking it draft again undoes it). Answered with mc.merged too.
 function readyEl(p){
   const box = h("div", {class: "mg"}), ref = mrRef(p.mr);
-  box.append(h("button", {class: "go", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, `Marking ${ref} ready…`)); post({cmd: "undraft", path: p.path})  /* "ready" is the page loading */ }},
+  box.append(h("button", {class: "go", onclick: () => act(p, `Didn't mark ${ref} ready`, {cmd: "undraft", path: p.path})  /* "ready" is the page loading */},
     h("b", {}, `Mark ${ref} ready for review`), h("small", {}, "Takes it out of draft")));
-  box.dataset.path = p.path; return box;
+  return box;
 }
 // Deploy (any step after the merge): the step's Run command from the lifecycle, then its sign-off; no Run: just the sign-off
 const stepTitle = k => k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 function signoffEl(p, x){
   const box = h("div", {class: "mg"}), ref = p.mr && p.mr.iid ? mrRef(p.mr) : p.name, t = stepTitle(x.step);
-  box.append(h("button", {class: "go", title: x.run || "", onclick: () => { box.className = "mg st"; box.replaceChildren(h("b", {}, x.run ? `${t}ing ${ref}…` : "Signing off…")); post({cmd: "signoff", path: p.path}) }},
+  box.append(h("button", {class: "go", title: x.run || "", onclick: () => act(p, `${t} didn't finish`, {cmd: "signoff", path: p.path})},
     h("b", {}, x.run ? `${t} ${ref}` : `Sign off ${x.step.replace(/_/g, " ")}`), h("small", {}, x.run ? `Runs ${short(x.run, 60)}, then signs it off` : "Done: marks the step finished")));
-  box.dataset.path = p.path; return box;
+  return box;
 }
 // Merge: the first click arms it for 5s, the second merges (dash.py tree merge, pinned to the head greenlight saw)
 function mergeEl(p, x){
@@ -1927,17 +1929,16 @@ function mergeEl(p, x){
   const arm = () => { box.className = "mg arm"; t = setTimeout(idle, 5000);
     box.replaceChildren(h("button", {class: "go", onclick: go}, h("b", {}, `Confirm merge ${ref}`), h("small", {}, "Can't be undone · click again within 5s"), h("i", {})),
       h("button", {class: "lnk", onclick: idle}, "Cancel")) };
-  const go = () => { clearTimeout(t); box.className = "mg st"; box.replaceChildren(h("b", {}, `Merging ${ref}…`)); post({cmd: "merge", path: p.path}) };
-  box.dataset.path = p.path; idle(); return box;
+  const go = () => { clearTimeout(t); act(p, `Didn't merge ${ref}`, {cmd: "merge", path: p.path}) };
+  idle(); return box;
 }
+// dash.py tree merge / ready / signoff answered: the outcome in the toast (the hex left with the click)
 function merged(o){
-  const box = document.querySelector(`#hcard .mg[data-path="${CSS.escape(o.path || "")}"]`);
-  if (!box) return console.log("dash: merge", o.path, o.error || "ok");  // ponytail: the card closed; the next snapshot shows it merged (or not)
-  box.className = "mg " + (o.error ? "no" : "ok");
-  const rd = o.op === "ready", so = o.op === "signoff", t = stepTitle(o.step || "step");
-  if (so) return box.replaceChildren(...(o.error ? [h("b", {}, `${t} didn't finish`), h("code", {}, o.error)] : [h("b", {}, `${t} signed off`), h("small", {}, o.ran ? `Ran ${o.ran}` : o.ref || "")]));
-  box.replaceChildren(...(o.error ? [h("b", {}, rd ? "Didn't mark it ready" : "Didn't merge"), h("code", {}, o.error)]
-    : rd ? [h("b", {}, `${o.ref} is ready for review`), h("small", {}, "Out of draft")] : [h("b", {}, `Merged ${o.ref} into ${o.target}`), h("small", {}, o.how)]));
+  const name = Object.keys(ui.acting).find(n => ui.acting[n].path === o.path), t = stepTitle(o.step || "step");
+  if (!name) return o.error ? note(o.op === "signoff" ? `${t} didn't finish` : o.op === "ready" ? "Didn't mark it ready" : "Didn't merge", o.error, true)  // a reply after ACT_LOST: still say so
+    : console.log("dash: tree", o.op || "merge", "ok");
+  acted(name, o.error, o.op === "signoff" ? [`${t} signed off`, o.ran ? `Ran ${o.ran}` : o.ref || ""]
+    : o.op === "ready" ? [`${o.ref} is ready for review`, "Out of draft"] : [`Merged ${o.ref} into ${o.target}`, o.how]);
 }
 // where the change is in its life and who holds it (lifestage.py, on the snapshot as p.life): "Review › Respond · held by reviewers"
 function lifeLine(p){
@@ -1953,7 +1954,7 @@ function nextBtn(p){
   suggestCon(p.name);  // normally already written or on its way; the app never asks twice at once
   const sg = ui.sug[p.name] || {}, ready = !!(sg.prompt || sg.error), mv = p.life && p.life.suggestion || {};
   return h("button", {class: "btn sm go nx", title: sg.prompt || "", disabled: !ready, "aria-busy": ready ? null : "true",
-    onclick: () => { hideCard(); nextStep(p.name) }},
+    onclick: () => { act(p, "The agent didn't start"); nextStep(p.name) }},
     sg.prompt ? sg.label || mv.label || "Run next step" : sg.error ? mv.label || "Run next step" : mv.label || "Please wait…");
 }
 function relabelCard(name){  // the open card's button now says what it will send
@@ -2166,6 +2167,38 @@ function suggestCon(name){
 }
 const cap = t => String(t || "").replace(/^./, m => m.toUpperCase());
 function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
+/* ---------- the hover card's actions, one mechanism: the hex leaves the map on the click and comes back once its state is fresh ----------
+   merge, mark ready, sign off, the moves, Next step and Answer all go through act(); their replies (mc.merged, mc.ran, mc.answered) through
+   acted(). A failure puts the hex back and says why. A success asks for a scan, and the hex stays away until the workspace's state moves
+   (its sig), a scan that began after the reply lands (it still needs you: it comes back) or ACT_SETTLE passes; gone from the snapshot: it stays gone */
+// ui.acting: name → {fail: the toast's title if it fails, path, sig: the puck's when clicked, at: ms clicked, done: host secs it answered (0: in flight)}
+ui.skew = 0;  // this Mac's clock minus the host's (the snapshot's ts), so a reply's time compares with the host's scan times
+const ACT_SETTLE = 180, ACT_LOST = 30 * 60e3;  // s after the reply (the scans keep failing: show what we have); ms with no reply (a sign-off may run 10 min, plus ssh)
+const hostNow = () => Date.now() / 1000 - ui.skew;
+function act(p, fail, msg){
+  if (msg && msg.path != null && (!/^\/[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\u200c\u200d./@+-]{1,300}$/u.test(msg.path) || msg.path.includes("..")))  // the app refuses these paths without a reply (App.swift)
+    return note(fail, "Greenlight can't act on a workspace at this path (spaces or unusual characters).", true);
+  hideCard(); ui.acting[p.name] = {fail, path: p.path, sig: p.sig, at: Date.now(), done: 0};
+  if (msg) post(msg);
+  render();
+}
+function acted(name, error, ok, quiet){  // ok: [title, detail] for the toast; quiet: the error already shows where they are
+  const a = ui.acting[name]; if (!a) return;
+  if (error) { delete ui.acting[name]; if (!quiet) note(a.fail, String(error), true) }
+  else { a.done = hostNow(); a.sig = puckOf(name, true)?.sig ?? a.sig; if (ok) note(ok[0], ok[1] || ""); rescanFor() }  // a move while it ran isn't its result
+  render();
+}
+function rescanFor(){  // one at a time (the app drops a second); none for a minute after one failed, or a failing host gets one every 5s
+  if (!ui.rescan && ui.snap && Date.now() - (ui.rescanFail || 0) > 60e3) { ui.rescan = ui.snap.scanned; post({cmd: "rescan"}) }
+}
+function settle(snap){  // after mc.update: the hexes whose fresh state has landed come back
+  const fresh = snap.scan_started ?? -Infinity, now = hostNow();  // an older dash.py: only the finish time, which a scan begun before the reply also has
+  for (const [n, a] of Object.entries(ui.acting)) {
+    const p = snap.pucks.find(x => x.name === n);
+    if (a.done ? !p || p.sig !== a.sig || fresh >= a.done || now - a.done > ACT_SETTLE : Date.now() - a.at > ACT_LOST) delete ui.acting[n];
+  }
+  if (Object.values(ui.acting).some(a => a.done)) rescanFor();  // a scan already running when it answered may predate it: one more
+}
 document.addEventListener("click", e => { const el = e.metaKey && e.target.closest && e.target.closest("[data-dock]"), it = el && ui.dk[el.dataset.dock]; if (it) { e.preventDefault(); e.stopPropagation(); dockToggle(it) } }, true);
 
 /* ---------- New task: describe it, attach files, pick the project; a fresh workspace and its agent start on it at once ---------- */
@@ -2275,14 +2308,26 @@ function taskSheetEl(){
       : ["Creates ", h("span", {class:"mono"}, taskSlug(line())), ` in ${repo.name}`];
   }
 }
+function note(title, detail, bad){  // a card action's outcome, in the toast. A New task error under it is replaced, as one error replaces another
+  const was = ui.task.done?.title && ui.task.done.error ? ui.task.done : null;  // a card's error (New task's have no title: replaced as before)
+  if (bad) detail = detail.length > 600 ? "…" + detail.slice(-600) : detail;  // each error's end (stderr's cause), before any join
+  if (!bad && was) return;  // a success doesn't cover an error showing (the hex coming back shows the success)
+  if (bad && was) [title, detail] = [`${(was.n || 1) + 1} actions failed`, `${was.n ? "" : was.title + ": "}${was.error}\n${title}: ${detail}`];  // and a second joins it
+  ui.task.done = {title, detail, error: bad ? detail : null, n: bad && was ? (was.n || 1) + 1 : 0}; toastTimer(NOTE_MS); render();
+}
 function toastEl(){
   const d = ui.task.done; if (!d) return null;
+  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status"},
+    h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
+    h("span", {class:"tmsg"}, h("b", {}, d.title), d.error ? h("code", {}, d.error)  // cut per error in note(); a long join scrolls
+      : d.detail ? h("span", {}, short(d.detail, 160)) : null),
+    h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: () => { clearTimeout(ui.task.t); ui.task.done = ui.task.fresh = null; render() }}, icon("close")));  // fresh: a task started under it
   const x = () => { clearTimeout(ui.task.t); ui.task.done = ui.task.fresh = null; render() };
-  return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`, onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer,  // read it at your pace: the clock waits
-      onfocusin: () => clearTimeout(ui.task.t), onfocusout: e => e.currentTarget.contains(e.relatedTarget) || toastTimer()}, h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
+  return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`},  // hovered or focused, toastTimer waits
+      h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
     h("span", {class:"tmsg"}, h("b", {}, d.error ? "Task didn't start" : "Task started"), d.error ? h("span", {}, short(d.error, 160)) : h("span", {}, h("span", {class:"mono"}, d.name), ` · ${d.repo}`)),  // the outcome first, then which one
-    d.error ? h("button", {class:"btn", onclick: () => { ui.task.done = null; if (ui.task.sheet) { render(); document.getElementById("ps-task")?.focus() } else taskSheet() }}, "Reopen")
-      : h("button", {class:"btn pri", onclick: () => { ui.task.done = null; render(); toBasement(d.name) }}, "Open in Basement"),
+    d.error ? h("button", {class:"btn", onclick: () => { x(); if (ui.task.sheet) document.getElementById("ps-task")?.focus(); else taskSheet() }}, "Reopen")  // x: the timer and the ring go with the toast
+      : h("button", {class:"btn pri", onclick: () => { x(); toBasement(d.name) }}, "Open in Basement"),
     h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: x}, icon("close")));
 }
 function tasked(r){
@@ -2306,10 +2351,17 @@ function tasked(r){
   }
   if (r.error && ui.task.sheet && !changed) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
   if (!r.error) { if (!changed) { ui.task.sheet = null; localSet("taskDraft", "") } ui.task.fresh = r.name }
-  ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};
-  toastTimer(); render();
+  if (r.error || !ui.task.done?.title || !ui.task.done.error) ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};  // a card's error stays: the new task shows on the map
+  toastTimer(ui.task.done.title ? NOTE_MS : undefined); render();  // the card toast it kept keeps its 5s
 }
-function toastTimer(){ clearTimeout(ui.task.t); ui.task.t = setTimeout(() => { ui.task.done = ui.task.fresh = null; render() }, 12000) }
+function toastTimer(ms = 12000){  // read at your pace: hovered or focused when it's due, it waits (render() rebuilds the toast, so no leave/blur event can be trusted)
+  clearTimeout(ui.task.t);
+  ui.task.t = setTimeout(function due(held){  // held: it came due while read; once let go it gets its whole time again
+    if (document.querySelector(".toast:hover, .toast:focus-within")) { ui.task.t = setTimeout(() => due(true), 1000); return }
+    if (held) { ui.task.t = setTimeout(() => due(false), ms); return }
+    ui.task.done = ui.task.fresh = null; render() }, ms);
+}
+const NOTE_MS = 5000;  // DESIGN.md §10.14: a toast with only its × lasts 5s, paused on hover or focus
 document.addEventListener("paste", e => {  // a pasted screenshot goes into an open New task
   if (!ui.task.sheet) return;
   const fs = [...(e.clipboardData ? e.clipboardData.files : [])];
@@ -2382,18 +2434,20 @@ window.mc = {
   undock(key){ ui.dock = ui.dock.filter(d => d.key !== key); renderDock(); if (ui.snap) renderMain() },  // × on the chat's chip
   builds(b){ ui.builds = b; footer() },
   suggest(r){ ui.sug[r.name] = r.error ? {error: r.error, sig: (puckOf(r.name) || {}).sig} : r;
-    if (ui.autorun.delete(r.name) && r.prompt) runFor(r.name, r.prompt);  // the hover card's Next step was waiting on it
+    if (ui.autorun.delete(r.name)) { if (r.prompt) runFor(r.name, r.prompt); else acted(r.name, r.error || "greenlight found no next step") }  // the hover card's Next step was waiting on it
     relabelCard(r.name) },
   merged(o){ merged(o) },
-  ran(r){ if (r.ok) delete ui.sug[r.name]; else console.log("dash: run failed:", r.name, r.error) },  // the agent changes the state; the next suggestion follows it
+  ran(r){ if (r.ok) delete ui.sug[r.name]; else console.log("dash: run failed:", r.name, r.error);  // the agent changes the state; the next suggestion follows it
+    acted(r.name, r.ok ? null : r.error || "it didn't start") },
   parked(r){  // the goal is set; the next snapshot carries it. A failure puts the hex back
     if (r.error) { delete ui.parking[r.name]; console.log("dash: park failed:", r.error); render() }
   },
   tasked(r){ tasked(r) },
-  rescanned(code){ if (code) { ui.rescan = 0; console.log("dash: rescan failed, exit " + code) } footer() },
+  rescanned(code){ if (code) { ui.rescan = 0; ui.rescanFail = Date.now(); console.log("dash: rescan failed, exit " + code) } footer() },
   update(snap){
     if (snap.error) { console.log("dash:", snap.error); return }
     clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.failed = CONN.refocus = false;
+    if (snap.ts) ui.skew = Date.now() / 1000 - snap.ts;
     ui.raw = snap; relift(); dropGone(snap);
     for (const p of snap.pucks) {  // next steps written ahead (dash.py suggest's cache) for the puck's current state
       const sg = ui.sug[p.name];
@@ -2401,6 +2455,7 @@ window.mc = {
     }
     for (const p of snap.pucks) if (ui.parking[p.name] === !!p.hidden) delete ui.parking[p.name];  // the snapshot caught up
     if (ui.rescan && snap.scanned !== ui.rescan) ui.rescan = 0;  // the new scan landed
+    settle(snap);
     if (ui.page) {
       const sg = sigOf(snap.pucks.find(x => x.name === ui.page.name));
       if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); outHead(); orphanCard(); return }  // it moved: refresh facts + layout
@@ -2413,7 +2468,7 @@ window.mc = {
   },
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;
-    st.sending = false;
+    st.sending = false; acted(r.name, r.error, null, ui.answering === r.name || ui.page?.name === r.name);  // the sheet or page shows its own error
     if (r.error) st.err = r.error;
     else { st.sent = true; st.draft = ""; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
     render();

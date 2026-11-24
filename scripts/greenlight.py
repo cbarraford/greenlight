@@ -1230,6 +1230,7 @@ def goal_with_backfill(comment, worktree_id, backfills, branch=None, linked_mr=N
 
 def scan(save=True, _backfill_retries=0):
     scan_started_ns = time.monotonic_ns()
+    started = int(time.time())  # wall clock, for the dashboard: a scan that began after an action can show its result
     clock_id = scan_clock_id()
     wts = orca("worktree", "ps", "--limit", "10000")["worktrees"]
     full = {w["id"]: w for w in orca("worktree", "list", "--limit", "10000")["worktrees"]}
@@ -1423,7 +1424,7 @@ def scan(save=True, _backfill_retries=0):
         for r in rows:
             r["_scan_id"] = scan_id
     result = {"scan_id": scan_id, "scan_started_ns": scan_started_ns, "scan_clock_id": clock_id,
-              "ts": int(time.time()), "prev_ts": prev.get("ts"), "skipped": skipped, "gone": gone, "rows": rows}
+              "started": started, "ts": int(time.time()), "prev_ts": prev.get("ts"), "skipped": skipped, "gone": gone, "rows": rows}
     if save:  # an actionable precheck mustn't overwrite the snapshot the run's report diffs against
         try:
             accepted = keep(result, expected_backfill_revision=backfill_read)

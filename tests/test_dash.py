@@ -220,7 +220,9 @@ with mock.patch.object(dash.greenlight, "mr_details", return_value=GH_MR) as md,
      "next": {"step": "ready", "owner": "greenlight", "action": "mark ready for review"}, "agent": {"state": "none", "type": None, "last": ""}}]}))
 with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20",
                                                                   "branch": "refs/heads/b"}, {})}):
-    pk = dash.snapshot()["pucks"][0]
+    _sn = dash.snapshot()
+    pk = _sn["pucks"][0]
+assert _sn["scan_started"] is None, "a last.json from before scans kept their start: the page falls back to scanned"
 assert (pk["mr"]["ref"], pk["mr"]["forge"], pk["state"], pk["steps"][0]) == ("#23", "github", "queued", "mr_open")
 # a workspace the scan hasn't seen yet (just created) is a puck at once, with its working agent; every puck carries the ADE's repo name,
 # which the dashboard matches against the picked projects (a window's paths are older than the workspace)
@@ -228,7 +230,11 @@ with mock.patch.object(dash, "live_agents", return_value={
         "w1": ({"displayName": "ws-gh", "worktreeId": "w1", "path": "/nonexistent", "comment": "Merge MR for #20", "branch": "refs/heads/b", "repo": "greenlight"}, {}),
         "w2": ({"displayName": "openai-live-voice", "worktreeId": "w2", "path": "/w/olv", "comment": "Switch voice", "branch": "refs/heads/olv", "repo": "greenlight",
                 "agents": [{"state": "working"}]}, {"state": "working", "agentType": "claude"})}):
-    _pk = {p["name"]: p for p in dash.snapshot()["pucks"]}
+    _last = json.loads((dash.greenlight.STATE / "last.json").read_text())
+    (dash.greenlight.STATE / "last.json").write_text(json.dumps(_last | {"started": 1700000000}))
+    _sn = dash.snapshot()
+    _pk = {p["name"]: p for p in _sn["pucks"]}
+assert _sn["scan_started"] == 1700000000, "the scan's wall-clock start reaches the page (a card action settles on a scan begun after it)"
 assert (_pk["ws-gh"]["repo"], _pk["openai-live-voice"]["repo"]) == ("greenlight", "greenlight")
 assert (_pk["openai-live-voice"]["state"], _pk["openai-live-voice"]["agent"]["state"], _pk["openai-live-voice"]["agent"]["type"]) == ("working", "working", "claude")
 # A finished review session may update after the parent session. Both PR workspaces must still reach the Agent view.
