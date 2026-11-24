@@ -1543,14 +1543,15 @@ function renderPage(main){
 
 /* ---------- answering a waiting agent: its question, the answers to offer, a free reply ---------- */
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
-function chatOn(p){ const st = ui.ask[p.name]; return !!(st && st.chat && Date.now() - st.chat.at < CHAT_KEEP && ["working", "done"].includes(p.agent.state)) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
+function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.sending) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in, and the agent hasn't gone quiet on it
+function chatOn(p){ return chatLive(ui.ask[p.name]) && ["working", "done"].includes(p.agent.state) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
 function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "done" && chatOn(p)) }  // waits on you: a question, or a chat's reply
 function askState(p){
   const a = p.agent, st = ui.ask[p.name], key = [a.state, a.since, a.last].join("|");  // since: an agent can ask again with no text in between
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
   const reply = a.state === "done" && chatOn(p) && (!st.sent || st.typed == null || since(a.since) > since(st.typed));  // its reply ends its turn: a "done" newer than the message
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
-    const chat = st && st.chat && Date.now() - st.chat.at < CHAT_KEEP ? st.chat : null;  // a quick reply carries the chat on; a long stretch of work ends it
+    const chat = chatLive(st) ? {...st.chat, at: Date.now()} : null;  // a reply in time carries the chat on (its clock restarts); a long stretch of work ends it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
     post({cmd: "ask", name: p.name});  // a reply too: the stream cuts the agent's message to 400 characters
   }
@@ -1579,7 +1580,8 @@ function chatThread(st, more){  // the chat so far, newest at the bottom (column
 }
 function answerBox(p, onPage){
   const st = askState(p), a = p.agent, rs = st.resp || {}, open = asking(p), sent = st.sent && open;
-  if (a.state === "working" && st.chat && st.sent) return h("div", {class:"abox"}, chatThread(st), h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "The agent is replying…"));
+  if (a.state === "working" && chatLive(st) && (st.sent || st.sending)) return h("div", {class:"abox"}, chatThread(st, st.sending ? st.pend : null),  // mid-send, the agent is already on its own "Chat about this" turn
+    h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), st.sending ? "Sending…" : "The agent is replying…"));
   if (!open) return h("div", {class:"ast"}, st.sent ? "Sent. The agent is back to work." : p.state === "needs" && (p.action || p.why)  // a request with no question: say what it is
     ? `Nothing to answer: ${short(p.action || p.why, 200).replace(/\.$/, "")}. Open the workspace to act on it.` : "The agent isn't waiting on you any more.");
   const q = String(rs.question || a.last || "").trim(), ag = agentMeta(a.type);
@@ -1595,7 +1597,8 @@ function answerBox(p, onPage){
     h("div", {class:"shd"}, onPage ? null : statusPill("wait", "Needs you"),  // the page title already carries the pill
       agentAv(a.type, 12, "av sm"),
       h("small", {style:"flex-grow:1"}, `${ag.name} ${a.state === "done" ? "replied" : "is waiting"}`, mins != null ? h("span", {class:"el"}, ` · ${mins < 1 ? "just now" : ago(mins / 60) + " ago"}`) : null),
-      talking && !fresh && a.state === "waiting" ? h("button", {type:"button", class:"afull", title:"Stop chatting and go back to answering", disabled: st.sending, onclick: () => endChat(st)}, "End chat") : null,  // at its prompt the composer is the only way to answer
+      talking && !fresh ? h("button", {type:"button", class:"afull", title: a.state === "waiting" ? "Stop chatting and go back to answering" : "Stop chatting; it no longer waits on you here",
+        disabled: st.sending, onclick: () => endChat(st)}, "End chat") : null,
       folds ? h("button", {type:"button", class:"afull", "aria-expanded": String(!!ui.afull), "aria-controls":"aq", onclick: () => { ui.afull = !ui.afull; render() }}, icon(ui.afull ? "chevron-down" : "chevron-right", 12), ui.afull ? "Less" : "Full message") : null),
     chatThread(st, more),
     folds && ui.afull ? h("p", {class:"aq afq", id:"aq"}, full) : h("p", {class:"aq", id:"aq"}, (lean || full).replace(/\n{2,}/g, "\n").trim()),  // the full message replaces the short one; no blank lines in the short one
@@ -1612,7 +1615,7 @@ function answerBox(p, onPage){
     menu && !(talking && rs.chat) ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); reply() }},  // a picker takes text only through its "Chat about this"
       h("textarea", {id:"areply", rows:"1", placeholder: fresh ? "Ask the agent about this question…" : talking ? "Keep chatting, or give your answer…" : opts.length ? "Or write a reply…" : "Reply to the agent…",
         "aria-label": talking ? "Your message about this question" : opts.length ? "Or write a reply" : "Your reply", title:"Enter sends · Shift+Enter for a new line",
-        disabled: locked, oninput: e => { st.draft = e.target.value; grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
+        disabled: locked, oninput: e => { st.draft = e.target.value; if (st.chat) st.chat.at = Date.now(); grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
         onkeydown: e => {  // as the input did: Enter sends, Shift+Enter is a new line
           if (e.key !== "Enter" || e.isComposing || e.shiftKey || e.altKey || e.ctrlKey) return;
           e.preventDefault(); reply();
@@ -2633,6 +2636,7 @@ window.mc = {
     st.loading = false; st.resp = r.error ? null : r; st.err = r.error || null;
     if (r.kind === "menu" && !r.chat) st.chat = null;  // a permission prompt, not its question asked again: the chat is over
     render();
+    const t = st.chat && ui.answering === r.name && document.getElementById("areply"); if (t && !t.disabled) t.focus();  // the reply came: back to the composer
   },
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;

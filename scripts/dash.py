@@ -1511,24 +1511,27 @@ def pending_questions(path, agent_type=None):
 
 def _picker_closed(h):
     """Polls ~8s for the agent's picker to close; False when it's still up."""
-    for _ in range(20):  # ponytail: polls ~8s for the picker to close
+    for _ in range(20):  # ponytail
         time.sleep(0.4)
-        if not menu(greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []):
+        if not menu(_tail(h)):
             return True
     return False
 
 
-def _turn_ended(name, h, secs=60):
-    """After "Chat about this" the agent takes a turn of its own ("what would you like to clarify?"): wait for it to end, so the
-    message is its own turn and the page can tell its reply. The agent's state then, else None when it's at a picker again."""
-    ag: dict = {}
-    for _ in range(secs):  # ponytail: polls Orca once a second, up to a minute
+def _tail(h):
+    return greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []
+
+
+def _turn_ended(name, h, before, secs=90):
+    """After "Chat about this" the agent takes a turn of its own ("what would you like to clarify?"): wait for that turn to end
+    (a state other than "working" that started after `before`, the picker's), so the message is its own turn and the page can
+    tell its reply. The agent then, "asked" when it's at a picker again, or "busy" when the turn didn't end in time."""
+    for _ in range(secs):  # ponytail: polls Orca once a second, up to 90s
         time.sleep(1)
         ag = next((ag or {} for w, ag in live_agents().values() if w["displayName"] == name), {})
-        if ag.get("state") != "working":
-            break
-    tail = greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []
-    return None if menu(tail) else ag
+        if ag.get("state") not in (None, "working") and ag.get("stateStartedAt") != before:
+            return "asked" if menu(_tail(h)) else ag
+    return "busy"
 
 
 def answer(name, text, chat=False):
@@ -1545,16 +1548,20 @@ def answer(name, text, chat=False):
         return {"error": "there's unsent text in that agent's input box; answer it in its workspace"}
     opts = menu(rd.get("tail") or [])
     text = " ".join(_strip_ctrl(text).split())  # one line: a newline would submit half the answer
-    if chat and opts and not chat_key(opts):  # a permission prompt, say: Esc would turn it down
+    key = chat_key(opts) if chat else None
+    if chat and opts and not key:  # a permission prompt, say: Esc would turn it down
         return {"error": "the agent is asking something else now; answer that first"}
     if opts and not chat and text in {k for k, _ in opts}:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text)
     elif opts:  # "Chat about this" (a chat) or Esc closes the picker, then the text goes in as a plain message
-        greenlight.orca("terminal", "send", "--terminal", h, "--text", chat_key(opts) if chat else "\x1b")
+        greenlight.orca("terminal", "send", "--terminal", h, "--text", key or "\x1b")
         if not _picker_closed(h):
             return {"error": "the agent's menu didn't close; answer it in its workspace"}
-        if chat and (ag := _turn_ended(name, h)) is None:
-            return {"error": "the agent asked again; answer it there"}
+        if chat:
+            ended = _turn_ended(name, h, ag.get("stateStartedAt"))
+            if isinstance(ended, str):
+                return {"error": "the agent asked again; answer it there" if ended == "asked" else "the agent is still busy; send it again in a moment"}
+            ag = ended
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text, "--enter")
     else:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text, "--enter")

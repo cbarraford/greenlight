@@ -759,6 +759,21 @@ test("answer: in a chat, only a 'done' newer than your message is the agent's re
   assert.deepEqual(page._errs, []);
 });
 
+test("answer: mid-send the chat says Sending… while the agent works; a chat you never sent never needs you (#173)", async page => {
+  const MENU = {name: "plan-a", question: "Which way?", kind: "menu", chat: "3", options: [{key: "1", label: "Keep it"}]};
+  const state = st => page.evaluate(([st, s]) => { s.pucks[0].agent.state = st; s.pucks[0].agent.since += 1000; s.pucks[0].state = "working"; window.mc.update(s) }, [st, JSON.parse(JSON.stringify(SNAP))]);
+  await page.evaluate(m => { openAnswer("plan-a"); window.mc.asked(m) }, MENU);
+  await page.click("#achat");
+  await state("done");  // you opened a chat, sent nothing, and the agent finished another way
+  assert.equal(await page.evaluate(() => asking(puckOf("plan-a"))), false, "an unsent chat isn't a question");
+  await page.evaluate(([m, s]) => { ui.ask = {}; window.mc.update(s); openAnswer("plan-a"); window.mc.asked(m) }, [MENU, JSON.parse(JSON.stringify(SNAP))]);
+  await page.click("#achat"); await page.fill("#areply", "Why?"); await page.press("#areply", "Enter");
+  await state("working");  // dash.py is still waiting out the agent's own "Chat about this" turn
+  assert.match(await page.textContent(".sheet"), /Sending…/);
+  assert.deepEqual(await page.$$eval(".athread p", es => es.map(e => e.textContent).reverse()), ["Which way?", "Why?"], "your message shows while it goes in");
+  assert.deepEqual(page._errs, []);
+});
+
 test("answer: a chat ends on a permission prompt or when the agent goes away, and never spins on 'replying' (#173)", async page => {
   const MENU = {name: "plan-a", question: "Which way?", kind: "menu", chat: "3", options: [{key: "1", label: "Keep it"}, {key: "2", label: "Port it"}]};
   const chat = async () => {

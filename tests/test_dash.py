@@ -81,6 +81,15 @@ with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)),
     assert "asked again" in dash.answer("ws", "hm?", chat=True)["error"] and o.call_count == 3  # it re-asked in its own turn: nothing typed over the picker
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "orca") as o:
     assert "something else" in dash.answer("ws", "hm?", chat=True)["error"] and not o.called  # a picker with no "Chat about this": never Esc it
+OLD = {"w1": ({"displayName": "ws"}, {"state": "waiting", "stateStartedAt": 1})}  # Orca still on the picker's state: not the new turn's end
+with mock.patch.object(dash, "waiting_term", return_value=({}, {"stateStartedAt": 1}, "t1", CHAT)), mock.patch.object(dash.time, "sleep"), \
+        mock.patch.object(dash, "live_agents", side_effect=[OLD, {"w1": ({"displayName": "ws"}, {"state": "working", "stateStartedAt": 2})}, AFTER]), \
+        mock.patch.object(dash.greenlight, "history_file", return_value=hist), mock.patch.object(dash.greenlight, "orca", side_effect=[None, PROMPT, PROMPT, None]) as o:
+    assert dash.answer("ws", "Why?", chat=True) == {"ok": True, "since": 5}  # typed only after the clarify turn really ended
+with mock.patch.object(dash, "waiting_term", return_value=({}, {"stateStartedAt": 1}, "t1", CHAT)), mock.patch.object(dash.time, "sleep"), \
+        mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "ws"}, {"state": "working", "stateStartedAt": 2})}), \
+        mock.patch.object(dash.greenlight, "orca", side_effect=[None, PROMPT]) as o:
+    assert "still busy" in dash.answer("ws", "Why?", chat=True)["error"] and o.call_count == 2  # never typed into a working agent
 with mock.patch.object(dash, "waiting_term", return_value=({}, {"state": "done", "lastAssistantMessage": "x" * 5000}, "t1", {"tail": ["❯"]})):
     assert dash.ask_user("ws") == {"name": "ws", "question": "x" * 4000, "kind": "prompt", "options": []}  # a chat's reply, in full and with no suggestions
 # a chat's reply ends the agent's turn at its prompt ("done"): only a chat message may go to it, never a plain answer
