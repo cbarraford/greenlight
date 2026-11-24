@@ -27,8 +27,11 @@ jobs:
           fail=0
           need() { command -v "$1" >/dev/null 2>&1 || { echo "::error::$1 is not on the runner PATH (actions-runner/.path)"; fail=1; }; }
           need python3; need git
-          python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' || { echo "::error::python3 is older than 3.12"; fail=1; }
-          python3 -m venv "$RUNNER_TEMP/venv-check" >/dev/null || { echo "::error::python3 -m venv fails (apt install python3.12-venv)"; fail=1; }
+          if command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' || { echo "::error::python3 is older than 3.12"; fail=1; }
+            python3 -m venv "$RUNNER_TEMP/venv-check" || { echo "::error::python3 -m venv failed (missing python3-venv/ensurepip)"; fail=1; }
+            rm -rf "$RUNNER_TEMP/venv-check"
+          fi
           if [ "$RUNNER_OS" = macOS ]; then
             need swiftc; need tmux
             if pgrep -x Greenlight-ci >/dev/null; then echo "::error::a Greenlight-ci process outlived its run; kill it on the host"; fail=1; fi
