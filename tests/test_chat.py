@@ -1249,7 +1249,8 @@ def test_scoped_compact_runs_when_the_board_is_unavailable(tmp_path, monkeypatch
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
     (tmp_path / "session_window").write_text("window-session")
-    monkeypatch.setattr(dash, "board", lambda **kw: (_ for _ in ()).throw(FileNotFoundError("last.json")))
+    built = []
+    monkeypatch.setattr(dash, "board", lambda **kw: built.append(kw) or (_ for _ in ()).throw(FileNotFoundError("last.json")))
     resumed = []
     monkeypatch.setattr(chat.harness, "argv", lambda *a, **kw: resumed.append(kw.get("sid")) or (["no-harness"], a[1]))
     def fake_run(cmd, engine, text, norm, **kw):
@@ -1259,7 +1260,7 @@ def test_scoped_compact_runs_when_the_board_is_unavailable(tmp_path, monkeypatch
     events = []
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e) or e)
     chat.turn("/compact", "claude-haiku-5-5", None, compact=True)
-    assert resumed == ["window-session"] and events[-1]["ok"] is True, events
+    assert resumed == ["window-session"] and events[-1]["ok"] is True and not built, events
 
 
 def test_scope_change_between_sends_resumes_same_session(tmp_path, monkeypatch):

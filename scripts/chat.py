@@ -1697,7 +1697,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         except Exception as e:
             return dict(e="done", ok=False, text=f"Scoped board unavailable: {e}", context=0, window=None, ms=None)
     request_snapshot = snapshot
-    if request_snapshot is None:
+    if request_snapshot is None and not compact:
         try:
             import dash
             request_snapshot = dash.board(with_ids=True)
