@@ -337,10 +337,11 @@ struct Staged: Equatable {
     /// What the transcript shows: the gist, then the detail.
     var shown: String { [text, screen ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n") }
     /// The finished reply's parts with the Options lines off, whichever part Chief ended with one: what's shown, the gist,
-    /// the detail alone, and the options.
+    /// the detail alone, and the options. A gist that asks the options' question goes last in what's shown, over its buttons.
     var parts: (shown: String, gist: String, detail: String?, options: [String]) {
-        let (gist, o1) = splitOptions(text), (more, o2) = splitOptions(screen ?? "")
-        return ([gist, more].filter { !$0.isEmpty }.joined(separator: "\n\n"), gist, more.isEmpty ? nil : more, o1 + o2)
+        let (gist, o1) = splitOptions(text), (more, o2) = splitOptions(screen ?? ""), options = o1 + o2
+        let order = !options.isEmpty && gist.contains("?") ? [more, gist] : [gist, more]
+        return (order.filter { !$0.isEmpty }.joined(separator: "\n\n"), gist, more.isEmpty ? nil : more, options)
     }
 }
 /// Every reply splits, voice mode or not: a session that ends voice mode may keep writing the marker, and only the line goes.
@@ -392,11 +393,12 @@ func forgeURL(_ s: String) -> URL? {
     return forgeHosts.contains(host) ? c.url : nil
 }
 
-/// The first `[screen]` marker: at the start of a line (bold or a colon around it allowed, the detail may follow on that line)
-/// and outside a code fence, so a reply that mentions or quotes it isn't split.
+/// The first `[screen]` marker: at the start of a line (the detail may follow on it) or at the end of one (the gist before it),
+/// bold or a colon around it allowed, and outside a code fence, so a reply that mentions or quotes it mid-sentence isn't split.
 func screenMark(_ s: String) -> Range<String.Index>? {
     var from = s.startIndex
-    while let r = s.range(of: #"(?m)^[ \t]*[*_]*\[screen\][*_]*:?[ \t]*"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
+    let mark = #"[*_]*\[screen\][*_]*:?[*_]*"#
+    while let r = s.range(of: #"(?m)^[ \t]*"# + mark + #"[ \t]*|[ \t]*"# + mark + #"[ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
         if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
         from = r.upperBound
     }
@@ -410,6 +412,7 @@ func forEar(_ s: String) -> String {
     let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])"#
     return s.replacingOccurrences(of: #"[ \t]*\([ \t]*"# + hash + #"[ \t]*\)"#, with: "", options: .regularExpression)
         .replacingOccurrences(of: #"(?i)\b(commits?)[ \t]+"# + hash, with: "$1", options: .regularExpression)
+        .replacingOccurrences(of: hash + #"[ \t]+(?=commits?\b)"#, with: "", options: .regularExpression)
         .replacingOccurrences(of: hash, with: "a commit", options: .regularExpression)
         .trimmingCharacters(in: .whitespaces)
 }

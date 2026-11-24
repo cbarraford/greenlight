@@ -1007,7 +1007,7 @@ final class Core: ObservableObject {
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let parts = st.parts, body = st.shown.isEmpty ? "(no reply)" : parts.shown, options = parts.options  // the transcript: the gist, then any [screen] detail
-        if !r.stopping && ok { voice.finished(st, parts.gist, detail: parts.detail) }
+        if !r.stopping && ok { voice.finished(st, parts.detail == nil ? body : parts.gist, detail: parts.detail) }  // body: "(no reply)" is said too
         else if !r.watch && !r.checkIn {  // a failure says the gist, never the detail
             voice.failed(parts.detail == nil ? body : parts.gist.isEmpty ? "It stopped. What it wrote is in the transcript." : parts.gist)
         }

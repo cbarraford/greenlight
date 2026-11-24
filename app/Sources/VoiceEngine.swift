@@ -332,6 +332,7 @@ final class Voice: NSObject, ObservableObject {
 
     func began(_ r: Run) {
         said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
+        drawing = false  // a drawing the last turn's own took over never came back to clear it
         waitWord = waitWords.randomElement()!
         guard on else { return }
         wait(waitWord, r.question)
@@ -356,7 +357,7 @@ final class Voice: NSObject, ObservableObject {
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
         guard on else { return }
         if let h = st.stage { stage(h) }
-        let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = plain(spoken) + "\n"
+        let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = spokenSoFar(spoken) + "\n"  // as live() counted `said`
         sentences(p, from: min(said, p.count)).said.forEach { say(forEar($0)) }
         said = 0
         if st.end && isLive {  // its goodbye was only just handed over: stop once it has said it (or soon, if it never does)
