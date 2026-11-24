@@ -1353,6 +1353,55 @@ test("empty state: .empty clears the Context rail gutter and does not clip at na
   assert.ok(geom.epRight <= geom.dockLeft + 1, `.empty paragraph clipped under #dock: ${JSON.stringify(geom)}`);
 });
 
+test("hovering an agent whose hex is in a stack highlights the stack hub and member, and hovering a fanned hex highlights its card", async page => {
+  const mk = (name, step) => ({...puck(name, "Goal " + name, "working"), state: "working", step, owner: "working"});
+  const pucks = [mk("st-1", "ci_green"), mk("st-2", "ci_green"), mk("st-3", "ci_green"), mk("solo-1", "threads")];
+  await page.evaluate(s => { ui.agentsFolded = false; window.mc.update(s) }, {...SNAP, pucks});
+  assert.equal(await page.locator(".fan .hub").count(), 1, "three identical workspaces collapse into one stack");
+  assert.equal(await page.locator(".cell[data-name='solo-1']").count(), 1, "different step stays unstacked");
+
+  // Hovering an agent card in the stack highlights the stack hub and member, not unrelated cells
+  await page.hover(".acard[data-name='st-1']");
+  assert.equal(await page.$eval(".acard[data-name='st-1']", e => e.classList.contains("hl")), true);
+  assert.equal(await page.$eval(".fan .hub", e => e.classList.contains("hl")), true, "collapsed stack hub gets .hl");
+  assert.equal(await page.$eval(".fan .fp[data-name='st-1']", e => e.classList.contains("hl")), true, "stack member gets .hl");
+  assert.equal(await page.$eval(".cell[data-name='solo-1']", e => e.classList.contains("hl")), false, "unrelated hex stays unhighlighted");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .hub .halo")).opacity === "1");
+  assert.equal(await page.$eval(".cell[data-name='solo-1'] .halo", e => getComputedStyle(e).opacity), "0");
+
+  // Moving away clears the highlight from card, member, and hub
+  await page.mouse.move(1, 1);
+  assert.equal(await page.$eval(".fan .hub", e => e.classList.contains("hl")), false, "leaving card clears stack hub .hl");
+  assert.equal(await page.$eval(".fan .fp[data-name='st-1']", e => e.classList.contains("hl")), false);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .hub .halo")).opacity === "0");
+
+  // Overlapping highlight in the same stack keeps the hub highlighted until all members clear
+  await page.evaluate(() => hl("st-1", true));
+  await page.hover(".acard[data-name='st-2']");
+  await page.mouse.move(1, 1);
+  assert.equal(await page.$eval(".fan .hub", e => e.classList.contains("hl")), true, "hub stays highlighted while another member still has .hl");
+  await page.evaluate(() => hl("st-1", false));
+  assert.equal(await page.$eval(".fan .hub", e => e.classList.contains("hl")), false, "hub clears once last highlighted member clears");
+
+  // Fanning the stack open and hovering a member highlights its agent card and member hex without double-highlighting the hub
+  await page.hover(".fan .hub");
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".fan.open .fp[data-name='st-2']");
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    return cs.opacity === "1"
+      && Math.abs(parseFloat(cs.left) - parseFloat(el.style.getPropertyValue("--x"))) < 1
+      && Math.abs(parseFloat(cs.top) - parseFloat(el.style.getPropertyValue("--y"))) < 1;
+  });
+  await page.hover(".fan .fp[data-name='st-2']");
+  assert.equal(await page.$eval(".acard[data-name='st-2']", e => e.classList.contains("hl")), true, "hovering a fanned member highlights its agent card");
+  assert.equal(await page.$eval(".fan .fp[data-name='st-2']", e => e.classList.contains("hl")), true);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .fp[data-name='st-2'] .halo")).opacity === "1");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .hub .halo")).opacity === "0");
+  await page.mouse.move(1, 1);
+  assert.equal(await page.$eval(".acard[data-name='st-2']", e => e.classList.contains("hl")), false, "leaving fanned member clears its agent card highlight");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

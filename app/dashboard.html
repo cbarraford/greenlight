@@ -251,8 +251,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hx .prog{fill:none;stroke:var(--hprog);stroke-linejoin:round}
 .hx .halo{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;opacity:0;transition:opacity var(--t-fast) ease}
 .cell:focus-visible{box-shadow:none}  /* the hex's halo is its focus ring */
-.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fp:hover .halo{opacity:1}
-.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo{stroke:var(--accent)}
+.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp:hover .halo,.fp.hl .halo{opacity:1}
+.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp.hl .halo{stroke:var(--accent)}
 /* needs you or crashed: three pulses when it arrives, then it rests (DESIGN.md §7) */
 .hx .pulse{fill:none;stroke-width:2;transform-box:fill-box;transform-origin:center;animation:hpulse 2.4s var(--ease) 3 both}
 @keyframes hpulse{from{transform:scale(1);opacity:.7}to{transform:scale(1.06);opacity:0}}
@@ -1010,8 +1010,9 @@ function stackFan(st, hx, hy, R, WW, HH){
   const sx = hx - (cx - ext) - R, sy = hy - (cy - ext) - R;  // hub's collapsed spot, in fan coordinates
   st.members.forEach((p, i) => {
     const [q, r] = cells[i], x = ext + rs * SQ3 * (q + r / 2) - mr, y = ext + rs * 1.5 * r - mr;
-    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}${inDock(p) ? " indock" : ""}`, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
+    fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}${inDock(p) ? " indock" : ""}`, "data-name": p.name, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
       "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
+      onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
       onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true})));
   });
   fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}${inDock(st) ? " indock" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
@@ -1033,7 +1034,10 @@ function clock(ms){
   const e = Math.max(0, Math.round((Date.now() - ms) / 1000)), hh = Math.floor(e / 3600), mm = Math.floor(e / 60) % 60, ss = String(e % 60).padStart(2, "0");
   return hh ? `${hh}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
 }
-function hl(name, on){ document.querySelectorAll(".cell,.acard,.lrow").forEach(e => e.dataset.name === name && e.classList.toggle("hl", on)) }
+function hl(name, on){
+  document.querySelectorAll(".cell,.fp,.acard,.lrow").forEach(e => e.dataset.name === name && e.classList.toggle("hl", on));
+  document.querySelectorAll(".fan").forEach(f => { const hub = f.querySelector(".hub"); if (hub) hub.classList.toggle("hl", !!f.querySelector(".fp.hl")) });
+}
 const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", review_bot:"Adding review bot", milestone:"Setting milestone",
   ready:"Undrafting", threads:"Answering threads", approved:"Awaiting approval", merge:"Merging", review:"Reviewing"};
 const CIWORD = {success:["passed", "--green"], failed:["failed", "--red"], running:["running", "--blue"], pending:["pending", "--blue"], canceled:["canceled", "--gray"]};
