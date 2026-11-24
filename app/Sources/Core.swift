@@ -36,6 +36,9 @@ final class Core: ObservableObject {
     static var refollowDelay = 2.0  // seconds before following a dropped turn again (tests: 0)
     /// This chat's running turn in UserDefaults, {id, question, watch, checkIn}: kept until its reply, so a relaunch follows it.
     var pendingKey: String { session == 0 ? "pendingTurn" : "pendingTurn-\(session)" }
+    private func savePending(_ r: Run, _ id: String) {
+        ud.set(["id": id, "question": r.question, "watch": r.watch, "checkIn": r.checkIn], forKey: pendingKey)
+    }
     /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
     var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(shellPath(greenlightHome))/chat-\(session) \(py)/chat.py" }
@@ -863,26 +866,32 @@ final class Core: ObservableObject {
 
     /// The turn saved when the app last quit mid-reply: followed from its first event, so its steps and reply come back.
     func resumeTurn() {
-        guard run == nil, let p = ud.dictionary(forKey: pendingKey), let id = p["id"] as? String,
-              id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }
+        guard run == nil, let p = ud.dictionary(forKey: pendingKey) else { return }
+        guard let id = p["id"] as? String, id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else {
+            ud.removeObject(forKey: pendingKey)  // not one chat.py made: nothing to follow, now or at the next launch
+            return
+        }
         let r = Run(p["question"] as? String ?? "The reply in progress")
         r.watch = p["watch"] as? Bool ?? false; r.checkIn = p["checkIn"] as? Bool ?? false
-        r.turnId = id; r.model = model
+        r.turnId = id; r.model = model; r.resumed = true
         run = r
         log(.chief, name, .status, "picking up the reply that was running when Greenlight quit")
         followTurn(r, id)
     }
 
-    /// `chat.py follow`: the turn's events from its first. A Run followed again starts over, as they all come again.
+    /// `chat.py follow`: the turn's events from its first. The ones this Run already applied are skipped (the log only grows,
+    /// and `send` streamed the same lines), so a refollow neither logs nor speaks anything twice.
     private func followTurn(_ r: Run, _ id: String) {
-        r.steps = []; r.live = ""; r.plan = nil; r.call = ""
-        proc = ssh("\(chief) follow \(shellQuote(id))", onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
+        r.seen = 0
+        proc = ssh("\(chief) follow \(shellQuote(id))", onLine: { [weak self] l in
+            r.seen += 1
+            guard r.seen > r.applied else { return }
+            r.refollows = 0  // something new: the connection works again
+            self?.event(l, r)
+        }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
             if code == 3 {  // pruned, or cleared from another window: nothing to wait for
-                ud.removeObject(forKey: self.pendingKey)
-                self.run = nil; self.tps = 0
-                self.msgs.append(Msg(.note, "The reply that was running when Greenlight quit is gone."))
-                self.next()
+                self.finish(r, ok: false, text: r.resumed ? "The reply that was running when Greenlight quit is gone." : "This reply is no longer on \(host).")
                 return
             }
             self.lost(r, code)
@@ -890,30 +899,35 @@ final class Core: ObservableObject {
     }
 
     /// The connection ended before the reply. Quitting: the turn goes on, and the next launch follows it. A dropped connection:
-    /// the turn still runs on the host, so follow it again (three tries, refollowDelay apart) before calling it lost.
+    /// the turn still runs on the host, so follow it again (five tries, backing off from refollowDelay: about a minute) before
+    /// calling it lost; even then its id stays, so the next launch picks the reply up.
     private func lost(_ r: Run, _ code: Int32) {
         if Core.quitting { return }
-        if let id = r.turnId, !r.stopping, r.refollows < 3 {
+        if let id = r.turnId, !r.stopping, r.refollows < 5 {
+            let wait = Core.refollowDelay * Double(1 << r.refollows)
             r.refollows += 1
             r.status = "Reconnecting to \(host)"
-            DispatchQueue.main.asyncAfter(deadline: .now() + Core.refollowDelay) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 guard let self, self.run === r, !r.gotDone else { return }
                 self.followTurn(r, id)
             }
             return
         }
         finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
+        if !r.stopping, let id = r.turnId { savePending(r, id) }  // still running there: the next launch follows it
     }
 
     private func event(_ l: String, _ r: Run) {
         guard run === r, let d = l.data(using: .utf8),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let e = j["e"] as? String else { return }
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        if j["e"] as? String != "turn" { r.applied += 1 }  // the turn's own lines (any JSON object), as `follow` sends them again
+        guard let e = j["e"] as? String else { return }
         connected = true
         switch e {
         case "turn":
             guard let id = j["id"] as? String else { break }
             r.turnId = id
-            ud.set(["id": id, "question": r.question, "watch": r.watch, "checkIn": r.checkIn], forKey: pendingKey)
+            savePending(r, id)
         case "start":
             let engine = j["engine"] as? String ?? "claude"
             let selected = engine == "agy" ? j["model"] as? String : engine

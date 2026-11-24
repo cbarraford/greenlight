@@ -6,6 +6,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest import mock
@@ -173,3 +174,59 @@ def test_a_turn_outlives_its_killed_send_and_follow_gets_the_reply(gl_home, tmp_
     out = subprocess.run([sys.executable, str(SCRIPTS / "chat.py"), "follow", tid], capture_output=True, text=True, env=env, timeout=60)
     done = [json.loads(x) for x in out.stdout.splitlines()][-1]
     assert out.returncode == 0 and done["e"] == "done" and done["ok"] is True and done["text"] == "survived"
+
+
+def test_a_runner_killed_while_its_own_send_follows_is_reaped_and_gets_a_reply(turns, capsys, tmp_path):
+    """send is the runner's parent: a SIGKILLed runner stays its zombie (same pid, same start time) until reaped."""
+    stub = tmp_path / "runner.py"
+    stub.write_text("import json, time\nprint(json.dumps({'e': 'start'}), flush=True)\ntime.sleep(60)\n")
+    with mock.patch.object(chat, "__file__", str(stub)):
+        tid = chat.start_turn([], "hi")
+    pid = json.loads(Path(chat.turn_paths(tid)[1]).read_text())["pid"]
+    deadline = time.time() + 10
+    while not Path(chat.turn_paths(tid)[0]).read_text() and time.time() < deadline:
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    got = {}
+    t = threading.Thread(target=lambda: got.update(rc=chat.follow(tid, poll=0.01)), daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive(), "follow kept waiting on its dead runner's zombie"
+    out = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert got["rc"] == 0 and [e["e"] for e in out] == ["start", "done"] and out[-1]["ok"] is False and "stopped" in out[-1]["text"]
+
+
+def test_a_runner_without_a_start_time_is_judged_by_its_pid(turns):
+    write(TID, meta={"pid": os.getpid(), "birth": None})  # ps failed when it started: alive while the pid is
+    assert chat.runner_alive(TID)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    write(TID, meta={"pid": proc.pid, "birth": None})
+    assert not chat.runner_alive(TID)
+
+
+def test_a_turn_cleared_before_its_runner_starts_never_runs(gl_home, turns, capsys, monkeypatch):
+    monkeypatch.setenv(chat.TURN_GEN, chat.generation_unlocked())
+    with chat.scope_lock():
+        chat.rotate_generation_unlocked()  # Clear, between send starting the runner and the runner getting going
+    Path(chat.turn_paths(TID)[2]).write_text("old request")
+    with mock.patch.object(chat, "dispatch") as d, mock.patch.object(chat.signal, "signal"):
+        chat.run_turn(TID, ["send"])
+    out = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert not d.called and out[0]["e"] == "done" and out[0]["text"] == "Cleared before it started." and out[-1] == chat.END
+    assert chat.TURN_GEN not in os.environ  # the harness it would start doesn't inherit it
+
+
+def test_a_turn_in_the_same_conversation_runs(gl_home, turns, capsys, monkeypatch):
+    monkeypatch.setenv(chat.TURN_GEN, chat.generation_unlocked())
+    Path(chat.turn_paths(TID)[2]).write_text("msg")
+    with mock.patch.object(chat, "dispatch") as d, mock.patch.object(chat.signal, "signal"):
+        chat.run_turn(TID, ["send"])
+    assert d.called
+
+
+def test_start_turn_passes_the_conversation_generation_to_its_runner(turns):
+    with mock.patch.object(chat.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen, \
+         mock.patch.object(chat.auto, "process_start", return_value="b1"):
+        tid = chat.start_turn(["send"], "m")
+    assert popen.call_args.kwargs["env"][chat.TURN_GEN] == chat.generation_unlocked() and chat.SPAWNED[tid].pid == 4242

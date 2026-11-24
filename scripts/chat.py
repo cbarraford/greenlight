@@ -1778,6 +1778,8 @@ TURN_KEEP = 24 * 3600  # a finished turn's file is deleted after this; it holds 
 TURN_GRACE = 10  # seconds a turn may run before its runner's identity is on file
 END = {"e": "end"}  # the runner's last line: nothing more will come
 QUICK = {"new", "stop", "bg", "bgstop"}  # answered here and now, not turns
+TURN_GEN = "GREENLIGHT_TURN_GEN"  # the runner's environment: the conversation generation its turn was sent in
+SPAWNED: dict[str, subprocess.Popen] = {}  # turn id -> the Popen of a runner this process started: polled so a killed one is reaped, not left a zombie
 
 
 def turn_paths(tid):
@@ -1791,7 +1793,12 @@ def runner_alive(tid):
     try:
         with open(meta) as fh:
             rec = json.load(fh)
-        return bool(rec.get("birth")) and auto.process_start(int(rec["pid"])) == rec["birth"]
+        if not rec.get("birth"):  # its start time couldn't be read (ps failed): fall back to whether the pid is there at all
+            os.kill(int(rec["pid"]), 0)
+            return True
+        return auto.process_start(int(rec["pid"])) == rec["birth"]
+    except ProcessLookupError:
+        return False
     except (OSError, ValueError, KeyError, TypeError):
         with contextlib.suppress(OSError):
             return time.time() - os.path.getmtime(log) < TURN_GRACE
@@ -1822,12 +1829,16 @@ def start_turn(args, data):
     log, meta, inp = turn_paths(tid)
     with os.fdopen(os.open(inp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as fh:
         fh.write(data)
+    with scope_lock():
+        gen = generation_unlocked()  # the conversation it's for: a Clear before its runner gets going cancels it
     out = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
     try:
         p = subprocess.Popen([sys.executable, os.path.realpath(__file__), "_run", tid, *args], stdin=subprocess.DEVNULL,
-                             stdout=out, stderr=subprocess.DEVNULL, cwd=DIR, start_new_session=True)
+                             stdout=out, stderr=subprocess.DEVNULL, cwd=DIR, start_new_session=True,
+                             env=os.environ | {TURN_GEN: gen})
     finally:
         os.close(out)
+    SPAWNED[tid] = p
     tmp = f"{meta}.{os.getpid()}.tmp"
     with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
         fh.write(json.dumps({"pid": p.pid, "birth": auto.process_start(p.pid)}))
@@ -1855,23 +1866,32 @@ def follow(tid, poll=0.1):
                 if not isinstance(j, dict):
                     continue
                 if j == END:
-                    return 0 if done else _ended(tid)
+                    return 0 if done else _ended()
                 done = done or j.get("e") == "done"
                 sys.stdout.write(raw.decode("utf-8", "replace") + "\n")
                 sys.stdout.flush()
             if lines[:-1]:
                 continue
             if last_look:
-                return 0 if done else _ended(tid)
+                return 0 if done else _ended()
+            if (p := SPAWNED.get(tid)) is not None:
+                p.poll()  # our own child (send): reap it if it died, or its zombie would still look alive
             if not runner_alive(tid):
                 last_look = True  # one more read: it may have written its last lines as it went
                 continue
             time.sleep(poll)
 
 
-def _ended(tid):
+def _ended():
     emit(e="done", ok=False, text="This reply stopped before it finished.", context=0, window=None, ms=None)
     return 0
+
+
+def cleared_before_start():
+    """True when a Clear came between `send` starting this turn and its runner getting going: it's for a gone conversation."""
+    gen = os.environ.pop(TURN_GEN, "")
+    with scope_lock():
+        return bool(gen) and generation_unlocked() != gen
 
 
 def run_turn(tid, args):
@@ -1882,6 +1902,8 @@ def run_turn(tid, args):
         with open(inp) as fh:
             data = fh.read()
         os.remove(inp)
+        if cleared_before_start():  # its conversation was cleared while this process started: don't run it in the new one
+            return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
         sys.stdin = io.StringIO(data)
         dispatch(args)
     finally:
