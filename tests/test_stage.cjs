@@ -114,6 +114,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.locator(".doc table.grid tbody td").allTextContents(), ["!1", "<b>ok</b>", "!2", "failed"]);
   assert.equal(await p.locator(".doc table.grid td b").textContent(), "!1");
   assert.deepEqual(await p.$$eval(".doc ol", ls => ls.map(l => l.start)), [1, 2]);
+  await p.evaluate(() => stage.text({ md: "1. **[!5355](https://x/5355): decode fix.** Review it, `now`." }));  // Chief bolds its links
+  assert.equal(await p.textContent(".doc ol li"), "!5355: decode fix. Review it, now.");
+  assert.equal(await p.textContent(".doc ol li b"), "!5355: decode fix.");
   await p.evaluate(() => stage.text({ md: "just text" }));
   assert.equal(await p.locator(".doc .lead").count(), 0);
   assert.equal(await p.textContent(".doc p"), "just text");

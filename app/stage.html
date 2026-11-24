@@ -217,7 +217,7 @@ const TEMPLATES = {
 // Markdown's inline marks as nodes, text only: `code`, **bold**, a [link](url) as its text.
 const inline = t => str(t).split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]*\))/).filter(Boolean).map(x =>
   x[0] === "`" && x.length > 2 && x.endsWith("`") ? $("code", null, x.slice(1, -1))
-  : x.startsWith("**") && x.endsWith("**") && x.length > 4 ? $("b", null, x.slice(2, -2))
+  : x.startsWith("**") && x.endsWith("**") && x.length > 4 ? (b => (b.append(...inline(x.slice(2, -2))), b))($("b"))  // a link or code inside bold too
   : /^\[[^\]]+\]\([^)\s]*\)$/.test(x) ? document.createTextNode(x.slice(1, x.indexOf("](")))
   : document.createTextNode(x));
 // A pipe table's rows as cells (its |---| rule dropped), drawn as the table template's grid.
