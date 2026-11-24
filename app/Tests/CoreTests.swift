@@ -739,7 +739,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     rs.load(); rs.setAuto("ci", 0); rs.reviewOwn = true; rs.review = "Custom"; rs.saveReview()
     rs.save(); rs.reset(); rs.saveInstructions(); rs.note = "n1"; rs.noteText = "body"; rs.saveNote(); rs.deleteNote()
     _ = (mainC.localShown, mainC.hostPending, mainC.shortcut, mainC.pasteFiles())
-    mainC.dockIcon = "Orb"
+    mainC.dockIcon = "Default"
     // Legacy gemini-4-neon migration on session 0 (uses isolated unittest UserDefaults)
     ud.set("gemini-4-neon", forKey: "model")
     let migC = Core(session: 0)
