@@ -150,10 +150,11 @@ main.ov{background:var(--canvas)}
 .crash:hover{box-shadow:inset 0 0 0 1px var(--red-edge)}
 /* cards keep about one size whatever the window: a wide window gets more columns, not wider cards */
 .acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2)}
-.acard{border-radius:var(--r-2);background:var(--card);border:1px solid var(--card-line);padding:var(--sp-3);min-width:0;
-  display:flex;flex-direction:column;gap:var(--sp-2);container-type:inline-size;position:relative}
-.acard:hover{border-color:var(--line-hover)} .acard.hl{border-color:var(--accent)}
-.acard.crashed{box-shadow:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
+.acard{border-radius:var(--ds-radius-md);background:var(--card);padding:var(--ds-space-12);min-width:0;
+  --edge:var(--ds-elevation-1);box-shadow:var(--lead,0 0 transparent),var(--edge);
+  display:flex;flex-direction:column;gap:var(--ds-space-8);container-type:inline-size;position:relative}
+.acard:hover{--edge:0 0 0 1px var(--ds-border-hover)} .acard.hl{--edge:0 0 0 1px var(--accent)}
+.acard.crashed{--lead:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
 .acard:hover,.acard:focus-within{z-index:2}  /* its stage list floats over the next card */
 .atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
 .av{width:28px;height:28px;flex-shrink:0;border-radius:var(--r-1);display:flex;align-items:center;justify-content:center;background:var(--fill);color:var(--text)}
@@ -241,13 +242,14 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .segs span{height:4px;border-radius:var(--r-full);background:var(--track);overflow:hidden}
 .segs i{display:block;height:100%;border-radius:var(--r-full);background:var(--text3)}
 .segs i.cur{background:var(--blue)} .acard.wait .segs i.cur{background:var(--orange)} .acard.crashed .segs i.cur{background:var(--red)}
-.acard .ask{padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);background:var(--orange-tint);font-size:var(--fs-3);line-height:var(--lh-3);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.acard .askrow{display:flex;align-items:flex-end;gap:var(--ds-space-8);padding-left:36px}  /* under the title, past the avatar */
+.acard .ask{flex:1;min-width:0;font:var(--ds-type-body);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .acard .el{min-width:40px;text-align:right}
 .acard .ask.full{display:block;white-space:pre-wrap;max-height:40vh;overflow:auto}
-.acard .fullq{height:24px;padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:none;color:var(--accent-fg);font-size:var(--fs-2);font-weight:500} .acard .fullq:hover{background:var(--fill)}
-.acard .open{flex-shrink:0;height:28px;padding:0 var(--sp-3);border-radius:var(--r-1);border:0;background:var(--fill);color:var(--text);font-size:var(--fs-2);font-weight:500}
-.acard .open:hover{background:var(--fill-hover)} .acard .open:active{background:var(--fill-active);transform:scale(.97)}
-.acard .open.ans{background:var(--accent-solid);color:var(--on-accent);font-weight:600} .acard .open.ans:hover{background:var(--accent-hover)}
+.acard .fullq{height:24px;flex-shrink:0;padding:0 var(--ds-space-8);margin:-4px 0;border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--text2);font:var(--ds-type-label)} .acard .fullq:hover{background:var(--ds-element-rest);color:var(--text)}
+.acard .open{flex-shrink:0;height:24px;padding:0 var(--ds-space-8);border-radius:var(--ds-radius-sm);border:0;background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label)}
+.acard .open:hover{background:var(--ds-element-hover)} .acard .open:active{background:var(--ds-element-active);transform:scale(.97)}
+.acards>.acard:first-child .open.ans{background:var(--accent-solid);color:var(--on-accent)} .acards>.acard:first-child .open.ans:hover{background:var(--accent-hover)}  /* one primary per view: the first question */
 @keyframes breathe{50%{opacity:.45}}
 .whead{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-4);padding:var(--sp-4) var(--sp-4) 0;font-size:var(--fs-2);color:var(--text3)}
 .whead h2.sect{margin:0}
@@ -1160,7 +1162,7 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
   const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : short(said || "Working", 160);
   const {n, i} = stepsOf(p), t0 = since(a.since), title = String(mr.title || p.goal || p.name).replace(/^Draft:\s*/i, ""), steps = p.steps || [];
   const q = String(a.last || "").trim().replace(/\n{3,}/g, "\n\n"), full = wait && ui.fullAsk[p.name], long = q.length > 120 || q.includes("\n");  // Full question: blank runs folded to one
-  const ci = CIWORD[mr.pipeline], why = p.action || p.why || (wait ? "asked a question" : "");
+  const ci = CIWORD[mr.pipeline], why = steps.length ? p.action || p.why || "" : "";  // no steps: nothing to say about the lifecycle
   const fact = (k, v, col) => h("span", {}, k + " ", h("b", {style: col ? `color:${ink(col)}` : null}, v));
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
@@ -1176,17 +1178,17 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       h("div", {class:"segs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {}, h("i", {class: k === i ? "cur" : null, style:`width:${k < i ? 100 : k === i ? 50 : 0}%`})))),
       h("div", {class:"lbls", "aria-hidden":"true"}, steps.map((s, k) => h("span", {class: k < i ? "done" : k === i ? "cur" : null}, HEXSUB[s] || STEP_NAMES[s] || s))),  // the stage list names them all: no title tips over it
       stageList(p, steps, i, n)) : null,
-    wait ? h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240))  // two lines of the question, or all of it
+    wait ? h("div", {class:"askrow"}, h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240)),  // two lines of the question, or all of it
+        long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null)
       : crash ? (said ? outLine(p, said, h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
       : outLine(p, act, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)),
-    h("div", {class:"ameta"},
+    steps.length || ci || mr.conflicts || mr.threads_total || mr.approvals_required ? h("div", {class:"ameta"},
       steps.length ? fact("Step", `${Math.min(i + 1, n)} of ${n}`) : null,
       ci ? fact("CI", ci[0], ci[1]) : null,
       mr.conflicts ? h("b", {style:`color:${ink("--red")}`}, "Conflicts") : null,
       mr.threads_total ? fact("Threads", `${mr.threads || 0} of ${mr.threads_total} open`) : null,
       mr.approvals_required ? fact("Approvals", `${mr.approvals || 0} of ${mr.approvals_required}`) : null,
-      why ? h("span", {class:"why", title: why}, why) : null,
-      wait && long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null));
+      why ? h("span", {class:"why", title: why}, why) : null) : null);
 }
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
