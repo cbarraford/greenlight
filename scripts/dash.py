@@ -946,8 +946,8 @@ def local_twin(w, twins):
     same project by Orca's projectId when its setups say, else by repo name (placement.local_repo's rule)."""
     proj = {x.get("repoId"): x.get("projectId") for x in greenlight.project_setups(tries=1) or []}
     def same(x):
-        a, b = proj.get(x.get("repoId")), proj.get(w.get("repoId"))
-        return a == b if a and b else x.get("repo") == w.get("repo")
+        mine = proj.get(w.get("repoId"))
+        return proj.get(x.get("repoId")) == mine if mine else x.get("repo") == w.get("repo")
     return next((x for x in twins if greenlight.is_local(x) and same(x)), w)
 
 

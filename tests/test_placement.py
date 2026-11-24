@@ -432,6 +432,12 @@ def test_tree_new_places_an_orca_create(monkeypatch, tmp_path):
     rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
          {"repoId": "r-fork", "repo": "widgets", "path": "/srv/w", "hostId": "local"})
     assert "on laptop" in dash.tree_new("/srv/w", {"name": "fix-7"})["error"]
+    # the same project under another folder name here: Orca's projectId says it's the one, so it swaps
+    cli_with(monkeypatch, paired=True, setups=SETUPS + [{"id": "s-alias", "repoId": "r-alias", "path": "/srv/w", "hostId": "local", "projectId": "p1"}],
+             created={"worktree": {"path": "/w/fix-8"}})
+    rows({"repoId": "r-there", "repo": "widgets", "path": "/srv/w", "hostId": "ssh:t1"},
+         {"repoId": "r-alias", "repo": "widgets-acme", "path": "/srv/w", "hostId": "local"})
+    assert dash.tree_new("/srv/w", {"name": "fix-8"})["path"] == "/w/fix-8"
     other = []
     monkeypatch.setattr(dash, "tree", lambda path, every=False: (lambda *a: other.append(a) or {"worktree": {"path": "/w/fix-2"}}, {"repoId": "r1"}, [{"repoId": "r1"}]))
     assert dash.tree_new("/src/widgets", {"name": "fix-2"})["path"] == "/w/fix-2" and other  # another ADE's call: as before
