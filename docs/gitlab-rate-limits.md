@@ -12,17 +12,19 @@ Investigation for issue #150. No code changes; this is the measured picture and 
   MR, its discussions, its approvals) on every scan, whether it changed or not.
 - **The average is fine.** Greenlight made **57,374 traced glab calls in 26.9 h (~2,130 an hour)** and started 7.5
   full scans an hour. The median minute has no glab calls at all.
-- **Bursts of overlapping scans cause the 429s.** At 09:11–09:12 on 2026-11-24, ten full scans overlapped. Agents
-  start them before every push. They made **1,693 calls in 60 s**, and GitLab answered **475 of them with 429**.
-  Those 429s aren't retried, so they became `error` rows on the board ("greenlight couldn't evaluate: glab api
+- **Bursts of overlapping scans cause the 429s.** At 09:11–09:12 on 2026-11-24, ten full scans overlapped: nine
+  agents' pre-push scans and one `greenlight.py --help`. They made **1,693 calls in 60 s**. GitLab then answered
+  **475 calls with 429** between 09:12:21 and 09:13:17, almost all within the first 8 s. Those 429s aren't retried, so they became `error` rows on the board ("greenlight couldn't evaluate: glab api
   …/merge_requests/N: glab: …"), and three scans started during the burst crashed.
 - **A bigger outage hides behind the 429s.** When the up-front open-MR listing fails, the whole scan crashes. That
-  happened **36 times**, including **20 automation ticks in a row (22:30–08:00)** that did nothing for 9.5 hours.
-  The automation recorded each one as "skipped". Only 3 of the 36 were rate limits; the cause of the other 33 isn't
-  recorded (`msg_class: other`).
+  happened **36 times**. Overnight, every glab call from every script failed (56 of 56) while `gh` kept working, so
+  **20 automation ticks in a row (22:30–08:00)** did nothing for 9.5 hours. 13 were recorded `skipped` and 7 `ok`,
+  and none pinged. Only 3 of the 36 crashes were rate limits. The other 33 are `msg_class: other`, which rules out
+  the auth, timeout and 5xx patterns.
 - **What to fix.** First, stop agents running a full scan to refresh one workspace, and make full scans single-flight.
-  Second, make scans survive failures: retry 429 with backoff, cap concurrency across processes, and keep a failed
-  project's or MR's last good row rather than crashing or blanking it. The full ranked list is in section 6.
+  Second, make scans survive failures: retry 429 with backoff, cap concurrency across processes, keep a failed
+  project's or MR's last good row rather than crashing or blanking it, and ping when GitLab is down instead of
+  skipping silently. The full ranked list is in section 6.
 
 ## 1. How this was measured
 
@@ -38,9 +40,15 @@ Investigation for issue #150. No code changes; this is the measured picture and 
 
 What the trail can't see, so the real load is higher than every number below:
 
-- glab calls that bypass `greenlight.run()`: `cleanup.py`'s `run()`, `audit.py`'s `_run()` (including the background
-  `audit.py merge` each scan starts for mergeable heads), and `orchestrate.py`'s `run_cmd()`, which executes a row's
-  `next.cmd` (`glab mr update`, `glab mr merge`).
+- glab calls that bypass `greenlight.run()`:
+  - `cleanup.py`'s `run()`.
+  - `audit.py`'s `_run()`, used for:
+    - its gates;
+    - the background `audit.py merge` a scan starts;
+    - `same_target` → `forge_refs` (`glab mr view` and the target branch). That runs inside the scan's `evaluate()`
+      for a mergeable row with a cached audit, and every 5 s in the app's dashboard stream.
+  - `orchestrate.py`'s `run_cmd()` and `dash.py`'s card actions, which execute a row's `next.cmd` (`glab mr update`,
+    `glab mr merge`).
 - Agents' own glab calls in their terminals, and CI jobs on the same token.
 
 The Mac app reaches GitLab only through `ssh` into scripts on this host, so its traffic is in the trail.
@@ -49,17 +57,19 @@ The Mac app reaches GitLab only through `ssh` into scripts on this host, so its 
 
 | Path | Calls GitLab via | What it fetches | How often |
 |---|---|---|---|
-| `greenlight.py scan` (`scan()`) | `gl`, `gl_all`, `mr_details` | Per project: the open-MR listing (paged); with a `milestone` stage, active milestones.<br>Per row with no open MR: `issues/:n/closed_by` or a `source_branch=` lookup.<br>Per open MR: the MR, its discussions (paged), its approvals; a failed pipeline's failed jobs; all jobs with `check=` stages; `/blocks` when blocked. | every full scan (below) |
-| `greenlight.py precheck` | `scan(save=False)`, then `adopt.plan()` | a full scan, then adopt's candidate queries and (cache cold) the blocking scan | every automation tick |
+| `greenlight.py scan` (`scan()`) | `gl`, `gl_all`, `mr_details` | Per project: the open-MR listing (paged); with a `milestone` stage, active milestones.<br>Per row with no open MR: `issues/:n/closed_by` or a `source_branch=` lookup.<br>Per open MR: the MR, its discussions (paged), its approvals; a failed pipeline's failed jobs; all jobs with `check=` stages; `/blocks` when blocked.<br>Per mergeable row with a cached audit: `audit.merge_verdict` → `forge_refs` (2 **untraced** calls). | every full scan (below) |
+| `greenlight.py precheck` | `scan(save=False)`, then `adopt.plan()` | a full scan (~250 calls), then adopt's plan: a median of **309** more, mostly the blocking scan | every automation tick |
 | `greenlight.py report` | `scan()` | another full scan | every tick whose precheck found work |
 | `greenlight.py <unknown>` (e.g. `--help`) | `scan()` | **a full scan**: `main()` treats any unrecognised subcommand as `scan` | 11 in 27 h; 9 of them run by the automation's own agent |
 | `ws_state.py observe` | `greenlight.scan(save=True)` | a full scan | 14 in 27 h; 11 in ticks, 1–5 min after `report` |
-| `adopt.py` (`candidates`, `review_done`, `rerequested`) | `gl_all`, `gl` | 2 global `merge_requests?scope=all` queries (author, reviewer); per review candidate `/approvals`, sometimes `/reviewers`; per blocked MR with no candidate, the MR | every tick (precheck plan, then apply) |
-| `blocking.py` (`scan`, `check`) | `gl`, `gl_all` | Per roster repo: open MRs (or per active milestone), and the project.<br>Per MR: pipelines, failed jobs, discussions, approvals, reviewers, last commit, notes. | only from adopt, at most every 5 min (`CACHE = 300`); cleanup and dash only read the cache |
+| `adopt.py` (`candidates`, `review_done`, `rerequested`) | `gl_all`, `gl` | 2 global `merge_requests?scope=all` queries (author, reviewer); per review candidate `/approvals`, sometimes `/reviewers`; per blocked MR with no candidate, the MR; a full `scan(save=False)` when `last.json` is older than one tick (not seen in this window) | every tick (precheck plan, then apply) |
+| `blocking.py` (`scan`, `check`) | `gl`, `gl_all` | Per roster repo: open MRs (or per active milestone), and the project.<br>Per MR: pipelines, failed jobs, discussions, approvals, reviewers, last commit, notes. | only from adopt, when its 5-minute cache (`CACHE = 300`) is cold, which in practice is once per tick, inside precheck; cleanup and dash only read the cache |
 | `cleanup.py` (`Forge.mrs`, versions) | its own `run()` (**untraced**) | per workspace: linked MRs, a `source_branch=` listing, approvals for review MRs, MR versions | every tick |
 | `orchestrate.py` | `mr_details`, `gl`; `run_cmd` (**untraced**) | a fresh `mr_details` and milestone per row it acts on; a `source_branch=` check before a goal backfill; runs `next.cmd` (`glab mr update`, `glab mr merge`) | per action (no orchestrate events in this window: ticks ran the Claude engine) |
 | `audit.py` gates and `audit.py merge` | its own `_run()` (**untraced**) | `glab mr view`, the target branch, discussions, notes, `mr create`, `mr merge`, `mr diff` | every push / PR / post / merge gate, and every scan with a mergeable head |
 | `dash.py page` / `suggest` (`facts` → `mr_facts`) | `mr_details`, `gl_all` | a full `mr_details` plus the head pipeline's jobs (~5 calls), even when the page's cached layout is reused | per puck page the app builds or re-suggests (323 runs in 27 h) |
+| `dash.py stream` (the app's dashboard, every 5 s) | `moves()` → `audit.same_target` (**untraced**) | 2 calls per mergeable MR with a fresh cached audit, in a repo with auto-merge on | every 5 s per running app |
+| `dash.py` card actions (`tree_merge`, `tree_ready`, `tree_signoff`) | `audit.py checked-merge`; `next.cmd` | `glab mr merge` / `glab mr update` | per click |
 | `dash.py forge` | `gl` | 3 global queries (review, mine, issues), or 2 per repo | on demand |
 | `chat.py` | `mr_details`; the chat agent runs `greenlight.py scan` | `mr_details` per question, to check it isn't stale; a full scan when the agent follows its prompt's "rescans every workspace" line | per chat turn |
 | Mac app (`App.swift` `rescan()`) | `ssh … greenlight.py scan` | a full scan | at launch and on ↻ |
@@ -96,7 +106,7 @@ run with a chat turn counts as chat; any other run with a scan counts as a stand
 | Origin | glab calls | Share | Per hour |
 |---|---|---|---|
 | Automation ticks (54, one every 30 min) | 33,947 | 59.2% | 1,261 |
-| Standalone scans (agents' pre-push scans, app ↻, and the `audit.py merge` they start) | 18,574 | 32.4% | 690 |
+| Standalone scans (agents' pre-push scans, app ↻, `--help`) | 18,574 | 32.4% | 690 |
 | Chat turns (and the scans their agent runs) | 2,819 | 4.9% | 105 |
 | `dash.py` (puck-page facts, forge) | 1,512 | 2.6% | 56 |
 | `ws_state.py` with no run id | 522 | 0.9% | 19 |
@@ -111,12 +121,15 @@ Automation ticks:
 
 - A tick lasts a median of 5 min (longest 12 min).
 - A healthy tick makes a median of **~1,050** calls, about 300 a minute at its peak.
-- On 33 ticks, `precheck` and `report` each ran a full scan, a median of 106 s apart (~8,500 calls for the second
-  scans).
+- Inside `precheck`, adopt's plan made a median of **309** calls after the scan: **10,064** in all, 17.5% of traced
+  calls. Most of that is the blocking scan, whose 5-minute cache is always cold at a 30-minute tick.
+- On 33 ticks, `precheck` and `report` each ran a full scan, a median of 113 s apart (precheck end to report start).
+  The second scans cost ~8,500 calls.
 - 11 ticks then ran a third full scan in `ws_state.py observe`.
 - 13 ticks were recorded `skipped`. Each made exactly 1 glab call: precheck crashed on its first listing, and
-  `auto.py` records any nonzero precheck exit as skipped. No tick in this window had a working precheck that found
-  nothing to do.
+  `auto.py` records any nonzero precheck exit as skipped. Seven more ticks (02:30–05:30) had the same crash but were
+  recorded `ok`: their agent ran anyway, and its `report` crashed too. No tick in this window had a working precheck
+  that found nothing to do.
 
 GitHub, for comparison, costs one GraphQL query per PR (`gh_pr`). There were 2,153 `gh` calls in the same window, and
 no GitHub rate-limit errors.
@@ -125,15 +138,17 @@ no GitHub rate-limit errors.
 
 | | |
 |---|---|
-| Full scans overlapping | 10, each with 8 threads, all standalone (agents' pre-push scans); no tick, `ws_state` or chat calls in the window |
+| Full scans overlapping | 10, each with 8 threads, all standalone: 9 agents' pre-push scans and 1 `greenlight.py --help`. No tick, `ws_state` or chat calls in the window. |
 | Peak traced calls | 1,693 in the 60 s from 09:11:27; 651 in the busiest 10 s |
-| 429 responses | 475, from 09:12:21 to 09:13:17 |
-| Effect | All 10 scans completed, 8 of them with 429 `error` rows. 3 more scans started during the burst (09:12:29, 09:13:00, 09:13:17) crashed on the open-MR listing. |
+| 429 responses | 475, from 09:12:21 to 09:13:17; 467 of them between 09:12:20 and 09:12:29 |
+| Effect | All 10 scans completed, 8 of them with 429 `error` rows. 3 more scans, started at 09:12:29, 09:12:59 and 09:13:11, crashed on the open-MR listing. |
 
 The push gates of the agents in question ran from 09:10:48 to 09:12:54.
 
-Traced calls reached 1,693 in a rolling minute. GitLab still refused calls, so roughly 300 or more untraced calls
-filled the rest of the 2,000: cleanup, audit, orchestrate, agents' own glab, CI. A live check while this report was
+At the first 429 (09:12:21), the preceding 60 s held 1,260 traced calls, so at least ~740 untraced calls shared that
+minute. If GitLab counts by clock minute it's more: only 719 traced calls came between 09:12:00 and the first 429.
+The candidates are the dashboard stream's `same_target` calls, cleanup, audit, orchestrate, agents' own glab, and
+CI. A live check while this report was
 written, with none of its own scans running, showed 874 requests counted on the account in 40 s
 (`RateLimit-Observed`).
 
@@ -145,8 +160,12 @@ Only 6 calendar minutes in the 27 h had more than 500 traced calls.
 (`for m in gl_all(f"projects/{pid(proj)}/merge_requests?state=opened")`).
 
 - This crashed 36 scans in the window: 33 with `msg_class: other`, 3 with `rate_limit`.
-- 20 automation ticks in a row failed this way, from 22:30 to 08:00, along with six standalone scans.
-- The trail doesn't keep the message, only its class, so the cause of the 33 is unknown. They aren't 429s.
+- Overnight, the listing wasn't the cause: every glab call from 22:25 to 08:05 failed (56 of 56: greenlight 33,
+  dash 15, adopt 7, blocking 1), while every `gh` call worked. glab or the GitLab account was down.
+- Twenty automation ticks in a row failed this way, from 22:30 to 08:00, along with six standalone scans. 13 ticks
+  were recorded `skipped` and 7 `ok`. `auto.py` pings only on `failed`, so nobody was told.
+- The trail keeps the class, not the message. `other` means none of `diag.classify()`'s patterns matched, which rules
+  out 401/403/token, timeouts, 5xx and 404. Go's "no such host" isn't a pattern, so DNS isn't ruled out.
 
 ## 4. How rate-limit responses are handled today
 
@@ -174,8 +193,9 @@ Only 6 calendar minutes in the 27 h had more than 500 traced calls.
    scan. Each costs 260 calls; the refresh needs about 4.
 2. **No single-flight.** Two scans 10 s apart both run in full. Nothing waits for a scan already running.
 3. **A tick scans two or three times.** `precheck` scans with `save=False`. Then `report` scans again about 2
-   minutes later, and `ws_state.py observe` often scans a third time 1–5 minutes after that. Observe needs fresh
-   goals, which come from the ADE, not GitLab.
+   minutes later, and `ws_state.py observe` often scans a third time 1–5 minutes after that. Observe scans so that
+   an old `last.json` can't undo a generated goal. That needs fresh goals from the ADE and a re-evaluation of the
+   rows whose goal changed, not a fresh GitLab fetch of every MR.
 4. **Unchanged MRs are fetched in full every scan.** The listing returns `updated_at`, `sha`, `has_conflicts` and
    `detailed_merge_status` for each MR, but `mr_details` refetches the MR, discussions and approvals for all 69.
 5. **N+1 per MR.** Three or more REST calls per open MR, where GitLab GraphQL can return a project's open MRs with
@@ -185,10 +205,14 @@ Only 6 calendar minutes in the 27 h had more than 500 traced calls.
 7. **The same MR fetched by several scripts in one tick.** The precheck scan reads every MR's approvals. Then each of
    these reads approvals again: adopt's `review_done` per candidate, blocking per roster MR, cleanup per review
    workspace, and orchestrate (`mr_details`) per row it acts on. None of them share a cache.
-8. **Puck pages refetch what the scan has.** `dash.py page` and `suggest` call `mr_facts` (~5 calls) before checking
-   whether the cached layout is still good. `mr_facts` also refetches jobs `mr_details` just read.
+8. **Puck pages refetch what the scan has.** `dash.py page` and `suggest` call `mr_facts` (~5 calls) per page. The
+   page shows those facts live, but most are already in the scanned row, and `mr_facts` refetches jobs that
+   `mr_details` just read.
 9. **Rows with no MR are looked up again every scan.** The 14 rows with no MR each make a `source_branch=` or
    `closed_by` call per scan.
+10. **The blocking scan runs every tick.** Its 5-minute cache always expires between 30-minute ticks. So adopt's plan
+    re-reads pipelines, discussions and approvals of every open roster MR (median 309 calls), including the MRs the
+    scan read seconds earlier.
 
 ## 6. Ranked fixes
 
@@ -196,23 +220,31 @@ Ranked by calls saved and failures removed per unit of work.
 
 ### 1. Refresh one workspace before a push; make full scans single-flight
 
-- **One-workspace refresh, ideally done by the push gate itself.** `gate push` already reads the live head and target
-  (`forge_refs`). What it needs from the scan is the goal and the MR link, which is `find_mr` + `evaluate` for one
-  row: about 4 calls. Doing it inside `gate push` / `gate pr` removes the scan from all seven prompt sites and from
-  the "rescan" loop. A `greenlight.py scan --ws <workspace>` is the other shape, for the prompts that keep it.
-- **Writing one row safely.** `last.json` is shared state, and a one-row write has to keep these intact:
-  - `keep()` drops any scan whose `scan_started_ns` is older than the saved one. A one-row write must not bump
-    `scan_started_ns`, `ts` or `scan_id`, or it will discard a full scan already in flight.
+- **Let the push gate check the push itself (simplest).**
+  - `gate push` already makes a `glab mr view` and reads the live head and target (`forge_refs`).
+  - With the MR iid from the existing row (or one `source_branch=…&state=opened` lookup when there is none), the goal
+    from the ADE, and the MR title and description from that same view, it can check the push without a scan, at 0–1
+    extra calls.
+  - That removes the scan from all seven prompt sites and the "rescan" loop.
+- **If a one-row `greenlight.py scan --ws <workspace>` is kept** for other callers:
+  - It must look up `state=opened` before `state=all`, as the full scan's `open_by_branch` does, or it can pick a
+    different MR.
+  - Its `evaluate()` calls `merge_verdict`, which can start an audit.
+  - GitHub stacked PRs need `_base_mr`, which comes from a listing.
+- **Writing one row safely: build on `dashboard_merges`.** `last.json` is shared state.
+  - `dash.py`'s card-merge write already bumps `scan_started_ns` and appends a row patch, and `keep()` replays the
+    patch onto an older full scan instead of dropping that scan. A one-row refresh should be the same kind of patch,
+    so a full scan that started before the push can't overwrite the fresh row with the old `sha`.
+  - A write without a patch must not bump `scan_started_ns`, `ts` or `scan_id`:
+    - `keep()` drops older scans.
     - `adopt.current_rows()` trusts the whole file while `ts` is fresh.
-    - `ws_state.observe` raises "scan superseded" when `scan_id` changes.
+    - `ws_state.observe` raises "scan superseded" on a new `scan_id`.
     - The report diffs against `prev_ts`.
-  - Give each row its own `_scanned_ns`, and have `keep()` merge row by row, newest wins. Otherwise a full scan that
-    started before the push overwrites the fresh row with the old `sha`, and the gate refuses again.
   - Write the whole merged row list. `close_stale()` resolves the question of any workspace missing from `rows`, and
     `ws_state.keyed()` reads every row's name to pick card keys.
 - **Single-flight for full scans.** App ↻, chat ("rescan every workspace") and automation scans take a new lock held
-  for the network part. Today there is only the short write lock in `keep()`, which pings and card writes also need,
-  so it must not be held for the whole scan. A second full scan waits, then reuses the result only when that scan
+  for the network part. Today there is only the short write lock in `keep()` (`backfill_lock` plus `ws_state.lock`),
+  which goal backfills and card writes also take, so it must not be held for the whole scan. A second full scan waits, then reuses the result only when that scan
   started after it was asked for. The push path never reuses; it always takes a fresh one-row refresh.
 - **Saves:** most of the standalone share (32%) and the scans in chat, and it removes the burst that caused the
   incident. Ten pushes at once would cost about 40 calls instead of about 2,600.
@@ -226,8 +258,12 @@ Ranked by calls saved and failures removed per unit of work.
     not needed for a first fix.
   - A retry must not hold a concurrency slot while it sleeps.
 - **Cap concurrency across processes.** Use a small file-based semaphore under `~/.greenlight` (e.g. 8 `flock`ed slot
-  files), so N processes share 8 slots instead of using 8N. At the measured median latency (0.57 s), 8 slots allow
-  about 840 calls a minute, under the limit. A shared token bucket is the exact tool if calls get faster.
+  files), so N processes share 8 slots instead of using 8N.
+  - At the measured median latency (0.57 s), 8 slots allow about 840 calls a minute from greenlight. With at least
+    ~740 a minute of untraced traffic in the incident, that's still close to the limit.
+  - Set the cap from measured traffic after fix 7 routes every caller through `run()`, or use a shared token bucket.
+- **Budget the retries.** Precheck runs under `auto.py`'s 300 s timeout (median 109 s today, max 220 s), so cap the
+  total retry wait per scan. Otherwise backoff can time a tick out.
 - **Catch a failed per-project listing.** A failure on one project must not crash the scan or the tick.
 - **Keep the last good row.** On a failure that can be retried (429, 5xx, timeout, a failed listing), carry the
   previous row's `mr`, `next` and `life` forward with a `stale` flag and the error class.
@@ -235,20 +271,32 @@ Ranked by calls saved and failures removed per unit of work.
     having no MR.
   - Don't change `owner` either. `close_stale()` resolves a workspace's open question as soon as its owner isn't
     `me`, so a 429 would silently close real questions.
-- **Classify the outage.** Add the missing patterns to `diag.classify()` so a failure like the 33 `other` crashes
-  (auth, DNS, a glab error) gets a class next time.
-- **Saves:** few calls, but it turns 429s into short delays, and turns a 9.5-hour silent outage into stale-but-visible
-  rows.
+  - Do drop `next.cmd` from a stale row, so the user-clicked `tree_ready` / `tree_signoff` can't run a command built
+    on old facts. Orchestrate, `tree_merge` and the auto-run path already re-check live.
+- **Say when GitLab is down.** When every GitLab call in a scan fails, as in the overnight outage, exit with a
+  distinct status that `auto.py` records as `failed` (which pings), not `skipped`, and show it on the board.
+- **Record why.** `other` already excludes auth, timeouts, 5xx and 404. Record glab's HTTP status on `cmd` spans (a
+  safe token), and add "no such host" to `network`, so the next outage can be identified.
+- **Saves:** few calls, but it turns 429s into short delays, and turns a 9.5-hour silent outage into one ping.
 - **Risk:** low, once fix 1's single-flight stops waiting scans piling up behind backoff.
 
 ### 3. Scan once per tick
 
 - Precheck saves its result to a side file keyed by `GREENLIGHT_RUN`. `report` in the same run reuses it when it's a
   few minutes old, and refreshes only the workspaces `adopt apply` created (with fix 1's one-row path).
-- `ws_state.py observe` takes its rows from this run's `last.json` and re-reads only goals from the ADE.
+- `ws_state.py observe` re-reads goals from the ADE.
+  - It re-runs `evaluate` offline, on the cached `mr`, only for rows whose goal changed.
+  - When a new goal changes which MR the row tracks (`Merge MR for #N`), it refreshes that row with fix 1's one-row
+    path.
+- The blocking scan takes MRs that are also workspace rows from the scan, and uses fix 5's per-MR cache for the
+  rest. Up to 17.5% of traced calls; how they split isn't measured.
 - **Saves:** about 8,500 calls from the second scans on 33 ticks, plus about 2,900 from 11 observe scans: about 20% of
-  traced calls.
-- **Risk:** low to medium. `report` must still see what `adopt apply` just did.
+  traced calls, before any blocking saving.
+- **Risk:** medium.
+  - `report` must still see what `adopt apply` and the agent just did.
+  - Precheck's `save=False` skips `ws_state.keyed(migrate=True)`, `_scan_id` and backfill pruning, so reused rows
+    must still go through them.
+  - Orchestrate re-reads the live MR before it acts, so a stale row makes it skip an action, not take a wrong one.
 
 ### 4. Stop unknown subcommands from scanning
 
@@ -279,16 +327,20 @@ Ranked by calls saved and failures removed per unit of work.
 
 ### 7. Trace everything; share one memo per tick
 
-- Route `cleanup.py`, `audit.py` and `orchestrate.py`'s `run_cmd` glab calls through `greenlight.run()` (or a
-  `diag.span("cmd")`). The incident shows untraced traffic matters.
+- Route `cleanup.py`, `audit.py` (including `same_target` / `forge_refs`) and `orchestrate.py`'s `run_cmd` glab
+  calls through `greenlight.run()` (or a `diag.span("cmd")`). The incident shows untraced traffic matters: at least
+  ~740 calls in its peak minute.
+- Cache `forge_refs` for a few seconds per `(project, iid)`. The dashboard stream calls it every 5 s per mergeable
+  auto-merge MR.
 - Adopt, blocking, cleanup and orchestrate read the scan's rows, or a short-lived per-run cache of `gl()` GETs keyed
   by path, instead of refetching approvals and MRs from seconds earlier.
 - **Saves:** unknown until the untraced calls are traced, which is why this half comes first.
 
 ### 8. Build puck pages from the scanned row
 
-- `dash.py page` checks the layout signature before calling `facts()`, and `mr_facts` takes jobs from `mr_details`
-  when it already has them.
+- Keep `mr_live`, because the page renders it live. Build it from the scanned row plus one jobs call (or cache it for
+  a minute), and have `mr_facts` take jobs from `mr_details` when it already has them. The layout cache isn't the
+  waste.
 - **Saves:** most of `dash.py`'s 1,512 calls.
 
 ### 9. Remember "no MR" for a while
