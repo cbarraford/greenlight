@@ -765,6 +765,62 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     check("core: reply, choose, submit, stale-backend, reset, DWIM error/retry, and stop/queue flows",
           validReplyAnswered && expiredRecorded && staleNoteHit && errToast?.failed == true && retryMsg && queuedWhileBusy && stoppedMsg)
 
+    // 9b. Turns that outlive the app: the "turn" id is kept until the reply, a dropped connection follows the turn again,
+    // a relaunch picks it up (or notes it's gone), and quitting leaves it for the next launch
+    let tid = String(repeating: "ab", count: 16)
+    var follows = 0
+    var followReply: (lines: [String], code: Int32) = ([], 0)
+    var pendingMidTurn = false
+    Core.refollowDelay = 0
+    sshOverride = { remote, h, stdin, onLine, onExit in
+        sshLog.append((remote, h, stdin))
+        if remote.contains("chat.py send") {
+            onLine(#"{"e":"turn","id":"\#(tid)"}"#)
+            onLine(#"{"e":"step","id":"s1","title":"Looking","detail":"","call":""}"#)
+            pendingMidTurn = (ud.dictionary(forKey: mainC.pendingKey)?["id"] as? String) == tid
+            onExit(255)  // the connection drops before the reply
+        } else if remote.contains("chat.py follow") {
+            follows += 1
+            for l in followReply.lines { onLine(l) }
+            onExit(followReply.code)
+        } else { onExit(0) }
+        return Process()
+    }
+    followReply = ([#"{"e":"step","id":"s1","title":"Looking","detail":"","call":""}"#, #"{"e":"done","ok":true,"text":"Back."}"#], 0)
+    mainC.send("A long one")
+    RunLoop.main.run(until: Date() + 0.1)
+    let refollowed = follows == 1 && mainC.msgs.last?.text == "Back." && mainC.msgs.last?.steps.count == 1  // its steps came again, not twice
+        && sshLog.contains { $0.remote.contains("follow '\(tid)'") || $0.remote.contains("follow \(tid)") }
+    let clearedAfterReply = ud.dictionary(forKey: mainC.pendingKey) == nil && mainC.run == nil
+    followReply = ([], 255)  // the host stays away: three tries, then lost
+    follows = 0
+    mainC.send("Another")
+    RunLoop.main.run(until: Date() + 0.2)
+    let gaveUp = follows == 3 && mainC.msgs.last?.text.contains("Lost the connection") == true && mainC.run == nil
+    ud.set(["id": tid, "question": "From before", "watch": false, "checkIn": false], forKey: mainC.pendingKey)
+    followReply = ([#"{"e":"done","ok":true,"text":"Resumed."}"#], 0)
+    mainC.resumeTurn()
+    RunLoop.main.run(until: Date() + 0.05)
+    let resumed = mainC.msgs.last?.text == "Resumed." && ud.dictionary(forKey: mainC.pendingKey) == nil
+    ud.set(["id": tid, "question": "Pruned", "watch": false, "checkIn": false], forKey: mainC.pendingKey)
+    followReply = ([], 3)
+    mainC.resumeTurn()
+    let goneNoted = mainC.msgs.last?.text.contains("is gone") == true && mainC.run == nil && ud.dictionary(forKey: mainC.pendingKey) == nil
+    ud.set(["id": "../../etc", "question": "Bad"], forKey: mainC.pendingKey)
+    follows = 0
+    mainC.resumeTurn()
+    let badIdIgnored = mainC.run == nil && follows == 0
+    ud.removeObject(forKey: mainC.pendingKey)
+    Core.quitting = true  // the app quits mid-turn: nothing is finished, the id stays for the next launch
+    mainC.send("Quitting")
+    let keptForRelaunch = mainC.run != nil && (ud.dictionary(forKey: mainC.pendingKey)?["id"] as? String) == tid
+    Core.quitting = false
+    mainC.clear()
+    let clearForgets = ud.dictionary(forKey: mainC.pendingKey) == nil
+    Core.refollowDelay = 2.0
+    check("core: turns keep their id until the reply, follow again after a drop, resume after a relaunch, and survive quitting",
+          pendingMidTurn && refollowed && clearedAfterReply && gaveUp && resumed && goneNoted && badIdIgnored && keptForRelaunch && clearForgets)
+
     // 10. Additional Core branches: error notes, inbox R/1/Up keys, question(for:) fallback, tailOutbox, voice-on DWIM, checkInTurn
     sshOverride = { remote, h, stdin, onLine, onExit in
         sshLog.append((remote, h, stdin))

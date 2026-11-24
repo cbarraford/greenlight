@@ -1903,41 +1903,65 @@ def main():
     sys.exit(follow(tid))
 
 
+def clear_chat():
+    """Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR."""
+    with scope_lock():
+        with open(os.path.join(DIR, RESETTING), "w") as fh:
+            fh.write("resetting")
+        scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
+            glob.glob(os.path.join(DIR, "session*_scope-*"))
+        for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
+            decisions.forget_chat(chat=(CHAT or "main") + suffix)
+        decisions.forget_chat(chat=CHAT)
+        cancel_running_unlocked()
+        rotate_generation_unlocked()
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(DIR, ACTIVE_TURN))
+        for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
+                                                        glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
+                                                        glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
+            if os.path.exists(os.path.join(DIR, f)):
+                os.remove(os.path.join(DIR, f))
+        attach.clear(DIR)
+        prune_turns(everything=True)  # the old conversation's replies; a turn still stopping keeps its file until it's done
+        os.remove(os.path.join(DIR, RESETTING))
+
+
+def stop_chat():
+    with scope_lock():
+        try:
+            active_path = os.path.join(DIR, ACTIVE_TURN)
+            with open(active_path) as fh:
+                active = json.load(fh)
+            active["cancelled"] = True
+            with open(active_path, "w") as fh:
+                fh.write(json.dumps(active))
+        except (OSError, ValueError):
+            pass
+        cancel_running_unlocked()
+
+
+def send_turn(args, opt):
+    if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
+        os.environ["GREENLIGHT_ONLY"] = opt("--only")
+    text, files = sys.stdin.read(), None
+    if "--attach" in args:
+        try:
+            j = json.loads(text)
+            text, files = str(j.get("text") or ""), j.get("files") or []
+        except (ValueError, AttributeError):
+            return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
+    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
+
+
 def dispatch(args):
     os.makedirs(DIR, exist_ok=True)
     cmd = args[0] if args else "send"
     opt = lambda k: args[i + 1] if k in args and (i := args.index(k)) + 1 < len(args) else None
     if cmd == "new":
-        # Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR.
-        with scope_lock():
-            open(os.path.join(DIR, RESETTING), "w").write("resetting")
-            scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
-                glob.glob(os.path.join(DIR, "session*_scope-*"))
-            for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
-                decisions.forget_chat(chat=(CHAT or "main") + suffix)
-            decisions.forget_chat(chat=CHAT)
-            cancel_running_unlocked()
-            rotate_generation_unlocked()
-            with contextlib.suppress(OSError):
-                os.remove(os.path.join(DIR, ACTIVE_TURN))
-            for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
-                                                            glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
-                                                            glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
-                if os.path.exists(os.path.join(DIR, f)):
-                    os.remove(os.path.join(DIR, f))
-            attach.clear(DIR)
-            prune_turns(everything=True)  # the old conversation's replies; a turn still stopping keeps its file until it's done
-            os.remove(os.path.join(DIR, RESETTING))
+        clear_chat()
     elif cmd == "stop":
-        with scope_lock():
-            try:
-                active_path = os.path.join(DIR, ACTIVE_TURN)
-                active = json.load(open(active_path))
-                active["cancelled"] = True
-                open(active_path, "w").write(json.dumps(active))
-            except (OSError, ValueError):
-                pass
-            cancel_running_unlocked()
+        stop_chat()
     elif cmd == "bg":
         print(json.dumps(background()))
     elif cmd == "bgstop":
@@ -1948,17 +1972,7 @@ def dispatch(args):
         else:
             turn("/compact", opt("--model"), None, compact=True)
     else:
-        if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
-            os.environ["GREENLIGHT_ONLY"] = opt("--only")
-        text, files = sys.stdin.read(), None
-        if "--attach" in args:
-            try:
-                j = json.loads(text)
-                text, files = str(j.get("text") or ""), j.get("files") or []
-            except (ValueError, AttributeError):
-                return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-        turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
-
+        send_turn(args, opt)
 
 if __name__ == "__main__":
     diag.install("chat")

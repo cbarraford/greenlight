@@ -29,7 +29,13 @@ final class Core: ObservableObject {
         }
         questions = (try? JSONDecoder().decode([Question].self, from: Data(contentsOf: questionsURL))) ?? []
         context = ud.integer(forKey: meterKeys.context); window = ud.integer(forKey: meterKeys.window)
+        DispatchQueue.main.async { [weak self] in self?.resumeTurn() }  // a reply that was running when the app quit
     }
+    /// Set when the app quits: its ssh processes end, but their turns go on (chat.py runs each in its own session).
+    static var quitting = false
+    static var refollowDelay = 2.0  // seconds before following a dropped turn again (tests: 0)
+    /// This chat's running turn in UserDefaults, {id, question, watch, checkIn}: kept until its reply, so a relaunch follows it.
+    var pendingKey: String { session == 0 ? "pendingTurn" : "pendingTurn-\(session)" }
     /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
     var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(shellPath(greenlightHome))/chat-\(session) \(py)/chat.py" }
@@ -816,6 +822,7 @@ final class Core: ObservableObject {
         for t in toasts where t.pending { toastListeners.removeValue(forKey: t.id) }
         toasts.removeAll { $0.pending }
         if run != nil { run?.files = []; stop(); run = nil }  // discard late events from the cleared conversation
+        ud.removeObject(forKey: pendingKey)
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
         clearing += 1
@@ -850,8 +857,52 @@ final class Core: ObservableObject {
         if !r.watch && !r.checkIn { voice.began(r) }
         proc = ssh(remote, stdin: stdin, onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
             guard let self, self.run === r, !r.gotDone else { return }
-            self.finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
+            self.lost(r, code)
         })
+    }
+
+    /// The turn saved when the app last quit mid-reply: followed from its first event, so its steps and reply come back.
+    func resumeTurn() {
+        guard run == nil, let p = ud.dictionary(forKey: pendingKey), let id = p["id"] as? String,
+              id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }
+        let r = Run(p["question"] as? String ?? "The reply in progress")
+        r.watch = p["watch"] as? Bool ?? false; r.checkIn = p["checkIn"] as? Bool ?? false
+        r.turnId = id; r.model = model
+        run = r
+        log(.chief, name, .status, "picking up the reply that was running when Greenlight quit")
+        followTurn(r, id)
+    }
+
+    /// `chat.py follow`: the turn's events from its first. A Run followed again starts over, as they all come again.
+    private func followTurn(_ r: Run, _ id: String) {
+        r.steps = []; r.live = ""; r.plan = nil; r.call = ""
+        proc = ssh("\(chief) follow \(shellQuote(id))", onLine: { [weak self] l in self?.event(l, r) }, onExit: { [weak self] code in
+            guard let self, self.run === r, !r.gotDone else { return }
+            if code == 3 {  // pruned, or cleared from another window: nothing to wait for
+                ud.removeObject(forKey: self.pendingKey)
+                self.run = nil; self.tps = 0
+                self.msgs.append(Msg(.note, "The reply that was running when Greenlight quit is gone."))
+                self.next()
+                return
+            }
+            self.lost(r, code)
+        })
+    }
+
+    /// The connection ended before the reply. Quitting: the turn goes on, and the next launch follows it. A dropped connection:
+    /// the turn still runs on the host, so follow it again (three tries, refollowDelay apart) before calling it lost.
+    private func lost(_ r: Run, _ code: Int32) {
+        if Core.quitting { return }
+        if let id = r.turnId, !r.stopping, r.refollows < 3 {
+            r.refollows += 1
+            r.status = "Reconnecting to \(host)"
+            DispatchQueue.main.asyncAfter(deadline: .now() + Core.refollowDelay) { [weak self] in
+                guard let self, self.run === r, !r.gotDone else { return }
+                self.followTurn(r, id)
+            }
+            return
+        }
+        finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
     }
 
     private func event(_ l: String, _ r: Run) {
@@ -859,6 +910,10 @@ final class Core: ObservableObject {
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let e = j["e"] as? String else { return }
         connected = true
         switch e {
+        case "turn":
+            guard let id = j["id"] as? String else { break }
+            r.turnId = id
+            ud.set(["id": id, "question": r.question, "watch": r.watch, "checkIn": r.checkIn], forKey: pendingKey)
         case "start":
             let engine = j["engine"] as? String ?? "claude"
             let selected = engine == "agy" ? j["model"] as? String : engine
@@ -909,6 +964,7 @@ final class Core: ObservableObject {
     }
 
     private func finish(_ r: Run, ok: Bool, text: String) {
+        ud.removeObject(forKey: pendingKey)
         log(.chief, name, ok ? .status : .failed, (ok ? "replied in \(fmt(Date().timeIntervalSince(r.start)))" : "ended: \(text)")
             + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace

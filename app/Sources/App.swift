@@ -2351,6 +2351,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
     func applicationWillTerminate(_ n: Notification) {
+        Core.quitting = true  // the chats' ssh processes end below; their turns go on and are followed at the next launch
         tunnels.values.forEach { $0.terminate() }
         dashProc?.terminate(); dashProc = nil
         greenlight.outboxProc?.terminate(); greenlight.outboxProc = nil

@@ -184,6 +184,8 @@ final class Run: ObservableObject {
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
     var model = ""  // the --model it was sent with: the picker can change mid-turn
     var open: URL?  // an [open: URL] from a reply block a later one replaced (text_reset)
+    var turnId: String?  // chat.py's id for it (its "turn" event): followed again after a dropped connection or a relaunch
+    var refollows = 0  // times followed again since the connection dropped
     init(_ q: String) { question = q }
 }
 
