@@ -22,31 +22,17 @@ Floor badges (`Floors.levels`, `app/Greenlight.swift`):
 | B1 · BASEMENT | B1 | `#FFB340` | `#1C1C1F` | `#FFB340` |
 | B2 · PIPE | B2 | `#A8661C` | `#FFF3E0` | `#E08A2E` |
 
-## App icons (`icons/`)
+## App icon (`icon/`, built into `icons/`)
 
-You edit the SVGs. The `.icns` files are built from them (`rsvg-convert` → `iconutil`), and `app/build.sh` copies them into the app.
+**Aperture:** six deep-green blades open on a hexagon of light. The layers, the light-appearance variant, the 16-grid
+mark and the Icon Composer settings are in [`icon/README.md`](icon/README.md). `brand/icon/generate.py` draws them.
 
 | File | Use |
 |---|---|
-| `orb.svg` → `Orb.icns` | The bundle icon (Finder) and the default Dock tile. A glowing green orb on a dark green squircle. |
-| `merge-light.svg` → `MergeLight.icns` | Dock tile option: the orb on top of a merge graph. |
-| `three-floors.svg` → `ThreeFloors.icns` | Dock tile option: a traffic-light housing with the green orb lit, plus faint amber (Basement) and copper (Pipe) lights. |
+| `icons/Greenlight.icns` | The bundle icon (`CFBundleIconFile`) and the Dock tile. Built by `scripts/build_icons.sh` on a Mac. |
+| `icons/GreenlightDebug.icns` | The same icon with a neutral-grey light: a dev copy's bundle icon, and Settings › General › Dock icon › Debug. |
 
-Settings › General › Dock icon switches the Dock tile of the running app; Finder always shows the Orb. The menubar item is SF Symbol `star`, which turns into `star.fill` while agents are working.
-
-All three icons use the same gradients:
-
-| Part | Stops |
-|---|---|
-| Tile (`bg`) | `#1F3A28` → `#0B160F` |
-| Tile, Merge Light (`bg2`) | `#2E6F43` → `#173A23` |
-| Orb (radial) | `#E4FFEC` · `#7DF0A8` · `#2FC36C` · `#17864A` |
-| Glow (radial) | `#5CF59A` at 55% → `#3DDC84` at 16% → 0 |
-| Housing | `#16241A` → `#070D09` |
-| Tile edge | white at 8–10%, 2px |
-| Specular | white ellipse at 50–55%, rotated −28° |
-
-Squircle: an 824 tile inside a 1024 canvas, radius 185.
+`app/build.sh` copies both into the app. Orb, MergeLight and ThreeFloors are retired.
 
 ## Color
 

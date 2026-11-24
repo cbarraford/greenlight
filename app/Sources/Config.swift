@@ -257,6 +257,20 @@ var bubble: Color { Color(DS.Palette.elementRest, dark: isDark) }
 /// `.system(size:)` at the chosen size; `design: .monospaced` uses the code font. Interface chrome stays in the system font.
 /// The box an icon gets beside text of `pt` points (brand/DESIGN.md §9): about a quarter more than the type size, as SF Symbols
 /// sit. It follows Settings › Text size like sys(), unless `scaled` is false.
+/// Greenlight's mark (brand/icon/mark*.svg, bundled by build.sh) as template images: lit (blades and light), the blades
+/// alone (idle), or the light alone (to colour it separately, as the orb does). Never coloured in the menu bar.
+enum GreenlightMark {
+    enum Part: String { case lit = "GreenlightMark", idle = "GreenlightMarkIdle", light = "GreenlightMarkLight" }
+    static func image(_ part: Part, size: CGFloat = 16) -> NSImage {
+        let img = Bundle.main.url(forResource: part.rawValue, withExtension: "svg").flatMap { NSImage(contentsOf: $0) }
+            ?? DSIcon.image("hex", size: size)  // a build without the marks (swiftc alone): the board's cell stands in
+        img.isTemplate = true
+        img.size = NSSize(width: size, height: size)
+        img.accessibilityDescription = "Greenlight"
+        return img
+    }
+}
+
 func iconSize(_ pt: CGFloat, scaled: Bool = true) -> CGFloat { (pt * (scaled ? fontSize / 13 : 1) * 1.25).rounded() }
 
 func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default, face: String = "System") -> Font {

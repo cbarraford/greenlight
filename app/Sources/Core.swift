@@ -256,8 +256,11 @@ final class Core: ObservableObject {
     }
     @Published var sidebarSlide = ud.object(forKey: "sidebarSlide") as? Double ?? 0.25 { didSet { ud.set(sidebarSlide, forKey: "sidebarSlide") } }  // seconds; 0: no slide
     // (The orb's up-face choice, Matte or Traffic light, is retired with those faces: §8.4.)
-    @Published var dockIcon = ud.string(forKey: "dockIcon") ?? "Orb" { didSet { ud.set(dockIcon, forKey: "dockIcon"); showDockIcon() } }  // Orb (the bundle's), MergeLight, ThreeFloors: brand/icons/*.icns
-    func showDockIcon() { NSApp.applicationIconImage = dockIcon == "Orb" ? nil : Bundle.main.image(forResource: dockIcon) }  // ponytail: the running app's Dock tile only; Finder keeps the bundle's Orb
+    @Published var dockIcon = { () -> String in  // Default or Debug (the same icon, its light grey); a stored Orb/MergeLight/ThreeFloors falls back
+        let v = ud.string(forKey: "dockIcon") ?? ""
+        return ["Default", "Debug"].contains(v) ? v : devDir == nil ? "Default" : "Debug"  // a dev copy starts on Debug
+    }() { didSet { ud.set(dockIcon, forKey: "dockIcon"); showDockIcon() } }
+    func showDockIcon() { NSApp.applicationIconImage = Bundle.main.image(forResource: dockIcon == "Debug" ? "GreenlightDebug" : "Greenlight") }  // the running app's Dock tile; Finder shows the bundle's
     @Published var vim = ud.bool(forKey: "vim") { didSet { ud.set(vim, forKey: "vim"); vimKeys.mode = vimStart } }
     @Published var vimStart = ud.string(forKey: "vimStart") ?? "insert" { didSet { ud.set(vimStart, forKey: "vimStart") } }
     @Published var vimMode = ud.string(forKey: "vimStart") ?? "insert"
