@@ -835,22 +835,18 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
 // MARK: voice mode's status line (#176): what Chief is doing, on the stage's strip, while it says nothing. Never spoken.
 
 /// Seconds of a running turn with nothing said before the strip gets a fresh line (and again after each line).
-let statusQuiet = 22.0
+let statusQuiet = 20.0  // plus Haiku's second or two: a line about every 20-25 s
 /// Words a status line keeps at most: it's a glance, not a report.
 let statusWords = 12
 
-/// What Chief has been doing, newest last, for the status line's model: its last few steps (title, detail, whether each is
-/// still going), its plan, and what it says it's on now (a thinking phrase before any step). Empty when there's nothing to go on.
+/// What Chief has been doing, newest last, for the status line's model: its last few steps' titles (never their details: a shell
+/// step's is the whole command line, with whatever tokens, hosts or paths it holds) and whether each is still going, its plan, and
+/// a thinking phrase. Not the connecting status either (a host name). Empty when there's nothing to go on.
 func statusActivity(_ r: Run) -> String {
-    let steps = r.steps.suffix(6).map { s -> String in
-        let state = s.ok == nil ? "running" : s.ok == true ? "done" : "failed"
-        let detail = s.detail.isEmpty ? "" : ": " + String(s.detail.prefix(160))
-        return "- \(state) · \(String(s.title.prefix(120)))\(detail)"
-    }
-    let now = r.status.trimmingCharacters(in: .whitespacesAndNewlines)
-    var out = steps
+    var out = r.steps.suffix(6).map { s in "- \(s.ok == nil ? "running" : s.ok == true ? "done" : "failed") · \(String(s.title.prefix(120)))" }
     if let p = r.plan, p.total > 0 { out.append("Plan: \(p.done) of \(p.total) done" + (p.title.isEmpty ? "" : ", now: \(p.title)")) }
-    if !now.isEmpty, now != r.steps.last?.title { out.append("Status: \(String(now.prefix(120)))") }
+    let now = r.status.trimmingCharacters(in: .whitespacesAndNewlines)
+    if r.thinking, !now.isEmpty { out.append("Status: \(String(now.prefix(120)))") }
     return out.joined(separator: "\n")
 }
 
@@ -867,10 +863,13 @@ func statusLine(_ raw: String, shown: [String]) -> String? {
     return shown.contains { key($0) == key(t) } ? nil : t
 }
 
-/// The strip's line when the model can't write one (no key, an error): the newest step still going, else the newest one, as it's
-/// titled; before any step, the turn's own status (a thinking phrase).
+/// The strip's line when the model can't write one (no key, an error): the newest step still going ("Ran gh pr list" as "Running
+/// gh pr list"), else the newest one as it's titled; before any step, the turn's own status (a thinking phrase).
 func statusFallback(_ r: Run, shown: [String]) -> String? {
-    statusLine((r.steps.last { $0.ok == nil } ?? r.steps.last)?.title ?? r.status, shown: shown)
+    if let s = r.steps.last(where: { $0.ok == nil }) {
+        return statusLine(s.title.hasPrefix("Ran ") ? "Running " + s.title.dropFirst(4) : s.title, shown: shown)
+    }
+    return statusLine(r.steps.last?.title ?? r.status, shown: shown)
 }
 
 /// Haiku writes the strip's line from Chief's activity: one short present-tense sentence, nothing it doesn't see, no repeat.

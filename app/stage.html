@@ -159,6 +159,7 @@ ol.life li span{color:var(--dim)}
 #status svg.tone{flex:none;margin:0;color:var(--now);animation:spin .9s linear infinite}  /* the spinner period: the one thing in progress here */
 @keyframes spin{to{transform:rotate(360deg)}}
 body.status #s{padding-bottom:calc(var(--ds-space-24) + var(--ds-space-32))}
+body.status #s.frame,[data-look] body.status #s.frame{height:calc(100% - var(--ds-space-32) - 1px);min-height:0;padding-bottom:0}  /* Chief's own page ends above it */
 [data-look=phosphor] #status{border-top-style:dashed}
 [data-look=phosphor] #status svg.tone{display:none}
 [data-look=phosphor] #status span::before{content:"$ ";color:var(--faint)}

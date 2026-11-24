@@ -183,7 +183,12 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => { stage.status("Reading the logs."); document.documentElement.dataset.look = "phosphor"; });
   assert.equal(await p.isVisible("#status svg.tone"), false);  // Phosphor: a $ prompt instead of the glyph
   assert.equal(await p.$eval("#status span", e => getComputedStyle(e, "::before").content), '"$ "');
-  await p.evaluate(() => { delete document.documentElement.dataset.look; stage.status(""); });
+  await p.evaluate(() => { stage.html("<p>page</p>"); });  // Chief's own page ends above the strip, in every look
+  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  await p.evaluate(() => { delete document.documentElement.dataset.look; });
+  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  await p.evaluate(() => stage.status(""));
+  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom >= innerHeight - 0.5));  // and fills it again without one
   // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
   await p.setViewportSize({ width: 340, height: 320 });
   await p.evaluate(() => stage.text({ lead: "Long items.",
