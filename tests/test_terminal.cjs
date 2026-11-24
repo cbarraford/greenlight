@@ -811,13 +811,13 @@ test("workspace card on hover: stays over the sidebar and the card, closes over 
   const hidden = () => page.$eval("#card", c => c.hidden), box = s => page.$eval(s, e => { const b = e.getBoundingClientRect(); return {x: b.x, y: b.y, w: b.width, h: b.height} });
   const row = await page.locator(".ws", {hasText: "fix-login"}).first().boundingBox(), on = [row.x + 20, row.y + row.height / 2];
   const st = await box("#stage"), term = [st.x + st.w - 80, st.y + st.h - 40], tree = await box("#tree"), gap = [tree.x + 30, tree.y + tree.h - 8];
-  const open = async () => { await page.mouse.move(...on, {steps: 4}); await page.waitForTimeout(450); assert.equal(await hidden(), false, "resting on a row opens its card") };
+  let pt0 = on;  // where glide starts from
+  const open = async () => { await page.mouse.move(...on, {steps: 4}); pt0 = on; await page.waitForTimeout(450); assert.equal(await hidden(), false, "resting on a row opens its card") };
   // every step of a move is watched, so a close-and-reopen on the way shows up
   const glide = async (to, steps = 10) => { const seen = []; for (let i = 1; i <= steps; i++) { await page.mouse.move(pt0[0] + (to[0] - pt0[0]) * i / steps, pt0[1] + (to[1] - pt0[1]) * i / steps); seen.push(await hidden()) } pt0 = to; return seen };
-  let pt0 = on;
   await open(); await page.mouse.move(...term, {steps: 8}); await page.waitForTimeout(350);
   assert.equal(await hidden(), true, "row → terminal: the card closes");
-  await open(); pt0 = on; const c = await box("#card"), inCard = [c.x + 40, c.y + 40];
+  await open(); const c = await box("#card"), inCard = [c.x + 40, c.y + 40];
   assert.deepEqual(await glide(inCard), Array(10).fill(false), "row → card: open the whole way");
   await page.waitForTimeout(350); assert.equal(await hidden(), false, "resting in the card keeps it");
   assert.deepEqual(await glide(on), Array(10).fill(false), "card → row: still open");
@@ -827,7 +827,7 @@ test("workspace card on hover: stays over the sidebar and the card, closes over 
   assert.equal(await hidden(), true, "card → terminal: the card closes");
   await open(); await page.mouse.move(st.x + 30, st.y + st.h - 40); await page.mouse.move(...gap); await page.waitForTimeout(350);
   assert.equal(await hidden(), false, "a brush over the terminal and back onto the sidebar doesn't close it");
-  await page.mouse.move(...term, {steps: 4}); await page.waitForTimeout(350); assert.equal(await hidden(), true);
+  await page.mouse.move(...term, {steps: 4}); await page.waitForTimeout(350); assert.equal(await hidden(), true, "sidebar gap → terminal: the card closes");
   await page.locator(".ws", {hasText: "fix-login"}).first().click({button: "right"}); await page.mouse.move(...term, {steps: 4}); await page.waitForTimeout(350);
   assert.equal(await hidden(), false, "a card you opened (right-click) stays until Esc or a click outside");
 });

@@ -1256,7 +1256,7 @@ const unhover = () => { clearTimeout(hoverT); if (cardHover && !$("card").hidden
 addEventListener("mouseover", e => {
   if (e.target.closest("#card, #menu")) return clearTimeout(hoverT);
   if (!e.target.closest("#side, #sdv")) { hoverRow = null; return unhover() }  // the terminal, its tabs: not where the card belongs
-  const r = e.target.closest(".ws"); if (r === hoverRow) return r || clearTimeout(hoverT);  // back on the sidebar's gaps: a pending close is off
+  const r = e.target.closest(".ws"); if (r && r === hoverRow) return;  // on a gap it goes on: clearing hoverT drops a pending close
   hoverRow = r; clearTimeout(hoverT);
   if (r?._ws && r._ws === cardWs && !$("card").hidden) return;  // already showing (or the sidebar re-rendered under the pointer)
   const c = $("card"), quiet = !e.buttons && $("menu").hidden && $("dlg").hidden && $("pal").hidden && (c.hidden || cardHover);
