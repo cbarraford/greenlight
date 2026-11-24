@@ -1735,20 +1735,25 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         "set -g default-terminal tmux-256color", "set -s 'terminal-features[90]' 'xterm-256color:RGB'", "set -g allow-passthrough on",
         "set -g history-limit 50000", "set -s 'terminal-overrides[90]' '*:smcup@:rmcup@'",  // no alternate screen: slow output also lands in the page's own scrollback
         // tmux draws screens, not lines: a fast burst reaches the page as its last screenful, so the history is tmux's. The page's
-        // wheel sends SGR wheel events: copy-mode (-e: out again at the bottom), a line each; ⌃⌥⇧-wheel down leaves copy-mode
-        // before a keystroke, ⌃⌥⇧-wheel up is ⌘K's clear-history. ghostty-web sends no other mouse events, so clicks stay the page's.
+        // wheel sends SGR wheel events (after paneCmd's tmuxMark): copy-mode (-e: out again at the bottom), a line each; ⌃⌥⇧-wheel
+        // down leaves copy-mode before a keystroke, ⌃⌥⇧-wheel up is ⌘K's clear-history. ghostty-web sends no other mouse events, so clicks stay the page's.
         "set -g mouse on", "bind -T copy-mode WheelUpPane send -X scroll-up", "bind -T copy-mode WheelDownPane send -X scroll-down",
         "bind -T copy-mode-vi WheelUpPane send -X scroll-up", "bind -T copy-mode-vi WheelDownPane send -X scroll-down",
-        "bind -T copy-mode C-M-S-WheelDownPane send -X cancel", "bind -T copy-mode-vi C-M-S-WheelDownPane send -X cancel",
+        // ⌃⌥⇧ in the root table: copy-mode falls back to it, and an app that asked for the mouse never sees them
         "bind -n C-M-S-WheelDownPane if -F '#{pane_in_mode}' 'send -X cancel'", "bind -n C-M-S-WheelUpPane clear-history",
+        // a pane keeps copy-mode across a detach (quit, reload): a reattach leaves it, as the new page doesn't know to
+        "set-hook -g client-attached 'if -F \"#{pane_in_mode}\" \"send -X cancel\"'",
         // the alternate screen (less, man) without the mouse gets arrow keys, as Ghostty's alternate scroll; an app that asked for the mouse, its events
         "bind -n WheelUpPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Up\" \"copy-mode -e\"'",
         "bind -n WheelDownPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Down\"'"]
     // ponytail: the two lists are set at a fixed index, as an append (-as) grew them on every attach
     static var tmux: String { "tmux -L \(shellQuote(tmuxSocketName)) -f /dev/null" }
+    /// What a pane prints just before it runs tmux: the page sends tmux's wheel events (terminal.html `wheel()`) only after it.
+    static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
     func paneCmd(session: String, cwd: String, on host: String) -> String {
-        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || exec $SHELL -l; exec \(App.tmux) start-server \\; "
+        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || exec $SHELL -l; "
+            + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + App.tmuxOpts.joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster

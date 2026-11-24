@@ -32,16 +32,20 @@ def tmux_opts() -> list[str]:
 
 
 class Pane:
-    def __init__(self, editor: str):
-        self.sock = f"gl-scroll-test-{os.getpid()}-{editor}"
+    def __init__(self, editor: str, sock: str = ""):
+        self.sock = sock or f"gl-scroll-test-{os.getpid()}-{editor}"
         cmd = f"exec tmux -L {self.sock} -f /dev/null start-server \\; " + " \\; ".join(tmux_opts()) + " \\; new-session -A -s s1"
         pid, self.fd = pty.fork()
         if pid == 0:
             os.environ.update(TERM="xterm-256color", PS1="$ ", SHELL="/bin/sh", EDITOR=editor, ENV="/dev/null")
             os.execvp("sh", ["sh", "-c", cmd])
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-        self.out = b""
-        self.pump(1.5)
+        try:
+            fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            self.out = b""
+            self.pump(1.5)
+        except BaseException:
+            self.close()
+            raise
 
     def pump(self, secs: float) -> None:
         end = time.time() + secs
@@ -63,8 +67,10 @@ class Pane:
         return self.tmux("display", "-p", "-t", "s1", f)
 
     def close(self) -> None:
-        subprocess.run(["tmux", "-L", self.sock, "kill-server"], capture_output=True, timeout=10)
-        os.close(self.fd)
+        try:
+            subprocess.run(["tmux", "-L", self.sock, "kill-server"], capture_output=True, timeout=10)
+        finally:
+            os.close(self.fd)
 
 
 @pytest.fixture(params=["nano", "vim"])  # vim in $EDITOR: tmux's copy-mode-vi table
@@ -112,3 +118,25 @@ def test_the_alternate_screen_gets_arrow_keys(pane, tmp_path):
     assert pane.fmt("#{pane_in_mode}") == "0", "no copy-mode on the alternate screen"
     pane.send(b"\r\x04", 0.8)
     assert re.search(r"033\s+\[\s+A", got.read_text()), "the wheel arrived as ↑"
+
+
+def test_a_reattach_leaves_copy_mode(pane):
+    pane.send(b"seq 1 100\r", 1.0)
+    pane.send(UP * 3)
+    assert pane.fmt("#{pane_in_mode}") == "1"
+    pane.tmux("detach-client", "-s", "s1")  # the app quits or reloads: the session lives on, still in copy-mode
+    pane.pump(0.5)
+    os.close(pane.fd)
+    again = Pane("nano", pane.sock)  # the next launch: new-session -A, and a page that sent no wheel up
+    pane.fd = again.fd
+    assert pane.fmt("#{pane_in_mode}") == "0"
+    again.send(b"echo BACK\r", 0.8)
+    assert "BACK" in pane.tmux("capture-pane", "-p", "-t", "s1").splitlines(), "the first keys reach the shell"
+
+
+def test_the_page_and_the_app_agree_on_the_tmux_mark():
+    swift = re.search(r'static let tmuxMark = "(.*?)"\n', (ROOT / "app/Sources/App.swift").read_text()).group(1)
+    page = re.search(r'const TMUX_MARK = "(.*?)";', (ROOT / "app/terminal.html").read_text()).group(1)
+    printed = swift.replace("\\\\", "\\").replace("\\033", "\x1b").replace("\\007", "\x07")  # printf's escapes
+    assert printed == page.replace("\\x1b", "\x1b").replace("\\x07", "\x07")
+    assert "printf '\\(App.tmuxMark)'; exec \\(App.tmux)" in (ROOT / "app/Sources/App.swift").read_text(), "printed just before tmux"

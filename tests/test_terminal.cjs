@@ -927,7 +927,7 @@ test("the wheel goes to tmux's history when the app asks for the mouse; typing a
     h.querySelector("canvas").dispatchEvent(new WheelEvent("wheel", {deltaY: dy, deltaMode: 1, shiftKey: shift, clientX: r.left + 5, clientY: r.top + 5, bubbles: true, cancelable: true})) }, [dy, shift]);
   await feed(Array.from({length: 60}, (_, i) => `line ${i}\r\n`).join(""));
   await wheel(-3); assert.deepEqual(await ins(), [], "no mouse asked for: ghostty-web scrolls its own, nothing to the pty");
-  await feed("\x1b[?1000h\x1b[?1002h\x1b[?1006h");  // tmux's mouse on
+  await feed("\x1b]6973;greenlight-tmux\x07\x1b[?1000h\x1b[?1002h\x1b[?1006h");  // paneCmd's mark, then tmux's mouse on
   await wheel(-3); assert.deepEqual(await ins(), ["\x1b[<64;1;1M".repeat(3)], "three lines up: three SGR wheel-up reports");
   await wheel(2); assert.equal((await ins()).pop(), "\x1b[<65;1;1M".repeat(2));
   await wheel(-5, true); assert.equal((await ins()).length, 2, "⇧-wheel: the page's own scrollback");
@@ -936,6 +936,27 @@ test("the wheel goes to tmux's history when the app asks for the mouse; typing a
   await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("y", true)); assert.equal((await ins()).pop(), "y", "once");
   await page.evaluate(() => clearPane(panes.get([...panes.keys()].pop())));
   assert.ok((await ins()).includes("\x1b[<93;1;1M\x1b[<92;1;1M"), "⌘K clears tmux's history too");
+});
+
+test("the wheel without Greenlight's tmux: an app's mouse modes get no ⌃⌥⇧ events; ⌃ scrolls as the plain wheel; ⇧ sideways scrolls the page", async page => {
+  await page.evaluate(() => newTab()); await page.waitForTimeout(300);
+  const id = await page.evaluate(() => [...panes.keys()].pop());
+  const feed = s => page.evaluate(([i, b]) => term.feed(i, b), [id, Buffer.from(s).toString("base64")]);
+  const ins = async () => (await posts(page, "in")).filter(m => m.id === id).map(m => m.d);
+  const wheel = o => page.evaluate(o => { const h = panes.get([...panes.keys()].pop()).box.querySelector(".t"), r = h.getBoundingClientRect();
+    h.querySelector("canvas").dispatchEvent(new WheelEvent("wheel", {deltaMode: 1, clientX: r.left + 5, clientY: r.top + 5, bubbles: true, cancelable: true, ...o})) }, o);
+  await feed(Array.from({length: 80}, (_, i) => `line ${i}\r\n`).join("") + "\x1b[?1000h\x1b[?1006h");  // vim's mouse=a in a plain shell
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.scrollToBottom());
+  await wheel({deltaY: 0, deltaX: -4, shiftKey: true});
+  assert.equal(await page.evaluate(() => panes.get([...panes.keys()].pop()).t.getViewportY()), 4, "⇧ and a mouse's wheel (sideways on macOS): the page's scrollback");
+  await wheel({deltaY: -3});
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("j", true));
+  await page.evaluate(() => clearPane(panes.get([...panes.keys()].pop())));
+  assert.deepEqual(await ins(), ["j", "\x0c"], "no wheel reports, no exit before the key, no ⌘K pair");
+  await feed("\x1b]6973;greenlight-tmux\x07");
+  assert.ok(!(await page.evaluate(() => { const b = panes.get([...panes.keys()].pop()).t.buffer.active; return Array.from({length: b.length}, (_, y) => b.getLine(y)?.translateToString(true)).join("\n") })).includes("greenlight-tmux"), "the mark draws nothing");
+  await wheel({deltaY: -2, ctrlKey: true});
+  assert.equal((await ins()).pop(), "\x1b[<64;1;1M".repeat(2), "⌃-wheel: plain reports, as tmux binds no modified wheel");
 });
 
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
