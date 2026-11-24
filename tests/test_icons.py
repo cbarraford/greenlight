@@ -161,9 +161,15 @@ def test_unused_needs_matching_quotes(repo):
     assert any("'half-quoted' is never used" in e for e in icons.check_usage(icons.load(repo)[0], repo))
 
 
-def test_check_reports_a_broken_spec(repo):
-    (repo / "brand/DESIGN.md").write_text("no front matter here\n")
-    assert any(e.startswith("brand/DESIGN.md:") for e in icons.run_check(repo))
+@pytest.mark.parametrize("spec", ["no front matter here\n", "---\nsemantic: x\n---\n",
+                                  "---\nsemantic:\n  status: x\n---\n"])
+def test_check_reports_a_broken_spec(repo, spec):
+    (repo / "brand/DESIGN.md").write_text(spec)
+    page = repo / "app/terminal.html"
+    page.write_text(page.read_text() + '\n<script>ico("no-such-icon")</script>')
+    errs = icons.run_check(repo)
+    assert any(e.startswith("brand/DESIGN.md:") for e in errs), errs
+    assert any("no icon named 'no-such-icon'" in e for e in errs)  # the rest of the check still runs
 
 
 def test_named_skips_non_names():

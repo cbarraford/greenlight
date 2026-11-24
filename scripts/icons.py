@@ -238,9 +238,13 @@ def named(text):
 
 def reserved(root=ROOT):
     """The status glyphs DESIGN.md's front matter names: part of the set before a surface draws them."""
-    spec = tokens.load(root) if (Path(root) / tokens.SPEC).exists() else {}
-    status = (spec.get("semantic") or {}).get("status") or {}
-    return {s["glyph"] for s in status.values() if isinstance(s, dict) and isinstance(s.get("glyph"), str)}
+    if not (Path(root) / tokens.SPEC).exists():
+        return set()
+    try:
+        status = tokens.load(root)["semantic"]["status"]
+        return {s["glyph"] for s in status.values() if "glyph" in s and isinstance(s["glyph"], str)}
+    except (ValueError, KeyError, TypeError, AttributeError) as e:  # tokens.py check says what's wrong with the spec
+        raise ValueError(f"brand/DESIGN.md: no semantic.status glyphs to read ({type(e).__name__}: {e})") from e
 
 
 def check_usage(icons, root=ROOT):
@@ -254,7 +258,12 @@ def check_usage(icons, root=ROOT):
         for at, name in named(text):
             if name not in icons:
                 errs.append(f"{rel}:{text.count(chr(10), 0, at) + 1}: no icon named '{name}' in brand/icons")
-    everything, keep = "\n".join(texts.values()), reserved(root)
+    try:
+        keep = reserved(root)
+    except ValueError as e:
+        errs.append(str(e))
+        keep = set()
+    everything = "\n".join(texts.values())
     errs.extend(f"brand/DESIGN.md: status glyph '{n}' has no icon in brand/icons" for n in sorted(keep - set(icons)))
     errs.extend(f"brand/icons: '{name}' is never used; delete it or use it" for name in sorted(icons)
                 if name != "question" and name not in keep and not re.search(QUOTED.format(re.escape(name)), everything))
@@ -265,10 +274,7 @@ def run_check(root=ROOT):
     icons, errs = load(root)
     if "question" not in icons:
         errs.append("brand/icons/ui/question.svg is the fallback for unknown names and must exist")
-    try:
-        errs += check_usage(icons, root)
-    except ValueError as e:  # DESIGN.md's front matter doesn't parse; tokens.py check says why
-        errs.append(f"brand/DESIGN.md: {e}")
+    errs += check_usage(icons, root)
     try:
         want_all = expected(icons, root)
     except ValueError as e:
