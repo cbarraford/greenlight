@@ -1161,7 +1161,7 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
 }
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
-  : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only a waiting agent has a question
+  : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only an agent asking (a question, or a chat's reply) has one
 function agentsStrip(docked){  // docked: the overview's strip, where idle crashed workspaces show only in the "N crashed" chip; every live agent shows, whatever its workspace's state
   const busy = p => p.agent.state === "working" || asking(p), all = shown();
   const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, idle ones show only in the chip); hid: the search hides some
@@ -1537,13 +1537,13 @@ function renderPage(main){
     box ? h("section", {class:"needs"}, answerBox(p, true)) : null,
     p.steps && p.steps.length ? lifecycle(p, ml) : null,
     h("div", {class:"cols"},
-      h("div", {class:"l"}, box ? null : agentPanel(p), insights(r)),  // waiting: the answer box above is the agent's panel
+      h("div", {class:"l"}, box ? null : agentPanel(p), insights(r)),  // waiting or chatting: the answer box above is the agent's panel
       h("aside", {class:"r"}, mrFacts(p, ml), activity(r)))));
 }
 
 /* ---------- answering a waiting agent: its question, the answers to offer, a free reply ---------- */
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
-function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.sending) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in, and the agent hasn't gone quiet on it
+function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), and the agent hasn't gone quiet on it
 function chatOn(p){ return chatLive(ui.ask[p.name]) && ["working", "done"].includes(p.agent.state) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
 function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "done" && chatOn(p)) }  // waits on you: a question, or a chat's reply
 function askState(p){
@@ -1568,6 +1568,7 @@ function sendAnswer(name, text, said){  // said: in a chat, the agent's messages
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
   st.sending = true; st.err = null; st.sentText = text; st.pend = said ? [...said, {who: "you", text}] : null;
+  if (said && st.chat) st.chat.tried = true;  // even if it fails, the picker may be gone: the chat stays to try again
   const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
   if (p && !said) act(p, "The answer didn't send");  // a chat keeps the sheet and its hex: the reply comes back here
   post({cmd: "answer", name, text, ...(said && {chat: true})}); render();
@@ -1580,8 +1581,9 @@ function chatThread(st, more){  // the chat so far, newest at the bottom (column
 }
 function answerBox(p, onPage){
   const st = askState(p), a = p.agent, rs = st.resp || {}, open = asking(p), sent = st.sent && open;
-  if (a.state === "working" && chatLive(st) && (st.sent || st.sending)) return h("div", {class:"abox"}, chatThread(st, st.sending ? st.pend : null),  // mid-send, the agent is already on its own "Chat about this" turn
-    h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), st.sending ? "Sending…" : "The agent is replying…"));
+  if (a.state === "working" && chatLive(st)) return h("div", {class:"abox"}, chatThread(st, st.sending ? st.pend : null),  // mid-send, the agent is already on its own "Chat about this" turn
+    st.err && !st.sending ? h("div", {class:"ast err"}, `${st.err}. Your message is kept for when it stops.`)
+      : h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), st.sending ? "Sending…" : "The agent is replying…"));
   if (!open) return h("div", {class:"ast"}, st.sent ? "Sent. The agent is back to work." : p.state === "needs" && (p.action || p.why)  // a request with no question: say what it is
     ? `Nothing to answer: ${short(p.action || p.why, 200).replace(/\.$/, "")}. Open the workspace to act on it.` : "The agent isn't waiting on you any more.");
   const q = String(rs.question || a.last || "").trim(), ag = agentMeta(a.type);

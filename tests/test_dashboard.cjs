@@ -771,6 +771,12 @@ test("answer: mid-send the chat says Sending… while the agent works; a chat yo
   await state("working");  // dash.py is still waiting out the agent's own "Chat about this" turn
   assert.match(await page.textContent(".sheet"), /Sending…/);
   assert.deepEqual(await page.$$eval(".athread p", es => es.map(e => e.textContent).reverse()), ["Which way?", "Why?"], "your message shows while it goes in");
+  await page.evaluate(() => window.mc.answered({name: "plan-a", error: "the agent is still busy; send it again in a moment"}));
+  assert.match(await page.textContent(".sheet"), /still busy.*Your message is kept/, "a failed first message keeps the chat (its picker may be gone)");
+  await state("done");  // its own "Chat about this" turn ended: the chat is there to send it again
+  await page.evaluate(() => window.mc.asked({name: "plan-a", question: "What would you like to clarify?", kind: "prompt", options: []}));
+  assert.equal(await page.inputValue("#areply"), "Why?", "the draft is still there");
+  assert.equal(await page.evaluate(() => asking(puckOf("plan-a"))), true);
   assert.deepEqual(page._errs, []);
 });
 
