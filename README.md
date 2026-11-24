@@ -172,6 +172,7 @@ can't run, nothing is exported. `diag.py bundle` writes the same data to a file 
 | `scripts/harness.py` | the agent CLIs |
 | `scripts/diag.py` | the diagnostic trail: structured, hashed events and the `summary`/`errors`/`tail` queries (see `AGENTS.md`) |
 | `scripts/update.py` | versioned backend installs for over-the-air updates: `install`, a locked `swap` with a smoke test, `rollback`, `adopt` (see `docs/UPDATES.md`) |
+| `scripts/release.py` | builds and signs releases for the `stable` and `main` channels: version, backend tarball, notes, the signed feed (see `docs/RELEASING.md`) |
 | `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
 | `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
 | `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |

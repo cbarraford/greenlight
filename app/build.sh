@@ -71,29 +71,10 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc "$([ -n "$dev" ] && ech
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 mv "$bin" "$app/Contents/MacOS/$name"
 ver=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-python3 - "$app/Contents/Info.plist" "$id" "$name" "$ver" "$dev" <<'PY'
-import plistlib, sys
-out, bid, name, ver, dev = sys.argv[1:]
-pl = {
-    "CFBundleIdentifier": bid,
-    "CFBundleName": name,
-    "CFBundleExecutable": name,
-    "CFBundlePackageType": "APPL",
-    "CFBundleIconFile": "GreenlightDebug" if dev else "Greenlight",  # a dev copy wears the grey-light Debug icon
-    "CFBundleShortVersionString": "1.0",
-    "CFBundleVersion": ver,
-    "NSMicrophoneUsageDescription": "Speak to Greenlight: your voice is transcribed into the message box.",
-    "NSSpeechRecognitionUsageDescription": "Transcribes what you say to Greenlight, on this Mac.",
-}
-if dev:
-    pl["GreenlightDev"] = dev
-with open(out, "wb") as f:
-    plistlib.dump(pl, f)
-PY
-mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Greenlight,GreenlightDebug}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the app icon and its Debug variant (scripts/build_icons.sh builds them from brand/icon/layers)
-for m in mark:GreenlightMark mark-idle:GreenlightMarkIdle mark-light:GreenlightMarkLight; do  # the mark: the menu bar's template (lit while agents work) and the orb's glyph (blades + light)
-  cp "../brand/icon/${m%%:*}.svg" "$app/Contents/Resources/${m#*:}.svg"
-done
+# shellcheck source=app/bundle.sh
+. ./bundle.sh  # the Info.plist and resources a release (release.sh) has too
+gl_plist "$app/Contents/Info.plist" "$id" "$name" 1.0 "$ver" "$dev"
+gl_resources "$app"
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then
   # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match

@@ -18,7 +18,7 @@ lint: ## ruff bug/security lint, static safety checks, design tokens, JS static 
 	$(PY) scripts/tokens.py check
 	$(PY) scripts/icons.py check
 	$(PY) scripts/js_lint.py
-	shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
+	shellcheck -S warning app/build.sh app/bundle.sh app/release.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
 
 check-diff: ## diff-scoped quality ratchet (stricter lint, mypy, function size, Swift evalJS)
 	$(PY) scripts/check_diff_quality.py

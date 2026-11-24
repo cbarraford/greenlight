@@ -1,0 +1,171 @@
+name: release
+# Builds, signs and publishes Greenlight for the update channels (docs/RELEASING.md):
+#   stable: a vX.Y.Z tag on main.   main: every push to main.
+# Each build is its own GitHub Release (stable: vX.Y.Z; main: a prerelease main-<n>-<sha>) holding the app zip and the
+# backend tarball. The rolling prereleases feed-stable and feed-main hold each channel's current signed feed,
+# channel-<name>.json, which the app checks. Only this repo runs it: forks have no secrets and publish nothing.
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:  # rebuild main's current commit for the main channel (from main only)
+
+permissions:
+  contents: write  # releases and their assets
+
+# main: the newest push wins (an older build still running is cancelled). stable: never cancelled, one tag at a time.
+concurrency:
+  group: release-${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'main' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  release:
+    # Stable: every vX.Y.Z tag. Main: only once the repo variable RELEASE_MAIN is true (set it after the secrets, so main's
+    # pushes don't fail while there's no key to sign with).
+    if: github.repository == 'cbarraford/greenlight' && (startsWith(github.ref, 'refs/tags/') || vars.RELEASE_MAIN == 'true')
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 60
+    env:
+      CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'main' }}
+      REF_NAME: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      GREENLIGHT_FEED_KEY: ${{ secrets.GREENLIGHT_FEED_KEY }}
+      HAS_SIGN_ID: ${{ secrets.DEVELOPER_ID_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0  # the commit count is the build number, and stable notes need the previous tag
+
+      - name: Check the tools and what this channel needs
+        run: |
+          for t in python3 gh swiftc lipo codesign ditto; do command -v "$t" >/dev/null || { echo "::error::$t is not on the runner's PATH"; exit 1; }; done
+          if [ "$CHANNEL" = main ] && [ "$REF_NAME" != main ]; then echo "::error::the main channel builds main only, not $REF_NAME"; exit 1; fi
+          if [ "$CHANNEL" = stable ]; then
+            git fetch --quiet origin main
+            git merge-base --is-ancestor HEAD origin/main || { echo "::error::$REF_NAME is not on main: tag a merged commit"; exit 1; }
+            [ "$HAS_SIGN_ID" = true ] && [ "$HAS_NOTARY" = true ] || { echo "::error::a stable release must be Developer ID signed and notarized: set DEVELOPER_ID_P12 and NOTARY_KEY_P8"; exit 1; }
+          fi
+          [ -n "$GREENLIGHT_FEED_KEY" ] || { echo "::error::GREENLIGHT_FEED_KEY is not set: nothing can be published (see docs/RELEASING.md)"; exit 1; }
+
+      - name: Version
+        id: v
+        run: |
+          python3 scripts/release.py version --channel "$CHANNEL" --ref "$REF_NAME" > "$RUNNER_TEMP/version.json"
+          python3 - "$RUNNER_TEMP/version.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          v = json.load(open(sys.argv[1]))
+          for k in ("version", "short", "build", "commit", "tag"):
+              print(f"{k}={v[k]}")
+          PY
+          cat "$RUNNER_TEMP/version.json"
+
+      - name: Backend tarball
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: python3 scripts/release.py backend --version "$VER" --out "$RUNNER_TEMP/out"
+
+      - name: Signing identity (a throwaway keychain)
+        if: env.HAS_SIGN_ID == 'true'
+        env:
+          P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: |
+          kc="$RUNNER_TEMP/release.keychain-db" pass=$(openssl rand -hex 24)
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          (umask 077; printf %s "$P12" | base64 --decode > "$RUNNER_TEMP/id.p12")
+          security import "$RUNNER_TEMP/id.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/id.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$kc" >/dev/null
+          kcs=(); while IFS= read -r l; do l=${l#*\"}; kcs+=("${l%\"}"); done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$kc" "${kcs[@]}"  # codesign only looks in keychains on the search list
+          id=$(security find-identity -v -p codesigning "$kc" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+          [ -n "$id" ] || { echo "::error::DEVELOPER_ID_P12 holds no Developer ID Application identity"; exit 1; }
+          { echo "GREENLIGHT_SIGN_ID=$id"; echo "GREENLIGHT_KEYCHAIN=$kc"; } >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_P8" ]; then
+            (umask 077; printf %s "$NOTARY_P8" > "$RUNNER_TEMP/notary.p8")
+            echo "GREENLIGHT_NOTARY_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build, sign and zip the app
+        id: app
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          SHORT: ${{ steps.v.outputs.short }}
+          BUILD: ${{ steps.v.outputs.build }}
+          GREENLIGHT_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          GREENLIGHT_NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          app/release.sh "$VER" "$SHORT" "$BUILD" "$RUNNER_TEMP/out/greenlight-backend-$VER.tar.gz" "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/app.json"
+          python3 - "$RUNNER_TEMP/app.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          a = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])
+          print(f"zip={a['zip']}\nsigning={a['signing']}\nnotarized={str(a['notarized']).lower()}")
+          PY
+
+      - name: Notes and the signed feed
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+          TAG: ${{ steps.v.outputs.tag }}
+          ZIP: ${{ steps.app.outputs.zip }}
+          SIGNING: ${{ steps.app.outputs.signing }}
+          NOTARIZED: ${{ steps.app.outputs.notarized }}
+        run: |
+          out="$RUNNER_TEMP/out" notarized=()
+          if [ "$NOTARIZED" = true ]; then notarized=(--notarized); fi
+          python3 scripts/release.py notes --channel "$CHANNEL" --ref "$REF_NAME" --repo "$REPO" |
+            python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["notes"])' > "$out/notes.md"
+          python3 scripts/release.py feed --channel "$CHANNEL" --version "$VER" --build "$BUILD" --commit "$COMMIT" \
+            --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz" --signing "$SIGNING" "${notarized[@]}" --notes "$out/notes.md" \
+            --base-url "https://github.com/$REPO/releases/download/$TAG" --out "$out/channel-$CHANNEL.json"
+          # The feed must check out with the key the app has (app/feed-key.pub), or nothing is published
+          if [ -f app/feed-key.pub ]; then pub=$(cat app/feed-key.pub); else
+            echo "::warning::app/feed-key.pub isn't committed: checking with the secret's own public half"
+            pub=$(python3 scripts/release.py pubkey | python3 -c 'import json,sys; print(json.load(sys.stdin)["public"])'); fi
+          python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$pub" --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz"
+
+      - name: Publish this build
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+          TAG: ${{ steps.v.outputs.tag }}
+          ZIP: ${{ steps.app.outputs.zip }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          files=("$ZIP" "$out/greenlight-backend-$VER.tar.gz" "$out/channel-$CHANNEL.json")
+          if [ "$CHANNEL" = stable ]; then
+            gh release create "$TAG" "${files[@]}" --repo "$REPO" --verify-tag --title "Greenlight $VER" --notes-file "$out/notes.md" --latest
+          else
+            gh release create "$TAG" "${files[@]}" --repo "$REPO" --target "$COMMIT" --title "Greenlight $VER" --notes-file "$out/notes.md" --prerelease --latest=false
+          fi
+
+      - name: Point the channel's feed at it
+        run: |
+          feed="feed-$CHANNEL"
+          gh release view "$feed" --repo "$REPO" >/dev/null 2>&1 ||
+            gh release create "$feed" --repo "$REPO" --target main --prerelease --latest=false --title "Greenlight $CHANNEL channel" \
+              --notes "The $CHANNEL channel's current feed, channel-$CHANNEL.json, which Greenlight checks for updates. Builds are the other releases."
+          gh release upload "$feed" "$RUNNER_TEMP/out/channel-$CHANNEL.json" --repo "$REPO" --clobber
+
+      - name: Keep the 20 newest main builds
+        if: env.CHANNEL == 'main'
+        run: |
+          gh release list --repo "$REPO" --limit 200 --json tagName,createdAt --jq '[.[] | select(.tagName | startswith("main-"))] | sort_by(.createdAt) | reverse | .[20:] | .[].tagName' |
+            while read -r tag; do gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag; done
+
+      - name: Remove the keychain and the notary key
+        if: always()
+        run: |
+          kc="$RUNNER_TEMP/release.keychain-db"
+          if [ -f "$kc" ]; then
+            kcs=(); while IFS= read -r l; do l=${l#*\"}; l=${l%\"}; [ "$l" = "$kc" ] || kcs+=("$l"); done < <(security list-keychains -d user)
+            security list-keychains -d user -s "${kcs[@]}"
+            security delete-keychain "$kc" || true
+          fi
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/id.p12"
