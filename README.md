@@ -171,6 +171,7 @@ can't run, nothing is exported. `diag.py bundle` writes the same data to a file 
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
 | `scripts/diag.py` | the diagnostic trail: structured, hashed events and the `summary`/`errors`/`tail` queries (see `AGENTS.md`) |
+| `scripts/update.py` | versioned backend installs for over-the-air updates: `install`, a locked `swap` with a smoke test, `rollback`, `adopt` (see `docs/UPDATES.md`) |
 | `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
 | `scripts/ade_*.py` | the cmux, herdr and T3 adapters (Orca is native) |
 | `scripts/dash.py`, `scripts/chat.py` | the menubar app's backends |

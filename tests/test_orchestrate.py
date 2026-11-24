@@ -756,7 +756,7 @@ with mock.patch.object(orchestrate.subprocess, "run", return_value=types.SimpleN
 ps = {"worktrees": [{"worktreeId": "id-m", "comment": "", "linkedPR": 1}]}
 greenlight.orca = lambda *a, **kw: ps if a[:2] == ("worktree", "ps") else fake_orca(*a, **kw)
 m = row("m", step="merge", owner="greenlight", action="merge", sha="s1", nxt={"cmd": ["gh", "pr", "merge", "1", "--merge"]})
-checked_cmd = [sys.executable, str(pathlib.Path(greenlight.__file__).with_name("audit.py")), "checked-merge", "github", m["project"], "1", "main", "s1", "base1", "gh", "pr", "merge", "1", "-R", m["project"], "--merge"]
+checked_cmd = [sys.executable, str(pathlib.Path(greenlight.__file__).resolve().with_name("audit.py")), "checked-merge", "github", m["project"], "1", "main", "s1", "base1", "gh", "pr", "merge", "1", "-R", m["project"], "--merge"]
 checked_row = m | {"next": m["next"] | {"cmd": checked_cmd}}
 assert orchestrate.plan([checked_row], {}, judge=False)[0]["do"] == "cmd"
 assert orchestrate.guard_merge(checked_row, checked_cmd)[0] == checked_cmd

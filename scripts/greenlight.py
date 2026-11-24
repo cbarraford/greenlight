@@ -1079,7 +1079,7 @@ def check(step, mr, ws, milestone):
         if st == "mergeable":
             import audit  # every unattended merge goes through the semantic audit, regardless of approval route
             v = audit.merge_verdict(ws, mr)
-            pin = ([sys.executable, str(Path(__file__).with_name("audit.py")), "checked-merge", "github" if github else "gitlab",
+            pin = ([sys.executable, str(Path(__file__).resolve().with_name("audit.py")), "checked-merge", "github" if github else "gitlab",
                     proj, str(iid), base, mr["sha"], v["target_oid"], *merge]
                    if mr.get("sha") and base and v.get("target_oid") else None)
             if v.get("pending"):
