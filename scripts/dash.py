@@ -1413,7 +1413,7 @@ def ask_user(name, model=None, effort="low"):
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
         chat = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True))
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat,
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:],  # said: in a chat, its reply
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != chat]}
     cache = DASH / "ask" / f"{safe(name)}.json"

@@ -583,7 +583,7 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .abox{display:flex;flex-direction:column;gap:var(--sp-2)}
 .abox .pill{flex-shrink:0}
 .abox .shd small{font-size:var(--fs-2);font-weight:400;color:var(--text2)} .abox .shd small .el{color:var(--text3)}
-.abox .shd .afull{display:flex;align-items:center;gap:var(--sp-1);padding:0;border:0;background:none;font:inherit;font-size:var(--fs-2);color:var(--text2)} .abox .shd .afull[aria-expanded=true] .ic{transform:rotate(90deg)}
+.abox .shd .afull,.achat .afull{display:flex;align-items:center;gap:var(--sp-1);padding:0;border:0;background:none;font:inherit;font-size:var(--fs-2);color:var(--text2)} .abox .shd .afull[aria-expanded=true] .ic{transform:rotate(90deg)}
 .abox .afq{font-size:var(--fs-3);line-height:var(--lh-3);font-weight:400;color:var(--text2)}
 .aq{margin:0;font-size:var(--fs-4);line-height:var(--lh-4);font-weight:600;white-space:pre-wrap;max-height:40vh;overflow:auto;max-width:68ch}
 .afull summary{display:flex;align-items:center;gap:var(--sp-1);list-style:none;font-size:var(--fs-2);color:var(--text2)}.afull summary::-webkit-details-marker{display:none}.afull[open] summary .ic{transform:rotate(90deg)} .afull .aq{margin-top:var(--sp-2);font-size:var(--fs-3);line-height:var(--lh-3);font-weight:400;color:var(--text2)}
@@ -617,10 +617,9 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .ast{font-size:var(--fs-2);color:var(--text3)} .ast.err{color:var(--red-ink)}
 /* "Chat about this" (DESIGN.md §10.17): you, a right-aligned element.rest bubble; the agent, full width; both body-copy */
 .athread{display:flex;flex-direction:column-reverse;gap:var(--sp-2);max-height:40vh;overflow:auto;padding-bottom:var(--sp-2);border-bottom:1px solid var(--hair)}
-.athread p{margin:0;font:var(--ds-type-body-copy);letter-spacing:var(--ds-type-body-copy-track);white-space:pre-wrap;max-width:68ch;color:var(--text2)}
-.athread p.you{align-self:flex-end;max-width:min(80%,68ch);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--fill);color:var(--text)}
-.achat{display:flex;align-items:center;gap:var(--sp-3)} .achat .ahint{flex-grow:1;margin:0}
-.achat .afull{display:flex;align-items:center;gap:var(--sp-1);padding:0;border:0;background:none;font:inherit;font-size:var(--fs-2);color:var(--text2);flex-shrink:0}
+.athread p{margin:0;font:var(--ds-type-body-copy);letter-spacing:var(--ds-type-body-copy-track);white-space:pre-wrap;overflow-wrap:anywhere;max-width:var(--ds-layout-measure);color:var(--text2)}
+.athread p.you{align-self:flex-end;max-width:min(80%,var(--ds-layout-measure));padding:var(--sp-2) var(--sp-3);border-radius:var(--ds-radius-md);background:var(--ds-element-rest);color:var(--text)}
+.achat{display:flex;align-items:center;gap:var(--sp-3)} .achat .ahint{flex-grow:1;margin:0} .achat .afull{flex-shrink:0}
 
 /* sheets (DESIGN.md §10.15) */
 .sheetbg{position:fixed;inset:0;z-index:50;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;padding:60px var(--sp-4) var(--sp-4)}
@@ -1546,52 +1545,54 @@ function renderPage(main){
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
 function askState(p){
   const st = ui.ask[p.name], key = [p.agent.state, p.agent.since, p.agent.last].join("|");  // since: an agent can ask again with no text in between
-  if (p.agent.state === "waiting" && (!st || (st.key !== key && !st.loading))) {
-    const chat = st && st.chat && Date.now() - st.chat.at < CHAT_KEEP ? st.chat : null;  // a chat about its question carries on into its next message
+  if (st && st.chat && !["waiting", "working"].includes(p.agent.state)) st.chat = null;  // it stopped without asking again: the chat is over
+  if (p.agent.state === "waiting" && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
+    const chat = st && st.chat && Date.now() - st.chat.at < CHAT_KEEP ? st.chat : null;  // a quick reply carries the chat on; a long stretch of work ends it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
     post({cmd: "ask", name: p.name});
   }
   return ui.ask[p.name] || {};
 }
-/* "Chat about this": a question can be talked over before it's answered. The chat lives in the question's own answer box: the
-   thread (its question, your messages, the agent's replies) above the agent's latest message, then the composer. Over the picker,
-   the first message picks its "Chat about this" (dash.py answer --chat), so the agent hears you want to discuss it, not a refusal.
-   You answer by choosing an option when the agent asks again, or by just saying it; choosing an option ends the chat. */
-const CHAT_KEEP = 30 * 60000, CHAT_MAX = 12;  // ms a chat waits for the agent's next message; entries kept
-function sendAnswer(name, text, q){  // q: the agent message it replies to, when it's part of a chat
+/* "Chat about this": a question can be talked over before it's answered. st.chat = {thread, at} lives in the question's own
+   answer box: the thread (its question, your messages, the agent's replies) above the agent's latest message, then the composer.
+   Every chat message goes as dash.py answer --chat: over a picker that picks its "Chat about this", so the agent hears you want to
+   discuss it, not a refusal; at a prompt it's a plain message. You answer by choosing an option when the agent asks again, or by
+   just saying it. Choosing an option, End chat, the agent stopping, or a long stretch of work (CHAT_KEEP) ends the chat. */
+const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms from a chat message to the agent's next question that still counts as its reply; entries kept
+function sendAnswer(name, text, said){  // said: in a chat, the agent's messages this one replies to
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
-  const chat = q != null && st.resp && st.resp.kind === "menu";  // the first message of a chat, or one more over a picker the agent asked again
-  st.sending = true; st.err = null; st.sentText = text; st.pend = q != null ? [{who: "agent", text: q}, {who: "you", text}] : null;
+  st.sending = true; st.err = null; st.sentText = text; st.pend = said ? [...said, {who: "you", text}] : null;
   const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
-  if (p && q == null) act(p, "The answer didn't send");  // a chat keeps the sheet and its hex: the reply comes back here
-  post(chat ? {cmd: "answer", name, text, chat: true} : {cmd: "answer", name, text}); render();
+  if (p && !said) act(p, "The answer didn't send");  // a chat keeps the sheet and its hex: the reply comes back here
+  post(said ? {cmd: "answer", name, text, chat: true} : {cmd: "answer", name, text}); render();
 }
-function endChat(st){ st.chat = null; st.composing = false; render() }
-function chatThread(st){  // the chat so far, newest at the bottom (column-reverse keeps the scroll there); the agent's latest message follows it
-  const t = arr(st.chat && st.chat.thread);
+function endChat(st){ st.chat = null; render() }
+function chatThread(st, more){  // the chat so far, newest at the bottom (column-reverse keeps the scroll there); the agent's latest message follows it
+  const t = arr(st.chat && st.chat.thread).concat(more || []);
   return t.length ? h("div", {class:"athread", role:"log", "aria-label":"Your chat about this question"},
     t.slice().reverse().map(e => h("p", {class: e.who === "you" ? "you" : "ag"}, short(e.text, 800)))) : null;
 }
 function answerBox(p, onPage){
   const st = askState(p), a = p.agent, rs = st.resp || {}, sent = st.sent && a.state === "waiting";
-  if (a.state !== "waiting" && st.chat && st.sent) return h("div", {class:"abox"}, chatThread(st), h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "The agent is replying…"));
+  if (a.state === "working" && st.chat && st.sent) return h("div", {class:"abox"}, chatThread(st), h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "The agent is replying…"));
   if (a.state !== "waiting") return h("div", {class:"ast"}, st.sent ? "Sent. The agent is back to work." : p.state === "needs" && (p.action || p.why)  // a request with no question: say what it is
     ? `Nothing to answer: ${short(p.action || p.why, 200).replace(/\.$/, "")}. Open the workspace to act on it.` : "The agent isn't waiting on you any more.");
   const q = String(rs.question || a.last || "").trim(), ag = agentMeta(a.type);
-  const opts = arr(rs.options), menu = rs.kind === "menu", talking = !!(st.chat || st.composing), canChat = menu && !!rs.chat && !talking;
+  const opts = arr(rs.options), menu = rs.kind === "menu", talking = !!st.chat, fresh = talking && !st.chat.thread.length, canChat = menu && !!rs.chat && !talking;
+  const said = talking && menu && String(rs.said || "").trim(), more = said && said !== q ? [{who: "agent", text: said}] : [];  // asked again: its reply came before the picker
   const full = q ? (t => t.length > 1600 ? t.slice(0, 1599) + "…" : t)(q.split(/\n\s*\n/).slice(-3).join("\n\n")) : "Waiting on you.";
   const LI = /^\s*(\d+[.)]|[-*•])\s+/, items = full.split("\n").filter(l => LI.test(l));
   const lean = opts.length && !st.loading && items.length === opts.length ? full.split("\n").filter(l => !LI.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim() : full;  // only the list the buttons repeat folds away; any other list stays
   const folds = lean && lean !== full, mins = a.since ? Math.round((Date.now() - since(a.since)) / 60000) : null, val = o => menu ? o.key : o.label;
-  const reply = () => sendAnswer(p.name, st.draft, talking ? q : null), busy = st.sending || sent;
+  const reply = () => sendAnswer(p.name, st.draft, talking ? [...more, {who: "agent", text: q}] : null), busy = st.sending || sent;
   return h("div", {class:"abox"},
     h("div", {class:"shd"}, onPage ? null : statusPill("wait", "Needs you"),  // the page title already carries the pill
       agentAv(a.type, 12, "av sm"),
       h("small", {style:"flex-grow:1"}, `${ag.name} is waiting`, mins != null ? h("span", {class:"el"}, ` · ${mins < 1 ? "just now" : ago(mins / 60) + " ago"}`) : null),
-      st.chat ? h("button", {type:"button", class:"afull", title:"Stop chatting; the next reply is a plain answer", onclick: () => endChat(st)}, "End chat") : null,
+      talking && !fresh ? h("button", {type:"button", class:"afull", title:"Stop chatting and go back to answering", onclick: () => endChat(st)}, "End chat") : null,
       folds ? h("button", {type:"button", class:"afull", "aria-expanded": String(!!ui.afull), "aria-controls":"aq", onclick: () => { ui.afull = !ui.afull; render() }}, icon(ui.afull ? "chevron-down" : "chevron-right", 12), ui.afull ? "Less" : "Full message") : null),
-    chatThread(st),
+    chatThread(st, more),
     folds && ui.afull ? h("p", {class:"aq afq", id:"aq"}, full) : h("p", {class:"aq", id:"aq"}, (lean || full).replace(/\n{2,}/g, "\n").trim()),  // the full message replaces the short one; no blank lines in the short one
     !st.loading && opts.length ? h("span", {class:"ahint", id:"ahint"}, "Choose an option to send it immediately") : null,
     st.loading ? h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "Finding the answers…")
@@ -1599,19 +1600,19 @@ function answerBox(p, onPage){
           return h("button", {class: mine ? "on" : null, disabled: st.sending || sent,  // ponytail: no .first highlight, the data marks no default
             onclick: () => sendAnswer(p.name, val(o))}, h("span", {class:"ot"}, h("b", {class:"lbl"}, o.label), o.detail ? h("span", {class:"det"}, o.detail) : null),
             h("span", {class:"osend"}, mine && st.sending ? "Sending…" : mine ? "Sent" : ["Send", svg(UP)])) })) : null,
-    canChat && !st.loading ? h("div", {class:"achat"}, h("button", {type:"button", class:"btn sm", id:"achat", disabled: busy, title:"Talk the question over with the agent before you answer it",
-      onclick: () => { st.composing = true; render(); const t = document.getElementById("areply"); if (t) t.focus() }}, icon("chat", 13), "Chat about this")) : null,
-    st.composing && !st.chat ? h("div", {class:"achat"}, h("span", {class:"ahint"}, "Ask about it or say what's unclear. The agent replies here, and you answer when you're ready."),
-      h("button", {type:"button", class:"afull", id:"aback", disabled: st.sending, onclick: () => { st.composing = false; render() }}, icon("chevron-left", 12), "Back to the options")) : null,
-    menu && !talking ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); reply() }},
-      h("textarea", {id:"areply", rows:"1", placeholder: talking ? (menu && !st.chat ? "Ask the agent about this question…" : "Keep chatting, or give your answer…") : opts.length ? "Or write a reply…" : "Reply to the agent…",
+    canChat ? h("div", {class:"achat"}, h("button", {type:"button", class:"btn sm", id:"achat", disabled: busy, title:"Talk the question over with the agent before you answer it",
+      onclick: () => { st.chat = {thread: [], at: Date.now()}; render(); const t = document.getElementById("areply"); if (t) t.focus() }}, icon("chat", 13), "Chat about this")) : null,
+    fresh ? h("div", {class:"achat"}, h("span", {class:"ahint"}, "Ask about it or say what's unclear. The agent replies here, and you answer when you're ready."),
+      h("button", {type:"button", class:"afull", id:"aback", disabled: st.sending, onclick: () => endChat(st)}, icon("chevron-left", 12), "Back to the options")) : null,
+    menu && !(talking && rs.chat) ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); reply() }},  // a picker takes text only through its "Chat about this"
+      h("textarea", {id:"areply", rows:"1", placeholder: fresh ? "Ask the agent about this question…" : talking ? "Keep chatting, or give your answer…" : opts.length ? "Or write a reply…" : "Reply to the agent…",
         "aria-label": talking ? "Your message about this question" : opts.length ? "Or write a reply" : "Your reply", title:"Enter sends · Shift+Enter for a new line",
-        disabled: st.sending, oninput: e => { st.draft = e.target.value; grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
+        disabled: busy || (talking && st.loading), oninput: e => { st.draft = e.target.value; grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
         onkeydown: e => {  // as the input did: Enter sends, Shift+Enter is a new line
           if (e.key !== "Enter" || e.isComposing || e.shiftKey || e.altKey || e.ctrlKey) return;
           e.preventDefault(); reply();
         }}, st.draft || ""),
-      h("div", {class:"srow"}, h("button", {type:"submit", class:"btn primary", id:"asend", title:"Enter sends · Shift+Enter for a new line", disabled: st.sending || !String(st.draft || "").trim()}, talking ? "Send" : "Send reply"))),
+      h("div", {class:"srow"}, h("button", {type:"submit", class:"btn primary", id:"asend", title:"Enter sends · Shift+Enter for a new line", disabled: busy || (talking && st.loading) || !String(st.draft || "").trim()}, talking ? "Send" : "Send reply"))),
     st.err ? h("div", {class:"ast err"}, st.err) : st.sending ? h("div", {class:"ast"}, "Sending…") : sent ? h("div", {class:"ast"}, `Sent “${short(st.sentText, 60)}”. Waiting for the agent to pick it up…`) : null);
 }
 /* greenlight's question about this workspace (a bell ping that names it): its options, or a reply field; answering = answering in the bell */
@@ -2631,10 +2632,10 @@ window.mc = {
     st.sending = false; acted(r.name, r.error, null, ui.answering === r.name || ui.page?.name === r.name);  // the sheet or page shows its own error
     if (r.error) st.err = r.error;
     else if (st.pend) {  // a chat: the thread grows, and the sheet stays open for the agent's reply
-      st.sent = true; st.draft = ""; st.composing = false;
+      st.sent = true; st.draft = "";
       st.chat = {thread: arr(st.chat && st.chat.thread).concat(st.pend).slice(-CHAT_MAX), at: Date.now()};
     }
-    else { st.sent = true; st.draft = ""; st.chat = null; st.composing = false; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
+    else { st.sent = true; st.draft = ""; st.chat = null; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
     render();
   },
   transcript(r){ gotOut(r) },  // All output's pages

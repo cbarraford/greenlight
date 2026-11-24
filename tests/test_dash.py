@@ -61,7 +61,7 @@ CHAT = {"draft": "", "tail": ["│ Which way?", "❯ 1. Keep it", "  2. Port it"
 assert dash.chat_key(dash.menu(CHAT["tail"])) == "3" and dash.chat_key(dash.menu(MENU["tail"])) is None
 with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x"}, "t1", CHAT)):
     asked = dash.ask_user("ws")
-    assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"], asked
+    assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"] and asked["said"] == "x", asked  # said: its message before the picker
 hist = Path(tempfile.mkdtemp()) / "h.md"
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
         mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:

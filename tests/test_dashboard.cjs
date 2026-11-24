@@ -721,19 +721,34 @@ test("answer: Chat about this opens a chat in the answer box, keeps the sheet op
   assert.match(await page.textContent("#aq"), /double the review/);
   await page.fill("#areply", "And the tests?");
   await page.click("#asend");
-  assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "And the tests?"}, "at its prompt a message is just a message");
+  assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "And the tests?", chat: true}, "a chat message at its prompt (dash.py sends it as a plain message)");
   await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
   assert.equal(await page.$$eval(".athread p", es => es.length), 4);
-  // it asks again with its picker: choosing an option answers it and ends the chat
-  await page.evaluate(s => { s.pucks[0].agent.last = "Which way?"; s.pucks[0].agent.since += 2000; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
-  await page.evaluate(m => window.mc.asked(m), MENU);
+  assert.equal(await page.isDisabled("#areply"), true, "no second message before the agent picks up the first");
+  // it replies, then asks again with its picker: its reply shows above the question; choosing an option answers it and ends the chat
+  await page.evaluate(s => { s.pucks[0].agent.last = "Tests stay as they are."; s.pucks[0].agent.since += 2000; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
+  assert.equal(await page.isDisabled("#areply"), true, "in a chat, the composer waits to know whether a picker is up");
+  await page.evaluate(m => window.mc.asked({...m, said: "Tests stay as they are."}), MENU);
   assert.equal(await page.$("#achat"), null, "already chatting: the composer is open, no second Chat button");
-  assert.ok(await page.$("#areply"), "you can keep chatting over the picker");
+  assert.match(await page.textContent(".athread p:first-child"), /Tests stay as they are/, "its reply before the picker is in the thread");
+  assert.ok(await page.$("#areply") && !(await page.isDisabled("#areply")), "you can keep chatting over the picker");
+  await page.evaluate(m => window.mc.asked({...m, chat: null}), MENU);
+  assert.equal(await page.$("#areply"), null, "a picker with no Chat about this (a permission prompt, say) takes no text");
+  await page.evaluate(m => window.mc.asked(m), MENU);
   await page.click(".aopts button:has-text('Port it')");
   assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "2"});
   await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
   assert.equal(await page.evaluate(() => ui.ask["plan-a"].chat), null, "an option ends the chat");
   assert.deepEqual(page._errs, []);
+});
+
+test("answer: a chat ends when the agent stops instead of replying, and never spins on 'replying' (#173)", async page => {
+  await page.evaluate(() => { openAnswer("plan-a"); window.mc.asked({name: "plan-a", question: "Which way?", kind: "menu", chat: "3", options: [{key: "1", label: "Keep it"}, {key: "2", label: "Port it"}]}) });
+  await page.click("#achat"); await page.fill("#areply", "Why?"); await page.press("#areply", "Enter");
+  await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
+  await page.evaluate(s => { s.pucks[0].agent.state = "done"; s.pucks[0].state = "working"; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
+  assert.doesNotMatch(await page.textContent(".sheet"), /replying/);
+  assert.equal(await page.evaluate(() => ui.ask["plan-a"].chat), null);
 });
 
 test("connecting: after 15s with no update it says so, and Retry says hello to the app again", async page => {
