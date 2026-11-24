@@ -2127,7 +2127,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
             ptys.removeValue(forKey: id)?.stop(); ptySession[id] = nil
             if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneTarget(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
-        case "hide": if wid == 0 { if !closeShare(termWindow) { termWindow.orderOut(nil); hideFloaters() } } else { closeTermWindow(wid) }  // its last tab closed: as its close button
+        case "hide": if wid == 0 { if !closeShare(termWindow) { hideLevel(termWindow) } } else { closeTermWindow(wid) }  // its last tab closed: as its close button
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }
         case "side": floors[wid]?.at = b["open"] as? Bool ?? false ? "basement" : "pipe"; if wid == 0 { termSide = b["open"] as? Bool ?? false; syncOrbs() }  // the green light shows only while the Basement's sidebar is open
@@ -2302,7 +2302,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if let sh = fsShare, from === sh.host || from === sh.guest {
             if to === sh.guest { return }
             leaveShare()
-            if to !== sh.host { joinShare(to, host: sh.host) }
+            if to !== sh.host, !to.styleMask.contains(.fullScreen) { joinShare(to, host: sh.host) }  // one in full screen keeps its own Space
             return
         }
         guard !to.styleMask.contains(.fullScreen) else { return }  // its own Space already: macOS takes you there
@@ -2406,7 +2406,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
         hand(to, from: from)  // before the snapshots: the other level grows into this one's frame
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
-        guard greenlight.rideTime > 0 else { if !up { stepAside(from); hideFloaters() }; return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
+        guard greenlight.rideTime > 0 else { stepAside(from); hideFloaters(); return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
         riding = true
         let S = scr.frame, reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
