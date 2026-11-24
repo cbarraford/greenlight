@@ -452,6 +452,15 @@ func runInboxUnitTests(_ c: Core, check: (String, Bool) -> Void) {
     check("core: empty name falls back to Greenlight", c.name == "Greenlight")
 }
 
+/// Runs the main run loop until `done()` holds or `secs` pass: a fixed short spin flakes on a loaded runner, where the
+/// main-queue blocks it waits for haven't run yet. True when `done()` held.
+@discardableResult
+func spin(until done: () -> Bool, secs: Double = 5) -> Bool {
+    let deadline = Date() + secs
+    while !done() && Date() < deadline { RunLoop.main.run(until: Date() + 0.01) }
+    return done()
+}
+
 /// Deterministic Core.swift state-machine tests using `sshOverride` (zero real subprocesses).
 func runCoreUnitTests(check: (String, Bool) -> Void) {
     defer { sshOverride = nil }
@@ -737,7 +746,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         return ([], 0)
     }
     mainC.send("Start over")
-    RunLoop.main.run(until: Date() + 0.05)
+    // [chat: reset] clears on a later main-queue turn; until it has, a send is queued behind it (clearing > 0)
+    let resetCleared = spin { mainC.clearing == 0 } && mainC.msgs.first?.text.hasPrefix("Context cleared") == true
     // DWIM apply error + undo failure retry
     responder = { r, _, _ in
         if r.contains("dwim.py plan") { return ([#"{"route":"direct","verb":"park","toast":"Parked","actions":[{"verb":"park","ws":"a"}]}"#], 0) }
@@ -763,7 +773,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let stoppedMsg = mainC.msgs.contains { $0.text == "Stopped." }
     mainC.clear()
     check("core: reply, choose, submit, stale-backend, reset, DWIM error/retry, and stop/queue flows",
-          validReplyAnswered && expiredRecorded && staleNoteHit && errToast?.failed == true && retryMsg && queuedWhileBusy && stoppedMsg)
+          validReplyAnswered && expiredRecorded && staleNoteHit && resetCleared && errToast?.failed == true && retryMsg && queuedWhileBusy && stoppedMsg)
 
     // 10. Additional Core branches: error notes, inbox R/1/Up keys, question(for:) fallback, tailOutbox, voice-on DWIM, checkInTurn
     sshOverride = { remote, h, stdin, onLine, onExit in
