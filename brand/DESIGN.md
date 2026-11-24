@@ -49,7 +49,7 @@ primitives:
     light: ["0.993 0.003 40", "0.982 0.008 40", "0.962 0.019 40", "0.938 0.032 40", "0.914 0.045 40", "0.889 0.060 40", "0.852 0.082 40", "0.790 0.102 40", "0.640 0.120 40", "0.600 0.120 40", "0.500 0.102 40", "0.235 0.046 40"]
     dark:  ["0.172 0.014 40", "0.205 0.019 40", "0.245 0.036 40", "0.278 0.050 40", "0.310 0.060 40", "0.348 0.070 40", "0.400 0.082 40", "0.490 0.098 40", "0.680 0.120 40", "0.720 0.120 40", "0.780 0.084 40", "0.950 0.025 40"]
 
-contrast_checks:   # measured on the values above; tokens.py re-checks them in CI (section 12)
+contrast_checks:   # measured on the values above; tokens.py re-checks them in CI (section 13)
   step11_on_step2: "APCA Lc 60–65 on every scale, both modes (WCAG 5.3–9.3:1)"
   step12_on_step2: "APCA Lc 95–100 on every scale, both modes (WCAG ≥ 15:1)"
   on_solid9:
@@ -173,7 +173,7 @@ layout:
 
 **Status:** draft v1, 2026-11-23. It replaces the current look in `brand/README.md`. The evidence behind each rule is in `brand/RESEARCH.md`.
 
-This file is the source of truth for every pixel Greenlight draws: the dashboard (`app/dashboard.html`), the Basement and the Pipe (`app/terminal.html`), the voice stage (`app/stage.html`), every SwiftUI/AppKit view, the app icon, the Dock tile, the menu bar item and the in-app icon set. An agent building UI here reads this file first, uses only these tokens and recipes, and passes the gate in section 12.
+This file is the source of truth for every pixel Greenlight draws: the dashboard (`app/dashboard.html`), the Basement and the Pipe (`app/terminal.html`), the voice stage (`app/stage.html`), every SwiftUI/AppKit view, the app icon, the Dock tile, the menu bar item and the in-app icon set. An agent building UI here reads this file first, uses only these tokens and recipes, and passes the gate in section 13.
 
 ## 0. Surface inventory
 
@@ -780,7 +780,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - The chat pane uses the system tokens. You: right-aligned bubble in `element.rest`, radius `md`, `body-copy`. Greenlight: no bubble, full width, `body-copy`.
   - Tool and status lines are `caption` `fg.muted` with a glyph.
 - **Composer:** a §10.4 textarea with attach (quiet icon), mic, and send. Send is primary only when there's text; otherwise it's disabled.
-- **Looks:** the 7 chat looks become token-override sets on the same components, not separate palettes and fonts. Phase one ships **Default** (this spec) and **Phosphor** (a mono, green-on-near-black homage that keeps the terminal's spirit). The other five are parked until someone asks for them back. See §13.
+- **Looks:** the 7 chat looks become token-override sets on the same components, not separate palettes and fonts. Phase one ships **Default** (this spec) and **Phosphor** (a mono, green-on-near-black homage that keeps the terminal's spirit). The other five are parked until someone asks for them back. See §14.
 
 ### 10.18 Voice stage (`stage.html`)
 - **Base:** the stage uses the same tokens as the chat look.
@@ -839,7 +839,54 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - em dashes as decoration;
   - invented numbers.
 
-## 12. Acceptance gate
+## 12. Do and don't
+
+Every ban comes with the move to make instead. The critique agent (§13) checks screenshots against this table, and any match fails the rubric.
+
+| Area | Don't | Do |
+|---|---|---|
+| Colour | A status colour as decoration, or a coloured section header or tint | Neutral chrome; colour only on the item that needs you, with its glyph |
+| Colour | Show a status with colour alone | Colour + glyph shape (+ label when there's room) |
+| Colour | Blue, amber, pink or violet as the accent; any hue in 270–330 | Signal, Teal or Graphite, through the §2.3 guard |
+| Colour | A literal hex, `rgba()` or `#fff` in UI code | A semantic token (`fg.on_solid`, `bg.raised`, …) |
+| Colour | Pure black, or pure white text | `neutral.1` / `neutral.12` |
+| Colour | A primary button in solid `#0A84FF`-style blue with white text below 4.5:1 | `accent.solid` (checked at ≥ 4.5:1) |
+| Light/dark | Force an appearance per window or floor | Follow the system; the Settings override applies to every window |
+| Light/dark | Invert the light palette to make dark | Use the dark scale: lighter as surfaces rise, chrome never lighter than the canvas |
+| Light/dark | Cross-fade the UI on a theme switch | Switch instantly with transitions disabled for a frame |
+| Type | Tracked all-caps eyebrow labels, uppercase section heads or floor badges | Sentence case `label` in `fg.muted` |
+| Type | Half-pixel sizes, sizes outside the role list, weights 550/650 or under 400 | The 10 type roles; weights 400/500/600/700 |
+| Type | Proportional figures in counts and timers | Tabular figures everywhere a number changes or lines up |
+| Type | Mono for small data labels | Mono only for code, branches, paths and logs |
+| Type | "Label: value" pairs everywhere | Values that explain themselves ("3 failing"); the label quieter than the value |
+| Layout | Ad-hoc spacing (5, 7, 9, 10, 14px…) | The space scale: 2, 4, 8, 12, 16, 24, 32, 48, 64 |
+| Layout | Hover-only controls the keyboard can't reach | Show them on hover, on focus and on selection |
+| Layout | Primary actions in the footer or the bottom edge | The footer holds status; actions go in the bar or the content |
+| Depth | Glass, blur or SVG glass gradients in content; glass on glass | Flat content; Liquid Glass only in native chrome |
+| Depth | One soft grey shadow on every card; opaque or animated shadows | The four elevation levels, by role; lift with a token swap or `transform` |
+| Depth | A card inside a card inside a card | Two levels at most; panels never inside cards |
+| Depth | Doubled borders where two surfaces meet | One surface owns the edge |
+| Shape | Radii outside 4/6/8/12/full; a child rounder than its parent | The radius tokens, concentric (inner = outer − padding) |
+| Shape | Hexagons as decoration | The hex only for the workspace cell and the mark |
+| Motion | Animating frequent or keyboard actions (⌘K, tabs, row selection) | Instant |
+| Motion | Infinite breathing, pulsing or glowing | The needs pulse (3 cycles, then rest) and the spinner on the focused item only |
+| Motion | `transition: all`, animating layout properties, ease-in, starting from `scale(0)` | `transform` and `opacity` with the `out` curve, from scale .96 |
+| Motion | Ignoring Reduce Motion in any file | A 150ms fade, loops stopped, nothing hidden |
+| Buttons | More than one primary per view; ghost, gradient or shadowed buttons; one-off variants | The five button variants (§10.2), one primary |
+| Buttons | Vague labels ("OK", "Submit", "Go") | A verb plus an object, with `…` when another step follows |
+| Buttons | `cursor: pointer` on ordinary controls | The default cursor; pointer only on links |
+| Icons | Mixed stroke widths or grids; a hand-drawn one-off glyph | The shared set: 16/20 grid, 1.5 or 1.75 stroke, round joins |
+| Icons | Coloured icon background tiles; duotone; emoji as icons | `currentColor` on the bare glyph; filled only when selected |
+| Icons | A redrawn or stand-in brand mark (the Codex hexagon) | The official mark, or a neutral monogram |
+| App icon | Baked glow, shadow or specular; a custom outline; words; UI screenshots | Flat layers in Icon Composer, the system squircle, one idea |
+| App icon | A checkmark or literal traffic light | A §8.3 concept that suggests "clear to proceed" |
+| States | Shipping a component without disabled, loading, empty or error states | Every state in its §10 recipe |
+| States | A spinner that flashes for 50ms; a null where content failed | A 200ms delay and 400ms minimum; a skeleton or a "Couldn't load" with Retry |
+| Native/web | A flash of white or black while a web view loads | Show the window after the first presentation update |
+| Native/web | A web tooltip clipped by the web view | Native-owned tooltips and popovers |
+| Copy | The banned words and tells in §11 and RESEARCH §1 | Plain, short, second-person copy |
+
+## 13. Acceptance gate
 
 A UI change is done only when every step below passes. Agents run it themselves and attach the evidence to the PR.
 
@@ -871,7 +918,7 @@ A UI change is done only when every step below passes. Agents run it themselves 
    - Refine only the top 3 findings per round. **At most 3 rounds.** Anything still failing is either fixed or waived with a written reason in the PR.
 7. **Human sign-off.** The owner reviews the screenshot matrix before merge. Design PRs don't automerge.
 
-## 13. Rollout
+## 14. Rollout
 
 Each step is one PR with its own screenshots.
 
