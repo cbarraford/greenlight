@@ -1518,7 +1518,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var projList = [[String: Any]]()  // id ("" No Man's Land), name, color, repos, paths (its worktrees), busy
     var projectsLoaded = false  // true once dash.py trees (or a terminal page with trees) has listed the projects
     var lastTreesObj: [String: Any]?  // newest valid dash.py trees payload, replayed to terminal pages and recomputed on project/theme changes
-    var refreshPanes = [String: Any]()  // every host's pane states from the current trees refresh (each publish carries only its own)
+    var paneReplay = PaneReplay()  // the current refresh's pane states, every host's, for a page that loads (each publish carries only its own)
     var readyDash = Set<ObjectIdentifier>(), waitingDash = Set<ObjectIdentifier>()  // dashboard webviews that have received mc.paths vs ones waiting on projectsLoaded
     var sharedOnly: [String]? { ud.array(forKey: "termOnly0") as? [String] }  // the one pick every floor and window shows; nil: all projects
     func setPick(_ only: [String]?, except: WKWebView? = nil) {
@@ -2027,8 +2027,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     private func publishTrees() {
         let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host)
         if let obj, JSONSerialization.isValidJSONObject(obj) {
-            refreshPanes.merge((obj["panes"] as? [String: Any]) ?? [:]) { _, new in new }
-            var kept = obj; kept["panes"] = refreshPanes; lastTreesObj = kept  // a page that loads now gets both hosts' states
+            lastTreesObj = obj; paneReplay.add(obj["panes"])
             refreshProjects()
             termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
         } else if !projectsLoaded {
@@ -2039,7 +2038,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Every installed ADE's worktrees (dash.py trees), where greenlight lives (and local Mac when a remote server is configured).
     func pushTrees() {
         guard treesProc == nil else { return }
-        treesAt = Date(); refreshPanes = [:]
+        treesAt = Date(); paneReplay.start()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
@@ -2088,7 +2087,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
             web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
             if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
-            if let obj = replayTrees(lastTreesObj, age: Date().timeIntervalSince(treesAt)) { web?.callJS("window.term && term.workspaces", [obj]) }
+            if let obj = paneReplay.replay(lastTreesObj) { web?.callJS("window.term && term.workspaces", [obj]) }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":
             guard let session, let at = paneTarget(b["ws"] as? String ?? "") else { return }

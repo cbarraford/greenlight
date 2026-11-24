@@ -305,13 +305,18 @@ func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, m
     server?["panes"] = nil; local?["panes"] = nil
     return obj
 }
-/// The newest trees payload, replayed to a terminal page that just loaded: its pane states only while they're fresh (`age`, since
-/// the refresh that read them began, within 5 s). An older "working" replayed into a reloaded page would flip an idle pane back to
-/// work, and the fetch `ready` starts would then ping its finished turn again; that fetch brings the current states instead.
-func replayTrees(_ obj: [String: Any]?, age: TimeInterval) -> [String: Any]? {
-    guard var o = obj else { return nil }
-    if age > 5 { o["panes"] = nil }
-    return o
+/// Pane states for a terminal page that just loads (`ready` replays the newest trees payload): every host's states from the current
+/// refresh, and only while fresh (5 s since they arrived). An older "working" replayed into a reloaded page would flip an idle pane
+/// back to work, and the next fetch's "done" would ping its finished turn again. A refresh that starts drops what the last one saved.
+struct PaneReplay {
+    private(set) var panes = [String: Any](), at = Date.distantPast
+    mutating func start() { panes = [:] }
+    mutating func add(_ p: Any?, now: Date = Date()) { panes.merge((p as? [String: Any]) ?? [:]) { _, new in new }; at = now }
+    func replay(_ obj: [String: Any]?, now: Date = Date()) -> [String: Any]? {
+        guard var o = obj else { return nil }
+        o["panes"] = !panes.isEmpty && now.timeIntervalSince(at) <= 5 ? panes : nil
+        return o
+    }
 }
 let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
 /// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages

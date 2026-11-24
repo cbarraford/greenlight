@@ -321,10 +321,15 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               && ((second?["panes"] as? [String: Any])?["mc-srv"] as? [String: Any])?["state"] as? String == "done"
               && ((second?["trees"] as? [[String: Any]]) ?? []).count == 2 && panesOf(single) == ["mc-1"] && only?["panes"] == nil
               && panesOf(treesToPublish(server: &srv, local: &mac, merge: true, primaryHost: "devbox")) == [])  // a failed fetch republishes none
-        let saved: [String: Any] = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "working"]]]
-        check("config: replayTrees gives a loading page the pane states only while fresh, the trees always",
-              panesOf(replayTrees(saved, age: 2)) == ["mc-srv"] && panesOf(replayTrees(saved, age: 40)) == []
-              && ((replayTrees(saved, age: 40)?["trees"] as? [[String: Any]]) ?? []).count == 1 && replayTrees(nil, age: 0) == nil)
+        let t0 = Date(), tree: [String: Any] = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "done"]]]
+        var r = PaneReplay()
+        r.add(["mc-srv": ["state": "working"]], now: t0); r.add(["mc-mac": ["state": "working"]], now: t0.addingTimeInterval(1))
+        let both = panesOf(r.replay(tree, now: t0.addingTimeInterval(3))), old = panesOf(r.replay(tree, now: t0.addingTimeInterval(40)))
+        r.start()  // the next refresh began; a page loading before it publishes gets the trees only
+        let inFlight = r.replay(tree, now: t0.addingTimeInterval(41))
+        check("config: PaneReplay gives a loading page both hosts' fresh states, never stale ones or the last refresh's",
+              both == ["mc-mac", "mc-srv"] && old == [] && panesOf(inFlight) == [] && ((inFlight?["trees"] as? [[String: Any]]) ?? []).count == 1
+              && r.replay(nil) == nil)
     }
     check("config: paneWhere validates @host and absolute paths without ..",
           paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil
