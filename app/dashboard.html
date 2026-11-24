@@ -2326,8 +2326,8 @@ function toastEl(){
   return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`},  // hovered or focused, toastTimer waits
       h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
     h("span", {class:"tmsg"}, h("b", {}, d.error ? "Task didn't start" : "Task started"), d.error ? h("span", {}, short(d.error, 160)) : h("span", {}, h("span", {class:"mono"}, d.name), ` · ${d.repo}`)),  // the outcome first, then which one
-    d.error ? h("button", {class:"btn", onclick: () => { clearTimeout(ui.task.t); ui.task.done = null; if (ui.task.sheet) { render(); document.getElementById("ps-task")?.focus() } else taskSheet() }}, "Reopen")
-      : h("button", {class:"btn pri", onclick: () => { clearTimeout(ui.task.t); ui.task.done = null; render(); toBasement(d.name) }}, "Open in Basement"),
+    d.error ? h("button", {class:"btn", onclick: () => { x(); if (ui.task.sheet) document.getElementById("ps-task")?.focus(); else taskSheet() }}, "Reopen")  // x: the timer and the ring go with the toast
+      : h("button", {class:"btn pri", onclick: () => { x(); toBasement(d.name) }}, "Open in Basement"),
     h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: x}, icon("close")));
 }
 function tasked(r){

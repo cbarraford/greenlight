@@ -531,8 +531,9 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   assert.ok((await page.evaluate(() => window.__ms)).includes(5000) && !(await page.evaluate(() => window.__ms)).includes(12000), "the kept card toast went to 12s");
   await page.click(".toast .btn.x");
   assert.equal(await page.evaluate(() => ui.task.fresh), null, "the task's ring outlives the toast it was under");
-  await page.evaluate(() => { ui.task.done = {name: "t2", repo: "widgets"}; toastTimer(300); render() });
-  await page.click(".toast .btn.pri");  // Open in Basement: the toast's timer goes with it, so it can't clear a later task's ring
+  await page.evaluate(() => { ui.task.done = {name: "t2", repo: "widgets"}; ui.task.fresh = "t2"; toastTimer(300); render() });
+  await page.click(".toast .btn.pri");  // Open in Basement: the toast's timer and ring go with it, so the timer can't clear a later task's ring
+  assert.equal(await page.evaluate(() => ui.task.fresh), null, "Open in Basement left the task's ring on");
   await page.mouse.move(5, 5);
   await page.evaluate(() => { ui.task.fresh = "t3" });
   await page.evaluate(() => new Promise(r => setTimeout(r, 1500)));
