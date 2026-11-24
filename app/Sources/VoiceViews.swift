@@ -159,6 +159,37 @@ var keychainOps = KeychainOps()
 var keys: [String: String?] = [:]
 let keyLock = NSLock()
 
+/// The whole of a recording's speech from the Apple recognizer's results (#172). After a pause, or a long run of speech, it starts
+/// a new utterance: its results then hold only that utterance, and the final one only the last. An utterance ends with
+/// speechRecognitionMetadata on its result (`ended`); one that restarts without it shows as a partial that is no revision of the
+/// last (fewer words, and not its start). Each ended utterance is kept, and the next added after it, in order.
+struct Transcript {
+    private(set) var done: [String] = []
+    private var current = ""
+    var text: String { (done + [current]).filter { !$0.isEmpty }.joined(separator: " ") }
+
+    mutating func add(_ raw: String, ended: Bool, final: Bool) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty {  // nothing new: an end still keeps what the utterance had
+            if (ended || final) && !current.isEmpty { done.append(current); current = "" }
+            return
+        }
+        if !current.isEmpty && Transcript.restarts(t, after: current) { done.append(current) }
+        else if final && current.isEmpty && t == done.last { return }  // the final result repeats the utterance that just ended
+        current = t
+        if ended || final { done.append(t); current = "" }
+    }
+
+    /// `t` begins a new utterance rather than revising `last`: it has fewer words and doesn't start with `last`'s first word.
+    static func restarts(_ t: String, after last: String) -> Bool {
+        let w = words(t), l = words(last)
+        return l.count >= 2 && w.count < l.count && (w.first != l.first || w.count * 2 < l.count)
+    }
+    private static func words(_ s: String) -> [String] {
+        s.lowercased().split(whereSeparator: \.isWhitespace).map { $0.trimmingCharacters(in: .punctuationCharacters) }.filter { !$0.isEmpty }
+    }
+}
+
 /// Transcribes a recorded file; done(text, error) runs on any thread, exactly once, and removes the recording file afterwards.
 func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -> Void) {
     let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -211,12 +242,13 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
                 let req = SFSpeechURLRecognitionRequest(url: url)
                 req.requiresOnDeviceRecognition = r.supportsOnDeviceRecognition
                 req.addsPunctuation = true
-                var fired = false
+                var fired = false, heard = Transcript()
                 r.recognitionTask(with: req) { res, err in
                     DispatchQueue.main.async {
                         guard !fired else { return }
-                        if let res, res.isFinal { fired = true; _ = r; finish(trim(res.bestTranscription.formattedString), nil) }
-                        else if let err { fired = true; _ = r; finish(nil, err.localizedDescription) }
+                        if let res { heard.add(res.bestTranscription.formattedString, ended: res.speechRecognitionMetadata != nil, final: res.isFinal) }
+                        if res?.isFinal == true { fired = true; _ = r; finish(heard.text, nil) }
+                        else if let err { fired = true; _ = r; heard.text.isEmpty ? finish(nil, err.localizedDescription) : finish(heard.text, nil) }  // keep what was heard
                     }
                 }
             }
