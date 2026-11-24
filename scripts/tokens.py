@@ -350,7 +350,8 @@ def mode_decls(spec, mode):
     sem = []
     for path, r in colour_refs(spec).items():
         v = str(r[mode])
-        sem.append((css_name(path), v.upper() if v.startswith("#") else f"var(--ds-{v.replace('.', '-')})"))
+        literal = v.startswith("#") or v in ("white", "ink")  # keywords resolve to a fixed colour, not a scale step
+        sem.append((css_name(path), ref(v, mode, pal) if literal else f"var(--ds-{v.replace('.', '-')})"))
     sem.append(("--ds-accent-on-solid", "#FFFFFF"))
     elev = [(f"--ds-elevation-{k}", v if isinstance(v, str) else v[mode])
             for k, v in spec["elevation"].items() if k != "scrim"]
