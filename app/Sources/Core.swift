@@ -1037,7 +1037,6 @@ final class Core: ObservableObject {
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
-        if r.resumed { DispatchQueue.main.async { [weak self] in self?.resumeTurn() } }  // a lost turn saved beside it, if any
     }
 
     // MARK: pings

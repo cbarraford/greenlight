@@ -843,13 +843,6 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     RunLoop.main.run(until: Date() + 0.05)
     let lostResumed = mainC.msgs.last?.text == "The lost one." && ud.dictionary(forKey: mainC.lostKey) == nil
         && ud.dictionary(forKey: mainC.pendingKey) == nil
-    // both saved (a lost turn, then a quit mid-turn): the launch follows the pending one, then the lost one
-    ud.set(["id": tid, "question": "Lost", "watch": false, "checkIn": false], forKey: mainC.lostKey)
-    ud.set(["id": tid, "question": "Pending", "watch": false, "checkIn": false], forKey: mainC.pendingKey)
-    follows = 0
-    mainC.resumeTurn()
-    RunLoop.main.run(until: Date() + 0.1)
-    let bothResumed = follows == 2 && ud.dictionary(forKey: mainC.lostKey) == nil && ud.dictionary(forKey: mainC.pendingKey) == nil
     ud.set(["id": tid, "question": "From before", "watch": false, "checkIn": false], forKey: mainC.pendingKey)
     followReply = ([#"{"e":"done","ok":true,"text":"Resumed."}"#], 0)
     mainC.resumeTurn()
@@ -873,7 +866,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let clearForgets = ud.dictionary(forKey: mainC.pendingKey) == nil && ud.dictionary(forKey: mainC.lostKey) == nil
     Core.refollowDelay = 2.0
     check("core: turns keep their id until the reply, follow again after a drop, resume after a relaunch, and survive quitting",
-          pendingMidTurn && refollowed && clearedAfterReply && triesReset && gaveUp && lostKept && lostResumed && bothResumed && resumed && goneNoted && badIdIgnored && keptForRelaunch && clearForgets)
+          pendingMidTurn && refollowed && clearedAfterReply && triesReset && gaveUp && lostKept && lostResumed && resumed && goneNoted && badIdIgnored && keptForRelaunch && clearForgets)
 
     // 10. Additional Core branches: error notes, inbox R/1/Up keys, question(for:) fallback, tailOutbox, voice-on DWIM, checkInTurn
     sshOverride = { remote, h, stdin, onLine, onExit in
