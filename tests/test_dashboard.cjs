@@ -1418,6 +1418,32 @@ test("hovering an agent whose hex is in a stack highlights the stack hub and mem
   assert.equal(await page.$eval(".acard[data-name='st-2']", e => e.classList.contains("hl")), false, "leaving fanned member clears its agent card highlight");
 });
 
+test("hexes with no MR: needs-you and crashed keep their solid fill, and every label reads at 4.5:1 on its body, light and dark (#155)", async page => {
+  const pucks = [{...puck("ask-a", "Alpha", "waiting"), state: "needs"}, {...puck("crash-b", "Beta", "idle"), state: "crashed"},
+    {...puck("work-c", "Gamma", "working"), state: "working"}, {...puck("ask-d", "Delta", "waiting"), state: "needs", mr: {iid: 7, ref: "!7", state: "opened", title: "x", web_url: "https://gl/7"}}];
+  for (const look of ["dark", "light"]) {
+    const got = await page.evaluate(([s, look]) => {
+      document.documentElement.dataset.appearance = look; window.mc.update(s);
+      const cv = document.createElement("canvas").getContext("2d", {willReadFrequently: true});
+      const rgb = c => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = "#000"; cv.fillStyle = c; cv.fillRect(0, 0, 1, 1); return [...cv.getImageData(0, 0, 1, 1).data].slice(0, 3) };
+      const lum = c => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4 }); return .2126 * r + .7152 * g + .0722 * b };
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + .05) / (y + .05) };
+      return [...document.querySelectorAll("#main .hx")].map(hx => {
+        const body = getComputedStyle(hx.querySelector(".body")), fill = body.fill;
+        return {cls: [...hx.classList].filter(c => /^st-|^nomr$/.test(c)).sort().join(" "), fill: rgb(fill).join(","), dash: body.strokeDasharray,
+          worst: Math.min(...[...hx.querySelectorAll(".hin b, .hin span, .hin svg")].map(e => ratio(getComputedStyle(e).color, fill)))};
+      });
+    }, [{...SNAP, pucks}, look]);
+    const by = c => got.filter(g => g.cls === c);
+    for (const c of ["nomr st-needs", "nomr st-crashed", "nomr st-working", "st-needs"]) assert.ok(by(c).length, `${look}: no ${c} hex in ${JSON.stringify(got)}`);
+    for (const g of got) assert.ok(g.worst >= 4.5, `${look}: ${g.cls} label contrast ${g.worst.toFixed(2)}:1 on its body`);
+    const lit = by("st-needs")[0].fill;
+    assert.equal(by("nomr st-needs")[0].fill, lit, `${look}: a needs-you hex with no MR keeps the solid fill`);
+    assert.notEqual(by("nomr st-crashed")[0].fill, by("nomr st-working")[0].fill, `${look}: a crashed hex with no MR keeps its solid fill`);
+    for (const c of ["nomr st-needs", "nomr st-crashed", "nomr st-working"]) assert.notEqual(by(c)[0].dash, "none", `${look}: ${c} keeps the dashed no-MR outline`);
+  }
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
