@@ -394,11 +394,11 @@ func forgeURL(_ s: String) -> URL? {
 }
 
 /// The first `[screen]` marker: at the start of a line (the detail may follow on it) or at the end of one (the gist before it),
-/// bold or a colon around it allowed, and outside a code fence, so a reply that mentions or quotes it mid-sentence isn't split.
+/// bold or a colon around it allowed (backticks only when alone on its line), and outside a code fence, so prose quoting it isn't split.
 func screenMark(_ s: String) -> Range<String.Index>? {
     var from = s.startIndex
-    let mark = #"[*_`]*\[screen\][*_`]*:?[*_`]*"#
-    while let r = s.range(of: #"(?m)^[ \t]*"# + mark + #"[ \t]*|[ \t]*"# + mark + #"[ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
+    let mark = #"[*_]*\[screen\][*_]*:?[*_]*"#
+    while let r = s.range(of: #"(?m)^[ \t]*"# + mark + #"[ \t]*|[ \t]+"# + mark + #"[ \t]*$|^[ \t]*`\[screen\]:?`:?[ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
         if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
         from = r.upperBound
     }
@@ -409,10 +409,10 @@ func screenMark(_ s: String) -> Range<String.Index>? {
 /// A hash is a whole word of 7 to 40 lowercase hex with a digit and a letter, not a number like 1e10000. In brackets it goes;
 /// after "commit" the word stays; anywhere else it's said as "a commit", so the sentence still reads.
 func forEar(_ s: String) -> String {
-    let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])"#
+    let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-/]|\.\w|\.\.)"#
     return s.replacingOccurrences(of: #"[ \t]*\([ \t]*"# + hash + #"[ \t]*\)"#, with: "", options: .regularExpression)
-        .replacingOccurrences(of: #"(?i)\b(commits?)[ \t]+"# + hash, with: "$1", options: .regularExpression)
-        .replacingOccurrences(of: hash + #"[ \t]+(?=commits?\b)"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\b((?i:commits?))[ \t]+"# + hash, with: "$1", options: .regularExpression)
+        .replacingOccurrences(of: hash + #"[ \t]+(?=(?i:commits?)\b)"#, with: "", options: .regularExpression)
         .replacingOccurrences(of: hash, with: "a commit", options: .regularExpression)
         .trimmingCharacters(in: .whitespaces)
 }

@@ -355,6 +355,7 @@ final class Voice: NSObject, ObservableObject {
     /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
     /// With only detail, a short pointer is said, so voice mode never goes silent.
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
+        defer { chiefDrew = false }  // watch/checkIn turns skip began(); clear so the next turn can draw
         guard on else { return }
         if let h = st.stage { stage(h) }
         let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = spokenSoFar(spoken) + "\n"  // as live() counted `said`
@@ -371,6 +372,7 @@ final class Voice: NSObject, ObservableObject {
     func took() { chiefDrew = true; shown = true; drawSeq += 1 }
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
+        chiefDrew = false
         guard on else { return }
         said = 0
         wait("Listening", plain(text))

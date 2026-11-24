@@ -129,6 +129,29 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.textContent(".doc p b em"), "blocked");
   assert.equal(await p.textContent(".doc p:last-child"), "Touches *.py and *.js files");
   assert.equal(await p.locator(".doc p:last-child em").count(), 0);
+  // bold+em, trailing/leading em in bold, inline code inside emphasis, snake_case in _em_, formatted links
+  await p.evaluate(() => stage.text({ md: "**!12 — *blocked*** and ***urgent*** and ***first* rest**\n\n**Use `**kwargs` here** · *Touches `*.py` files* · _fix ws_state.py_\n\n[**!5013**](https://x/5013) in [`ws_state.py`](https://x/ws)" }));
+  assert.deepEqual(await p.locator(".doc p").nth(0).locator("b").allTextContents(), ["!12 — blocked", "urgent", "first rest"]);
+  assert.deepEqual(await p.locator(".doc p").nth(0).locator("b em").allTextContents(), ["blocked", "urgent", "first"]);
+  assert.equal(await p.locator(".doc p").nth(1).locator("b code").textContent(), "**kwargs");
+  assert.equal(await p.locator(".doc p").nth(1).locator("em code").textContent(), "*.py");
+  assert.deepEqual(await p.locator(".doc p").nth(1).locator("em").allTextContents(), ["Touches *.py files", "fix ws_state.py"]);
+  assert.equal(await p.locator(".doc p").nth(2).locator("b").textContent(), "!5013");
+  assert.equal(await p.locator(".doc p").nth(2).locator("code").textContent(), "ws_state.py");
+  // unmatched * / ` runs stay literal (never recurse/stack-overflow), unclosed brackets stay linear, inline triple backticks aren't fences
+  const t0 = Date.now();
+  await p.evaluate(() => stage.text({ md: "- *****\n- " + "*".repeat(10000) + "\n\nUse ``` for fences\n\n```stage``` blocks draw charts.\n\n" + "[a](".repeat(16000) }));
+  assert.ok(Date.now() - t0 < 2000, "inline stayed linear on unclosed brackets and long star runs");
+  assert.equal(await p.locator(".doc ul li").nth(0).textContent(), "*****");
+  assert.equal(await p.locator(".doc ul li b").count(), 0);
+  assert.equal(await p.locator(".doc pre").count(), 0);
+  assert.equal(await p.locator(".doc p").nth(0).locator("code").count(), 0);
+  assert.equal(await p.locator(".doc p").nth(1).textContent(), "stage blocks draw charts.");
+  assert.equal(await p.locator(".doc p").nth(1).locator("code").textContent(), "stage");
+  // pipe tables keep pipes inside inline code and escaped pipes, and keep `-` data rows after the header divider
+  await p.evaluate(() => stage.text({ md: "| Command | Ok |\n|---|---|\n| `a | b` | a \\| b |\n| - | - |" }));
+  assert.deepEqual(await p.locator(".doc table.grid tbody td").allTextContents(), ["a | b", "a | b", "-", "-"]);
+  assert.equal(await p.locator(".doc table.grid tbody td code").textContent(), "a | b");
   await p.evaluate(() => stage.text({ md: "just text" }));
   assert.equal(await p.locator(".doc .lead").count(), 0);
   assert.equal(await p.textContent(".doc p"), "just text");

@@ -150,8 +150,10 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && split.shown == "Two reviews need you.\n\n- **!4834** at abc1234" && staged("All green.").screen == nil && staged("All green.").shown == "All green."
           && staged("Gist.\n[SCREEN]\n").screen == nil && streaming.screen == nil && sentences(plain(streaming.text), from: 0).said == ["Two reviews need you."])
     let quoted = "Add a line `[screen]` then the detail.\n```\n[screen]\n```\nDone.", twice = staged("Gist.\n [screen] \nOne.\n[screen]\nTwo.")
+    let prose = ["Always separate them with `[screen]`", "Put details after `[screen]`\nand keep the gist short.", "`[screen]` splits gist from detail.", "Example:\n```[screen]\nfoo\n```"]
     check("voice: only a [screen] at a line's start and outside a code fence splits; a second one stays in the detail",
-          staged(quoted).screen == nil && staged(quoted).text == quoted && twice.text == "Gist." && twice.screen == "One.\n[screen]\nTwo.")
+          staged(quoted).screen == nil && staged(quoted).text == quoted && twice.text == "Gist." && twice.screen == "One.\n[screen]\nTwo."
+          && prose.allSatisfy { staged($0).screen == nil && staged($0).text == $0 })
     let loose = ["Gist.\n**[screen]**\n- a", "Gist.\n[Screen]:\n- a", "Gist.\n[screen] - a", "Gist.\n**[screen]:**\n- a", "Gist. [screen]\n- a", "Gist.\n\n`[screen]`\n- a"].map { staged($0) }
     check("voice: a bold, colon, same-line or line-ending [screen] still splits, so the detail is never read out",
           loose.allSatisfy { $0.text == "Gist." && $0.screen == "- a" })
@@ -170,9 +172,12 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && saidLive.said == ["Merge it?"] && sentences(spokenSoFar(splitOptions(mid).0) + "\n", from: saidLive.to).said == ["Or ask me later."])
     check("voice: a commit hash isn't read out, and the sentence still reads; words, numbers, refs and look-alikes stay",
           forEar("The latest commit (abc1234) fixed it.") == "The latest commit fixed it." && forEar("Commit 9f8e7d6c5b4a fails.") == "Commit fails."
-          && forEar("Merged in abc1234, then deployed.") == "Merged in a commit, then deployed." && forEar("The abc1234 commit fixed it.") == "The commit fixed it." && forEar("abc1234 broke it.") == "a commit broke it."
+          && forEar("Merged in abc1234, then deployed.") == "Merged in a commit, then deployed." && forEar("Fixed in abc1234.") == "Fixed in a commit."
+          && forEar("The abc1234 commit fixed it.") == "The commit fixed it." && forEar("The abc1234 Commit fixed it.") == "The Commit fixed it."
+          && forEar("abc1234 broke it.") == "a commit broke it."
           && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too."
-          && ["It costs 1e10000.", "Color #4f3e2d1 is set.", "Id 0f8fad5b-d9cb-469f is set.", "See a/abc1234def."].allSatisfy { forEar($0) == $0 })
+          && ["It costs 1e10000.", "Color #4f3e2d1 is set.", "Id 0f8fad5b-d9cb-469f is set.", "See a/abc1234def.",
+              "See abc1234def/main.swift.", "Check abc1234.log.", "Diff abc1234..def5678 looks good.", "Commit Abc1234 fails."].allSatisfy { forEar($0) == $0 })
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
@@ -805,6 +810,15 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: fallback say/play, Speech.test, openLive no-key, pre-up fail, warm, and cancel/toggle paths",
               testErr == "No audio" && noKeyStopped && preUpStopped && pendingCancelled && cancelledStart
               && whyOther.contains("lost") && whyNil == "lost the connection" && why404.contains("404"))
+        // Voice.finished and failed clear chiefDrew so subsequent watch/checkIn turns (which skip began()) still update the stage
+        v.on = true; v.isLive = false; v.chiefDrew = false
+        v.finished(staged("Turn 1.\n[screen]\n- a"), "Turn 1.", detail: "- a")
+        let clearedAfterScreen = !v.chiefDrew, seqBeforeWatch = v.drawSeq
+        v.finished(staged("Watch turn.\n[screen]\n- b"), "Watch turn.", detail: "- b")
+        let watchDrewStage = v.drawSeq > seqBeforeWatch && !v.chiefDrew
+        v.chiefDrew = true; v.failed("Stopped."); v.hush()
+        check("voice: finished and failed clear chiefDrew so subsequent watch/checkIn turns still draw the stage",
+              clearedAfterScreen && watchDrewStage && !v.chiefDrew)
     }
 
     check("voice: Voice state machine handles GPT-Live events, cues, audio silence, stage blocks, fallback dedupe, barge-in, and close (\(heardText) / \(handedOff) / \(awaitingCue) / \(cueCleared) / \(startedSpeaking) / \(endedSpeaking) / \(liveErrCount) / \(fbCount) / \(capOff) / \(closedStopped) / \(bargedIn) / \(turnRanCmd))",

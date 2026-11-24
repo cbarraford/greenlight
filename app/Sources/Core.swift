@@ -469,7 +469,7 @@ final class Core: ObservableObject {
         notify(title: name, body: "That notification is no longer open. Your reply is saved in chat.", subtitle: nil, reply: false, id: "expired:\(about)")
     }
     func reply(to about: String, _ text: String, questionID: UUID? = nil, freeform: Bool = false) {
-        if let questionID {
+        if let questionID, !freeform {
             guard let q = notificationQuestion(about, id: questionID) else {
                 expiredNotification(about, reply: text)
                 return
@@ -483,7 +483,8 @@ final class Core: ObservableObject {
             return
         }
         unread = max(0, unread - 1)
-        if let q = waiting.first(where: { !$0.ping && $0.text == about }) { answer(q, text) }
+        let q = questionID.flatMap { id in waiting.first { !$0.ping && $0.id == id } } ?? waiting.first { !$0.ping && $0.text == about }
+        if let q { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
 
@@ -1017,7 +1018,8 @@ final class Core: ObservableObject {
         m.options = options
         m.failed = !ok
         msgs.append(m)
-        if ok && !options.isEmpty { questions.append(Question(text: body, options: options, ping: false)) }
+        var chatQ: Question?
+        if ok && !options.isEmpty { let q = Question(text: body, options: options, ping: false); questions.append(q); chatQ = q }
         if ok && !r.stopping && !parts.shown.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
             picks += 1
             let n = picks
@@ -1038,7 +1040,7 @@ final class Core: ObservableObject {
         if !popoverShown() && !r.stopping {
             let said = parts.detail == nil ? body : [parts.gist, parts.detail ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")  // gist first: the question it asks
             missed += 1
-            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(said.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(said.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), questionID: chatQ?.id, freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
     }

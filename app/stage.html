@@ -216,17 +216,31 @@ const TEMPLATES = {
     return [ol].concat(foot ? [$("div", "foot", foot)] : []);
   },
 };
-// Markdown's inline marks as nodes, text only: `code`, **bold**, *em* or _em_, a [link](url) as its text.
+// Markdown's inline marks as nodes, text only: `code`, ***bold+em***, **bold**, *em* or _em_, a [link](url) as its formatted text.
 const wrap = (tag, inner) => { const e = $(tag); e.append(...inline(inner)); return e; };  // a link or code inside bold too
-const inline = t => str(t).split(/(`[^`]+`|\*\*(?:[^*]|\*(?!\*))+\*\*|\*[^*\s](?:[^*]*[^*\s])?\*|(?<!\w)_[^_]+_(?!\w)|\[[^\]]+\]\([^)\s]*\))/).filter(Boolean).map(x =>
-  x[0] === "`" && x.length > 2 && x.endsWith("`") ? $("code", null, x.slice(1, -1))
-  : x.startsWith("**") && x.endsWith("**") && x.length > 4 ? wrap("b", x.slice(2, -2))
-  : /^(\*[^*\s](?:[^*]*[^*\s])?\*|_[^_]+_)$/.test(x) ? wrap("em", x.slice(1, -1))
-  : /^\[[^\]]+\]\([^)\s]*\)$/.test(x) ? document.createTextNode(x.slice(1, x.indexOf("](")))
-  : document.createTextNode(x));
-// A pipe table's rows as cells (its |---| rule dropped), drawn as the table template's grid.
+const INLINE_RE = /(`{3}[^`]+`{3}|``[^`]+``|`[^`]+`|\*\*\*(?!\s)(?:`[^`]+`|[^*`])+?(?<!\s)\*\*\*|\*\*(?!\s)(?:`[^`]+`|[^*`]|\*(?!\*)|(?<=[^*\s])\*(?=\*\*(?!\*)))+(?<!\s)\*\*|\*(?!\s)(?:`[^`]+`|[^*`])+(?<!\s)\*|(?<!\w)_(?!\s)(?:`[^`]+`|[^_`]|(?<=\w)_(?=\w))+(?<!\s)_(?!\w)|\[[^\[\]]+\]\([^)\s\[]*\))/;
+const inline = t => str(t).split(INLINE_RE).flatMap((x, i) => {
+  if (!x) return [];
+  if (i % 2 === 0) return [document.createTextNode(x)];  // unmatched text stays plain (never recurses on * or ` runs)
+  if (x[0] === "`") { const n = x.match(/^`+/)[0].length; return [$("code", null, x.slice(n, -n))]; }
+  if (x.startsWith("***") && x.endsWith("***") && x.length > 6) { const e = $("b"); e.append(wrap("em", x.slice(3, -3))); return [e]; }
+  if (x.startsWith("**")) return [wrap("b", x.slice(2, -2))];
+  if (x[0] === "*" || x[0] === "_") return [wrap("em", x.slice(1, -1))];
+  return inline(x.slice(1, x.indexOf("](")));
+});
+// A pipe table's rows as cells (its |---| rule dropped; pipes in `code` or \| stay inside their cell), drawn as the table template's grid.
+function splitRow(r){
+  const s = r.replace(/^\||(?<!\\)\|$/g, ""), cells = []; let cur = "", code = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && !code && s[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (s[i] === "`") code = !code;
+    if (s[i] === "|" && !code) { cells.push(cur.trim()); cur = ""; continue; }
+    cur += s[i];
+  }
+  cells.push(cur.trim()); return cells;
+}
 function pipeTable(rows){
-  const cells = rows.filter(r => !/^\|?[\s:|-]+\|?$/.test(r)).map(r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim()));
+  const cells = rows.filter((r, i) => !(i === 1 && /^\|?[\s:|-]+\|?$/.test(r))).map(splitRow);
   const t = $("table", "grid"), head = $("thead"), hr = $("tr"), tb = $("tbody");
   (cells[0] || []).forEach(c => { const th = $("th"); th.append(...inline(c)); hr.append(th); });
   head.append(hr); t.append(head);
@@ -241,8 +255,9 @@ function blocks(md){
     const p = $("p", quote ? "quote" : null); para.forEach((l, k) => { if (k) p.append($("br")); p.append(...inline(l)); }); out.push(p); para = []; quote = false; };
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i], t = l.trim(), m = t.match(/^([-*+]|\d+[.)])\s+(.*)$/);
-    if (t.startsWith("```")) { flush(); list = null; const code = [];
-      while (++i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i]);
+    const fence = t.match(/^(`{3,})[^`]*$/);
+    if (fence) { flush(); list = null; const code = [], end = new RegExp("^`{" + fence[1].length + ",}$");
+      while (++i < lines.length && !end.test(lines[i].trim())) code.push(lines[i]);
       out.push($("pre", null, code.join("\n"))); continue; }
     if (!t) { flush(); list = null; continue; }
     if (t.startsWith("|")) { flush(); list = null; const rows = [t];
