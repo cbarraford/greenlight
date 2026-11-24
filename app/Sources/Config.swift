@@ -98,8 +98,33 @@ func hostPaths(for targetHost: String, defaultHost: String = host, home: String 
     let localHome = ud.string(forKey: "localGreenlightHome") ?? "~/.greenlight"
     let configured = ud.string(forKey: "localGreenlightCode") ?? ""
     if !configured.isEmpty { return (localHome, configured) }
-    if code.hasPrefix("~/") || FileManager.default.fileExists(atPath: code + "/scripts/chat.py") { return (localHome, code) }
-    return (localHome, "~/.claude/skills/greenlight")
+    if FileManager.default.fileExists(atPath: (code as NSString).expandingTildeInPath + "/scripts/chat.py") { return (localHome, code) }
+    return (localHome, localSkill)  // the server's path isn't on this Mac: the skill's home, which localBackendPrefix fills
+}
+
+/// Where greenlight's scripts live on this Mac when the server holds the main checkout.
+let localSkill = "~/.claude/skills/greenlight"
+/// Exit code of a Mac-side command whose scripts couldn't be copied from the server (Core.lost explains it).
+let localBackendMissing: Int32 = 97
+
+/// A shell prefix for a command on this Mac while the default host is a server: when the skill isn't on this Mac yet (a project
+/// that needs the Mac runs its Chief and agents here, #169), copy it from the server's checkout first, once. Without it
+/// `python3 …/chat.py` exits 2 and the chat reads "Lost the connection to this Mac (exit 2)". Several commands can start
+/// together: one takes the lock and copies, the rest wait for it. "" when there is nothing to do.
+func localBackendPrefix(server: String = host, serverCode: String = greenlightCode) -> String {
+    guard !isLocalHost(server), !uitest, !unittest, !selftest, hostPaths(for: "local", defaultHost: server, code: serverCode).code == localSkill,
+          !FileManager.default.fileExists(atPath: (localSkill as NSString).expandingTildeInPath + "/scripts/chat.py") else { return "" }
+    let pack = "tar -C \(shellPath(serverCode)) -czf - --exclude=.git --exclude=app --exclude=memory --exclude=.venv --exclude=node_modules --exclude=__pycache__ ."
+    let ssh = (["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + devSsh(server) + ["--", server, pack]).map(shellQuote).joined(separator: " ")
+    return """
+    gl_d="$HOME/.claude/skills/greenlight"; if [ ! -f "$gl_d/scripts/chat.py" ]; then \
+    mkdir -p "$HOME/.claude/skills"; find "$gl_d.installing" -maxdepth 0 -mmin +5 -exec rmdir {} \\; 2>/dev/null; \
+    if mkdir "$gl_d.installing" 2>/dev/null; then \
+    gl_t=$(mktemp -d "$gl_d.XXXXXX") && \(ssh) | tar -xzf - -C "$gl_t" && [ -f "$gl_t/scripts/chat.py" ] && \
+    { rmdir "$gl_d" 2>/dev/null; [ -e "$gl_d" ] || mv "$gl_t" "$gl_d"; }; rm -rf "$gl_t"; rmdir "$gl_d.installing"; \
+    else gl_n=0; while [ -d "$gl_d.installing" ] && [ $gl_n -lt 120 ]; do sleep 1; gl_n=$((gl_n+1)); done; fi; \
+    [ -f "$gl_d/scripts/chat.py" ] || { echo "greenlight: couldn't copy greenlight from \(server) to $gl_d" >&2; exit \(localBackendMissing); }; fi;\u{20}
+    """
 }
 
 func pyCmd(on targetHost: String = host) -> String {
@@ -322,7 +347,7 @@ extension WKWebView {
 func remoteArgv(_ remote: String, on host: String = host) -> (String, [String]) {
     if host.isEmpty || host == "local" {
         if uitest || selftest { return ("/bin/sh", ["-c", remote]) }
-        return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", remote])
+        return (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-lc", localBackendPrefix() + remote])
     }
     return ("/usr/bin/ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"] + devSsh(host) + ["--", host, remote])
 }

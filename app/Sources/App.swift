@@ -901,7 +901,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         rescanning = true
         greenlight.log(.greenlight, "Greenlight", .action, "rescanning every workspace")
         ssh("\(py)/greenlight.py scan >/dev/null", onExit: { [weak self] code in
-            self?.greenlight.acted("Greenlight", "rescan", code, "")
+            self?.greenlight.acted("Greenlight", "rescan", code, "", tell: false)  // the board, not a workspace: nothing for Chief
             DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
         })
         if anyMacNeeded && !uitest && !selftest {
@@ -1118,7 +1118,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
         let isWsName: (String) -> Bool = { $0.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil }
         let badNameErr = "Unsupported characters in workspace name."
-        let winHost = l?.c.chatHost ?? greenlight.chatHost
+        let chief = l?.c ?? greenlight  // this window's Chief hears what its buttons did (Core.acted)
+        let winHost = chief.chatHost
         if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
         if cmd == "page", let name = b["name"] as? String {
             guard isWsName(name) else { from.callJS("window.mc && mc.page", [["name": name, "error": badNameErr]]); return }
@@ -1160,7 +1161,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var out = ""
             if cmd == "answer" { greenlight.log(.greenlight, name, .action, "answering its agent: \(text)") }
             ssh(remote, on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
-                if cmd == "answer" { self.greenlight.acted(name, "answer", code, out) }
+                if cmd == "answer" { chief.acted(name, "answer its agent", code, out) }
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.\(cmd == "ask" ? "asked" : "answered")(\(js))")
             })
@@ -1172,7 +1173,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
             ssh("\(pyCmd(on: h))/dash.py park '\(name)' \(on ? "on" : "off")", on: h, onLine: { out += $0 }, onExit: { code in
-                self.greenlight.acted(name, on ? "park" : "unpark", code, out)
+                chief.acted(name, on ? "park" : "unpark", code, out)
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
@@ -1185,7 +1186,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, "steward \(op)")
             ssh("\(pyCmd(on: h))/dash.py steward \(op) \(shellQuote(name))", on: h, onLine: { out += $0 }, onExit: { [weak self] code in
-                self?.greenlight.acted(name, "steward \(op)", code, out)
+                chief.acted(name, "steward \(op)", code, out)
                 let obj = (out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
                     ?? ["op": op, "name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"]
                 for w in self?.webs ?? [] where self?.readyDash.contains(ObjectIdentifier(w)) == true {
@@ -1199,6 +1200,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var out = ""
             let h = op == "new" ? resolveRepoTargetHost(arg, repoHosts: repoHosts, defaultHost: winHost) : winHost
             ssh("\(pyCmd(on: h))/dash.py task \(op) '\(arg)'", on: h, stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
+                if op == "new" { let made = chief.made(out); chief.acted(made ?? arg, made == nil ? "start a task" : "start a task in \(arg)", code, out) }
                 let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
@@ -1210,11 +1212,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
         if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path
+            let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.wsName(path: path)
             let h = workspaceHost(path: path, fallback: winHost)
             greenlight.log(.greenlight, who, .action, ["merge": "merging", "ready": "marking ready", "signoff": "signing off"][op] ?? op)
             ssh("\(pyCmd(on: h))/dash.py tree \(op) '\(path)'", on: h, onLine: { out += $0 }, onExit: { code in
-                self.greenlight.acted(who, op, code, out)
+                chief.acted(who, actedVerb[op] ?? op, code, out)
                 let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
@@ -1231,7 +1233,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
             ssh("\(pyCmd(on: h))/dash.py run '\(name)'", on: h, stdin: prompt, onLine: { out += $0 }, onExit: { code in
-                self.greenlight.acted(name, "start agent", code, out)
+                chief.acted(name, "start an agent", code, out)
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
@@ -2163,7 +2165,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
-            guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
+            guard let op = b["op"] as? String, sidebarOps.contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
             let h = workspaceHost(path: path, fallback: greenlight.chatHost)
@@ -2172,6 +2174,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
+                if let what = actedVerb[op], let c = self?.greenlight { c.acted(op == "new" ? c.made(out) ?? c.wsName(path: path) : c.wsName(path: path), what, code, out) }
             })
         case "dwim":  // ⌘J's palette, typed with nothing to jump to: a board command (dwim.py), else a question for Chief in the chat
             guard let t = (b["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return }

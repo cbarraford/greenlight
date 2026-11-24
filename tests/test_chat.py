@@ -2,7 +2,7 @@
 """Tests for chat.py: python3 -m pytest test_chat.py"""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo")  # before greenlight: never the real ~/.greenlight or glab
-import json, os, stat, subprocess, sys, time
+import io, json, os, stat, subprocess, sys, time
 import chat
 from chat import Norm, step_title
 
@@ -1005,7 +1005,7 @@ out(type="result", result=reply, is_error=False, duration_ms=10)
 """
 
 
-def turn(tmp_path, monkeypatch, msg, verbose=False):
+def turn(tmp_path, monkeypatch, msg, verbose=False, done=""):
     import ws_state
     fake = tmp_path / "claude"
     fake.write_text(FAKE)
@@ -1017,7 +1017,7 @@ def turn(tmp_path, monkeypatch, msg, verbose=False):
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     monkeypatch.setattr(ws_state, "DIR", tmp_path / "state")
     monkeypatch.setattr(ws_state, "MEMORY", tmp_path / "memory")
-    chat.turn(msg, "claude-haiku-5-5", None, verbose=verbose)
+    chat.turn(msg, "claude-haiku-5-5", None, verbose=verbose, done=done)
     prompts = [json.loads(l) for l in open(str(fake) + ".log")]
     return events, prompts
 
@@ -1051,6 +1051,24 @@ def test_board_goes_ahead_of_the_message_once(tmp_path, monkeypatch):
     assert prompts[0].startswith("BOARD (") and "faster-qa (#16): step 4/7 ready" in prompts[0] and prompts[0].endswith(chat.WRAP + "what next?"), prompts
     _, prompts = turn(tmp_path, monkeypatch, "and then?")  # the session has it: not again until it changes
     assert prompts[-1] == chat.WRAP + "and then?", prompts
+
+
+def test_buttons_go_ahead_of_the_message_not_into_it(tmp_path, monkeypatch):
+    # #175: send --done's lines reach Chief ahead of the message; the message (a reply header, the watch's marker) still leads
+    # what decisions.heard / turn_kind and GREENLIGHT_REQUEST read
+    assert chat.done_note("") == "" and chat.done_note("\n \n") == ""
+    done = "- merge on faster-qa (#16, head 0123456789ab): done\n- mark ready on b: failed: exit 1"
+    kinds = []
+    monkeypatch.setattr(chat.decisions, "turn_kind", lambda m: kinds.append(m))
+    _, prompts = turn(tmp_path, monkeypatch, "(Greenlight's watch, not typed by the user: x)", done=done)
+    assert prompts[0].startswith(chat.done_note(done)) and chat.RESCAN in prompts[0], prompts
+    assert "- mark ready on b: failed: exit 1\n\n" in prompts[0] and prompts[0].endswith(chat.WRAP + "(Greenlight's watch, not typed by the user: x)")
+    assert kinds == ["(Greenlight's watch, not typed by the user: x)"] and "merge on" not in os.environ.get("GREENLIGHT_REQUEST", "")
+    sent, args = [], ["send", "--done", "- park on a: done"]
+    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: sent.append((text, k["done"])))
+    monkeypatch.setattr(chat.sys, "stdin", io.StringIO("hi"))
+    chat.dispatch(args)  # the runner's own argument parsing
+    assert sent == [("hi", "- park on a: done")], sent  # the message stays what was typed
 
 
 def test_board_context_uses_current_card_identity(tmp_path, monkeypatch):
