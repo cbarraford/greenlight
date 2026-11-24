@@ -330,7 +330,7 @@ struct DropArea: NSViewRepresentable {
 // MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil }
+struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil }
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, end = false, hexes: [String]?
     if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
@@ -344,6 +344,12 @@ func staged(_ s: String) -> Staged {
         console = text[r].dropFirst(9).replacingOccurrences(of: "]", with: "").trimmingCharacters(in: .whitespaces)
         text.removeSubrange(r)
     }
+    var link: URL?
+    while let r = text.range(of: #"\[open:(?:[^\[\]\n]|\[[^\]\n]*+(?:\]|$))*+(?:\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief opens a PR/MR/issue in the browser: the first allowed one; every one is hidden. One [!3] level inside; possessive, so a stray one can't backtrack
+        let closed = text[r].range(of: #"^\[open:(?:[^\[\]\n]|\[[^\]\n]*+\])*+\]$"#, options: [.regularExpression, .caseInsensitive]) != nil  // its own ], not a nested one's
+        if link == nil, closed { link = forgeURL(String(text[r].dropFirst(6).dropLast())) }  // closed only: a cut-off one never opens
+        text.removeSubrange(r)
+    }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
     if let open = text.range(of: "```stage") {
@@ -352,7 +358,20 @@ func staged(_ s: String) -> Staged {
             text.removeSubrange(open.lowerBound..<close.upperBound)
         } else { text = String(text[..<open.lowerBound]) }
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil)
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil, open: link)
+}
+
+/// The forges Greenlight tracks (greenlight.py's forge_project): the only hosts Chief's [open: …] may send the browser to.
+let forgeHosts: Set<String> = ["github.com", "gitlab.com"]
+/// Chief's [open: URL] (or [open: [!3](URL)]) as a URL the browser may open: http(s) on a forge host (or its www.), no user:password@, no odd port; else nil.
+func forgeURL(_ s: String) -> URL? {
+    var t = s.trimmingCharacters(in: .whitespaces)
+    t = t.replacingOccurrences(of: #"^\[[^\]]*\]\(([^)]*)\)$"#, with: "$1", options: .regularExpression)  // [!3](url): Chief's Markdown link
+    t = t.trimmingCharacters(in: CharacterSet(charactersIn: "<>`\"' "))
+    guard let c = URLComponents(string: t), let scheme = c.scheme?.lowercased(), ["http", "https"].contains(scheme),
+          var host = c.host?.lowercased(), c.user == nil, c.password == nil, c.port == nil else { return nil }
+    if host.hasPrefix("www.") { host.removeFirst(4) }
+    return forgeHosts.contains(host) ? c.url : nil
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.

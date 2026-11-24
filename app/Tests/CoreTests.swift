@@ -104,6 +104,26 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
     check("byline: time left is never seconds", timeLeft(10) == "under a minute left" && timeLeft(70) == "about a minute left" && timeLeft(400) == "about 7 min left"
           && timeLeft(3000) == "over 20 min left" && timeLeft(0) == nil && timeLeft(-5) == nil)
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
+    check("Chief's [open: URL] opens a forge page and isn't shown", staged("Here's the PR.\n[open: https://github.com/acme/widgets/pull/7]")
+          == Staged(text: "Here's the PR.", stage: nil, open: URL(string: "https://github.com/acme/widgets/pull/7"))
+          && staged("Opening [open: https://gitl").text == "Opening" && staged("Opening [open: https://gitl").open == nil  // still streaming
+          && staged("[open: <https://gitlab.com/acme/widgets/-/merge_requests/3>]\n[open: https://github.com/x/y]").open == URL(string: "https://gitlab.com/acme/widgets/-/merge_requests/3"))
+    check("[open: …] only sends the browser to http(s) on a forge host",
+          forgeURL("http://www.github.com/a/b/issues/1") != nil && forgeURL("HTTPS://GitLab.com/a/b") != nil
+          && ["javascript:alert(1)", "file:///etc/passwd", "ssh://github.com/a/b", "https://evil.com/github.com", "https://github.com.evil.com/a",
+              "https://me" + "@github.com/a", "https://github.com" + "@evil.com/a", "https://github.com:8443/a", "https://gist.github.com/a", "github.com/a/b", ""]
+              .allSatisfy { forgeURL($0) == nil }
+          && staged("No.\n[open: https://evil.com/x]") == Staged(text: "No.", stage: nil))
+    check("[open: [!3](URL)]: a Markdown link inside opens its URL and leaves nothing behind, streaming or done",
+          staged("Here.\n[open: [!3](https://gitlab.com/acme/widgets/-/merge_requests/3)]\nMore.")
+              == Staged(text: "Here.\n\nMore.", stage: nil, open: URL(string: "https://gitlab.com/acme/widgets/-/merge_requests/3"))
+          && staged("Here. [open: [!3](https://gitl").text == "Here." && staged("Here. [open: [!3](https://gitlab.com/a/b)").text == "Here."
+          && staged("[open: [x](https://evil.com/a)]").open == nil)
+    check("[open: …] cut off before its ] is hidden but never opens", staged("Looking.\n[open: https://github.com/acme/widgets/pull/7") == Staged(text: "Looking.", stage: nil)
+          && staged("[open: [!3](https://github.com/acme/widgets/pull/3)").open == nil && staged("[open: https://github.com/acme/widgets/pull/3 [x]").open == nil)
+    let manyLinks = "Opened: [open: " + (1...12).map { "[!\($0)](https://gitlab.com/acme/widgets/-/merge_requests/\($0))" }.joined(separator: ", ") + "\nMore.", reT0 = Date()
+    check("[open: …] never backtracks: a dozen links, unclosed, parse at once; a half-typed one is hidden while it streams",
+          staged(manyLinks).open == nil && Date().timeIntervalSince(reT0) < 0.5 && staged("Here. [open: [").text == "Here." && staged("Here. [open: [!3").text == "Here.")
     check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
           livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
           && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])
@@ -345,6 +365,53 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         while failCode == nil && Date() < until2 { RunLoop.main.run(until: Date() + 0.02) }
         check("config: ssh() streams stdout lines and reports exit codes",
               lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
+        func isClosed(_ h: FileHandle?) -> Bool {
+            guard let h else { return false }
+            do { _ = try h.readToEnd(); return false } catch { return true }
+        }
+        let probe = Pipe()
+        try? probe.fileHandleForWriting.close()
+        let openNotClosed = !isClosed(probe.fileHandleForReading)
+        try? probe.fileHandleForReading.close()
+        let closedIsClosed = isClosed(probe.fileHandleForReading)
+        check("config: isClosed distinguishes an open EOF pipe from a closed handle (open=\(openNotClosed), closed=\(closedIsClosed))",
+              openNotClosed && closedIsClosed)
+        // a daemon keeps both pipes: finish() times out promptly and closes both read handles even while Process is retained
+        var heldCode: Int32?
+        let heldT0 = Date()
+        let heldProc = ssh("sleep 2 & exit 3", on: "local", onExit: { heldCode = $0 })
+        let until3 = Date() + 5
+        while heldCode == nil && Date() < until3 { RunLoop.main.run(until: Date() + 0.02) }
+        let heldElapsed = Date().timeIntervalSince(heldT0)
+        let drainDone = heldT0 + 2.4
+        while Date() < drainDone { RunLoop.main.run(until: Date() + 0.05) }  // let sleep 2 close write ends (avoids EAGAIN) while heldProc stays retained
+        let heldOutClosed = isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
+        let heldErrClosed = isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading)
+        check("config: ssh() survives a held pipe, times out promptly, and closes read handles even while Process is retained (rc=\(heldCode ?? -1), secs=\(String(format: "%.2f", heldElapsed)), out=\(heldOutClosed), err=\(heldErrClosed))",
+              heldCode == 3 && heldElapsed < 1.5 && heldOutClosed && heldErrClosed)
+        var rc0ErrDone = 0
+        for _ in 0..<10 {
+            _ = ssh("printf 'stderr noise\\n' >&2; printf 'ok\\n'", on: "local", onExit: { if $0 == 0 { rc0ErrDone += 1 } })
+        }
+        let until4 = Date() + 5
+        while rc0ErrDone < 10 && Date() < until4 { RunLoop.main.run(until: Date() + 0.02) }
+        check("config: ssh() survives rc=0 with active stderr without a close race", rc0ErrDone == 10)
+        let buffered = Pipe()
+        var got = Data()
+        let bufQ = DispatchQueue(label: "greenlight.test.pipe.buf")
+        let bufReader = PipeReader(buffered.fileHandleForReading, on: bufQ) { got.append($0) }
+        try? buffered.fileHandleForWriting.write(contentsOf: Data("hello".utf8))
+        try? buffered.fileHandleForWriting.close()
+        bufReader.finish(within: 2)
+        check("config: PipeReader reads buffered data to EOF and closes the handle",
+              got == Data("hello".utf8) && isClosed(buffered.fileHandleForReading))
+        let heldPipe = Pipe()
+        let heldQ = DispatchQueue(label: "greenlight.test.pipe.held")
+        let heldReader = PipeReader(heldPipe.fileHandleForReading, on: heldQ) { _ in }
+        heldReader.finish(within: 0.05)
+        try? heldPipe.fileHandleForWriting.close()
+        check("config: PipeReader.finish() times out and closes a held pipe without waiting for the writer",
+              isClosed(heldPipe.fileHandleForReading))
     }
 }
 
@@ -518,6 +585,23 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     check("core: chat streaming handles all event kinds, options, context meter, and compact",
           chatMsg?.text == "Done." && chatMsg?.options == ["yes", "no"] && matchedQ != nil
           && mainC.context == 1200 && mainC.window == 200000 && compactMsg.contains("Compacted"))
+
+    var browsed: [URL] = []
+    mainC.browse = { browsed.append($0) }
+    responder = { r, _, _ in
+        guard r.contains("chat.py send") else { return ([], 0) }
+        return ([#"{"e":"text_reset"}"#, #"{"e":"text","delta":"Hmm.\n[open: https://github.com/acme/widgets/pull/6"}"#,  // cut off: never opens
+                 #"{"e":"text_reset"}"#, #"{"e":"text","delta":"Opening it.\n[open: https://github.com/acme/widgets/pull/7]"}"#,
+                 #"{"e":"text_reset"}"#, #"{"e":"text","delta":"It's open."}"#, #"{"e":"done","ok":true,"text":"It's open."}"#], 0)
+    }
+    mainC.send("Pop up PR 7")
+    let carried = browsed, openMsg = mainC.msgs.last?.text
+    responder = { r, _, _ in
+        r.contains("chat.py send") ? ([#"{"e":"done","ok":false,"text":"Failed.\n[open: https://github.com/acme/widgets/pull/8]"}"#], 1) : ([], 0)
+    }
+    mainC.send("Pop up PR 8")
+    check("core: [open: URL] opens once a reply finishes, even from a block a later one replaced; a failed reply opens nothing",
+          carried == [URL(string: "https://github.com/acme/widgets/pull/7")!] && openMsg == "It's open." && browsed == carried)
 
     // 6. Watch turn & ping auto/suggest/start
     mainC.pucks = [["name": "ws-watch", "state": "needs", "why": "ci"]]

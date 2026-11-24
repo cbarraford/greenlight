@@ -34,6 +34,7 @@ final class Core: ObservableObject {
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
     var chief: String { session == 0 ? chatCmd : "CHAT_DIR=\(shellPath(greenlightHome))/chat-\(session) \(py)/chat.py" }
     var light: ([String], Bool) -> Void = { delegate.pick($0, open: $1) }  // the hexes a reply is about, lit in this chat's dashboard; true: open the lone one's card
+    var browse: (URL) -> Void = { NSWorkspace.shared.open($0) }  // Chief's [open: URL]: a forge page in the default browser
     var subs = Set<AnyCancellable>(), mirroring = false
     /// A second window's chat keeps the main one's settings, both ways: Settings (the main chat's) and this chat's own name agree.
     func follow(_ m: Core) {
@@ -886,7 +887,7 @@ final class Core: ObservableObject {
             if !r.stopping { voice.status(byline(r, now: Date(), lead: true)) }
             if n > 0 { log(.chief, name, .status, "plan: \(k) of \(n) done" + (t.isEmpty ? "" : " · \(t)")) }
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
-        case "text_reset": r.live = ""; voice.said = 0
+        case "text_reset": r.open = r.open ?? staged(r.live).open; r.live = ""; voice.said = 0  // an [open: …] in a block the next one replaces still counts
         case "text":  // a whole message (codex, opencode) shows but isn't spoken yet: it may be a progress note the reply restates;
             r.live += j["delta"] as? String ?? ""  // finished() speaks the reply (from said = 0) at done
             if !r.watch && !r.checkIn && j["whole"] as? Bool != true { voice.live(r) }
@@ -945,7 +946,10 @@ final class Core: ObservableObject {
         }
         run = nil
         tps = 0
-        if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
+        if ok && !r.stopping && !r.watch && !r.checkIn {
+            if let w = st.console { delegate.toConsole(w) }
+            if let u = st.open ?? r.open { browse(u) }  // the reply's own [open: URL], else one from a block before it
+        }
         if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
             clearing += 1  // now, so nothing sent before the clear goes to the old conversation
             DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }

@@ -553,6 +553,48 @@ enum Diag {
 /// Test seam for `ssh(...)`: when non-nil (only in `--unittest`), intercepts commands without spawning real processes.
 var sshOverride: ((_ remote: String, _ host: String, _ stdin: String, _ onLine: @escaping (String) -> Void, _ onExit: @escaping (Int32) -> Void) -> Process?)?
 
+/// Streams a pipe's read handle on a serial queue via non-blocking Darwin.read (never FileHandle's ObjC-exception
+/// availableData/readDataToEndOfFile); finish() or cancel() stops reading and closes h once any in-flight read has returned.
+final class PipeReader {
+    private let src: DispatchSourceRead
+    private let done = DispatchGroup()
+    init(_ h: FileHandle, on q: DispatchQueue, onData: @escaping (Data) -> Void) {
+        let fd = h.fileDescriptor
+        let fl = fcntl(fd, F_GETFL)
+        if fl >= 0 { _ = fcntl(fd, F_SETFL, fl | O_NONBLOCK) }
+        src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: q)
+        done.enter()
+        let g = done
+        src.setEventHandler { [weak self] in
+            guard let self, !self.src.isCancelled else { return }
+            let want = max(Int(min(self.src.data, 65536)), 4096)
+            var chunk = [UInt8](repeating: 0, count: want)
+            let n = Darwin.read(fd, &chunk, chunk.count)
+            if n > 0 { onData(Data(chunk[0..<n])); return }
+            if n < 0 && (errno == EINTR || errno == EAGAIN) { return }
+            self.src.cancel()
+        }
+        src.setCancelHandler {
+            try? h.close()
+            g.leave()
+        }
+        src.resume()
+    }
+    deinit { src.cancel() }
+    /// Waits until `deadline` for EOF, then cancels and waits for any in-flight read and close() to finish.
+    func finish(until deadline: DispatchTime) {
+        if done.wait(timeout: deadline) == .timedOut { src.cancel() }
+        done.wait()
+    }
+    /// Waits up to `secs` for EOF (<= 0 cancels immediately), then waits for close() to finish.
+    func finish(within secs: Double = 0.3) {
+        if secs <= 0 { src.cancel(); done.wait(); return }
+        finish(until: .now() + secs)
+    }
+    /// Stops reading without blocking the caller; cancelHandler closes h on its queue.
+    func cancel() { src.cancel() }
+}
+
 /// Runs <remote> where greenlight lives (remoteArgv), calling onLine (main thread) per stdout line and onExit when it ends.
 @discardableResult
 func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @escaping (String) -> Void = { _ in },
@@ -565,59 +607,47 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
     let inPipe = Pipe(), out = Pipe()
     p.standardInput = inPipe
     p.standardOutput = out
-    final class Buf { var s = Data(); let l = NSLock() }  // tail: its handler's queue writes, terminationHandler reads
+    final class Buf { var s = Data() }  // only mutated on serial ioQ, then read after finish()
+    let ioQ = DispatchQueue(label: "greenlight.ssh.io")
     let buf = Buf(), err = Pipe(), tail = Buf(), t0 = Date()
     // stderr's last 4 KB, in memory only: classified into the diag trail, never written
     p.standardError = err
-    err.fileHandleForReading.readabilityHandler = { h in
-        let d = h.availableData
-        if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: a handler left on re-fires forever (a full core)
-        tail.l.lock(); tail.s.append(d)
+    let errReader = PipeReader(err.fileHandleForReading, on: ioQ) { d in
+        tail.s.append(d)
         if tail.s.count > 4096 { tail.s = Data(tail.s.suffix(4096)) }
-        tail.l.unlock()
     }
-    out.fileHandleForReading.readabilityHandler = { h in
-        let d = h.availableData
-        if d.isEmpty { h.readabilityHandler = nil; return }
+    let outReader = PipeReader(out.fileHandleForReading, on: ioQ) { d in
         var lines = [String]()
-        buf.l.lock()
         buf.s.append(d)
         while let nl = buf.s.firstIndex(of: 10) {
             lines.append(String(decoding: buf.s[buf.s.startIndex..<nl], as: UTF8.self))
             buf.s.removeSubrange(buf.s.startIndex...nl)
         }
-        buf.l.unlock()
         if !lines.isEmpty { DispatchQueue.main.async { for l in lines { onLine(l) } } }
     }
     p.terminationHandler = { p in
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
         let rc = p.terminationStatus
-        if rc != 0 {  // a fast failure's stderr may not have been read yet: drain it, but never wait long on a pipe a daemon kept
-            let sem = DispatchSemaphore(value: 0), drained = Buf()
-            DispatchQueue.global().async { drained.s = err.fileHandleForReading.readDataToEndOfFile(); sem.signal() }
-            let more = sem.wait(timeout: .now() + 0.3) == .success ? drained.s : Data()  // ponytail: a held pipe leaks that one reader thread
-            tail.l.lock(); let seen = tail.s; tail.l.unlock()
+        if rc != 0 {  // a fast failure's stderr may not have been read yet: drain both pipes, but never wait long on a pipe a daemon kept
+            let deadline = DispatchTime.now() + 0.3
+            errReader.finish(until: deadline)
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": Int(rc), "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
-                                    "msg_class": Diag.classify(String(decoding: (seen + more).suffix(4096), as: UTF8.self))])
+                                    "msg_class": Diag.classify(String(decoding: tail.s, as: UTF8.self))])
+            outReader.finish(until: deadline)
         } else {
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
+            errReader.finish(within: 0)
+            outReader.finish(within: 0.3)
         }
-        let outSem = DispatchSemaphore(value: 0), outDrained = Buf()
-        DispatchQueue.global().async { outDrained.s = out.fileHandleForReading.readDataToEndOfFile(); outSem.signal() }
-        let rest = outSem.wait(timeout: .now() + 0.3) == .success ? outDrained.s : Data()
-        buf.l.lock(); let leftover = buf.s + rest; buf.s.removeAll(); buf.l.unlock()
-        try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
+        let leftover = buf.s; buf.s.removeAll()
         DispatchQueue.main.async {
             for l in String(decoding: leftover, as: UTF8.self).split(separator: "\n") { onLine(String(l)) }
             onExit(rc)
         }
     }
     do { try p.run() } catch {
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
+        outReader.cancel(); errReader.cancel()
         p.terminationHandler = nil
-        try? inPipe.fileHandleForWriting.close(); try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
+        try? inPipe.fileHandleForWriting.close()
         Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": -1, "msg_class": "spawn"])
         DispatchQueue.main.async { onExit(-1) }
         return p
