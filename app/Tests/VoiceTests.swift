@@ -32,18 +32,42 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     let objs = stageCard("{\"title\":\"!12\",\"kind\":\"compare\",\"items\":[{\"label\":\"CI\",\"detail\":\"green\",\"tone\":\"ok\"},{\"name\":\"Owner\",\"value\":3},{\"tone\":\"x\"}]}")
     check("voice: a card's object items keep label, detail and a known tone; empty ones drop",
           objs?["kind"] as? String == "compare" && (objs?["items"] as? [[String: String]]) == [["label": "CI", "detail": "green", "tone": "ok"], ["label": "Owner", "detail": "3", "tone": ""]])
-    check("voice: a chart, HTML, notes or empty JSON aren't cards; a native template goes through whole",
+    check("voice: a chart, HTML, notes or empty JSON aren't cards; a native template with its facts goes through whole, links to their text",
           stageCard("{\"chart\":\"bar\",\"title\":\"x\"}") == nil && stageCard("<b>hi</b>") == nil && stageCard("Three MRs are green.") == nil
-          && stageCard("{}") == nil && stageCard("{\"title\": ") == nil && stageCard("{\"kind\":\"table\",\"rows\":[[\"a\"]]}")?["rows"] != nil
-          && (stageCard("[\"one\", \"two\"]")?["items"] as? [[String: String]])?.count == 2
-          && (stageCard("{\"title\":\"audit\",\"findings\":[\"1. divide by zero\",\"Likely recovered\"]}")?["items"] as? [[String: String]])?.map { $0["label"]! } == ["divide by zero", "Likely recovered"])
-    let fb = fallbackSpec("{\"heading_x\":\"Held\",\"meta\":{\"a\":\"CI green\",\"b\":\"no conflicts\"}}"), fbText = "\(fb)"
-    check("voice: the fallback never puts raw JSON on the stage: a card, else its values as lines",
-          fallbackSpec(issued)["title"] as? String == "Issue filed" && !fbText.contains("{\"") && fb["title"] as? String == "Held"
+          && stageCard("{}") == nil && stageCard("{\"title\": ") == nil
+          && (stageCard("{\"kind\":\"table\",\"title\":\"[x](https://u)\",\"rows\":[[\"[!1](https://u)\", 2]]}")?["rows"] as? [[Any]])?.first?.first as? String == "!1"
+          && stageCard("{\"kind\":\"table\",\"title\":\"[x](https://u)\",\"rows\":[[\"a\"]]}")?["title"] as? String == "x"
+          && (stageCard("[\"one\", \"two\"]")?["items"] as? [[String: String]])?.count == 2)
+    let labels = { (s: String) in (stageCard(s)?["items"] as? [[String: String]])?.map { $0["label"]! + ($0["detail"]!.isEmpty ? "" : "=" + $0["detail"]!) } }
+    check("voice: a template without its facts is a card, not an empty table (#153 review)",
+          labels("{\"kind\":\"table\",\"title\":\"Results\",\"items\":[\"One\"]}") == ["One"] && stageCard("{\"kind\":\"timeline\",\"items\":[\"a\"]}")?["kind"] as? String == "list")
+    check("voice: a shape a card can't show goes to Haiku whole, not a bare title (#153 review)",
+          ["{\"title\":\"MRs\",\"rows\":[[\"!1\",\"green\"]]}", "{\"title\":\"F\",\"items\":\"a, b\"}", "{\"title\":\"M\",\"items\":{\"!12\":\"green\"}}",
+           "{\"title\":\"MRs\",\"columns\":[\"MR\",\"CI\"],\"rows\":[[\"!1\",\"green\"]]}", "{\"title\":\"audit\",\"findings\":[\"x\"]}"].allSatisfy { stageCard($0) == nil })
+    check("voice: plain values beside the title, other item keys and true/false all make it onto the card (#153 review)",
+          labels("{\"title\":\"Status\",\"CI\":\"green\",\"sub\":\"backend\",\"Draft\":false}") == ["CI=green", "Draft=no", "backend"]
+          && labels("{\"title\":\"t\",\"items\":[{\"ref\":\"!12\",\"status\":\"merged\"},{\"label\":\"Mergeable\",\"value\":true,\"why\":\"CI green\"}]}") == ["!12=merged", "Mergeable=yes · CI green"]
+          && labels("{\"title\":\"audit\",\"notes\":[\"1. divide by zero\",\"Likely recovered\"]}") == ["1. divide by zero", "Likely recovered"])
+    check("voice: a card's lines keep their meaning: 1) counts as steps, a list keeps its numbers, > and + and URLs stay (#153 review)",
+          labels("{\"items\":[\"1) merge\",\"2) rebase\"]}") == ["merge", "rebase"] && stageCard("{\"items\":[\"1) merge\"]}")?["kind"] as? String == "steps"
+          && labels("{\"kind\":\"list\",\"items\":[\"1. a\",\"2. b\"]}") == ["1. a", "2. b"]
+          && labels("{\"items\":[\"> 5 minutes\",\"+ 2 added\",\"https://x.test/1\"]}") == ["> 5 minutes", "+ 2 added", "https://x.test/1"]
+          && labels("{\"items\":[\"\",\" \",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]}")?.count == 8)
+    check("voice: the fence's own label, any case, before the JSON (#153 review)",
+          ["JSON\n{\"title\":\"x\"}", "-json {\"title\":\"x\"}", "card\n{\"title\":\"x\"}", "json{\"title\":\"x\"}"].allSatisfy { stageCard($0)?["title"] as? String == "x" })
+    let raw = { (spec: [String: Any]) in ([spec["title"] as? String ?? ""] + ((spec["items"] as? [[String: String]]) ?? []).map { $0["label"]! }).contains { $0.hasPrefix("{") || $0.hasPrefix("[") || $0.contains("\":") } }
+    let fb = fallbackSpec("{\"heading_x\":\"Held\",\"meta\":{\"a\":\"CI green\",\"b\":\"no conflicts\"}}")
+    let broken = fallbackSpec("JSON\n{\"title\":\"Work on first\",\"items\":[\"merge !5415\",\"say \\\"go\\\"\",]}")
+    check("voice: the fallback never puts raw JSON on the stage: a card, else its values (title first), else a broken block's quoted values",
+          fallbackSpec(issued)["title"] as? String == "Issue filed" && !raw(fb) && fb["title"] as? String == "Held"
           && (fb["items"] as? [[String: String]])?.map { $0["label"]! } == ["CI green", "no conflicts"]
-          && fallbackSpec("All green. Two MRs wait.")["title"] as? String == "All green.")
-    check("voice: a ```Stage fence is cut out of the transcript too", staged("Done.\n```Stage\n{\"title\":\"x\"}\n```").text == "Done."
-          && staged("Done.\n``` stage\n{}\n```").stage == "{}")
+          && fallbackSpec("{\"summary\":\"Held\",\"title\":\"T\",\"more\":{\"a\":\"x\"}}")["title"] as? String == "T"
+          && !raw(broken) && broken["title"] as? String == "Work on first" && (broken["items"] as? [[String: String]])?.map { $0["label"]! } == ["merge !5415", "say \"go\""]
+          && raw(["title": "{\"title\":\"x\"}"]) && fallbackSpec("All green. Two MRs wait.")["title"] as? String == "All green.")
+    let two = staged("A.\n```stage\n{\"title\":\"x\"}\n```\nB.\n```Stage\n{\"title\":\"y\"}\n```\nC.")
+    check("voice: every ```stage block is cut out of the transcript, ```Stage too; the first is drawn (#153 review)",
+          two.text == "A.\n\nB.\n\nC." && two.stage == "{\"title\":\"x\"}" && staged("Done.\n``` stage\n{}\n```").stage == "{}"
+          && staged("Run:\n```stagehand\nx\n```").stage == nil && staged("```stage-json\n{}\n```").stage == "-json\n{}")
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
