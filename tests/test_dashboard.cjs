@@ -1228,14 +1228,21 @@ test("hovering an agent whose hex is in a stack highlights the stack hub and mem
   await page.evaluate(() => hl("st-1", false));
   assert.equal(await page.$eval(".fan .hub", e => e.classList.contains("hl")), false, "hub clears once last highlighted member clears");
 
-  // Fanning the stack open and hovering a member highlights its agent card too
+  // Fanning the stack open and hovering a member highlights its agent card and member hex without double-highlighting the hub
   await page.hover(".fan .hub");
-  await page.waitForSelector(".fan.open");
-  await page.waitForTimeout(260);
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".fan.open .fp[data-name='st-2']");
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    return cs.opacity === "1"
+      && Math.abs(parseFloat(cs.left) - parseFloat(el.style.getPropertyValue("--x"))) < 1
+      && Math.abs(parseFloat(cs.top) - parseFloat(el.style.getPropertyValue("--y"))) < 1;
+  });
   await page.hover(".fan .fp[data-name='st-2']");
   assert.equal(await page.$eval(".acard[data-name='st-2']", e => e.classList.contains("hl")), true, "hovering a fanned member highlights its agent card");
   assert.equal(await page.$eval(".fan .fp[data-name='st-2']", e => e.classList.contains("hl")), true);
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .fp[data-name='st-2'] .halo")).opacity === "1");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".fan .hub .halo")).opacity === "0");
   await page.mouse.move(1, 1);
   assert.equal(await page.$eval(".acard[data-name='st-2']", e => e.classList.contains("hl")), false, "leaving fanned member clears its agent card highlight");
 });

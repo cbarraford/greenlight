@@ -251,8 +251,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hx .prog{fill:none;stroke:var(--hprog);stroke-linejoin:round}
 .hx .halo{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;opacity:0;transition:opacity var(--t-fast) ease}
 .cell:focus-visible{box-shadow:none}  /* the hex's halo is its focus ring */
-.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.hub.hl .halo,.fp:hover .halo,.fp.hl .halo{opacity:1}
-.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.hub.hl .halo,.fp.hl .halo{stroke:var(--accent)}
+.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp:hover .halo,.fp.hl .halo{opacity:1}
+.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp.hl .halo{stroke:var(--accent)}
 /* needs you or crashed: three pulses when it arrives, then it rests (DESIGN.md §7) */
 .hx .pulse{fill:none;stroke-width:2;transform-box:fill-box;transform-origin:center;animation:hpulse 2.4s var(--ease) 3 both}
 @keyframes hpulse{from{transform:scale(1);opacity:.7}to{transform:scale(1.06);opacity:0}}
