@@ -18,8 +18,10 @@ upload has left it with no file.
 
 Re-running a build that's already published rebuilds nothing and leaves its files alone (the live feed may point at them): it
 checks that build's own signed feed and points the channel at it again (a release missing any of its three files stops the
-run: delete it on GitHub to build it fresh). A draft holding only this build's files, left by a run that stopped partway, is
-deleted and built again; any other draft for the tag (say, one you started by hand) stops the run and is left alone.
+run: delete it on GitHub to build it fresh). A draft holding some of this build's files and nothing else, left by a run that
+stopped mid-upload, is deleted and built again. Any other draft for the tag stops the run and is left alone: one holding
+other files, or an empty one, which is either a run stopped before its first upload or one you started by hand (it may
+hold your notes, so it's never deleted for you; delete it on GitHub if it's a stopped run's).
 
 For main, use *Run workflow* (main's current commit: built if it has no release yet, else re-pointed) rather than re-running
 an old run: a re-run never cancels the build that's running, but while waiting it can still replace a newer run that's

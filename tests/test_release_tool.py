@@ -322,7 +322,8 @@ def test_release_workflow_guards_the_key_the_feed_and_reruns():
                           check=True).stdout.strip() for pat in re.findall(r"sed -n '([^']+)'", guard)]
     assert got == ["412", "1.3.0"]
     # a draft is deleted only when it holds nothing but this build's own files; a repair needs all three of them
-    assert 'grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}"' in guard and '[ -z "$assets" ]' in guard
+    assert 'grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}"' in guard
+    assert guard.index('[ -z "$assets" ]') < guard.index("an empty draft release") < guard.index('gh release delete "$TAG"')
     assert guard.index("grep -qvxF") < guard.index('gh release delete "$TAG"')
     assert '"$(grep -cxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets")" = 3' in guard
     # a published build is never rebuilt or re-uploaded (the live feed may point at its files): it only re-points the feed;
