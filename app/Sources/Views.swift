@@ -235,7 +235,7 @@ struct RunCard: View, Looked {
             Text(mono ? "[ stop ]" : "Stop").font(ui(DS.TypeRole.label)).foregroundColor(fg)
                 .padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightSm)
                 .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm).fill(mono ? Color.clear : card))
-                .overlay(RoundedRectangle(cornerRadius: 0).stroke(mono ? fg : .clear))
+                .overlay(Rectangle().stroke(mono ? fg : .clear))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(r.stopping).opacity(r.stopping ? 0.5 : 1).accessibilityLabel("Stop").help("Stop this run")
     }
@@ -483,31 +483,31 @@ struct Inbox: View {
     var body: some View {
         let w = c.waiting, open = c.inboxFocus?.id
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.sp2) {
+            HStack(spacing: DS.Space.s8) {
                 Text("Inbox").fontWeight(.semibold)
                 if !w.isEmpty {
-                    Text("\(w.count)").font(sys(size: Theme.fs1, weight: .bold)).foregroundColor(.black.opacity(0.8))
-                        .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16).background(Capsule().fill(Theme.needs))
+                    Text("\(w.count)").font(sys(size: DS.TypeRole.caption.size, weight: .bold)).foregroundColor(.black.opacity(0.8))
+                        .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16).background(Capsule().fill(StatusInk.needs))
                         .accessibilityLabel("\(w.count) waiting")
                 }
                 Spacer()
                 Button { c.inboxOpen = false } label: {
-                    Image(ds: "close", size: iconSize(Theme.glyph), medium: true).foregroundColor(dim).frame(width: 28, height: 28).contentShape(Rectangle())
+                    Image(ds: "close", size: iconSize(glyphSize), medium: true).foregroundColor(dim).frame(width: 28, height: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain).help("Close (Esc)").accessibilityLabel("Close inbox")
-            }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp2).padding(.vertical, Theme.sp1).background(card)
+            }.padding(.leading, DS.Space.s16).padding(.trailing, DS.Space.s8).padding(.vertical, DS.Space.s4).background(card)
             Divider().overlay(line)
             if w.isEmpty {
-                HStack(alignment: .top, spacing: Theme.sp3) {
-                    Image(ds: "done-fill", size: iconSize(Theme.fs5)).foregroundColor(Theme.done)
+                HStack(alignment: .top, spacing: DS.Space.s12) {
+                    Image(ds: "done-fill", size: iconSize(DS.TypeRole.title.size)).foregroundColor(StatusInk.done)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Nothing waiting on you").fontWeight(.semibold)
-                        Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: Theme.fs2)).foregroundColor(dim)
+                        Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: DS.TypeRole.label.size)).foregroundColor(dim)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(Theme.sp4)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.s16)
             } else {
                 let rows = VStack(spacing: 0) {
                     ForEach(w) { q in if q.id == open { QuestionRow(c: c, q: q) } else { InboxLine(c: c, q: q) } }
-                }.padding(.vertical, Theme.sp1)
+                }.padding(.vertical, DS.Space.s4)
                 ViewThatFits(in: .vertical) { rows; ScrollView { rows } }
             }
             // the last few answered, and every answer greenlight gave for you in the last day (each with its Undo)
@@ -515,47 +515,47 @@ struct Inbox: View {
             let done = answered.filter { last.contains($0.id) || ($0.auto != nil && $0.ts > Date().addingTimeInterval(-86400)) }.reversed()
             if !done.isEmpty {
                 Divider().overlay(line)
-                VStack(alignment: .leading, spacing: Theme.sp2) {
-                    Text("ANSWERED").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(dim)
+                VStack(alignment: .leading, spacing: DS.Space.s8) {
+                    Text("ANSWERED").font(sys(size: DS.TypeRole.caption.size, weight: .semibold)).foregroundColor(dim)
                     ForEach(Array(done)) { q in
-                        HStack(spacing: Theme.sp2) {
+                        HStack(spacing: DS.Space.s8) {
                             let dismissed = q.answer == "(dismissed)"
-                            Image(ds: q.auto != nil ? "sparkles" : dismissed ? "close" : "check", size: iconSize(Theme.fs1), medium: true)
-                                .foregroundColor(q.auto != nil ? accent : dismissed ? dim : Theme.done).frame(width: 12)
+                            Image(ds: q.auto != nil ? "sparkles" : dismissed ? "close" : "check", size: iconSize(DS.TypeRole.caption.size), medium: true)
+                                .foregroundColor(q.auto != nil ? accent : dismissed ? dim : StatusInk.done).frame(width: 12)
                             Text(q.title(c.name)).foregroundColor(sub).lineLimit(1).frame(width: 92, alignment: .leading)
                             Text(dismissed ? "Dismissed" : q.answer ?? "").foregroundColor(dim).lineLimit(1).help(q.text)
-                            Spacer(minLength: Theme.sp2)
+                            Spacer(minLength: DS.Space.s8)
                             if q.auto != nil {
                                 Button("Ask again") { c.undoAuto(q) }.buttonStyle(.plain).foregroundColor(accent)
                                     .help("Greenlight will ask again. This does not reverse an action already taken.")
                             }
-                        }.font(sys(size: Theme.fs2))
+                        }.font(sys(size: DS.TypeRole.label.size))
                     }
-                }.padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3)
+                }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s12)
             }
             if !w.isEmpty {
                 Divider().overlay(line)
-                HStack(spacing: Theme.sp2) {
+                HStack(spacing: DS.Space.s8) {
                     if c.inboxConfirm {
                         Text("Dismiss all \(w.count) without answering?").foregroundColor(sub)
-                        Spacer(minLength: Theme.sp2)
+                        Spacer(minLength: DS.Space.s8)
                         Button("Cancel") { c.inboxConfirm = false }.buttonStyle(.plain).foregroundColor(dim).help("Esc")
                         Button("Clear all", action: c.clearInbox).buttonStyle(.plain).fontWeight(.semibold).foregroundColor(fg)
-                            .padding(.horizontal, Theme.sp3).frame(minHeight: 26).background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface))
-                            .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge)).help("Return")
+                            .padding(.horizontal, DS.Space.s12).frame(minHeight: 26).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(surface))
+                            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(edge)).help("Return")
                     } else {
                         Group { kbd("↑↓"); Text("move"); kbd("⌫"); Text("dismiss"); kbd("esc"); Text("close") }.foregroundColor(dim)
-                        Spacer(minLength: Theme.sp2)
+                        Spacer(minLength: DS.Space.s8)
                         Button { c.inboxConfirm = true } label: { HStack(spacing: 6) { Text("Clear all"); kbd("⇧⌫") } }.buttonStyle(.plain).foregroundColor(sub)
                             .help("Dismiss every waiting question without answering. Nothing is sent.")
                     }
-                }.font(sys(size: Theme.fs1)).padding(.horizontal, Theme.sp4).frame(minHeight: 38).background(card)
+                }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38).background(card)
             }
         }
-        .background(RoundedRectangle(cornerRadius: Theme.r3).fill(bg))
-        .overlay(RoundedRectangle(cornerRadius: Theme.r3).stroke(edge))
-        .clipShape(RoundedRectangle(cornerRadius: Theme.r3))
-        .shadow(color: .black.opacity(theme.dark ? 0.5 : 0.12), radius: theme.dark ? 20 : 12, y: theme.dark ? 10 : 4)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(bg))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(edge))
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
+        .shadow(color: .black.opacity(isDark ? 0.45 : 0.10), radius: 12, y: 6)  // elevation 2: an overlay, no scrim (§10.13)
         .accessibilityElement(children: .contain).accessibilityLabel("Questions waiting for you")
     }
 }
@@ -563,7 +563,7 @@ struct Inbox: View {
 /// A key, as the inbox shows it: "1", "R", "⇧⌫".
 func kbd(_ k: String) -> some View {
     Text(k).font(sys(size: 10, weight: .medium)).foregroundColor(dim).padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(edge)).accessibilityHidden(true)
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge)).accessibilityHidden(true)
 }
 
 /// A waiting question, folded to a line: which workspace, what it asks, how long ago. Click opens it.
@@ -573,13 +573,13 @@ struct InboxLine: View {
     @StateObject private var hover = Flag()  // not @State: see the top of the file
     var body: some View {
         Button { c.inboxPick = q.id } label: {
-            HStack(spacing: Theme.sp2) {
-                Circle().fill(Theme.needs).frame(width: 6, height: 6)
-                Text(q.title(c.name)).font(sys(size: Theme.fs2, weight: .semibold)).lineLimit(1).frame(width: 92, alignment: .leading)
-                Text(q.label.1).font(sys(size: Theme.fs2)).foregroundColor(sub).lineLimit(1)
-                Spacer(minLength: Theme.sp1)
-                Text(ago(q.ts)).font(sys(size: Theme.fs1)).foregroundColor(dim)
-            }.padding(.horizontal, Theme.sp4).frame(height: 32).background(hover.on ? surface : .clear).contentShape(Rectangle())
+            HStack(spacing: DS.Space.s8) {
+                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)
+                Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1).frame(width: 92, alignment: .leading)
+                Text(q.label.1).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub).lineLimit(1)
+                Spacer(minLength: DS.Space.s4)
+                Text(ago(q.ts)).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim)
+            }.padding(.horizontal, DS.Space.s16).frame(height: 32).background(hover.on ? surface : .clear).contentShape(Rectangle())
         }.buttonStyle(.plain).onHover { hover.on = $0 }.accessibilityLabel("\(q.title(c.name)): \(q.label.1)").accessibilityHint("Opens the question")
     }
 }
@@ -591,57 +591,57 @@ struct QuestionRow: View {
     @FocusState private var typing: Bool
     var body: some View {
         let (mr, said) = q.label
-        VStack(alignment: .leading, spacing: Theme.sp2) {
-            HStack(spacing: Theme.sp2) {
-                Circle().fill(Theme.needs).frame(width: 6, height: 6)  // ping or chat, it waits on you
-                Text(q.title(c.name)).font(sys(size: Theme.fs2, weight: .semibold)).lineLimit(1)
-                if let mr { Text(mr).font(sys(size: Theme.fs2)).foregroundColor(sub) }
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
+            HStack(spacing: DS.Space.s8) {
+                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)  // ping or chat, it waits on you
+                Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1)
+                if let mr { Text(mr).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub) }
                 Spacer(minLength: 0)
-                Text(ago(q.ts)).font(sys(size: Theme.fs1)).foregroundColor(dim)
+                Text(ago(q.ts)).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim)
             }
-            Text(md(said)).font(chatFace(size: Theme.fs3)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(md(said)).font(chatFace(size: DS.TypeRole.body.size)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             let chips = Group {  // equal weight, unless autonomy.py's past answers make one likely (tier 2): that one is preselected
                 ForEach(Array(q.options.enumerated()), id: \.element) { i, o in
                     AnswerChip(title: o, key: i < 9 ? "\(i + 1)" : nil, likely: q.suggest?.choice == o) { c.answer(q, o) }
                 }
                 if c.replyingTo != q.id {
                     Button { c.replyText = ""; c.replyingTo = q.id } label: { HStack(spacing: 6) { kbd("R"); Text(q.options.isEmpty ? "Reply" : "Other…") } }
-                        .buttonStyle(.plain).font(sys(size: Theme.fs2)).foregroundColor(sub)
-                        .padding(.horizontal, Theme.sp3).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
+                        .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub)
+                        .padding(.horizontal, DS.Space.s12).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
                 }
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: Theme.sp2) { chips }
-                VStack(alignment: .leading, spacing: Theme.sp2) { chips }
+                HStack(spacing: DS.Space.s8) { chips }
+                VStack(alignment: .leading, spacing: DS.Space.s8) { chips }
             }
             if c.replyingTo == q.id {
-                HStack(spacing: Theme.sp2) {
+                HStack(spacing: DS.Space.s8) {
                     TextField("Reply to \(c.name)…", text: $c.replyText).textFieldStyle(.plain).onSubmit(send).focused($typing)
                         .onAppear { DispatchQueue.main.async { typing = true } }
                     Button(action: send) {
-                        Image(ds: "arrow-up", size: iconSize(Theme.fs1), medium: true).frame(width: 24, height: 24)
-                            .background(RoundedRectangle(cornerRadius: Theme.r1).fill(accent)).foregroundColor(bg)
+                        Image(ds: "arrow-up", size: iconSize(DS.TypeRole.caption.size), medium: true).frame(width: 24, height: 24)
+                            .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(accent)).foregroundColor(bg)
                     }.buttonStyle(.plain).accessibilityLabel("Send reply")
-                }.padding(.leading, Theme.sp3).padding(.trailing, 2).padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: Theme.r1).fill(bg)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(accent))
+                }.padding(.leading, DS.Space.s12).padding(.trailing, 2).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg)).overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(accent))
             }
-            HStack(spacing: Theme.sp1) {
+            HStack(spacing: DS.Space.s4) {
                 if let s = q.suggest {
                     Label { Text(likelyNote(s)) } icon: { Image(ds: "sparkles") }.lineLimit(1)
                         .help("Greenlight's guess from your past answers to this sort of question. Nothing is sent until you choose.")
                     Text("·")
                 }
                 Text(q.ping ? "Ping" : "Asked in the chat")
-                Spacer(minLength: Theme.sp2)
+                Spacer(minLength: DS.Space.s8)
                 if let ws = q.about {
                     Button("Open") { c.openPage(ws) }.buttonStyle(.plain).foregroundColor(sub).help("Show \(ws) in the dashboard")
                 }
-                Button("Dismiss") { c.dismiss(q) }.buttonStyle(.plain).foregroundColor(sub).padding(.leading, Theme.sp2)
+                Button("Dismiss") { c.dismiss(q) }.buttonStyle(.plain).foregroundColor(sub).padding(.leading, DS.Space.s8)
                     .help("Dismiss without answering (⌫)")
-            }.font(sys(size: Theme.fs1)).foregroundColor(dim)
-        }.padding(Theme.sp3)
-            .background(RoundedRectangle(cornerRadius: Theme.r2).fill(card)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
-            .padding(.horizontal, Theme.sp2).padding(.vertical, Theme.sp1)
+            }.font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim)
+        }.padding(DS.Space.s12)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
+            .padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)
     }
     func send() {
         let t = c.replyText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -669,16 +669,16 @@ struct AutonomyActRow: View {
     let a: AutonomyReport.Act, title: String, fg: Color, dim: Color, undo: () -> Void
     var body: some View {
         let said = a.text.map { String(splitOptions($0).0.prefix(120)) } ?? ""
-        HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(a.choice) · \(title)").font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+                Text("\(a.choice) · \(title)").font(sys(size: DS.TypeRole.body.size, weight: .medium)).foregroundColor(fg)
                 Text("\(ago(Date(timeIntervalSince1970: a.ts))) · \(Int((a.prob * 100).rounded()))% sure · \(said)")
-                    .font(sys(size: Theme.fs2)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+                    .font(sys(size: DS.TypeRole.label.size)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: Theme.sp3)
-            if a.undone != nil { Text("Asked again").font(sys(size: Theme.fs1)).foregroundColor(dim) }
+            Spacer(minLength: DS.Space.s12)
+            if a.undone != nil { Text("Asked again").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) }
             else { Button("Ask me again", action: undo).help("Asks you again; it does not reverse an action already taken") }
-        }.padding(.horizontal, Theme.sp4).padding(.vertical, 10)
+        }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10)
     }
 }
 
@@ -698,13 +698,13 @@ struct AnswerChip: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let key { kbd(key) }
-                if likely { Image(ds: "check", size: iconSize(Theme.fs1), medium: true) }
+                if likely { Image(ds: "check", size: iconSize(DS.TypeRole.caption.size), medium: true) }
                 Text(title)
             }
-        }.buttonStyle(.plain).font(sys(size: Theme.fs2, weight: likely ? .semibold : .regular))
-            .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).frame(minHeight: 30)
-            .background(Capsule().fill(Theme.needs.opacity(likely ? (hover.on ? 0.32 : 0.22) : hover.on ? 0.14 : 0)).background(Capsule().fill(surface)))
-            .overlay(Capsule().stroke(Theme.needs.opacity(hover.on || likely ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
+        }.buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size, weight: likely ? .semibold : .regular))
+            .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(minHeight: 30)
+            .background(Capsule().fill(StatusInk.needs.opacity(likely ? (hover.on ? 0.32 : 0.22) : hover.on ? 0.14 : 0)).background(Capsule().fill(surface)))
+            .overlay(Capsule().stroke(StatusInk.needs.opacity(hover.on || likely ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
             .accessibilityLabel(likely ? "\(title), suggested" : title)
     }
 }
@@ -714,13 +714,13 @@ final class Flag: ObservableObject { @Published var on = false }
 struct HintTab: View {
     let text: String
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.r1)
-        HStack(spacing: Theme.sp2) {
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.sm)
+        HStack(spacing: DS.Space.s8) {
             Circle().fill(accent).frame(width: 6, height: 6)
-            Text(text).font(sys(size: Theme.fs1)).foregroundColor(fg).lineLimit(3).fixedSize(horizontal: false, vertical: true)
-        }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
+            Text(text).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(fg).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+        }.padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s4 + 2)
             .background(shape.fill(bg)).overlay(shape.stroke(edge))
-            .preferredColorScheme(theme.dark ? .dark : .light)
+            .preferredColorScheme(isDark ? .dark : .light)
     }
 }
 /// The hint's size: its one line, or wrapped at 480 pt (a long name), so it never runs off screen.
@@ -744,33 +744,40 @@ struct InboxOverlay: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.clear.contentShape(Rectangle()).onTapGesture { c.inboxOpen = false }  // no scrim: the dashboard stays readable
-            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 420).padding(.top, 50).padding(.trailing, Theme.sp3).padding(.bottom, Theme.sp4)
+            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 420).padding(.top, 50).padding(.trailing, DS.Space.s12).padding(.bottom, DS.Space.s16)
             Button("") { c.inboxOpen = false }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundColor(fg)
-        .preferredColorScheme(theme.dark ? .dark : .light)
-        .font(sys(size: Theme.fs3))
+        .preferredColorScheme(isDark ? .dark : .light)
+        .font(sys(size: DS.TypeRole.body.size))
     }
 }
 
-/// One accent choice: a 20pt disk in a 32pt target, its name on hover, an outline on hover or focus.
+/// One accent swatch (§10.20): the accent's solid fill, a ring and a check when it's the one you're on.
 struct AccentDot: View {
     @ObservedObject var c: Core
-    let h: String
-    var ring = fg, rim = edge  // Settings passes its own theme's
+    let a: AccentSet
     @FocusState private var focused: Bool
-    static let names = ["F5A524": "Amber", "FF7A45": "Orange", "F7768E": "Rose", "FF79C6": "Pink", "BD93F9": "Purple", "7AA2F7": "Blue", "2AC3DE": "Cyan", "9ECE6A": "Green"]
     var body: some View {
-        let on = h == accentHex, name = Self.names[h] ?? "#\(h)", hover = c.hint == name  // Tip sets the hint while hovered
-        Button { c.restyle { accentHex = h } } label: {
-            Circle().fill(Color(nsColor: hex(h))).frame(width: 20, height: 20)
-                .overlay(Circle().stroke(on ? ring : hover || focused ? rim : Color.clear, lineWidth: 2).padding(-3))
-                .overlay { if on { Image(ds: "check", size: iconSize(Theme.glyph), medium: true).foregroundColor(.black.opacity(0.7)) } }
-                .frame(width: 32, height: 32).contentShape(Rectangle())
+        let on = a.id == accentName, hover = c.hint == a.name  // Tip sets the hint while hovered
+        Button { c.restyle { accentName = a.id } } label: {
+            VStack(spacing: DS.Space.s4) {
+                Circle().fill(Color(a.solid, dark: isDark)).frame(width: 20, height: 20)
+                    .overlay(Circle().stroke(on ? fg : hover || focused ? edge : Color.clear, lineWidth: 2).padding(-3))
+                    .overlay { if on { Image(ds: "check", size: iconSize(glyphSize), medium: true).foregroundColor(Color(a.onSolid, dark: isDark)) } }
+                    .frame(width: 28, height: 28)
+                Text(a.name).font(ds(DS.TypeRole.caption)).foregroundColor(on ? fg : dim)
+            }.frame(minWidth: 56).contentShape(Rectangle())
         }.buttonStyle(.plain).focused($focused)
-            .modifier(Tip(c: c, text: name)).accessibilityLabel("\(name) accent (#\(h))\(on ? ", selected" : "")")
+            .modifier(Tip(c: c, text: a.name)).accessibilityLabel("\(a.name) accent\(on ? ", selected" : "")")
     }
+}
+
+/// The system sidebar material (§5: glass and materials only in native chrome).
+struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView { let v = NSVisualEffectView(); v.material = .sidebar; v.blendingMode = .behindWindow; v.state = .followsWindowActiveState; return v }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
 }
 
 struct SettingsWindowView: View {
@@ -778,14 +785,17 @@ struct SettingsWindowView: View {
     var body: some View { SettingsView(c: c) }
 }
 
-/// Settings: a sidebar of panes, the pane, and a footer with Done. Its own light/dark (the header's toggle), from lightTheme or darkTheme.
+/// Settings (§10.20): the system sidebar (its own material: search, then this Mac's panes and Greenlight's on its host) beside
+/// the pane, a form column of grouped sections. Changes apply at once; ⌘W closes. No footer, no Done.
+/// ponytail: a split by hand, not NavigationSplitView: inside the app's NSHostingView its columns couldn't be checked drawing
+/// (the snapshot harness got an empty sidebar and detail), and Settings must never open blank.
 struct SettingsView: View {
     @ObservedObject var c: Core
     @ObservedObject var preview = LivePreview.shared
     @StateObject var rs = RulesStore()
     /// (pane, icon name, words the sidebar's search also matches). This Mac's panes, then greenlight's on its host.
     static let mac = [("General", "sliders", "startup opens dock icon assistant name"),
-                      ("Appearance", "contrast", "theme dark light accent color colour font size text dashboard source custom"),
+                      ("Appearance", "contrast", "theme dark light system accent color colour font size text chat look phosphor dashboard source custom"),
                       ("Chat & voice", "chat", "model effort dictation voice whisper engine shortcut"),
                       ("Keyboard", "keyboard", "vim shortcuts keys"),
                       ("Terminal", "terminal", "tab names basement orbs floors sidebar slide ride animation up button"),
@@ -798,113 +808,63 @@ struct SettingsView: View {
                      ("Memory", "bookmark", "notes learned")]
     static let wide: Set = ["Projects", "Repositories", "Memory"]
 
-    // Settings' own theme: these shadow the app's globals of the same names in every pane below.
-    var theme: Theme { c.settingsDark ? darkTheme : lightTheme }
-    var accentNS: NSColor { accentHex.map(hex) ?? theme.accent }
-    var accent: Color { Color(nsColor: accentNS) }
-    /// A glyph on the accent: dark on a light accent (Greenlight's amber), white on a dark one (GitHub's blue).
-    var onAccent: Color {
-        let c = accentNS.usingColorSpace(.sRGB) ?? accentNS
-        return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent > 0.6 ? Color(nsColor: hex("111113")) : .white
-    }
-    var bg: Color { Color(nsColor: theme.bg) }
-    var fg: Color { Color(nsColor: theme.fg) }
-    var card: Color { theme.mix(0.04) }
-    var surface: Color { theme.mix(0.07) }
-    var line: Color { theme.mix(0.1) }
-    var edge: Color { theme.mix(0.17) }
-    var dim: Color { theme.mix(theme.dark ? 0.62 : 0.7) }
-    var sub: Color { theme.mix(0.82) }
     var hostLabel: String { host.isEmpty || host == "local" ? "this Mac" : host }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: Theme.sp2) {
-                Text("Settings").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
-                Text("/").font(sys(size: Theme.fs3)).foregroundColor(dim)
-                Text(c.settingsTab).font(sys(size: Theme.fs3)).foregroundColor(sub)
-                Spacer()
-                TextField("Search settings", text: $rs.q).textFieldStyle(.roundedBorder).frame(width: 220)
-                Picker("Settings theme", selection: $c.settingsDark) {
-                    Image(ds: "sun").accessibilityLabel("Light").tag(false)
-                    Image(ds: "moon").accessibilityLabel("Dark").tag(true)
-                }.pickerStyle(.segmented).labelsHidden().fixedSize().help("Settings in light or dark").padding(.leading, Theme.sp2)
-            }.padding(.leading, 80).padding(.trailing, Theme.sp4).frame(height: 52)  // the window's own buttons sit left of the title
-            Divider().overlay(line)
-            HStack(spacing: 0) {
-                sidebar
-                Divider().overlay(line)
+        let _ = c.look
+        HStack(spacing: 0) {
+            sidebar.frame(width: 220).background(SidebarMaterial())
+            Rectangle().fill(line).frame(width: 1)  // one hairline: the sidebar owns the edge
+            Group {
                 if Self.wide.contains(c.settingsTab) { widePane } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 22) { pane }
-                            .padding(.horizontal, 40).padding(.top, 28).padding(.bottom, 40)
-                            .frame(maxWidth: 720, alignment: .leading)
+                        VStack(alignment: .leading, spacing: DS.Space.s24) { pane }
+                            .padding(.horizontal, DS.Space.s32).padding(.top, DS.Space.s48).padding(.bottom, DS.Space.s32)  // clear of the title bar
+                            .frame(maxWidth: 640, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-            }
-            Divider().overlay(line)
-            HStack(spacing: Theme.sp2) {
-                Image(ds: foot.0, size: iconSize(Theme.fs2)).foregroundColor(dim)
-                Text(foot.1).font(sys(size: Theme.fs2)).foregroundColor(dim)
-                Spacer()
-                Button("Done") { c.settingsOpen = false }.keyboardShortcut(.cancelAction).buttonStyle(.borderedProminent).controlSize(.large)
-            }.padding(.leading, 20).padding(.trailing, Theme.sp4).frame(height: 60)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg).ignoresSafeArea()  // the header is the title bar
-            .environment(\.colorScheme, theme.dark ? .dark : .light).tint(accent)
-            .onAppear { rs.load(); rs.projs = delegate.savedProjects }
-            .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
-            .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
+        .tint(accent)
+        .onAppear { rs.load(); rs.projs = delegate.savedProjects }
+        .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
+        .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
     }
 
-    var foot: (String, String) {
-        switch c.settingsTab {
-        case "Projects": return ("drive", "Projects are saved on this Mac as you change them.")
-        case "Repositories": return ("server", "Project and Auto-run apply right away; the lifecycle, rules and prompts are saved on \(hostLabel) when you press Save.")
-        case "Instructions", "Memory": return ("server", "Stored on \(hostLabel) in \(greenlightHome). Changes apply when you press Save.")
-        default: return ("check", "Changes on this page apply right away.")
-        }
-    }
-
+    /// The system sidebar: search, then the panes; the one you're on in accent.subtle with fg.default. No icon tiles.
     var sidebar: some View {
         let q = rs.q.trimmingCharacters(in: .whitespaces).lowercased()
         let hit = { (t: (String, String, String)) in q.isEmpty || "\(t.0) \(t.2)".lowercased().contains(q) }
         let mac = Self.mac.filter(hit), gl = Self.gl.filter(hit)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                if !mac.isEmpty {
-                    Text("This Mac").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(dim).padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 4)
-                }
-                ForEach(mac, id: \.0) { navButton($0) }
-                if !gl.isEmpty {
-                    HStack(spacing: 10) {  // greenlight's own panes, on its host
-                        Circle().fill(Theme.done).frame(width: 8, height: 8)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Greenlight").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
-                            Text("on \(hostLabel)").font(sys(size: Theme.fs1)).foregroundColor(dim)
-                        }
-                        Spacer(minLength: 0)
-                    }.padding(.horizontal, 10).padding(.vertical, Theme.sp2)
-                        .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(line))
-                        .accessibilityElement(children: .combine).padding(.top, 14).padding(.bottom, 6)
-                }
-                ForEach(gl, id: \.0) { navButton($0) }
-                if mac.isEmpty && gl.isEmpty { note("No settings match “\(rs.q)”.").padding(Theme.sp2) }
-            }.padding(.horizontal, 10).padding(.vertical, Theme.sp3)
-        }.frame(width: 228).background(card)
+        func section(_ t: String) -> some View {
+            Text(t).font(ds(DS.TypeRole.label)).foregroundColor(dim).padding(.horizontal, DS.Space.s8).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s4)
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            TextField("Search settings", text: $rs.q).textFieldStyle(.roundedBorder)
+                .padding(.horizontal, DS.Space.s12).padding(.top, DS.Space.s48).padding(.bottom, DS.Space.s4)  // under the window's buttons
+            ScrollView {
+                VStack(alignment: .leading, spacing: DS.Space.s2) {
+                    if !mac.isEmpty { section("This Mac"); ForEach(mac, id: \.0) { navButton($0) } }
+                    if !gl.isEmpty { section("Greenlight on \(hostLabel)"); ForEach(gl, id: \.0) { navButton($0) } }
+                    if mac.isEmpty && gl.isEmpty { note("No settings match “\(rs.q)”.").padding(DS.Space.s8) }
+                }.padding(.horizontal, DS.Space.s8).padding(.bottom, DS.Space.s12)
+            }
+        }
     }
 
     func navButton(_ t: (String, String, String)) -> some View {
         let on = c.settingsTab == t.0
         return Button { c.settingsTab = t.0; rs.adding = false } label: {
-            HStack(spacing: 10) {
-                tile(t.1, 22, on: on)
-                Text(t.0).font(sys(size: Theme.fs3, weight: on ? .semibold : .regular)).foregroundColor(fg)
+            HStack(spacing: DS.Space.s8) {
+                Image(ds: t.1, size: iconSize(DS.TypeRole.body.size), medium: on).foregroundColor(on ? fg : dim).frame(width: 18).accessibilityHidden(true)
+                Text(t.0).font(ds(DS.TypeRole.body)).foregroundColor(fg)
                 Spacer(minLength: 0)
-                if let n = count(t.0) { Text("\(n)").font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim) }
-            }.padding(.horizontal, 6).frame(height: 32).contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: 7).fill(on ? accent.opacity(0.15) : Color.clear))
-        }.buttonStyle(.plain).accessibilityLabel("\(t.0) settings").accessibilityAddTraits(on ? .isSelected : [])
+                if let n = count(t.0) { Text("\(n)").font(ds(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim) }
+            }.padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightMd).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(accentSet.subtle, dark: isDark) : Color.clear))
+        }.buttonStyle(.plain)
+            .accessibilityLabel("\(t.0) settings").accessibilityAddTraits(on ? .isSelected : [])
     }
     func count(_ t: String) -> Int? { t == "Projects" ? rs.projs.count : t == "Repositories" ? allRepos.count : t == "Memory" ? rs.notes.count : nil }
 
@@ -932,78 +892,72 @@ struct SettingsView: View {
 
     // MARK: the panes' parts
 
-    /// A pane's (or nav item's) icon on a rounded tile: the accent when it's the one you're on.
-    func tile(_ icon: String, _ size: CGFloat, on: Bool = true) -> some View {
-        Image(ds: icon, size: iconSize(size * 0.48, scaled: false), medium: true).foregroundColor(on ? onAccent : sub)
-            .frame(width: size, height: size).background(RoundedRectangle(cornerRadius: size * 0.27).fill(on ? accent : surface)).accessibilityHidden(true)
-    }
     static func icon(_ t: String) -> String { (mac + gl).first { $0.0 == t }?.1 ?? "settings" }
 
+    /// A pane's title (`title`) and what it's for (`body`, fg.muted). No icon tile.
     func heading(_ t: String, _ lede: String?, @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
-        HStack(alignment: .center, spacing: 14) {
-            tile(Self.icon(t), 42)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(t).font(sys(size: 20, weight: .bold)).foregroundColor(fg)
-                if let lede { Text(lede).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 560, alignment: .leading) }
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s12) {
+            VStack(alignment: .leading, spacing: DS.Space.s4) {
+                Text(t).font(ds(DS.TypeRole.title)).foregroundColor(fg)
+                if let lede { Text(lede).font(ds(DS.TypeRole.body)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 560, alignment: .leading) }
             }
             Spacer(minLength: 0)
             trailing()
         }
     }
 
-    /// Helper text: subordinate but not disabled-looking in either theme.
-    func note(_ t: String) -> some View { Text(t).font(sys(size: Theme.fs2)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true) }
+    /// Helper text: `caption` in fg.muted, subordinate but not disabled-looking.
+    func note(_ t: String) -> some View { Text(t).font(ds(DS.TypeRole.caption)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true) }
 
     /// A small accent label: "new terminals", "yours".
     func chip(_ t: String) -> some View {
-        Text(t).font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(accent)
-            .padding(.horizontal, Theme.sp2).frame(height: 20).background(Capsule().fill(accent.opacity(0.12)))
+        Text(t).font(ds(DS.TypeRole.labelSm)).foregroundColor(Color(accentSet.fg, dark: isDark))
+            .padding(.horizontal, DS.Space.s8).frame(height: 20).background(Capsule().fill(Color(accentSet.subtle, dark: isDark)))
     }
 
-    /// A section: its title above a rounded group of rows; each row draws the hairline above it.
+    /// A section (§10.20): a `title-sm` header with an optional `caption`, then a group of rows on bg.surface, radius md.
     func box<V: View>(_ title: String? = nil, aside: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             if let title {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                    Text(title).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(sub)
-                    Spacer(minLength: Theme.sp3)
-                    if let aside { Text(aside).font(sys(size: Theme.fs1)).foregroundColor(dim).multilineTextAlignment(.trailing) }
-                }.padding(.horizontal, 10)
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                    Text(title).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
+                    Spacer(minLength: DS.Space.s12)
+                    if let aside { Text(aside).font(ds(DS.TypeRole.caption)).foregroundColor(dim).multilineTextAlignment(.trailing) }
+                }
             }
             VStack(alignment: .leading, spacing: 0) { v() }.padding(.top, -1)  // the first row's hairline tucks under the card's border
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 12).fill(card)).overlay(RoundedRectangle(cornerRadius: 12).stroke(line))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
         }
     }
     func ruled(_ v: some View) -> some View { v.overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) } }
 
-    /// Label and hint on the left, the control on the right.
+    /// Label (`body`) and hint (`caption`) on the left, the control on the right.
     func row<V: View>(_ label: String, _ hint: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
-        let text = VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(sys(size: Theme.fs3, weight: .medium)).foregroundColor(fg)
+        let text = VStack(alignment: .leading, spacing: DS.Space.s2) {
+            Text(label).font(ds(DS.TypeRole.body)).foregroundColor(fg)
             if let hint { note(hint) }
         }
         // The label keeps at least 180pt beside the control; a control too wide for that (Effort, Accent, Scan every) moves under it.
         return ruled(ViewThatFits(in: .horizontal) {
-            HStack(spacing: 20) {
+            HStack(spacing: DS.Space.s24) {
                 text.frame(minWidth: 180, idealWidth: 180, maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: Theme.sp2) { v() }.layoutPriority(1)
+                HStack(spacing: DS.Space.s8) { v() }.layoutPriority(1)
             }
-            VStack(alignment: .leading, spacing: 10) { text.frame(maxWidth: .infinity, alignment: .leading); HStack(spacing: Theme.sp2) { v() } }
-        }.padding(.horizontal, Theme.sp4).padding(.vertical, 10).frame(minHeight: 48))
+            VStack(alignment: .leading, spacing: DS.Space.s8) { text.frame(maxWidth: .infinity, alignment: .leading); HStack(spacing: DS.Space.s8) { v() } }
+        }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s12).frame(minHeight: 44))
     }
 
     func toggleRow(_ title: String, _ help: String, _ on: Binding<Bool>) -> some View {
         row(title, help) { Toggle(title, isOn: on).labelsHidden().toggleStyle(.switch) }
     }
-
     /// Rows that only matter while the row above is on: indented under an L, dimmed while it's off.
     func dependent<V: View>(off: Bool, @ViewBuilder _ v: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 0) { v() }.padding(.leading, 22)
             .overlay(alignment: .topLeading) {
                 Path { p in p.move(to: CGPoint(x: 0.5, y: 0)); p.addLine(to: CGPoint(x: 0.5, y: 24)); p.addLine(to: CGPoint(x: 12, y: 24)) }
-                    .stroke(edge, lineWidth: 1).frame(width: 12, height: 24).padding(.leading, Theme.sp4 + 4).accessibilityHidden(true)
+                    .stroke(edge, lineWidth: 1).frame(width: 12, height: 24).padding(.leading, DS.Space.s16 + 4).accessibilityHidden(true)
             }
             .disabled(off).opacity(off ? 0.45 : 1)
     }
@@ -1013,15 +967,14 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
-                    tile(Self.icon(t), 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(t).font(sys(size: Theme.fs4, weight: .bold)).foregroundColor(fg)
-                        Text(lede).font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+                        Text(t).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
+                        Text(lede).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(14)
                 ScrollView { VStack(spacing: 1) { list() }.padding(.horizontal, 8) }
                 Divider().overlay(line)
-                Button(action: add.1) { Label { Text(add.0) } icon: { Image(ds: "plus") }.font(sys(size: Theme.fs3)) }.buttonStyle(.borderless)
+                Button(action: add.1) { Label { Text(add.0) } icon: { Image(ds: "plus") }.font(sys(size: DS.TypeRole.body.size)) }.buttonStyle(.borderless)
                     .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }.frame(width: 220)
             Divider().overlay(line)
@@ -1036,11 +989,11 @@ struct SettingsView: View {
     func banner(_ icon: String, _ text: String, tinted: Bool = false, @ViewBuilder action: () -> some View = { EmptyView() }) -> some View {
         HStack(spacing: 10) {
             Image(ds: icon).foregroundColor(tinted ? accent : sub)
-            Text(text).font(sys(size: Theme.fs2)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: Theme.sp2)
+            Text(text).font(sys(size: DS.TypeRole.label.size)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: DS.Space.s8)
             action()
         }.padding(.horizontal, 14).padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 9).fill(tinted ? accent.opacity(0.12) : surface))
+            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(tinted ? Color(accentSet.subtle, dark: isDark) : surface))
     }
 
     func listItem(_ title: String, _ meta: String, on: Bool, mono: Bool = false, icon: String? = nil, tag: String? = nil, _ pick: @escaping () -> Void) -> some View {
@@ -1048,38 +1001,38 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 if let icon { Image(ds: icon).foregroundColor(on ? accent : sub).frame(width: 16) }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(sys(size: Theme.fs3, weight: .semibold, design: mono ? .monospaced : .default)).foregroundColor(fg).lineLimit(1)
-                    Text(meta).font(sys(size: Theme.fs1)).foregroundColor(dim).lineLimit(1)
+                    Text(title).font(sys(size: DS.TypeRole.body.size, weight: .semibold, design: mono ? .monospaced : .default)).foregroundColor(fg).lineLimit(1)
+                    Text(meta).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let tag { chip(tag) }
-            }.padding(.horizontal, 10).padding(.vertical, Theme.sp2).contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: 7).fill(on ? accent.opacity(0.15) : Color.clear))
+            }.padding(.horizontal, 10).padding(.vertical, DS.Space.s8).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(accentSet.subtle, dark: isDark) : Color.clear))
         }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
     }
 
     /// A path or name in a card, with its buttons on the right.
     func pathRow<V: View>(_ icon: String, _ text: String, @ViewBuilder _ actions: () -> V) -> some View {
         ruled(HStack(spacing: 10) {
-            Image(ds: icon, size: iconSize(Theme.fs2)).foregroundColor(sub).frame(width: 16)
-            Text(text).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(fg).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: Theme.sp2)
+            Image(ds: icon, size: iconSize(DS.TypeRole.label.size)).foregroundColor(sub).frame(width: 16)
+            Text(text).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).foregroundColor(fg).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: DS.Space.s8)
             actions()
-        }.padding(.leading, Theme.sp4).padding(.trailing, Theme.sp3).frame(minHeight: 40))
+        }.padding(.leading, DS.Space.s16).padding(.trailing, DS.Space.s12).frame(minHeight: 40))
     }
     func xButton(_ label: String, _ act: @escaping () -> Void) -> some View {
-        Button(action: act) { Image(ds: "close", size: iconSize(Theme.fs2)) }.buttonStyle(.borderless).foregroundColor(sub).accessibilityLabel(label).help(label)
+        Button(action: act) { Image(ds: "close", size: iconSize(DS.TypeRole.label.size)) }.buttonStyle(.borderless).foregroundColor(sub).accessibilityLabel(label).help(label)
     }
 
     /// A multi-line field.
     func editor(_ t: Binding<String>, _ label: String, height: CGFloat = 120) -> some View {
-        TextEditor(text: t).font(sys(size: Theme.fs2, design: .monospaced)).scrollContentBackground(.hidden).padding(Theme.sp2)
-            .frame(minHeight: height).background(RoundedRectangle(cornerRadius: Theme.r1).fill(bg))
-            .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge)).accessibilityLabel(label)
+        TextEditor(text: t).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).scrollContentBackground(.hidden).padding(DS.Space.s8)
+            .frame(minHeight: height).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(edge)).accessibilityLabel(label)
     }
 
     func saveRow(_ title: String = "Save", _ save: @escaping () -> Void, @ViewBuilder more: () -> some View = { EmptyView() }) -> some View {
-        HStack(spacing: Theme.sp3) {
+        HStack(spacing: DS.Space.s12) {
             more()
             if rs.busy { ProgressView().controlSize(.small) }
             note(rs.status)
@@ -1101,83 +1054,79 @@ struct SettingsView: View {
         return ViewThatFits(in: .horizontal) { p.pickerStyle(.segmented).fixedSize(); p.frame(width: menuWidth) }.disabled(off).opacity(off ? 0.45 : 1)
     }
     func claudeModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+        Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
     }
     /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one through agy.
     func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+        Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
     }
 
     // MARK: This Mac
 
     @ViewBuilder var general: some View {
         heading("General", "How Greenlight starts and how it shows up on this Mac.")
-        box("Opens to", aside: "New windows (⌘N) always open to the Pipe.") {
-            let floors = [("greenlight", "Greenlight", "L1"), ("basement", "Basement", "B1"), ("pipe", "Pipe", "B2")]
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: Theme.sp3) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: false) } }
-                HStack(spacing: Theme.sp2) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: true) } }
-                VStack(spacing: Theme.sp2) { ForEach(floors, id: \.0) { floorCard($0.0, $0.1, $0.2, compact: false) } }
-            }.padding(Theme.sp3)
-        }
-        box("Assistant") {
+        box {
+            row("Opens to", "The floor Greenlight opens on. New windows (⌘N) always open to the Pipe.") {  // the title bar's own control
+                FloorSegments(at: c.termOpens, go: { c.termOpens = $0 }).fixedSize()
+            }
             row("Name", "What the chat calls itself. ⌃⌥M shows or hides it from any app.") {
                 TextField("Greenlight", text: $c.name).textFieldStyle(.roundedBorder).frame(width: 220)
             }
         }
         box("Dock icon", aside: "Finder always shows the Orb.") {
-            HStack(spacing: Theme.sp3) { ForEach([("Orb", "Orb"), ("MergeLight", "Merge Light"), ("ThreeFloors", "Three Floors")], id: \.0) { dockTile($0.0, $0.1) } }
-                .padding(Theme.sp3)
+            HStack(spacing: DS.Space.s12) { ForEach([("Orb", "Orb"), ("MergeLight", "Merge Light"), ("ThreeFloors", "Three Floors")], id: \.0) { dockTile($0.0, $0.1) } }
+                .padding(DS.Space.s12)
         }
-    }
-
-    /// A floor the app opens to, with the three floors stacked and its own lit.
-    func floorCard(_ id: String, _ name: String, _ floor: String, compact: Bool = false) -> some View {
-        let on = c.termOpens == id
-        let labelW = ceil(72 * fontSize / 13)
-        let bars = VStack(spacing: 3) { ForEach(["L1", "B1", "B2"], id: \.self) { f in RoundedRectangle(cornerRadius: 2).fill(f == floor ? accent : edge).frame(width: 30, height: 8) } }
-        let label = VStack(alignment: compact ? .center : .leading, spacing: 1) {
-            Text(name).font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg).lineLimit(1).fixedSize(horizontal: true, vertical: false)
-            Text(floor).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(dim).lineLimit(1).fixedSize(horizontal: true, vertical: false)
-        }
-        return Button { c.termOpens = id } label: {
-            Group {
-                if compact {
-                    VStack(spacing: Theme.sp2) { bars; label }.padding(.vertical, Theme.sp3).padding(.horizontal, Theme.sp2)
-                } else {
-                    HStack(spacing: Theme.sp3) { bars; label; Spacer(minLength: 0) }.padding(Theme.sp3)
-                }
-            }.frame(minWidth: compact ? labelW + 16 : labelW + 74, maxWidth: .infinity).contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
-        }.buttonStyle(.plain).accessibilityLabel("Open to \(name), \(floor)").accessibilityAddTraits(on ? .isSelected : [])
     }
 
     func dockTile(_ id: String, _ name: String) -> some View {
         let on = c.dockIcon == id
         return Button { c.dockIcon = id } label: {
-            VStack(spacing: Theme.sp2) {
+            VStack(spacing: DS.Space.s8) {
                 Image(nsImage: Bundle.main.image(forResource: id) ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
-                Text(name).font(sys(size: Theme.fs2, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub).multilineTextAlignment(.center)
-            }.padding(Theme.sp3).frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: Theme.r2).fill(bg))
-                .overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
+                Text(name).font(sys(size: DS.TypeRole.label.size, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub).multilineTextAlignment(.center)
+            }.padding(DS.Space.s12).frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
         }.buttonStyle(.plain).accessibilityLabel("\(name) Dock icon\(on ? ", selected" : "")")
     }
 
+    /// Settings › Appearance (§10.20): appearance, accent, contrast, text, the chat look and the terminal's themes, with a live
+    /// preview. ponytail: the neutral-tint slider and Match terminal need the tokens generated at run time; not here yet.
     @ViewBuilder var appearance: some View {
-        heading("Appearance", "The switch in the window bar picks Auto (match macOS), Light or Dark for every floor; each mode wears the theme you pick here.")
-        box("Floors") { HStack(spacing: Theme.sp3) { floorTheme(dark: false); floorTheme(dark: true) }.padding(Theme.sp3) }
-        box("Color & text") {
-            row("Accent", "Buttons, selection and focus. State colors (orange, red) never change.") { accentPicker }
+        heading("Appearance", "How every window looks. Changes apply at once.")
+        box {
+            row("Appearance", "System follows macOS. The View menu has the same choice.") {
+                Picker("Appearance", selection: Binding(get: { appearanceMode }, set: { m in c.restyle { ud.set(m, forKey: "appearance") }; delegate.tick() })) {
+                    ForEach(App.appearances, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+            row("Accent", "The primary button, links, focus and the selected item. Status colours never change.") {
+                HStack(spacing: DS.Space.s4) { ForEach(accents, id: \.id) { AccentDot(c: c, a: $0) } }
+            }
+            row("Contrast", "Follows System Settings › Accessibility › Display › Increase contrast.") {
+                Text(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? "Increased" : "Standard").font(ds(DS.TypeRole.body)).foregroundColor(sub)
+            }
+            row("Text size", "Chat, settings and terminal. The dashboard keeps its own size.") {
+                Text("A").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(sub).accessibilityHidden(true)
+                Slider(value: Binding(get: { fontSize }, set: { v in c.restyle { fontSize = v } }), in: 11...17, step: 1).frame(width: 140).accessibilityLabel("Text size")
+                Text("A").font(sys(size: DS.TypeRole.title.size)).foregroundColor(sub).accessibilityHidden(true)
+                Text("\(Int(fontSize)) pt").font(ds(DS.TypeRole.label).monospacedDigit()).foregroundColor(sub).frame(width: 36, alignment: .trailing)
+            }
+            row("Chat look", "Default follows the appearance; Phosphor is the terminal's green on near-black.") {
+                Picker("Chat look", selection: Binding(get: { c.voice.look.id }, set: { c.voice.look = lookNamed($0) })) {
+                    Text("Default").tag("default"); Text("Phosphor").tag("phosphor")
+                }.labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+        }
+        previewCard
+        box("Fonts") {
             row("Chat font", "Messages, the composer and questions.") { fontPicker("Chat font", chatFont) { chatFont = $0 } }
             row("Code font", "Code blocks, logs and the terminal.") { fontPicker("Code font", codeFont) { codeFont = $0 } }
-            row("Text size", "Chat, settings and terminal. The dashboard keeps its own size.") {
-                Text("A").font(.system(size: 10)).foregroundColor(sub).accessibilityHidden(true)
-                Slider(value: Binding(get: { fontSize }, set: { v in c.restyle { fontSize = v } }), in: 11...17, step: 1).frame(width: 140).accessibilityLabel("Text size")
-                Text("A").font(.system(size: 16)).foregroundColor(sub).accessibilityHidden(true)
-                Text("\(Int(fontSize)) pt").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(sub).frame(width: 36, alignment: .trailing)
-            }
+        }
+        box("Terminal theme", aside: "The terminal canvas only") {
+            row("In light", "The Basement's terminals while the app is light.") { termTheme(dark: false) }
+            row("In dark", "The Basement's terminals while the app is dark.") { termTheme(dark: true) }
         }
         let custom = c.customPage || !c.fluidURL.isEmpty
         box("Dashboard") {
@@ -1198,56 +1147,57 @@ struct SettingsView: View {
         }
         HStack {
             Spacer()
-            Button("Reset appearance to defaults") { c.restyle { darkTheme = named("", "Greenlight"); lightTheme = named("", "GitHub Light"); accentHex = nil; chatFont = "System"; codeFont = "SF Mono"; fontSize = 13 } }
-                .buttonStyle(.link).font(sys(size: Theme.fs2))
+            Button("Reset appearance to defaults") {
+                c.restyle { darkTheme = named("", "Greenlight"); lightTheme = named("", "GitHub Light"); accentName = "signal"; chatFont = "System"; codeFont = "SF Mono"; fontSize = 13
+                    ud.set("auto", forKey: "appearance") }
+                delegate.tick()
+            }.buttonStyle(.plain).font(ds(DS.TypeRole.label)).foregroundColor(Color(accentSet.fg, dark: isDark))
         }
     }
 
-    /// A floor's theme: a small picture of it in that theme, and the theme menu.
-    func floorTheme(dark: Bool) -> some View {
-        let t = dark ? darkTheme : lightTheme, tfg = Color(nsColor: t.fg)
-        return VStack(alignment: .leading, spacing: Theme.sp2) {
-            VStack(alignment: .leading, spacing: 6) {
-                RoundedRectangle(cornerRadius: 2).fill(tfg).frame(width: 70, height: 6)
-                RoundedRectangle(cornerRadius: 2).fill(tfg.opacity(0.3)).frame(width: 120, height: 5)
-                RoundedRectangle(cornerRadius: 2).fill(tfg.opacity(0.3)).frame(width: 96, height: 5)
-                Capsule().fill(Color(nsColor: t.accent)).frame(width: 40, height: 12)
-            }.padding(Theme.sp3).frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: t.bg))).overlay(RoundedRectangle(cornerRadius: 8).stroke(edge)).accessibilityHidden(true)
-            Text(dark ? "The Basement" : "Greenlight Center").font(sys(size: Theme.fs3, weight: .semibold)).foregroundColor(fg)
-            note(dark ? "Terminals and their sidebar." : "Dashboard and chat.")
-            Picker(dark ? "Basement theme" : "Greenlight Center theme", selection: Binding(get: { t.name }, set: { n in
-                c.restyle { if let t = themes.first(where: { $0.name == n }) { if dark { darkTheme = t } else { lightTheme = t } } }
-            })) { ForEach(themes.filter { $0.dark == dark }, id: \.name) { Text($0.name).tag($0.name) } }.labelsHidden()
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    /// A live preview: a chat turn, a status and the primary button, in the appearance, accent and text size you've picked.
+    var previewCard: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s12) {
+            Text("Preview").font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
+                HStack { Spacer(minLength: DS.Space.s48)
+                    Text("Which MRs need me?").font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(fg)
+                        .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(surface)) }
+                Text("!12 needs your answer; the rest are working.").font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(fg)
+                HStack(spacing: DS.Space.s8) {
+                    Label { Text("Needs you") } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(StatusInk.needsInk)
+                    Label { Text("Working") } icon: { Image(ds: "working", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(StatusInk.working)
+                    Spacer(minLength: DS.Space.s8)
+                    Text("Answer").font(ds(DS.TypeRole.label)).foregroundColor(Color(accentSet.onSolid, dark: isDark)).padding(.horizontal, DS.Space.s12)
+                        .frame(height: DS.Layout.controlHeightMd).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(accent))
+                }
+            }.padding(DS.Space.s16).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
+        }.accessibilityElement(children: .combine).accessibilityLabel("Preview")
     }
 
-    var accentPicker: some View {
-        let themeAccent = Button { c.restyle { accentHex = nil } } label: {
-            HStack(spacing: Theme.sp2) {
-                Circle().fill(Color(nsColor: lightTheme.accent)).frame(width: 12, height: 12)
-                Text("Theme accent").font(sys(size: Theme.fs2, weight: accentHex == nil ? .semibold : .regular)).foregroundColor(fg)
-            }.padding(.horizontal, Theme.sp3).frame(height: 28)
-                .overlay(Capsule().stroke(accentHex == nil ? fg : edge))
-        }.buttonStyle(.plain).accessibilityLabel("Theme accent\(accentHex == nil ? ", selected" : "")")
-        let dots = HStack(spacing: 0) { ForEach(accents, id: \.self) { h in AccentDot(c: c, h: h, ring: fg, rim: edge) } }
-        return ViewThatFits(in: .horizontal) {  // larger fonts or a narrow pane: the dots move under the theme accent, none drop
-            HStack(spacing: Theme.sp2) { themeAccent; dots }
-            VStack(alignment: .leading, spacing: Theme.sp2) { themeAccent; dots }
+    /// The terminal canvas's theme in one appearance (§2.5): a swatch of it and the theme menu.
+    func termTheme(dark: Bool) -> some View {
+        let t = dark ? darkTheme : lightTheme
+        return HStack(spacing: DS.Space.s8) {
+            Text("ab").font(ds(DS.TypeRole.code, mono: true)).foregroundColor(Color(nsColor: t.fg)).frame(width: 32, height: 22)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(Color(nsColor: t.bg))).overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge)).accessibilityHidden(true)
+            Picker(dark ? "Dark terminal theme" : "Light terminal theme", selection: Binding(get: { t.name }, set: { n in
+                c.restyle { if let t = themes.first(where: { $0.name == n }) { if dark { darkTheme = t } else { lightTheme = t } } }
+            })) { ForEach(themes.filter { $0.dark == dark }, id: \.name) { Text($0.name).tag($0.name) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
         }
     }
 
     func fontPicker(_ label: String, _ current: String, _ set: @escaping (String) -> Void) -> some View {
         Picker(label, selection: Binding(get: { current }, set: { v in c.restyle { set(v) } })) {
             ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
-        }.labelsHidden().frame(width: menuWidth)
+        }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
     }
 
     @ViewBuilder var chat: some View {
         heading("Chat & voice", "The chat pane's model, and dictating into it from any app.")
         box("Model") {
             row("Chat model", "Changes apply from your next message.") {
-                Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth)
+                Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
             }
             row("Effort", c.isClaude ? Self.effortNotes[c.effort] : c.model.hasPrefix("gemini-") ? "Choose the Gemini effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
@@ -1256,8 +1206,8 @@ struct SettingsView: View {
         let status = engineStatus, ready = !status.hasPrefix("Not ready")
         box("Dictation") {
             row("Engine", status) {
-                Circle().fill(ready ? Theme.done : Theme.needs).frame(width: 8, height: 8).accessibilityLabel(ready ? "Ready" : "Not ready")
-                Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().frame(width: menuWidth)
+                Circle().fill(ready ? StatusInk.done : StatusInk.needs).frame(width: 8, height: 8).accessibilityLabel(ready ? "Ready" : "Not ready")
+                Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
             }
             if c.engine == "whisper" { dependent(off: false) { row("Whisper model") { Button("Choose model…") { delegate.pickModel() } } } }
             if c.engine == "openai" { dependent(off: false) { row("OpenAI key", openAIKeySource()) { Button("Set key…") { delegate.setKey() } } } }
@@ -1270,12 +1220,12 @@ struct SettingsView: View {
             row("Speaking voice", Speech.shared.status.isEmpty ? (Speech.shared.kind == "live" ? "OpenAI's GPT-Live 1.1 holds the conversation: it hears you, hands each request to \(c.name) and reads its answer. About $0.05 a minute while voice mode is on; if it fails, voice mode stops and says why (no Apple voice standing in)." : "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice.") : Speech.shared.status) {
                 Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); preview.stop(); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {
                     ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
-                }.labelsHidden().frame(width: menuWidth)
+                }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
             }
             if Speech.shared.kind == "kokoro" { dependent(off: false) { row("Kokoro voice", "a = American, b = British; f/m = female/male.") {
                 Picker("Kokoro voice", selection: Binding(get: { Speech.shared.kokoroVoice }, set: { ud.set($0, forKey: "kokoroVoice"); c.objectWillChange.send() })) {
                     ForEach(Speech.kokoroVoices, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: menuWidth)
+                }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
             } } }
             if Speech.shared.kind == "live" { dependent(off: false) {
                 row("OpenAI key", openAIKeySource() + " The same key as the OpenAI Whisper engine.") { Button("Set key…") { delegate.setKey() } }
@@ -1290,7 +1240,7 @@ struct SettingsView: View {
                         preview.play($0, voiceOn: c.voice.on)
                     })) {
                         ForEach(LiveVoice.voices, id: \.self) { Text($0.capitalized).tag($0) }
-                    }.labelsHidden().frame(width: menuWidth)
+                    }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
                 }
             } }
             if Speech.shared.kind == "eleven" { dependent(off: false) {
@@ -1312,9 +1262,9 @@ struct SettingsView: View {
                 Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
             }
         }
-        HStack(spacing: Theme.sp1) {
+        HStack(spacing: DS.Space.s4) {
             note("Standing instructions for Greenlight have their own page:")
-            Button("Instructions") { c.settingsTab = "Instructions" }.buttonStyle(.link).font(sys(size: Theme.fs2))
+            Button("Instructions") { c.settingsTab = "Instructions" }.buttonStyle(.link).font(sys(size: DS.TypeRole.label.size))
         }.padding(.horizontal, 10)
     }
 
@@ -1338,11 +1288,11 @@ struct SettingsView: View {
     /// The voice shortcut's keys and Change…; while recording, an inline prompt in their place.
     @ViewBuilder var shortcutEditor: some View {
         if c.keying {
-            Text("Press shortcut… Esc cancels").font(sys(size: Theme.fs2, weight: .medium)).foregroundColor(Theme.workingInk)
-                .padding(.horizontal, Theme.sp2).frame(height: 22)
-                .overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(Theme.working, style: StrokeStyle(lineWidth: 1, dash: [3])))
+            Text("Press shortcut… Esc cancels").font(sys(size: DS.TypeRole.label.size, weight: .medium)).foregroundColor(StatusInk.workingInk)
+                .padding(.horizontal, DS.Space.s8).frame(height: 22)
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(StatusInk.working, style: StrokeStyle(lineWidth: 1, dash: [3])))
         } else {
-            HStack(spacing: Theme.sp2) { keycaps(c.shortcut); Button("Change…") { delegate.recordShortcut() } }
+            HStack(spacing: DS.Space.s8) { keycaps(c.shortcut); Button("Change…") { delegate.recordShortcut() } }
         }
     }
 
@@ -1373,21 +1323,21 @@ struct SettingsView: View {
         }
     }
     func shortcut(_ a: String, _ k: String) -> some View {
-        ruled(HStack(spacing: Theme.sp2) {
-            Text(a).font(sys(size: Theme.fs3)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: Theme.sp2)
+        ruled(HStack(spacing: DS.Space.s8) {
+            Text(a).font(sys(size: DS.TypeRole.body.size)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: DS.Space.s8)
             if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) }  // the voice shortcut is edited where it's listed
-        }.padding(.horizontal, Theme.sp4).frame(minHeight: 40))
+        }.padding(.horizontal, DS.Space.s16).frame(minHeight: 40))
     }
 
     /// "↑|↓" is either key, as separate caps; a chord is one cap with its modifiers spaced.
     func keycaps(_ k: String) -> some View {
-        HStack(spacing: Theme.sp1) {
+        HStack(spacing: DS.Space.s4) {
             ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
-                if i > 0 { Text("or").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: Theme.fs2, weight: .medium).monospacedDigit()).foregroundColor(fg)
-                    .padding(.horizontal, Theme.sp2).frame(minWidth: 26).frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(surface)).overlay(RoundedRectangle(cornerRadius: 5).stroke(edge))
+                if i > 0 { Text("or").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) }
+                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: DS.TypeRole.label.size, weight: .medium).monospacedDigit()).foregroundColor(fg)
+                    .padding(.horizontal, DS.Space.s8).frame(minWidth: 26).frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(surface)).overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge))
             }
         }
     }
@@ -1397,11 +1347,6 @@ struct SettingsView: View {
         box("Floating orbs") {
             toggleRow("Show floating orbs", "The buttons bottom right that ride between floors. Off: ⌘↑ / ⌘↓ still ride.",
                       Binding(get: { !c.orbsHidden }, set: { c.orbsHidden = !$0 }))
-            dependent(off: c.orbsHidden) {
-                row("Up button") {
-                    Picker("Up button", selection: $c.orbStyle) { Text("Matte").tag("matte"); Text("Traffic light").tag("light") }.pickerStyle(.segmented).labelsHidden().fixedSize()
-                }
-            }
             row("Ride animation", "The orb's flip between floors. 0: you're just there.") { seconds("Ride animation", $c.rideTime) }
             row("Sidebar slide", "How long the Basement's sidebar takes to slide in. 0: it's just there.") { seconds("Sidebar slide", $c.sidebarSlide) }
         }
@@ -1414,12 +1359,12 @@ struct SettingsView: View {
     /// A duration: a slider for the usual 0–2s, a field for up to 5s, and whether it's on at all.
     func seconds(_ label: String, _ v: Binding<Double>) -> some View {
         let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) }), on = v.wrappedValue > 0
-        return HStack(spacing: Theme.sp2) {
+        return HStack(spacing: DS.Space.s8) {
             Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)
                 .frame(width: 130).accessibilityLabel(label)  // no `step:`, which draws 41 tick marks
             TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
             Text("s").foregroundColor(sub)
-            Text(on ? "On" : "Off").font(sys(size: Theme.fs1, weight: .medium)).foregroundColor(on ? accent : dim)
+            Text(on ? "On" : "Off").font(sys(size: DS.TypeRole.caption.size, weight: .medium)).foregroundColor(on ? accent : dim)
                 .frame(width: 34, height: 18).background(Capsule().fill(on ? accent.opacity(0.12) : surface))
         }
     }
@@ -1446,13 +1391,13 @@ struct SettingsView: View {
         if let env { banner("alert", "GREENLIGHT_HOST=\(env) is set, and it wins over this setting.") }
         box("The Basement's hosts", aside: "From ~/.ssh/config") {
             row("This Mac's name", "Shown in the Basement's sidebar. Empty: its hostname.") { TextField(localDefault, text: $c.localName).textFieldStyle(.roundedBorder).frame(width: 240) }
-            pathRow("laptop", c.localShown) { Text("local").font(sys(size: Theme.fs1)).foregroundColor(dim) }
-            ForEach(ssh, id: \.self) { h in pathRow("server", h) { if h == host { chip("runs Greenlight") } else { Text("ssh").font(sys(size: Theme.fs1)).foregroundColor(dim) } } }
+            pathRow("laptop", c.localShown) { Text("local").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) }
+            ForEach(ssh, id: \.self) { h in pathRow("server", h) { if h == host { chip("runs Greenlight") } else { Text("ssh").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) } } }
             ruled(HStack {
                 note("Every Host in ~/.ssh/config, minus wildcards, git hosts and -ts twins. A new one shows after a relaunch.")
-                Spacer(minLength: Theme.sp3)
+                Spacer(minLength: DS.Space.s12)
                 Button("Edit ~/.ssh/config") { _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-t", NSHomeDirectory() + "/.ssh/config"]) }
-            }.padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3))
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s12))
         }
     }
 
@@ -1471,15 +1416,15 @@ struct SettingsView: View {
                 }.labelsHidden().pickerStyle(.segmented).fixedSize().onAppear(perform: c.loadGreenlightEvery).disabled(c.greenlightEveryLoading)
             }
             if failed {
-                ruled(HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                    Image(ds: "alert").foregroundColor(Theme.needs)
+                ruled(HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                    Image(ds: "alert").foregroundColor(StatusInk.needs)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(c.greenlightEveryNote).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(fg)
+                        Text(c.greenlightEveryNote).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).foregroundColor(fg)
                         note("The schedule shown is the last one this Mac read; it may be out of date.")
                     }
-                    Spacer(minLength: Theme.sp3)
+                    Spacer(minLength: DS.Space.s12)
                     Button("Retry", action: c.loadGreenlightEvery)
-                }.padding(Theme.sp4).background(Theme.needs.opacity(0.1)))
+                }.padding(DS.Space.s16).background(StatusInk.needs.opacity(0.1)))
             }
         }
         box("Background agents") {
@@ -1525,7 +1470,7 @@ struct SettingsView: View {
                 }
                 row("Test", c.s1Test.isEmpty ? "Asks each model a question with a known answer." : c.s1Test) { Button("Test") { c.testSystemOne() } }
             }
-            if !c.s1Note.isEmpty { ruled(note(c.s1Note).padding(Theme.sp4)) }
+            if !c.s1Note.isEmpty { ruled(note(c.s1Note).padding(DS.Space.s16)) }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
         banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
@@ -1571,7 +1516,7 @@ struct SettingsView: View {
                     }
                 }
             } else if c.autonomyNote.isEmpty {
-                HStack(spacing: Theme.sp2) { ProgressView().controlSize(.small); note("Reading \(hostLabel)…") }
+                HStack(spacing: DS.Space.s8) { ProgressView().controlSize(.small); note("Reading \(hostLabel)…") }
             }
             if !c.autonomyNote.isEmpty {
                 banner("alert", c.autonomyNote) { Button("Retry", action: c.loadAutonomy) }
@@ -1626,7 +1571,7 @@ struct SettingsView: View {
                 let p = rs.projs[i], n = pstrings(p, "repos").count, d = pstrings(p, "dirs").count
                 listItem(pname(p), "\(n) \(n == 1 ? "repo" : "repos") · \(d) \(d == 1 ? "folder" : "folders")", on: pid(p) == rs.proj, icon: "folder") { rs.proj = pid(p); rs.draftDir = ""; rs.projNote = "" }
             }
-            if rs.projs.isEmpty { note("No projects yet.").padding(Theme.sp3) }
+            if rs.projs.isEmpty { note("No projects yet.").padding(DS.Space.s12) }
         } detail: {
             if let i = rs.projs.firstIndex(where: { pid($0) == rs.proj }) { projectDetail(i) } else { note("Pick a project, or make a new one.") }
             if !rs.projNote.isEmpty { note(rs.projNote) }
@@ -1638,7 +1583,7 @@ struct SettingsView: View {
         let mutate: ((inout [String: Any]) -> Void) -> Void = { fn in
             commitProjects { l in if let idx = l.firstIndex(where: { pid($0) == id }) { fn(&l[idx]) } }
         }
-        HStack(spacing: Theme.sp3) {
+        HStack(spacing: DS.Space.s12) {
             TextField("Project name", text: Binding(get: { pname(p) }, set: { v in mutate { $0["name"] = String(v.prefix(80)) } }))
                 .textFieldStyle(.plain).font(sys(size: 20, weight: .bold)).foregroundColor(fg)
             Button("Delete", role: .destructive) { deleteProject(id) }
@@ -1655,15 +1600,15 @@ struct SettingsView: View {
             ForEach(dirs, id: \.self) { d in
                 pathRow("folder", d) {
                     if d == opensIn { chip("new terminals") }
-                    else { Button("Open terminals here") { mutate { $0["dir"] = d } }.buttonStyle(.borderless).font(sys(size: Theme.fs2)) }
+                    else { Button("Open terminals here") { mutate { $0["dir"] = d } }.buttonStyle(.borderless).font(sys(size: DS.TypeRole.label.size)) }
                     xButton("Remove \(d)") { mutate { $0["dirs"] = pstrings($0, "dirs").filter { $0 != d }; if $0["dir"] as? String == d { $0["dir"] = nil } } }
                 }
             }
             ruled(HStack(spacing: 10) {
-                TextField("/home/you/src/another-repo", text: $rs.draftDir).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).onSubmit(addDir)
+                TextField("~/src/another-repo", text: $rs.draftDir).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).onSubmit(addDir)
                     .accessibilityLabel("New folder path")
                 Button("Add folder", action: addDir).disabled(rs.draftDir.trimmingCharacters(in: .whitespaces).isEmpty)
-            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10))
         }
         box("Repositories", aside: "\(repos.count) \(repos.count == 1 ? "repo" : "repos")") {
             ForEach(repos, id: \.self) { r in
@@ -1672,7 +1617,7 @@ struct SettingsView: View {
                     xButton("Remove \(r) from this project") { setProject(r, "") }
                 }
             }
-            if repos.isEmpty { ruled(note("No repositories in this project yet.").padding(Theme.sp4).frame(maxWidth: .infinity, alignment: .leading)) }
+            if repos.isEmpty { ruled(note("No repositories in this project yet.").padding(DS.Space.s16).frame(maxWidth: .infinity, alignment: .leading)) }
             ruled(HStack {
                 Menu("Add a repository…") {
                     ForEach(allRepos.filter { !repos.contains($0) }, id: \.self) { r in
@@ -1680,7 +1625,7 @@ struct SettingsView: View {
                     }
                 }.fixedSize()
                 Spacer()
-            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10))
         }
     }
 
@@ -1691,7 +1636,7 @@ struct SettingsView: View {
                 let on = !rs.adding && rs.repo == r
                 listItem(r, projectOf(r).map(pname) ?? "No project", on: on, mono: true, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
             }
-            if allRepos.isEmpty { note(rs.busy ? "Loading…" : "No repositories yet.").padding(Theme.sp3) }
+            if allRepos.isEmpty { note(rs.busy ? "Loading…" : "No repositories yet.").padding(DS.Space.s12) }
         } detail: {
             if rs.adding { addRepoForm } else if !rs.repo.isEmpty { repoDetail } else { note("Pick a repository.") }
         }.onAppear { takeRepo() }.onChange(of: c.settingsRepo) { takeRepo() }
@@ -1706,7 +1651,7 @@ struct SettingsView: View {
     @ViewBuilder var addRepoForm: some View {
         box("Add a repository") {
             row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
-                TextField("repo", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
+                TextField("repo", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
             }
             row("Project") {
                 Picker("Project", selection: $rs.draftProj) { ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) } }.labelsHidden().frame(width: 180)
@@ -1736,7 +1681,7 @@ struct SettingsView: View {
             Text(rs.repo).font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg)
             if let path = rs.repoPaths[rs.repo] { note(path) }
         }
-        HStack(spacing: Theme.sp2) {  // under the name: the detail column can be ~300pt
+        HStack(spacing: DS.Space.s8) {  // under the name: the detail column can be ~300pt
             Picker("Project", selection: Binding(get: { proj.map(pid) ?? "" }, set: { setProject(rs.repo, $0) })) {
                 Text("No project").tag("")
                 ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) }
@@ -1746,20 +1691,20 @@ struct SettingsView: View {
             Button("Remove", role: .destructive) { setProject(rs.repo, "") }.disabled(proj == nil).help("Take it out of its project")
         }
         if !rs.projNote.isEmpty { note(rs.projNote) }
-        VStack(alignment: .leading, spacing: Theme.sp2) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             Picker("Repository settings", selection: $rs.rtab) {
                 Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
             }.pickerStyle(.segmented).labelsHidden().fixedSize()
-            if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
+            if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
                 Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo.replacingOccurrences(of: "/", with: "__")).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
-                    .font(sys(size: Theme.fs2)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
-                if own { Button("Use default", action: rs.reset).buttonStyle(.link).font(sys(size: Theme.fs2)).disabled(rs.busy) }
+                    .font(sys(size: DS.TypeRole.label.size)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
+                if own { Button("Use default", action: rs.reset).buttonStyle(.link).font(sys(size: DS.TypeRole.label.size)).disabled(rs.busy) }
             } }
         }
         switch rs.rtab {
         case "auto": autoRun
         case "rules":
-            box("Rules", aside: "Markdown · every agent on \(rs.repo) follows these") { editor($rs.rules, "Rules for \(rs.repo)", height: 260).padding(Theme.sp3) }
+            box("Rules", aside: "Markdown · every agent on \(rs.repo) follows these") { editor($rs.rules, "Rules for \(rs.repo)", height: 260).padding(DS.Space.s12) }
             saveRow("Save", rs.save)
         case "prompts": prompts
         default: lifecycle
@@ -1805,7 +1750,7 @@ struct SettingsView: View {
                     Button("Your own (sign-off, label or check)…") { rs.stages.insert(Stage(key: "stage\(rs.stages.count + 1)", req: "", done: "signoff"), at: max(0, rs.stages.count - 1)) }
                 }.fixedSize()
                 Spacer()
-            }.padding(.horizontal, Theme.sp4).padding(.vertical, 10))
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10))
         }
         box("Options") {
             toggleRow("Solo", "Nobody else reviews this repo: a mergeable MR with no other approval comes to you to review and merge.", optBinding("solo"))
@@ -1823,10 +1768,10 @@ struct SettingsView: View {
                 }.labelsHidden().frame(width: 140)
             }
             row("Review bot", "Overrides global review_bot for this repo. Set to none to disable.") {
-                TextField("Global default", text: optText("review_bot")).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180)
+                TextField("Global default", text: optText("review_bot")).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
             }
             row("Milestone prefix", "Active milestone prefix for the milestone step (default Release-).") {
-                TextField("Release-", text: optText("milestone")).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180)
+                TextField("Release-", text: optText("milestone")).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
             }
         }
         saveRow("Save", rs.save)
@@ -1842,20 +1787,20 @@ struct SettingsView: View {
         let phaseBind = Binding(get: { safeStage().phase }, set: { if i < rs.stages.count { rs.stages[i].phase = $0 } })
         let cur = safeStage(), builtin = rs.builtins[cur.key] != nil
         let badge = builtin ? "Built-in" : cur.done.hasPrefix("label=") ? "Label" : cur.done.hasPrefix("check=") ? "CI check" : "Your sign-off"
-        return ruled(HStack(alignment: .top, spacing: Theme.sp3) {
-            Text("\(i + 1)").font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
-            VStack(alignment: .leading, spacing: Theme.sp1) {
-                HStack(spacing: Theme.sp2) {
-                    if builtin { Text(cur.key).font(sys(size: Theme.fs2, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
-                    else { TextField("key", text: keyBind).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
-                    Text(badge).font(sys(size: Theme.fs1, weight: .medium))
-                        .foregroundColor(builtin ? sub : accent).padding(.horizontal, Theme.sp2).frame(height: 20)
+        return ruled(HStack(alignment: .top, spacing: DS.Space.s12) {
+            Text("\(i + 1)").font(sys(size: DS.TypeRole.label.size).monospacedDigit()).foregroundColor(dim).frame(width: 18, alignment: .trailing).padding(.top, 5)
+            VStack(alignment: .leading, spacing: DS.Space.s4) {
+                HStack(spacing: DS.Space.s8) {
+                    if builtin { Text(cur.key).font(sys(size: DS.TypeRole.label.size, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
+                    else { TextField("key", text: keyBind).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
+                    Text(badge).font(sys(size: DS.TypeRole.caption.size, weight: .medium))
+                        .foregroundColor(builtin ? sub : accent).padding(.horizontal, DS.Space.s8).frame(height: 20)
                         .background(Capsule().fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
                 }
                 if builtin { note(cur.req) }
                 else {
                     TextField("Requirement", text: reqBind).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
-                    HStack(spacing: Theme.sp2) {
+                    HStack(spacing: DS.Space.s8) {
                         Picker("Done when", selection: Binding(
                             get: { doneBind.wrappedValue.hasPrefix("label=") ? "label" : doneBind.wrappedValue.hasPrefix("check=") ? "check" : "signoff" },
                             set: { doneBind.wrappedValue = $0 == "label" ? "label=" : $0 == "check" ? "check=" : "signoff" })) {
@@ -1868,11 +1813,11 @@ struct SettingsView: View {
                             TextField("check name", text: Binding(get: { String(doneBind.wrappedValue.dropFirst(6)) }, set: { doneBind.wrappedValue = "check=" + $0 }))
                                 .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) check")
                         } else {
-                            TextField("Run command (optional)", text: runBind).textFieldStyle(.roundedBorder).font(sys(size: Theme.fs2, design: .monospaced))
+                            TextField("Run command (optional)", text: runBind).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced))
                                 .frame(width: 200).accessibilityLabel("Stage \(i + 1) run command")
                         }
                     }
-                    HStack(spacing: Theme.sp2) {
+                    HStack(spacing: DS.Space.s8) {
                         Picker("Owner", selection: ownerBind) {
                             Text("Default owner").tag(""); Text("Agent").tag("agent"); Text("You").tag("me"); Text("Reviewers").tag("reviewers"); Text("CI").tag("ci")
                         }.labelsHidden().frame(width: 140)
@@ -1888,7 +1833,7 @@ struct SettingsView: View {
                 Button { if i + 1 < rs.stages.count { rs.stages.swapAt(i, i + 1) } } label: { Image(ds: "chevron-down") }.disabled(i >= rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
                 Button { if i < rs.stages.count && rs.stages.count > 1 { rs.stages.remove(at: i) } } label: { Image(ds: "close") }.disabled(rs.stages.count <= 1).accessibilityLabel("Remove stage \(i + 1)")
             }.buttonStyle(.borderless).foregroundColor(sub).frame(height: 24)
-        }.padding(.leading, Theme.sp3).padding(.trailing, Theme.sp3).padding(.vertical, 10))
+        }.padding(.leading, DS.Space.s12).padding(.trailing, DS.Space.s12).padding(.vertical, 10))
     }
 
     @ViewBuilder var autoRun: some View {
@@ -1905,36 +1850,36 @@ struct SettingsView: View {
                     }
                 }
             }
-            if rs.autoKinds.isEmpty { note(rs.busy ? "Loading…" : "No auto-run jobs from \(hostLabel).").padding(Theme.sp4) }
+            if rs.autoKinds.isEmpty { note(rs.busy ? "Loading…" : "No auto-run jobs from \(hostLabel).").padding(DS.Space.s16) }
         }
     }
 
     @ViewBuilder var prompts: some View {
         let kindName = RulesStore.kinds.first { $0.0 == rs.kind }?.1 ?? ""
         box {
-            HStack(spacing: Theme.sp3) {
+            HStack(spacing: DS.Space.s12) {
                 Picker("Button", selection: Binding(get: { rs.kind }, set: { rs.kind = $0; rs.getPrompt() })) { ForEach(RulesStore.kinds, id: \.0) { Text($0.1).tag($0.0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
-                Spacer(minLength: Theme.sp2)
+                Spacer(minLength: DS.Space.s8)
                 Picker("Prompt", selection: Binding(get: { rs.reviewOwn }, set: { rs.reviewOwn = $0; if $0 && rs.review.isEmpty { rs.review = "{default}\n\n" } })) {
                     Text("Your own").tag(true); Text("Default").tag(false)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
-            }.padding(.horizontal, Theme.sp3).padding(.vertical, 10)
-            VStack(alignment: .leading, spacing: Theme.sp2) {
+            }.padding(.horizontal, DS.Space.s12).padding(.vertical, 10)
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
                 note("What the \(kindName) button hands Claude. Private to you: \(greenlightHome)/prompts/\(rs.repo)/\(rs.kind).md on \(hostLabel), never in the repo. Fills in \(rs.reviewVars.joined(separator: " ")); {default} pulls in the default.")
                 if rs.reviewOwn { editor($rs.review, "\(kindName) prompt for \(rs.repo)", height: 240) }
                 else {
-                    ScrollView { Text(rs.reviewDefault).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(sub).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                        .padding(Theme.sp2).frame(height: 240).background(RoundedRectangle(cornerRadius: Theme.r1).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r1).stroke(edge))
+                    ScrollView { Text(rs.reviewDefault).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).foregroundColor(sub).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                        .padding(DS.Space.s8).frame(height: 240).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(surface)).overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(edge))
                 }
-            }.padding(Theme.sp3).overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) }
+            }.padding(DS.Space.s12).overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) }
         }
         saveRow("Save prompt", rs.saveReview)
     }
 
     @ViewBuilder var instructions: some View {
         heading("Instructions", "Standing instructions Greenlight reads in the chat and on every run: how to talk to you, what to never do, what to always check. A repo's own rules live in Repositories › Rules.")
-        box("Instructions.md", aside: "On \(hostLabel)") { editor($rs.instructions, "Instructions for Greenlight", height: 380).padding(Theme.sp3) }
+        box("Instructions.md", aside: "On \(hostLabel)") { editor($rs.instructions, "Instructions for Greenlight", height: 380).padding(DS.Space.s12) }
         saveRow("Save instructions", rs.saveInstructions)
     }
 
@@ -1945,12 +1890,12 @@ struct SettingsView: View {
                 listItem(n.name, n.text.split(separator: "\n").first { $0.hasPrefix("description:") }.map { $0.dropFirst(12).trimmingCharacters(in: .whitespaces) } ?? "",
                          on: rs.note == n.name, mono: true) { rs.note = n.name; rs.noteText = n.text }
             }
-            if rs.notes.isEmpty { note(rs.busy ? "Loading…" : "No notes yet.").padding(Theme.sp3) }
+            if rs.notes.isEmpty { note(rs.busy ? "Loading…" : "No notes yet.").padding(DS.Space.s12) }
         } detail: {
             let existing = rs.notes.contains { $0.name == rs.note }
             if existing { Text(rs.note + ".md").font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg) }
             else { TextField("my-decision", text: $rs.note).textFieldStyle(.roundedBorder).frame(width: 260).accessibilityLabel("New note name") }
-            box("Note", aside: "Keep the frontmatter: it's the index line.") { editor($rs.noteText, "Note text", height: 340).padding(Theme.sp3) }
+            box("Note", aside: "Keep the frontmatter: it's the index line.") { editor($rs.noteText, "Note text", height: 340).padding(DS.Space.s12) }
             saveRow("Save note", rs.saveNote) {
                 Button("Delete note", role: .destructive, action: rs.deleteNote).disabled(rs.busy || !existing)
             }.disabled(rs.note.isEmpty)

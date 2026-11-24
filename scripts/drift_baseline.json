@@ -1,8 +1,8 @@
 {
  "app/Sources/App.swift": {
-  "colour": 70,
-  "font_size": 3,
-  "radius": 10
+  "colour": 16,
+  "font_size": 0,
+  "radius": 0
  },
  "app/Sources/Core.swift": {
   "colour": 0,
@@ -25,9 +25,9 @@
   "radius": 0
  },
  "app/Sources/Views.swift": {
-  "colour": 9,
-  "font_size": 2,
-  "radius": 16
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
  },
  "app/Sources/Vim.swift": {
   "colour": 0,

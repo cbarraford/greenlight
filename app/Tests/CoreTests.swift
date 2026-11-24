@@ -292,9 +292,14 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && harnessOf("gemini-4-neon-high") == "agy" && harnessOf("codex") == "codex"
           && effortName("xhigh") == "Extra high" && effortName("low") == "Low"
           && !fontChoices.isEmpty && !models.isEmpty && !accents.isEmpty)
-    _ = (Theme.needs, Theme.yourMove, Theme.working, Theme.crashed, Theme.queued, Theme.done,
-         Theme.needsInk, Theme.crashedInk, Theme.workingInk, bg, fg, card, surface, line, edge, dim, sub, bubble, accent,
+    _ = (StatusInk.needs, StatusInk.yourMove, StatusInk.working, StatusInk.crashed, StatusInk.queued, StatusInk.done,
+         StatusInk.needsInk, StatusInk.crashedInk, StatusInk.workingInk, bg, fg, card, surface, line, edge, dim, sub, bubble, accent,
          sys(size: 13), sys(size: 13, design: .monospaced), sys(size: 13, face: "Menlo"), chatFace(size: 13))
+    check("config: three accents (§2.3); an old swatch migrates to the nearest, the theme's own to Signal",
+          accents.map(\.id) == ["signal", "teal", "graphite"] && migratedAccent("2AC3DE") == "teal" && migratedAccent("7aa2f7") == "teal"
+          && migratedAccent("BD93F9") == "teal" && migratedAccent("9ECE6A") == "signal" && migratedAccent("F5A524") == "signal" && migratedAccent(nil) == "signal")
+    check("config: appearance is one setting for every window: System leaves NSApp's own, Light and Dark override it",
+          App.appearances.map(\.0) == ["auto", "light", "dark"] && Floors.levels.map(\.1) == ["Center", "Basement", "Pipe"])
     ud.set("gemini-4-neon", forKey: "testSavedModel")
     check("config: savedModel migrates legacy gemini-4-neon id", savedModel("testSavedModel", fallback: "codex") == "gemini-4-neon-medium")
     let rs = RulesStore()
