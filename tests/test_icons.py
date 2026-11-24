@@ -100,6 +100,8 @@ def test_reserved_status_glyphs(repo):
     spec = repo / "brand/DESIGN.md"
     spec.write_text(spec.read_text() + "\n    extra: { glyph: reserved-x }\n")
     assert not any("reserved-x" in e for e in icons.check_usage(found, repo))
+    spec.write_text(spec.read_text().replace("glyph: reserved-x", "glyph: no-such-glyph"))
+    assert any("status glyph 'no-such-glyph' has no icon" in e for e in icons.run_check(repo))
 
 
 def test_swift_source(repo):
@@ -128,9 +130,15 @@ def test_usage_errors(repo):
 @pytest.mark.parametrize("code", [
     'Image(ds: on ? "mic" : "mic-of", size: 12)',      # either arm of a ternary
     'dsIcon(on ? "bell-fill" : "bel", 14)',
+    'dsIcon(`nope`, 14)',                               # a template literal
     'banner("nope", "text")',                           # Swift helpers that take an icon name
     'listItem("t", "m", on: true, icon: "nope")',
+    'pathRow("nope", "text") { EmptyView() }',
+    'knob("nope", (help: "h", label: "l")) {}',
     'const MI = {review: "review", ci: "nope"};',       # the pages' name maps
+    'const G = {ok: "done", q: "nope"};',
+    'const GLYPH = {idle: "nope"};',
+    'icon(t ? "a\\",b" : "nope", 14)',                  # an escaped quote doesn't end the string
 ])
 def test_usage_follows_ternaries_helpers_and_maps(repo, code):
     swift = repo / "app/Sources/Views.swift"
@@ -140,7 +148,8 @@ def test_usage_follows_ternaries_helpers_and_maps(repo, code):
 
 
 def test_named_skips_non_names():
-    assert [n for _, n in icons.named('icon(x ? "a b" : `t`, 14) icon(k)')] == []
+    assert [n for _, n in icons.named('SettingsView.icon("General") x.ico("nope")')] == []  # methods, not icon calls
+    assert [n for _, n in icons.named('icon(x ? "a b" : `${t}`, 14) icon(k)')] == []
     assert [n for _, n in icons.named('icon(f("x", y) ? "done" : "ring", 14)')] == ["x", "done", "ring"]
 
 

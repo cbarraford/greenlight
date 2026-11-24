@@ -40,7 +40,7 @@ CALLS = re.compile(r"(?<![\w.])(?:dsIcon|dsIconHTML|ico|icon|g16|DSIcon\.image|b
                    r"\blistItem\(.*?\bicon:")
 # The pages' name maps (a meaning → an icon): every value must exist.
 MAPS = re.compile(r"\bconst (?:GLYPH|MI|G) = \{([^}]*)\}")
-NAME = re.compile(r"""["']([a-z0-9]+(?:-[a-z0-9]+)*)["']""")
+NAME = re.compile(r"""["'`]([a-z0-9]+(?:-[a-z0-9]+)*)["'`]""")  # comments inside the argument aren't understood
 GENERATED = re.compile(r'<script id="ds-icons">.*?</script><!-- /ds-icons -->', re.S)
 
 
@@ -250,7 +250,7 @@ def check_usage(icons, root=ROOT):
                 errs.append(f"{rel}:{text.count(chr(10), 0, at) + 1}: no icon named '{name}' in brand/icons")
     everything, keep = "\n".join(texts.values()), reserved(root)
     errs.extend(f"brand/icons: '{name}' is never used; delete it or use it" for name in sorted(icons)
-                if name != "question" and name not in keep and not re.search(rf"""["']{re.escape(name)}["']""", everything))
+                if name != "question" and name not in keep and not re.search(rf"""["'`]{re.escape(name)}["'`]""", everything))
     return errs
 
 
@@ -259,6 +259,7 @@ def run_check(root=ROOT):
     if "question" not in icons:
         errs.append("brand/icons/ui/question.svg is the fallback for unknown names and must exist")
     errs += check_usage(icons, root)
+    errs += [f"brand/DESIGN.md: status glyph '{n}' has no icon in brand/icons" for n in sorted(reserved(root) - set(icons))]
     try:
         want_all = expected(icons, root)
     except ValueError as e:
