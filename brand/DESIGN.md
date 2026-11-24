@@ -789,6 +789,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Charts:** follow §10.10 and the dataviz skill. The 8-hex hard-coded `PAL` becomes neutral steps plus the accent.
 - **Motion:** content enters at `base`/`out` with a 4px rise. The listening cursor blinks only while listening and stops under reduced motion.
 - **Iframes:** each one gets the theme variables, as today.
+- **Status line:** while Chief works without speaking (about 22 s of quiet), a strip pinned to the stage's foot says what it's doing in one sentence of `label` `fg.muted` (under 12 words, ellipsis on overflow), after the working glyph spinning at the `spinner` period (still under reduced motion). It sits on `--bg` with a `border.subtle` top rule, updates in place, and clears when Chief speaks or the turn ends. It is never spoken. Phosphor drops the glyph for a `$ ` prompt and dashes the rule.
 
 ### 10.19 Floor bar and orb
 - **Floor bar:** a native segmented control (glass in the titlebar on macOS 26).

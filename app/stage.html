@@ -150,10 +150,23 @@ ol.life li span{color:var(--dim)}
   .listening .cursor{animation:none}
 }
 @keyframes fade{from{opacity:0}}
+/* The status line (issue 176): what Chief is doing while it says nothing, pinned under whatever the stage shows. Shown, never spoken. */
+#status{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;gap:var(--ds-space-8);padding:var(--ds-space-8) var(--ds-space-24);
+  background:var(--bg);border-top:1px solid var(--line);font:var(--ds-type-label);font-family:var(--font);color:var(--dim);
+  animation:in var(--ds-duration-base) var(--ds-easing-out)}
+#status[hidden]{display:none}
+#status span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#status svg.tone{flex:none;margin:0;color:var(--now);animation:spin .9s linear infinite}  /* the spinner period: the one thing in progress here */
+@keyframes spin{to{transform:rotate(360deg)}}
+body.status #s{padding-bottom:calc(var(--ds-space-24) + var(--ds-space-32))}
+[data-look=phosphor] #status{border-top-style:dashed}
+[data-look=phosphor] #status svg.tone{display:none}
+[data-look=phosphor] #status span::before{content:"$ ";color:var(--faint)}
+@media (prefers-reduced-motion: reduce){ #status{animation:fade var(--ds-duration-fast) linear} #status svg.tone{animation:none} }
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
 </style></head>
-<body><div id="s"></div>
+<body><div id="s"></div><div id="status" hidden></div>
 <script>
 const $ = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const vars = () => { const cs = getComputedStyle(document.documentElement);  // the theme, resolved, for Chief's own page
@@ -345,6 +358,15 @@ window.stage = {
     o = o && typeof o === "object" ? o : {};
     const lead = str(o.lead).trim(), body = blocks(o.md);
     show((lead ? [$("p", "lead", lead)] : []).concat(body), "doc");
+  },
+  // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
+  status(line){
+    const el = document.getElementById("status"), t = str(line).trim();
+    document.body.classList.toggle("status", !!t);
+    if (!t) { el.hidden = true; el.replaceChildren(); return; }
+    const span = el.querySelector("span");
+    if (span && !el.hidden) { span.textContent = t; return; }  // in place: no re-entry for each new line
+    el.replaceChildren(toneGlyph("now"), $("span", null, t)); el.hidden = false;
   },
   // Chief's own page (a ```stage block): sandboxed, so it can't run scripts, reach the app or load anything.
   html(str){

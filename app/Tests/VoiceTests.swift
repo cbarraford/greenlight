@@ -9,6 +9,28 @@ import Speech
 /// Deterministic offline voice, audio, WebSocket, and GPT-Live protocol tests.
 func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
+    do {  // the stage's status line (issue 176): one short sentence, never a repeat; the activity Haiku reads; the local fallback
+        check("voice: a status line is one sentence of at most 12 words, markdown off, with a full stop",
+              statusLine("Checking **PR 153**'s CI. Then the logs.", shown: []) == "Checking PR 153's CI."
+              && statusLine("one two three four five six seven eight nine ten eleven twelve thirteen", shown: [])
+                == "one two three four five six seven eight nine ten eleven twelve…"
+              && statusLine("Reading `chat.py`\nnow", shown: []) == "Reading chat.py now." && statusLine("Mulling…", shown: []) == "Mulling."
+              && statusLine("  ", shown: []) == nil && statusLine("…", shown: []) == nil)
+        check("voice: a status line that says a shown one again (case, spacing, final mark aside) isn't shown",
+              statusLine("checking PR 153's CI", shown: ["Checking PR 153's CI."]) == nil
+              && statusLine("Checking PR 154's CI.", shown: ["Checking PR 153's CI."]) == "Checking PR 154's CI.")
+        let r = Run("why is CI red on 153?")
+        r.steps = [Step(id: "1", title: "glab ci status", detail: "!153", ok: true), Step(id: "2", title: "Reading the job log", detail: "")]
+        r.status = "Reading the job log"
+        let act = statusActivity(r)
+        check("voice: the status line's activity is the newest steps, each running/done/failed, and a status only when it's new",
+              act == "- done · glab ci status: !153\n- running · Reading the job log" && statusActivity(Run("q")).hasPrefix("Status: Connecting"))
+        r.plan = Plan(done: 1, total: 3, title: "Fix the test", eta: nil, at: Date()); r.status = "Mulling…"
+        check("voice: the activity adds the plan and a thinking phrase", statusActivity(r).hasSuffix("\nPlan: 1 of 3 done, now: Fix the test\nStatus: Mulling…"))
+        check("voice: without the model, the strip shows the newest running step, else the newest, else the status; never a repeat",
+              statusFallback(r, shown: []) == "Reading the job log." && statusFallback(r, shown: ["Reading the job log."]) == nil
+              && statusFallback(Run("q"), shown: [])?.hasPrefix("Connecting") == true)
+    }
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: contrast is WCAG's ratio", abs(contrast("FFFFFF", "000000") - 21) < 0.01 && abs(contrast("777777", "777777") - 1) < 0.01 && abs(contrast("0969DA", "FFFFFF") - 5.2) < 0.1)
     let bothLooks = [defaultLook(dark: false), defaultLook(dark: true), phosphorLook]
@@ -819,6 +841,25 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.chiefDrew = true; v.failed("Stopped."); v.hush()
         check("voice: finished and failed clear chiefDrew so subsequent watch/checkIn turns still draw the stage",
               clearedAfterScreen && watchDrewStage && !v.chiefDrew)
+        // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
+        // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
+        keyLock.lock(); let savedA = keys["anthropic"]; keys["anthropic"] = .some(nil); keyLock.unlock()
+        let sr = Run("status?"); sr.steps = [Step(id: "s1", title: "Running the tests", detail: "")]
+        c.run = sr; v.on = true; v.isLive = false; v.hush(); v.statusShown = []; v.statusAsking = false
+        v.quietSince = Date() - 5; v.statusTick(sr)
+        let notYet = v.statusShown.isEmpty
+        v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr)
+        let firstLine = v.statusShown == ["Running the tests."] && v.statusUp && !v.statusAsking && Date().timeIntervalSince(v.quietSince) < 1
+        v.quietSince = Date() - statusQuiet - 1; v.askStatus(sr)
+        let noRepeat = v.statusShown.count == 1
+        sr.steps.append(Step(id: "s2", title: "Reading the failure", detail: "")); v.statusSeq += 1
+        v.statusAsking = true; let seqNow = v.statusSeq; v.clearStatus(); v.statusAsking = false
+        let cleared = !v.statusUp && v.statusSeq == seqNow + 1
+        v.finished(staged("Done."), "Done."); let afterReply = !v.statusUp
+        c.run = nil; v.statusTick(sr); let staleRun = v.statusShown.count == 1  // a turn that's over gets no line
+        keyLock.lock(); keys["anthropic"] = savedA; keyLock.unlock(); v.hush()
+        check("voice: the status line waits for 22 s of quiet, shows the newest step, doesn't repeat, and clears on speech or the reply",
+              notYet && firstLine && noRepeat && cleared && afterReply && staleRun)
     }
 
     check("voice: Voice state machine handles GPT-Live events, cues, audio silence, stage blocks, fallback dedupe, barge-in, and close (\(heardText) / \(handedOff) / \(awaitingCue) / \(cueCleared) / \(startedSpeaking) / \(endedSpeaking) / \(liveErrCount) / \(fbCount) / \(capOff) / \(closedStopped) / \(bargedIn) / \(turnRanCmd))",

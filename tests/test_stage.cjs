@@ -162,6 +162,28 @@ const { launchBrowser } = require("./js_harness.cjs");
     assert.ok(await p.isVisible(".doc li"), look);
   }
   await p.evaluate(() => { delete document.documentElement.dataset.look; });
+  // the status line (issue 176): hidden until there's one, text only, updated in place, kept across cards, cleared by ""
+  assert.equal(await p.isVisible("#status"), false);
+  await p.evaluate(() => stage.status("Checking <b>PR 153</b>'s CI."));
+  assert.equal(await p.textContent("#status span"), "Checking <b>PR 153</b>'s CI.");
+  assert.equal(await p.locator("#status b").count(), 0);
+  assert.equal(await p.getAttribute("#status svg.tone", "aria-label"), "Now");  // the working glyph, not colour alone
+  assert.ok(await p.evaluate(() => document.body.classList.contains("status")));  // the card makes room above it
+  await p.evaluate(() => { document.querySelector("#status span").dataset.mark = "same"; stage.status("Still waiting on the test run."); });
+  assert.equal(await p.getAttribute("#status span", "data-mark"), "same");  // in place, no re-entry
+  assert.equal(await p.textContent("#status span"), "Still waiting on the test run.");
+  await p.evaluate(() => stage.spec({ title: "new card", kind: "list", items: [] }));
+  assert.ok(await p.isVisible("#status"));  // a new card doesn't take it down
+  assert.equal(await p.$eval("#status", e => getComputedStyle(e).position), "fixed");
+  await p.evaluate(() => stage.status(""));
+  assert.equal(await p.isVisible("#status"), false);
+  assert.ok(await p.evaluate(() => !document.body.classList.contains("status")));
+  await p.evaluate(() => stage.status(null));
+  assert.equal(await p.isVisible("#status"), false);
+  await p.evaluate(() => { stage.status("Reading the logs."); document.documentElement.dataset.look = "phosphor"; });
+  assert.equal(await p.isVisible("#status svg.tone"), false);  // Phosphor: a $ prompt instead of the glyph
+  assert.equal(await p.$eval("#status span", e => getComputedStyle(e, "::before").content), '"$ "');
+  await p.evaluate(() => { delete document.documentElement.dataset.look; stage.status(""); });
   // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
   await p.setViewportSize({ width: 340, height: 320 });
   await p.evaluate(() => stage.text({ lead: "Long items.",
