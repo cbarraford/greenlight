@@ -119,6 +119,11 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               == Staged(text: "Here.\n\nMore.", stage: nil, open: URL(string: "https://gitlab.com/acme/widgets/-/merge_requests/3"))
           && staged("Here. [open: [!3](https://gitl").text == "Here." && staged("Here. [open: [!3](https://gitlab.com/a/b)").text == "Here."
           && staged("[open: [x](https://evil.com/a)]").open == nil)
+    check("[open: …] cut off before its ] is hidden but never opens", staged("Looking.\n[open: https://github.com/acme/widgets/pull/7") == Staged(text: "Looking.", stage: nil)
+          && staged("[open: [!3](https://github.com/acme/widgets/pull/3)").open == nil)
+    let manyLinks = "Opened: [open: " + (1...12).map { "[!\($0)](https://gitlab.com/acme/widgets/-/merge_requests/\($0))" }.joined(separator: ", ") + "\nMore.", reT0 = Date()
+    check("[open: …] never backtracks: a dozen links, unclosed, parse at once; a half-typed one is hidden while it streams",
+          staged(manyLinks).open == nil && Date().timeIntervalSince(reT0) < 0.5 && staged("Here. [open: [").text == "Here." && staged("Here. [open: [!3").text == "Here.")
     check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
           livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
           && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])
@@ -538,7 +543,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.browse = { browsed.append($0) }
     responder = { r, _, _ in
         guard r.contains("chat.py send") else { return ([], 0) }
-        return ([#"{"e":"text_reset"}"#, #"{"e":"text","delta":"Opening it.\n[open: https://github.com/acme/widgets/pull/7]"}"#,
+        return ([#"{"e":"text_reset"}"#, #"{"e":"text","delta":"Hmm.\n[open: https://github.com/acme/widgets/pull/6"}"#,  // cut off: never opens
+                 #"{"e":"text_reset"}"#, #"{"e":"text","delta":"Opening it.\n[open: https://github.com/acme/widgets/pull/7]"}"#,
                  #"{"e":"text_reset"}"#, #"{"e":"text","delta":"It's open."}"#, #"{"e":"done","ok":true,"text":"It's open."}"#], 0)
     }
     mainC.send("Pop up PR 7")
