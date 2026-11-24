@@ -1539,6 +1539,22 @@ def test_asked_question():
     assert chat.asked_question("") is None and chat.asked_question(None) is None
 
 
+def test_asked_question_voice_screen_split():
+    # Voice mode puts the question in the spoken gist and workspace/MR refs after [screen].
+    q1 = chat.asked_question("The docs fix is ready. Want me to merge it?\n[screen]\n- **docs-tokens**: [!5013](https://gitlab.com/a/b/-/merge_requests/5013) green\n[hexes: docs-tokens]")
+    assert q1 is not None and "Want me to merge it?" in q1 and "!5013" in q1
+    assert chat.question_targets(q1, {"docs-tokens": ("gitlab", "a/b", "!5013", "sha1", "docs", "main", "id-1", "docs/tokens")})
+    # Options before [screen] are moved to the last line so decisions.split_options parses them.
+    q2 = chat.asked_question("Merge it?\nOptions: merge | hold\n[screen]\n- **!5013** CI green\n[hexes: docs-tokens]")
+    assert q2 == "- **!5013** CI green\n\nMerge it?\nOptions: merge | hold"
+    # Multi-paragraph [screen] with Options at the end still keeps the spoken gist question.
+    q3 = chat.asked_question("Want me to merge it?\n[screen]\n- one\n\n- two\n\n- three\n\nOptions: merge | hold\n[hexes: docs-tokens]")
+    assert q3 is not None and "Want me to merge it?" in q3 and q3.endswith("\nOptions: merge | hold")
+    # Statement in both parts is not a question; [screen] inside a code fence is ignored.
+    assert chat.asked_question("Two reviews need you.\n[screen]\n- **!4834** waiting\n[hexes: scan]") is None
+    assert chat.asked_question("Use this marker?\n```\n[screen]\n```\nDone.\n[hexes:]") is None
+
+
 def test_answer_separator_matches_greenlight():
     import greenlight
     assert (chat.ANSWER, chat.ASKED) == (greenlight.ANSWER, greenlight.ASKED)

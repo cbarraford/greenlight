@@ -123,7 +123,7 @@ ol.life li.now{border-top-color:var(--text);color:var(--text)}
 ol.life li b{font:var(--ds-type-label);font-family:var(--font)}
 ol.life li span{color:var(--dim)}
 /* The [screen] text: Chief's detail as a readable page under the spoken gist. Markdown read as structure, drawn as text. */
-#s.doc{justify-content:flex-start;max-width:var(--ds-layout-measure)}
+#s.doc{justify-content:flex-start;max-width:var(--ds-layout-measure);overflow-wrap:anywhere}
 .doc .lead{margin:0 0 var(--ds-space-8);font:var(--ds-type-title-sm);font-family:var(--font);letter-spacing:var(--ds-type-title-sm-track);text-wrap:pretty}
 .doc h2{margin:var(--ds-space-8) 0 0;font:var(--ds-type-strong);font-family:var(--font)}
 .doc p{margin:0}
@@ -164,7 +164,7 @@ const TONE = {needs: ["M8 1.75 14.25 8 8 14.25 1.75 8z", "M8 5.25v3.25M8 10.75h.
 const TONE_SAY = {needs: "Needs you", bad: "Failed", now: "Now", ok: "Done"};
 function toneGlyph(t){ const NS = "http://www.w3.org/2000/svg", g = document.createElementNS(NS, "svg"); g.setAttribute("viewBox", "0 0 16 16"); g.setAttribute("class", "tone");
   g.setAttribute("role", "img"); g.setAttribute("aria-label", TONE_SAY[t]); for (const d of TONE[t]) { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); g.append(p); } return g; }
-function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); }
+function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0); }
 const head = o => (o.eyebrow ? [$("div", "eyebrow", String(o.eyebrow))] : []).concat([$("h1", null, String(o.title ?? ""))]);
 const str = v => v == null ? "" : String(v), int = v => Math.max(0, Math.round(+v) || 0), arr = v => Array.isArray(v) ? v : [];
 // The native templates: a spec with one of these kinds draws from facts (dwim.py stage fills them from the snapshot, ~150 ms),

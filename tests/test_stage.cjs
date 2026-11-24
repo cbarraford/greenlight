@@ -162,5 +162,14 @@ const { launchBrowser } = require("./js_harness.cjs");
     assert.ok(await p.isVisible(".doc li"), look);
   }
   await p.evaluate(() => { delete document.documentElement.dataset.look; });
+  // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
+  await p.setViewportSize({ width: 340, height: 320 });
+  await p.evaluate(() => stage.text({ lead: "Long items.",
+    md: Array.from({ length: 24 }, (_, i) => `- \`scripts/deeply/nested/module_${i}.py\` at \`0123456789abcdef0123456789abcdef01234567\``).join("\n") }));
+  assert.ok(await p.evaluate(() => document.body.scrollWidth <= window.innerWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1), "narrow .doc wraps long inline code");
+  await p.evaluate(() => { document.body.scrollTop = 300; window.scrollTo(0, 300); });
+  assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
+  await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
+  assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
