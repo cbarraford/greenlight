@@ -13,7 +13,7 @@ the menu bar mark and the orb share one form.
 - previews/: every appearance (and Debug) composited in an approximate squircle, for review only.
 - mark.svg: the foreground alone on a 16 grid in currentColor (blades at half alpha, the light solid): the About
   box, the orb glyph, and the menu bar's lit state while agents work. mark-idle.svg: the blades alone, the opening
-  empty: the menu bar at rest.
+  empty: the menu bar at rest, and the orb's blades. mark-light.svg: the light alone, for the orb to colour Signal.
 - `icns VARIANT` reads layers/ back from disk, so those files stay the source of truth for the .icns too.
 """
 import math
@@ -189,7 +189,8 @@ def marks():
     lit = (f'<path d="{blades_d(k, off)}" fill="currentColor" fill-opacity="0.5"/>'
            f'<path d="{light_d(k, off)}" fill="currentColor"/>')
     idle = f'<path d="{blades_d(k, off)}" fill="currentColor"/>'
-    return {"mark.svg": SVG.format(16, lit), "mark-idle.svg": SVG.format(16, idle)}
+    light = f'<path d="{light_d(k, off)}" fill="currentColor"/>'
+    return {"mark.svg": SVG.format(16, lit), "mark-idle.svg": SVG.format(16, idle), "mark-light.svg": SVG.format(16, light)}
 
 
 def write():

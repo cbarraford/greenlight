@@ -14,6 +14,7 @@ cell (a pointy-top hexagon), so the app icon, the menu bar mark and the orb are 
 | `previews/*.svg` | Each appearance and the Debug variant in an approximate squircle (for review only) |
 | `mark.svg` | The mark, 16 grid, `currentColor`: the blades at 50% and the light solid. The About box, the orb's glyph, and the menu bar while agents work |
 | `mark-idle.svg` | The blades alone, the opening empty: the menu bar at rest |
+| `mark-light.svg` | The light alone: the orb draws `mark-idle` in `fg.muted` and this in Signal on top |
 
 The layers are square 1024 canvases, unmasked, with no glow, shadow, blur or specular: Icon Composer adds the squircle
 and the glass. The light covers exactly the opening, so no blade overlaps it. In tinted and clear modes the blades turn
@@ -26,9 +27,9 @@ translucent, and they never show the light through them.
   1024), renders 16–512 @1x/@2x, and writes `brand/icons/Greenlight.icns` and `brand/icons/GreenlightDebug.icns` (the same
   icon with a neutral-grey light `#BABFBB`). Commit both. `app/build.sh` copies them into the bundle. Its
   `CFBundleIconFile` is `Greenlight`, or `GreenlightDebug` for a dev copy (`GREENLIGHT_DEV`).
-- **The mark in the app:** `app/build.sh` copies `mark.svg` and `mark-idle.svg` into Resources as
-  `GreenlightMark.svg` and `GreenlightMarkIdle.svg`. `NSImage` loads them as SVG, and its `fill-opacity` holds as a
-  template image.
+- **The mark in the app:** `app/build.sh` copies `mark.svg`, `mark-idle.svg` and `mark-light.svg` into Resources as
+  `GreenlightMark.svg`, `GreenlightMarkIdle.svg` and `GreenlightMarkLight.svg`. `NSImage` loads them as SVG, and
+  `fill-opacity` holds in a template image.
 - **`.icon` (macOS 26+):** build `brand/icon/Greenlight.icon` in Icon Composer from `layers/` with the settings below.
   Whether `actool` can compile it from the command line on the mini is still open (DESIGN.md §8.5 step 4). Until then
   the bundle ships the `.icns`.
