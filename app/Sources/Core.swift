@@ -175,7 +175,7 @@ final class Core: ObservableObject {
     @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") { didSet { ud.set(designModel, forKey: "designModel") } }
     @Published var designEffort = ud.string(forKey: "designEffort") ?? "low" { didSet { ud.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
-    @Published var termNameModel = ud.string(forKey: "termNameModel") ?? "claude-haiku-5-5" { didSet { ud.set(termNameModel, forKey: "termNameModel") } }
+    @Published var termNameModel = savedModel("termNameModel", fallback: "claude-haiku-5-5") { didSet { ud.set(termNameModel, forKey: "termNameModel") } }
     @Published var termAutoName = ud.object(forKey: "termAutoName") as? Bool ?? true { didSet { ud.set(termAutoName, forKey: "termAutoName") } }
     // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
     @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { ud.set(nextModel, forKey: "nextModel") } }
@@ -291,7 +291,25 @@ final class Core: ObservableObject {
         look += 1
     }
 
-    var modelName: String { models.first { $0.1 == model }?.0 ?? model }
+    @Published var availableModels: [(String, String)] = models
+    var modelsLoaded = false
+    func loadModels() {
+        guard !modelsLoaded else { return }
+        modelsLoaded = true
+        var out = ""
+        ssh("\(py)/harness.py models", onLine: { out += $0 }, onExit: { [weak self] code in
+            guard code == 0, let data = out.data(using: .utf8),
+                  let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+            let parsed: [(String, String)] = rows.compactMap { r in
+                guard let id = r["id"] as? String, !id.isEmpty, let name = r["name"] as? String, !name.isEmpty else { return nil }
+                return (name, id)
+            }
+            guard !parsed.isEmpty else { return }
+            DispatchQueue.main.async { self?.availableModels = parsed }
+        })
+    }
+
+    var modelName: String { availableModels.first { $0.1 == model }?.0 ?? models.first { $0.1 == model }?.0 ?? model }
     var recorder: AVAudioRecorder?
     var meter: Timer?
     var shortcut: String { shortcutName(voiceMods, voiceKey) }
@@ -445,6 +463,7 @@ final class Core: ObservableObject {
     }
 
     var isClaude: Bool { harnessOf(model) == "claude" }
+    var supportsEffort: Bool { modelSupportsEffort(model) }
     var waiting: [Question] { questions.filter { $0.answer == nil } }
     /// The waiting pings that name workspaces, for the dashboard (mc.bell's third argument).
     var asked: [[String: Any]] {
@@ -938,8 +957,11 @@ final class Core: ObservableObject {
             savePending(r, id)
         case "start":
             let engine = j["engine"] as? String ?? "claude"
-            let selected = engine == "agy" ? j["model"] as? String : engine
-            r.status = "Starting \(models.first { $0.1 == selected }?.0 ?? engine.capitalized)"
+            let rawModel = j["model"] as? String
+            let selected = (rawModel != nil && rawModel != "default") ? rawModel : engine
+            let shown = availableModels.first { $0.1 == selected || $0.1 == "\(engine):\(selected ?? "")" }?.0
+                ?? models.first { $0.1 == selected }?.0 ?? engine.capitalized
+            r.status = "Starting \(shown)"
             log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":
             if !r.stopping { r.status = j["text"] as? String ?? r.status; r.thinking = j["thinking"] as? Bool ?? false; voice.status(byline(r, now: Date(), lead: true)) }

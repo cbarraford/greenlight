@@ -184,6 +184,14 @@ def primary_agent(agents):
 
 
 ORCA_AGENTS = {"agy": "antigravity"}  # greenlight's harness names that Orca knows by another id
+FROM_ORCA_AGENTS = {v: k for k, v in ORCA_AGENTS.items()}
+
+
+def canonical_agent(name):
+    """Normalize ADE-specific agent ids (e.g. Orca's 'antigravity') to greenlight's harness name."""
+    if not isinstance(name, str):
+        return name
+    return FROM_ORCA_AGENTS.get(name.strip().lower(), name)
 
 
 def orca_agent(args):
@@ -192,7 +200,7 @@ def orca_agent(args):
     if "--agent" not in args[:-1]:
         return args
     i = args.index("--agent") + 1
-    name = args[i]
+    name = canonical_agent(args[i])
     args[i] = ORCA_AGENTS.get(name, name)
     model = ((CONFIG.get("harnesses") or {}).get(name) or {}).get("model")
     return args + ["--model", model] if model and "--model" not in args else args
@@ -1174,12 +1182,12 @@ def upstream_gone(r):
 
 def screen(ws, terminals):
     """What the workspace's newest agent terminal shows (ade_common.agent_state over its last 60 lines), or None."""
-    agent_type, pane = ws["agent"].get("type"), ws["agent"].get("pane_key")
+    agent_type, pane = canonical_agent(ws["agent"].get("type")), ws["agent"].get("pane_key")
     if ws["agent"].get("state") in ("working", "waiting") and not pane:
         return None  # another same-type session cannot prove this agent is done or has answered its prompt
     terms = sorted((t for t in terminals.get(ws["id"], []) if
                     (f"{t.get('tabId')}:{t.get('leafId')}" == pane if pane else
-                     t.get("agentIdentity") and (not agent_type or t["agentIdentity"] == agent_type))),
+                     t.get("agentIdentity") and (not agent_type or canonical_agent(t["agentIdentity"]) == agent_type))),
                    key=lambda t: t.get("lastOutputAt") or 0, reverse=True)
     if not terms:
         return None
@@ -1264,7 +1272,8 @@ def agent_overlay(ws, terminals):
     elif seen["state"] == "logged_out":
         nxt.update(owner="me", action=f"agent logged out: /login in {h}, then greenlight re-dispatches")
     elif seen["state"] == "rate_limited":
-        now = ag.get("type") if ag.get("type") in CONFIG["agents"] else (CONFIG["agents"][0] if CONFIG["agents"] else "agent")
+        cur_type = canonical_agent(ag.get("type"))
+        now = cur_type if cur_type in CONFIG["agents"] else (CONFIG["agents"][0] if CONFIG["agents"] else "agent")
         others = [a for a in CONFIG["agents"] if a != now]
         if others:
             nxt["agent"] = others[0]
@@ -1381,7 +1390,7 @@ def scan(save=True, _backfill_retries=0):
                                    goal == backfills[w["worktreeId"]].get("goal") and (not comment or STATUS_LINE_RE.search(comment))),
             "comment": comment,
             "pinned": w.get("isPinned"), "linked_mr": linked,
-            "agent": {"state": ag.get("state", "none"), "type": ag.get("agentType"),
+            "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},

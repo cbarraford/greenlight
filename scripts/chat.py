@@ -5,7 +5,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
-                                     # M: a Claude or agy Gemini model, or a harness name for its default model
+                                     # M: any model id harness.route takes (claude-*, gpt-*, gemini-*, <harness>:<model>), or a harness name
   chat.py compact [--model M]       # claude only
   chat.py new                        # forget every harness's session (Clear)
   chat.py stop                       # kill the running turn
@@ -90,7 +90,7 @@ PROMPT = (
     "`automerge` option and `autonomy.py` opt-ins, with `merge-held` human-only). When the user says `steward #N` or `steward !N` "
     "(or asks to watch an MR to merge), run `python3 " + SCRIPTS + "/ws_state.py steward <ws|#N|!N> on` (pass `--project owner/repo` if ambiguous). "
     "Other actions: `off`, `confirm` (accept a head-SHA or target-branch drift pause), `status`, and `log` (per-MR activity history). "
-    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
+    "Agents: the coding agents in the user's workspaces (Claude Code, Codex, Antigravity/agy, opencode, pi, Gemini CLI) each run in a Greenlight terminal tab, a tmux "
     "session on `tmux -L greenlight`; this host's are here (tabs on the user's Mac aren't: you can open those, not read them). "
     "`tmux -L greenlight ls -F '#{session_name} #{pane_current_command} #{pane_current_path}'` lists them (the path is the worktree); "
     "`capture-pane -p -t '=SESSION:' -S -60` reads an agent's screen, to tell the user what it's doing or asking. When the user asks to "
@@ -373,11 +373,11 @@ GEMINI_TOOLS = {"run_shell_command": "Bash", "read_file": "Read", "read_many_fil
 
 RUNNERS = {"python", "python3", "node", "uv", "npx", "env", "sudo", "time", "nice", "nohup", "exec", "timeout", "command"}  # name what they run
 SHELLS = {"sh", "bash", "zsh"}
-SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude"}  # their subcommands name them
+SUBCOMMANDS = {"gh", "glab", "git", "orca", "tmux", "docker", "kubectl", "npm", "make", "codex", "claude", "agy"}  # their subcommands name them
 NOUN_VERB = {"gh", "glab", "orca"}  # two words: gh pr list
 WRAPPER_VERBS = {"run", "compose", "stash", "worktree", "remote"}  # …and after these: npm run build, git stash pop (not exec: a prompt)
 VALUED = {"-C", "-L", "-S", "-R", "-t", "-F", "-n", "--repo", "--namespace", "--prefix"}  # a subcommand tool's flags that take the next word
-AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin"}  # claude/codex: else a word is the prompt
+AGENT_SUBS = {"exec", "review", "mcp", "resume", "login", "apply", "doctor", "update", "config", "plugin", "plugins", "models", "agent", "agents", "changelog", "acp"}  # claude/codex/agy: else a word is the prompt
 RUNNER_VALUED = {"sudo": {"-u", "-g", "-C", "-h", "-p"}, "env": {"-u", "-C", "-S"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
                  "nice": {"-n"}, "uv": {"--with", "--python", "--from", "-p", "--project", "--directory"}, "npx": {"-p", "--package"}}
 
@@ -433,7 +433,7 @@ def cmd_title(cmd, _depth=0):
             return cmd_title(" ".join(w[2:]), _depth + 1)
         w = _strip_runners(w)
         prog = os.path.basename(w[0])
-        if prog in ("claude", "codex"):  # a subcommand only right after it, unquoted: any other word is the prompt
+        if prog in ("claude", "codex", "agy"):  # a subcommand only right after it, unquoted: any other word is the prompt
             m = re.search(r"(?:^|[\s/])" + prog + r"\s+(" + "|".join(sorted(AGENT_SUBS)) + r")(?=\s|$)", bare)  # quotes blanked
             return "Ran " + prog + (" " + m.group(1) if m else "")
         return short(" ".join(["Ran", prog] + _extract_sub(prog, w)), 60)

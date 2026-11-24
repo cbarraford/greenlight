@@ -86,3 +86,21 @@ def test_launchd_plist_format():
     pl = plistlib.loads(auto.PLIST.format(exe="/py", path="/a.py", env_path="/bin").encode())
     assert pl["ProgramArguments"] == ["/py", "/a.py", "tick"]
     assert pl["StartInterval"] == 60
+
+
+def test_model_picks_the_provider(gl_home, monkeypatch):
+    # an automation with only a --model runs on the harness that model names; a harness prefix is dropped for it
+    monkeypatch.setitem(auto.CONFIG, "agents", ["claude", "codex"])
+    assert auto.provider({"model": "gpt-6-luna"}) == "codex" and auto.provider({"model": "gemini-4-neon-low"}) == "agy"
+    assert auto.provider({"model": "agy:claude-opus-5-5-high"}) == "agy" and auto.provider({}) == "claude"
+    assert auto.provider({"provider": "codex", "model": "claude-opus-5-5"}) == "codex"  # an explicit provider wins
+    assert auto.own_model({"model": "agy:claude-opus-5-5-high"}, "agy") == "claude-opus-5-5-high"
+    assert auto.own_model({"model": "mystery-1"}, "codex") == "mystery-1" and auto.own_model({}, "codex") is None
+    seen = []
+    def argv(engine, text, model=None, **kw):
+        seen.append((engine, model))
+        raise ValueError("stop")
+    monkeypatch.setattr(auto.harness, "argv", argv)
+    auto.agent({"prompt": "p", "model": "agy:claude-opus-5-5-high"}, "agy", io_log := __import__("io").StringIO())
+    auto.agent({"prompt": "p", "model": "agy:claude-opus-5-5-high"}, "claude", io_log)  # a fallback harness: its own default
+    assert seen == [("agy", "claude-opus-5-5-high"), ("claude", False)], seen

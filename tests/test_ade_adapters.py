@@ -316,6 +316,34 @@ def test_basement_full_lifecycle(tmp_path):
             ade_basement.call("bad", "cmd")
 
 
+def test_basement_detects_codex_and_agy_panes(tmp_path):
+    rows = "\n".join([
+        "\t".join(["%1", "mc-a", "/w/feat-1", "⌬ codex", "1700001", "codex"]),
+        "\t".join(["%2", "mc-b", "/w/widgets", "◈ agy", "1700002", "agy"]),
+        "\t".join(["%3", "mc-c", "/w/widgets", "zsh", "1700003", "zsh"]),
+    ])
+
+    def fake_tmux(*args):
+        if args[:2] == ("list-panes", "-a"):
+            return rows
+        if args[0] == "capture-pane":
+            return "Working (5s · esc to interrupt)\n" if "%1" in args else "▸ 1. Continue\n  2. Stop\n"
+        return ""
+
+    with (
+        mock.patch.object(ade_basement, "REPOS", tmp_path / "repos.json"),
+        mock.patch("ade_common.GOALS", tmp_path / "goals.json"),
+        mock.patch.object(ade_basement, "tmux", side_effect=fake_tmux),
+        mock.patch.object(ade_basement, "git", return_value="worktree /w/widgets\nworktree /w/feat-1\n"),
+        mock.patch.object(ade_basement, "git_info", side_effect=_fake_git_info),
+    ):
+        wts = {w["path"]: w for w in ade_basement.call("worktree", "ps")["worktrees"]}
+        assert wts["/w/feat-1"]["agents"][0]["agentType"] == "codex" and wts["/w/feat-1"]["agents"][0]["state"] == "working"
+        assert wts["/w/widgets"]["agents"][0]["agentType"] == "agy" and wts["/w/widgets"]["agents"][0]["state"] == "waiting"
+        terms = {t["handle"]: t for t in ade_basement.call("terminal", "list")["terminals"]}
+        assert terms["%1"]["agentIdentity"] == "codex" and terms["%2"]["agentIdentity"] == "agy" and terms["%3"]["agentIdentity"] is None
+
+
 def test_basement_tmux_no_server_vs_error():
     no_srv = subprocess.CompletedProcess(["tmux"], 1, stdout="", stderr="no server running on /tmp/tmux")
     with mock.patch.object(ade_basement.subprocess, "run", return_value=no_srv):

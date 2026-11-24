@@ -3,7 +3,7 @@
 
   auto.py list
   auto.py add <name> --schedule "<cron>" --prompt "<text>" [--cwd DIR] [--precheck CMD]
-              [--provider claude|codex|opencode|pi|gemini] [--model M] [--effort E] [--timeout MIN]
+              [--provider claude|codex|agy|opencode|pi|gemini] [--model M] [--effort E] [--timeout MIN]
   auto.py add <name> --schedule "<cron>" --orchestrator [--precheck CMD] [--timeout MIN]
                             # a greenlight run with no LLM session: orchestrate.py tick (adopt, scan, next.cmd,
                             # goal backfill, templated dispatch, cleanup; decide.py only at ambiguous forks)
@@ -19,7 +19,7 @@
 Automations live in ~/.greenlight/automations.json, runs in ~/.greenlight/auto/.
 Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday=0).
 A precheck that exits non-zero means "nothing to do": the run is skipped.
-The provider (default: config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
+The provider (default: the harness --model names, see harness.py, else config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
 Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
 An --orchestrator automation ("kind": "orchestrator") runs orchestrate.py tick instead of an agent; its prompt is optional.
 """
@@ -115,14 +115,20 @@ def alive(name):
 
 
 def provider(a):
-    return a.get("provider") or CONFIG["agents"][0]
+    return a.get("provider") or harness.harness_of(a.get("model")) or CONFIG["agents"][0]
+
+
+def own_model(a, engine):
+    """The model id `engine` gets: an id that names this harness (agy:claude-opus-5-5-high) loses its prefix."""
+    m = a.get("model")
+    return harness.route(m, engine)[1] if m and harness.harness_of(m) in (engine, None) else m
 
 
 def agent(a, engine, log):
     """(text, exit code, tokens): the run's step titles, plain lines and reply, and its diag token fields."""
     own = engine == provider(a)  # a model name only means something to its own harness
     try:  # stream JSON, as chat does: the same parsers then give the reply and its tokens
-        cmd, text = harness.argv(engine, a["prompt"], model=own and a.get("model"), effort=own and a.get("effort"), stream=True)
+        cmd, text = harness.argv(engine, a["prompt"], model=own and own_model(a, engine), effort=own and a.get("effort"), stream=True)
         env = {**os.environ, "GREENLIGHT_REQUEST": a["prompt"]}  # a read-only automation can't create workspaces (greenlight.read_only)
         p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(a.get("timeout") or 120) * 60)

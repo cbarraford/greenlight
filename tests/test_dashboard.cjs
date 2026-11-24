@@ -1532,6 +1532,28 @@ test("steward hex badge and popover Log tab show per-MR activity and toggle stew
   assert.equal(await page.$(".cell[data-name='st-ws'] .stbadge"), null, "badge disappears when steward mode turns off");
 });
 
+test("agent avatars, hover cards, and All output support Claude, Codex, and Antigravity (agy)", async page => {
+  await page.evaluate(s => {
+    const agyPuck = JSON.parse(JSON.stringify(s.pucks[0]));
+    agyPuck.name = "agy-ws"; agyPuck.state = "working"; agyPuck.agent = {state: "working", type: "agy", last: "Building", since: 1700000000000};
+    s.pucks[0].state = "working"; s.pucks[0].agent.state = "working"; s.pucks[0].agent.type = "claude";
+    s.pucks[1].agent.type = "codex";
+    s.pucks.push(agyPuck);
+    mc.update(s);
+  }, JSON.parse(JSON.stringify(SNAP)));
+  const logos = await page.$$eval(".acard .av svg path", es => es.map(e => e.getAttribute("d")));
+  assert.equal(logos.length, 3);
+  assert.equal(new Set(logos).size, 3, "Claude, Codex, and Antigravity must have distinct logos");
+  assert.match(await page.locator(".acard[data-name='agy-ws']").textContent(), /Antigravity/);
+  await page.click(".acard[data-name='agy-ws'] button.aline");
+  await page.evaluate(() => mc.transcript({name: "agy-ws", before: null, more: null, entries: [
+    {id: "c1:0", role: "assistant", text: "from agy", kind: "agy"},
+    {id: "c2:0", role: "assistant", text: "from codex", kind: "codex"},
+  ], recent: []}));
+  assert.deepEqual(await page.$$eval("#aout-list .aow", es => es.map(e => e.textContent)), ["Antigravity", "Codex"]);
+  assert.match(await page.textContent("#aout-sub"), /Antigravity is working/);
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

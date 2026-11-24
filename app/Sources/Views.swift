@@ -1053,12 +1053,18 @@ struct SettingsView: View {
         let p = Picker(label, selection: v) { ForEach(efforts, id: \.self) { Text(effortName($0)).tag($0) } }.labelsHidden()
         return ViewThatFits(in: .horizontal) { p.pickerStyle(.segmented).fixedSize(); p.frame(width: menuWidth) }.disabled(off).opacity(off ? 0.45 : 1)
     }
-    func claudeModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        Picker(label, selection: v) { ForEach(models.filter { harnessOf($0.1) == "claude" }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+    func modelOptions(for current: String, where keep: (String) -> Bool) -> [(String, String)] {
+        var list = c.availableModels.filter { keep($0.1) }
+        if !list.contains(where: { $0.1 == current }) {
+            let label = models.first { $0.1 == current }?.0 ?? current
+            list.append((label, current))
+        }
+        return list
     }
-    /// The background agents dash.py runs where greenlight does: a Claude model, or a Gemini one through agy.
+    /// Any Claude, Codex, or agy model for background agents (pages, suggestions, tab naming).
     func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        Picker(label, selection: v) { ForEach(models.filter { $0.1.hasPrefix("claude-") || $0.1.hasPrefix("gemini-") }, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+        let opts = modelOptions(for: v.wrappedValue) { ["claude", "codex", "agy"].contains(harnessOf($0)) }
+        return Picker(label, selection: v) { ForEach(opts, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing).onAppear(perform: c.loadModels)
     }
 
     // MARK: This Mac
@@ -1196,10 +1202,11 @@ struct SettingsView: View {
     @ViewBuilder var chat: some View {
         heading("Chat & voice", "The chat pane's model, and dictating into it from any app.")
         box("Model") {
+            let chatOpts = modelOptions(for: c.model) { _ in true }
             row("Chat model", "Changes apply from your next message.") {
-                Picker("Model", selection: $c.model) { ForEach(models, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+                Picker("Model", selection: $c.model) { ForEach(chatOpts, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing).onAppear(perform: c.loadModels)
             }
-            row("Effort", c.isClaude ? Self.effortNotes[c.effort] : c.model.hasPrefix("gemini-") ? "Choose the Gemini effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.isClaude) }
+            row("Effort", c.supportsEffort ? Self.effortNotes[c.effort] : harnessOf(c.model) == "agy" ? "Choose the effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.supportsEffort) }
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
             toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
         }
@@ -1352,7 +1359,7 @@ struct SettingsView: View {
         }
         box("Tab names") {
             toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
-            dependent(off: !c.termAutoName) { row("Naming model") { claudeModelPicker("Naming model", $c.termNameModel) } }
+            dependent(off: !c.termAutoName) { row("Naming model") { writerModelPicker("Naming model", $c.termNameModel) } }
         }
     }
 
@@ -1430,7 +1437,7 @@ struct SettingsView: View {
         box("Background agents") {
             row("Workspace pages", "Builds each workspace's page on the dashboard.") { writerModelPicker("Workspace pages model", $c.designModel) }
             dependent(off: false) {
-                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: harnessOf(c.designModel) == "agy") }
+                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: !modelSupportsEffort(c.designModel)) }
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
                     if c.designParallel > 0 {
                         Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
@@ -1441,7 +1448,7 @@ struct SettingsView: View {
                 }
             }
             row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { writerModelPicker("Suggestions model", $c.nextModel) }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: harnessOf(c.nextModel) == "agy") } }
+            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: !modelSupportsEffort(c.nextModel)) } }
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
             }

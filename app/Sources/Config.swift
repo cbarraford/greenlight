@@ -302,9 +302,83 @@ let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5
               ("Gemini 4 Neon · High", "gemini-4-neon-high"), ("Gemini 4 Neon · Extra high", "gemini-4-neon-xhigh"),
               ("Gemini 4 Argon · Medium", "gemini-4-argon-medium"), ("Gemini 4 Hydrogen · Medium", "gemini-4-hydrogen-medium"),
               ("Gemini 3.8 Flash · Medium", "gemini-3.8-flash-medium"),
-              ("Codex", "codex"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
-/// Gemini model ids run through agy; the Gemini CLI entry still starts that harness's default model.
-func harnessOf(_ model: String) -> String { model.hasPrefix("claude-") ? "claude" : model.hasPrefix("gemini-") ? "agy" : model }
+              ("Codex", "codex"), ("Antigravity", "agy"), ("OpenCode", "opencode"), ("Pi", "pi"), ("Gemini CLI", "gemini")]
+let knownHarnesses: Set<String> = ["claude", "codex", "agy", "opencode", "pi", "gemini"]
+let effortSuffixes = ["-low", "-medium", "-high", "-xhigh", "-max"]
+/// Which harness runs `model` (mirrors `harness.harness_of`): claude-*, gpt-*/codex-*/o<N>, gemini-*/gpt-oss-*, <harness>:<model>, or a harness name.
+func harnessOf(_ model: String) -> String {
+    if knownHarnesses.contains(model) { return model }
+    if let i = model.firstIndex(of: ":") {
+        let head = String(model[..<i])
+        if knownHarnesses.contains(head) { return head }
+    }
+    if model.hasPrefix("claude-") { return "claude" }
+    if model.hasPrefix("gemini-") || model.hasPrefix("gpt-oss-") { return "agy" }
+    if model.hasPrefix("gpt-") || model.hasPrefix("codex-") { return "codex" }
+    if model.hasPrefix("o"), model.dropFirst().first?.isNumber == true { return "codex" }
+    return model
+}
+/// (harness, model id or nil for that harness's default), matching `harness.route`.
+func routeModel(_ model: String) -> (harness: String, id: String?) {
+    let h = harnessOf(model)
+    if model == h { return (h, nil) }
+    if model.hasPrefix(h + ":") {
+        let rest = String(model.dropFirst(h.count + 1))
+        return (h, rest.isEmpty ? nil : rest)
+    }
+    return (h, model == "gemini-4-neon" ? "gemini-4-neon-medium" : model)
+}
+/// Whether a separate Effort picker applies to `model` (Claude, Codex, and agy models whose ID doesn't bake effort in).
+func modelSupportsEffort(_ model: String) -> Bool {
+    let h = harnessOf(model)
+    if h == "claude" || h == "codex" { return true }
+    if h == "agy" { return !effortSuffixes.contains { model.hasSuffix($0) } }
+    return false
+}
+func localHarnessBin(_ name: String) -> String {
+    if let override = ud.string(forKey: "\(name)Bin"), !override.isEmpty { return override }
+    let candidates = ["\(NSHomeDirectory())/.local/bin/\(name)", "\(NSHomeDirectory())/.\(name)/bin/\(name)",
+                      "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)"]
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "\(NSHomeDirectory())/.local/bin/\(name)"
+}
+/// One toolless CLI invocation for Claude, Codex, or agy (used for tab naming and window restyling).
+func llmInvocation(_ prompt: String, model: String, effort: String = "low") -> (harness: String, bin: String, args: [String], stdin: String, shell: String) {
+    let routed = routeModel(model)
+    let h = ["claude", "codex", "agy"].contains(routed.harness) ? routed.harness : "claude"
+    let bin = localHarnessBin(h)
+    if h == "codex" {
+        var args = ["exec", "--skip-git-repo-check", "-c", "sandbox_mode=read-only"]
+        var shell = "cd /tmp && exec codex exec --skip-git-repo-check -c sandbox_mode=read-only"
+        if let id = routed.id { args += ["-m", id]; shell += " -m \(shellQuote(id))" }
+        args += ["-c", "model_reasoning_effort=\(effort)", "-"]
+        shell += " -c model_reasoning_effort=\(shellQuote(effort)) -"
+        return (h, bin, args, prompt, shell)
+    }
+    if h == "agy" {
+        var args = ["--input-format", "stream-json", "--output-format", "stream-json"]
+        var shell = "cd /tmp && exec agy --input-format stream-json --output-format stream-json"
+        if let id = routed.id { args += ["--model", id]; shell += " --model \(shellQuote(id))" }
+        let baked = routed.id.map { m in effortSuffixes.contains { m.hasSuffix($0) } } ?? false
+        if !baked { args += ["--effort", effort]; shell += " --effort \(shellQuote(effort))" }
+        let payload: [String: Any] = ["event": "user", "message": ["role": "user", "content": prompt]]
+        let line = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        return (h, bin, args, line + "\n", shell)
+    }
+    let id = routed.id ?? "claude-haiku-5-5"
+    return ("claude", bin, ["-p", "--model", id, "--effort", effort], prompt,
+            "cd /tmp && exec claude -p --model \(shellQuote(id)) --effort \(shellQuote(effort))")
+}
+/// Extract the final text response from `agy --output-format stream-json` output ("" on failure).
+func parseAgyStreamResult(_ output: String) -> String {
+    for line in output.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+        guard let data = line.data(using: .utf8),
+              let ev = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              ev["event"] as? String == "result",
+              let res = ev["result"] as? [String: Any] else { continue }
+        return res["status"] as? String == "SUCCESS" ? (res["response"] as? String ?? "") : ""
+    }
+    return ""
+}
 /// A Gemini model that came back with Claude Code's "issue with the selected model": the host's chat.py predates agy and
 /// handed the id to `claude`, so the model is fine and the host's greenlight is older than this app. Says so, else nil.
 func staleBackendNote(model: String, error: String, host: String, code: String) -> String? {

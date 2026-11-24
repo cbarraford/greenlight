@@ -795,14 +795,60 @@ with mock.patch.object(sys, "argv", ["dash.py", "turn", "bad;session"]), mock.pa
         pass
 print("turn ok")
 
-# `dash.py trees` includes live Basement tmux agent pane states (`panes`), tolerating tmux failures
+# `dash.py trees` includes live Basement tmux agent pane states (`panes`) and configured agents, tolerating tmux failures
 with mock.patch.object(ade_basement, "pane_states", return_value={"mc-a": {"state": "done", "title": "✳ Done"}}):
     assert dash.basement_panes() == {"mc-a": {"state": "done", "title": "✳ Done"}}
     _trees_out = _io.StringIO()
     with mock.patch.object(sys, "argv", ["dash.py", "trees"]), mock.patch.object(sys, "stdout", _trees_out), \
-         mock.patch.object(dash, "trees", return_value=[]):
+         mock.patch.object(dash, "trees", return_value=[]), \
+         mock.patch.dict(dash.greenlight.CONFIG, {"agents": ["agy", "codex", "claude"]}):
         dash.main()
-    assert json.loads(_trees_out.getvalue()) == {"trees": [], "panes": {"mc-a": {"state": "done", "title": "✳ Done"}}}
+    assert json.loads(_trees_out.getvalue()) == {"trees": [], "panes": {"mc-a": {"state": "done", "title": "✳ Done"}},
+                                                 "agents": ["agy", "codex", "claude"]}
 with mock.patch.object(ade_basement, "pane_states", side_effect=OSError("no tmux")):
     assert dash.basement_panes() == {}
 print("basement panes ok")
+
+# agy transcripts, pending ask_question, multi-agent menu pickers, and <harness>:<model> opts
+import sqlite3  # noqa: E402
+_agy_home = Path(tempfile.mkdtemp())
+_ws_dir = "/w/agy-demo"
+_cid1, _cid2 = "conv-aaa-111", "conv-bbb-222"
+_db = sqlite3.connect(_agy_home / "conversation_summaries.db")
+_db.execute("create table conversation_summaries (conversation_id text, workspace_uris text)")
+_db.execute("insert into conversation_summaries values (?, ?)", (_cid1, json.dumps([f"file://{_ws_dir}"])))
+_db.execute("insert into conversation_summaries values (?, ?)", (_cid2, json.dumps([f"file://{_ws_dir}"])))
+_db.execute("insert into conversation_summaries values (?, ?)", ("conv-other", json.dumps([f"file://{_ws_dir}-other"])))
+_db.commit()
+_db.close()
+_t1 = _agy_home / "brain" / _cid1 / ".system_generated" / "logs" / "transcript.jsonl"
+_t2 = _agy_home / "brain" / _cid2 / ".system_generated" / "logs" / "transcript.jsonl"
+_t1.parent.mkdir(parents=True)
+_t2.parent.mkdir(parents=True)
+_t1.write_text("\n".join([
+    json.dumps({"type": "USER_INPUT", "content": "Fix the tests"}),
+    json.dumps({"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "run_command", "args": {"CommandLine": "pytest -q"}}]}),
+    json.dumps({"type": "PLANNER_RESPONSE", "content": "All tests pass."}),
+]) + "\n")
+_t2.write_text("\n".join([
+    json.dumps({"type": "USER_INPUT", "content": "Should I merge?"}),
+    json.dumps({"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "ask_question", "args": {"questions": [{"question": "Merge now?", "options": ["Yes", "No"]}]}}]}),
+]) + "\n")
+os.utime(_t1, (time.time() - 10, time.time() - 10))
+os.utime(_t2, (time.time() - 1, time.time() - 1))
+assert dash._agy_entries(_t1) == [("user", "Fix the tests"), ("tool", "run_command pytest -q"), ("assistant", "All tests pass.")]
+with mock.patch.dict(os.environ, {"AGY_HOME": str(_agy_home), "CODEX_HOME": str(_agy_home / "no-codex")}), \
+     mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "agy-ws", "path": _ws_dir}, {})}):
+    _found = dash.transcript_files(_ws_dir)
+    assert [k for _, k in _found] == ["agy", "agy"] and len(_found) == 2
+    assert dash.pending_questions(_ws_dir) == [{"question": "Merge now?", "options": ["Yes", "No"]}]
+    _tr = dash.transcript("agy-ws")
+    assert any(e["id"].startswith(f"{_cid2}:") and e.get("kind") == "agy" for e in _tr["entries"])
+    assert any(e["id"].startswith(f"{_cid1}:") and e["text"] == "All tests pass." for e in _tr["entries"])
+# Codex (›) and agy (▸) question menus are recognized; Codex empty › prompt is not a menu
+assert dash.menu(["Pick:", "› 1. Approve", "  2. Skip"]) == [("1", "Approve"), ("2", "Skip")]
+assert dash.menu(["Pick:", "▸ 1. Yes", "  2. No"]) == [("1", "Yes"), ("2", "No")]
+assert dash.menu(["1. Foo", "2. Bar", "›"]) == []
+# --model accepts <harness>:<model> ids
+assert dash._model_opts(["page", "ws", "--model", "agy:claude-opus-5-5-high", "--effort", "low"]) == {"model": "agy:claude-opus-5-5-high", "effort": "low"}
+print("agy transcripts, menus & trees agents ok")

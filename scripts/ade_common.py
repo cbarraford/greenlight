@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 GOALS = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight") / "goals.json"  # {workspace path: goal}
-MENU_ITEM_RE = re.compile(r"[❯›●]\s*\d\.")  # a picker's highlighted row: Claude ❯, Codex ›, Gemini ●
+MENU_ITEM_RE = re.compile(r"[❯›●▸]\s*\d\.")  # a picker's highlighted row: Claude ❯, Codex ›, Gemini ●, agy ▸
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
 DIM_RE = re.compile(r"\x1b\[2m.*?(?=\x1b\[(?:0|22)?m|$)")  # dim text: Claude's prompt suggestion, not a draft
 
@@ -126,17 +126,17 @@ STATES = {  # the classifier's options: name → when it applies (System One rea
     "logged_out": "The coding agent itself can't authenticate: logged out, expired or revoked token or API key, its own 401, asked to /login or sign in. A command or test seeing HTTP 401 is not agent logout.",
     "unsent_draft": "Text is typed into the agent's input box but not sent: the turn is over and the draft waits on Enter.",
 }
-QUESTION = ("This is the bottom of a coding agent's terminal (Claude Code, Codex, opencode, pi or Gemini CLI). "
+QUESTION = ("This is the bottom of a coding agent's terminal (Claude Code, Codex, Antigravity/agy, opencode, pi or Gemini CLI). "
             "What state is the agent in now? Judge by the bottom of the screen: older lines are history.")
 DEAD_RE = re.compile(r"^\s*\W{0,3}\s*(?:(?:API Error:\s*401\s+)?OAuth access token has been revoked|Please run /login|"
-                     r"(?:Not logged in\.\s*)?Run `?(?:codex|claude|gemini|opencode|pi) login`?|login expired|"
+                     r"(?:Not logged in\.\s*)?Run `?(?:codex|claude|agy|gemini|opencode|pi) login`?|login expired|"
                      r"API key (?:has expired|is invalid|not valid|expired)|Invalid API key|authentication_error)", re.I)
 LIMIT_RE = re.compile(r"^\s*\W{0,3}\s*(?:(?:API )?Error:?\s*)?(?:(?:You've hit your )?usage limit|limit reached|5-hour limit|weekly limit|out of (?:extra )?usage"
                       r"|exceeded your current quota|insufficient_quota"
                       r"|(?:You have )?exhausted your daily quota|(?:Your )?quota will reset after)", re.I | re.M)  # a bare RESOURCE_EXHAUSTED is any gRPC error
-BUSY_RE = re.compile(r"esc to interrupt|esc interrupt|ctrl\+c to (?:interrupt|stop)|"
+BUSY_RE = re.compile(r"esc to interrupt|esc interrupt|\(esc to cancel\b|ctrl\+c to (?:interrupt|stop|cancel)|"
                      r"^\W{0,3}\S[^(]{0,40}…\s*\(\d+[smh]\b|^[⠀-⣿]\s|\bWorking\s*\(\d+s\b", re.I | re.M)  # spinners and timers
-ASK_RE = re.compile(r"^\s*(?:[❯›●]\s*\d\.\s+\S|Do you want to|Allow (?:execution|command|this)|"
+ASK_RE = re.compile(r"^\s*(?:[❯›●▸]\s*\d\.\s+\S|Do you want to|Allow (?:execution|command|this)|"
                     r"Waiting for (?:your )?(?:approval|confirmation|input))|(?:\(y/n\)|\[Y/n\]|\[y/N\])\s*$", re.I | re.M)
 HEURISTIC_P = 0.75  # a pattern hit: above the 0.7 that greenlight acts on, as the regexes it replaces were acted on
 
