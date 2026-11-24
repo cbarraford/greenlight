@@ -682,13 +682,13 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 <script>
 "use strict";
 const STATE = {
-  needs:   {label:"Needs you", color:"--orange", glyph:"needs",  size:160},
-  crashed: {label:"Crashed",   color:"--red",    glyph:"crashed", size:96},
-  raised:  {label:"Your move", color:"--yellow", glyph:"your-move", size:104},
-  working: {label:"Working",   color:"--blue",   glyph:"working",  size:112},
-  queued:  {label:"Queued",    color:"--gray",   glyph:"queued",  size:78},
-  quiet:   {label:"Waiting on others", color:"--purple", glyph:"waiting", size:64},
-  done:    {label:"Done",      color:"--green",  glyph:"done", size:58},
+  needs:   {label:"Needs you", color:"--orange", size:160},
+  crashed: {label:"Crashed",   color:"--red", size:96},
+  raised:  {label:"Your move", color:"--yellow", size:104},
+  working: {label:"Working",   color:"--blue", size:112},
+  queued:  {label:"Queued",    color:"--gray", size:78},
+  quiet:   {label:"Waiting on others", color:"--purple", size:64},
+  done:    {label:"Done",      color:"--green", size:58},
 };
 const ORDER = Object.keys(STATE);
 const TONE = {ok:"--green", warn:"--orange", bad:"--red", info:"--blue", idle:"--track"};

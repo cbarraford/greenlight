@@ -162,7 +162,7 @@ struct Theme {
     // The dashboard's tokens (dashboard.html :root), so the native panes and the HTML share one scale.
     static let r1: CGFloat = 6, r2: CGFloat = 10, r3: CGFloat = 14, r4: CGFloat = 20  // --r-1…4: controls, cards, sheets
     static let fs1: CGFloat = 11, fs2: CGFloat = 12, fs3: CGFloat = 13, fs4: CGFloat = 15, fs5: CGFloat = 18, fs6: CGFloat = 22  // --fs-1…6, before sys()'s size setting
-    static let glyph: CGFloat = 9  // small SF Symbols in a fixed frame (xmark, chevron, check)
+    static let glyph: CGFloat = 9  // small icons in a fixed frame (close, chevron, check)
     static let sp1: CGFloat = 4, sp2: CGFloat = 8, sp3: CGFloat = 12, sp4: CGFloat = 16, sp5: CGFloat = 24, sp6: CGFloat = 32  // --sp-1…6, 4pt grid
     /// State colors, dark | light, as the dashboard's. Never the accent: orange always means "needs you", red "crashed".
     static func state(_ d: String, _ l: String) -> Color { Color(nsColor: hex(theme.dark ? d : l)) }

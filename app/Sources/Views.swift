@@ -996,7 +996,7 @@ struct SettingsView: View {
     @ObservedObject var c: Core
     @ObservedObject var preview = LivePreview.shared
     @StateObject var rs = RulesStore()
-    /// (pane, SF Symbol, words the sidebar's search also matches). This Mac's panes, then greenlight's on its host.
+    /// (pane, icon name, words the sidebar's search also matches). This Mac's panes, then greenlight's on its host.
     static let mac = [("General", "sliders", "startup opens dock icon assistant name"),
                       ("Appearance", "contrast", "theme dark light accent color colour font size text dashboard source custom"),
                       ("Chat & voice", "chat", "model effort dictation voice whisper engine shortcut"),
@@ -1145,7 +1145,7 @@ struct SettingsView: View {
 
     // MARK: the panes' parts
 
-    /// A pane's (or nav item's) SF Symbol on a rounded tile: the accent when it's the one you're on.
+    /// A pane's (or nav item's) icon on a rounded tile: the accent when it's the one you're on.
     func tile(_ icon: String, _ size: CGFloat, on: Bool = true) -> some View {
         Image(ds: icon, size: iconSize(size * 0.48, scaled: false), medium: true).foregroundColor(on ? onAccent : sub)
             .frame(width: size, height: size).background(RoundedRectangle(cornerRadius: size * 0.27).fill(on ? accent : surface)).accessibilityHidden(true)

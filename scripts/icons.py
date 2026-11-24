@@ -35,8 +35,12 @@ TAGS = {"path", "circle", "rect", "line", "polyline", "polygon", "ellipse"}
 ATTRS = {"d", "cx", "cy", "r", "rx", "ry", "x", "y", "width", "height", "x1", "y1", "x2", "y2", "points",
          "fill-rule", "stroke-dasharray", "fill", "stroke"}
 PAINT = {"currentColor", "none"}
-# Calls whose first argument must name an icon that exists.
-CALLS = re.compile(r"\b(?:dsIcon|dsIconHTML|ico|icon|g16|DSIcon\.image)\(\s*[\"']([a-z0-9-]+)[\"']|Image\(ds:\s*\"([a-z0-9-]+)\"")
+# Calls whose first argument names icons: every quoted name in it (a literal, or both arms of a ternary) must exist.
+CALLS = re.compile(r"(?<![\w.])(?:dsIcon|dsIconHTML|ico|icon|g16|DSIcon\.image|banner|pathRow|knob)\(|Image\(ds:|"
+                   r"\blistItem\(.*?\bicon:")
+# The pages' name maps (a meaning → an icon): every value must exist.
+MAPS = re.compile(r"\bconst (?:GLYPH|MI|G) = \{([^}]*)\}")
+NAME = re.compile(r"""["']([a-z0-9]+(?:-[a-z0-9]+)*)["']""")
 GENERATED = re.compile(r'<script id="ds-icons">.*?</script><!-- /ds-icons -->', re.S)
 
 
@@ -114,8 +118,13 @@ def js_block(icons):
 
 def apply_block(text, block):
     """Replace the page's icon block, or insert it before the page's first <script>."""
+    if text.count(OPEN) > 1:
+        raise ValueError(f"the page has more than one {OPEN} block")
     if OPEN in text:
-        return GENERATED.sub(lambda _m: block, text, count=1)
+        out, n = GENERATED.subn(lambda _m: block, text, count=1)
+        if not n:
+            raise ValueError(f"the page has {OPEN} but not its end marker {CLOSE}")
+        return out
     at = text.index("<script")
     return text[:at] + block + "\n" + text[at:]
 
@@ -194,18 +203,54 @@ def sources(root=ROOT):
     return out
 
 
+def first_arg(text, i):
+    """The source of the call argument starting at text[i]: up to its top-level `,` or closing bracket."""
+    depth, quote, j = 0, None, i
+    while j < len(text):
+        c = text[j]
+        if quote:
+            j += c == "\\"
+            quote = None if c == quote else quote
+        elif c in "\"'`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}" and depth == 0 or c == "," and depth == 0:
+            break
+        elif c in ")]}":
+            depth -= 1
+        j += 1
+    return text[i:j]
+
+
+def named(text):
+    """(offset, name) for every icon name the text passes to an icon call or puts in a name map."""
+    for m in CALLS.finditer(text):
+        yield from ((m.start(), n) for n in NAME.findall(first_arg(text, m.end())))
+    for m in MAPS.finditer(text):
+        yield from ((m.start(), v) for v in re.findall(r""":\s*["']([a-z0-9-]+)["']""", m.group(1)))
+
+
+def reserved(root=ROOT):
+    """The status glyphs DESIGN.md's front matter names: part of the set before a surface draws them."""
+    spec = Path(root) / "brand/DESIGN.md"
+    return set(re.findall(r"\bglyph: ([a-z0-9-]+)", spec.read_text())) if spec.exists() else set()
+
+
 def check_usage(icons, root=ROOT):
-    """Every icon a call names exists, and every icon is named somewhere in the code."""
+    """Every name an icon call or name map gives exists, and every icon is named somewhere (or reserved by the spec).
+
+    For "named somewhere" any quoted string equal to the icon's name counts, so the Swift tables of (pane, icon, …)
+    count too; the price is that a short name that's also a state or command string can go dead unseen.
+    """
     errs, texts = [], sources(root)
     for rel, text in texts.items():
-        for m in CALLS.finditer(text):
-            name = m.group(1) or m.group(2)
+        for at, name in named(text):
             if name not in icons:
-                line = text.count("\n", 0, m.start()) + 1
-                errs.append(f"{rel}:{line}: no icon named '{name}' in brand/icons")
-    everything = "\n".join(texts.values())
+                errs.append(f"{rel}:{text.count(chr(10), 0, at) + 1}: no icon named '{name}' in brand/icons")
+    everything, keep = "\n".join(texts.values()), reserved(root)
     errs.extend(f"brand/icons: '{name}' is never used; delete it or use it" for name in sorted(icons)
-                if name != "question" and not re.search(rf"""["']{re.escape(name)}["']""", everything))
+                if name != "question" and name not in keep and not re.search(rf"""["']{re.escape(name)}["']""", everything))
     return errs
 
 
@@ -214,7 +259,11 @@ def run_check(root=ROOT):
     if "question" not in icons:
         errs.append("brand/icons/ui/question.svg is the fallback for unknown names and must exist")
     errs += check_usage(icons, root)
-    for rel, want in expected(icons, root).items():
+    try:
+        want_all = expected(icons, root)
+    except ValueError as e:
+        return [*errs, str(e)]
+    for rel, want in want_all.items():
         path = Path(root) / rel
         if not path.exists() or path.read_text() != want:
             errs.append(f"{rel} is out of date with brand/icons: run `python3 scripts/icons.py generate`")

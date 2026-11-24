@@ -15,7 +15,7 @@ def repo(tmp_path):
     """A scratch copy of the icon sources and everything that uses them."""
     for rel in [*icons.SETS, "app/Sources"]:
         shutil.copytree(ROOT / rel, tmp_path / rel)
-    for rel in icons.PAGES:
+    for rel in [*icons.PAGES, "brand/DESIGN.md"]:
         shutil.copy(ROOT / rel, tmp_path / rel)
     return tmp_path
 
@@ -59,7 +59,7 @@ def test_parse_rejects_broken_xml(tmp_path):
 def test_load_repo_set():
     found, errs = icons.load(ROOT)
     assert errs == []
-    assert {"question", "needs", "your-move", "working", "crashed", "queued", "waiting", "done", "claude", "openai"} <= set(found)
+    assert {"question", "working", "crashed", "done", "claude", "openai"} | icons.reserved() <= set(found)
     assert found["claude"][0] == 24 and found["claude"][1] == "f"
 
 
@@ -79,6 +79,27 @@ def test_js_block_and_apply(repo):
     once = icons.apply_block(page, block)
     assert once.index(icons.OPEN) < once.index("<script>let a")
     assert icons.apply_block(once, block) == once
+    broken = once.replace(icons.CLOSE, "</script>")
+    with pytest.raises(ValueError, match="end marker"):
+        icons.apply_block(broken, block)
+    with pytest.raises(ValueError, match="more than one"):
+        icons.apply_block(once + block, block)
+
+
+def test_check_flags_a_lost_end_marker(repo):
+    page = repo / "app/terminal.html"
+    page.write_text(page.read_text().replace(icons.CLOSE, "</script>"))
+    assert any("end marker" in e for e in icons.run_check(repo))
+
+
+def test_reserved_status_glyphs(repo):
+    assert {"needs", "your-move", "queued", "waiting", "done"} <= icons.reserved(repo)
+    _svg(repo / "brand/icons/ui", "reserved-x", '<path d="M1 1"/>')
+    found = icons.load(repo)[0]
+    assert any("'reserved-x' is never used" in e for e in icons.check_usage(found, repo))
+    spec = repo / "brand/DESIGN.md"
+    spec.write_text(spec.read_text() + "\n    extra: { glyph: reserved-x }\n")
+    assert not any("reserved-x" in e for e in icons.check_usage(found, repo))
 
 
 def test_swift_source(repo):
@@ -102,6 +123,25 @@ def test_usage_errors(repo):
     assert any("no icon named 'no-such-icon'" in e for e in errs)
     assert any("no icon named 'also-missing'" in e for e in errs)
     assert any("'orphan' is never used" in e for e in errs)
+
+
+@pytest.mark.parametrize("code", [
+    'Image(ds: on ? "mic" : "mic-of", size: 12)',      # either arm of a ternary
+    'dsIcon(on ? "bell-fill" : "bel", 14)',
+    'banner("nope", "text")',                           # Swift helpers that take an icon name
+    'listItem("t", "m", on: true, icon: "nope")',
+    'const MI = {review: "review", ci: "nope"};',       # the pages' name maps
+])
+def test_usage_follows_ternaries_helpers_and_maps(repo, code):
+    swift = repo / "app/Sources/Views.swift"
+    swift.write_text(swift.read_text() + f"\n{code}\n")
+    errs = icons.check_usage(icons.load(repo)[0], repo)
+    assert any(e.startswith("app/Sources/Views.swift:") and "no icon named" in e for e in errs), errs
+
+
+def test_named_skips_non_names():
+    assert [n for _, n in icons.named('icon(x ? "a b" : `t`, 14) icon(k)')] == []
+    assert [n for _, n in icons.named('icon(f("x", y) ? "done" : "ring", 14)')] == ["x", "done", "ring"]
 
 
 def test_check_stale_generate_and_question_fallback(repo):
