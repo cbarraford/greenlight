@@ -494,7 +494,7 @@ function newPane(tab, cmd, session = sid()){
     host.addEventListener("mouseleave", lnkHide);
     host.addEventListener("click", e => { const l = t.currentHoveredLink;  // a plain click opens it too; ⌘-click is ghostty-web's own
       if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
-    t.onData(d => { if (!p.dead) { if (p.hist) { p.hist = false; d = HIST_EXIT + d } return post({cmd: "in", id, d}) } p.dead = p.tmux = false; t.write("\r\n"); post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows}) });
+    t.onData(d => { if (!p.dead) { if (p.hist) { p.hist = false; d = HIST_EXIT + d } return post({cmd: "in", id, d}) } p.dead = p.tmux = p.hist = false; t.write("\r\n"); post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows}) });
     t.onResize(({cols, rows}) => post({cmd: "size", id, cols, rows}));
     post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
     if (cmd) post({cmd: "in", id, d: cmd + "\r"});

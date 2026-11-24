@@ -957,6 +957,12 @@ test("the wheel without Greenlight's tmux: an app's mouse modes get no ⌃⌥⇧
   assert.ok(!(await page.evaluate(() => { const b = panes.get([...panes.keys()].pop()).t.buffer.active; return Array.from({length: b.length}, (_, y) => b.getLine(y)?.translateToString(true)).join("\n") })).includes("greenlight-tmux"), "the mark draws nothing");
   await wheel({deltaY: -2, ctrlKey: true});
   assert.equal((await ins()).pop(), "\x1b[<64;1;1M".repeat(2), "⌃-wheel: plain reports, as tmux binds no modified wheel");
+  await page.evaluate(i => term.exited(i, 255), id);  // the connection drops, after a wheel up
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("r", true));  // the key that reconnects
+  await page.evaluate(() => panes.get([...panes.keys()].pop()).t.input("k", true));
+  assert.equal((await ins()).pop(), "k", "after a reconnect, no exit before the key: the host may have no tmux now");
+  await wheel({deltaY: -2});
+  assert.equal((await ins()).pop(), "k", "and no wheel reports until the new connection prints the mark");
 });
 
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
