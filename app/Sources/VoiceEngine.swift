@@ -21,11 +21,13 @@ final class Voice: NSObject, ObservableObject {
     @Published var heard = ""  // your turn so far
     let meter = Meter()
     @Published var caption = ""  // the sentence Chief is saying
-    @Published var look = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1] {  // default Orb
+    /// The chat and stage look: Default or Phosphor (a parked look's stored id opens as Default). Read its colours through
+    /// lookNamed(look.id) where the appearance matters: Default follows it.
+    @Published var look = lookNamed(ud.string(forKey: "stageStyle")) {
         didSet {
-            ud.set(look.id, forKey: "stageStyle"); chatLook = look; core?.look += 1
+            ud.set(look.id, forKey: "stageStyle"); chatLookId = look.id; core?.look += 1
             if stageWebLoaded {
-                stageWeb.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)
+                stageWeb.appearance = stageAppearance
                 stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
             }
         }
@@ -84,6 +86,8 @@ final class Voice: NSObject, ObservableObject {
         }
         func webView(_ w: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
     }
+    /// Phosphor always wears dark; Default follows its window (nil), so the stage flips with the app.
+    var stageAppearance: NSAppearance? { look.id == "phosphor" ? NSAppearance(named: .darkAqua) : nil }
     private var stageNav: StageNav?
     private var stageWebLoaded = false
     lazy var stageWeb: WKWebView = {  // no message handlers: nothing on the stage can reach the app
@@ -95,7 +99,7 @@ final class Voice: NSObject, ObservableObject {
         let v = WKWebView(frame: .zero, configuration: cfg)
         v.navigationDelegate = nav; v.uiDelegate = nav
         v.setValue(false, forKey: "drawsBackground")
-        v.appearance = NSAppearance(named: look.dark ? .darkAqua : .aqua)  // the look's, not the system's
+        v.appearance = stageAppearance  // Phosphor's dark, else the window's
         if let u { v.loadFileURL(u, allowingReadAccessTo: u) }
         return v
     }()

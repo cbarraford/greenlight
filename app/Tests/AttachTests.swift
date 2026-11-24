@@ -157,8 +157,8 @@ func attachTest(_ c: Core, check: (String, Bool) -> Void, wait: (String, Double,
             c.fileSays("tool.bin isn't a file the chat can use: attach \(ChatFile.supported).")
             let was = c.voice.look
             defer { c.voice.look = was }  // the user's own pick stays
-            for look in ["orb", "conversation"] {
-                c.voice.look = looks.first { $0.id == look }!
+            for look in ["default", "phosphor"] {
+                c.voice.look = lookNamed(look)
                 for (n, drag) in [("files", false), ("drop", true)] {
                     c.dropping = drag; h.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date() + 0.5)
                     if let rep = h.bitmapImageRepForCachingDisplay(in: h.bounds) { h.cacheDisplay(in: h.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/stage-\(look)-\(n).png")) }
