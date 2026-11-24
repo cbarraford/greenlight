@@ -1136,14 +1136,110 @@ def test_scoped_session_preserves_history_when_workspace_departs(tmp_path, monke
 
 
 def test_scoped_windows_isolate_asked_and_chat_identity(tmp_path, monkeypatch):
-    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path / "chat"))
+    monkeypatch.setattr(chat, "CHAT", None)
+    os.makedirs(chat.DIR)
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/a"]}))
     first_asked, first_chat = chat.asked_path(), chat.chat_identity()
     with open(first_asked, "w") as fh:
         fh.write("Deploy to production?")
+    monkeypatch.setattr(chat, "DIR", str(tmp_path / "chat-2"))  # a second Center window: its own CHAT_DIR (#168: not its paths)
+    monkeypatch.setattr(chat, "CHAT", "chat-2")
     monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/b"]}))
     assert chat.asked_path() != first_asked and chat.chat_identity() != first_chat
     assert not os.path.exists(chat.asked_path())
+
+
+def test_scoped_window_keeps_its_conversation_apart_from_every_project_chat(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "CHAT", None)
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    broad = (chat.asked_path(), chat.chat_identity(), chat.session_path("claude"))
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/a"], "repos": ["octo/app"]}))
+    scoped = (chat.asked_path(), chat.chat_identity(), chat.session_path("claude"))
+    assert all(x != y for x, y in zip(broad, scoped)) and scoped[1] == "main_window"
+
+
+def test_workspace_changes_keep_scoped_window_conversation(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    ident = lambda: (chat.asked_path(), chat.chat_identity(), chat.session_path("claude"), chat.session_path("codex"),
+                     chat.QUESTION_DELIVERY + chat.scope_suffix())
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": [], "repos": []}))  # a picked project with no workspace yet
+    first = ident()
+    for scope in ({"paths": ["/w/a"], "repos": ["octo/app"]},  # its first workspace: repos follow the trees too
+                  {"paths": ["/w/a", "/w/phase-1"], "repos": ["octo/app", "octo/api"]},
+                  {"paths": ["/w/phase-1"], "repos": ["octo/api"]}):
+        monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps(scope))
+        assert ident() == first, scope
+
+
+def test_upgrade_adopts_newest_hash_scoped_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    old, newer = tmp_path / "session_scope-f494a9ab9f6e", tmp_path / "session_scope-c613ba1bd55b"
+    old.write_text("old-session")
+    newer.write_text("newer-session")
+    os.utime(old, (1, 1))
+    (tmp_path / "session_codex_scope-111111111111").write_text("codex-session")
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    with chat.scope_lock():
+        chat.adopt_legacy_scope_unlocked()
+    assert chat.session("claude") is None and newer.exists()  # the every-project chat never takes a scoped one
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
+    (tmp_path / chat.RESETTING).write_text("resetting")
+    with chat.scope_lock():
+        chat.adopt_legacy_scope_unlocked()
+    assert chat.session("claude") is None and newer.exists()  # an interrupted Clear never revives an old conversation
+    (tmp_path / chat.RESETTING).unlink()
+    with chat.scope_lock():
+        chat.adopt_legacy_scope_unlocked()
+    assert chat.session("claude") == "newer-session" and not newer.exists() and old.exists()
+    assert chat.session("codex") == "codex-session"
+
+
+def test_upgrade_closes_old_pending_question_and_warns_this_turn(tmp_path, monkeypatch):
+    import dash
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "CHAT", None)
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    closed = []
+    monkeypatch.setattr(chat.decisions, "forget_chat", lambda **kw: closed.append(kw["chat"]))
+    (tmp_path / "session_scope-f494a9ab9f6e").write_text("s1")
+    (tmp_path / "asked_scope-f494a9ab9f6e").write_text("Merge #42?")
+    (tmp_path / (chat.QUESTION_DELIVERY + "_scope-f494a9ab9f6e")).write_text("pending")
+    sent = []
+    def fake_run(cmd, engine, text, norm, **kw):
+        sent.append(text)
+        norm.reply = "ok"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "s1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    monkeypatch.setattr(chat, "emit", lambda **e: e)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
+    chat.turn("yes", "claude-haiku-5-5", None)
+    assert closed[0] == "main_scope-f494a9ab9f6e" and "STALE QUESTION" in sent[0]
+    assert not list(tmp_path.glob("*_scope-*")) and chat.session("claude") == "s1"
+
+
+def test_scope_change_between_sends_resumes_same_session(tmp_path, monkeypatch):
+    import dash
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(dash, "board", lambda **kw: ("", dash.BoardAllow()))
+    resumed = []
+    real_argv = chat.harness.argv
+    monkeypatch.setattr(chat.harness, "argv", lambda *a, **kw: resumed.append(kw.get("sid")) or real_argv(*a, **kw))
+    def fake_run(cmd, engine, text, norm, **kw):
+        norm.reply = "ok"
+        norm.pending_done = {"e": "done", "ok": True, "text": norm.reply, "context": 0, "window": None, "ms": None}
+        return "s1", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    monkeypatch.setattr(chat, "emit", lambda **e: e)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
+    chat.turn("lets put all of the phases into one PR", "claude-haiku-5-5", None)
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a", "/w/phase-1"], "repos": ["octo/app"]}))
+    chat.turn("and the phases?", "claude-haiku-5-5", None)
+    assert resumed == [None, "s1"] and chat.session("claude") == "s1"
 
 
 def test_scope_addition_and_engine_switch_preserve_question(tmp_path, monkeypatch):
@@ -1354,7 +1450,7 @@ def test_clear_closes_questions_in_every_scope_of_center(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["chat.py", "new"])
     chat.main()
     assert {kw["chat"] for kw in calls} == \
-        {None, "main_scope-111111111111", "main_scope-222222222222"}
+        {None, "main_window", "main_scope-111111111111", "main_scope-222222222222"}
     assert not list(tmp_path.glob("asked*")) and not list(tmp_path.glob("members_scope-*"))
 
 
