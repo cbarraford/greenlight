@@ -346,7 +346,8 @@ func staged(_ s: String) -> Staged {
     }
     var link: URL?
     while let r = text.range(of: #"\[open:(?:[^\[\]\n]|\[[^\]\n]*+(?:\]|$))*+(?:\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief opens a PR/MR/issue in the browser: the first allowed one; every one is hidden. One [!3] level inside; possessive, so a stray one can't backtrack
-        if link == nil, text[r].hasSuffix("]") { link = forgeURL(String(text[r].dropFirst(6).dropLast())) }  // closed only: a cut-off one never opens
+        let closed = text[r].range(of: #"^\[open:(?:[^\[\]\n]|\[[^\]\n]*+\])*+\]$"#, options: [.regularExpression, .caseInsensitive]) != nil  // its own ], not a nested one's
+        if link == nil, closed { link = forgeURL(String(text[r].dropFirst(6).dropLast())) }  // closed only: a cut-off one never opens
         text.removeSubrange(r)
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over

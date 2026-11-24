@@ -120,7 +120,7 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && staged("Here. [open: [!3](https://gitl").text == "Here." && staged("Here. [open: [!3](https://gitlab.com/a/b)").text == "Here."
           && staged("[open: [x](https://evil.com/a)]").open == nil)
     check("[open: …] cut off before its ] is hidden but never opens", staged("Looking.\n[open: https://github.com/acme/widgets/pull/7") == Staged(text: "Looking.", stage: nil)
-          && staged("[open: [!3](https://github.com/acme/widgets/pull/3)").open == nil)
+          && staged("[open: [!3](https://github.com/acme/widgets/pull/3)").open == nil && staged("[open: https://github.com/acme/widgets/pull/3 [x]").open == nil)
     let manyLinks = "Opened: [open: " + (1...12).map { "[!\($0)](https://gitlab.com/acme/widgets/-/merge_requests/\($0))" }.joined(separator: ", ") + "\nMore.", reT0 = Date()
     check("[open: …] never backtracks: a dozen links, unclosed, parse at once; a half-typed one is hidden while it streams",
           staged(manyLinks).open == nil && Date().timeIntervalSince(reT0) < 0.5 && staged("Here. [open: [").text == "Here." && staged("Here. [open: [!3").text == "Here.")
