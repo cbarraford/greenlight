@@ -2127,7 +2127,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
             ptys.removeValue(forKey: id)?.stop(); ptySession[id] = nil
             if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneTarget(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
-        case "hide": if wid == 0 { if !closeShare(termWindow) { hideLevel(termWindow) } } else { closeTermWindow(wid) }  // its last tab closed: as its close button
+        case "hide": if wid == 0 { if !upstairs, !closeShare(termWindow) { hideLevel(termWindow) } } else { closeTermWindow(wid) }  // its last tab closed: as its close button (upstairs it's out of sight already)
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }
         case "side": floors[wid]?.at = b["open"] as? Bool ?? false ? "basement" : "pipe"; if wid == 0 { termSide = b["open"] as? Bool ?? false; syncOrbs() }  // the green light shows only while the Basement's sidebar is open
