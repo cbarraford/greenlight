@@ -2340,14 +2340,14 @@ function badgeSync(){ const n = [...panes.values()].filter(p => p.bell && isAgen
   if (n !== badgeSync.n) post({cmd: "badge", n: badgeSync.n = n}) }  // the Dock: agents waiting on you (hoisted: render runs during load)
 // a file dropped on a pane (or a pasted screenshot): the app writes it where that pane's shell runs and its path is pasted in
 // a pasted image's own name is WebKit's "image.png" (or none): it goes as pasted-<tag>.<its extension>, and the tag tells filed it was a paste
-const pasteTags = new Set(), EXT = {"svg+xml": "svg", jpeg: "jpg", "x-icon": "ico", "vnd.microsoft.icon": "ico"};
-const pastedName = f => { if (f.name && !/^image\.\w+$/i.test(f.name)) return f.name;
-  const sub = f.type.split("/")[1] || "", ext = f.name?.match(/\.(\w{1,8})$/)?.[1] || EXT[sub] || sub.replace(/\W/g, "").slice(0, 8) || "png", tag = Math.random().toString(36).slice(2, 8);
+const pasteTags = new Set(), EXT = {"svg+xml": "svg", jpeg: "jpg"};
+const pastedName = f => { const m = /^image\.(\w{1,8})$/i.exec(f.name || ""); if (f.name && !m) return f.name;
+  const sub = f.type.split("/")[1] || "", ext = m?.[1] || EXT[sub] || sub.replace(/\W/g, "").slice(0, 8) || "png", tag = Math.random().toString(36).slice(2, 8);
   pasteTags.add(tag); return `pasted-${tag}.${ext}` };
 function sendFile(p, f, name = f.name){
   if (f.size > 10e6) return toast(`${f.name || "That file"} is over 10 MB`);
   const r = new FileReader();
-  r.onload = () => post({cmd: "file", id: p.id, ws: p.tab.ws, name: name || "pasted.png", data: String(r.result).split(",")[1] || ""});
+  r.onload = () => post({cmd: "file", id: p.id, ws: p.tab.ws, name, data: String(r.result).split(",")[1] || ""});
   r.readAsDataURL(f);
 }
 let dropT;
