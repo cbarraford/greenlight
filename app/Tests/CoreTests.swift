@@ -347,36 +347,28 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
         func isClosed(_ h: FileHandle?) -> Bool {
             guard let h else { return false }
-            do { _ = try h.read(upToCount: 1); return false } catch {
-                var cur: NSError? = error as NSError
-                while let e = cur {
-                    if e.domain == NSPOSIXErrorDomain && (e.code == Int(EAGAIN) || e.code == Int(EINTR)) { return false }
-                    cur = e.userInfo[NSUnderlyingErrorKey] as? NSError
-                }
-                return true
-            }
+            do { _ = try h.readToEnd(); return false } catch { return true }
         }
         let probe = Pipe()
-        let pfd = probe.fileHandleForReading.fileDescriptor
-        let pfl = fcntl(pfd, F_GETFL)
-        if pfl >= 0 { _ = fcntl(pfd, F_SETFL, pfl | O_NONBLOCK) }
+        try? probe.fileHandleForWriting.close()
         let openNotClosed = !isClosed(probe.fileHandleForReading)
         try? probe.fileHandleForReading.close()
         let closedIsClosed = isClosed(probe.fileHandleForReading)
-        try? probe.fileHandleForWriting.close()
-        check("config: isClosed distinguishes an open O_NONBLOCK pipe from a closed handle",
+        check("config: isClosed distinguishes an open EOF pipe from a closed handle (open=\(openNotClosed), closed=\(closedIsClosed))",
               openNotClosed && closedIsClosed)
         // a daemon keeps both pipes: finish() times out promptly and closes both read handles even while Process is retained
         var heldCode: Int32?
         let heldT0 = Date()
-        let heldProc = ssh("sleep 3 & exit 3", on: "local", onExit: { heldCode = $0 })
+        let heldProc = ssh("sleep 2 & exit 3", on: "local", onExit: { heldCode = $0 })
         let until3 = Date() + 5
         while heldCode == nil && Date() < until3 { RunLoop.main.run(until: Date() + 0.02) }
         let heldElapsed = Date().timeIntervalSince(heldT0)
-        check("config: ssh() survives a held pipe, times out promptly, and closes read handles even while Process is retained",
-              heldCode == 3 && heldElapsed < 2.2
-              && isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
-              && isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading))
+        let drainDone = heldT0 + 2.4
+        while Date() < drainDone { RunLoop.main.run(until: Date() + 0.05) }  // let sleep 2 close write ends (avoids EAGAIN) while heldProc stays retained
+        let heldOutClosed = isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
+        let heldErrClosed = isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading)
+        check("config: ssh() survives a held pipe, times out promptly, and closes read handles even while Process is retained (rc=\(heldCode ?? -1), secs=\(String(format: "%.2f", heldElapsed)), out=\(heldOutClosed), err=\(heldErrClosed))",
+              heldCode == 3 && heldElapsed < 1.5 && heldOutClosed && heldErrClosed)
         var rc0ErrDone = 0
         for _ in 0..<10 {
             _ = ssh("printf 'stderr noise\\n' >&2; printf 'ok\\n'", on: "local", onExit: { if $0 == 0 { rc0ErrDone += 1 } })
