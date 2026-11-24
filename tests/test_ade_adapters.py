@@ -348,6 +348,35 @@ def test_basement_detects_codex_and_agy_panes(tmp_path):
         assert "mc-c" not in ps
 
 
+def test_basement_hides_claude_agent_worktrees(tmp_path):
+    """Claude Code's `.claude/worktrees/agent-…` checkouts aren't workspaces (#127)."""
+    porcelain = "\n".join([
+        "worktree /w/widgets", "HEAD abc", "branch refs/heads/main", "",
+        "worktree /w/widgets/.claude/worktrees/agent-a1b2", "HEAD def", "detached", "",
+        "worktree /w/feat-1", "HEAD 123", "branch refs/heads/feat-1", "",
+        "worktree /w/not.claude/worktrees-x", "HEAD 456", "branch refs/heads/x", "",
+    ])
+    row = "\t".join(["%1", "mc-a", "/w/widgets/.claude/worktrees/agent-a1b2/src", "⠋ Working", "1700001"])
+
+    def fake_tmux(*args):
+        return row if args[:2] == ("list-panes", "-a") else ""
+
+    with (
+        mock.patch.object(ade_basement, "REPOS", tmp_path / "repos.json"),
+        mock.patch("ade_common.GOALS", tmp_path / "goals.json"),
+        mock.patch.object(ade_basement, "tmux", side_effect=fake_tmux),
+        mock.patch.object(ade_basement, "git", return_value=porcelain),
+        mock.patch.object(ade_basement, "git_info", side_effect=_fake_git_info),
+    ):
+        wts = {w["path"]: w for w in ade_basement.call("worktree", "ps")["worktrees"]}
+        assert sorted(wts) == ["/w/feat-1", "/w/not.claude/worktrees-x", "/w/widgets"]
+        # a pane inside a hidden agent checkout counts toward the checkout that holds it
+        assert wts["/w/widgets"]["agents"][0]["state"] == "working"
+    assert ade_basement.agent_worktree("/r/.claude/worktrees/agent-1")
+    assert not ade_basement.agent_worktree("/r/claude/worktrees/agent-1")
+    assert not ade_basement.agent_worktree("/r/.claude/worktreesX")
+
+
 def test_basement_tmux_no_server_vs_error():
     no_srv = subprocess.CompletedProcess(["tmux"], 1, stdout="", stderr="no server running on /tmp/tmux")
     with mock.patch.object(ade_basement.subprocess, "run", return_value=no_srv):

@@ -130,11 +130,17 @@ def remember(repo):
         os.replace(tmp, REPOS)
 
 
+def agent_worktree(path):
+    """Claude Code's own subagent checkouts (`<repo>/.claude/worktrees/agent-…`): not a workspace, so hidden."""
+    return "/.claude/worktrees/" in path + "/"
+
+
 def worktrees():
     ps, g = panes(), goals()
     repos = dict.fromkeys([*saved(), *(git_info(p["cwd"])["repoId"] for p in {p["cwd"]: p for p in ps}.values())])
     paths = [l[9:] for repo in filter(None, repos)
-             for l in git(repo, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
+             for l in git(repo, "worktree", "list", "--porcelain").splitlines()
+             if l.startswith("worktree ") and not agent_worktree(l[9:])]
     by_len = sorted(set(paths), key=len, reverse=True)
     owned: dict[str, list] = {}
     for p in ps:
