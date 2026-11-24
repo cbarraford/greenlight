@@ -363,6 +363,9 @@ func sshHosts() -> [String] {
     }
     return names.filter { !($0.hasSuffix("-ts") && names.contains(String($0.dropLast(3)))) }
 }
+/// Whether a Basement tab's home runs greenlight's scripts (dash.py turn can read its pane there): a workspace or the home on
+/// the scripts' host, and @local (this Mac). Another @host shell has none. terminal.html's scriptsOn is the same rule.
+func runsScripts(_ ws: String) -> Bool { !ws.hasPrefix("@") || ws == "@local" }
 /// A pane's host and folder: "@name" is a host's home (the Hosts rows), anything else a folder on GREENLIGHT_HOST.
 func paneWhere(_ ws: String) -> (host: String, cwd: String)? {
     if ws.hasPrefix("@") { return ws.range(of: #"^@\w[\w.-]{0,63}$"#, options: .regularExpression) != nil ? (String(ws.dropFirst()), "") : nil }

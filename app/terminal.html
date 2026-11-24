@@ -806,13 +806,16 @@ function working(p){
   if ((was === "work") !== (p.st === "work") && !editing) render();
 }
 // Backend state() (ade_basement.py via dash.py trees): keeps restored or background panes in sync even before PTY output arrives.
+// The app merges the Mac's pane states in with the server's (mergeTreesPayload), so an @local tab is driven too; a pane's
+// tmux session (sid) is unique, so the map only ever names panes on the host that reported it (other @hosts aren't asked).
+const scriptsOn = ws => ws?.[0] !== "@" || ws === "@local";  // a host that runs greenlight's scripts: the server, and this Mac
 let lastPanes = null;
 function syncPanes(map){
   if (!map || typeof map !== "object") return;
   lastPanes = map;
   const now = Date.now();
   for (const p of panes.values()) {
-    if (hostOf(p.tab.ws) !== HOST) continue;
+    if (!scriptsOn(p.tab.ws)) continue;
     const info = map[p.session];
     if (!info || typeof info !== "object") continue;
     if (typeof info.title === "string" && info.title && (!p.title || now - (p.out || 0) > 2000)) {
@@ -843,7 +846,7 @@ function turnEnded(p){
   p.endT = 0;
   if (!panes.has(p.id) || p.st !== "idle") return;
   const asIs = () => { p.askT = 0; if (panes.has(p.id) && p.st === "idle") { ping(p, doneMsg(p), paneTitle(p)); if (!editing) render() } };
-  if (p.tab.ws?.[0] === "@") return asIs();  // a host's shell, not a workspace: the app doesn't ask (the plain reading)
+  if (!scriptsOn(p.tab.ws)) return asIs();  // a host without greenlight's scripts: the app can't ask (the plain reading)
   post({cmd: "turn", id: p.id, session: p.session, ws: p.tab.ws});
   p.askT = setTimeout(asIs, 20e3);  // no answer (offline, an old app): the plain reading
 }

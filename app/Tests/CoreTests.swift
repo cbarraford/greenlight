@@ -305,6 +305,8 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && safeJSON("[1,2]", fallback: [:]) == "{}")
     check("config: shellQuote escapes single quotes safely",
           shellQuote("plain") == "'plain'" && shellQuote("a'b") == "'a'\\''b'")
+    check("config: runsScripts: workspaces, the home and @local can be asked how a turn ended; another @host can't",
+          runsScripts("/w/ok") && runsScripts("") && runsScripts("@local") && !runsScripts("@devbox") && !runsScripts("@localhost"))
     check("config: paneWhere validates @host and absolute paths without ..",
           paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil
           && paneWhere("/w/ok")?.cwd == "/w/ok" && paneWhere("/w/../etc") == nil && paneWhere("")?.cwd == "")

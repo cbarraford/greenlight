@@ -2129,7 +2129,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
         case "turn":  // a Claude pane's spinner stayed gone: dash.py turn reads its screen (greenlight's agent_state), answered with term.turn
-            guard let session, let ws = b["ws"] as? String, !ws.hasPrefix("@"), let at = paneTarget(ws) else { return }  // @host shells: not the scripts' host
+            guard let session, let ws = b["ws"] as? String, runsScripts(ws), let at = paneTarget(ws) else { return }  // @host shells: no scripts there; @local: this Mac's own
             var out = ""
             ssh("\(pyCmd(on: at.host))/dash.py turn \(shellQuote(session))", on: at.host, onLine: { out += $0 }, onExit: { [weak web] code in
                 let o = out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? ["session": session, "error": "exit \(code)"]

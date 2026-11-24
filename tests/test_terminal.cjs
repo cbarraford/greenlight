@@ -633,6 +633,25 @@ test("alerts: restored background tabs fire finished and waiting alerts from bac
   await page.close();
 });
 
+test("alerts: with greenlight on a server, a restored @local background tab is driven by the Mac's pane states; another host's isn't", async page => {
+  const b = page.context().browser();
+  const saved = {cur: 0, tabs: [
+    {ws: "/w/sidebar", set: 1, name: "", manual: false, sig: "", tree: {s: "mc-fg3"}},
+    {ws: "@local", set: 2, name: "", manual: false, sig: "", tree: {s: "mc-mac-bg", st: "work", title: "✳ Mac job"}},
+    {ws: "@mini", set: 3, name: "", manual: false, sig: "", tree: {s: "mc-mini-bg", st: "work", title: "✳ Mini job"}},
+  ]};
+  // the app's merged payload: the server's panes plus the Mac's (mergeTreesPayload); a stray report for the @mini session is ignored
+  page = await boot(b, saved, "?host=devbox&hosts=" + encodeURIComponent(JSON.stringify(["mini", "devbox"])), {trees: TREES.trees, panes: {
+    "mc-mac-bg": {state: "done", title: "✳ Mac job"}, "mc-mini-bg": {state: "done", title: "✳ Mini job"}}});
+  assert.deepEqual((await posts(page, "turn")).map(a => [a.session, a.ws]), [["mc-mac-bg", "@local"]], "the @local pane that finished asks the Mac's dash.py turn");
+  await page.evaluate(() => term.turn({session: "mc-mac-bg", state: "waiting_for_user", prob: 0.9}));
+  const mac = await page.evaluate(() => { const p = [...panes.values()].find(x => x.session === "mc-mac-bg"); return [p.st, p.bell, p.why] });
+  assert.deepEqual(mac, ["idle", true, "Asking"], "the Mac's reading labels the alert");
+  assert.equal(await page.evaluate(() => [...panes.values()].find(x => x.session === "mc-mini-bg").st), "work", "another host's pane: no backend state applies");
+  assert.equal((await posts(page, "badge")).pop().n, 1);
+  await page.close();
+});
+
 test("alerts: split OSC title in a restored background tab still detects Claude; stale working poll after PTY finish doesn't double-ping", async page => {
   const b = page.context().browser();
   const saved = {
