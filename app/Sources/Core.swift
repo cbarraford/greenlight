@@ -879,7 +879,8 @@ final class Core: ObservableObject {
 
     func compact() {
         guard run == nil, clearing == 0, isClaude else { return }
-        start(Run("Compact context", on: chatHost), "\(chief) compact --model \(shellQuote(model))", tellDone: false, stdin: "")
+        let only = scope().map { " --only \(shellQuote($0))" } ?? ""  // the window's session, the one `send` resumes (#168)
+        start(Run("Compact context", on: chatHost), "\(chief) compact --model \(shellQuote(model))" + only, tellDone: false, stdin: "")
     }
 
     private var clearingByHost = [String: Int]()  // per-host `chat.py new`s in flight: an offline old host never blocks the new one

@@ -933,8 +933,9 @@ def session_path(engine):
 
 def adopt_legacy_scope_unlocked():
     """Upgrading from a hash-keyed scope (#168), under scope_lock so a Clear can't interleave: a scoped window resumes the
-    newest of its old sessions (per engine) once. Its old pending questions are closed and this turn gets the STALE
-    QUESTION notice, so an answer typed after the upgrade never acts on an unchecked approval."""
+    newest of its old sessions (per engine) once. Its old pending questions (an asked file or a delivery marker) are closed
+    and this turn gets the STALE QUESTION notice, so an answer typed after the upgrade never acts on an unchecked approval.
+    Callers set GREENLIGHT_ONLY first: `send` and `compact` both take the window's --only."""
     if not scope_suffix() or not scope_current_unlocked():
         return
     old: dict[str, list[str]] = {}
@@ -948,9 +949,10 @@ def adopt_legacy_scope_unlocked():
     asked = list(suffixes.values())
     for suffix in suffixes:
         decisions.forget_chat(chat=(CHAT or "main") + suffix)
-    for p in asked + glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "_scope-*")):
+    deliveries = [p for p in glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "_scope-*")) if LEGACY_SCOPE.search(p)]
+    for p in asked + deliveries:
         os.remove(p)
-    if asked:
+    if asked or deliveries:  # a marker alone is a question already found stale, or one cut off before it was saved
         _mark_question_stale_unlocked()
 
 
@@ -2027,9 +2029,13 @@ def stop_chat():
         cancel_running_unlocked()
 
 
-def send_turn(args, opt):
+def apply_only(opt):
     if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
         os.environ["GREENLIGHT_ONLY"] = opt("--only")
+
+
+def send_turn(args, opt):
+    apply_only(opt)
     text, files = sys.stdin.read(), None
     if "--attach" in args:
         try:
@@ -2053,8 +2059,9 @@ def dispatch(args):
     elif cmd == "bgstop":
         print(json.dumps({"ok": stop_shell(args[1]) if len(args) > 1 else False}))
     elif cmd == "compact":
+        apply_only(opt)  # the window's own session, as `send` resumes it; without --only, the every-project one
         with scope_lock():
-            adopt_legacy_scope_unlocked()  # a first /compact after upgrading still finds the window's old session
+            adopt_legacy_scope_unlocked()  # a first Compact after upgrading still finds the window's old session
         if not session("claude"):
             emit(e="done", ok=True, text="Nothing to compact yet.", context=0, window=None, ms=None)
         else:

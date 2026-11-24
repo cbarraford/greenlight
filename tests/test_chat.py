@@ -1221,6 +1221,28 @@ def test_upgrade_closes_old_pending_question_and_warns_this_turn(tmp_path, monke
     assert not list(tmp_path.glob("*_scope-*")) and chat.session("claude") == "s1"
 
 
+def test_compact_uses_the_scoped_window_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setenv("GREENLIGHT_ONLY", "")  # unscoped; dispatch's --only sets it, and monkeypatch restores it after
+    (tmp_path / "session").write_text("every-project-session")
+    (tmp_path / "session_scope-f494a9ab9f6e").write_text("window-session")
+    compacted = []
+    monkeypatch.setattr(chat, "turn", lambda text, model, effort, compact=False, **kw: compacted.append(chat.session("claude")))
+    chat.dispatch(["compact", "--model", "claude-haiku-5-5", "--only", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]})])
+    assert compacted == ["window-session"]
+
+
+def test_upgrade_rearms_a_stale_marker_left_without_a_question(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
+    (tmp_path / "session_scope-f494a9ab9f6e").write_text("s1")
+    (tmp_path / (chat.QUESTION_DELIVERY + "_scope-f494a9ab9f6e")).write_text("stale")  # its targets moved: no asked file
+    with chat.scope_lock():
+        chat.adopt_legacy_scope_unlocked()
+    assert (tmp_path / (chat.QUESTION_DELIVERY + chat.WINDOW_SCOPE)).read_text() == "stale"
+    assert not list(tmp_path.glob("*_scope-*"))
+
+
 def test_scope_change_between_sends_resumes_same_session(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
