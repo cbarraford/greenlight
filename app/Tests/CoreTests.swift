@@ -306,7 +306,21 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
     check("config: shellQuote escapes single quotes safely",
           shellQuote("plain") == "'plain'" && shellQuote("a'b") == "'a'\\''b'")
     check("config: runsScripts: workspaces, the home and @local can be asked how a turn ended; another @host can't",
-          runsScripts("/w/ok") && runsScripts("") && runsScripts("@local") && !runsScripts("@devbox") && !runsScripts("@localhost"))
+          runsScripts("/w/ok") && runsScripts("") && runsScripts("@local") && runsScripts("@" + host) && !runsScripts("@devbox-other") && !runsScripts("@localhost"))
+    do {  // each host's pane states are published once: the other fetch's publish doesn't replay them
+        var srv: [String: Any]? = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "working"]]]
+        var mac: [String: Any]? = ["trees": [["path": "/mac/a"]], "panes": ["mc-mac": ["state": "working"]]]
+        let first = treesToPublish(server: &srv, local: &mac, merge: true, primaryHost: "devbox")
+        srv = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "done"]]]  // the next refresh: the server answers first
+        let second = treesToPublish(server: &srv, local: &mac, merge: true, primaryHost: "devbox")
+        let panesOf = { (o: [String: Any]?) in ((o?["panes"] as? [String: Any]) ?? [:]).keys.sorted() }
+        var only: [String: Any]? = ["trees": [], "panes": ["mc-1": ["state": "done"]]], none: [String: Any]? = nil
+        let single = treesToPublish(server: &only, local: &none, merge: false, primaryHost: "local")
+        check("config: treesToPublish sends each host's pane states once, never the other host's stale ones; trees stay merged",
+              panesOf(first) == ["mc-mac", "mc-srv"] && panesOf(second) == ["mc-srv"]
+              && ((second?["panes"] as? [String: Any])?["mc-srv"] as? [String: Any])?["state"] as? String == "done"
+              && ((second?["trees"] as? [[String: Any]]) ?? []).count == 2 && panesOf(single) == ["mc-1"] && only?["panes"] == nil)
+    }
     check("config: paneWhere validates @host and absolute paths without ..",
           paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil
           && paneWhere("/w/ok")?.cwd == "/w/ok" && paneWhere("/w/../etc") == nil && paneWhere("")?.cwd == "")

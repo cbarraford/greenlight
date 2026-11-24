@@ -808,7 +808,8 @@ function working(p){
 // Backend state() (ade_basement.py via dash.py trees): keeps restored or background panes in sync even before PTY output arrives.
 // The app merges the Mac's pane states in with the server's (mergeTreesPayload), so an @local tab is driven too; a pane's
 // tmux session (sid) is unique, so the map only ever names panes on the host that reported it (other @hosts aren't asked).
-const scriptsOn = ws => ws?.[0] !== "@" || ws === "@local";  // a host that runs greenlight's scripts: the server, and this Mac
+// Each host's states arrive once, from its own fetch (treesToPublish), so a stale "working" never follows a turn's ping.
+const scriptsOn = ws => ws?.[0] !== "@" || ws === "@local" || ws === "@" + HOST;  // a host that runs greenlight's scripts: the server (@HOST: a tab saved before it moved there), and this Mac
 let lastPanes = null;
 function syncPanes(map){
   if (!map || typeof map !== "object") return;

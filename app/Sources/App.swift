@@ -2024,9 +2024,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         web?.evaluateJavaScript("term.toast(\(d))")
     }
     private func publishTrees() {
-        let obj: [String: Any]? = (!isLocalHost(host) && localTreesObj != nil)
-            ? mergeTreesPayload(serverTreesObj, localTreesObj, primaryHost: host, secondaryHost: "local")
-            : serverTreesObj ?? localTreesObj
+        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host)
         if let obj, JSONSerialization.isValidJSONObject(obj) {
             lastTreesObj = obj
             refreshProjects()
