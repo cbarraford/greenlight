@@ -346,7 +346,7 @@ func staged(_ s: String) -> Staged {
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
-    if let open = text.range(of: "```stage") {
+    if let open = text.range(of: #"```[ \t]*stage"#, options: [.regularExpression, .caseInsensitive]) {  // ```Stage too: it's never for the transcript
         if let close = text[open.upperBound...].range(of: "```") {
             stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             text.removeSubrange(open.lowerBound..<close.upperBound)
@@ -526,9 +526,52 @@ func dwimSkipped(_ plan: [String: Any]) -> String {
     return skipped.isEmpty ? "" : " Skipped " + skipped.joined(separator: "; ") + "."
 }
 
+/// Chief's ```stage JSON that isn't a chart: a card ({title, items, eyebrow, kind, stat}, items as lines or {label, detail, tone},
+/// or just a list), drawn as stage.spec at once, never handed to Haiku or its fallback as raw text. A native template kind
+/// (table, timeline, diff, lifecycle) goes through whole. Text only, as the stage draws it: links to their text. nil when it isn't one.
+func stageCard(_ s: String) -> [String: Any]? {
+    let j = s.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)
+    guard j.hasPrefix("{") || j.hasPrefix("["), let any = try? JSONSerialization.jsonObject(with: Data(j.utf8)) else { return nil }
+    let o = (any as? [String: Any]) ?? (any as? [Any]).map { ["items": $0] } ?? [:]
+    guard o["chart"] == nil else { return nil }
+    let kind = o["kind"] as? String ?? ""
+    if ["table", "timeline", "diff", "lifecycle"].contains(kind) { return o }
+    let line = { (v: Any?) -> String in
+        let t = v as? String ?? (v as? NSNumber).map { "\($0)" } ?? ""
+        return plain(t).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    }
+    let raw = (o["items"] ?? o["steps"] ?? o["notes"]) as? [Any] ?? o.keys.sorted().lazy.compactMap { o[$0] as? [Any] }.first ?? []  // else its list, by any name
+    let items: [[String: String]] = raw.prefix(8).compactMap { v in
+        guard let d = v as? [String: Any] else { let l = line(v); return l.isEmpty ? nil : ["label": l, "detail": ""] }
+        let l = line(d["label"] ?? d["title"] ?? d["name"]), detail = line(d["detail"] ?? d["value"] ?? d["text"])
+        guard !(l.isEmpty && detail.isEmpty) else { return nil }
+        let tone = d["tone"] as? String ?? ""
+        return ["label": l.isEmpty ? detail : l, "detail": l.isEmpty ? "" : detail, "tone": ["needs", "bad", "now", "ok"].contains(tone) ? tone : ""]
+    }
+    let title = line(o["title"] ?? o["heading"])
+    guard !(title.isEmpty && items.isEmpty) else { return nil }
+    let numbered = !raw.isEmpty && raw.allSatisfy { ($0 as? String)?.range(of: #"^\s*\d+[.)]\s"#, options: .regularExpression) != nil }
+    let kinds = ["list", "steps", "stat", "flow", "compare", "quote"]
+    return ["title": title, "kind": kinds.contains(kind) ? kind : numbered ? "steps" : "list", "eyebrow": line(o["eyebrow"]), "stat": line(o["stat"]), "items": items]
+}
+
+/// Every string and number in a JSON value, in order: what a block the stage can't draw still says.
+func jsonLines(_ v: Any) -> [String] {
+    if let s = v as? String { return [s] }
+    if let n = v as? NSNumber { return ["\(n)"] }
+    if let a = v as? [Any] { return a.flatMap(jsonLines) }
+    if let d = v as? [String: Any] { return d.keys.sorted().flatMap { jsonLines(d[$0]!) } }
+    return []
+}
+
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
+/// JSON (a ```stage block Haiku couldn't draw) is read as a card, else its values as lines: never the raw JSON.
 func fallbackSpec(_ text: String) -> [String: Any] {
-    let ss = sentences(plain(text) + "\n", from: 0).said
+    if let c = stageCard(text) { return c }
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)
+    let parsed = t.hasPrefix("{") || t.hasPrefix("[") ? try? JSONSerialization.jsonObject(with: Data(t.utf8)) : nil
+    let ss = parsed.map { jsonLines($0).map { plain($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
+        ?? sentences(plain(text) + "\n", from: 0).said
     return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 
@@ -805,7 +848,7 @@ let voiceNote = "(Voice mode: the user is talking to you out loud, and your repl
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
-    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); for a card, JSON {\"title\": …, \"items\": [short lines]}; otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
     + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
     + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
 

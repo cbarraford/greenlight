@@ -23,6 +23,27 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && bothLooks.allSatisfy { contrast($0.text, $0.stage) >= 7 && contrast($0.dim, $0.stage) >= 4.5 })
 
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
+    let issued = "{\"title\":\"Issue filed\",\"items\":[\"[greenlight #148](https://github.com/x/y/issues/148)\",\"Open a URL, http(s) only\"]}"
+    let card = stageCard(issued), numbered = stageCard("json\n{\"title\":\"Work on first\",\"items\":[\"1. merge !5415\",\"2. clear the draft\"]}")
+    check("voice: Chief's {title, items} stage JSON is a card, drawn as is: links to their text, numbered lines as steps (#149)",
+          card?["title"] as? String == "Issue filed" && card?["kind"] as? String == "list"
+          && (card?["items"] as? [[String: String]])?.map { $0["label"]! } == ["greenlight #148", "Open a URL, http(s) only"]
+          && numbered?["kind"] as? String == "steps" && (numbered?["items"] as? [[String: String]])?.first?["label"] == "merge !5415")
+    let objs = stageCard("{\"title\":\"!12\",\"kind\":\"compare\",\"items\":[{\"label\":\"CI\",\"detail\":\"green\",\"tone\":\"ok\"},{\"name\":\"Owner\",\"value\":3},{\"tone\":\"x\"}]}")
+    check("voice: a card's object items keep label, detail and a known tone; empty ones drop",
+          objs?["kind"] as? String == "compare" && (objs?["items"] as? [[String: String]]) == [["label": "CI", "detail": "green", "tone": "ok"], ["label": "Owner", "detail": "3", "tone": ""]])
+    check("voice: a chart, HTML, notes or empty JSON aren't cards; a native template goes through whole",
+          stageCard("{\"chart\":\"bar\",\"title\":\"x\"}") == nil && stageCard("<b>hi</b>") == nil && stageCard("Three MRs are green.") == nil
+          && stageCard("{}") == nil && stageCard("{\"title\": ") == nil && stageCard("{\"kind\":\"table\",\"rows\":[[\"a\"]]}")?["rows"] != nil
+          && (stageCard("[\"one\", \"two\"]")?["items"] as? [[String: String]])?.count == 2
+          && (stageCard("{\"title\":\"audit\",\"findings\":[\"1. divide by zero\",\"Likely recovered\"]}")?["items"] as? [[String: String]])?.map { $0["label"]! } == ["divide by zero", "Likely recovered"])
+    let fb = fallbackSpec("{\"heading_x\":\"Held\",\"meta\":{\"a\":\"CI green\",\"b\":\"no conflicts\"}}"), fbText = "\(fb)"
+    check("voice: the fallback never puts raw JSON on the stage: a card, else its values as lines",
+          fallbackSpec(issued)["title"] as? String == "Issue filed" && !fbText.contains("{\"") && fb["title"] as? String == "Held"
+          && (fb["items"] as? [[String: String]])?.map { $0["label"]! } == ["CI green", "no conflicts"]
+          && fallbackSpec("All green. Two MRs wait.")["title"] as? String == "All green.")
+    check("voice: a ```Stage fence is cut out of the transcript too", staged("Done.\n```Stage\n{\"title\":\"x\"}\n```").text == "Done."
+          && staged("Done.\n``` stage\n{}\n```").stage == "{}")
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")

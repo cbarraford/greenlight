@@ -377,6 +377,7 @@ final class Voice: NSObject, ObservableObject {
         drawSeq += 1
         let j = h.replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)  // ```stage json
         if j.hasPrefix("{"), let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any], o["chart"] != nil { js("stage.chart", [o]) }
+        else if let card = stageCard(h) { js("stage.spec", [card]) }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
         else if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
     }
     func draw(_ text: String, last: Bool, force: Bool = false) {
