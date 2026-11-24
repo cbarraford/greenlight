@@ -631,7 +631,7 @@ body:has(>main.ov){background:var(--canvas)}
 .toast .tbadge{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:inherit} .toast.bad .tbadge{color:inherit}
 .toast .tmsg{display:flex;flex-direction:column;gap:1px;flex:1 1 160px;min-width:0;line-height:var(--lh-2)} .toast .tmsg b{font-weight:600} .toast .tmsg>span{opacity:.75;font-size:var(--fs-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .toast.bad .tmsg>span{white-space:normal;overflow-wrap:anywhere} .toast .tmsg .mono{font-size:var(--fs-2)}
 .toast .btn{flex-shrink:0;background:none;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--bg) 35%,transparent);color:inherit;font-size:var(--fs-2)} .toast .btn:hover:not(:disabled){background:color-mix(in srgb,var(--bg) 14%,transparent)}
-.toast.note .tmsg{flex-basis:auto} .toast.note code{font:var(--fs-1)/var(--lh-1) var(--mono);white-space:pre-wrap;word-break:break-word;max-height:12em;overflow:auto;opacity:.85} /* only a ×: a short line must not wrap it under */
+.toast.note .tmsg{flex-basis:auto} .toast.note code{font:var(--fs-2)/var(--lh-2) var(--mono);opacity:.75;white-space:pre-wrap;overflow-wrap:anywhere;max-height:12em;overflow:auto} /* only a ×: a short line must not wrap it under */
 .toast .btn.x{width:28px;padding:0;justify-content:center;box-shadow:none;opacity:.75} .toast .btn.x:hover{opacity:1}
 @media (max-width:520px){.toast .btn.x{order:2;align-self:flex-start} .toast .btn:not(.x){order:3;margin-left:var(--sp-6)}}
 .sheet.plain{width:560px;max-width:calc(100% - 2 * var(--sp-5));padding:var(--sp-5)}
@@ -1894,7 +1894,7 @@ const MTONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {r
 function movesEl(p, mv){
   const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y) && Object.hasOwn(MOVE, y.kind));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
-  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt}) : hideCard();  // the app ignores an empty prompt (no reply)  // as a new agent in that workspace, like the Next step
+  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt}) : note("The agent didn't start", "This step has no prompt yet.", true);  // the app ignores an empty prompt (no reply): nothing hides  // as a new agent in that workspace, like the Next step
   let top = null;
   if (x) { const [l, sub] = MOVE[x.kind](p.mr, x);
     top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
@@ -2176,7 +2176,7 @@ ui.skew = 0;  // this Mac's clock minus the host's (the snapshot's ts), so a rep
 const ACT_SETTLE = 180, ACT_LOST = 30 * 60e3;  // s after the reply (the scans keep failing: show what we have); ms with no reply (a sign-off may run 10 min, plus ssh)
 const hostNow = () => Date.now() / 1000 - ui.skew;
 function act(p, fail, msg){
-  if (msg && msg.path != null && (!/^\/[\w./@+-]{1,300}$/.test(msg.path) || msg.path.includes("..")))  // the app refuses these paths without a reply (App.swift)
+  if (msg && msg.path != null && (!/^\/[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\u200c\u200d./@+-]{1,300}$/u.test(msg.path) || msg.path.includes("..")))  // the app refuses these paths without a reply (App.swift)
     return note(fail, "Greenlight can't act on a workspace at this path (spaces or unusual characters).", true);
   hideCard(); ui.acting[p.name] = {fail, path: p.path, sig: p.sig, at: Date.now(), done: 0};
   if (msg) post(msg);
@@ -2308,13 +2308,15 @@ function taskSheetEl(){
       : ["Creates ", h("span", {class:"mono"}, taskSlug(line())), ` in ${repo.name}`];
   }
 }
-function note(title, detail, bad){  // a card action's outcome, in the toast; an error stays until dismissed
-  if (!bad && ui.task.done?.error) return;  // an error showing stays until it's dismissed: a success doesn't cover it
-  ui.task.done = {title, detail, error: bad ? detail : null}; clearTimeout(ui.task.t); if (!bad) toastTimer(); render();
+function note(title, detail, bad){  // a card action's outcome, in the toast (DESIGN.md §10.14: timed, paused on hover)
+  const was = ui.task.done?.error ? ui.task.done : null;
+  if (!bad && was) return;  // a success doesn't cover an error showing (the hex coming back shows the success)
+  if (bad && was) [title, detail] = [`${(was.n || 1) + 1} actions failed`, `${was.n ? "" : was.title + ": "}${was.error}\n${title}: ${detail}`];  // and a second joins it
+  ui.task.done = {title, detail, error: bad ? detail : null, n: bad && was ? (was.n || 1) + 1 : 0}; toastTimer(); render();
 }
 function toastEl(){
   const d = ui.task.done; if (!d) return null;
-  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: () => d.error || toastTimer()},
+  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer},
     h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
     h("span", {class:"tmsg"}, h("b", {}, d.title), d.error ? h("code", {}, d.error.length > 600 ? "…" + d.error.slice(-600) : d.error)  // the end of stderr is the cause
       : d.detail ? h("span", {}, short(d.detail, 160)) : null),
@@ -2348,7 +2350,7 @@ function tasked(r){
   }
   if (r.error && ui.task.sheet && !changed) { ui.task.err = r.error; render(); if (/already exists/.test(r.error)) document.querySelector("#ps-err .lnk")?.click(); return }  // a taken name: the caret goes to the line to change
   if (!r.error) { if (!changed) { ui.task.sheet = null; localSet("taskDraft", "") } ui.task.fresh = r.name }
-  ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};
+  if (r.error || !ui.task.done?.title || !ui.task.done.error) ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};  // a card's error stays: the new task shows on the map
   toastTimer(); render();
 }
 function toastTimer(){ clearTimeout(ui.task.t); ui.task.t = setTimeout(() => { ui.task.done = ui.task.fresh = null; render() }, 12000) }

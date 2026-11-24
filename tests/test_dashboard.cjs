@@ -403,7 +403,7 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   await page.evaluate(() => window.mc.merged({path: "/w/plan-a", error: "405: Branch cannot be merged"}));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge !12");
   assert.equal(await page.textContent(".toast.bad .tmsg code"), "405: Branch cannot be merged");
-  await page.click(".toast .btn.x");  // an error stays up until dismissed
+  await page.click(".toast .btn.x");  // a success never covers an error: dismiss it first
   assert.equal(await page.$(".toast"), null);
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "review", prompt: "rv", own: true, repo: "widgets"}, {kind: "merge", how: "Squash", target: "main"}]; hideCard(); document.body.append(hoverCard(p)) });
   assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
@@ -486,10 +486,16 @@ test("card actions: errors keep their end and stay up; a late reply still says s
   await page.evaluate(e => window.mc.merged({op: "signoff", path: "/w/plan-a", step: "deploy", error: e}), err);
   const shown = await page.textContent(".toast.bad .tmsg code");
   assert.ok(shown.endsWith("\nError: the real cause") && shown.startsWith("…"), "the error's tail (stderr's cause) was cut: " + shown.slice(-40));
-  await page.evaluate(() => { clearTimeout(ui.task.t); ui.task.t = 0; note("Didn't merge", "y", true) });
-  assert.equal(await page.evaluate(() => ui.task.t), 0, "an error toast is on a timer");
+  await page.evaluate(() => { ui.task.done = null; clearTimeout(ui.task.t); ui.task.t = 0; note("Didn't merge", "y", true) });
+  assert.notEqual(await page.evaluate(() => ui.task.t), 0, "an error toast has no timer (DESIGN.md §10.14: toasts are timed)");
   await page.evaluate(() => note("Merged", "Squash"));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "a success covered the error");
+  await page.evaluate(() => note("Deploy didn't finish", "exit 2", true));
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "2 actions failed", "a second error replaced the first");
+  assert.equal(await page.textContent(".toast.bad .tmsg code"), "Didn't merge: y\nDeploy didn't finish: exit 2");
+  await page.evaluate(() => { ui.task.done = null; act({name: "plan-b", path: "/w/café-ü", sig: "x"}, "f", {cmd: "merge", path: "/w/café-ü"}) });
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), ["plan-b"], "a path the app's \\w accepts (Unicode letters) was refused");
+  await page.evaluate(() => { delete ui.acting["plan-b"]; render() });
   // a reply after the action was given up on (ACT_LOST): the error still reaches the toast
   await page.evaluate(() => { ui.task.done = null; window.mc.merged({path: "/w/plan-a", error: "409: already merged"}) });
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge");
@@ -503,9 +509,14 @@ test("card actions: errors keep their end and stay up; a late reply still says s
   assert.equal((await posts(page, "rescan")).length, asked, "a failed rescan is re-asked on every stream update");
   // a move whose prompt rendered empty: the app ignores it (no reply), so its hex mustn't wait on one
   await page.evaluate(() => { delete ui.acting["plan-a"]; const p = puckOf("plan-a"); p.moves = [{kind: "ci", prompt: "", own: true, repo: "widgets"}]; document.body.append(hoverCard(p)) });
+  await page.evaluate(() => { ui.task.done = null; render() });
   await page.click("#hcard .mv .go");
   assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
   assert.equal((await posts(page, "run")).length, 0);
+  assert.equal(await page.textContent(".toast.bad .tmsg code"), "This step has no prompt yet.", "a dead button: nothing says why");
+  // a New task's success doesn't cover a card's error (the new workspace is ringed on the map anyway)
+  await page.evaluate(() => { ui.task.fresh = null; tasked({op: "new", name: "t1", repo: "widgets"}) });
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "The agent didn't start");
   // its state moves while the action runs (the agent stopped): that isn't the result, so the reply's sig is the baseline
   await page.evaluate(() => { ui.task.done = null; ui.rescanFail = 0; const p = puckOf("plan-a"); p.moves = [{kind: "signoff", step: "deploy", run: "make deploy"}]; document.body.append(hoverCard(p)) });
   await page.click("#hcard .mg .go");
