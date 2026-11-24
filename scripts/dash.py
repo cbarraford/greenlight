@@ -941,6 +941,16 @@ def hook(cmd, path):
     return None if p.returncode == 0 else f"exit {p.returncode}: " + (p.stderr or p.stdout).strip()[-300:]
 
 
+def local_twin(w, twins):
+    """This machine's row of twins (worktrees at one path on several hosts) for the same project as w, else w. The
+    same project by Orca's projectId when its setups say, else by repo name (placement.local_repo's rule)."""
+    proj = {x.get("repoId"): x.get("projectId") for x in greenlight.project_setups(tries=1) or []}
+    def same(x):
+        a, b = proj.get(x.get("repoId")), proj.get(w.get("repoId"))
+        return a == b if a and b else x.get("repo") == w.get("repo")
+    return next((x for x in twins if greenlight.is_local(x) and same(x)), w)
+
+
 def tree_new(path, o):
     """The sidebar's New workspace: branch `name` off `base` as a worktree of path's repo, made by the ADE that holds path;
     then the repo's setup command in it, then the default agent on the goal. Setup runs only when the page showed it (o.setup)
@@ -953,16 +963,13 @@ def tree_new(path, o):
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
     call, w, twins = tree(path, every=True)
-    picked = True
-    if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: placed below. The page sends a path, not a
-        # host: of several rows there, this machine's checkout of the same repo; the row is the user's pick when it's the
-        # only one, or that local one; else the create is checked like any other
-        w = next((x for x in twins if greenlight.is_local(x) and x.get("repo") == w.get("repo")), w) if len(twins) > 1 else w
-        picked = len(twins) == 1 or greenlight.is_local(w)
+    if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host, and shows its first row (w):
+        w = local_twin(w, twins)  # of several, this machine's checkout of that same project
     args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
             *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else [])]
-    if call is greenlight.orca_cli:
-        args, why = greenlight.place_here(args, picked=picked)
+    if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: placed the same way; the row is the user's
+        # pick when it's the only one there, or this machine's; else it's checked like any create
+        args, why = greenlight.place_here(args, picked=len(twins) == 1 or greenlight.is_local(w))
         if why:
             return {"error": why}
     res = call(*args)
