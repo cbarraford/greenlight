@@ -495,7 +495,10 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   await page.hover(".toast .tmsg");
   await page.evaluate(() => new Promise(r => { toastTimer(10); render(); setTimeout(r, 120) }));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "the toast went while it was being read");
+  await page.evaluate(() => new Promise(r => setTimeout(r, 1100)));  // it has seen the hover once more
   await page.mouse.move(5, 5);
+  await page.evaluate(() => new Promise(r => setTimeout(r, 50)));
+  assert.ok(await page.$(".toast"), "let go after reading, the toast went at once: it should get its time again");
   await page.waitForFunction(() => !document.querySelector(".toast"), null, {timeout: 3000});
   await page.evaluate(() => { ui.task.done = null; note("Didn't merge", "y", true) });
   await page.evaluate(() => note("Merged", "Squash"));
@@ -827,7 +830,7 @@ test("toast: hovering it holds the 12s timer, leaving restarts it", async page =
   await page.clock.fastForward(20000);
   assert.ok(await page.$(".toast"), "the toast left while hovered");
   await page.mouse.move(5, 300);
-  await page.clock.fastForward(13000);
+  await page.clock.runFor(14000);  // the 1s re-check, then its whole 12s again (runFor fires timers set meanwhile)
   assert.equal(await page.$(".toast"), null);
 });
 

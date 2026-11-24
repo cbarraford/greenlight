@@ -2356,8 +2356,9 @@ function tasked(r){
 }
 function toastTimer(ms = 12000){  // read at your pace: hovered or focused when it's due, it waits (render() rebuilds the toast, so no leave/blur event can be trusted)
   clearTimeout(ui.task.t);
-  ui.task.t = setTimeout(function due(){
-    if (document.querySelector(".toast:hover, .toast:focus-within")) { ui.task.t = setTimeout(due, 1000); return }
+  ui.task.t = setTimeout(function due(held){  // held: it came due while read; once let go it gets its whole time again
+    if (document.querySelector(".toast:hover, .toast:focus-within")) { ui.task.t = setTimeout(() => due(true), 1000); return }
+    if (held) { ui.task.t = setTimeout(() => due(false), ms); return }
     ui.task.done = ui.task.fresh = null; render() }, ms);
 }
 const NOTE_MS = 5000;  // DESIGN.md §10.14: a toast with only its × lasts 5s, paused on hover or focus
