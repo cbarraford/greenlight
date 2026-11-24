@@ -306,7 +306,7 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
     check("config: shellQuote escapes single quotes safely",
           shellQuote("plain") == "'plain'" && shellQuote("a'b") == "'a'\\''b'")
     check("config: runsScripts: workspaces, the home and @local can be asked how a turn ended; another @host can't",
-          runsScripts("/w/ok") && runsScripts("") && runsScripts("@local") && runsScripts("@" + host) && !runsScripts("@devbox-other") && !runsScripts("@localhost"))
+          runsScripts("/w/ok") && runsScripts("") && runsScripts("@local") && runsScripts("@" + host) && (host == "devbox-other" || !runsScripts("@devbox-other")) && (host == "localhost" || !runsScripts("@localhost")))
     do {  // each host's pane states are published once: the other fetch's publish doesn't replay them
         var srv: [String: Any]? = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "working"]]]
         var mac: [String: Any]? = ["trees": [["path": "/mac/a"]], "panes": ["mc-mac": ["state": "working"]]]
@@ -319,7 +319,12 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         check("config: treesToPublish sends each host's pane states once, never the other host's stale ones; trees stay merged",
               panesOf(first) == ["mc-mac", "mc-srv"] && panesOf(second) == ["mc-srv"]
               && ((second?["panes"] as? [String: Any])?["mc-srv"] as? [String: Any])?["state"] as? String == "done"
-              && ((second?["trees"] as? [[String: Any]]) ?? []).count == 2 && panesOf(single) == ["mc-1"] && only?["panes"] == nil)
+              && ((second?["trees"] as? [[String: Any]]) ?? []).count == 2 && panesOf(single) == ["mc-1"] && only?["panes"] == nil
+              && panesOf(treesToPublish(server: &srv, local: &mac, merge: true, primaryHost: "devbox")) == [])  // a failed fetch republishes none
+        let saved: [String: Any] = ["trees": [["path": "/srv/a"]], "panes": ["mc-srv": ["state": "working"]]]
+        check("config: replayTrees gives a loading page the pane states only while fresh, the trees always",
+              panesOf(replayTrees(saved, age: 2)) == ["mc-srv"] && panesOf(replayTrees(saved, age: 40)) == []
+              && ((replayTrees(saved, age: 40)?["trees"] as? [[String: Any]]) ?? []).count == 1 && replayTrees(nil, age: 0) == nil)
     }
     check("config: paneWhere validates @host and absolute paths without ..",
           paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil
