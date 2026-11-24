@@ -34,7 +34,12 @@ final class Voice: NSObject, ObservableObject {
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
     @Published var transcript = false  // the chat instead of the stage
-    @Published var speaking = 0  // speech buffers queued and not yet played
+    @Published var speaking = 0 {  // speech buffers queued and not yet played
+        didSet {
+            guard (oldValue > 0) != (speaking > 0) else { return }
+            lock.lock(); gateUntil = echoGateUntil(speaking: speaking > 0, now: ProcessInfo.processInfo.systemUptime); lock.unlock()
+        }
+    }
     @Published var fallback = ""  // why Apple's voice is standing in for the chosen one ("" when it isn't)
     var toldFallback = ""  // the reason the chat was last told, so each is said once
     var claimedAt = 0.0  // when this app's voice mode started, for voiceYields (another Greenlight starting later takes over)
@@ -55,6 +60,10 @@ final class Voice: NSObject, ObservableObject {
     /// so macOS still shows the mic in use. Each voice mode starts unmuted.
     @Published private(set) var micMuted = false
     private var micOff = false  // micMuted for the mic's tap on the audio thread, under `lock`
+    /// Settings ▸ Echo cancellation, read as voice mode starts. Off skips macOS's voice processing, which turns the mic down for every
+    /// other app recording it and can keep what Chief says out of a screen recording. Then Chief can't be talked over.
+    var echoCancel: Bool { ud.object(forKey: "voiceEcho") as? Bool ?? true }
+    private var gateUntil = 0.0  // without echo cancellation, GPT-Live gets silence until this uptime (echoGateUntil), under `lock`
     var mutes = 0  // each mute bumps it: a GPT-Live hand-off scheduled before one is dropped
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
@@ -224,7 +233,8 @@ final class Voice: NSObject, ObservableObject {
     func startEngine() throws {
         engine.stop()
         let input = engine.inputNode
-        vp = (try? input.setVoiceProcessingEnabled(true)) != nil
+        vp = echoCancel && (try? input.setVoiceProcessingEnabled(true)) != nil
+        let echoes = !vp  // ponytail: gates on headphones too; read the output's transport type if talking over GPT-Live while recording matters
         if !engine.attachedNodes.contains(player) { engine.attach(player) }
         try engine.link(player, to: engine.mainMixerNode, format: speechFormat)
         let inFormat = input.outputFormat(forBus: 0)  // after voice processing, which can change it
@@ -243,10 +253,12 @@ final class Voice: NSObject, ObservableObject {
         input.removeTap(onBus: 0)
         try input.tap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] b, _ in
             guard let self else { return }
-            self.lock.lock(); let r = self.request, off = self.micOff; self.lock.unlock()
+            self.lock.lock(); let r = self.request, off = self.micOff, until = self.gateUntil; self.lock.unlock()
             // GPT-Live: the mic goes to it, not to Apple's recognizer. Muted, it gets silence instead (zeros, never your audio), so its
             // turn detection ends the turn you muted in, and that turn's transcript and hand-off land while muted and are dropped.
-            if let lconv { convert(b, lconv, self.live.fmt).map { self.live.mic($0, silent: off) } }
+            // Without echo cancellation it gets silence while it speaks too, or it would answer its own voice from the speakers.
+            let echo = echoes && ProcessInfo.processInfo.systemUptime < until
+            if let lconv { convert(b, lconv, self.live.fmt).map { self.live.mic($0, silent: off || echo) } }
             guard !off, let conv, let m = convert(b, conv, self.micFormat) else { return }  // muted: nothing for Apple's recognizer or the meter
             r?.append(m)
             let l = level(m)
@@ -646,6 +658,10 @@ let voiceClaim = Notification.Name("dev.greenlight.voice.claim")
 /// Whether this app's voice mode gives way to another's claim: the later start keeps it (the pid breaks a tie), so one shortcut press
 /// that starts two apps leaves exactly one on.
 func voiceYields(mine: (at: Double, pid: Int), theirs: (at: Double, pid: Int)) -> Bool { theirs.pid != mine.pid && (theirs.at, theirs.pid) > (mine.at, mine.pid) }
+
+/// Without echo cancellation, the uptime until which GPT-Live gets silence in place of the mic: while it or Chief speaks, and for
+/// `tail` seconds after (the output's latency, and the room).
+func echoGateUntil(speaking: Bool, now: Double, tail: Double = 0.5) -> Double { speaking ? .infinity : now + tail }
 
 /// Output format for `mainMixerNode -> outputNode` under voice processing: matches `inputRate` while preserving the output
 /// channel count/layout, so AUVoiceProcessor doesn't fail with -10875 on mixed-rate devices (e.g. 48 kHz mic + 44.1 kHz headphones).
