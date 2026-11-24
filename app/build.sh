@@ -79,7 +79,7 @@ pl = {
     "CFBundleName": name,
     "CFBundleExecutable": name,
     "CFBundlePackageType": "APPL",
-    "CFBundleIconFile": "Orb",
+    "CFBundleIconFile": "GreenlightDebug" if dev else "Greenlight",  # a dev copy wears the grey-light Debug icon
     "CFBundleShortVersionString": "1.0",
     "CFBundleVersion": ver,
     "NSMicrophoneUsageDescription": "Speak to Greenlight: your voice is transcribed into the message box.",
@@ -90,7 +90,7 @@ if dev:
 with open(out, "wb") as f:
     plistlib.dump(pl, f)
 PY
-mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Orb,MergeLight,ThreeFloors}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the Dock icons (../brand/icons/*.svg → rsvg-convert → iconutil; Orb is the bundle's)
+mkdir -p "$app/Contents/Resources" && cp dashboard.html terminal.html stage.html kokoro.py ../brand/icons/{Greenlight,GreenlightDebug}.icns "$app/Contents/Resources/" && cp vendor/ghostty-web.js "$app/Contents/Resources/"  # the left pane, the app icon and its Debug variant (scripts/build_icons.sh builds them from brand/icon/layers)
 if [ -n "$team" ] && codesign -fs "$apple" --timestamp=none -r="designated => anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[subject.CN] = \"$cn\"" "$app"; then :
 elif [ -n "$apple" ]; then
   # not Greenlight Dev instead: a build signed by the other one has a requirement your mic, speech and Keychain grants don't match

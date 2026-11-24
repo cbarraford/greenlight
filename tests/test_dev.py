@@ -34,7 +34,7 @@ def dev_workspace(gl_dev_home, tmp_path):
     (main / "app/Greenlight.swift").write_text("let a = 1\n")
     (main / "app/dashboard.html").write_text("<p>1</p>")
     (main / "app/vendor/t.js").write_text("1")
-    (main / "brand/icons/Orb.icns").write_bytes(b"\x00\xff")
+    (main / "brand/icons/Greenlight.icns").write_bytes(b"\x00\xff")
     (main / "scripts/dev.py").write_text("# main's\n")
     _sh("git", "init", "-q", "-b", "main", cwd=main)
     _sh("git", "add", "-A", cwd=main)
@@ -55,8 +55,8 @@ def test_watch_mirror_live_web_and_log(dev_workspace, monkeypatch):
     assert ev[1]["ev"] == "tool" and ev[1]["path"] == str(main / "scripts/dev.py") and ev[1]["sha"] == dev.sha1(b"# main's\n")
     ws = {e["name"]: e for e in ev if e["ev"] == "ws"}
     assert ws["new"]["ok"] and ws["new"]["ui"] and not ws["old"]["ok"] and not ws["old"]["ui"], ws
-    assert sorted(ws["new"]["put"]) == ["app/Greenlight.swift", "app/build.sh", "app/dashboard.html", "app/vendor/t.js", "brand/icons/Orb.icns"]
-    assert base64.b64decode(ws["new"]["put"]["brand/icons/Orb.icns"]) == b"\x00\xff" and ws["new"]["rm"] == []
+    assert sorted(ws["new"]["put"]) == ["app/Greenlight.swift", "app/build.sh", "app/dashboard.html", "app/vendor/t.js", "brand/icons/Greenlight.icns"]
+    assert base64.b64decode(ws["new"]["put"]["brand/icons/Greenlight.icns"]) == b"\x00\xff" and ws["new"]["rm"] == []
     assert ws["new"]["path"] == str(new) and ws["new"]["git"] == _sh("git", "rev-parse", "--absolute-git-dir", cwd=new).strip()
     assert ws["new"]["sig"] == dev.sig(dev.Tree(new).scan()) != ws["old"]["sig"]
 
@@ -80,7 +80,7 @@ def test_watch_mirror_live_web_and_log(dev_workspace, monkeypatch):
 
     # a page is live (no rebuild); the Swift is not. The live pages are what the bundle ships
     (k.app / "Contents/Resources").mkdir(parents=True)
-    for n in ("dashboard.html", "Orb.icns"):
+    for n in ("dashboard.html", "Greenlight.icns"):
         (k.app / "Contents/Resources" / n).write_text("")
     dev.lay_web(k)
     assert [p.name for p in k.web.iterdir()] == ["dashboard.html"] and (k.web / "dashboard.html").read_text() == "<p>2</p>"
