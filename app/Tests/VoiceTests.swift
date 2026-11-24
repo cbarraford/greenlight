@@ -225,9 +225,8 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: of two Greenlights in voice mode, exactly one keeps it (the later start; the pid breaks a tie)",
           voiceYields(mine: (100, 7), theirs: (101, 3)) && !voiceYields(mine: (101, 3), theirs: (100, 7))
           && voiceYields(mine: (100, 3), theirs: (100, 7)) != voiceYields(mine: (100, 7), theirs: (100, 3)) && !voiceYields(mine: (100, 7), theirs: (200, 7)))
-    check("voice: without echo cancellation GPT-Live gets silence while the voice speaks and 0.5 s after, and nothing says talk to interrupt",
-          echoGateUntil(speaking: true, now: 10) == .infinity && echoGateUntil(speaking: false, now: 10) == 10.5
-          && !voiceInterruptible(live: true, vp: false, bargeIn: true) && !voiceInterruptible(live: false, vp: false, bargeIn: true)
+    check("voice: without echo cancellation nothing says talk to interrupt; with it GPT-Live always does, Apple's recognizer by the setting",
+          !voiceInterruptible(live: true, vp: false, bargeIn: true) && !voiceInterruptible(live: false, vp: false, bargeIn: true)
           && voiceInterruptible(live: true, vp: true, bargeIn: false) && voiceInterruptible(live: false, vp: true, bargeIn: true)
           && !voiceInterruptible(live: false, vp: true, bargeIn: false))
     check("voice: while voice mode is starting, its button says a press cancels the start",

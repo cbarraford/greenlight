@@ -1238,7 +1238,7 @@ struct SettingsView: View {
                     }
                 }
             } }
-            row("Echo cancellation", "Keeps \(c.name)'s voice out of the mic. Off for a screen recording: while it's on, macOS turns your mic down in other apps and can leave \(c.name)'s voice out of them. Applies when voice mode next starts.") {
+            row("Echo cancellation", "Keeps \(c.name)'s voice out of the mic. Off for a screen recording: with it on, macOS can turn your mic down in other apps and leave \(c.name)'s voice out of the recording. Applies when voice mode next starts.") {
                 // a new engine: the old one's output is still wired for voice processing
                 Toggle("Echo cancellation", isOn: Binding(get: { c.voice.echoCancel }, set: { ud.set($0, forKey: "voiceEcho"); c.voice.staleEngine = true; c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
             }
