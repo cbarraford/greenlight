@@ -185,6 +185,7 @@ final class Run: ObservableObject {
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
     var model = ""  // the --model it was sent with: the picker can change mid-turn
     var open: URL?  // an [open: URL] from a reply block a later one replaced (text_reset)
+    var textAt = Date.distantPast  // when its text last streamed: a step started since means the block was commentary, not the reply
     var turnId: String?  // chat.py's id for it (its "turn" event): followed again after a dropped connection or a relaunch
     var refollows = 0  // times followed again since the connection dropped, without a new event since
     var applied = 0, seen = 0  // the turn's events handled so far, and those the current follow has sent: a refollow skips what's applied

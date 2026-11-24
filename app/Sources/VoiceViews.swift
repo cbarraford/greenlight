@@ -863,6 +863,12 @@ func statusLine(_ raw: String, shown: [String]) -> String? {
     return shown.contains { key($0) == key(t) } ? nil : t
 }
 
+/// The reply's [screen] detail is on its way: the block streaming now has one and no step has started since its text (else it was
+/// commentary before more work, and the quiet that follows still gets lines).
+func screenStreaming(_ r: Run) -> Bool {
+    staged(r.live).screen != nil && !(r.steps.last.map { $0.start > r.textAt } ?? false)
+}
+
 /// The strip's line when the model can't write one (no key, an error): the newest step still going ("Ran gh pr list" as "Running
 /// gh pr list"), else the newest one as it's titled; before any step, the turn's own status (a thinking phrase).
 func statusFallback(_ r: Run, shown: [String]) -> String? {

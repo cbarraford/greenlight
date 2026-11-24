@@ -358,7 +358,7 @@ final class Voice: NSObject, ObservableObject {
         guard on, g == tickGen else { return }
         guard core?.run === r, !r.stopping else { if core?.run == nil || r.stopping { clearStatus() }; return }  // cleared, switched away or stopped: no stale line
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.statusTick(r, g) }
-        if staged(r.live).screen != nil { return clearStatus() }  // its [screen] detail is streaming: the reply, until a new block replaces it
+        if screenStreaming(r) { return clearStatus() }  // its [screen] detail is streaming: the reply
         // still saying something; the wait word alone doesn't count, so the first line isn't pushed back by it
         if lines.contains(where: { $0 != waitWord }) || (lines.isEmpty && speaking > 0) { quietSince = Date(); return }
         guard !statusAsking, Date().timeIntervalSince(quietSince) >= statusQuiet else { return }
@@ -371,7 +371,7 @@ final class Voice: NSObject, ObservableObject {
         let done = { [weak self] (raw: String?) in
             guard let self else { return }
             self.statusAsking = false
-            guard self.on, seq == self.statusSeq, self.core?.run === r, !r.stopping, staged(r.live).screen == nil else { return }  // it spoke, or the turn ended or stopped, meanwhile
+            guard self.on, seq == self.statusSeq, self.core?.run === r, !r.stopping, !screenStreaming(r) else { return }  // it spoke, or the turn ended or stopped, meanwhile
             self.quietSince = Date()  // the next after another quiet stretch, a line or not
             guard let line = raw.flatMap({ statusLine($0, shown: shown) }) ?? statusFallback(r, shown: shown) else { return }
             self.statusShown.append(line); self.statusUp = true
@@ -392,7 +392,7 @@ final class Voice: NSObject, ObservableObject {
         if let h = st.stage { stage(h) }
         let (ss, to) = sentences(p, from: said)
         said = to
-        if !ss.isEmpty { clearStatus() }  // the reply is here, said or (after you cut in) not
+        if !ss.isEmpty || st.screen != nil { clearStatus() }  // the reply is here, said or (after you cut in) not, or its [screen] detail
         ss.forEach { say(forEar($0)) }  // per sentence, so `said` stays an offset into text that only grows
         if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }

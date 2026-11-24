@@ -870,11 +870,13 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, v.tickGen); let stoppedQuiet = !v.statusUp
         sr.stopping = false; v.muted = false; v.said = 0
         v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; let g0 = v.tickGen; v.statusTick(sr, g0); let upBeforeScreen = v.statusUp
-        sr.live = "Found it.\n[screen]\n| a | b |"; v.live(sr)
+        sr.live = "Found it.\n[screen]\n| a | b |"; sr.textAt = Date(); v.live(sr)
+        let screenClearsAtOnce = !v.statusUp  // on the text, not the next tick
         v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, g0)  // the turn's clock, after [screen]: stopped
-        let screenEnds = upBeforeScreen && !v.statusUp
-        sr.live = ""; v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, g0)  // a new block replaced it (text_reset): lines again
-        let screenResumes = v.statusUp
+        let screenEnds = upBeforeScreen && screenClearsAtOnce && !v.statusUp
+        sr.steps.append(Step(id: "s3", title: "Checking CI again", detail: "", start: Date() + 1))  // a tool after it: it was commentary
+        v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, g0)
+        let screenResumes = v.statusUp && v.statusShown == ["Checking CI again."]
         c.run = nil
         keyLock.lock(); keys["anthropic"] = savedA; keyLock.unlock(); v.hush()
         check("voice: the status line waits for 20 s of quiet, shows the newest step, doesn't repeat, and clears on speech or the reply",
@@ -882,7 +884,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: the wait word doesn't hold the status line back; a cleared chat and a muted reply take it down (#180 review)",
               fillerQuiet && clearedChat && mutedReply)
         check("voice: a stopped turn's strip clears and gets no new line (#180 review)", stoppedClears && stoppedQuiet)
-        check("voice: once the reply's [screen] detail streams, the strip clears until a new block replaces it (#180 reviews 2, 3)", screenEnds && screenResumes)
+        check("voice: once the reply's [screen] detail streams, the strip clears; a step after it brings lines back (#180 reviews 2-4)", screenEnds && screenResumes)
     }
 
     check("voice: Voice state machine handles GPT-Live events, cues, audio silence, stage blocks, fallback dedupe, barge-in, and close (\(heardText) / \(handedOff) / \(awaitingCue) / \(cueCleared) / \(startedSpeaking) / \(endedSpeaking) / \(liveErrCount) / \(fbCount) / \(capOff) / \(closedStopped) / \(bargedIn) / \(turnRanCmd))",
