@@ -886,6 +886,7 @@ final class Core: ObservableObject {
     private func followTurn(_ r: Run, _ id: String) {
         r.seen = 0
         proc = ssh("\(chief) follow \(shellQuote(id))", onLine: { [weak self] l in
+            guard Core.turnLine(l) != nil else { return }  // counted as event() counts them
             r.seen += 1
             guard r.seen > r.applied else { return }
             r.refollows = 0  // something new: the connection works again
@@ -898,6 +899,12 @@ final class Core: ObservableObject {
             }
             self.lost(r, code)
         })
+    }
+
+    /// A whole JSON object, as `follow` writes every line: a piece cut off by a drop (ssh hands over its last bytes at exit) or
+    /// a stray line isn't one, so it isn't counted, and a refollow sends the line whole.
+    private static func turnLine(_ l: String) -> [String: Any]? {
+        l.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     }
 
     /// The connection ended before the reply. Quitting: the turn goes on, and the next launch follows it. A dropped connection:
@@ -920,10 +927,9 @@ final class Core: ObservableObject {
     }
 
     private func event(_ l: String, _ r: Run) {
-        guard run === r else { return }
-        let j = l.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        if j?["e"] as? String != "turn" { r.applied += 1 }  // every line but send's own "turn", as `follow` sends them again (seen)
-        guard let j, let e = j["e"] as? String else { return }
+        guard run === r, let j = Core.turnLine(l) else { return }
+        if j["e"] as? String != "turn" { r.applied += 1 }  // the turn's own lines, as `follow` sends them again (seen)
+        guard let e = j["e"] as? String else { return }
         connected = true
         switch e {
         case "turn":
@@ -1031,6 +1037,7 @@ final class Core: ObservableObject {
             notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
+        if r.resumed { DispatchQueue.main.async { [weak self] in self?.resumeTurn() } }  // a lost turn saved beside it, if any
     }
 
     // MARK: pings
