@@ -327,9 +327,13 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         let both = panesOf(r.replay(tree, now: t0.addingTimeInterval(3))), old = panesOf(r.replay(tree, now: t0.addingTimeInterval(40)))
         r.start()  // the next refresh began; a page loading before it publishes gets the trees only
         let inFlight = r.replay(tree, now: t0.addingTimeInterval(41))
+        r.add(["mc-mac": ["state": "working"]], now: t0.addingTimeInterval(50)); r.add(nil, now: t0.addingTimeInterval(54)); r.add([String: Any](), now: t0.addingTimeInterval(55))
+        let afterEmpty = panesOf(r.replay(tree, now: t0.addingTimeInterval(56)))  // 6 s after the states came: empty publishes don't refresh them
+        r.add(["mc-srv": ["state": "done"]], now: t0.addingTimeInterval(57))  // the server's answer, 7 s after the Mac's
+        let lateHost = panesOf(r.replay(tree, now: t0.addingTimeInterval(57)))  // dated by the Mac's: nothing stale rides along
         check("config: PaneReplay gives a loading page both hosts' fresh states, never stale ones or the last refresh's",
               both == ["mc-mac", "mc-srv"] && old == [] && panesOf(inFlight) == [] && ((inFlight?["trees"] as? [[String: Any]]) ?? []).count == 1
-              && r.replay(nil) == nil)
+              && afterEmpty == [] && lateHost == [] && r.replay(nil) == nil)
     }
     check("config: paneWhere validates @host and absolute paths without ..",
           paneWhere("@devbox")?.host == "devbox" && paneWhere("@bad host") == nil

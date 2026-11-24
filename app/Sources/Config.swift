@@ -306,12 +306,16 @@ func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, m
     return obj
 }
 /// Pane states for a terminal page that just loads (`ready` replays the newest trees payload): every host's states from the current
-/// refresh, and only while fresh (5 s since they arrived). An older "working" replayed into a reloaded page would flip an idle pane
+/// refresh, and only while fresh (5 s since the first of them arrived). An older "working" replayed into a reloaded page would flip an idle pane
 /// back to work, and the next fetch's "done" would ping its finished turn again. A refresh that starts drops what the last one saved.
 struct PaneReplay {
     private(set) var panes = [String: Any](), at = Date.distantPast
     mutating func start() { panes = [:] }
-    mutating func add(_ p: Any?, now: Date = Date()) { panes.merge((p as? [String: Any]) ?? [:]) { _, new in new }; at = now }
+    mutating func add(_ p: Any?, now: Date = Date()) {  // dated by the refresh's first states: the oldest that a replay carries
+        guard let p = p as? [String: Any], !p.isEmpty else { return }
+        if panes.isEmpty { at = now }
+        panes.merge(p) { _, new in new }
+    }
     func replay(_ obj: [String: Any]?, now: Date = Date()) -> [String: Any]? {
         guard var o = obj else { return nil }
         o["panes"] = !panes.isEmpty && now.timeIntervalSince(at) <= 5 ? panes : nil
