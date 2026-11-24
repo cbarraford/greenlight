@@ -345,6 +345,42 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         while failCode == nil && Date() < until2 { RunLoop.main.run(until: Date() + 0.02) }
         check("config: ssh() streams stdout lines and reports exit codes",
               lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
+        func isClosed(_ h: FileHandle?) -> Bool {
+            guard let h else { return false }
+            do { _ = try h.readToEnd(); return false } catch { return true }
+        }
+        // a daemon keeps both pipes: finish() times out and closes both read handles even while Process is retained
+        var heldCode: Int32?
+        let heldProc = ssh("sleep 2 & exit 3", on: "local", onExit: { heldCode = $0 })
+        let until3 = Date() + 5
+        while heldCode == nil && Date() < until3 { RunLoop.main.run(until: Date() + 0.02) }
+        check("config: ssh() survives a held pipe and closes read handles even while Process is retained",
+              heldCode == 3
+              && isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
+              && isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading))
+        var rc0ErrDone = 0
+        for _ in 0..<10 {
+            _ = ssh("printf 'stderr noise\\n' >&2; printf 'ok\\n'", on: "local", onExit: { if $0 == 0 { rc0ErrDone += 1 } })
+        }
+        let until4 = Date() + 5
+        while rc0ErrDone < 10 && Date() < until4 { RunLoop.main.run(until: Date() + 0.02) }
+        check("config: ssh() survives rc=0 with active stderr without a close race", rc0ErrDone == 10)
+        let buffered = Pipe()
+        var got = Data()
+        let bufQ = DispatchQueue(label: "greenlight.test.pipe.buf")
+        let bufReader = PipeReader(buffered.fileHandleForReading, on: bufQ) { got.append($0) }
+        try? buffered.fileHandleForWriting.write(contentsOf: Data("hello".utf8))
+        try? buffered.fileHandleForWriting.close()
+        bufReader.finish(within: 2)
+        check("config: PipeReader reads buffered data to EOF and closes the handle",
+              got == Data("hello".utf8) && isClosed(buffered.fileHandleForReading))
+        let heldPipe = Pipe()
+        let heldQ = DispatchQueue(label: "greenlight.test.pipe.held")
+        let heldReader = PipeReader(heldPipe.fileHandleForReading, on: heldQ) { _ in }
+        heldReader.finish(within: 0.05)
+        check("config: PipeReader.finish() times out and closes a held pipe without waiting for the writer",
+              isClosed(heldPipe.fileHandleForReading))
+        try? heldPipe.fileHandleForWriting.close()
     }
 }
 
