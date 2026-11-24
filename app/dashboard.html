@@ -275,8 +275,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hx{position:relative;--hfill:var(--hexbody);--hedge:var(--line);--hink:var(--text2);--htrack:transparent;--hprog:var(--text3)}
 .hx.st-needs{--hfill:var(--orange);--hedge:transparent;--hink:var(--on-orange);--htrack:color-mix(in srgb,var(--on-orange) 30%,transparent);--hprog:var(--on-orange)}
 .hx.st-crashed{--hfill:var(--red);--hedge:transparent;--hink:var(--on-red);--htrack:color-mix(in srgb,var(--on-red) 30%,transparent);--hprog:var(--on-red)}
-.hx.st-working{--hfill:var(--blue-tint);--hedge:transparent;--hink:var(--blue-ink);--htrack:var(--blue-edge);--hprog:var(--blue-ink)}
-.hx.st-raised{--hfill:var(--yellow-tint);--hedge:transparent;--hink:var(--yellow-ink);--htrack:var(--yellow-edge);--hprog:var(--yellow-ink)}
+.hx.st-working{--hfill:var(--blue-tint);--hedge:var(--blue-edge);--hink:var(--blue-ink);--htrack:var(--blue-edge);--hprog:var(--blue-ink)}
+.hx.st-raised{--hfill:var(--yellow-tint);--hedge:var(--yellow-edge);--hink:var(--yellow-ink);--htrack:var(--yellow-edge);--hprog:var(--yellow-ink)}
 .hx svg{position:absolute;inset:0;overflow:visible}
 .hx .body{fill:var(--hfill);stroke:var(--hedge);stroke-width:1.5;stroke-linejoin:round}
 .hx .back{fill:var(--hexbody);stroke:var(--hexline);stroke-width:1}
@@ -996,8 +996,8 @@ function hexEl(p, R, opts = {}){
     s("polygon", {class:"halo", points: hpoly(R * 1.05)}),
     p.state === "needs" || p.state === "crashed" ? s("polygon", {class:"pulse", points: hpoly(R * .97), stroke: col}) : null,
     s("polygon", {class:"body", points: hpoly(R * .97)}),
-    s("polygon", {class:"track", points: hpoly(R * .92), "stroke-width": 2}),
-    s("polygon", {class:"prog", points: hpoly(R * .92), "stroke-width": 2, pathLength: n, "stroke-dasharray": "0.86 0.14 ".repeat(i) + `0 ${n}`}));
+    i ? s("polygon", {class:"track", points: hpoly(R * .92), "stroke-width": 2}) : null,  // no step done: one edge, no empty ring inside it (§10.9)
+    i ? s("polygon", {class:"prog", points: hpoly(R * .92), "stroke-width": 2, pathLength: n, "stroke-dasharray": "0.86 0.14 ".repeat(i) + `0 ${n}`}) : null);
   const b = Math.max(6, Math.round(R * .15)), named = !compact && R >= 50 && lb.num !== "No MR" && !opts.num;  // named: task, MR, step
   const ly = named ? R * 1.02 : R * 1.04;  // under the bell and agent dot's band
   return h("div", {class:"hx st-" + p.state + (lb.num === "No MR" ? " nomr" : "") + (R < 40 ? " sm" : ""), style:`width:${2 * R}px;height:${2 * R}px;--hc:${col}`}, svg,
