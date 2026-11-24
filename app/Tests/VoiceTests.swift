@@ -62,7 +62,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           fallbackSpec(issued)["title"] as? String == "Issue filed" && !raw(fb) && fb["title"] as? String == "Held"
           && (fb["items"] as? [[String: String]])?.map { $0["label"]! } == ["CI green", "no conflicts"]
           && fallbackSpec("{\"summary\":\"Held\",\"title\":\"T\",\"more\":{\"a\":\"x\"}}")["title"] as? String == "T"
-          && !raw(broken) && broken["title"] as? String == "Work on first" && (broken["items"] as? [[String: String]])?.map { $0["label"]! } == ["merge !5415", "say \"go\""]
+          && !raw(broken) && broken["title"] as? String == "Work on first" && (broken["items"] as? [[String: String]])?.map { $0["label"]! } == ["merge !5415", "say \"go\"", "x"]
           && raw(["title": "{\"title\":\"x\"}"]) && fallbackSpec("All green. Two MRs wait.")["title"] as? String == "All green.")
     let two = staged("A.\n```stage\n{\"title\":\"x\"}\n```\nB.\n```Stage\n{\"title\":\"y\"}\n```\nC.")
     check("voice: every ```stage block is cut out of the transcript, ```Stage too; the first is drawn (#153 review)",
@@ -86,6 +86,22 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: broken JSON's fallback has its strings, not the punctuation between them (#153 review 2)",
           fallbackSpec("{\"title\": \"Work\", \"items\": [\"a\", \"b")["title"] as? String == "Work"
           && (fallbackSpec("{\"title\": \"Work\", \"items\": [\"a\", \"b")["items"] as? [[String: String]])?.map { $0["label"]! } == ["a"])
+    check("voice: JSON that starts with true/false/null or single quotes is JSON; one with nothing to say draws blank, never its source (#153 review 3)",
+          ["[true, false]", "[null]", "{'title': 'Work'}", "[ 'a' ]"].allSatisfy { stageJSON($0) != nil } && stageJSON("[tasks] two left") == nil
+          && labels("[true, false]") == ["yes", "no"] && fallbackSpec("{'title': 'Work', 'items': ['a', 'it\\'s']}")["title"] as? String == "Work"
+          && (fallbackSpec("{'title': 'Work', 'items': ['a', 'it\\'s']}")["items"] as? [[String: String]])?.map { $0["label"]! } == ["a", "it's"]
+          && ["{}", "{\"title\":", "{\"items\":[{\"a\":null}]}", "[]"].allSatisfy { fallbackSpec($0)["title"] as? String == "" && !raw(fallbackSpec($0)) }
+          && fallbackSpec("{\"items\": [1, 2,")["title"] as? String == "")
+    check("voice: only real emphasis loses its marks: **kwargs and **opts, f(**a) g(**b), x ** 2 stay (#153 review 3)",
+          labels("{\"items\":[\"forward **kwargs and **opts\",\"f(**a) calls g(**b)\",\"x ** 2 + y ** 2\",\"a **real** b ~~old~~\"]}")
+          == ["forward **kwargs and **opts", "f(**a) calls g(**b)", "x ** 2 + y ** 2", "a real b old"])
+    let table = stageCard("{\"kind\":\"table\",\"title\":\"CI\",\"rows\":[[\"`main` **failed**\", \"[doc](./README.md)\"]]}")
+    check("voice: a table or timeline drops markdown marks too; relative links read as text; ```stage.json is a label (#153 review 3)",
+          ((table?["rows"] as? [[Any]])?.first as? [String]) == ["main failed", "doc"] && labels("{\"items\":[\"[MR](gitlab.test/x/1)\"]}") == ["MR"]
+          && stageCard(".json {\"title\":\"x\"}")?["title"] as? String == "x" && stageCard(":json\n{\"title\":\"x\"}")?["title"] as? String == "x")
+    check("voice: broken JSON's escapes read as text; unquoted keys still give their values (#153 review 3)",
+          (fallbackSpec("{\"title\": \"a\\nb\\/c\", \"x\": [1")["title"] as? String) == "a b/c"
+          && fallbackSpec("{title: \"x\", items: [\"a\"]}")["title"] as? String == "x")
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
