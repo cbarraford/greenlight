@@ -104,6 +104,16 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
     check("byline: time left is never seconds", timeLeft(10) == "under a minute left" && timeLeft(70) == "about a minute left" && timeLeft(400) == "about 7 min left"
           && timeLeft(3000) == "over 20 min left" && timeLeft(0) == nil && timeLeft(-5) == nil)
     check("Chief's [console: mc-…] opens a tab and isn't shown", staged("Here it is.\n[console: mc-ab12]") == Staged(text: "Here it is.", stage: nil, console: "mc-ab12") && staged("Opening [console: mc-a").text == "Opening")
+    check("Chief's [open: URL] opens a forge page and isn't shown", staged("Here's the PR.\n[open: https://github.com/acme/widgets/pull/7]")
+          == Staged(text: "Here's the PR.", stage: nil, open: URL(string: "https://github.com/acme/widgets/pull/7"))
+          && staged("Opening [open: https://gitl").text == "Opening" && staged("Opening [open: https://gitl").open == nil  // still streaming
+          && staged("[open: <https://gitlab.com/acme/widgets/-/merge_requests/3>]\n[open: https://github.com/x/y]").open == URL(string: "https://gitlab.com/acme/widgets/-/merge_requests/3"))
+    check("[open: …] only sends the browser to http(s) on a forge host",
+          forgeURL("http://www.github.com/a/b/issues/1") != nil && forgeURL("HTTPS://GitLab.com/a/b") != nil
+          && ["javascript:alert(1)", "file:///etc/passwd", "ssh://github.com/a/b", "https://evil.com/github.com", "https://github.com.evil.com/a",
+              "https://me" + "@github.com/a", "https://github.com" + "@evil.com/a", "https://github.com:8443/a", "https://gist.github.com/a", "github.com/a/b", ""]
+              .allSatisfy { forgeURL($0) == nil }
+          && staged("No.\n[open: https://evil.com/x]") == Staged(text: "No.", stage: nil))
     check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
           livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
           && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])

@@ -946,6 +946,7 @@ final class Core: ObservableObject {
         run = nil
         tps = 0
         if ok && !r.stopping && !r.watch && !r.checkIn, let w = st.console { delegate.toConsole(w) }
+        if ok && !r.stopping && !r.watch && !r.checkIn, let u = st.open { NSWorkspace.shared.open(u) }  // [open: URL]: a forge page in the default browser
         if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
             clearing += 1  // now, so nothing sent before the clear goes to the old conversation
             DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }
