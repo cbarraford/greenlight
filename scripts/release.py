@@ -6,10 +6,10 @@
     release.py feed --channel C --version V --build N --commit SHA --app ZIP --backend TGZ --base-url URL
                     --signing developer_id|adhoc [--notarized] [--notes FILE] --out FILE
                                                            the channel's feed, signed with $GREENLIGHT_FEED_KEY
-    release.py verify FEED [--pub HEX] [--app ZIP] [--backend TGZ]   the feed's signature, then the files' sha256
+    release.py verify FEED [--pub HEX] [--app ZIP] [--backend TGZ] [--build N]   the feed's signature, the files' sha256
     release.py notes --channel C [--ref REF] [--repo OWNER/NAME]   release notes (Markdown): a stable tag's commits since
                                                            the previous one, or a main build's own commit
-    release.py guard --build N [--current FEED]            refuse a build older than the channel's current feed's
+    release.py guard --build N [--current FEED] [--floor N] [--version V]   refuse a build older than the channel's feed
     release.py keygen                                      a new feed key pair (the private half goes in a CI secret)
     release.py pubkey                                      the public half of $GREENLIGHT_FEED_KEY
 
@@ -233,18 +233,24 @@ def verify(path: Path, pub: bytes | None, files: dict[str, Path | None]) -> dict
             "checked": sorted(k for k, f in files.items() if f is not None)}
 
 
-def guard(build: int, current: Path | None) -> dict[str, Any]:
-    """Refuse a build older than the one the channel's feed already offers (an old tag pushed late, or an old run
-    re-run): the feed only moves forward. The same build again is a re-run, and passes."""
-    if current is None or not current.exists():
+def guard(build: int, current: Path | None, floor: int | None = None, ver: str | None = None) -> dict[str, Any]:
+    """Refuse a build older than the one the channel's feed offers (an old tag pushed late, an old run re-run): the feed
+    only moves forward. `floor` is the build the feed release's title records, which a failed upload can't erase. The
+    same build again is a re-run and passes, unless it's a lower stable version on the same commit."""
+    now, was = floor, None
+    if current is not None and current.exists():
+        try:
+            body = json.loads(base64.b64decode(json.loads(current.read_text())["body"], validate=True))
+            now, was = max(int(body["build"]), floor or 0), str(body["version"])
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            raise ReleaseError(f"can't read the channel's current feed: {e}") from None
+    if now is None:
         return {"ok": True, "current": None}
-    try:
-        body = json.loads(base64.b64decode(json.loads(current.read_text())["body"], validate=True))
-        now = int(body["build"])
-    except (OSError, ValueError, KeyError, TypeError) as e:
-        raise ReleaseError(f"can't read the channel's current feed: {e}") from None
     if build < now:
-        raise ReleaseError(f"build {build} is older than the feed's build {now} ({body.get('version')}): nothing published")
+        raise ReleaseError(f"build {build} is older than the feed's build {now}: nothing published")
+    new, old = tag_num(f"v{ver}"), tag_num(f"v{was}")  # () for a main version: only stable versions compare
+    if build == now and new and old and new < old:
+        raise ReleaseError(f"{ver} is lower than the feed's {was} on the same build: nothing published")
     return {"ok": True, "current": now}
 
 
@@ -269,6 +275,7 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--pub")
     c.add_argument("--app")
     c.add_argument("--backend")
+    c.add_argument("--build", type=int)
     n = sub.add_parser("notes")
     n.add_argument("--channel", required=True, choices=CHANNELS)
     n.add_argument("--ref")
@@ -276,6 +283,8 @@ def parser() -> argparse.ArgumentParser:
     g = sub.add_parser("guard")
     g.add_argument("--build", type=int, required=True)
     g.add_argument("--current")
+    g.add_argument("--floor", type=int)
+    g.add_argument("--version")
     sub.add_parser("keygen")
     sub.add_parser("pubkey")
     return ap
@@ -290,9 +299,12 @@ def run(a: argparse.Namespace) -> dict[str, Any]:
         return feed(a)
     if a.cmd == "verify":
         pub = bytes.fromhex(a.pub) if a.pub else default_pub()
-        return verify(Path(a.feed), pub, {"app": Path(a.app) if a.app else None, "backend": Path(a.backend) if a.backend else None})
+        ok = verify(Path(a.feed), pub, {"app": Path(a.app) if a.app else None, "backend": Path(a.backend) if a.backend else None})
+        if a.build is not None and ok["build"] != a.build:
+            raise ReleaseError(f"the feed is build {ok['build']}, not {a.build}")
+        return ok
     if a.cmd == "guard":
-        return guard(a.build, Path(a.current) if a.current else None)
+        return guard(a.build, Path(a.current) if a.current else None, a.floor, a.version)
     if a.cmd == "notes":
         return {"notes": notes(a.channel, a.ref, a.repo)}
     if a.cmd == "keygen":

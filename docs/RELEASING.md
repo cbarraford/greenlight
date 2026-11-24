@@ -12,8 +12,14 @@ short version is the highest stable tag behind it (`0.0.0` before the first). A 
 (`v1.02.3` doesn't build), so no two tags give the same version.
 
 A channel's feed only moves forward: a build older than the one the feed already offers (an old tag pushed late, an old run
-re-run) stops before it builds anything. Re-running the same build is fine: it replaces that build's files and points the feed
-at it again.
+re-run) stops before it builds anything, and so does a lower stable tag on the same commit. The feed release's title records
+the build it holds (`Greenlight main channel (build 412)`), so this holds even while a failed upload has left it with no file.
+
+Re-running a build that's already published rebuilds nothing and leaves its files alone (the live feed may point at them): it
+checks that build's own signed feed and points the channel at it again. A draft left by a run that stopped partway is deleted
+and built again. For main, use *Run workflow* (main's current commit: built if it has no release yet, else re-pointed)
+rather than re-running an old run: a re-run never cancels the build that's running, but while waiting it can still replace a
+newer run that's pending.
 
 Each release holds three files:
 - `Greenlight-<version>.zip`: the app. It's universal (Apple silicon and Intel), runs on macOS 14 or later, and carries the
@@ -87,8 +93,8 @@ git fetch origin && git tag v0.1.0 origin/main && git push origin v0.1.0
 
 Push one tag at a time, and the next once the first is running: GitHub keeps only one pending run per channel, so a third
 tag pushed while one builds and one waits replaces the waiting one (re-run it from the Actions tab once the others finish, if
-it's still the newest). The notes are the commit subjects since the previous stable tag. To fix them after the release, edit them on GitHub; the feed
-keeps the notes it was built with.
+it's still the newest). The notes are the commit subjects since the previous stable tag. To fix them after the release,
+edit them on GitHub (a re-run leaves them alone); the feed keeps the notes it was built with.
 
 ## Building locally (a dry run, nothing published)
 

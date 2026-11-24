@@ -113,6 +113,29 @@ def test_guard_lets_the_feed_only_move_forward(signed, tmp_path, capsys):
     bad.write_text("{not a feed")
     with pytest.raises(release.ReleaseError, match="can't read"):
         release.guard(9, bad)
+    # the feed release's title keeps the floor when a failed upload has already deleted the file
+    with pytest.raises(release.ReleaseError, match="older than the feed's build 11"):
+        release.guard(9, None, floor=11)
+    assert release.guard(11, None, floor=11)["current"] == 11 and release.guard(9, signed["out"], floor=3)["current"] == 7
+    with pytest.raises(release.ReleaseError, match="older than the feed's build 11"):
+        release.guard(9, signed["out"], floor=11)  # a stale file can't lower the floor either
+
+
+def test_guard_refuses_a_lower_stable_version_on_the_same_build(signed):
+    # the signed feed is stable 1.0.0 at build 7: a v0.9.9 tag on the same commit would move the version back
+    with pytest.raises(release.ReleaseError, match="0.9.9 is lower than the feed's 1.0.0"):
+        release.guard(7, signed["out"], ver="0.9.9")
+    assert release.guard(7, signed["out"], ver="1.0.0")["ok"] and release.guard(7, signed["out"], ver="1.0.1")["ok"]
+    assert release.guard(8, signed["out"], ver="0.9.9")["ok"]  # a newer build wins whatever its version
+    assert release.guard(7, signed["out"], ver="main-7-abc1234")["ok"]  # main versions don't compare
+
+
+def test_verify_can_insist_on_the_build(signed, capsys):
+    capsys.readouterr()
+    base = ["verify", str(signed["out"]), "--pub", signed["pub"].hex()]
+    assert release.main([*base, "--build", "7"]) == 0
+    capsys.readouterr()
+    assert release.main([*base, "--build", "8"]) == 1 and "not 8" in json.loads(capsys.readouterr().out)["error"]
 
 
 def test_backend_holds_tracked_backend_files_only_and_is_reproducible(repo, tmp_path):
@@ -270,11 +293,21 @@ def test_release_workflow_guards_the_key_the_feed_and_reruns():
     assert '--pub "$(cat app/feed-key.pub)"' in _step(wf, "Notes and the signed feed")
     # an older build than the channel's feed stops before anything is built
     order = [wf.index(f"- name: {n}") for n in ("Version", "Only forward", "Backend tarball", "Publish this build")]
-    assert order == sorted(order) and "release.py guard" in _step(wf, "Only forward")
-    # a re-run replaces its own release's files instead of failing on `release create`
-    pub = _step(wf, "Publish this build")
-    assert pub.index('gh release view "$TAG"') < pub.index("gh release create") and "--clobber" in pub
-    # the feed's delete-then-upload is retried, and a final failure fails the job
+    guard = _step(wf, "Only forward")
+    assert order == sorted(order) and "release.py guard" in guard and "--floor" in guard and "--version" in guard
+    # the floor: the feed release's title records the build before the upload, which deletes the old file first
     feed = _step(wf, "Point the channel's feed at it")
+    assert "(build $BUILD)" in feed and feed.index("--title") < feed.index("gh release upload")
+    # a published build is never rebuilt or re-uploaded (the live feed may point at its files): it only re-points the feed;
+    # a draft left by a stopped run is deleted and built again
+    assert "isDraft" in guard and 'gh release delete "$TAG"' in guard and "--cleanup-tag" not in guard
+    assert 'verify "$out/channel-$CHANNEL.json" --pub "$(cat app/feed-key.pub)" --build "$BUILD"' in guard
+    for name in ("Backend tarball", "Signing identity", "Build, sign and zip", "Notes and the signed feed", "Publish this build"):
+        assert "steps.g.outputs.repair != 'true'" in _step(wf, name), name
+    pub = _step(wf, "Publish this build")
+    assert "--clobber" not in pub and "gh release edit" not in pub  # nor its hand-edited notes overwritten
+    # the feed's delete-then-upload is retried, and a final failure fails the job
     assert "for try in 1 2 3" in feed and "exit 1" in feed
+    # a re-run (an old commit) never cancels the main build that's running
+    assert "github.run_attempt == '1'" in wf
     assert "never cancelled, one tag at a time" not in wf  # GitHub replaces a pending run in the group

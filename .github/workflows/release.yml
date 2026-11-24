@@ -8,16 +8,17 @@ on:
   push:
     branches: [main]
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
-  workflow_dispatch:  # rebuild main's current commit for the main channel (from main only)
+  workflow_dispatch:  # main's current commit for the main channel (from main only): built, or re-pointed if published
 
 permissions:
   contents: write  # releases and their assets
 
-# main: the newest push wins (an older build still running is cancelled). stable: a running build is never cancelled and
-# tags build one at a time, but GitHub keeps only one *pending* run per group: push a tag, then the next once it's running.
+# main: the newest push wins (an older build still running is cancelled), but a re-run (attempt 2+, an old commit) never
+# cancels the build that's running. stable: a running build is never cancelled and tags build one at a time. GitHub keeps
+# only one *pending* run per group: push a tag, then the next once it's running.
 concurrency:
   group: release-${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'main' }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && github.run_attempt == '1' }}
 
 jobs:
   release:
@@ -63,28 +64,52 @@ jobs:
           PY
           cat "$RUNNER_TEMP/version.json"
 
-      - name: Only forward (not older than the channel's current feed)
+      - name: Only forward, and a published build is never rebuilt
+        id: g
         env:
           BUILD: ${{ steps.v.outputs.build }}
+          VER: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
-          cur=()
-          # the feed release's channel-<name>.json, if there is one yet; a failed download fails the build (no guessing)
-          if names=$(gh release view "feed-$CHANNEL" --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then :
-          elif grep -q "release not found" <<<"$names"; then names=""  # no feed yet: the channel's first build
-          else echo "::error::can't read the $CHANNEL feed: $names"; exit 1; fi
-          if grep -qx "channel-$CHANNEL.json" <<<"$names"; then
+          out="$RUNNER_TEMP/out" cur=() floor=() repair=false
+          mkdir -p "$out"
+          # The channel's feed: its channel-<name>.json, and the build its title records (set before each upload, so a
+          # failed upload, which has already deleted the old file, can't make an older build look new). No guessing.
+          if meta=$(gh release view "feed-$CHANNEL" --repo "$REPO" --json name,assets --jq '.name, .assets[].name' 2>&1); then :
+          elif grep -q "release not found" <<<"$meta"; then meta=""  # the channel's first build
+          else echo "::error::can't read the $CHANNEL feed: $meta"; exit 1; fi
+          if grep -qx "channel-$CHANNEL.json" <<<"$meta"; then
             gh release download "feed-$CHANNEL" --repo "$REPO" --pattern "channel-$CHANNEL.json" --output "$RUNNER_TEMP/current.json" --clobber
             cur=(--current "$RUNNER_TEMP/current.json")
           fi
-          python3 scripts/release.py guard --build "$BUILD" "${cur[@]}"
+          n=$(sed -n 's/.*(build \([0-9][0-9]*\))$/\1/p' <<<"$meta" | head -n 1)
+          if [ -n "$n" ]; then floor=(--floor "$n"); fi
+          python3 scripts/release.py guard --build "$BUILD" --version "$VER" "${cur[@]}" "${floor[@]}"
+          # This build's own release. Published: keep its files (the live feed may point at them) and only point the feed
+          # at its own signed feed again. A draft (a run stopped mid-create) is deleted and built again.
+          if rel=$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets --jq '(.isDraft | tostring), .assets[].name' 2>&1); then
+            if [ "$(head -n 1 <<<"$rel")" = true ]; then
+              echo "::warning::$TAG is a draft left by a run that stopped: deleting it to build it again"
+              gh release delete "$TAG" --repo "$REPO" --yes
+            elif grep -qx "channel-$CHANNEL.json" <<<"$rel"; then
+              repair=true
+              gh release download "$TAG" --repo "$REPO" --pattern "channel-$CHANNEL.json" --output "$out/channel-$CHANNEL.json" --clobber
+              python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$(cat app/feed-key.pub)" --build "$BUILD"
+              echo "::notice::$TAG is already published: pointing the $CHANNEL feed at it again, nothing rebuilt"
+            else
+              echo "::error::$TAG is published without channel-$CHANNEL.json: delete that release on GitHub, then re-run"; exit 1
+            fi
+          elif ! grep -q "release not found" <<<"$rel"; then echo "::error::can't read release $TAG: $rel"; exit 1; fi
+          echo "repair=$repair" >> "$GITHUB_OUTPUT"
 
       - name: Backend tarball
+        if: steps.g.outputs.repair != 'true'
         env:
           VER: ${{ steps.v.outputs.version }}
         run: python3 scripts/release.py backend --version "$VER" --out "$RUNNER_TEMP/out"
 
       - name: Signing identity (a throwaway keychain)
-        if: env.HAS_SIGN_ID == 'true'
+        if: env.HAS_SIGN_ID == 'true' && steps.g.outputs.repair != 'true'
         env:
           P12: ${{ secrets.DEVELOPER_ID_P12 }}
           P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
@@ -110,6 +135,7 @@ jobs:
 
       - name: Build, sign and zip the app
         id: app
+        if: steps.g.outputs.repair != 'true'
         env:
           VER: ${{ steps.v.outputs.version }}
           SHORT: ${{ steps.v.outputs.short }}
@@ -125,6 +151,7 @@ jobs:
           PY
 
       - name: Notes and the signed feed
+        if: steps.g.outputs.repair != 'true'
         env:
           VER: ${{ steps.v.outputs.version }}
           BUILD: ${{ steps.v.outputs.build }}
@@ -146,6 +173,7 @@ jobs:
           python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$(cat app/feed-key.pub)" --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz"
 
       - name: Publish this build
+        if: steps.g.outputs.repair != 'true'
         env:
           VER: ${{ steps.v.outputs.version }}
           COMMIT: ${{ steps.v.outputs.commit }}
@@ -154,22 +182,23 @@ jobs:
         run: |
           out="$RUNNER_TEMP/out"
           files=("$ZIP" "$out/greenlight-backend-$VER.tar.gz" "$out/channel-$CHANNEL.json")
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            # a re-run (or a dispatch of a commit already built): replace this build's files, then carry on to the feed
-            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
-            gh release edit "$TAG" --repo "$REPO" --notes-file "$out/notes.md"
-          elif [ "$CHANNEL" = stable ]; then
+          if [ "$CHANNEL" = stable ]; then
             gh release create "$TAG" "${files[@]}" --repo "$REPO" --verify-tag --title "Greenlight $VER" --notes-file "$out/notes.md" --latest
           else
             gh release create "$TAG" "${files[@]}" --repo "$REPO" --target "$COMMIT" --title "Greenlight $VER" --notes-file "$out/notes.md" --prerelease --latest=false
           fi
 
       - name: Point the channel's feed at it
+        env:
+          BUILD: ${{ steps.v.outputs.build }}
         run: |
-          feed="feed-$CHANNEL"
-          gh release view "$feed" --repo "$REPO" >/dev/null 2>&1 ||
-            gh release create "$feed" --repo "$REPO" --target main --prerelease --latest=false --title "Greenlight $CHANNEL channel" \
+          feed="feed-$CHANNEL" title="Greenlight $CHANNEL channel (build $BUILD)"  # the guard's floor: set before the upload
+          if gh release view "$feed" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$feed" --repo "$REPO" --title "$title"
+          else
+            gh release create "$feed" --repo "$REPO" --target main --prerelease --latest=false --title "$title" \
               --notes "The $CHANNEL channel's current feed, channel-$CHANNEL.json, which Greenlight checks for updates. Builds are the other releases."
+          fi
           # --clobber deletes the old feed before the upload (GitHub has no atomic replace): retry so the gap stays short
           for try in 1 2 3; do
             gh release upload "$feed" "$RUNNER_TEMP/out/channel-$CHANNEL.json" --repo "$REPO" --clobber && exit 0
