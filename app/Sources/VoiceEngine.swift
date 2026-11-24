@@ -377,7 +377,7 @@ final class Voice: NSObject, ObservableObject {
             self.js("stage.status", [line])
         }
         if activity.isEmpty { return done(nil) }
-        statusSpec(r.question, activity, shown: shown, done: done)
+        statusSpec(r.spoken ? String(r.question.prefix(300)) : "", activity, shown: shown, done: done)  // what was said, never a typed paste
     }
     /// Something was said, or the turn or voice mode ended: the strip goes, and the quiet clock starts again.
     func clearStatus() {
@@ -392,6 +392,7 @@ final class Voice: NSObject, ObservableObject {
         let (ss, to) = sentences(p, from: said)
         said = to
         if !ss.isEmpty { clearStatus() }  // the reply is here, said or (after you cut in) not
+        if st.screen != nil && tickGen > 0 { clearStatus(); tickGen += 1 }  // its [screen] detail: surely the reply, so no more lines this turn
         ss.forEach { say(forEar($0)) }  // per sentence, so `said` stays an offset into text that only grows
         if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }

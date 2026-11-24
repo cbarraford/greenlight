@@ -868,13 +868,19 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, v.tickGen); let upBeforeStop = v.statusUp
         sr.stopping = true; v.statusTick(sr, v.tickGen); let stoppedClears = upBeforeStop && !v.statusUp
         v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, v.tickGen); let stoppedQuiet = !v.statusUp
-        sr.stopping = false; c.run = nil; v.muted = false
+        sr.stopping = false; v.muted = false; v.said = 0
+        v.statusShown = []; v.quietSince = Date() - statusQuiet - 1; let g0 = v.tickGen; v.statusTick(sr, g0); let upBeforeScreen = v.statusUp
+        sr.live = "Found it.\n[screen]\n| a | b |"; v.live(sr)
+        v.quietSince = Date() - statusQuiet - 1; v.statusTick(sr, g0)  // the turn's clock, after [screen]: stopped
+        let screenEnds = upBeforeScreen && !v.statusUp && v.tickGen > g0
+        c.run = nil
         keyLock.lock(); keys["anthropic"] = savedA; keyLock.unlock(); v.hush()
         check("voice: the status line waits for 20 s of quiet, shows the newest step, doesn't repeat, and clears on speech or the reply",
               notYet && firstLine && noRepeat && cleared && afterReply && staleRun)
         check("voice: the wait word doesn't hold the status line back; a cleared chat and a muted reply take it down (#180 review)",
               fillerQuiet && clearedChat && mutedReply)
         check("voice: a stopped turn's strip clears and gets no new line (#180 review)", stoppedClears && stoppedQuiet)
+        check("voice: once the reply's [screen] detail streams, the strip clears and the turn gets no more lines (#180 review 2)", screenEnds)
     }
 
     check("voice: Voice state machine handles GPT-Live events, cues, audio silence, stage blocks, fallback dedupe, barge-in, and close (\(heardText) / \(handedOff) / \(awaitingCue) / \(cueCleared) / \(startedSpeaking) / \(endedSpeaking) / \(liveErrCount) / \(fbCount) / \(capOff) / \(closedStopped) / \(bargedIn) / \(turnRanCmd))",

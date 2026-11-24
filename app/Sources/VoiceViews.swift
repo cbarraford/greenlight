@@ -880,7 +880,7 @@ func statusSpec(_ heard: String, _ activity: String, shown: [String], done: @esc
             + "e.g. \"Checking PR 153's CI.\" or \"Reading the auth workspace's last test run.\" Name the newest thing still running; "
             + "when it's the same work as before, say how it's going instead (\"Still waiting on the test run.\"). "
             + "Use only names, numbers and refs from the activity; never invent any. No markdown, no emoji, no commands or paths.",
-          "The user said: \(heard)\n\nIts activity, newest last:\n\(activity)"
+          (heard.isEmpty ? "" : "The user said: \(heard)\n\n") + "Its activity, newest last:\n\(activity)"
             + (shown.isEmpty ? "" : "\n\nLines already shown (say something new):\n" + shown.map { "- " + $0 }.joined(separator: "\n")),
           schema) { o in done(o?["line"] as? String) }
 }
