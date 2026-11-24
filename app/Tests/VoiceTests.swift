@@ -828,31 +828,33 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
           && capOff && v.captions && closedStopped && bargedIn && turnRanCmd)
 }
 
-/// Dictation keeps every utterance the Apple recognizer hears in a recording, not just the last (#172).
+/// Dictation keeps every utterance the Apple recognizer hears in a recording, not just the last (#172). The sequences are the
+/// results it gave on a Mac for `say` recordings with pauses, shortened to a few partials each.
 func runTranscriptTests(check: (String, Bool) -> Void) {
     func heard(_ results: [(String, Bool, Bool)]) -> String {
         var t = Transcript()
-        for (s, ended, final) in results { t.add(s, ended: ended, final: final) }
+        for (s, meta, final) in results { t.add(s, ends: meta || final) }
         return t.text
     }
-    check("dictation: partials revise one utterance; the final one is the text",
-          heard([("Check", false, false), ("Check the", false, false), ("Check the pipeline", false, false), ("Check the pipeline status.", false, true)])
-          == "Check the pipeline status.")
-    check("dictation: an utterance that ends (metadata) is kept and the next one added after it, the final repeat once (#172)",
-          heard([("First sentence", false, false), ("First sentence here.", true, false), ("Then", false, false), ("Then the second.", true, false),
-                 ("Then the second.", false, true)]) == "First sentence here. Then the second.")
-    check("dictation: a restart without metadata (fewer words, a new first word) keeps the utterance before it (#172)",
-          heard([("I paused in the middle", false, false), ("of", false, false), ("of a sentence.", false, true)])
-          == "I paused in the middle of a sentence.")
-    check("dictation: a restart on the same first word still keeps the earlier text when it's under half as long",
-          heard([("I want to go to the store", false, false), ("I", false, false), ("I need milk.", false, true)])
-          == "I want to go to the store I need milk.")
-    check("dictation: a long run of utterances all stay, in order",
-          heard((1...5).map { ("Part \($0).", true, false) } + [("", false, true)]) == "Part 1. Part 2. Part 3. Part 4. Part 5.")
-    check("dictation: an empty final result doesn't drop the utterance in progress",
-          heard([("Hello there", false, false), ("", false, true)]) == "Hello there")
-    check("dictation: a revision that changes an early word isn't a restart",
-          heard([("Czech", false, false), ("Check the", false, false), ("Check the status", false, true)]) == "Check the status"
-          && !Transcript.restarts("Check the pipe", after: "Check the pipeline status") && Transcript.restarts("Status", after: "Check the pipeline"))
+    check("dictation: partials revise one utterance, even shrinking and changing its first word; the final one is the text",
+          heard([("Grin light", false, false), ("Greenlight", false, false), ("Greenlight check the", false, false), ("Greenlight, check the pipeline.", false, true)])
+          == "Greenlight, check the pipeline.")
+    check("dictation: a pause ends an utterance (metadata) and the next one is added after it, not in its place (#172)",
+          heard([("I want to check", false, false), ("I want to check the pipeline status", false, false), ("I want to check the pipeline status", true, false),
+                 ("Then", false, false), ("Then merge it when it is green", false, false), ("Then merge it when it is green", true, true)])
+          == "I want to check the pipeline status Then merge it when it is green")
+    check("dictation: a one-word utterance before a pause stays (#172)",
+          heard([("OK", false, false), ("OK", true, false), ("Check", false, false), ("Check the pipeline, please", true, true)]) == "OK Check the pipeline, please")
+    check("dictation: two pauses in one sentence keep all three parts, in order (#172)",
+          heard([("First, I paused", false, false), ("First, I paused", true, false), ("In the middle", false, false), ("In the middle of a sentence", true, false),
+                 ("And then", false, false), ("And then I kept talking", true, true)]) == "First, I paused In the middle of a sentence And then I kept talking")
+    check("dictation: over 60 s of speech, the utterance cut at 60 s stays (#172)",
+          heard([("Sentence one", false, false), ("Sentence one … sentence eleven is about", true, false), ("That are waiting", false, false),
+                 ("That are waiting on review. Sentence eighteen.", true, true)]) == "Sentence one … sentence eleven is about That are waiting on review. Sentence eighteen.")
+    check("dictation: Apple's servers send one growing utterance, ended by the final result: kept once",
+          heard([("OK", false, false), ("OK, check the pipeline", false, false), ("OK, check the pipeline", true, true)]) == "OK, check the pipeline")
+    check("dictation: a spoken repeat stays; an empty or blank final keeps what was heard",
+          heard([("Yes", false, false), ("Yes.", true, false), ("Yes", false, false), ("Yes.", true, true)]) == "Yes. Yes."
+          && heard([("Hello there", false, false), ("", false, true)]) == "Hello there" && heard([("Hello", false, false), (" ", true, false)]) == "Hello")
     check("dictation: nothing heard is empty", heard([("", false, false), (" ", false, true)]).isEmpty)
 }
