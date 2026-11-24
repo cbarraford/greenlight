@@ -999,14 +999,15 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && hostBadgeName("devbox", defaultHost: "devbox") == "devbox")
 
     let mergedSnap = mergeSnapshots(
-        ["ts": 10, "scanned": 10, "pucks": [["name": "srv-1", "path": "/srv/1", "nativeHost": true]], "trees": []],
+        ["ts": 10, "scanned": 10, "pucks": [["name": "srv-1", "path": "/srv/1", "nativeHost": true]], "trees": [["path": "/mac/1", "nativeHost": false], ["path": "/srv/tree", "nativeHost": true]]],
         ["ts": 12, "scanned": 12, "pucks": [
             ["name": "srv-1", "path": "/srv/1", "nativeHost": false],
             ["name": "mac-1", "path": "/mac/1", "nativeHost": true],
-        ], "trees": []],
+        ], "trees": [["path": "/srv/1", "nativeHost": false]]],
         primaryHost: "devbox", secondaryHost: "local"
     )
     let mergedPucks = (mergedSnap?["pucks"] as? [[String: Any]]) ?? []
+    let mergedSnapTrees = (mergedSnap?["trees"] as? [[String: Any]]) ?? []
     let mergedTrees = mergeTreesPayload(
         ["trees": [["path": "/srv/a", "project": "greenlight", "nativeHost": true]], "panes": ["mc-srv": ["state": "done"]],
          "repoHosts": ["greenlight": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""]]],
@@ -1022,6 +1023,12 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         "ios-app": ["mode": "server", "target": "server", "needs_mac": false, "reason": ""],
         "acme/ios-app": ["mode": "mac", "target": "mac", "needs_mac": true, "reason": "Xcode project"],
     ]))
+    let preservedAutoMap = mergeRepoHostMaps([:], parseRepoHosts([
+        "mac-app": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""],
+        "acme/mac-app": ["mode": "server", "target": "server", "needs_mac": true, "reason": "macOS/iOS app"],
+    ]))
+    let downgradedMap = setRepoHostInMap(foldedMap, repo: "ios-app",
+                                         info: RepoHostInfo(mode: "server", target: "server", needsMac: false, reason: ""))
     let savedOnlyHost = resolveProjectHost(
         only: ["pempty"],
         projList: [["id": "pempty", "name": "Empty", "repos": [String](), "paths": [String]()]],
@@ -1030,6 +1037,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     )
     check("project host: nativeHost wins on paired Orca dedupe, org/repo fold is deterministic, and savedProjects resolves empty-tree projects",
           mergedPucks.count == 2
+          && mergedSnapTrees.count == 1 && mergedSnapTrees[0]["path"] as? String == "/srv/tree"
           && mergedPucks.first { $0["name"] as? String == "mac-1" }?["_runHost"] as? String == "local"
           && mergedPucks.first { $0["name"] as? String == "srv-1" }?["_runHost"] as? String == "devbox"
           && mergedTreeList.count == 2
@@ -1037,6 +1045,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && mergedPanes["mc-srv"] != nil && mergedPanes["mc-mac"] != nil
           && combinedHost?.mode == "auto" && combinedHost?.target == "mac" && combinedHost?.needsMac == true
           && foldedMap["ios-app"]?.target == "mac"
+          && preservedAutoMap["mac-app"]?.mode == "auto" && preservedAutoMap["mac-app"]?.target == "mac" && preservedAutoMap["mac-app"]?.needsMac == true
+          && downgradedMap["ios-app"]?.target == "server" && downgradedMap["acme/ios-app"]?.target == "server" && downgradedMap["acme/ios-app"]?.needsMac == true
           && savedOnlyHost == "local")
 
     // Verify switchProject clears docked attachments, tracks clearing per host (slow old host never blocks new host),

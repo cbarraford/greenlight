@@ -792,6 +792,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var cachedWsHostByPath: [String: String] = (ud.dictionary(forKey: "wsHostByPathCache") as? [String: String]) ?? [:]
     var wsHostByName = [String: String](), wsHostByPath = [String: String]()  // rebuilt from merged trees + snapshots
     var localScanned = false
+    var initialServerTreesDone = false, initialLocalTreesDone = isLocalHost(host)
 
     var anyMacNeeded: Bool {
         !isLocalHost(host) && (repoHosts.values.contains { $0.target == "mac" }
@@ -799,14 +800,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     private func rebuildWorkspaceHostIndex() {
-        var byPath = cachedWsHostByPath
-        if !treeHostByPath.isEmpty || !snapHostByPath.isEmpty {
-            byPath = treeHostByPath.merging(snapHostByPath) { _, s in s }
+        let fresh = snapHostByPath.merging(treeHostByPath) { _, t in t }  // native trees win over snapshots
+        let startupPending = !initialServerTreesDone || !initialLocalTreesDone
+        let byPath = startupPending ? cachedWsHostByPath.merging(fresh) { _, f in f } : fresh
+        wsHostByPath = byPath
+        wsHostByName = snapHostByName.merging(treeHostByName) { _, t in t }
+        if byPath != cachedWsHostByPath {
             cachedWsHostByPath = byPath
             ud.set(byPath, forKey: "wsHostByPathCache")
         }
-        wsHostByPath = byPath
-        wsHostByName = treeHostByName.merging(snapHostByName) { _, s in s }
     }
 
     func workspaceHost(name: String? = nil, path: String? = nil, fallback: String? = nil) -> String {
@@ -828,7 +830,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     func updateRepoHost(_ repo: String, _ info: RepoHostInfo, clearOnChange: Bool = true) {
-        repoHosts = mergeRepoHostMaps(repoHosts, [repo: info])
+        repoHosts = setRepoHostInMap(repoHosts, repo: repo, info: info)
         syncHostForActiveWindows(clearOnChange: clearOnChange)
         ensureLocalDashIfNeeded()
     }
@@ -837,13 +839,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         projList.isEmpty ? buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true) : projList
     }
 
+    private func canSyncSilently(_ c: Core) -> Bool {
+        !initialServerTreesDone || !initialLocalTreesDone || (c.run == nil && !c.msgs.contains { $0.role == .you })
+    }
+
     private func syncHostForActiveWindows(clearOnChange: Bool) {
         let list = effectiveProjList(), saved = savedProjects
         let mainTarget = resolveProjectHost(only: l1Only ?? sharedOnly, projList: list, savedProjects: saved, repoHosts: repoHosts)
         if clearOnChange && mainTarget != greenlight.chatHost {
             let label = projectChip(only: sharedOnly, projList: list, projectsLoaded: true).text
             greenlight.switchProject(to: mainTarget, label: label)
-        } else if !clearOnChange {
+        } else if !clearOnChange && canSyncSilently(greenlight) {
             greenlight.syncChatHost(mainTarget)
         }
         for l in l1s.values {
@@ -851,7 +857,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if clearOnChange && target != l.c.chatHost {
                 let label = projectChip(only: l.only, projList: list, projectsLoaded: true).text
                 l.c.switchProject(to: target, label: label)
-            } else if !clearOnChange {
+            } else if !clearOnChange && canSyncSilently(l.c) {
                 l.c.syncChatHost(target)
             }
         }
@@ -859,14 +865,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     private func indexSnapshotHosts(_ obj: [String: Any], fallbackHost: String) {
         var byName = [String: String](), byPath = [String: String]()
-        for p in obj["pucks"] as? [[String: Any]] ?? [] {
+        for p in obj["pucks"] as? [[String: Any]] ?? [] where p["nativeHost"] as? Bool != false {
             let h = (p["_runHost"] as? String) ?? fallbackHost
             if let n = p["name"] as? String, !n.isEmpty { byName[n] = h }
             if let path = p["path"] as? String, !path.isEmpty { byPath[path] = h }
         }
-        for t in obj["trees"] as? [[String: Any]] ?? [] {
+        for t in obj["trees"] as? [[String: Any]] ?? [] where t["nativeHost"] as? Bool != false {
             let h = (t["_runHost"] as? String) ?? fallbackHost
-            if let path = t["path"] as? String, !path.isEmpty { byPath[path] = h }
+            if let path = t["path"] as? String, !path.isEmpty, byPath[path] == nil { byPath[path] = h }
             if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty, byName[n] == nil { byName[n] = h }
         }
         snapHostByName = byName
@@ -1576,8 +1582,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             repoHosts = mergeRepoHostMaps(repoHosts, parseRepoHosts(rawHosts))
         }
         var byPath = [String: String](), byName = [String: String]()
-        for t in trees {
-            if let path = t["path"] as? String, !path.isEmpty, let h = t["_runHost"] as? String {
+        for t in trees where t["nativeHost"] as? Bool != false {
+            if let path = t["path"] as? String, !path.isEmpty {
+                let h = (t["_runHost"] as? String) ?? host
                 byPath[path] = h
                 if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty { byName[n] = h }
             }
@@ -1638,6 +1645,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas); w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
+        c.serverConnected = greenlight.serverConnected
         c.syncChatHost(resolveProjectHost(only: live(only) ?? only, projList: effectiveProjList(), savedProjects: savedProjects, repoHosts: repoHosts))
         ensureLocalDashIfNeeded()
         c.follow(greenlight)
@@ -2036,6 +2044,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
+            self.initialServerTreesDone = true
             if out.hasPrefix("{"), let d = out.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                JSONSerialization.isValidJSONObject(obj) {
@@ -2048,6 +2057,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             localTreesProc = ssh("\(pyCmd(on: "local"))/dash.py trees", on: "local", onLine: { localOut += $0 }, onExit: { [weak self] _ in
                 guard let self else { return }
                 self.localTreesProc = nil
+                self.initialLocalTreesDone = true
                 if localOut.hasPrefix("{"), let d = localOut.data(using: .utf8),
                    let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                    JSONSerialization.isValidJSONObject(obj) {
@@ -2400,6 +2410,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
             if case let t = l1Title(l.floor.project), l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
+            l.c.serverConnected = greenlight.serverConnected
             let wantConnected = isLocalHost(l.c.chatHost) ? true : greenlight.serverConnected
             if l.c.run == nil, l.c.connected != wantConnected { l.c.connected = wantConnected }
         }

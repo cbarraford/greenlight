@@ -1110,12 +1110,13 @@ final class Core: ObservableObject {
             if let u = st.open ?? r.open { browse(u) }  // the reply's own [open: URL], else one from a block before it
         }
         if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
-            let h = chatHost
+            let h = chatHost, epoch = chatEpoch
             clearingByHost[h, default: 0] += 1  // now, so nothing sent before the clear goes to the old conversation
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 let left = max(0, (self.clearingByHost[h] ?? 1) - 1)
                 self.clearingByHost[h] = left == 0 ? nil : left
+                guard self.chatEpoch == epoch else { return }
                 self.clear(keepQueue: true)
             }
         }

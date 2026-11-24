@@ -654,16 +654,23 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     pucks, blk = [], blocking.cached()
     ms = placement.machines()
     home = placement.expected(ms)  # where the agents belong: a workspace elsewhere is flagged `away` (#160)
-    main_paths = {w.get("repo"): w.get("path") for w, _ in live.values() if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
-    repo_targets: dict[str, str] = {}
+    main_paths: dict[str, str] = {}
+    for w, _ in live.values():
+        if w.get("isMainWorktree") and (p := w.get("path")) and (repo := w.get("repo")):
+            main_paths[repo] = p
+            main_paths.setdefault(repo.rsplit("/", 1)[-1], p)
+    repo_targets: dict[tuple[str, str], str] = {}
     for r in rows:
         w, ag = live[r["id"]]
         _normalize_row(r)
         card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r["name"])
         repo = r.get("project") or w.get("repo") or ""
-        if repo and repo not in repo_targets:
-            repo_targets[repo] = greenlight.resolve_repo_host(repo, path=main_paths.get(w.get("repo") or ""), check_mac=False)["target"]
-        repo_target = repo_targets.get(repo, "server")
+        w_repo = w.get("repo") or ""
+        mpath = main_paths.get(w_repo) or main_paths.get(repo) or main_paths.get(repo.rsplit("/", 1)[-1]) or ""
+        key = (repo, mpath)
+        if repo and key not in repo_targets:
+            repo_targets[key] = greenlight.resolve_repo_host(repo, path=mpath or None, check_mac=False)["target"]
+        repo_target = repo_targets.get(key, "server")
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=greenlight.canonical_agent(ag.get("agentType")) or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
