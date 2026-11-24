@@ -63,6 +63,15 @@ def test_load_tolerates_a_corrupt_file(home):
                                            "/w/f": {"harness": "pi", "session": 7}}))
     assert last_agent.load() == {"/w/c": {"harness": "pi", "used": 17}, "/w/f": {"harness": "pi", "used": 0}}
     assert last_agent.resume(last_agent.load()["/w/c"], [], created=NOW) == {}  # no crash on what's left
+    last_agent.FILE.write_text('{"/w/a": {"harness": "pi", "used": 1e999}, "/w/b": {"harness": "pi", "used": ' + str(NOW) + ', "session": "mc-a\\n"}}')
+    assert last_agent.load() == {"/w/b": {"harness": "pi", "used": NOW}}  # inf, and a session with a trailing newline
+    last_agent.note({"/w/c": ("pi", None, NOW)})  # and it heals: the next write keeps only good records
+    assert sorted(last_agent.load()) == ["/w/b", "/w/c"]
+
+
+def test_observe_survives_an_infinite_ade_time(home):
+    last_agent.observe([("/w/a", {"agentType": "codex", "updatedAt": float("inf")})], [], lambda t: False)
+    assert last_agent.load()["/w/a"]["used"] == 0
 
 
 def test_note_drops_worktrees_gone_a_day(home, tmp_path):
@@ -100,6 +109,20 @@ def test_observe_goes_by_last_use(home):
     assert strip(last_agent.load()) == {"/w/a": {"harness": "codex"}, "/w/b": {"harness": "claude", "session": "mc-b"},
                                         "/w/d": {"harness": "pi"}, "/w/e": {"harness": "claude", "session": "mc-e"}}
     assert last_agent.load()["/w/d"]["used"] >= NOW
+
+
+def test_a_live_claude_pane_beats_a_quit_ones_title(home):
+    # the Basement ADE lists every ✳ pane as Claude: a quit one, used last, comes back as the primary agent, with no session
+    quit_t = NOW + 600_000
+    agents = [("/w/a", {"agentType": "claude", "updatedAt": quit_t})]
+    panes = [{"session": "mc-live", "cwd": "/w/a", "title": "✳ Claude", "at": str(NOW // 1000), "cmd": "claude"},
+             {"session": "mc-quit", "cwd": "/w/a", "title": "✳ Claude", "at": str(quit_t // 1000), "cmd": "zsh"}]
+    last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
+    assert last_agent.load()["/w/a"]["session"] == "mc-live"
+    assert last_agent.resume(last_agent.load()["/w/a"], panes) == {"harness": "claude", "session": "mc-live"}
+    last_agent.FILE.write_text(json.dumps({"/w/a": {"harness": "claude", "used": quit_t}}))  # already stored that way
+    last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
+    assert last_agent.load()["/w/a"]["session"] == "mc-live"
 
 
 def test_owner_is_the_longest_containing_worktree():

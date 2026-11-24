@@ -33,7 +33,7 @@ ALIASES = {"antigravity": "agy", "claude-code": "claude", "claude code": "claude
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 CMDS = {"claude": {"claude", "node"}, "codex": {"codex", "node"}, "opencode": {"opencode", "node", "bun"}, "gemini": {"gemini", "node"},
         "pi": {"pi", "node"}, "agy": {"agy", "antigravity"}}
-SESSION_RE = re.compile(r"^mc-[\w-]{1,64}$")  # the app's own sessions (sid(), launch); App.swift's open and resumeOf check the same
+SESSION_RE = re.compile(r"mc-[\w-]{1,64}")  # fullmatch  # the app's own sessions (sid(), launch); App.swift's open and resumeOf check the same
 STALE_MS = 86400_000  # a record whose worktree has been gone this long is dropped
 REFRESH_MS = 60_000  # the same agent seen again: written at most once a minute
 
@@ -51,10 +51,10 @@ def _record(v):
         return None
     try:
         used = int(v.get("used") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: JSON's 1e999 is inf
         return None
     s = v.get("session")
-    return {"harness": harness_of(v["harness"]), **({"session": s} if isinstance(s, str) and SESSION_RE.match(s) else {}), "used": used}
+    return {"harness": harness_of(v["harness"]), **({"session": s} if isinstance(s, str) and SESSION_RE.fullmatch(s) else {}), "used": used}
 
 
 def load():
@@ -77,8 +77,9 @@ def _lock():
 
 
 def _newer(old, rec):
-    """Whether a sighting replaces what's stored: a newer one, and for the same agent only once it's a minute newer."""
-    if not old:
+    """Whether a sighting replaces what's stored: a newer one, and for the same agent only once it's a minute newer; a live
+    session of the stored harness always (attaching to it beats starting a second copy beside it)."""
+    if not old or (rec.get("session") and not old.get("session") and rec["harness"] == old["harness"]):
         return True
     same = (old["harness"], old.get("session")) == (rec["harness"], rec.get("session"))
     return rec["used"] >= old["used"] + REFRESH_MS if same else rec["used"] > old["used"] or not old["used"]
@@ -123,7 +124,7 @@ def _used(ag, now):
     """When the ADE last saw this agent at work (ms); a live one with no time (herdr) counts as now, else unknown (0)."""
     try:
         t = int(ag.get("updatedAt") or ag.get("stateStartedAt") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         t = 0
     return t or (now if ag.get("state") in ("working", "waiting") else 0)
 
@@ -131,17 +132,21 @@ def _used(ag, now):
 def observe(agents, panes, is_agent):
     """agents: [(worktree path, the ADE's primary agent dict)]; panes: ade_basement.panes(cmd=True) rows; is_agent(title): a
     Claude title (ade_basement.state). A Claude pane counts while claude runs in it (a quit one leaves its title behind); a
-    pane and the ADE's own listing go by which was used last, the pane on a tie (it can be attached)."""
+    pane and the ADE's own listing go by which was used last, the pane on a tie, and a live Claude pane always beats the ADE's
+    session-less Claude (in the Basement ADE that's any ✳ title, a quit one's too)."""
     now, seen = int(time.time() * 1000), {}
     for path, ag in agents:
         if h := harness_of((ag or {}).get("agentType") or (ag or {}).get("type")):
             seen[path] = (h, None, _used(ag, now))
-    paths = [p for p, _ in agents]
-    for p in panes:
+    paths, live = [p for p, _ in agents], dict[str, tuple]()
+    for p in panes:  # the newest pane still running Claude, per worktree
         w = is_agent(p.get("title") or "") and cmd(p) in CMDS["claude"] and owner(p.get("cwd") or "", paths)
         at = int(p["at"]) * 1000 if str(p.get("at") or "").isdigit() else now
-        if w and at >= (seen.get(w) or ("", None, -1))[2]:
-            seen[w] = ("claude", p.get("session"), at)
+        if w and at >= live.get(w, ("", None, -1))[2]:
+            live[w] = ("claude", p.get("session"), at)
+    for w, pane in live.items():  # it beats an older agent, and any Claude the ADE lists without a session (a quit pane's title)
+        if w not in seen or pane[2] >= seen[w][2] or seen[w][0] == "claude":
+            seen[w] = pane
     note(seen)
 
 

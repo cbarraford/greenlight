@@ -754,7 +754,7 @@ def trees():
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
 
 
-BIN_RE = re.compile(r"^/[\w./@+-]{1,300}$")  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
+BIN_RE = re.compile(r"/[\w./@+-]{1,300}")  # fullmatch  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
 
 
 def harness_bin(h):
@@ -762,7 +762,7 @@ def harness_bin(h):
     hs = greenlight.CONFIG.get("harnesses")
     c = hs.get(h) if isinstance(hs, dict) else None
     b = c.get("bin") if isinstance(c, dict) else None  # a malformed config.json must not take the snapshot down
-    return b if isinstance(b, str) and BIN_RE.match(b) and ".." not in b else None
+    return b if isinstance(b, str) and BIN_RE.fullmatch(b) and ".." not in b else None
 
 
 def add_resume(pucks, agents):
