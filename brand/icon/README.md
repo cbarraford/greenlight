@@ -26,6 +26,9 @@ translucent, and they never show the light through them.
   1024), renders 16–512 @1x/@2x, and writes `brand/icons/Greenlight.icns` and `brand/icons/GreenlightDebug.icns` (the same
   icon with a neutral-grey light `#BABFBB`). Commit both. `app/build.sh` copies them into the bundle. Its
   `CFBundleIconFile` is `Greenlight`, or `GreenlightDebug` for a dev copy (`GREENLIGHT_DEV`).
+- **The mark in the app:** `app/build.sh` copies `mark.svg` and `mark-idle.svg` into Resources as
+  `GreenlightMark.svg` and `GreenlightMarkIdle.svg`. `NSImage` loads them as SVG, and its `fill-opacity` holds as a
+  template image.
 - **`.icon` (macOS 26+):** build `brand/icon/Greenlight.icon` in Icon Composer from `layers/` with the settings below.
   Whether `actool` can compile it from the command line on the mini is still open (DESIGN.md §8.5 step 4). Until then
   the bundle ships the `.icns`.
