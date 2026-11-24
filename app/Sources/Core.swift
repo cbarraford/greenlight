@@ -225,7 +225,7 @@ final class Core: ObservableObject {
     @Published var levels = [Float](repeating: 0, count: 28)  // recent mic levels 0...1, newest last
     @Published var settingsOpen = false
     @Published var settingsTab = "General"
-    @Published var settingsDark = ud.bool(forKey: "settingsDark") { didSet { ud.set(settingsDark, forKey: "settingsDark") } }  // Settings' own light or dark; the rest of the app keeps its themes
+    // (Settings' own light/dark toggle is gone: appearance is one setting for every window, §2.2.)  // Settings' own light or dark; the rest of the app keeps its themes
     @Published var settingsRepo = ""  // the hover card's "Edit <repo>'s prompt…": Repositories opens on it
     @Published var orbsHidden = ud.bool(forKey: "orbsHidden") { didSet { ud.set(orbsHidden, forKey: "orbsHidden") } }
     @Published var termOpens = ud.string(forKey: "termOpens") ?? "pipe" { didSet { ud.set(termOpens, forKey: "termOpens") } }  // the app opens to: greenlight | basement | pipe (New windows: the Pipe)
@@ -255,7 +255,7 @@ final class Core: ObservableObject {
         try? p.run(); NSApp.terminate(nil)
     }
     @Published var sidebarSlide = ud.object(forKey: "sidebarSlide") as? Double ?? 0.25 { didSet { ud.set(sidebarSlide, forKey: "sidebarSlide") } }  // seconds; 0: no slide
-    @Published var orbStyle = ud.string(forKey: "orbStyle") ?? "matte" { didSet { ud.set(orbStyle, forKey: "orbStyle") } }  // the up face: "matte" or "light" (the traffic light)
+    // (The orb's up-face choice, Matte or Traffic light, is retired with those faces: §8.4.)
     @Published var dockIcon = ud.string(forKey: "dockIcon") ?? "Orb" { didSet { ud.set(dockIcon, forKey: "dockIcon"); showDockIcon() } }  // Orb (the bundle's), MergeLight, ThreeFloors: brand/icons/*.icns
     func showDockIcon() { NSApp.applicationIconImage = dockIcon == "Orb" ? nil : Bundle.main.image(forResource: dockIcon) }  // ponytail: the running app's Dock tile only; Finder keeps the bundle's Orb
     @Published var vim = ud.bool(forKey: "vim") { didSet { ud.set(vim, forKey: "vim"); vimKeys.mode = vimStart } }
@@ -271,7 +271,7 @@ final class Core: ObservableObject {
 
     func restyle(_ change: () -> Void) {
         change()
-        ud.set(darkTheme.name, forKey: "darkTheme"); ud.set(lightTheme.name, forKey: "lightTheme"); ud.set(accentHex, forKey: "accent")
+        ud.set(darkTheme.name, forKey: "darkTheme"); ud.set(lightTheme.name, forKey: "lightTheme"); ud.set(accentName, forKey: "accentName")
         ud.set(chatFont, forKey: "chatFont"); ud.set(codeFont, forKey: "codeFont"); ud.set(fontSize, forKey: "fontSize")
         look += 1
     }
