@@ -123,6 +123,8 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: JSON null and falsy chart don't break cards or chart routing; numeric rest fields keep their keys (#153 review 4)",
           !isStageChart(["chart": NSNull()]) && !isStageChart(["chart": ""]) && !isStageChart(["chart": false]) && isStageChart(["chart": "bar"])
           && stageCard("{\"chart\":null,\"title\":\"Status\",\"items\":[\"All green\"]}")?["title"] as? String == "Status"
+          && labels("{\"chart\":false,\"title\":\"Status\",\"items\":[\"All green\"]}") == ["All green"]
+          && stageCard("{\"title\":\"Deploys\",\"chart\":{\"type\":\"bar\",\"values\":[1,2]}}") == nil
           && stageCard("{\"title\":\"x\",\"items\":[\"a\"],\"note\":null}")?["title"] as? String == "x"
           && labels("{\"title\":\"Status\",\"items\":null,\"notes\":[\"Merge !12\"]}") == ["Merge !12"]
           && stageCard("{\"title\":null,\"heading\":\"Status\",\"items\":[\"a\"]}")?["title"] as? String == "Status"
@@ -133,6 +135,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && stageCard("{\"title\":\"Plan\",\"kind\":\"list\",\"steps\":[\"Rebase\",\"Merge\"]}")?["kind"] as? String == "list"
           && labels("{\"title\":\"Plan\",\"kind\":\"steps\",\"items\":[{\"label\":\"1. Rebase\",\"detail\":\"main\"}]}") == ["Rebase=main"]
           && stageHTML("html\n<div>hi</div>") == "<div>hi</div>" && stageHTML("-svg\n<svg/>") == "<svg/>"
+          && stageHTML("svg\n<?xml version=\"1.0\"?><svg/>") == "<?xml version=\"1.0\"?><svg/>"
           && stageHTML("Note:\n<something>") == nil && stageHTML("html\n< 50ms") == nil)
     check("voice: broken JSON unescapes in one pass (\\n vs \\\\n, \\uXXXX); fallback skips kind/tone/chart metadata and puts title first (#153 review 4)",
           (fallbackSpec("{\"path\": \"C:\\\\new\\\\test\", \"x\": [1")["title"] as? String) == "C:\\new\\test"

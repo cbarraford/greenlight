@@ -537,7 +537,7 @@ func stageJSON(_ s: String) -> String? {
 func stageHTML(_ s: String) -> String? {
     let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
     if t.hasPrefix("<") { return t }
-    return t.range(of: #"^(?i)[_.:-]?(?:html|svg)\s+(?=<[A-Za-z!])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
+    return t.range(of: #"^(?i)[_.:-]?(?:html|svg)\s+(?=<[A-Za-z!?])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
 }
 
 /// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
@@ -618,9 +618,11 @@ func stageCard(_ s: String) -> [String: Any]? {
     let o = (any as? [String: Any]) ?? (any as? [Any]).map { ["items": $0] } ?? [:]
     guard !isStageChart(o) else { return nil }
     if templateDraws(o) { return cardClean(o) as? [String: Any] }
-    let head = ["title", "heading", "kind", "eyebrow", "stat", "tone", "chart"]
+    let head = ["title", "heading", "kind", "eyebrow", "stat", "tone"]
     let listKey = ["items", "steps", "notes", "list", "lines"].first { o[$0] != nil && !(o[$0] is NSNull) }
-    let rest = o.keys.filter { !head.contains($0) && $0 != listKey && !(o[$0] is NSNull) }.sorted()
+    let noChart = { (k: String) in k == "chart" && ((o[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+        || (o[k] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && !$0.boolValue } == true) }
+    let rest = o.keys.filter { !head.contains($0) && $0 != listKey && !(o[$0] is NSNull) && !noChart($0) }.sorted()
     let list: [Any]? = listKey.map { o[$0] as? [Any] } ?? []  // nil: a list given as text or an object
     guard rest.allSatisfy({ o[$0] is String || o[$0] is NSNumber }), let raw = list else { return nil }
     let numbered = !raw.isEmpty && raw.allSatisfy { ($0 as? String)?.range(of: #"^\s*\d+[.)]\s"#, options: .regularExpression) != nil }
