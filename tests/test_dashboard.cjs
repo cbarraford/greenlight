@@ -437,6 +437,22 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.equal(await page.textContent(".toast .tmsg span"), "Ran git pull");
 });
 
+test("footer: a scan that died says why (and the fix in its tooltip) until a newer scan lands; not while a rescan runs", async page => {
+  const now = Math.floor(Date.now() / 1000), snap = {...JSON.parse(JSON.stringify(SNAP)), ts: now, scanned: now - 7200};
+  await page.evaluate(s => window.mc.update(s), snap);
+  assert.equal(await page.$("#foot .scanerr"), null, "no failure, no line");
+  const se = {msg: "GitLab login expired", fix: "glab auth login --hostname gitlab.com", class: "auth", ts: now - 60};
+  await page.evaluate(s => window.mc.update(s), {...snap, scan_error: se});
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired");
+  assert.match(await page.getAttribute("#foot .scanerr", "title"), /Fix: run glab auth login --hostname gitlab\.com, then ↻/);
+  await page.click("#foot .rescan");
+  assert.equal(await page.$("#foot .scanerr"), null, "a rescan in flight: the old failure isn't this one's");
+  await page.evaluate(() => window.mc.rescanned(1));
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired", "it failed again: the line is back");
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now});
+  assert.equal(await page.$("#foot .scanerr"), null, "a good scan: the line goes");
+});
+
 test("card actions: the hex leaves on the click, comes back when its state moves or a later scan still has it; a failure restores it", async page => {
   const snap = JSON.parse(JSON.stringify(SNAP)), now = () => Math.floor(Date.now() / 1000);
   Object.assign(snap.pucks[0], {agent: {...snap.pucks[0].agent, state: "idle"}, sig: "a1",

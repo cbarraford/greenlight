@@ -235,6 +235,14 @@ with mock.patch.object(dash, "live_agents", return_value={
     _sn = dash.snapshot()
     _pk = {p["name"]: p for p in _sn["pucks"]}
 assert _sn["scan_started"] == 1700000000, "the scan's wall-clock start reaches the page (a card action settles on a scan begun after it)"
+# greenlight.py's note on a scan that died reaches the footer, until a scan newer than it lands
+assert "scan_error" not in _sn
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 5, "msg": "GitLab login expired", "fix": "glab auth login", "class": "auth", "tool": "glab"}))
+assert dash.scan_error(1) == {"msg": "GitLab login expired", "fix": "glab auth login", "class": "auth", "ts": 5}
+assert dash.scan_error(5) is None and dash.scan_error(9) is None, "a scan that finished after the failure: the footer stops saying it"
+(dash.greenlight.STATE / "scan_error.json").write_text("{not json")
+assert dash.scan_error(1) is None
+(dash.greenlight.STATE / "scan_error.json").unlink()
 assert (_pk["ws-gh"]["repo"], _pk["openai-live-voice"]["repo"]) == ("greenlight", "greenlight")
 assert (_pk["openai-live-voice"]["state"], _pk["openai-live-voice"]["agent"]["state"], _pk["openai-live-voice"]["agent"]["type"]) == ("working", "working", "claude")
 # A finished review session may update after the parent session. Both PR workspaces must still reach the Agent view.

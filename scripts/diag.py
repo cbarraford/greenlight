@@ -51,7 +51,7 @@ KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "na
         "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
-    ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey"),
+    ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey|invalid_grant|\boauth"),
     ("permission", r"permission denied|EACCES|operation not permitted|read-only file system"),
     ("timeout", r"timed? ?out|timeout|deadline"),
     ("network", r"could not resolve|name or service not known|connection (?:reset|refused|closed)|network|unreachable|"

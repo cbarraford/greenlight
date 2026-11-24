@@ -2026,6 +2026,36 @@ def note(name, text):
         fh.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
+SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca"}
+SCAN_WHY = {"auth": "login expired", "rate_limit": "rate limited", "timeout": "timed out", "network": "unreachable",
+            "transient": "server error", "permission": "permission denied"}
+SCAN_FIX = {"glab": "glab auth login --hostname gitlab.com", "gh": "gh auth login"}
+
+
+def scan_failed(e):
+    """Why the last scan died, for the dashboard footer (scan_error.json); a scan that finishes removes it.
+    Only the tool, the error's class and the fix go in it: the message has argv (project paths)."""
+    f = STATE / "scan_error.json"
+    if e is None:
+        f.unlink(missing_ok=True)
+        return
+    text = str(e) if not isinstance(e, subprocess.TimeoutExpired) else "timed out"
+    tool = str(e.cmd[0] if isinstance(e, subprocess.TimeoutExpired) else text.split(" ", 1)[0]).rsplit("/", 1)[-1]
+    tool = tool if tool in SCAN_TOOLS else ""
+    cls = diag.classify(text)
+    why = SCAN_WHY.get(cls, "failed")
+    out = {"ts": int(time.time()), "class": cls, "tool": tool,
+           "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else f"scan {why}" if why != "failed" else "scan crashed",
+           "fix": SCAN_FIX.get(tool, "") if cls == "auth" else ""}
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(out))
+        os.replace(tmp, f)
+    except OSError:
+        pass  # the traceback still reaches stderr
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     if cmd == "note":  # greenlight.py note <workspace> "<what happened>"
@@ -2065,7 +2095,12 @@ def main():
         print(f.read_text() if f.exists() else "(no history)")
         return
     with diag.span("scan", op=cmd) as d:
-        res = scan(save=cmd != "precheck")
+        try:
+            res = scan(save=cmd != "precheck")
+        except Exception as e:
+            scan_failed(e)
+            raise
+        scan_failed(None)
         d["rows"] = len(res["rows"])
         for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
             d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None

@@ -728,7 +728,19 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                      **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})}
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
-    return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees}
+    return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees,
+            **({"scan_error": err} if (err := scan_error(snap["ts"])) else {})}
+
+
+def scan_error(scanned):
+    """greenlight.py's note on why its last scan died (the footer says it), when that's newer than the snapshot we have."""
+    try:
+        e = json.loads((greenlight.STATE / "scan_error.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(e, dict) or not isinstance(e.get("ts"), int) or e["ts"] <= (scanned or 0):
+        return None
+    return {k: str(e.get(k) or "") for k in ("msg", "fix", "class")} | {"ts": e["ts"]}
 
 
 ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in

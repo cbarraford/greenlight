@@ -234,6 +234,23 @@ saved = json.loads(snapshot)
 assert code == 1 and saved["rows"][0] == row("ws-a", "ci") | {"_scan_id": saved["scan_id"]}
 assert precheck("agent") == (0, "old")
 assert precheck("ci", adoptions=2) == (0, "old")  # MRs with no workspace wake the automation too
+# a scan that dies says why in scan_error.json (the dashboard footer shows it): tool, class and fix only, never the argv; a good scan clears it
+def scan_dies(exc):
+    with mock.patch.object(greenlight, "scan", side_effect=exc), mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "scan"]):
+        try:
+            greenlight.main()
+        except type(exc):
+            pass
+    return json.loads((greenlight.STATE / "scan_error.json").read_text())
+e = scan_dies(RuntimeError('glab api projects/acme%2Fsecret/merge_requests?state=opened: ERROR\n  Oauth2: "invalid_grant" "The provided authorization grant is invalid, expired"'))
+assert (e["msg"], e["class"], e["fix"]) == ("GitLab login expired", "auth", "glab auth login --hostname gitlab.com") and "secret" not in json.dumps(e)
+assert scan_dies(RuntimeError("gh api x: HTTP 429 Too Many Requests"))["msg"] == "GitHub rate limited"
+e = scan_dies(subprocess.TimeoutExpired(["glab", "api", "x"], 45))
+assert (e["msg"], e["fix"]) == ("GitLab timed out", "")
+assert scan_dies(KeyError("rows"))["msg"] == "scan crashed"
+with mock.patch.object(greenlight, "scan", return_value={"rows": []}), mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "scan"]):
+    greenlight.main()
+assert not (greenlight.STATE / "scan_error.json").exists()
 newer = {"scan_id": "newer", "scan_started_ns": 20, "rows": [row("snapshot", "ci")]}
 assert greenlight.keep(newer) is True
 old_revision = greenlight.backfill_revision()
