@@ -654,10 +654,13 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     pucks, blk = [], blocking.cached()
     ms = placement.machines()
     home = placement.expected(ms)  # where the agents belong: a workspace elsewhere is flagged `away` (#160)
+    main_paths = {w.get("repo"): w.get("path") for w, _ in live.values() if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
     for r in rows:
         w, ag = live[r["id"]]
         _normalize_row(r)
         card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r["name"])
+        repo = w.get("repo") or r.get("project") or ""
+        repo_target = greenlight.resolve_repo_host(repo, path=main_paths.get(w.get("repo") or ""))["target"] if repo else "server"
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=greenlight.canonical_agent(ag.get("agentType")) or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
@@ -683,7 +686,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                                                      "source_branch", "target_branch", "labels", "milestone", "approved_by",
                                                      "pipeline_url", "threads_total")},
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
-            "host": (h := placement.host_of(w, ms)), "away": not greenlight.same_host(h, home),
+            "host": placement.host_of(w, ms), "away": placement.is_misplaced(w, ms, home, repo_target=repo_target),
             "steward": bool(card.get("steward")),
             **({"steward_drift": card["steward_drift"]} if card.get("steward_drift") else {}),
             "activity": ws_state.activity_of(card, limit=25),
@@ -1907,8 +1910,93 @@ def _lifecycle_key(arg):
     return "__".join(parts)
 
 
+def _repo_main_paths(tree_rows=None):
+    """{repo_name: main_checkout_path} from live worktree rows (or Orca repo list when omitted)."""
+    paths: dict[str, str] = {}
+    if tree_rows is not None:
+        for w in tree_rows:
+            if w.get("main") and (repo := w.get("project")) and (p := w.get("path")):
+                paths.setdefault(repo, p)
+                paths.setdefault(repo.rsplit("/", 1)[-1], p)
+        return paths
+    try:
+        for r in greenlight.orca("repo", "list").get("repos") or []:
+            p = r.get("path") or ""
+            if not p:
+                continue
+            if name := r.get("displayName"):
+                paths.setdefault(name, p)
+            key = (r.get("gitRemoteIdentity") or {}).get("canonicalKey") or ""
+            _, _, slug = key.partition("/")
+            if slug:
+                paths.setdefault(slug, p)
+                paths.setdefault(slug.rsplit("/", 1)[-1], p)
+    except Exception:
+        pass
+    return paths
+
+
+def _find_repo_path(repo):
+    paths = _repo_main_paths()
+    return paths.get(repo) or paths.get(str(repo or "").rsplit("/", 1)[-1])
+
+
+def _bundled_lifecycle_opts(project):
+    parts = [p for p in str(project or "").strip("/").split("/") if p]
+    names = ([f"{'__'.join(parts)}.md"] if len(parts) > 1 else []) + ([f"{parts[-1]}.md"] if parts else [])
+    f = next((greenlight.ROOT / "lifecycles" / n for n in names if (greenlight.ROOT / "lifecycles" / n).exists()), None)
+    if not f:
+        return {}
+    m = re.search(r"^Options:(.*)$", f.read_text().partition("\n## Rules")[0], re.M)
+    return dict(re.findall(r"`(\w+)=?([^`]*)`", m[1])) if m else {}
+
+
+def repo_hosts(tree_rows=None):
+    """{repo: resolve_repo_host(...)} for every known repo and saved lifecycle."""
+    paths = _repo_main_paths(tree_rows)
+    names = set(paths)
+    for d in (greenlight.STATE / "lifecycles", greenlight.ROOT / "lifecycles"):
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.md")):
+            if f.name == "default.md":
+                continue
+            names.add(f.stem.replace("__", "/"))
+    return {n: greenlight.resolve_repo_host(n, path=paths.get(n) or paths.get(n.rsplit("/", 1)[-1]))
+            for n in sorted(names) if n}
+
+
+def _set_repo_host(arg, mode):
+    stem = _lifecycle_key(arg)
+    if not stem:
+        return {"error": "bad repo"}
+    if mode not in greenlight.HOST_MODES:
+        return {"error": f"bad host {mode!r}: expected server, mac, or auto"}
+    doc = greenlight.lifecycle_doc(arg)
+    opts = dict(doc.get("options") or {})
+    bundled_has_host = "host" in _bundled_lifecycle_opts(arg)
+    if mode == "server" and not bundled_has_host:
+        opts.pop("host", None)
+    else:
+        opts["host"] = mode
+    md = greenlight.lifecycle_md(arg, {**doc, "options": opts})
+    f = greenlight.STATE / "lifecycles" / f"{stem}.md"
+    _atomic_write(f, md)
+    updated = greenlight.lifecycle_doc(arg)
+    return {"repo": arg, **greenlight.resolve_repo_host(arg, path=_find_repo_path(arg), opts=updated["options"]),
+            "options": updated["options"], "source": updated["source"]}
+
+
 def settings(op, arg, stdin):
-    """The app's Settings: a repo's lifecycle, greenlight's standing instructions, and greenlight's memory notes."""
+    """The app's Settings: a repo's lifecycle, host preference, standing instructions, and memory notes."""
+    if op == "repo-hosts":
+        return {"hosts": repo_hosts()}
+    if op in ("host-get", "host-set"):
+        if not _lifecycle_key(arg):
+            return {"error": "bad repo"}
+        if op == "host-set":
+            return _set_repo_host(arg, stdin.strip().lower())
+        return {"repo": arg, **greenlight.resolve_repo_host(arg, path=_find_repo_path(arg))}
     if op.startswith("prompt-"):  # the hover card's prompts: arg <repo>/<kind>; yours in ~/.greenlight/prompts/<repo>/<kind>.md
         repo, _, kind = arg.partition("/")
         if kind not in KINDS or not re.fullmatch(r"[\w.-]{1,100}", repo) or repo.startswith("."):
@@ -1945,7 +2033,9 @@ def settings(op, arg, stdin):
             f.unlink(missing_ok=True)
         elif op != "lifecycle-get":
             return {"error": f"no op {op}"}
-        return {**greenlight.lifecycle_doc(arg), "builtins": greenlight.BUILTIN}
+        doc = greenlight.lifecycle_doc(arg)
+        return {**doc, "builtins": greenlight.BUILTIN,
+                "host_info": greenlight.resolve_repo_host(arg, path=_find_repo_path(arg), opts=doc["options"])}
     if op in ("instructions-get", "instructions-set"):
         f = greenlight.STATE / "instructions.md"
         if op == "instructions-set":
@@ -2093,7 +2183,8 @@ def main():
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
-        print(json.dumps({"trees": trees(), "panes": basement_panes(),
+        ts = trees()
+        print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
                           "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"]}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:

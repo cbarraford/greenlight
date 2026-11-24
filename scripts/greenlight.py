@@ -583,6 +583,100 @@ def repo_human_approval(opts):
     return bool(CONFIG["require_human_approval"]) and "no_human_approval" not in opts
 
 
+HOST_MODES = ("server", "mac", "auto")
+_MAC_SKIP_DIRS = frozenset({".git", "node_modules", "vendor", "target", ".build", "DerivedData", "Pods", ".venv", "__pycache__", "dist", "build"})
+_MAC_SWIFT_IMPORTS = re.compile(r"^\s*import\s+(?:AppKit|SwiftUI|UIKit|Cocoa|XCTest|XCUIApplication)\b", re.M)
+_MAC_BUILD_RE = re.compile(r"\b(?:xcodebuild|swiftc|xcrun\s+simctl)\b|\.app/Contents/MacOS\b")
+_MAC_PKG_RE = re.compile(r"\.(?:macOS|iOS|tvOS|watchOS|visionOS)\s*\(")
+
+
+def _read_head(path, limit=8192):
+    try:
+        with path.open("r", errors="ignore") as fh:
+            return fh.read(limit)
+    except OSError:
+        return ""
+
+
+def _scan_mac_tree(root):
+    """Walk up to 2 levels under `root` for Xcode / macOS GUI test markers."""
+    for dirpath, dirs, files in os.walk(root):
+        rel = Path(dirpath).relative_to(root)
+        depth = 0 if str(rel) == "." else len(rel.parts)
+        for d in dirs:
+            if d.endswith((".xcodeproj", ".xcworkspace")):
+                return "Xcode project"
+            if d.endswith("UITests"):
+                return "GUI tests"
+        for f in files:
+            if f.endswith(".xctestplan"):
+                return "Xcode test plan"
+            if f in ("Podfile", "project.yml", "Project.swift"):
+                return "Xcode project"
+            if (f.startswith("test_uitest") and f.endswith(".py")) or f in ("uitest.py", "vm_test.sh"):
+                return "GUI tests"
+        if depth >= 2:
+            dirs[:] = []
+        else:
+            dirs[:] = [d for d in dirs if d not in _MAC_SKIP_DIRS and not d.startswith(".")]
+    return None
+
+
+def _scan_mac_sources(root):
+    """Check Package.swift, app build scripts, and Apple UI Swift imports."""
+    pkg = root / "Package.swift"
+    if pkg.is_file() and _MAC_PKG_RE.search(_read_head(pkg)):
+        return "Apple Swift package"
+    for rel in ("app/build.sh", "Makefile"):
+        if (p := root / rel).is_file() and _MAC_BUILD_RE.search(_read_head(p)):
+            return "macOS app build"
+    checked = 0
+    for sub in ("app/Sources", "Sources", "macos", "macOS", "ios", "iOS", "."):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for sf in sorted(d.glob("*.swift")):
+            if _MAC_SWIFT_IMPORTS.search(_read_head(sf, 4096)):
+                return "macOS/iOS app"
+            checked += 1
+            if checked >= 12:
+                return None
+    return None
+
+
+def needs_mac_reason(path):
+    """Why a repo checkout needs the Mac (Xcode, macOS/iOS app, GUI tests), or None when it runs fine on Linux."""
+    if not path:
+        return None
+    try:
+        root = Path(path)
+        if not root.is_dir():
+            return None
+        return _scan_mac_tree(root) or _scan_mac_sources(root)
+    except OSError:
+        return None
+
+
+def needs_mac(path):
+    """True when the checkout at `path` shows Xcode, local Mac/iOS app, or macOS GUI test markers."""
+    return bool(needs_mac_reason(path))
+
+
+def repo_host_mode(project, opts=None):
+    """Per-repo host preference (`server` default, `mac`, or `auto`) from its lifecycle `Options:` line."""
+    val = opt_val(lifecycle_opts(project) if opts is None else opts, "host").strip().lower()
+    return val if val in HOST_MODES else "server"
+
+
+def resolve_repo_host(project, path=None, opts=None):
+    """Resolved host preference for `project`: {mode, target ('server'|'mac'), needs_mac, reason}."""
+    mode = repo_host_mode(project, opts)
+    reason = needs_mac_reason(path) if path else None
+    mac = bool(reason)
+    target = "mac" if (mode == "mac" or (mode == "auto" and mac)) else "server"
+    return {"mode": mode, "target": target, "needs_mac": mac, "reason": reason or ""}
+
+
 def signoffs():
     f = STATE / "signoffs.json"
     try:

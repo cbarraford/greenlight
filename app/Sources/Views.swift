@@ -803,7 +803,7 @@ struct SettingsView: View {
     static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions system one jev haiku typesafe decisions"),
                      ("Autonomy", "wand", "confidence auto answer preselect likely calibration graduate ping gate check-in watch dismiss undo"),
                      ("Projects", "folder", "folders default folder new terminals open"),
-                     ("Repositories", "branch", "repo lifecycle stages rules prompts auto-run project solo merge"),
+                     ("Repositories", "branch", "repo lifecycle stages rules prompts auto-run project solo merge host mac server auto"),
                      ("Instructions", "file-text", "standing rules"),
                      ("Memory", "bookmark", "notes learned")]
     static let wide: Set = ["Projects", "Repositories", "Memory"]
@@ -1641,7 +1641,8 @@ struct SettingsView: View {
               add: ("Add repository", { rs.adding = true; rs.draftRepo = ""; rs.draftProj = rs.projs.first.map(pid) ?? ""; rs.projNote = "" })) {
             ForEach(allRepos, id: \.self) { r in
                 let on = !rs.adding && rs.repo == r
-                listItem(r, projectOf(r).map(pname) ?? "No project", on: on, mono: true, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
+                let hostTag = lookupRepoHost(r, in: rs.repoHosts)?.target == "mac" ? " · Mac" : ""
+                listItem(r, (projectOf(r).map(pname) ?? "No project") + hostTag, on: on, mono: true, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
             }
             if allRepos.isEmpty { note(rs.busy ? "Loading…" : "No repositories yet.").padding(DS.Space.s12) }
         } detail: {
@@ -1698,6 +1699,15 @@ struct SettingsView: View {
             Button("Remove", role: .destructive) { setProject(rs.repo, "") }.disabled(proj == nil).help("Take it out of its project")
         }
         if !rs.projNote.isEmpty { note(rs.projNote) }
+        box("Host") {
+            row("Run Chief and agents on", repoHostHelp) {
+                Picker("Host", selection: Binding(get: { rs.repoHostMode }, set: { rs.setHost($0) })) {
+                    Text("Server").tag("server")
+                    Text("Mac").tag("mac")
+                    Text("Auto").tag("auto")
+                }.labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+        }
         VStack(alignment: .leading, spacing: DS.Space.s8) {
             Picker("Repository settings", selection: $rs.rtab) {
                 Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
@@ -1715,6 +1725,19 @@ struct SettingsView: View {
             saveRow("Save", rs.save)
         case "prompts": prompts
         default: lifecycle
+        }
+    }
+
+    var repoHostHelp: String {
+        switch rs.repoHostMode {
+        case "mac": return "Runs Chief and agents on this Mac (for local apps, Xcode, GUI tests)."
+        case "auto":
+            if rs.repoNeedsMac {
+                return "Auto: runs on this Mac" + (rs.repoNeedsMacReason.isEmpty ? "." : " (\(rs.repoNeedsMacReason)).")
+            }
+            return "Auto: runs on \(hostLabel) (no Mac-only markers detected)."
+        default:
+            return isLocalHost(host) ? "Runs Chief and agents on this Mac (no remote server set in Hosts)." : "Runs Chief and agents on \(host) (default)."
         }
     }
 
@@ -2031,10 +2054,11 @@ struct ChatView: View, Looked {
 
     /// Host and tok/s at the right; Phosphor adds its [state].
     @ViewBuilder var meta: some View {
+        let h = hostBadgeName(c.chatHost)
         if mono {
-            Text("\(host)\(tps)").foregroundColor(dim).lineLimit(1)
+            Text("\(h)\(tps)").foregroundColor(dim).lineLimit(1)
             Text("[\(stateWord)]").fontWeight(busy ? .bold : .regular).foregroundColor(c.connected ? (busy ? fg : dim) : crashedInk)
-        } else { tag("\(host)\(tps)").foregroundColor(dim).lineLimit(1) }
+        } else { tag("\(h)\(tps)").foregroundColor(dim).lineLimit(1) }
     }
 
     /// The hairline between header, list and footer (§10.1: one side draws it); Phosphor dashes it.

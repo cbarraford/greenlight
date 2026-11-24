@@ -170,8 +170,9 @@ func expandBang(_ v: String, _ last: String) -> String {
 
 final class Run: ObservableObject {
     let question: String
+    let runHost: String
     let start = Date()
-    @Published var status = "Connecting to \(host)"
+    @Published var status: String
     @Published var steps: [Step] = []
     @Published var live = ""
     @Published var stopping = false
@@ -188,7 +189,7 @@ final class Run: ObservableObject {
     var refollows = 0  // times followed again since the connection dropped, without a new event since
     var applied = 0, seen = 0  // the turn's events handled so far, and those the current follow has sent: a refollow skips what's applied
     var resumed = false  // picked up at launch, not sent from this one
-    init(_ q: String) { question = q }
+    init(_ q: String, on h: String = host) { question = q; runHost = h; status = "Connecting to \(hostDisplayName(h))" }
 }
 
 /// The agent's task list as chat.py's plan event has it: eta is seconds left at `at`, from this turn's own pace (nil without one).

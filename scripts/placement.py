@@ -57,17 +57,28 @@ def host_of(w, ms):
     return ms.get(hid) or hid
 
 
+def is_misplaced(w, ms, expect, repo_target="server"):
+    """True when `w` is not on the machine its repo expects (`mac` repos belong off a Linux server; `server` repos belong on `expect`)."""
+    on_expect = greenlight.same_host(host_of(w, ms), expect)
+    if repo_target == "mac" and sys.platform != "darwin":
+        return on_expect
+    return not on_expect
+
+
 def rows(worktrees, ms, expect, every=False):
     """One row per workspace with an agent (every: or a goal), main checkouts and archived ones left out."""
+    main_paths = {w.get("repo"): w.get("path") for w in worktrees if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
     out = []
     for w in worktrees:
         if w.get("isMainWorktree") or w.get("isArchived") or not (w.get("agents") or every and w.get("comment")):
             continue
         host = host_of(w, ms)
         ag = greenlight.primary_agent(w.get("agents"))
+        repo = w.get("repo") or ""
+        target = greenlight.resolve_repo_host(repo, path=main_paths.get(repo))["target"] if repo else "server"
         out.append({"name": w.get("displayName") or w.get("path"), "id": w.get("worktreeId"), "host": host,
                     "agent": (ag or {}).get("state") or "none", "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
-                    "misplaced": not greenlight.same_host(host, expect)})
+                    "misplaced": is_misplaced(w, ms, expect, repo_target=target)})
     return sorted(out, key=lambda r: (not r["misplaced"], r["name"] or ""))
 
 

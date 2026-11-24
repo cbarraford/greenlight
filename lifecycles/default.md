@@ -21,6 +21,7 @@ A lifecycle can add an `Options:` line of backticked flags:
 - `human_approval=true|false` (or `no_human_approval`): overrides global `require_human_approval` for this repository. With `require_human_approval: true` and no per-repo override, a repo whose forge requires no approvals asks you to merge ("mergeable, nothing blocks it: merge it?") instead of waiting on reviewers; `human_approval=true` waits for another human's approval anyway.
 - `auto_rebase`: dispatch an agent to rebase when the forge reports `need_rebase` (no conflicts), instead of asking the user.
 - `milestone=<prefix>`: prefix for the active release milestone step (default `Release-`).
+- `host=server|mac|auto`: where Chief and agents run for this repository (default `server`; `mac` runs on your Mac for local apps, Xcode, or GUI tests; `auto` picks the Mac when those markers are present).
 
 A step that isn't one of the built-ins above is your own: ``N. `qa` — QA passed. Done: `label=qa-ok` `` passes once the MR has that label, ``Done: `check=e2e` `` passes once that CI check succeeds, and ``Done: `signoff` `` asks you once per MR (with optional ``Run: `cmd` `` to run a command first). Any custom step may also set ``Owner: `agent|me|reviewers|ci` `` and ``Phase: `define|build|verify|review|land` ``. Steps before `mr_open` run before an MR is opened (keyed per branch); steps after `merge` run once it lands (deploy, verify) and cleanup keeps the workspace until they're done. `mr_open` is the implement phase: the goal is being built until the MR exists.
 
