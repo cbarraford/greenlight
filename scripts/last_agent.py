@@ -29,9 +29,10 @@ FILE = HOME / "last_agent.json"
 HARNESSES = ("claude", "codex", "opencode", "gemini", "pi", "agy")  # harness.H's names (tests/test_last_agent.py checks)
 ALIASES = {"antigravity": "agy", "claude-code": "claude", "claude code": "claude", "gemini-cli": "gemini"}  # the ADEs' ids
 # what tmux names a pane running each (Linux: its process group's argv[0]; macOS: the file it runs, so the native Claude is its
-# version, e.g. 2.1.308, and cmd() calls that claude): the npm-installed ones run under node
+# version, e.g. 2.1.308, and cmd() calls that claude): the npm-installed ones run under node, but not Claude's: a quit Claude's
+# ✳ title outlives it, and node is anything (an npm Claude on a Mac is continued, not attached)
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
-CMDS = {"claude": {"claude", "node"}, "codex": {"codex", "node"}, "opencode": {"opencode", "node", "bun"}, "gemini": {"gemini", "node"},
+CMDS = {"claude": {"claude"}, "codex": {"codex", "node"}, "opencode": {"opencode", "node", "bun"}, "gemini": {"gemini", "node"},
         "pi": {"pi", "node"}, "agy": {"agy", "antigravity"}}
 SESSION_RE = re.compile(r"mc-[\w-]{1,64}")  # fullmatch  # the app's own sessions (sid(), launch); App.swift's open and resumeOf check the same
 STALE_MS = 86400_000  # a record whose worktree has been gone this long is dropped
@@ -57,10 +58,17 @@ def _record(v):
     return {"harness": harness_of(v["harness"]), **({"session": s} if isinstance(s, str) and SESSION_RE.fullmatch(s) else {}), "used": used}
 
 
-def load():
+def load(strict=False):
+    """The records; strict (note, before it rewrites the file): a read error other than a missing file raises, not {}."""
     try:
         d = json.loads(FILE.read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        if strict:
+            raise
+        return {}
+    except ValueError:  # corrupt: rewritten from what's seen next
         return {}
     return {k: r for k, v in d.items() if isinstance(k, str) and (r := _record(v))} if isinstance(d, dict) else {}
 
@@ -76,25 +84,27 @@ def _lock():
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def _newer(old, rec):
+def _newer(old, rec, panes):
     """Whether a sighting replaces what's stored: a newer one, and for the same agent only once it's a minute newer; a live
-    session of the stored harness always (attaching to it beats starting a second copy beside it)."""
-    if not old or (rec.get("session") and not old.get("session") and rec["harness"] == old["harness"]):
+    session of the stored harness also replaces one whose agent has quit (attaching beats a second copy beside it)."""
+    if not old or (rec.get("session") and rec["harness"] == old["harness"] and old.get("session") not in ("", None, rec["session"])
+                   and not runs(old, panes)):
         return True
     same = (old["harness"], old.get("session")) == (rec["harness"], rec.get("session"))
     return rec["used"] >= old["used"] + REFRESH_MS if same else rec["used"] > old["used"] or not old["used"]
 
 
-def note(seen):
-    """Record {path: (harness, session or None, used ms)}, where newer than what's stored. Writes only on a change; a write
-    also drops records of worktrees gone for a day."""
+def note(seen, panes=()):
+    """Record {path: (harness, session or None, used ms)}, where newer than what's stored (panes: ade_basement.panes(cmd=True),
+    to tell a stored session's agent has quit). Writes only on a change; a write also drops records of worktrees gone for a
+    day. A read error raises (OSError) rather than overwrite the file with only these."""
     recs = {p: r for p, (h, s, used) in seen.items() if isinstance(p, str) and p.startswith("/")
             and (r := _record({"harness": h, "session": s, "used": used}))}
     if not recs:
         return
     with _lock():
-        cur, now = load(), int(time.time() * 1000)
-        new = {p: r for p, r in recs.items() if _newer(cur.get(p), r)}
+        cur, now = load(strict=True), int(time.time() * 1000)
+        new = {p: r for p, r in recs.items() if _newer(cur.get(p), r, panes)}
         if not new:
             return
         cur = {k: v for k, v in {**cur, **new}.items() if k in new or now - v["used"] < STALE_MS or os.path.isdir(k)}
@@ -132,10 +142,12 @@ def _used(ag, now):
 def observe(agents, panes, is_agent):
     """agents: [(worktree path, the ADE's primary agent dict)]; panes: ade_basement.panes(cmd=True) rows; is_agent(title): a
     Claude title (ade_basement.state). A Claude pane counts while claude runs in it (a quit one leaves its title behind); a
-    pane and the ADE's own listing go by which was used last, the pane on a tie, and a live Claude pane always beats the ADE's
-    session-less Claude (in the Basement ADE that's any ✳ title, a quit one's too)."""
+    pane and the ADE's own listing go by which was used last, the pane on a tie. The Basement ADE's own agents (they carry a
+    `handle`) are these same panes by title alone, a quit one's too, so the panes speak for them."""
     now, seen = int(time.time() * 1000), {}
     for path, ag in agents:
+        if (ag or {}).get("handle"):
+            continue
         if h := harness_of((ag or {}).get("agentType") or (ag or {}).get("type")):
             seen[path] = (h, None, _used(ag, now))
     paths, live = [p for p, _ in agents], dict[str, tuple]()
@@ -144,10 +156,10 @@ def observe(agents, panes, is_agent):
         at = int(p["at"]) * 1000 if str(p.get("at") or "").isdigit() else now
         if w and at >= live.get(w, ("", None, -1))[2]:
             live[w] = ("claude", p.get("session"), at)
-    for w, pane in live.items():  # it beats an older agent, and any Claude the ADE lists without a session (a quit pane's title)
-        if w not in seen or pane[2] >= seen[w][2] or seen[w][0] == "claude":
+    for w, pane in live.items():  # it beats an older agent the ADE lists
+        if w not in seen or pane[2] >= seen[w][2]:
             seen[w] = pane
-    note(seen)
+    note(seen, panes)
 
 
 def resume(rec, panes, busy=False, created=None, binary=None):

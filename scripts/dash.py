@@ -776,10 +776,10 @@ def add_resume(pucks, agents):
         tm, is_agent = [], lambda t: False
     with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
         last_agent.observe(agents, tm, is_agent)
-    recs = last_agent.load()
+    recs, now = last_agent.load(), dict(agents)  # now: the live agent (a puck's own may be the last scan's)
     for p in pucks:
         rec = recs.get(p["path"])
-        p["resume"] = last_agent.resume(rec, tm, busy=(p.get("agent") or {}).get("state") in ("working", "waiting"),
+        p["resume"] = last_agent.resume(rec, tm, busy=(now.get(p["path"]) or {}).get("state") in ("working", "waiting"),
                                         created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 

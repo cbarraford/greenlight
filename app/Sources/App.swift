@@ -1545,6 +1545,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         return p
     }()
     var ptys = [String: Pty]()  // one shell per tab, by "window:tab"
+    var ptySession = [String: String]()  // the tmux session each of those attached ("window:tab" → mc-…)
+    /// Whether a pane other than `key` (any window) still shows this session: a workspace page's Basement button can attach
+    /// an agent's session that another window already has open, and closing one of them must not kill the agent in the other.
+    func heldElsewhere(_ session: String, except key: (String) -> Bool) -> Bool {
+        ptySession.contains { !key($0.key) && $0.value == session && ptys[$0.key] != nil }
+    }
     /// Terminal windows by id: 0 is the orb's (every project, its close button hides it); the rest you made with
     /// New window (some projects, its close button kills its shells), remembered in termWindows.
     var termWins = [Int: NSWindow]()
@@ -1627,10 +1633,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             for p in r as? [[String: Any]] ?? [] {
                 guard let s = p["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil,
-                      let at = paneWhere(p["ws"] as? String ?? "") else { continue }
+                      !self.heldElsewhere(s, except: { $0.hasPrefix("\(wid):") }), let at = paneWhere(p["ws"] as? String ?? "") else { continue }
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
-            for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop() }
+            for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
             self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
@@ -1838,7 +1844,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         switch b["cmd"] as? String {
         case "ready":
-            for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop() }  // a (re)loaded page starts with no tabs: detach, restore reattaches
+            for k in ptys.keys where k.hasPrefix("\(wid):") { ptys.removeValue(forKey: k)?.stop(); ptySession[k] = nil }  // a (re)loaded page starts with no tabs: detach, restore reattaches
             // ponytail: a reattach shows tmux's current screen only (older scrollback stays in tmux), and sessions a crash
             // orphaned before a save stay on the socket; reap ones not in the saved layout here if they pile up
             termLoaded = true
@@ -1855,13 +1861,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
-            ptys[id] = p; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
+            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
         case "in":
             ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
-            ptys.removeValue(forKey: id)?.stop()
-            if let session, let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
+            ptys.removeValue(forKey: id)?.stop(); ptySession[id] = nil
+            if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
         case "hide": if wid == 0 { termWindow.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }  // its last tab closed
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }

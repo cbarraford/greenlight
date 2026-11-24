@@ -92,7 +92,7 @@ def test_runs_needs_the_harness_command_in_that_session():
     assert not last_agent.runs({"harness": "claude", "used": 1}, [{"session": "mc-a", "cmd": "claude"}])
     claude = {"harness": "claude", "session": "mc-a", "used": 1}
     assert last_agent.runs(claude, [{"session": "mc-a", "cmd": "2.1.308"}])  # macOS: the native Claude is its version file
-    assert last_agent.runs(claude, [{"session": "mc-a", "cmd": "node"}])  # an npm install
+    assert not last_agent.runs(claude, [{"session": "mc-a", "cmd": "node"}])  # anything under node: a dev server in a quit Claude's tab
     assert not last_agent.runs(claude, [{"session": "mc-a", "cmd": "1.2"}, {"session": "mc-a", "cmd": "zsh"}])
 
 
@@ -111,18 +111,45 @@ def test_observe_goes_by_last_use(home):
     assert last_agent.load()["/w/d"]["used"] >= NOW
 
 
-def test_a_live_claude_pane_beats_a_quit_ones_title(home):
-    # the Basement ADE lists every ✳ pane as Claude: a quit one, used last, comes back as the primary agent, with no session
+def test_basement_ade_quit_titles_dont_count(home):
+    # the Basement ADE lists every ✳ pane as Claude (it carries a handle): a quit one, used last, comes back as the primary agent
     quit_t = NOW + 600_000
-    agents = [("/w/a", {"agentType": "claude", "updatedAt": quit_t})]
+    agents = [("/w/a", {"agentType": "claude", "updatedAt": quit_t, "handle": "%2"})]
     panes = [{"session": "mc-live", "cwd": "/w/a", "title": "✳ Claude", "at": str(NOW // 1000), "cmd": "claude"},
              {"session": "mc-quit", "cwd": "/w/a", "title": "✳ Claude", "at": str(quit_t // 1000), "cmd": "zsh"}]
     last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
     assert last_agent.load()["/w/a"]["session"] == "mc-live"
     assert last_agent.resume(last_agent.load()["/w/a"], panes) == {"harness": "claude", "session": "mc-live"}
-    last_agent.FILE.write_text(json.dumps({"/w/a": {"harness": "claude", "used": quit_t}}))  # already stored that way
-    last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
+    last_agent.note({"/w/b": ("codex", "mc-cx", NOW)})  # a launched codex, still running: a quit ✳ there doesn't replace it
+    last_agent.observe([("/w/b", {"agentType": "claude", "updatedAt": quit_t, "handle": "%3"})],
+                       [{"session": "mc-q", "cwd": "/w/b", "title": "✳ x", "at": str(quit_t // 1000), "cmd": "zsh"}], lambda t: t.startswith("✳"))
+    assert last_agent.load()["/w/b"]["session"] == "mc-cx"
+
+
+def test_a_newer_agent_elsewhere_beats_an_old_live_basement_pane(home):
+    old_pane = [{"session": "mc-old", "cwd": "/w/a", "title": "✳ Claude", "at": str((NOW - 86_400_000) // 1000), "cmd": "claude"}]
+    last_agent.observe([("/w/a", {"agentType": "claude", "updatedAt": NOW})], old_pane, lambda t: t.startswith("✳"))  # Orca's, today
+    assert "session" not in last_agent.load()["/w/a"]  # continue today's, don't attach yesterday's
+    last_agent.observe([("/w/a", {})], old_pane, lambda t: t.startswith("✳"))  # Orca no longer lists it: still today's
+    assert "session" not in last_agent.load()["/w/a"]
+
+
+def test_a_live_session_replaces_a_quit_one(home):
+    last_agent.note({"/w/a": ("claude", "mc-quit", NOW + 600_000)})  # recorded while it ran; it has quit since
+    panes = [{"session": "mc-live", "cwd": "/w/a", "title": "✳ Claude", "at": str(NOW // 1000), "cmd": "claude"},
+             {"session": "mc-quit", "cwd": "/w/a", "title": "✳ Claude", "at": str((NOW + 600_000) // 1000), "cmd": "-zsh"}]
+    last_agent.observe([("/w/a", {})], panes, lambda t: t.startswith("✳"))
     assert last_agent.load()["/w/a"]["session"] == "mc-live"
+
+
+def test_note_keeps_the_file_on_a_read_error(home):
+    last_agent.note({"/w/a": ("claude", None, NOW)})
+    before = last_agent.FILE.read_text()
+    with mock.patch.object(last_agent.Path, "read_text", side_effect=PermissionError("denied")), pytest.raises(OSError):
+        last_agent.note({"/w/b": ("codex", None, NOW)})
+    assert last_agent.FILE.read_text() == before
+    with mock.patch.object(last_agent.Path, "read_text", side_effect=PermissionError("denied")):
+        assert last_agent.load() == {}  # a reader just sees nothing
 
 
 def test_owner_is_the_longest_containing_worktree():
@@ -172,13 +199,13 @@ def _tmux_rows(*rows):
 
 
 def test_add_resume_on_pucks(home, monkeypatch):
-    last_agent.note({"/w/old": ("opencode", "mc-gone", NOW), "/w/exited": ("claude", "mc-sh2", NOW)})
+    last_agent.note({"/w/old": ("opencode", "mc-gone", NOW), "/w/exited": ("claude", "mc-sh2", NOW), "/w/closed": ("codex", None, NOW)})
     monkeypatch.setitem(dash.greenlight.CONFIG, "harnesses", {"opencode": {"bin": "/opt/oc/opencode"}, "claude": {"bin": "x; rm"}, "pi": "/opt/pi"})
     pucks = [{"path": p, "agent": {"state": st}} for p, st in
              (("/w/live", "done"), ("/w/old", "none"), ("/w/busy", "working"), ("/w/new", "none"), ("/w/exited", "none"),
-              ("/w/ask", "waiting"), ("/w/pi", "none"))]
+              ("/w/ask", "waiting"), ("/w/pi", "none"), ("/w/closed", "working"))]  # closed: the scan's state, its agent gone since
     agents = [("/w/live", {"agentType": "claude"}), ("/w/old", {}), ("/w/busy", {"agentType": "codex", "state": "working"}),
-              ("/w/new", {}), ("/w/exited", {}), ("/w/ask", {"agentType": "claude", "state": "waiting"}), ("/w/pi", {"agentType": "pi", "updatedAt": NOW})]
+              ("/w/new", {}), ("/w/exited", {}), ("/w/ask", {"agentType": "claude", "state": "waiting"}), ("/w/pi", {"agentType": "pi", "updatedAt": NOW}), ("/w/closed", {})]
     tm = _tmux_rows(["%1", "mc-live", "/w/live", "✳ Done", "1", "claude"], ["%2", "mc-sh", "/w/new", "zsh", "1", "zsh"],
                     ["%3", "mc-sh2", "/w/exited", "✳ Done", "1", "-zsh"])  # Claude quit there: its title stays, its shell runs
     with mock.patch.object(ade_basement.subprocess, "run", return_value=tm):
@@ -186,7 +213,7 @@ def test_add_resume_on_pucks(home, monkeypatch):
     by = {p["path"]: p["resume"] for p in pucks}
     assert by == {"/w/live": {"harness": "claude", "session": "mc-live"}, "/w/old": {"harness": "opencode", "bin": "/opt/oc/opencode"},
                   "/w/busy": {}, "/w/new": {}, "/w/exited": {"harness": "claude"},
-                  "/w/ask": {}, "/w/pi": {"harness": "pi"}}  # waiting on you in another ADE: no second copy; a bad config entry: no bin
+                  "/w/ask": {}, "/w/pi": {"harness": "pi"}, "/w/closed": {"harness": "codex"}}  # waiting on you in another ADE: no second copy; a bad config entry: no bin
 
 
 def test_add_resume_on_a_recreated_workspace(home, tmp_path):
