@@ -65,6 +65,8 @@ with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastA
 with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x", "stateStartedAt": None}, "t1", CHAT)):
     asked = dash.ask_user("ws")  # an ADE that can't say when a turn ends or what was said (herdr): no chat, and still no "Chat about this" answer
     assert asked["chat"] is None and [o["key"] for o in asked["options"]] == ["1", "2"], asked
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"stateStartedAt": 1}, "t1", CHAT)):
+    assert dash.ask_user("ws")["chat"] is None  # an ADE that never says what the agent said (basement): no chat
 hist = Path(tempfile.mkdtemp()) / "h.md"
 PICK, PROMPT = {"stateStartedAt": 1}, {"terminal": {"tail": ["❯"]}}
 ps = lambda *states: [{"w1": ({"displayName": "ws"}, {"state": st, "stateStartedAt": at})} for st, at in states]

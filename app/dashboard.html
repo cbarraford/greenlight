@@ -1543,7 +1543,7 @@ function renderPage(main){
 
 /* ---------- answering a waiting agent: its question, the answers to offer, a free reply ---------- */
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
-function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), and the agent hasn't gone quiet on it
+function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), within CHAT_KEEP of your last word or its reply
 function chatOn(p){ return chatLive(ui.ask[p.name]) && ["working", "done"].includes(p.agent.state) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
 function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "done" && chatOn(p)) }  // waits on you: a question, or a chat's reply
 function askState(p){
@@ -1551,7 +1551,7 @@ function askState(p){
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
   const reply = a.state === "done" && chatOn(p) && (!st.sent || st.typed == null || since(a.since) > since(st.typed));  // its reply ends its turn: a "done" newer than the message
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
-    const chat = chatLive(st) ? st.chat : null;  // a reply in time carries the chat on; a long stretch of work ends it
+    const chat = !chatLive(st) ? null : reply ? {...st.chat, at: Date.now()} : st.chat;  // a reply in time carries the chat on, with its own CHAT_KEEP to read and answer it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
     post({cmd: "ask", name: p.name});  // a reply too: the stream cuts the agent's message to 400 characters
   }
@@ -1563,7 +1563,7 @@ function askState(p){
    discuss it, not a refusal; at a prompt it's a plain message. Its replies end its turn at its prompt, so a chat goes on through
    "done" as well as "waiting" (chatOn). You answer by choosing an option when the agent asks again, or by just saying it.
    Choosing an option, End chat, a permission prompt, the agent crashing, or a long stretch of work (CHAT_KEEP) ends the chat. */
-const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms a chat lasts after your last message or keystroke (so a task you answered in words doesn't come back as a reply); entries kept
+const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms a chat lasts after your last message, keystroke or its reply (a task you answered in words that runs longer doesn't come back as a reply); entries kept
 function sendAnswer(name, text, said){  // said: in a chat, the agent's messages this one replies to
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;

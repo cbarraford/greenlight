@@ -1419,7 +1419,7 @@ def ask_user(name, model=None, effort="low"):
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
         key = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True)),
-        chat = key if ag.get("stateStartedAt") else None  # where the ADE reports when a turn ends (herdr doesn't, nor what was said)
+        chat = key if ag.get("stateStartedAt") and "lastAssistantMessage" in ag else None  # an ADE that says when a turn ends and what was said (not herdr, basement)
         return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:] if chat else "",  # said: in a chat, its reply
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != key]}
