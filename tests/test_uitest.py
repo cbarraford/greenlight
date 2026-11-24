@@ -256,8 +256,16 @@ def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path)
     r_set = ui1.screenshot(s_settings, window="settings")
     assert r_set["ok"], r_set
     assert_png(s_settings)
+    for tab, slug in (("Chat & voice", "chat"), ("Terminal", "terminal"), ("Automation", "automation")):
+        r_tab = ui1.action("openSettings", tab=tab)
+        assert r_tab["ok"] and r_tab.get("tab") == tab, r_tab
+        time.sleep(0.2)
+        s_tab = shot_dir / f"settings-{slug}.png"
+        assert ui1.screenshot(s_tab, window="settings")["ok"]
+        assert_png(s_tab)
     r_narrow = ui1.action("resize", window="settings", width=560, height=460)
     assert r_narrow["ok"] and r_narrow["width"] == 620, r_narrow  # minSize 620x460
+    assert ui1.action("openSettings", tab="Chat & voice")["ok"]
     time.sleep(0.2)
     s_narrow = shot_dir / "settings-narrow.png"
     assert ui1.screenshot(s_narrow, window="settings")["ok"]
@@ -265,7 +273,7 @@ def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path)
     r_close = ui1.action("closeSettings")
     assert r_close["ok"] and r_close["settingsOpen"] is False, r_close
     wait_state(ui1, lambda s: s.get("settingsOpen") is False, desc="settings closed")
-    print(f"ok  Settings open/screenshot/close verified ({r_set['width']}x{r_set['height']}, {r_set['bytes']} bytes)")
+    print(f"ok  Settings open/tabs/screenshot/close verified ({r_set['width']}x{r_set['height']}, {r_set['bytes']} bytes)")
 
 
 def assert_process_gone(pid: int, timeout: float = 5.0) -> None:

@@ -179,6 +179,7 @@ final class Core: ObservableObject {
     @Published var designEffort = ud.string(forKey: "designEffort") ?? "low" { didSet { ud.set(designEffort, forKey: "designEffort") } }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
     @Published var termNameModel = savedModel("termNameModel", fallback: "claude-haiku-5-5") { didSet { ud.set(termNameModel, forKey: "termNameModel") } }
+    @Published var termNameEffort = ud.string(forKey: "termNameEffort") ?? "low" { didSet { ud.set(termNameEffort, forKey: "termNameEffort") } }
     @Published var termAutoName = ud.object(forKey: "termAutoName") as? Bool ?? true { didSet { ud.set(termAutoName, forKey: "termAutoName") } }
     // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
     @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { ud.set(nextModel, forKey: "nextModel") } }

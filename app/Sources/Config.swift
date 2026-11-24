@@ -615,6 +615,214 @@ func savedModel(_ key: String, fallback: String) -> String {
 }
 let efforts = ["low", "medium", "high", "xhigh", "max"]
 func effortName(_ e: String) -> String { e == "xhigh" ? "Extra high" : e.capitalized }  // display only; the stored value stays
+let effortNotes: [String: String] = [
+    "low": "Fastest replies, least reasoning.",
+    "medium": "Balances reasoning against response time.",
+    "high": "More reasoning; replies take longer.",
+    "xhigh": "Extended reasoning for hard problems; noticeably slower.",
+    "max": "The most reasoning; the slowest replies.",
+]
+let writerHarnesses: Set<String> = ["claude", "codex", "agy"]
+
+/// Model manufacturer / provider buckets for the reusable Settings model selector.
+enum ModelManufacturer: String, CaseIterable, Equatable, Hashable, Sendable {
+    case anthropic, openai, google, other
+
+    var name: String {
+        switch self {
+        case .anthropic: return "Anthropic"
+        case .openai: return "OpenAI"
+        case .google: return "Google"
+        case .other: return "Other"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .anthropic: return "claude"
+        case .openai: return "openai"
+        case .google: return "agy"
+        case .other: return "terminal"
+        }
+    }
+
+    /// Infers the manufacturer from a model ID (including `<harness>:<model>` pins like `agy:claude-opus-5-5-high`).
+    static func of(_ modelId: String) -> ModelManufacturer {
+        let h = harnessOf(modelId)
+        let raw = routeModel(modelId).id ?? ""
+        let low = raw.lowercased()
+        if low.hasPrefix("claude-") || modelId == "claude" { return .anthropic }
+        if low.hasPrefix("gpt-oss-") || low.hasPrefix("gpt-") || low.hasPrefix("codex-") || modelId == "codex" { return .openai }
+        if low.hasPrefix("o"), low.dropFirst().first?.isNumber == true { return .openai }
+        if low.hasPrefix("gemini-") || modelId == "agy" || modelId == "gemini" { return .google }
+        switch h {
+        case "claude": return .anthropic
+        case "codex": return .openai
+        case "agy", "gemini": return .google
+        default: return .other
+        }
+    }
+}
+
+/// Splits an `agy` model ID whose effort is baked into the slug (e.g. `gemini-4-neon-high`, `agy:claude-opus-5-5-low`)
+/// into its base model ID, cleaned display name, and effort level. Non-baked IDs return `(id, name, nil)`.
+func splitBakedEffort(id: String, name: String) -> (baseID: String, baseName: String, bakedEffort: String?) {
+    guard harnessOf(id) == "agy" else { return (id, name, nil) }
+    for eff in efforts {
+        let suffix = "-\(eff)"
+        if id.hasSuffix(suffix) {
+            let baseID = String(id.dropLast(suffix.count))
+            let cleaned = stripEffortLabel(from: name)
+            return (baseID, cleaned.isEmpty ? baseID : cleaned, eff)
+        }
+    }
+    return (id, name, nil)
+}
+
+/// Strips trailing or parenthesised effort labels (` (High)`, ` (XHigh)`, ` · Extra high`, etc.) from a model display name.
+private func stripEffortLabel(from name: String) -> String {
+    var out = name
+    let patterns = [
+        #"\s*\((?:Low|Medium|High|XHigh|Extra high|Max)\)"#,
+        #"\s*·\s*(?:Low|Medium|High|XHigh|Extra high|Max)\b"#,
+    ]
+    for p in patterns {
+        out = out.replacingOccurrences(of: p, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+    return out.trimmingCharacters(in: .whitespaces)
+}
+
+/// DS icon name for a model button based on its family/tier (every name is in `brand/icons`).
+func modelIcon(for baseID: String, harness: String) -> String {
+    if knownHarnesses.contains(baseID) { return "terminal" }
+    let low = (routeModel(baseID).id ?? baseID).lowercased()
+    if low.contains("orchestrator") { return "grid" }
+    if low.contains("gpt-oss") { return "branch" }
+    if low.contains("haiku") || low.contains("flash") || low.contains("mini") || low.contains("luna") { return "bolt" }
+    if low.contains("opus") || low.contains("neon") || low.contains("sol") || low.contains("ultra") { return "sparkles" }
+    if low.contains("fable") || low.contains("daybreak") { return "wand" }
+    if low.contains("sonnet") || low.contains("carbon") || low.contains("argon") || low.contains("hydrogen")
+        || low.contains("astra") || low.contains("terra") { return "spark" }
+    switch harness {
+    case "claude": return "claude"
+    case "codex": return "openai"
+    case "agy": return "agy"
+    default: return "terminal"
+    }
+}
+
+/// Picks `desired` when supported; otherwise the closest lower level in `efforts`, else the lowest supported level.
+func nearestEffort(_ desired: String, in supported: [String]) -> String {
+    if supported.contains(desired) { return desired }
+    let ordered = efforts.filter { supported.contains($0) }
+    guard !ordered.isEmpty else { return desired }
+    guard let wantIdx = efforts.firstIndex(of: desired) else {
+        return ordered.contains("medium") ? "medium" : ordered[0]
+    }
+    if let below = ordered.last(where: { (efforts.firstIndex(of: $0) ?? 0) <= wantIdx }) {
+        return below
+    }
+    return ordered[0]
+}
+
+/// One selectable model button inside `ModelSelector`, collapsing any baked-effort variants into a single choice.
+struct ModelChoice: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let manufacturer: ModelManufacturer
+    let harness: String
+    let icon: String
+    let bakedVariants: [String: String]
+    let supportedEfforts: [String]
+
+    var hasBakedEffort: Bool { !bakedVariants.isEmpty }
+    var supportsEffortSlider: Bool { supportedEfforts.count > 1 }
+    var fixedEffort: String? { supportedEfforts.count == 1 ? supportedEfforts[0] : nil }
+
+    func matches(modelId: String) -> Bool {
+        if hasBakedEffort { return bakedVariants.values.contains(modelId) }
+        return id == modelId
+    }
+
+    func bakedEffort(for modelId: String) -> String? {
+        bakedVariants.first { $0.value == modelId }?.key
+    }
+
+    /// Concrete `(modelId, effort)` pair when choosing this model with `desiredEffort`.
+    func resolve(desiredEffort: String) -> (modelId: String, effort: String) {
+        guard !supportedEfforts.isEmpty else { return (id, desiredEffort) }
+        let chosen = nearestEffort(desiredEffort, in: supportedEfforts)
+        if hasBakedEffort { return (bakedVariants[chosen] ?? id, chosen) }
+        return (id, chosen)
+    }
+}
+
+/// One manufacturer tab and its ordered model choices.
+struct ModelGroup: Identifiable, Equatable, Sendable {
+    var id: ModelManufacturer { manufacturer }
+    let manufacturer: ModelManufacturer
+    let choices: [ModelChoice]
+}
+
+/// Groups raw `(name, id)` options into Manufacturer -> Model choices, collapsing baked-effort variants
+/// and always keeping `current` selectable even when offline or custom.
+func buildModelCatalog(from rawOptions: [(String, String)], current: String, where keep: (String) -> Bool = { _ in true }) -> [ModelGroup] {
+    var list = rawOptions.filter { keep($0.1) }
+    if !current.isEmpty && !list.contains(where: { $0.1 == current }) {
+        let label = models.first { $0.1 == current }?.0 ?? current
+        list.append((label, current))
+    }
+    var order = [String]()
+    var grouped = [String: (name: String, mfg: ModelManufacturer, harness: String, variants: [String: String])]()
+    for (name, id) in list {
+        let h = harnessOf(id)
+        let mfg = ModelManufacturer.of(id)
+        let (baseID, rawBaseName, baked) = splitBakedEffort(id: id, name: name)
+        let displayName = (mfg == .anthropic && rawBaseName.hasPrefix("Claude ")) ? String(rawBaseName.dropFirst(7)) : rawBaseName
+        if let baked {
+            if grouped[baseID] == nil {
+                order.append(baseID)
+                grouped[baseID] = (displayName, mfg, h, [baked: id])
+            } else {
+                grouped[baseID]?.variants[baked] = id
+            }
+        } else if grouped[id] == nil {
+            order.append(id)
+            grouped[id] = (displayName, mfg, h, [:])
+        }
+    }
+    var byMfg = [ModelManufacturer: [ModelChoice]]()
+    for key in order {
+        guard let entry = grouped[key] else { continue }
+        let supported = entry.variants.isEmpty
+            ? (modelSupportsEffort(key) ? efforts : [])
+            : efforts.filter { entry.variants[$0] != nil }
+        let choice = ModelChoice(id: key, name: entry.name, manufacturer: entry.mfg, harness: entry.harness,
+                                 icon: modelIcon(for: key, harness: entry.harness),
+                                 bakedVariants: entry.variants, supportedEfforts: supported)
+        byMfg[entry.mfg, default: []].append(choice)
+    }
+    return ModelManufacturer.allCases.compactMap { mfg in
+        guard let choices = byMfg[mfg], !choices.isEmpty else { return nil }
+        return ModelGroup(manufacturer: mfg, choices: choices)
+    }
+}
+
+/// Finds the active `(group, choice)` matching `modelId`, falling back to the first available entry.
+func activeModelSelection(in catalog: [ModelGroup], modelId: String) -> (group: ModelGroup, choice: ModelChoice)? {
+    for g in catalog {
+        if let ch = g.choices.first(where: { $0.matches(modelId: modelId) }) { return (g, ch) }
+    }
+    guard let firstGroup = catalog.first, let firstChoice = firstGroup.choices.first else { return nil }
+    return (firstGroup, firstChoice)
+}
+
+/// Resolves the effort value shown on the slider for `choice` given the current `modelId` and `storedEffort`.
+func currentModelEffort(for choice: ModelChoice, modelId: String, storedEffort: String) -> String {
+    if let baked = choice.bakedEffort(for: modelId) { return baked }
+    if choice.supportedEfforts.isEmpty { return storedEffort }
+    return nearestEffort(storedEffort, in: choice.supportedEfforts)
+}
 
 // MARK: Settings: repo lifecycles, instructions, memory
 
