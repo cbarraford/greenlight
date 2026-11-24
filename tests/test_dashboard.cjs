@@ -401,20 +401,79 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   await page.click("#hcard .mg .go");
   assert.deepEqual((await posts(page, "merge")).pop(), {cmd: "merge", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({path: "/w/plan-a", error: "405: Branch cannot be merged"}));
-  assert.equal(await page.textContent("#hcard .mg code"), "405: Branch cannot be merged");
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge !12");
+  assert.equal(await page.textContent(".toast.bad .tmsg span"), "405: Branch cannot be merged");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "review", prompt: "rv", own: true, repo: "widgets"}, {kind: "merge", how: "Squash", target: "main"}]; hideCard(); document.body.append(hoverCard(p)) });
   assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "ready"}]; hideCard(); document.body.append(hoverCard(p)) });
   await page.click("#hcard .mg .go");  // one click: undrafting is undone by drafting again
   assert.deepEqual((await posts(page, "undraft")).pop(), {cmd: "undraft", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({op: "ready", path: "/w/plan-a", ok: true, ref: "!12"}));
-  assert.equal(await page.textContent("#hcard .mg.ok b"), "!12 is ready for review");
+  assert.equal(await page.textContent(".toast:not(.bad) .tmsg b"), "!12 is ready for review");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.mr = {...p.mr, state: "merged"}; p.moves = [{kind: "signoff", step: "deploy", run: "git pull"}]; hideCard(); document.body.append(hoverCard(p)) });
   assert.equal(await page.textContent("#hcard .mg .go b"), "Deploy !12", "a merged MR's step after the merge gets its button");
   await page.click("#hcard .mg .go");
   assert.deepEqual((await posts(page, "signoff")).pop(), {cmd: "signoff", path: "/w/plan-a"});
+  await page.evaluate(() => { delete ui.acting["plan-a"] });  // the ready above is still settling: it would hold the signoff's reply
+  await page.evaluate(() => { hideCard(); document.body.append(hoverCard(puckOf("plan-a"))) });
+  await page.click("#hcard .mg .go");
   await page.evaluate(() => window.mc.merged({op: "signoff", path: "/w/plan-a", ok: true, step: "deploy", ran: "git pull"}));
-  assert.equal(await page.textContent("#hcard .mg.ok b"), "Deploy signed off");
+  assert.equal(await page.textContent(".toast:not(.bad) .tmsg b"), "Deploy signed off");
+  assert.equal(await page.textContent(".toast .tmsg span"), "Ran git pull");
+});
+
+test("card actions: the hex leaves on the click, comes back when its state moves or a later scan still has it; a failure restores it", async page => {
+  const snap = JSON.parse(JSON.stringify(SNAP)), now = () => Math.floor(Date.now() / 1000);
+  Object.assign(snap.pucks[0], {agent: {...snap.pucks[0].agent, state: "idle"}, sig: "a1",
+    mr: {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12"}, moves: [{kind: "merge", how: "Squash", target: "main"}]});
+  Object.assign(snap, {ts: now(), scanned: 100, scan_started: 90});
+  await page.evaluate(s => window.mc.update(s), snap);
+  const hex = () => page.evaluate(() => !!hexOn("plan-a"));
+  const card = () => page.evaluate(() => document.body.append(hoverCard(puckOf("plan-a"))));
+  assert.equal(await hex(), true);
+  // Merge: gone the moment it's confirmed, before the host answers
+  await card(); await page.click("#hcard .mg .go"); await page.click("#hcard .mg .go");
+  assert.deepEqual((await posts(page, "merge")).pop(), {cmd: "merge", path: "/w/plan-a"});
+  assert.equal(await hex(), false, "the hex lags the merge");
+  assert.equal(await page.$("#hcard"), null, "the card goes with its hex");
+  assert.equal(await page.evaluate(() => shown().some(p => p.name === "plan-a")), false, "counts and the list skip it too");
+  await page.evaluate(() => window.mc.update(ui.raw));  // the 5s stream, before the reply: still away
+  assert.equal(await hex(), false);
+  // it merged: the outcome toasts, a scan is asked for at once, and a scan that began before the reply doesn't bring it back
+  await page.evaluate(() => window.mc.merged({path: "/w/plan-a", ok: true, ref: "!12", target: "main", how: "Squash"}));
+  assert.equal(await page.textContent(".toast .tmsg b"), "Merged !12 into main");
+  assert.equal((await posts(page, "rescan")).length, 1, "no scan asked for after the merge");
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), scanned: 101, scan_started: 95}), snap);
+  assert.equal(await hex(), false, "a scan already running when it merged put it back unmerged");
+  assert.equal((await posts(page, "rescan")).length, 2, "that stale scan should be followed by one that starts after the merge");
+  // the merged state lands (its sig moves): back, as it is now
+  snap.pucks[0] = {...snap.pucks[0], state: "done", sig: "a2", mr: {...snap.pucks[0].mr, state: "merged"}, moves: []};
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  assert.equal(await page.evaluate(() => shown().some(p => p.name === "plan-a" && p.state === "done")), true, "the merged state never brought it back (done: on the shelf)");
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
+  // a move that fails: the hex comes straight back and the toast says why
+  snap.pucks[0] = {...snap.pucks[0], state: "needs", sig: "a3", mr: {...snap.pucks[0].mr, state: "opened"}, moves: [{kind: "ci", jobs: ["lint"], prompt: "fix ci", own: true, repo: "widgets"}]};
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  await card(); await page.click("#hcard .mv .go");
+  assert.deepEqual((await posts(page, "run")).pop(), {cmd: "run", name: "plan-a", prompt: "fix ci"});
+  assert.equal(await hex(), false);
+  await page.evaluate(() => window.mc.ran({name: "plan-a", error: "the workspace is gone"}));
+  assert.equal(await hex(), true, "a failed action left the hex hidden");
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "The agent didn't start");
+  assert.equal(await page.textContent(".toast.bad .tmsg span"), "the workspace is gone");
+  // it worked but nothing moved: a scan begun after the reply that still has it on you brings it back
+  await card(); await page.click("#hcard .mv .go");
+  await page.evaluate(() => window.mc.ran({name: "plan-a", ok: true}));
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), scanned: 200, scan_started: 150}), snap);
+  assert.equal(await hex(), false, "an older scan brought it back");
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), scanned: 300, scan_started: Math.floor(Date.now() / 1000) + 5}), snap);
+  assert.equal(await hex(), true, "it still needs you after a fresh scan, but stayed hidden");
+  // gone from the snapshot after the action (merged and cleaned up): it stays gone, and nothing waits on it
+  await card(); await page.click("#hcard .mv .go");
+  await page.evaluate(() => window.mc.ran({name: "plan-a", ok: true}));
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), pucks: s.pucks.slice(1)}), snap);
+  assert.equal(await hex(), false);
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
 });
 
 test("hover card button: a step written ahead (the snapshot's suggestion) is ready the moment the card opens", async page => {
@@ -427,6 +486,7 @@ test("hover card button: a step written ahead (the snapshot's suggestion) is rea
   assert.equal((await posts(page, "suggest")).length, 0, "asked again for a step it already has");
   await page.click("#hcard .btn.nx");
   assert.deepEqual((await posts(page, "run")).map(m => m.prompt), ["Reply to the 2 open threads on !12 and push the fixes."]);
+  await page.evaluate(() => window.mc.ran({name: "plan-a", ok: true}));  // the agent started: its hex is back once the state moves
   // the state moves on: the old step is stale, so the card waits for the new one, and an open card picks it up from the next snapshot
   snap.pucks[0].sig = "plan-aidle2"; snap.pucks[0].suggestion = null;
   await page.evaluate(s => { window.mc.update(s); hideCard(); document.body.append(hoverCard(puckOf("plan-a"))) }, snap);
