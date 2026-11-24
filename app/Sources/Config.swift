@@ -296,6 +296,32 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     for (k, v) in (secondary?["panes"] as? [String: Any]) ?? [:] { panes[k] = v }
     return ["trees": merged, "panes": panes, "repoHosts": hosts]
 }
+/// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
+/// a server), but each host's pane states only once, from the fetch that read them. Each fetch publishes on its own, so without
+/// this the other host's states from the last refresh ride along: a stale "working" after a turn's ping, then the fresh "done",
+/// pinged the turn again (terminal.html syncPanes). Spent states are dropped from `server`/`local`.
+func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, merge: Bool, primaryHost: String) -> [String: Any]? {
+    let obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
+    server?["panes"] = nil; local?["panes"] = nil
+    return obj
+}
+/// Pane states for a terminal page that just loads (`ready` replays the newest trees payload): every host's states from the current
+/// refresh, and only while fresh (5 s since the first of them arrived). An older "working" replayed into a reloaded page would flip an idle pane
+/// back to work, and the next fetch's "done" would ping its finished turn again. A refresh that starts drops what the last one saved.
+struct PaneReplay {
+    private(set) var panes = [String: Any](), at = Date.distantPast
+    mutating func start() { panes = [:] }
+    mutating func add(_ p: Any?, now: Date = Date()) {  // dated by the refresh's first states: the oldest that a replay carries
+        guard let p = p as? [String: Any], !p.isEmpty else { return }
+        if panes.isEmpty { at = now }
+        panes.merge(p) { _, new in new }
+    }
+    func replay(_ obj: [String: Any]?, now: Date = Date()) -> [String: Any]? {
+        guard var o = obj else { return nil }
+        o["panes"] = !panes.isEmpty && now.timeIntervalSince(at) <= 5 ? panes : nil
+        return o
+    }
+}
 let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Greenlight"  // "greenlight-<workspace>" in a copy
 /// A dev copy's folder on this Mac (Info.plist's GreenlightDev, from build.sh), nil in Greenlight itself. A copy loads its pages
 /// from there and reloads one when it changes, sends its ssh through dev.py's tunnel, and posts no banners (Greenlight does).
@@ -363,6 +389,9 @@ func sshHosts() -> [String] {
     }
     return names.filter { !($0.hasSuffix("-ts") && names.contains(String($0.dropLast(3)))) }
 }
+/// Whether a Basement tab's home runs greenlight's scripts (dash.py turn can read its pane there): a workspace or the home on
+/// the scripts' host (also as @<host>, a tab saved before GREENLIGHT_HOST moved there), and @local (this Mac). Another @host has none. terminal.html's scriptsOn is the same rule.
+func runsScripts(_ ws: String) -> Bool { !ws.hasPrefix("@") || ws == "@local" || ws == "@" + host }
 /// A pane's host and folder: "@name" is a host's home (the Hosts rows), anything else a folder on GREENLIGHT_HOST.
 func paneWhere(_ ws: String) -> (host: String, cwd: String)? {
     if ws.hasPrefix("@") { return ws.range(of: #"^@\w[\w.-]{0,63}$"#, options: .regularExpression) != nil ? (String(ws.dropFirst()), "") : nil }

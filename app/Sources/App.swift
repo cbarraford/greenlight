@@ -1520,6 +1520,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var projList = [[String: Any]]()  // id ("" No Man's Land), name, color, repos, paths (its worktrees), busy
     var projectsLoaded = false  // true once dash.py trees (or a terminal page with trees) has listed the projects
     var lastTreesObj: [String: Any]?  // newest valid dash.py trees payload, replayed to terminal pages and recomputed on project/theme changes
+    var paneReplay = PaneReplay()  // the current refresh's pane states, every host's, for a page that loads (each publish carries only its own)
     var readyDash = Set<ObjectIdentifier>(), waitingDash = Set<ObjectIdentifier>()  // dashboard webviews that have received mc.paths vs ones waiting on projectsLoaded
     var sharedOnly: [String]? { ud.array(forKey: "termOnly0") as? [String] }  // the one pick every floor and window shows; nil: all projects
     func setPick(_ only: [String]?, except: WKWebView? = nil) {
@@ -2051,11 +2052,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         web?.evaluateJavaScript("term.toast(\(d))")
     }
     private func publishTrees() {
-        let obj: [String: Any]? = (!isLocalHost(host) && localTreesObj != nil)
-            ? mergeTreesPayload(serverTreesObj, localTreesObj, primaryHost: host, secondaryHost: "local")
-            : serverTreesObj ?? localTreesObj
+        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host)
         if let obj, JSONSerialization.isValidJSONObject(obj) {
-            lastTreesObj = obj
+            lastTreesObj = obj; paneReplay.add(obj["panes"])
             refreshProjects()
             termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
         } else if !projectsLoaded {
@@ -2066,7 +2065,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Every installed ADE's worktrees (dash.py trees), where greenlight lives (and local Mac when a remote server is configured).
     func pushTrees() {
         guard treesProc == nil else { return }
-        treesAt = Date()
+        treesAt = Date(); paneReplay.start()
         var out = ""
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
@@ -2115,7 +2114,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
             web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
             if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
-            if let obj = lastTreesObj { web?.callJS("window.term && term.workspaces", [obj]) }
+            if let obj = paneReplay.replay(lastTreesObj) { web?.callJS("window.term && term.workspaces", [obj]) }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":
             guard let session, let at = paneTarget(b["ws"] as? String ?? "") else { return }
@@ -2156,7 +2155,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
         case "turn":  // a Claude pane's spinner stayed gone: dash.py turn reads its screen (greenlight's agent_state), answered with term.turn
-            guard let session, let ws = b["ws"] as? String, !ws.hasPrefix("@"), let at = paneTarget(ws) else { return }  // @host shells: not the scripts' host
+            guard let session, let ws = b["ws"] as? String, runsScripts(ws), let at = paneTarget(ws) else { return }  // @host shells: no scripts there; @local: this Mac's own
             var out = ""
             ssh("\(pyCmd(on: at.host))/dash.py turn \(shellQuote(session))", on: at.host, onLine: { out += $0 }, onExit: { [weak web] code in
                 let o = out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? ["session": session, "error": "exit \(code)"]
