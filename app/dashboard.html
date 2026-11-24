@@ -1205,7 +1205,13 @@ function agentsStrip(docked){  // docked: the overview's strip, where idle crash
 setInterval(() => {
   if (document.hidden) return;
   document.querySelectorAll("[data-since]").forEach(e => e.textContent = clock(Number(e.dataset.since) || null));
-  if (ui.out) document.querySelectorAll("#aout [data-ts]").forEach(e => { const t = Number(e.dataset.ts); if (isFinite(t)) e.textContent = relTime(t) });
+  if (ui.out) {
+    const now = Date.now();
+    document.querySelectorAll("#aout [data-ts]").forEach(e => {
+      const t = Number(e.dataset.ts); if (!isFinite(t)) return;
+      const s = relTime(t, now); if (e.textContent !== s) e.textContent = s;
+    });
+  }
 }, 1000);
 
 /* ---------- views ---------- */
@@ -1659,9 +1665,9 @@ function closeAnswer(){ ui.answering = null; render() }
 const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
 const OUT_IDLE = 5000, OUT_FOLLOW = 40, LOOKED_KEY = "gl_last_looked";
 let OUT_WAIT = 20000, OUT_QUIET = 30000;  // a reply later than OUT_WAIT counts as lost; a main session quiet for OUT_QUIET hands over (let: the tests shorten them)  // px from the bottom that still counts as "at the bottom"
-function relTime(ms){
+function relTime(ms, now = Date.now()){
   if (ms == null || !isFinite(ms)) return "";
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  const s = Math.max(0, Math.floor((now - ms) / 1000));
   if (s < 10) return "just now";
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -1683,18 +1689,24 @@ function outMaxTs(o){
   if (!o) return null;
   let max = typeof o.lastOutputTs === "number" && isFinite(o.lastOutputTs) ? o.lastOutputTs : 0;
   for (const e of o.entries) if (typeof e.ts === "number" && isFinite(e.ts) && e.ts > max) max = e.ts;
+  if (o.tail && typeof o.tail.ts === "number" && isFinite(o.tail.ts) && o.tail.ts > max) max = o.tail.ts;
   return max || null;
+}
+function markOutSeen(o){
+  if (!o || !o.follow) return;
+  const max = outMaxTs(o);
+  if (max) o.seenTs = Math.max(o.seenTs || 0, max);
 }
 function saveOutLooked(o){
   if (!o) return;
-  const max = outMaxTs(o);
-  if (max) setLastLooked(o.name, max);
-  else if (o.source === "pane") setLastLooked(o.name, Date.now());
+  if (o.seenTs) setLastLooked(o.name, o.seenTs);
+  else if (o.follow && o.loaded && o.source === "pane" && !o.entries.length && !o.tail) setLastLooked(o.name, Date.now());
 }
 function openOut(name){
   closeOut(false);
   ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null,
-    unseen: 0, follow: true, inflight: false, timer: 0, source: null, lastOutputTs: null, tool: "", toolInput: "", lastLooked: getLastLooked(name)};
+    unseen: 0, follow: true, inflight: false, timer: 0, source: null, lastOutputTs: null, tool: "", toolInput: "",
+    lastLooked: getLastLooked(name), seenTs: null, tail: null};
   const p = puckOf(name) || {name, agent: {}};
   const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
     h("header", {class:"aohd"},
@@ -1753,11 +1765,29 @@ function lookedDivider(ts){
     h("span", {}, "Since you last looked"),
     ts ? h("span", {class:"aots", "data-ts": String(ts), title: new Date(ts).toLocaleString()}, relTime(ts)) : null);
 }
+function syncEntryDom(node, e){
+  if (!node) return;
+  const tx = node.querySelector(".aotx");
+  if (tx) { const t = e.text || " "; if (tx.textContent !== t) tx.textContent = t }
+  const ts = node.querySelector(".aots");
+  if (ts && typeof e.ts === "number" && isFinite(e.ts)) {
+    ts.dataset.ts = String(e.ts); ts.title = new Date(e.ts).toLocaleString();
+    const rt = relTime(e.ts); if (ts.textContent !== rt) ts.textContent = rt;
+  }
+}
+function syncOutTail(list, tail){
+  const cur = list.querySelector("[data-tail='1']");
+  if (!tail) { if (cur) cur.remove(); return }
+  const note = list.querySelector(".aonote"); if (note) note.remove();
+  if (cur) { cur.dataset.id = tail.id; syncEntryDom(cur, tail); return }
+  const el = outEntry(tail); el.dataset.tail = "1"; list.append(el);
+}
 function syncLookedDivider(){
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   const old = document.getElementById("aout-looked");
   if (o.lastLooked == null) { if (old) old.remove(); return }
-  const firstNew = o.entries.find(e => typeof e.ts === "number" && isFinite(e.ts) && e.ts > o.lastLooked);
+  const firstNew = o.entries.find(e => typeof e.ts === "number" && isFinite(e.ts) && e.ts > o.lastLooked)
+    || (o.tail && typeof o.tail.ts === "number" && isFinite(o.tail.ts) && o.tail.ts > o.lastLooked ? o.tail : null);
   if (!firstNew) { if (old) old.remove(); return }
   const target = list.querySelector(`[data-id="${CSS.escape(firstNew.id)}"]`);
   if (!target) { if (old) old.remove(); return }
@@ -1772,7 +1802,7 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     o.older = false;
     if (r.error) { o.olderErr = r.error; outMore(); return }
     const log = document.getElementById("aout-log"), h0 = log.scrollHeight, t0 = log.scrollTop;
-    const add = arr(r.entries).filter(e => !o.ids.has(e.id));
+    const add = arr(r.entries).filter(e => !e.partial && !o.ids.has(e.id));
     add.forEach(e => { o.ids.add(e.id); if (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]) o.tip[stemOf(e)] = idxOf(e) }); o.entries = add.concat(o.entries); o.more = r.more || null;
     document.getElementById("aout-list").prepend(...add.map(e => outEntry(e)));
     syncLookedDivider();
@@ -1787,11 +1817,27 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     if (typeof r.tool === "string") { o.tool = r.tool; o.toolInput = typeof r.tool_input === "string" ? r.tool_input : "" }
     const log = document.getElementById("aout-log");
     if (log) log.classList.toggle("pane", o.source === "pane");
-    const page = arr(r.entries), first = !o.loaded;
+    const rawPage = arr(r.entries), first = !o.loaded;
+    const nextTail = rawPage.find(e => e.partial) || null;
+    const page = rawPage.filter(e => !e.partial);
+    const prevTail = o.tail; o.tail = nextTail;
+    const tailChanged = (prevTail?.text || "") !== (nextTail?.text || "") || (prevTail?.ts || 0) !== (nextTail?.ts || 0);
+    let updated = false;
+    if (!first) {
+      const list = document.getElementById("aout-list");
+      for (const e of page) {
+        if (e.role !== "line" || !o.ids.has(e.id)) continue;
+        const cur = o.entries.find(x => x.id === e.id);
+        if (cur && (cur.text !== e.text || cur.ts !== e.ts)) {
+          cur.text = e.text; cur.ts = e.ts; updated = true;
+          if (list) syncEntryDom(list.querySelector(`[data-id="${CSS.escape(e.id)}"]`), cur);
+        }
+      }
+    }
     // new to it: a line past the last one shown for its session (a session that flips between newest and recent never
     // brings its older, unseen lines in at the bottom), or any line of a session not shown yet
     const fresh = e => !o.ids.has(e.id) && (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]);
-    const seen = page.filter(fresh), rec = arr(r.recent).filter(e => fresh(e) && !seen.some(x => x.id === e.id)), add = seen.concat(rec);  // another session busy at the same time: its new lines too
+    const seen = page.filter(fresh), rec = arr(r.recent).filter(e => !e.partial && fresh(e) && !seen.some(x => x.id === e.id)), add = seen.concat(rec);  // another session busy at the same time: its new lines too
     const gap = !first && o.entries.length && seen.length && seen.length === page.length && r.more;  // more arrived than one page holds: what's between is skipped, and said so (no cursor: the page reaches the start)
     if (first) o.more = r.more || null;  // Load earlier continues from the top of what's shown
     const newest = page.length ? stemOf(page[page.length - 1]) : null;  // the page ends in the newest session's tail
@@ -1799,19 +1845,36 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     else if (newest && (first || !o.main || Date.now() - o.mainAt > OUT_QUIET)) { o.main = newest; o.mainAt = Date.now() }  // main: the newest, once the old main has been quiet a while (two busy sessions keep their labels)
     for (const e of add) e.other = !!o.main && stemOf(e) !== o.main && (rec.includes(e) || !first);  // the first page's older sessions are history, not "another"
     add.forEach(e => { o.ids.add(e.id); o.tip[stemOf(e)] = Math.max(o.tip[stemOf(e)] ?? -1, idxOf(e)) }); o.entries.push(...add); o.loaded = true;
-    if (first) outPaint();  // outPaint lands at the bottom
-    else if (add.length) {
-      const list = document.getElementById("aout-list"), note = list.querySelector(".aonote");
-      if (note) note.remove();  // "No output yet" was true until now
-      if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
-      list.append(...add.map(e => outEntry(e, e.other)));
-      const cap = o.source === "pane" ? 1000 : 500;
-      if (o.follow && o.entries.length > cap) {
-        const drop = o.entries.splice(0, o.entries.length - cap);
-        for (const e of drop) list.querySelector(`[data-id="${CSS.escape(e.id)}"]`)?.remove();
+    if (first) {
+      const hasNew = o.lastLooked != null && (o.entries.some(e => typeof e.ts === "number" && isFinite(e.ts) && e.ts > o.lastLooked)
+        || (o.tail && typeof o.tail.ts === "number" && isFinite(o.tail.ts) && o.tail.ts > o.lastLooked));
+      if (!hasNew) o.lastLooked = null;
+      outPaint();  // outPaint lands at the bottom
+    } else if (add.length || tailChanged || updated) {
+      const list = document.getElementById("aout-list");
+      if (add.length) {
+        const note = list.querySelector(".aonote");
+        if (note) note.remove();  // "No output yet" was true until now
+        list.querySelector("[data-tail='1']")?.remove();
+        if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
+        list.append(...add.map(e => outEntry(e, e.other)));
+        const cap = o.source === "pane" ? 1000 : 500;
+        if (o.follow && o.entries.length > cap) {
+          const drop = o.entries.splice(0, o.entries.length - cap);
+          let droppedNew = false;
+          for (const e of drop) {
+            o.ids.delete(e.id);
+            if (o.lastLooked != null && typeof e.ts === "number" && isFinite(e.ts) && e.ts > o.lastLooked) droppedNew = true;
+            list.querySelector(`[data-id="${CSS.escape(e.id)}"]`)?.remove();
+          }
+          if (droppedNew) o.lastLooked = null;
+          const firstCur = o.entries.find(e => idxOf(e) >= 0);
+          if (firstCur) o.more = firstCur.id;
+        }
       }
+      syncOutTail(list, o.tail);
       syncLookedDivider();
-      if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
+      if (o.follow) outBottom(); else if (add.length) { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
   }
@@ -1831,11 +1894,12 @@ function outEntry(e, other){  // other: a line of another session running alongs
   if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open");
       ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
       outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
+    const box = stamp ? h("span", {class:"aotool"}, e.text) : null;
     const el = h("div", {class:"aoe tool" + (stamp ? " hasts" : ""), "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
       onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
       onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }},
-      ...(stamp ? [stamp, h("span", {class:"aotool"}, e.text)] : [e.text]));
-    if (!long) requestAnimationFrame(() => { if (el.isConnected && el.scrollHeight > el.clientHeight + 1)  // a narrow window folds a shorter one too
+      ...(stamp ? [stamp, box] : [e.text]));
+    if (!long) requestAnimationFrame(() => { const probe = box || el; if (el.isConnected && probe.scrollHeight > probe.clientHeight + 1)  // a narrow window folds a shorter one too
       Object.entries({tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"}).forEach(([k, v]) => el.setAttribute(k, v)) });
     return el }
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
@@ -1846,30 +1910,31 @@ const idxOf = e => { const n = Number(String(e.id).replace(/^.*:/, "")); return 
 function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   list.replaceChildren(...o.entries.map(e => outEntry(e, e.other)));
-  if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
+  syncOutTail(list, o.tail);
+  if (o.loaded && !o.entries.length && !o.tail) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
   syncLookedDivider();
   outMore(); outBottom();
 }
 function outMore(){  // the top of the log: Load earlier, or where the sessions start
   const o = ui.out, el = document.getElementById("aout-more"); if (!o || !el) return;
-  const key = [o.loaded, !!o.more, o.older, !!o.olderErr, !!o.entries.length].join();
+  const key = [o.loaded, !!o.more, o.older, !!o.olderErr, !!(o.entries.length || o.tail)].join();
   if (key === o.moreKey) return;  // unchanged: the button stays the one under the pointer (and the screen reader's)
   o.moreKey = key;
   const had = el.contains(document.activeElement);  // its button is rebuilt: keep the keyboard on it (or on the log), never behind the dialog
   el.replaceChildren(!o.loaded ? h("span", {}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "Loading output…")
     : o.more ? h("button", {class:"btn sm", id:"aout-older", disabled: o.older, onclick: olderOut}, o.older ? "Loading…" : o.olderErr ? "Couldn't load. Try again" : "Load earlier output")
-    : o.entries.length ? h("span", {}, "Start of this workspace's agent sessions") : null);
+    : (o.entries.length || o.tail) ? h("span", {}, "Start of this workspace's agent sessions") : null);
   const b = document.getElementById("aout-older");
   if (had) (b && !b.disabled ? b : document.getElementById("aout-log")).focus();  // a disabled one can't hold focus
 }
 function outBottom(){
   const o = ui.out, log = document.getElementById("aout-log"); if (!o || !log) return;
-  log.scrollTop = log.scrollHeight; o.follow = true; o.unseen = 0; outNew();
+  log.scrollTop = log.scrollHeight; o.follow = true; o.unseen = 0; markOutSeen(o); outNew();
 }
 function outScrolled(e){
   const o = ui.out, log = e.currentTarget; if (!o) return;
   const was = o.follow; o.follow = log.scrollHeight - log.scrollTop - log.clientHeight <= OUT_FOLLOW;
-  if (o.follow) o.unseen = 0;
+  if (o.follow) { o.unseen = 0; markOutSeen(o) }
   if (o.follow !== was) outNew();  // scrolled away: Latest offers the way back; at the bottom it goes
 }
 function outNew(){
@@ -1884,15 +1949,18 @@ function outStrip(o, p){
   const a = (p && p.agent) || {}, mr = (p && p.mr) || {};
   const st = a.state === "working" ? ["blue", "Working"] : a.state === "waiting" ? ["wait", "Waiting"]
     : p && p.state === "crashed" ? ["red", "Crashed"] : ["gray", "Idle"];
-  const lastTs = outMaxTs(o) || since(a.last_output_at) || (typeof a.idle_h === "number" && isFinite(a.idle_h) ? Date.now() - a.idle_h * 3.6e6 : null) || since(a.since);
+  const snapMs = ui.snap && ui.snap.ts ? ui.snap.ts * 1000 : Date.now();
+  const lastTs = outMaxTs(o) || since(a.last_output_at) || (typeof a.idle_h === "number" && isFinite(a.idle_h) ? snapMs - a.idle_h * 3.6e6 : null) || since(a.since);
   const toolName = a.tool || o.tool || "", toolIn = a.tool ? (a.input || "") : (o.toolInput || "");
   const toolText = toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "";
-  const [ciText, ciTone, ciIcon] = mr.iid || mr.pipeline ? ciSay({}, mr) : ["", null, null];
-  const ciLabel = ciTone === "ok" ? "CI passed" : ciTone === "bad" ? "CI failed" : ciTone === "run" ? `CI ${ciText}` : ciText ? `CI ${ciText}` : "";
+  const [ciText, ciTone, ciIcon] = mr.pipeline ? ciSay({}, mr) : ["", null, null];
+  const ciLabel = ciTone === "ok" ? "CI passed" : ciTone === "bad" ? "CI failed" : ciText ? `CI ${ciText}` : "";
+  const ciGlyph = ciTone ? ciIcon : "ci";
   const ciCol = {ok:"--green", bad:"--red", run:"--blue"}[ciTone];
   const {n, i} = p ? stepsOf(p) : {n: 0, i: 0}, stepLabel = p && p.step ? (STEP_GOALS[p.step] || STEP_NAMES[p.step] || cap(String(p.step).replace(/_/g, " "))) : "";
-  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, i, n, stepLabel, p && p.state || ""].join("\u0000");
+  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, ciGlyph || "", i, n, stepLabel, p && p.state || ""].join("\u0000");
   if (strip.dataset.key === key) return;
+  const hadPrFocus = !!(document.activeElement && strip.contains(document.activeElement) && document.activeElement.classList.contains("aos-pr"));
   strip.dataset.key = key;
   strip.replaceChildren(
     statusPill(st[0], st[1]),
@@ -1903,9 +1971,10 @@ function outStrip(o, p){
       ? h("a", {class:"aos-pr", href: mr.web_url, title: mr.title || mrRef(mr)}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null)
       : h("span", {class:"aos-pr"}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null))
       : h("span", {class:"aos-item muted"}, "No PR"),
-    ciLabel ? h("span", {class:"aos-ci", style: ciCol ? `color:${ink(ciCol)}` : null}, icon(ciIcon, 12), ciLabel) : null,
+    ciLabel ? h("span", {class:"aos-ci", style: ciCol ? `color:${ink(ciCol)}` : null}, icon(ciGlyph, 12), ciLabel) : null,
     n ? h("span", {class:"aos-item aos-step"}, `Step ${Math.min(i + 1, n)} of ${n}`, stepLabel ? [" · ", h("b", {}, p && p.state === "done" ? "Done" : stepLabel)] : null)
       : stepLabel ? h("span", {class:"aos-item aos-step"}, h("b", {}, stepLabel)) : null);
+  if (hadPrFocus) strip.querySelector("a.aos-pr")?.focus();
 }
 function outHead(){  // who and what it's doing now, from the 5s snapshot; any refresh error
   const o = ui.out; if (!o) return;

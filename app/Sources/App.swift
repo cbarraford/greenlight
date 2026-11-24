@@ -1997,15 +1997,24 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         "bind -n WheelDownPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Down\"'"]
     // ponytail: the two lists are set at a fixed index, as an append (-as) grew them on every attach
     static var tmux: String { "tmux -L \(shellQuote(tmuxSocketName)) -f /dev/null" }
-    /// Escape a string as a tmux double-quoted argument (`\` and `"`).
+    /// Escape a string as a tmux double-quoted argument (`\`, `"`, and `$`).
     static func tmuxQuote(_ s: String) -> String {
-        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        "\"" + s
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$") + "\""
+    }
+    /// Escape literal `#` as `##` for tmux commands that run status-left format expansion (`pipe-pane`).
+    static func tmuxFormatEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "#", with: "##")
     }
     /// Idempotent tmux hooks (`after-new-session[1]`, `client-attached[1]`) that attach `pane_log.py record`
     /// via `pipe-pane -O` when `#{pane_pipe}` is 0. Safe on remote hosts: no-ops cleanly if `pane_log.py` is absent.
     static func paneRecorderHooks() -> [String] {
-        let script = "\(shellPath(greenlightCode))/scripts/pane_log.py"
-        let pipeShell = "[ -f \(script) ] && GREENLIGHT_HOME=\(shellPath(greenlightHome)) exec python3 \(script) record --pane #{pane_id} --socket \(shellQuote(tmuxSocketName))"
+        let script = tmuxFormatEscape("\(shellPath(greenlightCode))/scripts/pane_log.py")
+        let home = tmuxFormatEscape(shellPath(greenlightHome))
+        let sock = tmuxFormatEscape(shellQuote(tmuxSocketName))
+        let pipeShell = "[ -f \(script) ] && GREENLIGHT_HOME=\(home) exec python3 \(script) record --pane #{pane_id} --socket \(sock)"
         let innerPipe = "pipe-pane -O " + tmuxQuote(pipeShell)
         let hookVal = "if -F \"#{pane_pipe}\" \"\" " + tmuxQuote(innerPipe)
         return [

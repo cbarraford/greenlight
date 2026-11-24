@@ -896,4 +896,27 @@ with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName":
     assert _tr["source"] == "transcript"
     _msg = next(e for e in _tr["entries"] if e["role"] == "assistant")
     assert isinstance(_msg["ts"], int) and _msg["ts"] > 1_700_000_000_000 and _tr["last_output_ts"] == _msg["ts"]
+
+# Empty pane log and plain shell pane log do NOT hijack Claude/Codex JSONL transcripts; agent pane chains `more` to JSONL history
+(_pl_home / "mc-shell1.jsonl").write_text(
+    json.dumps({"ts": 1_700_000_000_000, "meta": {"session": "mc-shell1", "cwd": "/w/tsws", "gen": 0}}) + "\n"
+    + json.dumps({"ts": 1_700_000_010_000, "d": "$ ls\r\nREADME.md\r\n"}) + "\n"
+)
+(_pl_home / "mc-empty1.jsonl").write_text(
+    json.dumps({"ts": 1_700_000_000_000, "meta": {"session": "mc-empty1", "cwd": "/w/emptyws", "gen": 0, "agent": "claude"}}) + "\n"
+)
+with mock.patch.object(dash, "live_agents", return_value={
+        "w1": ({"displayName": "tsws", "path": "/w/tsws"}, {}),
+        "w2": ({"displayName": "emptyws", "path": "/w/emptyws"}, {}),
+        "w3": ({"displayName": "plog", "path": "/w/plog"}, {}),
+     }), \
+     mock.patch.object(pane_log, "default_log_dir", return_value=_pl_home), \
+     mock.patch.object(ade_basement, "panes", return_value=[]), \
+     mock.patch.object(dash, "transcript_files", return_value=[(_ts_dir / "t1.jsonl", "claude")]):
+    assert dash.transcript("tsws")["source"] == "transcript", "plain shell must not hijack JSONL transcript"
+    assert dash.transcript("emptyws")["source"] == "transcript", "empty pane log must fall back to JSONL transcript"
+    _chained = dash.transcript("plog")
+    assert _chained["source"] == "pane" and _chained["more"] == "t1:999999999"
+    _older = dash.transcript("plog", before=_chained["more"])
+    assert _older["source"] == "transcript" and any(e["text"] == "hello" for e in _older["entries"])
 print("pane log transcript ok")

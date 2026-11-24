@@ -31,6 +31,7 @@ widgets, so a bad layout degrades to fewer cards, never to executed output.
 import base64
 import calendar
 import contextlib
+from datetime import datetime, timezone
 import hashlib
 import importlib
 import json
@@ -1574,14 +1575,12 @@ def _parse_ts_ms(val):
     if not isinstance(val, str) or not val:
         return None
     try:
-        from datetime import UTC, datetime
-
         s = val.strip()
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
+            dt = dt.replace(tzinfo=timezone.utc)  # noqa: UP017
         return int(dt.timestamp() * 1000)
     except ValueError:
         return None
@@ -1799,16 +1798,57 @@ def transcript_files(path):
 RECENT = 300  # seconds
 
 
-def _pane_transcript(path, before=None, limit=120):
-    """Read recorded tmux pane log for `path` when available, else None."""
+def _agent_pane_sessions(path, live_panes, worktree_paths):
+    """Tmux sessions in `path` known to run an agent (last_agent record or active agent pane)."""
+    out: set[str] = set()
+    with contextlib.suppress(Exception):
+        rec = last_agent.load().get(path)
+        if isinstance(rec, dict) and rec.get("session"):
+            out.add(str(rec["session"]))
+    try:
+        import ade_basement
+    except Exception:
+        return out
+    all_cmds = {c for cmds in last_agent.CMDS.values() for c in cmds}
+    for p in live_panes:
+        s = p.get("session") or ""
+        if not s:
+            continue
+        owner = last_agent.owner(p.get("cwd") or "", worktree_paths) if worktree_paths else path
+        if owner != path:
+            continue
+        if ade_basement.state(p.get("title") or "") or last_agent.cmd(p) in all_cmds:
+            out.add(s)
+    return out
+
+
+def _pane_transcript(path, before=None, limit=120, worktree_paths=None):
+    """Read recorded tmux pane log for an agent session in `path`, else None."""
     if not path:
         return None
     try:
+        import ade_basement
         import pane_log
 
         if before and not pane_log.CURSOR_RE.fullmatch(before):
             return None
-        return pane_log.read_workspace(path, before=before, limit=limit)
+        try:
+            live_panes = ade_basement.panes(cmd=True)
+        except Exception:
+            live_panes = []
+        agent_sessions = _agent_pane_sessions(path, live_panes, worktree_paths)
+        res = pane_log.read_workspace(
+            path, live_panes=live_panes, before=before, limit=limit,
+            worktree_paths=worktree_paths, agent_sessions=agent_sessions,
+        )
+        if res:
+            return res
+        fallback = pane_log.read_workspace(
+            path, live_panes=live_panes, before=before, limit=limit, worktree_paths=worktree_paths,
+        )
+        if fallback and (before or fallback.get("tool")):
+            return fallback
+        return None
     except Exception:
         return None
 
@@ -1816,10 +1856,14 @@ def _pane_transcript(path, before=None, limit=120):
 def transcript(name, before=None, limit=60):
     """A page of the agent's log in the workspace, oldest first, ending just before `before` ("<stem>:<index>").
     Prefers recorded tmux pane logs (with per-line timestamps); falls back to Claude/Codex transcripts."""
-    w = next((w for w, _ in live_agents().values() if w["displayName"] == name), None)
+    agents_map = live_agents()
+    w = next((w for w, _ in agents_map.values() if w["displayName"] == name), None)
     if not w:
         return {"error": f"no workspace {name}", "before": before}  # before: the page can tell a failed "Load earlier" from a failed refresh
-    if pane := _pane_transcript(w.get("path"), before=before, limit=max(limit, 120)):
+    all_paths = [ww["path"] for ww, _ in agents_map.values() if ww.get("path")]
+    if pane := _pane_transcript(w.get("path"), before=before, limit=max(limit, 120), worktree_paths=all_paths):
+        if pane.get("more") is None and (older_files := transcript_files(w["path"])):
+            pane["more"] = f"{_transcript_stem(*older_files[0])}:999999999"
         return pane
     files = transcript_files(w["path"])
     f, i = 0, None

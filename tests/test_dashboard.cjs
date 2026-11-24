@@ -1634,21 +1634,68 @@ test("Agent log view phase 1: status strip, per-line relative-time gutter, and '
   assert.match(strip2, /Edit: app\/dashboard\.html/, "falls back to tool detected from recorded pane log");
   assert.match(strip2, /CI failed/);
 
-  // Close & reopen with no new lines: divider does not appear
+  // Close & reopen with no new lines: divider does not appear, and live lines arriving while watching never spawn a stale divider
   await page.click("#aout-back");
-  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [{...rich, agent: {...rich.agent, state: "idle"}}]});
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [{...rich, agent: {...rich.agent, state: "idle"}, mr: {...rich.mr, pipeline: null}}]});
   await page.evaluate(() => openPage("log-ws"));
   await page.click("button:has-text('View log')");
   await page.evaluate(r => mc.transcript(r), {
     name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 5_000,
     entries: [{id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"}],
   });
-  assert.match(await page.textContent("#aout-strip"), /Idle/);
+  const stripNoPipe = await page.textContent("#aout-strip");
+  assert.match(stripNoPipe, /Idle/);
+  assert.doesNotMatch(stripNoPipe, /no pipeline/i, "MR without pipeline does not render 'CI no pipeline'");
   assert.equal(await page.$("#aout-looked"), null, "no divider when nothing arrived since last looked");
+
+  // Live partial tail arrives while watching: appears cleanly without spawning a stale divider, then transitions to committed line
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 2_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:tail", role: "line", text: "Half written", ts: now - 2_000, kind: "pane", partial: true},
+    ],
+  });
+  assert.equal(await page.textContent("#aout-list [data-tail='1'] .aotx"), "Half written");
+  assert.equal(await page.$("#aout-looked"), null, "live tail while watching never spawns a stale divider");
+
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 1_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+    ],
+  });
+  assert.equal(await page.$("#aout-list [data-tail='1']"), null, "committed line replaces partial tail");
+  assert.equal(await page.textContent("#aout-list [data-id='mc-s1.g0:4'] .aotx"), "Half written completed");
+  assert.equal(await page.$("#aout-looked"), null, "live output while watching never spawns a stale 'Since you last looked' divider");
+
+  // Closing while scrolled up (follow=false) preserves seenTs so unseen lines show 'Since you last looked' on reopen
+  await page.evaluate(() => { ui.out.follow = false; ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now + 5_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+      {id: "mc-s1.g0:5", role: "line", text: "Unseen while scrolled up", ts: now + 5_000, kind: "pane"},
+    ],
+  });
+  await page.click("#aout-back");
+  assert.equal(await page.evaluate(() => getLastLooked("log-ws")), now - 1_000, "scrolled-up close keeps seenTs, not unseen ts");
 
   // Narrow viewport & light appearance sanity
   await page.setViewportSize({width: 480, height: 640});
-  await page.evaluate(() => { document.documentElement.dataset.appearance = "light" });
+  await page.evaluate(() => { document.documentElement.dataset.appearance = "light"; openOut("log-ws") });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now + 5_000,
+    entries: [
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+      {id: "mc-s1.g0:5", role: "line", text: "Unseen while scrolled up", ts: now + 5_000, kind: "pane"},
+    ],
+  });
+  assert.equal(await page.locator("#aout-looked").count(), 1, "reopening shows divider before line that arrived while scrolled up");
   const overflow = await page.evaluate(() => document.getElementById("aout-strip").scrollWidth > window.innerWidth + 2);
   assert.equal(overflow, false, "status strip wraps cleanly at 480px width");
   await page.click("#aout-back");

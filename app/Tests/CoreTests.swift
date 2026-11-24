@@ -1115,6 +1115,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && hooks[0].contains("after-new-session[1]")
           && hooks[1].contains("client-attached[1]")
           && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
-          && App.tmuxQuote(#"a"b\c"#) == #""a\"b\\c""#)
+          && App.tmuxQuote(#"a"b\c$HOME"#) == #""a\"b\\c\$HOME""#
+          && App.tmuxFormatEscape("dir#1/file#2") == "dir##1/file##2")
     mainC.clear()
 }
