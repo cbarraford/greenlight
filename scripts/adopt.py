@@ -87,7 +87,7 @@ def repo_map():
     """{project path: {"id", "path", "forge"}} for every gitlab.com/github.com repo the ADE knows, worktrees or not.
     ponytail: keyed by path alone, so the same owner/repo on both forges collides (first one wins)"""
     out = {}
-    for r in greenlight.orca("repo", "list")["repos"]:
+    for r in greenlight.local_first(greenlight.orca("repo", "list")["repos"]):  # first one wins: this machine's (#160)
         if r.get("path") and not os.path.isdir(r["path"]):  # a moved/renamed checkout Orca still lists shares its remote
             continue
         key = (r.get("gitRemoteIdentity") or {}).get("canonicalKey")

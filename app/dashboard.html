@@ -1413,10 +1413,13 @@ function factsLine(p, ml){  // the facts panel in one sentence
 }
 const BRIEF = {merge: () => "Ready for your merge review.", milestone: () => "Needs a milestone before it can merge.", review: mr => `${mr.author || "Someone"} asked for your review.`};
 function safeHttpUrl(u){ return typeof u === "string" && /^https?:\/\//i.test(u) }
+// the machine its agent runs on (dash.py host): needs-you ink when that is not where Chief runs (placement.py moves it)
+const hostFact = p => p.away ? h("span", {style:`color:${ink("--orange")}`}, `${p.host} · not where Chief runs`) : p.host;
 function mrFacts(p, ml){
   const mr = p.mr || {};
   if (!mr.iid) return h("section", {class:"panel"}, h("h2", {}, "Workspace"), h("dl", {class:"facts"},
-    h("dt", {}, "Branch"), h("dd", {class:"mono"}, p.branch || p.name), h("dt", {}, "Project"), h("dd", {}, p.project || "none"), h("dt", {}, "Goal"), h("dd", {}, p.goal || "No goal in the Orca comment.")));
+    h("dt", {}, "Branch"), h("dd", {class:"mono"}, p.branch || p.name), h("dt", {}, "Project"), h("dd", {}, p.project || "none"),
+    p.host ? [h("dt", {}, "Host"), h("dd", {}, hostFact(p))] : null, h("dt", {}, "Goal"), h("dd", {}, p.goal || "No goal in the Orca comment.")));
   const [ci, tn, ic] = ciSay(ml, mr), cis = h("span", {class:"fv", style: tn ? `color:${ink({ok:"--green", run:"--blue", bad:"--red"}[tn])}` : null},
     icon(ic, 14), (tn === "run" ? "running" : tn === "bad" ? "failed" : tn === "ok" ? "passed" : "") + (tn && arr(ml.jobs).length ? " · " : "") + (arr(ml.jobs).length || !tn ? ci : ""));
   const appr = ml.approved_by || [], need = Math.max(mr.approvals_required || 0, appr.length), un = ml.unresolved != null ? ml.unresolved : mr.threads || 0;
@@ -1427,6 +1430,7 @@ function mrFacts(p, ml){
     ["Approvals", appr.length ? h("span", {}, h("span", {style: need ? `color:${ink(appr.length >= need ? "--green" : "--orange")}` : null}, need ? `${appr.length} of ${need}` + (appr.length < need ? ` · ${need - appr.length} needed` : "") : `${appr.length}`), ` · ${appr.join(", ")}`) : need ? `0 of ${need} · nobody yet` : "nobody yet"],
     ["Milestone", ml.milestone || "none"], ["Labels", arr(ml.labels).join(", ") || "none"],
     ["MR", safeHttpUrl(mr.web_url) ? h("a", {href: mr.web_url}, mrRef(mr), mr.author ? h("span", {class:"muted"}, ` by ${mr.author}`) : null) : h("span", {}, mrRef(mr), mr.author ? h("span", {class:"muted"}, ` by ${mr.author}`) : null)]];
+  if (p.host) rows.push(["Host", hostFact(p)]);
   if (ml.error) rows.push([forgeName(mr), h("span", {style:`color:${c("--red")}`}, short(ml.error, 120))]);
   return h("section", {class:"panel"}, h("h2", {class:"sect"}, mr.role === "reviewer" ? "Merge request you review" : "Merge request"),
     h("dl", {class:"facts"}, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])));

@@ -160,6 +160,7 @@ can't run, nothing is exported. `diag.py bundle` writes the same data to a file 
 | `AGENTS.md` | notes for coding agents (Codex, agy; `CLAUDE.md` and `GEMINI.md` point at it): the diagnostic trail and its privacy rules |
 | `scripts/greenlight.py` | scan, next step per workspace, report, pings |
 | `scripts/adopt.py` | a workspace for each open MR/PR of yours or awaiting your review |
+| `scripts/placement.py` | where each workspace's agent runs; flags and recreates ones not on the host greenlight runs on |
 | `scripts/lifestage.py` | where each change is in its lifecycle (stage and sub-stage), who holds it, the suggested move |
 | `scripts/dwim.py` | the fast path for board commands said, typed in the chat or in ⌘J (“park the two auth ones”, “hold #42”, “fix CI on the red ones”): done in under a second with an Undo toast, or handed to Chief when it’s ambiguous or destructive; and the voice stage’s instant table / timeline / diff / lifecycle card |
 | `scripts/cleanup.py` | deletes finished workspaces when nothing can be lost |

@@ -409,7 +409,7 @@ def test_dash_new_task_and_tree_new_preflight_gates(lifestage_env):
         return {"worktree": {"path": "/w/new", "worktreeId": "t1"}} if a[:2] == ("worktree", "create") else {}
 
     with (
-        mock.patch.object(dash, "tree", return_value=(tree_call, {"repoId": "r"})),
+        mock.patch.object(dash, "tree", return_value=(tree_call, {"repoId": "r"}, [{"repoId": "r"}])),
         mock.patch.object(dash, "repo_cfg", return_value={}),
         mock.patch.dict(sys.modules, {"decide": FakeDecide(0.9, clarity=0.2)}),
     ):

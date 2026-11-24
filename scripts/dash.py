@@ -53,6 +53,7 @@ import greenlight  # noqa: E402
 import last_agent  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
+import placement  # noqa: E402
 
 DASH = greenlight.STATE / "dash"
 NAME_RE = re.compile(r"^[\w.@+/-]{1,200}$")
@@ -646,6 +647,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     now = time.time() * 1000
     rows = live_rows(snap["rows"], live)
     pucks, blk = [], blocking.cached()
+    ms = placement.machines()
+    home = placement.expected(ms)  # where the agents belong: a workspace elsewhere is flagged `away` (#160)
     for r in rows:
         w, ag = live[r["id"]]
         _normalize_row(r)
@@ -674,6 +677,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                                                      "source_branch", "target_branch", "labels", "milestone", "approved_by",
                                                      "pipeline_url", "threads_total")},
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
+            "host": (h := placement.host_of(w, ms)), "away": not greenlight.same_host(h, home),
             "puck": page.get("layout", {}).get("puck"),
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
             # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
@@ -693,7 +697,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
     trees = sorted(({"name": w["displayName"], "path": w["path"], "project": w.get("repo") or "", "main": bool(w.get("isMainWorktree")),
-                     "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "agent": (ag or {}).get("state") or "none"}
+                     "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "agent": (ag or {}).get("state") or "none",
+                     "host": placement.host_of(w, ms)}
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
     return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees}
@@ -799,16 +804,18 @@ def created(path):
         return None
 
 
-def tree(path):
-    """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree."""
+def tree(path, every=False):
+    """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree. every: also every
+    live row at that path (two hosts can share one)."""
     for ade in ADES:
         try:
             call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
-        if w := next((w for w in ws if w.get("path") == path and not w.get("isArchived")), None):
-            return call, w
+        rows = [w for w in ws if w.get("path") == path and not w.get("isArchived")]
+        if rows:
+            return (call, rows[0], rows) if every else (call, rows[0])
     raise LookupError(f"no workspace at {path}")
 
 
@@ -945,9 +952,17 @@ def tree_new(path, o):
     gate = preflight(goal, "", o) if o.get("agent") and goal else None
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
-    call, w = tree(path)
-    res = call("worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
-               *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else []))
+    call, w, twins = tree(path, every=True)
+    if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host: this machine's checkout there, if any
+        w = next((x for x in twins if x.get("hostId") == "local"), w)
+    args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
+            *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else [])]
+    if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: place it the same way. The row is the user's
+        # pick when it's the only one at that path, or this machine's of several; else it's checked like any create
+        args, why = greenlight.place_here(args, picked=len(twins) == 1 or w.get("hostId") == "local")
+        if why:
+            return {"error": why}
+    res = call(*args)
     made = res.get("worktree") or {}
     if not made.get("path"):  # ponytail: Orca's create answer isn't pinned down here; find it by branch instead
         made = next((x for x in call("worktree", "ps", "--limit", "10000")["worktrees"]
@@ -1616,7 +1631,7 @@ FILES_CAP = 15 << 20  # raw bytes, all files together; stdin is capped at 20 MB 
 def repos():
     """Orca repos with a GitHub/GitLab remote: where a task's MR can live."""
     out = []
-    for r in greenlight.orca("repo", "list")["repos"]:
+    for r in greenlight.local_first(greenlight.orca("repo", "list")["repos"]):  # a name picks this machine's checkout first
         key = (r.get("gitRemoteIdentity") or {}).get("canonicalKey") or ""
         host, _, path = key.partition("/")
         if host in ("gitlab.com", "github.com") and path:
