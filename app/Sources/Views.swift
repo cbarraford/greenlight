@@ -484,26 +484,22 @@ struct Inbox: View {
         let w = c.waiting, open = c.inboxFocus?.id
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DS.Space.s8) {
-                Text("Inbox").fontWeight(.semibold)
+                Text("Inbox").font(sys(size: DS.TypeRole.label.size, weight: .medium)).foregroundColor(dim)
                 if !w.isEmpty {
                     Text("\(w.count)").font(sys(size: DS.TypeRole.caption.size, weight: .bold)).foregroundColor(.black.opacity(0.8))
                         .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16).background(Capsule().fill(StatusInk.needs))
                         .accessibilityLabel("\(w.count) waiting")
                 }
-                Spacer()
-                Button { c.inboxOpen = false } label: {
-                    Image(ds: "close", size: iconSize(glyphSize), medium: true).foregroundColor(dim).frame(width: 28, height: 28).contentShape(Rectangle())
-                }.buttonStyle(.plain).help("Close (Esc)").accessibilityLabel("Close inbox")
-            }.padding(.leading, DS.Space.s16).padding(.trailing, DS.Space.s8).padding(.vertical, DS.Space.s4).background(card)
-            Divider().overlay(line)
+                Spacer()  // no close button: Esc, the bell or a click outside closes it, as a popover
+            }.padding(.horizontal, DS.Space.s16).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s4)
             if w.isEmpty {
                 HStack(alignment: .top, spacing: DS.Space.s12) {
-                    Image(ds: "done-fill", size: iconSize(DS.TypeRole.title.size)).foregroundColor(StatusInk.done)
+                    Image(ds: "done", size: iconSize(DS.TypeRole.title.size)).foregroundColor(dim)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Nothing waiting on you").fontWeight(.semibold)
+                        Text("Nothing needs you").fontWeight(.semibold)
                         Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: DS.TypeRole.label.size)).foregroundColor(dim)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.s16)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, DS.Space.s16).padding(.top, DS.Space.s8).padding(.bottom, DS.Space.s16)
             } else {
                 let rows = VStack(spacing: 0) {
                     ForEach(w) { q in if q.id == open { QuestionRow(c: c, q: q) } else { InboxLine(c: c, q: q) } }
@@ -549,7 +545,7 @@ struct Inbox: View {
                         Button { c.inboxConfirm = true } label: { HStack(spacing: 6) { Text("Clear all"); kbd("⇧⌫") } }.buttonStyle(.plain).foregroundColor(sub)
                             .help("Dismiss every waiting question without answering. Nothing is sent.")
                     }
-                }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38).background(card)
+                }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38)
             }
         }
         .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(bg))
@@ -761,7 +757,7 @@ struct InboxOverlay: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.clear.contentShape(Rectangle()).onTapGesture { c.inboxOpen = false }  // no scrim: the dashboard stays readable
-            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 420).padding(.top, 50).padding(.trailing, DS.Space.s12).padding(.bottom, DS.Space.s16)
+            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 400).padding(.top, DS.Layout.barHeight + DS.Space.s8).padding(.trailing, DS.Space.s12).padding(.bottom, DS.Space.s16)
             Button("") { c.inboxOpen = false }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
