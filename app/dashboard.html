@@ -1280,6 +1280,10 @@ function footer(){
       ui.rescan ? "Refreshing…" : !isFinite(hrs) ? "Not scanned yet" : hrs < 1 / 60 ? "Scanned just now" : `Scanned ${ago(hrs)} ago`),
       h("button", {class: "rescan" + (ui.rescan ? " on" : ""), title: "Refresh now (~40s)", "aria-label": "Refresh now", disabled: !!ui.rescan,
         onclick: () => { ui.rescanFail = 0; rescanFor(); footer() }}, icon("refresh", 13)));
+    const se = ui.snap.scan_error;  // the newest scan died (greenlight.py's scan_error.json): say why, or the age just goes stale
+    if (se && !ui.rescan) f.append(h("span", {class: "scanerr", style: `color:${ink("--red")}`,
+      title: `The last scan stopped ${ago((Date.now() / 1000 - se.ts) / 3600)} ago, so these facts are from the one before.` + (se.fix ? `\nFix: run ${se.fix}, then ↻.` : "")},
+      `Scan failed: ${se.msg || "unknown error"}`));
   }
   const np = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)).length : 0;
   if (np && !ui.page) f.append(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
