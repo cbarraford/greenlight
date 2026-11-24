@@ -1053,6 +1053,25 @@ def test_board_goes_ahead_of_the_message_once(tmp_path, monkeypatch):
     assert prompts[-1] == chat.WRAP + "and then?", prompts
 
 
+def test_buttons_go_ahead_of_the_message_not_into_it(tmp_path, monkeypatch):
+    # #175: send --done's lines reach Chief ahead of the message; the message (a reply header, the watch's marker) still leads
+    # what decisions.heard / turn_kind and GREENLIGHT_REQUEST read
+    assert chat.done_note("") == "" and chat.done_note("\n \n") == ""
+    monkeypatch.setattr(chat, "DONE", "- merge on faster-qa (#16, head 0123456789ab): done\n- mark ready on b: failed: exit 1")
+    kinds = []
+    monkeypatch.setattr(chat.decisions, "turn_kind", lambda m: kinds.append(m))
+    _, prompts = turn(tmp_path, monkeypatch, "(Greenlight's watch, not typed by the user: x)")
+    assert prompts[0].startswith(chat.done_note(chat.DONE)) and "refresh the workspaces" in prompts[0], prompts
+    assert "- mark ready on b: failed: exit 1\n\n" in prompts[0] and prompts[0].endswith(chat.WRAP + "(Greenlight's watch, not typed by the user: x)")
+    assert kinds == ["(Greenlight's watch, not typed by the user: x)"] and "merge on" not in os.environ.get("GREENLIGHT_REQUEST", "")
+    import io
+    sent, args = [], ["send", "--done", "- park on a: done"]
+    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: sent.append((text, chat.DONE)))
+    monkeypatch.setattr(chat.sys, "stdin", io.StringIO("hi"))
+    chat.send_turn(args, lambda k: args[args.index(k) + 1] if k in args and args.index(k) + 1 < len(args) else None)
+    assert sent == [("hi", "- park on a: done")], sent  # the message stays what was typed
+
+
 def test_board_context_uses_current_card_identity(tmp_path, monkeypatch):
     import dash, ws_state
     monkeypatch.setattr(dash.greenlight, "STATE", tmp_path)

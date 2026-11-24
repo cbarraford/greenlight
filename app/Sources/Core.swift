@@ -200,19 +200,20 @@ final class Core: ObservableObject {
     /// for Chief's next turn, so it doesn't ask about a merge you just did or miss one that failed (#175).
     func acted(_ who: String, _ what: String, _ code: Int32, _ out: String, tell: Bool = true) {
         let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any]
-        let err = o?["error"] as? String, why = err ?? (code == 0 ? nil : "exit \(code)")
+        let why = o?["error"] as? String ?? (code == 0 ? nil : "exit \(code)")
         log(.greenlight, who, why == nil ? .action : .failed, "\(what): " + (why ?? "done"))
-        if tell && o?["risks"] == nil { doneSince = Array((doneSince + [actedLine(who, what, why, o)]).suffix(10)) }  // risks: it only asked to confirm
+        // risks: a Delete that only asked to confirm; paused: a new task's preflight asking first. Neither did anything yet.
+        guard tell, o?["risks"] == nil, o?["paused"] == nil else { return }
+        let mr = pucks.first { $0["name"] as? String == who || $0["path"] as? String == who }?["mr"] as? [String: Any]  // a failure names no MR
+        keepDone(doneSince + [actedLine(who, what, why, o, mr)])
     }
-    /// Buttons pressed since Chief's last turn (acted), oldest first; the next turn takes them (takeDone).
+    /// A worktree's board name (the path itself when the board doesn't have it).
+    func wsName(path: String) -> String { pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path }
+    /// Buttons pressed since Chief's last turn (acted), oldest first. The next turn takes them (start), and gives them back if it fails.
     var doneSince: [String] = []
-    /// The note that opens Chief's next turn, once: "" when no button was pressed since the last one.
-    func takeDone() -> String {
-        guard !doneSince.isEmpty else { return "" }
-        defer { doneSince = [] }
-        return "(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; each line is how it ended. "
-            + "Don't ask about or redo what's done, and say so if they ask whether you saw it. The board may lag behind a button: "
-            + "refresh the workspaces before you say where these stand.)\n" + doneSince.joined(separator: "\n") + "\n"
+    static let doneCap = 12, doneMore = "- (more buttons before these, not listed)"
+    private func keepDone(_ all: [String]) {
+        doneSince = all.count <= Core.doneCap ? all : [Core.doneMore] + all.filter { $0 != Core.doneMore }.suffix(Core.doneCap - 1)
     }
     /// A snapshot's agent and lifecycle changes, into the feed.
     func fed(_ pucks: [[String: Any]]) {
@@ -776,16 +777,15 @@ final class Core: ObservableObject {
                 + new.map(\.text).joined(separator: "\n") + "\n\n" + payload
             for i in attached.indices { attached[i].sent = true }
         }
-        payload = takeDone() + payload  // the buttons pressed since the last turn, ahead of what was typed
         if !focus.isEmpty && focus != focusSent {  // only when it changed: the chat session remembers the last one
             payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
             focusSent = focus
         }
-        if fs.isEmpty { let r = Run(shown ?? text, on: chatHost); r.spoken = spoken; return start(r, chatSend, stdin: payload) }  // spoken: began() draws its instant card
+        if fs.isEmpty { let r = Run(shown ?? text, on: chatHost); r.spoken = spoken; return start(r, chatSend, tellDone: true, stdin: payload) }  // spoken: began() draws its instant card
         // chat.py send --attach: the message and the files as one JSON object (attach.py)
         let body = (try? JSONSerialization.data(withJSONObject: ["text": payload, "files": fs.map(\.json)])).map { String(decoding: $0, as: UTF8.self) } ?? ""
         let r = Run(you, on: chatHost); r.files = fs; r.text = shown ?? text; r.spoken = spoken
-        start(r, chatSend + " --attach", stdin: body)
+        start(r, chatSend + " --attach", tellDone: true, stdin: body)
     }
 
     // The idle check-in: at the Mac but nothing done in Greenlight (chat, a card's button, typing in a Basement terminal) for
@@ -812,7 +812,7 @@ final class Core: ObservableObject {
     private func checkInTurn() {
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next", on: chatHost); r.checkIn = true
-        start(r, chatSend, stdin: takeDone() +
+        start(r, chatSend, tellDone: true, stdin:
             "(Greenlight's idle check-in, not typed by the user: they're at their Mac but haven't done anything in Greenlight for \(checkInMins) minutes.) "
             + "From the board, suggest which 1–3 workspaces they should work on next, most valuable first: for each, where it is in its lifecycle, "
             + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
@@ -857,7 +857,7 @@ final class Core: ObservableObject {
             guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = visible.merging(self.fresh) { $1 }; return }
             let liveList = visible.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
             let r = Run("Watching the workspaces", on: chatHost); r.watch = true
-            self.start(r, self.chatSend, stdin: self.takeDone() +
+            self.start(r, self.chatSend, tellDone: true, stdin:
                 "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(liveList)\n"
                 + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
                 + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")
@@ -939,8 +939,15 @@ final class Core: ObservableObject {
         ssh("\(chief(on: r.runHost)) stop", on: r.runHost)
     }
 
-    private func start(_ r: Run, _ remote: String, stdin: String) {
+    /// tellDone: a chat turn, which takes the buttons pressed since the last one (acted) as chat.py's --done, kept out of
+    /// the message so its reply header and the check-in/watch marker still lead it (decisions.heard, turn_kind).
+    private func start(_ r: Run, _ remote: String, tellDone: Bool = false, stdin: String) {
         run = r
+        var remote = remote
+        if tellDone && !doneSince.isEmpty {
+            r.told = doneSince; doneSince = []
+            remote += " --done " + shellQuote(r.told.joined(separator: "\n"))
+        }
         r.model = model
         tps = 0; outTok = 0
         log(.chief, name, .status, r.watch ? "watch: \(r.question)" : r.checkIn ? "check-in: \(r.question)" : "asked: \(r.question)")
@@ -1078,6 +1085,7 @@ final class Core: ObservableObject {
 
     private func finish(_ r: Run, ok: Bool, text: String) {
         ud.removeObject(forKey: pendingKey)
+        if !ok { keepDone(r.told + doneSince); r.told = [] }  // Chief may not have heard them: the next turn says them again
         log(.chief, name, ok ? .status : .failed, (ok ? "replied in \(fmt(Date().timeIntervalSince(r.start)))" : "ended: \(text)")
             + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace

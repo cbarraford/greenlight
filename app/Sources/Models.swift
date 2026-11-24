@@ -122,13 +122,18 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
     return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
 }
 
-/// One dashboard button for Chief (Core.acted): what, on which workspace, the MR and head commit when dash.py named them, and how
-/// it ended. why: nil when it worked, else the error (cut short: a forge's refusal can run long).
-func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]?) -> String {
-    let at = [o?["ref"] as? String, (o?["sha"] as? String).map { "head " + $0.prefix(12) }].compactMap { $0 }.filter { !$0.isEmpty }
+/// One dashboard button for Chief (Core.acted): what, on which workspace, the MR and head commit (dash.py's answer, else the
+/// board's row for it, as a failure names none), and how it ended. why: nil when it worked, else the error (cut short: a
+/// forge's refusal can run long).
+func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]?, _ mr: [String: Any]? = nil) -> String {
+    let ref = o?["ref"] as? String ?? mr?["ref"] as? String, sha = o?["sha"] as? String ?? mr?["sha"] as? String
+    let at = [ref, sha.map { "head " + $0.prefix(12) }].compactMap { $0 }.filter { !$0.isEmpty && $0 != "head " }
     let end = why.map { "failed: " + $0.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(300) } ?? "done"
     return "- \(what) on \(who)" + (at.isEmpty ? "" : " (\(at.joined(separator: ", ")))") + ": " + end
 }
+
+/// The buttons Chief hears about (Core.acted), by dash.py's op: the popover's and the sidebar's say the same.
+let actedVerb = ["merge": "merge", "ready": "mark ready", "signoff": "sign off", "rm": "delete the workspace", "new": "new workspace", "goal": "set the goal"]
 
 /// The watch's news split by the window you're in (focusScope's JSON, the same rule as dash.py's board): `ask` is about its
 /// worktrees or repos, `hold` is another project's and waits until you're in a window that shows it. nil scope: every project's.
@@ -188,6 +193,7 @@ final class Run: ObservableObject {
     @Published var thinking = false  // the status is a thinking phrase (Mulling…), not something the agent did
     @Published var plan: Plan?  // the agent's own task list, when it keeps one (TodoWrite, codex's todo list)
     var gotDone = false, checkIn = false, watch = false
+    var told: [String] = []  // the buttons this turn told Chief about (Core.acted, chat.py --done): back in the queue if it fails
     var meterStale = false  // Clear or a harness change mid-turn: its usage is the old conversation's, not the meter's
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray

@@ -2,7 +2,8 @@
 """Menubar chat backend: one greenlight session on the greenlight host, resumed per message.
 
 Every command streams JSON lines (events, see Norm) for the Greenlight app:
-  chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
+  chat.py send [--model M] [--effort E] [--name N] [--verbose] [--done LINES] < message
+                                     # --done: the dashboard buttons pressed since the last turn, one per line (done_note)
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
                                      # M: any model id harness.route takes (claude-*, gpt-*, gemini-*, <harness>:<model>), or a harness name
@@ -324,6 +325,16 @@ def board_note(query="", key="", seen=None, snapshot=None):
 
 
 WRAP = "USER MESSAGE (reply to this): "
+DONE = ""  # chat.py send --done: the dashboard buttons pressed since the last turn (done_note)
+
+
+def done_note(lines):
+    """The dashboard buttons the user pressed since Chief's last turn and how each ended (the app's Core.acted, #175).
+    Kept out of the message itself, so decisions.heard / turn_kind and GREENLIGHT_REQUEST still see only what was typed."""
+    lines = "\n".join(line for line in (lines or "").splitlines() if line.strip())[:8000]
+    return ("(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; "
+            "each line is how it ended. Don't ask about or redo what's done, and say so if they ask whether you saw it. "
+            "The board may lag behind a button: refresh the workspaces before you say where these stand.)\n" + lines + "\n\n") if lines else ""
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # greenlight's (not imported: its import reads config and may call the forge)
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 # What the status says while the model thinks: one picked per stretch of thinking, held until something else shows.
@@ -1726,7 +1737,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         req_val = question_context + ANSWER + text if question_context else text
         os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
         wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
-        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))
+        text = wrap(done_note(DONE) + stale_note + board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
@@ -1762,7 +1773,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         key = f"{engine}:new"
         seen_forget()
         seen = seen_load(key)
-        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
+        text = wrap(done_note(DONE) + stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         norm.base = (0, 0)  # a new thread: its totals start at 0
         try:
             cmd, t = mk(None, text)
@@ -1984,6 +1995,8 @@ def stop_chat():
 
 
 def send_turn(args, opt):
+    global DONE
+    DONE = opt("--done") or ""
     if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
         os.environ["GREENLIGHT_ONLY"] = opt("--only")
     text, files = sys.stdin.read(), None

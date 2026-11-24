@@ -1118,8 +1118,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
         let isWsName: (String) -> Bool = { $0.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil }
         let badNameErr = "Unsupported characters in workspace name."
-        let winHost = l?.c.chatHost ?? greenlight.chatHost
         let chief = l?.c ?? greenlight  // this window's Chief hears what its buttons did (Core.acted)
+        let winHost = chief.chatHost
         if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
         if cmd == "page", let name = b["name"] as? String {
             guard isWsName(name) else { from.callJS("window.mc && mc.page", [["name": name, "error": badNameErr]]); return }
@@ -1212,11 +1212,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // The hex card's Merge (second click): dash.py tree merge, answered with mc.merged
         if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
-            let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path
+            let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.wsName(path: path)
             let h = workspaceHost(path: path, fallback: winHost)
             greenlight.log(.greenlight, who, .action, ["merge": "merging", "ready": "marking ready", "signoff": "signing off"][op] ?? op)
             ssh("\(pyCmd(on: h))/dash.py tree \(op) '\(path)'", on: h, onLine: { out += $0 }, onExit: { code in
-                chief.acted(who, ["merge": "merge", "ready": "mark ready", "signoff": "sign off"][op] ?? op, code, out)
+                chief.acted(who, actedVerb[op] ?? op, code, out)
                 let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
@@ -2149,10 +2149,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
-                let did = ["merge": "merge", "ready": "mark ready", "signoff": "sign off", "rm": "delete the workspace", "new": "new workspace", "goal": "set the goal"]
-                if let what = did[op], let c = self?.greenlight {
-                    c.acted(c.pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path, what, code, out)
-                }
+                if let what = actedVerb[op], let c = self?.greenlight { c.acted(c.wsName(path: path), what, code, out) }
             })
         case "dwim":  // ⌘J's palette, typed with nothing to jump to: a board command (dwim.py), else a question for Chief in the chat
             guard let t = (b["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return }
