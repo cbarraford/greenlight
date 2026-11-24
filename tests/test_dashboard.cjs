@@ -1181,6 +1181,21 @@ test("workspace page: Branch row shows p.branch (not p.name) and long h1 wraps i
   assert.ok(box.h1Right <= box.htRight + 2, `long h1 overflowed container: ${JSON.stringify(box)}`);
 });
 
+test("workspace page: Host row says where its agent runs, in needs-you ink when it isn't where Chief runs; none when unknown", async page => {
+  const here = {...puck("ws-here", "Here", "idle"), mr: null, host: "devbox", away: false};
+  const away = {...puck("ws-away", "Away", "idle"), mr: {iid: 4, ref: "!4", title: "x", web_url: "https://x/4"}, host: "laptop", away: true};
+  const none = {...puck("ws-none", "Unknown", "idle"), mr: null};
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [here, away, none]});
+  const host = async n => { await page.evaluate(n => window.mc.openPage(n), n);
+    const dd = page.locator(".facts dt:has-text('Host') + dd");
+    return await dd.count() ? [await dd.textContent(), await dd.evaluate(e => (e.querySelector("span") || {}).style?.color || "")] : null };
+  assert.deepEqual(await host("ws-here"), ["devbox", ""]);
+  const [t, color] = await host("ws-away");
+  assert.equal(t, "laptop · not where Chief runs");
+  assert.match(color, /--orange-ink/);
+  assert.equal(await host("ws-none"), null);
+});
+
 test("empty state: .empty clears the Context rail gutter and does not clip at narrow width", async page => {
   await page.setViewportSize({width: 440, height: 520});
   await page.evaluate(s => window.mc.update({...s, pucks: []}), SNAP);

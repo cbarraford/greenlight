@@ -1511,7 +1511,7 @@ def test_billing_question_creates_no_workspace(tmp_path, monkeypatch):
 
 def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
     done, calls = dispatch_turn(tmp_path, monkeypatch, "Add a 24h GPT-Live cost meter to the dashboard")
-    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+    assert [c[:2] for c in calls] == [["host", "list"], ["worktree", "create"]], calls  # placed first (#160)
     assert done == ["Created gpt-live-24h-cost"], done
 
 
@@ -1526,7 +1526,7 @@ def test_answer_carries_the_request_it_answers(tmp_path, monkeypatch):
     # and an answer to a change request's question is a change, though alone it reads as a question
     (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard" + chat.ASKED + "Which repo?")
     done, calls = dispatch_turn(tmp_path, monkeypatch, "which repo would you put it in?")
-    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
+    assert [c[:2] for c in calls] == [["host", "list"], ["worktree", "create"]], calls  # placed first (#160)
 
 
 def test_asked_question():

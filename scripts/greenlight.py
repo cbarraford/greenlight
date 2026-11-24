@@ -14,7 +14,8 @@
                                        you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
                                        autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
-    greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out
+    greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out;
+                                            `worktree create` stays on this machine (place_here; placement.py lists strays)
 
 Read-only: it never changes anything. The greenlight skill acts on `next.cmd` / `next.owner`.
 Deleting finished workspaces is cleanup.py's job (next to this file); creating workspaces for MRs
@@ -36,6 +37,7 @@ import hashlib
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -161,10 +163,18 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 
 def orca(*args, timeout=120):
-    """An Orca CLI call. Any other GREENLIGHT_ADE answers the same calls from another ADE, in Orca's shape (ade_<GREENLIGHT_ADE>.py)."""
+    """An Orca CLI call. Any other GREENLIGHT_ADE answers the same calls from another ADE, in Orca's shape (ade_<GREENLIGHT_ADE>.py).
+    A `worktree create` goes through place_here first, so adopt.py's and dash.py's workspaces stay on this machine too."""
     if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
         return importlib.import_module(f"ade_{os.environ['GREENLIGHT_ADE']}").call(*args)
+    args, why = place_here(args)
+    if why:
+        raise PlacementRefused(why)
     return orca_cli(*args, timeout=timeout)
+
+
+class PlacementRefused(RuntimeError):
+    """place_here said no: `ade` prints it and exits 3, like a read-only refusal."""
 
 
 def primary_agent(agents):
@@ -268,6 +278,110 @@ def create_refused(args):
     if a != ["worktree", "create"] or any(x.startswith("--change") for x in args):
         return None
     return READ_ONLY_REFUSAL if read_only(os.environ.get("GREENLIGHT_REQUEST", "")) else None
+
+
+def here():
+    """This machine's short name, as Orca's `host list` prints it (devbox, not devbox.lan)."""
+    return socket.gethostname().split(".")[0].lower()
+
+
+def same_host(a, b):
+    return bool(a) and bool(b) and str(a).split(".")[0].lower() == str(b).split(".")[0].lower()
+
+
+ELSEWHERE = ("refused: Orca here answers from {there}, not this machine ({me}), so the workspace and its agent would "
+             "run there. Chief's workspaces run where chief does. Pass --host <name> (orca host list) or set "
+             "ORCA_ENVIRONMENT only when the user asked for another machine.")
+REPO_ELSEWHERE = ("refused: {what} is checked out on {there}, not this machine ({me}), so the workspace and its agent "
+                  "would run there.{alt} Only when the user asked for that machine, use --project <id> --host <name>.")
+UNVERIFIED = ("refused: Orca didn't answer `project setups`, so whether {what} is on this machine can't be checked "
+              "while another host is paired. Try again in a moment.")
+
+
+def flag(args, name):
+    """The value of --name v or --name=v in args, else None."""
+    for i, x in enumerate(args):
+        if x.startswith(f"--{name}="):
+            return x.split("=", 1)[1]
+        if x == f"--{name}" and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def repo_setups(sel, setups):
+    """The Orca project setups an `--repo` selector (id:, name:, path:, or bare) can mean."""
+    kind, _, val = sel.partition(":") if sel.split(":", 1)[0] in ("id", "name", "path") else ("", "", sel)
+    keys = {"id": ("repoId", "id"), "name": ("displayName",), "path": ("path",)}.get(kind, ("repoId", "displayName", "path"))
+    return [s for s in setups if any(s.get(k) == val for k in keys)]
+
+
+def project_setups(tries=2):
+    """Orca's project setups (each checkout's id, repoId, displayName, path, hostId, projectId), always Orca's whatever
+    GREENLIGHT_ADE is (only Orca has hosts); None when Orca didn't answer, after a second try."""
+    for _ in range(tries):
+        try:
+            return [s for s in orca_cli("project", "setups", timeout=20).get("setups") or [] if isinstance(s, dict)]
+        except Exception:  # noqa: BLE001 - a blip, or an Orca without them: the caller decides
+            pass
+    diag.event("placement", op="setups", err="unverified")
+    return None
+
+
+def is_local(s):
+    return (s.get("hostId") or "local") == "local"
+
+
+def local_first(repos):
+    """repos (`orca repo list` rows, which carry no host) with this machine's checkouts first, so a pick by name or by
+    project (dash.py's New task, adopt.py) lands here when it can (#160). Unchanged under other ADEs (no hosts), and
+    when Orca can't say."""
+    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
+        return list(repos)
+    here_ = {(s.get("repoId"), s.get("path")) for s in project_setups(tries=1) or [] if is_local(s)}
+    return sorted(repos, key=lambda r: (r.get("id"), r.get("path")) not in here_) if here_ else list(repos)
+
+
+def place_repo(args, hosts):
+    """(args, None) when a --repo or --project-host-setup names a checkout on this machine (or one Orca doesn't know:
+    Orca refuses those), else (None, why not), naming this machine's checkout of the same project when there is one.
+    A --project-host-setup whose id also names one here gets --host local (setup ids repeat across hosts)."""
+    setups = project_setups()
+    sel, hs = flag(args, "repo"), flag(args, "project-host-setup")
+    what = f"repo {sel}" if sel else f"project setup {hs}"
+    if setups is None:
+        return None, UNVERIFIED.format(what=what)
+    hit = repo_setups(sel, setups) if sel else [s for s in setups if s.get("id") == hs]
+    if not hit:
+        return list(args), None
+    if any(is_local(s) for s in hit):
+        return list(args) + (["--host", "local"] if hs and not sel else []), None
+    mine = next((s for s in setups if is_local(s) and s.get("projectId") and s.get("projectId") == hit[0].get("projectId")), None)
+    names = {h.get("id"): h.get("machineName") or h.get("name") for h in hosts if isinstance(h, dict)}
+    alt = f" This machine's checkout of it is --repo id:{mine['repoId']}." if mine else ""
+    return None, REPO_ELSEWHERE.format(what=what, there=names.get(hit[0].get("hostId")) or hit[0].get("hostId"), me=here(), alt=alt)
+
+
+def place_here(args, picked=False):
+    """(args, None) that create an Orca workspace on this machine, or (None, why not). An explicit --host or
+    ORCA_ENVIRONMENT is the user's choice and stands. Otherwise: a runtime whose `local` is another machine (an Orca
+    terminal relayed from elsewhere) is refused; so is a --repo or --project-host-setup only on another paired host,
+    unless the user picked that checkout themselves (picked: the sidebar's New workspace on its row); and --project
+    gets --host local (#160)."""
+    a = [x for x in args if not x.startswith("-")][:2]
+    if a != ["worktree", "create"] or os.environ.get("ORCA_ENVIRONMENT") or flag(args, "host") is not None:
+        return list(args), None
+    try:
+        hosts = orca_cli("host", "list", timeout=20).get("hosts") or []
+    except Exception:  # noqa: BLE001 - an Orca with no `host list` can't be checked: create as before
+        hosts = []
+    local = next((h for h in hosts if isinstance(h, dict) and h.get("id") == "local"), {})
+    if local.get("machineName") and not same_host(local["machineName"], here()):
+        return None, ELSEWHERE.format(there=local["machineName"], me=here())
+    if not picked and len(hosts) > 1 and (flag(args, "repo") or flag(args, "project-host-setup")):
+        args, why = place_repo(args, hosts)
+        if why:
+            return None, why
+    return list(args) + (["--host", "local"] if flag(args, "project") is not None else []), None
 
 
 def without_change(args):
@@ -1808,7 +1922,12 @@ def main():
             print(why, file=sys.stderr)
             sys.exit(3)
         os.environ.pop("GREENLIGHT_REQUEST", None)  # not for the ADE: a tmux server started here would hand it to every pane
-        print(json.dumps(orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"]), indent=1))
+        try:
+            out = orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"])
+        except PlacementRefused as e:
+            print(e, file=sys.stderr)
+            sys.exit(3)
+        print(json.dumps(out, indent=1))
         return
     if cmd == "signoff":  # greenlight.py signoff <project> <iid|@branch> <stage>: the user signed off a custom stage
         STATE.mkdir(parents=True, exist_ok=True)
