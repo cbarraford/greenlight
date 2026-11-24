@@ -1243,6 +1243,25 @@ def test_upgrade_rearms_a_stale_marker_left_without_a_question(tmp_path, monkeyp
     assert not list(tmp_path.glob("*_scope-*"))
 
 
+def test_scoped_compact_runs_when_the_board_is_unavailable(tmp_path, monkeypatch):
+    import dash
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setenv("GREENLIGHT_ONLY", json.dumps({"paths": ["/w/a"], "repos": ["octo/app"]}))
+    (tmp_path / "session_window").write_text("window-session")
+    monkeypatch.setattr(dash, "board", lambda **kw: (_ for _ in ()).throw(FileNotFoundError("last.json")))
+    resumed = []
+    monkeypatch.setattr(chat.harness, "argv", lambda *a, **kw: resumed.append(kw.get("sid")) or (["no-harness"], a[1]))
+    def fake_run(cmd, engine, text, norm, **kw):
+        norm.pending_done = {"e": "done", "ok": True, "text": "", "context": 0, "window": None, "ms": None}
+        return "window-session", None
+    monkeypatch.setattr(chat, "run", fake_run)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e) or e)
+    chat.turn("/compact", "claude-haiku-5-5", None, compact=True)
+    assert resumed == ["window-session"] and events[-1]["ok"] is True, events
+
+
 def test_scope_change_between_sends_resumes_same_session(tmp_path, monkeypatch):
     import dash
     monkeypatch.setattr(chat, "DIR", str(tmp_path))

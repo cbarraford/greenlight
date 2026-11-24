@@ -1040,12 +1040,12 @@ def scope_current_unlocked():
     return generation_unlocked() == SCOPE_EXPECTED[0]
 
 
-def check_session_scope(engine, snapshot=None):
+def check_session_scope(engine, snapshot=None, board=True):
     global SCOPE_EXPECTED, SCOPE_SNAPSHOT, SCOPE_DIR
     with scope_lock():
         SCOPE_DIR = DIR
         SCOPE_EXPECTED = (generation_unlocked(), None)
-        if not os.environ.get("GREENLIGHT_ONLY"):
+        if not os.environ.get("GREENLIGHT_ONLY") or not board:
             SCOPE_SNAPSHOT = None
             return False
         if snapshot is None:
@@ -1690,7 +1690,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         with open(rules) as rf:
             prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + rf.read().strip()
     snapshot = None
-    if os.environ.get("GREENLIGHT_ONLY"):
+    if os.environ.get("GREENLIGHT_ONLY") and not compact:  # a Compact sends no BOARD: a failed scan mustn't block it
         try:
             import dash
             snapshot = dash.board(with_ids=True)
@@ -1706,7 +1706,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if reservation and not reservation_current(*reservation):
         return {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
     try:
-        check_session_scope(engine, snapshot)
+        check_session_scope(engine, snapshot, board=not compact)
     except OSError as e:
         return dict(e="done", ok=False, text=f"Chat scope check failed: {e}", context=0, window=None, ms=None)
     if snapshot is not None:
