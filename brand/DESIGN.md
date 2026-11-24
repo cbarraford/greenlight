@@ -7,57 +7,58 @@ version: 1
 theme:
   # A theme is these inputs and nothing else. Everything below the primitives is derived from them.
   inputs:
-    neutral_hue: 155      # a faint green-grey: the brand shows in the greys, not only in the accent
-    neutral_chroma: 0.010 # 0 to 0.02. Above about 0.02 the greys turn muddy.
+    neutral_hue: 0        # unused while the chroma is 0
+    neutral_chroma: 0     # true grey, like the system's own windows. 0 to 0.02; above about 0.02 the greys turn muddy.
     accent: signal        # signal | teal | graphite (section 2.3)
     contrast: standard    # standard | increased (it follows the macOS Increase Contrast setting)
   appearance: system      # system | light | dark. The system is the default and the others are an opt-in override.
 
 primitives:
   # Steps 1–12. Measured Radix lightness curves, a chroma peak at steps 9–10, and text chroma below the fill.
+  # Dark steps 1–8 start at the macOS window grey (L 0.235, #1E1E1E) on every scale, so a tint never sits darker than its surface.
   neutral:
-    light: ["0.993 0.005 155", "0.982 0.006 155", "0.962 0.007 155", "0.938 0.008 155", "0.914 0.009 155", "0.889 0.010 155", "0.852 0.010 155", "0.790 0.010 155", "0.640 0.010 155", "0.600 0.010 155", "0.500 0.009 155", "0.235 0.008 155"]
-    # light sRGB: #FAFEFB #F6FAF7 #EFF4F0 #E7ECE8 #DEE4E0 #D5DCD7 #CAD0CB #B6BCB8 #888E89 #7C827E #5F6561 #1B1F1C
-    dark:  ["0.172 0.005 155", "0.205 0.006 155", "0.245 0.007 155", "0.278 0.008 155", "0.310 0.009 155", "0.348 0.010 155", "0.400 0.010 155", "0.490 0.010 155", "0.540 0.010 155", "0.580 0.010 155", "0.780 0.009 155", "0.950 0.008 155"]
-    # dark sRGB:  #0E100F #151816 #1E211F #252A27 #2D322E #363C38 #444945 #5C625E #6A706C #767C78 #B3B9B5 #EAF0EC
+    light: ["1.000 0 0", "0.982 0 0", "0.962 0 0", "0.938 0 0", "0.914 0 0", "0.889 0 0", "0.852 0 0", "0.790 0 0", "0.640 0 0", "0.600 0 0", "0.500 0 0", "0.235 0 0"]
+    # light sRGB: #FFFFFF #F9F9F9 #F2F2F2 #EAEAEA #E2E2E2 #DADADA #CECECE #BABABA #8C8C8C #808080 #636363 #1E1E1E
+    dark:  ["0.235 0 0", "0.277 0 0", "0.310 0 0", "0.340 0 0", "0.370 0 0", "0.405 0 0", "0.450 0 0", "0.530 0 0", "0.580 0 0", "0.620 0 0", "0.800 0 0", "0.950 0 0"]
+    # dark sRGB:  #1E1E1E #282828 #303030 #383838 #404040 #494949 #555555 #6C6C6C #7A7A7A #868686 #BEBEBE #EEEEEE
   signal:   # the brand accent: go-green
     light: ["0.993 0.009 150", "0.982 0.018 150", "0.962 0.037 150", "0.938 0.054 150", "0.914 0.069 150", "0.889 0.084 150", "0.852 0.102 150", "0.790 0.128 150", "0.530 0.146 150", "0.490 0.135 150", "0.500 0.128 150", "0.235 0.057 150"]
     # light sRGB: #F9FFFA #F1FDF3 #E2FAE6 #D2F5D8 #C3F0CB #B3EBBD #9EE2AB #7AD28E #00823A #007433 #177739 #05250F
-    dark:  ["0.172 0.018 150", "0.205 0.024 150", "0.245 0.045 150", "0.278 0.063 150", "0.310 0.075 150", "0.348 0.087 150", "0.400 0.102 150", "0.490 0.123 150", "0.550 0.150 150", "0.590 0.150 150", "0.780 0.105 150", "0.950 0.048 150"]
-    # dark sRGB:  #0A120C #0F1A11 #0F2615 #0C3117 #0B3A1B #0C4620 #0E5628 #197338 #05893E #21954A #85CB94 #D9F8DE
+    dark:  ["0.235 0.018 150", "0.277 0.024 150", "0.310 0.045 150", "0.340 0.063 150", "0.370 0.075 150", "0.405 0.087 150", "0.450 0.102 150", "0.530 0.123 150", "0.550 0.150 150", "0.590 0.150 150", "0.800 0.105 150", "0.950 0.048 150"]
+    # dark sRGB:  #18211A #202C22 #1F3724 #1D4126 #1E4B2A #1F562F #216535 #297F43 #05893E #21954A #8BD19A #D9F8DE
   amber:    # status: needs you
     light: ["0.993 0.004 62", "0.982 0.010 62", "0.962 0.023 62", "0.938 0.039 62", "0.914 0.056 62", "0.889 0.074 62", "0.852 0.102 62", "0.790 0.145 62", "0.760 0.170 62", "0.720 0.165 62", "0.500 0.114 62", "0.235 0.054 62"]
     # light sRGB: #FFFCFA #FEF8F2 #FEEFE3 #FEE5D1 #FFDBBD #FFD0A9 #FFC088 #FCA34D #FC9417 #EC8904 #905203 #301700
-    dark:  ["0.172 0.020 62", "0.205 0.027 62", "0.245 0.051 62", "0.278 0.064 62", "0.310 0.071 62", "0.348 0.080 62", "0.400 0.092 62", "0.490 0.112 62", "0.780 0.160 62", "0.820 0.127 62", "0.780 0.119 62", "0.950 0.031 62"]
-    # dark sRGB:  #160E07 #20140A #311A03 #3E2000 #492700 #572F00 #6A3A00 #8C4F02 #FF9D36 #FFB169 #EEA563 #FEEADA
+    dark:  ["0.235 0.020 62", "0.277 0.027 62", "0.310 0.051 62", "0.340 0.064 62", "0.370 0.071 62", "0.405 0.080 62", "0.450 0.092 62", "0.530 0.112 62", "0.780 0.160 62", "0.820 0.127 62", "0.800 0.119 62", "0.950 0.031 62"]
+    # dark sRGB:  #251C14 #32251A #432A13 #4F3010 #5A3612 #673E14 #794815 #995B17 #FF9D36 #FFB169 #F5AC6A #FEEADA
   yellow:   # status: your move
     light: ["0.993 0.010 95", "0.982 0.020 95", "0.962 0.041 95", "0.938 0.059 95", "0.914 0.076 95", "0.889 0.092 95", "0.852 0.112 95", "0.790 0.140 95", "0.880 0.165 95", "0.840 0.165 95", "0.500 0.102 95", "0.235 0.048 95"]
     # light sRGB: #FFFDF5 #FDF9EA #FBF3D4 #F7EBBE #F2E3A9 #EDDA94 #E5CE75 #D7B93F #FAD53B #ECC825 #766202 #251D00
-    dark:  ["0.172 0.020 95", "0.205 0.026 95", "0.245 0.050 95", "0.278 0.057 95", "0.310 0.063 95", "0.348 0.071 95", "0.400 0.082 95", "0.490 0.100 95", "0.880 0.165 95", "0.920 0.127 95", "0.780 0.115 95", "0.950 0.053 95"]
-    # dark sRGB:  #131006 #1B1709 #282000 #312800 #3A2F01 #463901 #564700 #725F02 #FAD53B #FFE47D #CEB75B #F9EFC7
+    dark:  ["0.235 0.020 95", "0.277 0.026 95", "0.310 0.050 95", "0.340 0.057 95", "0.370 0.063 95", "0.405 0.071 95", "0.450 0.082 95", "0.530 0.100 95", "0.880 0.165 95", "0.920 0.127 95", "0.800 0.115 95", "0.950 0.053 95"]
+    # dark sRGB:  #211E13 #2C2819 #38300F #413711 #4A3F13 #554815 #645415 #7E6B17 #FAD53B #FFE47D #D5BD62 #F9EFC7
   blue:     # status: working
     light: ["0.993 0.003 252", "0.982 0.008 252", "0.962 0.018 252", "0.938 0.030 252", "0.914 0.042 252", "0.889 0.055 252", "0.852 0.074 252", "0.790 0.109 252", "0.550 0.164 252", "0.510 0.152 252", "0.500 0.149 252", "0.235 0.068 252"]
     # light sRGB: #FBFDFF #F5FAFF #EAF4FF #DDECFF #CFE5FF #C1DEFF #ACD2FE #86BFFF #0172CD #0167B9 #0164B4 #011E3D
-    dark:  ["0.172 0.022 252", "0.205 0.029 252", "0.245 0.054 252", "0.278 0.076 252", "0.310 0.090 252", "0.348 0.104 252", "0.400 0.119 252", "0.490 0.146 252", "0.560 0.167 252", "0.600 0.179 252", "0.780 0.115 252", "0.950 0.024 252"]
-    # dark sRGB:  #091019 #0D1824 #0B2139 #05294C #02315C #003A6E #014885 #0161AF #0275D2 #0281E6 #80BCFF #E3F0FF
+    dark:  ["0.235 0.022 252", "0.277 0.029 252", "0.310 0.054 252", "0.340 0.076 252", "0.370 0.090 252", "0.405 0.104 252", "0.450 0.119 252", "0.530 0.146 252", "0.560 0.167 252", "0.600 0.179 252", "0.800 0.103 252", "0.950 0.024 252"]
+    # dark sRGB:  #171F28 #1E2936 #1B324B #16395E #16416D #154A7F #175795 #186DBD #0275D2 #0281E6 #8CC2FE #E3F0FF
   red:      # status: crashed / failed
     light: ["0.993 0.003 25", "0.982 0.008 25", "0.962 0.018 25", "0.938 0.031 25", "0.914 0.044 25", "0.889 0.058 25", "0.852 0.080 25", "0.790 0.121 25", "0.570 0.200 25", "0.530 0.200 25", "0.500 0.170 25", "0.235 0.076 25"]
     # light sRGB: #FFFCFC #FFF7F6 #FFEEEC #FFE3E0 #FFD8D4 #FFCCC7 #FFBBB4 #FF9B93 #D42F34 #C51D28 #B02A2D #3B0A0A
-    dark:  ["0.172 0.024 25", "0.205 0.032 25", "0.245 0.060 25", "0.278 0.084 25", "0.310 0.100 25", "0.348 0.116 25", "0.400 0.136 25", "0.490 0.164 25", "0.570 0.200 25", "0.610 0.200 25", "0.780 0.128 25", "0.950 0.024 25"]
-    # dark sRGB:  #190C0A #241110 #381311 #4A1212 #581414 #6A1718 #811C1E #AA2A2C #D42F34 #E23F40 #FF958E #FEE9E6
+    dark:  ["0.235 0.024 25", "0.277 0.032 25", "0.310 0.060 25", "0.340 0.084 25", "0.370 0.100 25", "0.405 0.116 25", "0.450 0.136 25", "0.530 0.164 25", "0.570 0.200 25", "0.610 0.200 25", "0.800 0.114 25", "0.950 0.024 25"]
+    # dark sRGB:  #281A18 #362220 #4A2321 #5C2321 #6B2523 #7C2927 #922D2C #B83838 #D42F34 #E23F40 #FFA098 #FEE9E6
   clay:     # the Claude agent mark only (a graphic, so 3:1 is enough). Never used as UI colour.
     light: ["0.993 0.003 40", "0.982 0.008 40", "0.962 0.019 40", "0.938 0.032 40", "0.914 0.045 40", "0.889 0.060 40", "0.852 0.082 40", "0.790 0.102 40", "0.640 0.120 40", "0.600 0.120 40", "0.500 0.102 40", "0.235 0.046 40"]
-    dark:  ["0.172 0.014 40", "0.205 0.019 40", "0.245 0.036 40", "0.278 0.050 40", "0.310 0.060 40", "0.348 0.070 40", "0.400 0.082 40", "0.490 0.098 40", "0.680 0.120 40", "0.720 0.120 40", "0.780 0.084 40", "0.950 0.025 40"]
+    dark:  ["0.235 0.014 40", "0.277 0.019 40", "0.310 0.036 40", "0.340 0.050 40", "0.370 0.060 40", "0.405 0.070 40", "0.450 0.082 40", "0.530 0.098 40", "0.680 0.120 40", "0.720 0.120 40", "0.800 0.084 40", "0.950 0.025 40"]
 
 contrast_checks:   # measured on the values above; tokens.py re-checks them in CI (section 13)
-  step11_on_step2: "APCA Lc 60–65 on every scale, both modes (WCAG 5.3–9.3:1)"
-  step12_on_step2: "APCA Lc 95–100 on every scale, both modes (WCAG ≥ 15:1)"
+  step11_on_step2: "APCA Lc 61–77 on every scale, both modes (WCAG 5.3–8.2:1)"
+  step12_on_step2: "APCA Lc 92–100 on every scale, both modes (WCAG ≥ 12.7:1)"
   on_solid9:
     signal: "white, 4.94:1 light / 4.51:1 dark"
     blue:   "white, 4.90 / 4.69"
     red:    "white, 4.93 / 4.93"
-    amber:  "ink (neutral.light.12), 7.45 / 8.73"
-    yellow: "ink, 11.6 / 12.6"
+    amber:  "ink (neutral.light.12), 7.45 / 8.04"
+    yellow: "ink, 11.6 / 11.6"
 
 semantic:          # name → primitive step. The light and dark columns differ where depth reads differently.
   bg:
@@ -134,15 +135,15 @@ radius:                                  # the "precise" family: tight, concentr
 elevation:   # one light source straight above; layered and translucent; never animated
   "0": none
   "1":       # cards on hover, the dragged item
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .06), 0 1px 2px -1px oklch(0.235 0.008 155 / .08), 0 2px 4px oklch(0.235 0.008 155 / .05)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .06), 0 1px 2px -1px oklch(0.235 0 0 / .08), 0 2px 4px oklch(0.235 0 0 / .05)"
     dark:  "0 0 0 1px oklch(1 0 0 / .06), 0 1px 2px oklch(0 0 0 / .4), inset 0 1px 0 oklch(1 0 0 / .04)"
   "2":       # menus, hover cards, tooltips, toasts
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .07), 0 2px 4px oklch(0.235 0.008 155 / .06), 0 8px 16px -4px oklch(0.235 0.008 155 / .10)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .07), 0 2px 4px oklch(0.235 0 0 / .06), 0 8px 16px -4px oklch(0.235 0 0 / .10)"
     dark:  "0 0 0 1px oklch(1 0 0 / .08), 0 4px 8px oklch(0 0 0 / .35), 0 12px 24px -6px oklch(0 0 0 / .45), inset 0 1px 0 oklch(1 0 0 / .05)"
   "3":       # sheets, dialogs, the palette
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .08), 0 4px 8px oklch(0.235 0.008 155 / .06), 0 24px 48px -12px oklch(0.235 0.008 155 / .18)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .08), 0 4px 8px oklch(0.235 0 0 / .06), 0 24px 48px -12px oklch(0.235 0 0 / .18)"
     dark:  "0 0 0 1px oklch(1 0 0 / .09), 0 8px 16px oklch(0 0 0 / .4), 0 32px 64px -16px oklch(0 0 0 / .6), inset 0 1px 0 oklch(1 0 0 / .06)"
-  scrim: { light: "oklch(0.235 0.008 155 / .24)", dark: "oklch(0 0 0 / .5)" }
+  scrim: { light: "oklch(0.235 0 0 / .24)", dark: "oklch(0 0 0 / .5)" }
 
 motion:
   duration: { instant: 0, press: 120ms, fast: 150ms, base: 200ms, slow: 260ms, drawer: 320ms }
@@ -298,11 +299,12 @@ Only use semantic tokens in UI code: `bg.*`, `element.*`, `border.*`, `fg.*`, `a
 ### 2.2 Light and dark
 - **Follow the system by default.** Settings › Appearance offers System / Light / Dark as an override. This replaces the forced light L1 and dark B1/B2, and the Settings-only light/dark toggle goes away. Floors are told apart by name and glyph, never by appearance.
 - **Dark is its own palette**, not light mode inverted:
-  - surfaces get lighter as they rise (canvas 0.17 → surface 0.21 → raised 0.25 L);
-  - text sits at L 0.95 / 0.78;
+  - surfaces get lighter as they rise (canvas 0.235 → surface 0.277 → raised 0.31 L): the canvas is the macOS window grey `#1E1E1E`, so a web view and the AppKit window beside it are the same colour;
+  - text sits at L 0.95 / 0.80;
   - chrome is never lighter than the canvas;
   - there's no pure black and no pure white text.
-- **Light mode:** the canvas is neutral.2 and cards are neutral.1, so cards lift by being paler, not by a shadow.
+- **Light mode:** the canvas is neutral.2 and cards are neutral.1 (white, the system's content background), so cards lift by being paler, not by a shadow.
+- **The greys are true greys** (chroma 0), as in every system window. The brand is the accent and the light, not a tint in the chrome.
 - **Switching appearance is instant.** Disable transitions for one frame (Paco's trick), then re-enable. Never cross-fade the whole UI.
 - **Increase Contrast** (`contrast: increased`): muted text becomes near-default, borders go up one step, and the focus ring is 3px. Test it under Reduce Transparency too.
 
