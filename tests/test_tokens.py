@@ -38,6 +38,8 @@ def test_strip_comment_respects_quotes():
     assert tokens.strip_comment("# whole line") == ""
     assert tokens.strip_comment("a: b#c") == "a: b#c"
     assert tokens.strip_comment("a: 'x # y'") == "a: 'x # y'"
+    assert tokens.strip_comment("a: parent's limit   # note") == "a: parent's limit"  # an apostrophe isn't a quote
+    assert tokens.split_top("it's, b") == ["it's", "b"]
 
 
 def test_split_top_ignores_nested_and_quoted_commas():
@@ -60,6 +62,13 @@ def test_key_value():
     assert tokens.key_value("block:") == ("block", None)
     with pytest.raises(ValueError):
         tokens.key_value("no colon here")
+
+
+def test_parse_yaml_rejects_block_lists_and_duplicates():
+    with pytest.raises(ValueError, match="block lists"):
+        tokens.parse_yaml("items:\n  - name: x\n  - name: y\n")
+    with pytest.raises(ValueError, match="duplicate key 'a'"):
+        tokens.parse_yaml("a: 1\nb: 2\na: 3\n")
 
 
 def test_parse_yaml_blocks_and_errors():
@@ -140,6 +149,10 @@ def test_resolve_and_increased(spec):
     assert set(hc) == {"fg.muted", "border.subtle", "border.default"}
     assert tokens.wcag(hc["fg.muted"]["light"], base["bg.surface"]["light"]) > \
         tokens.wcag(base["fg.muted"]["light"], base["bg.surface"]["light"])
+    for bad in ("#000000", "white", "neutral.12 mixed 82.5% over bg.surface"):
+        spec["semantic"]["increased_contrast"]["fg.muted"] = bad
+        with pytest.raises(ValueError, match="increased_contrast.fg.muted"):
+            tokens.increased(spec, base)
 
 
 def test_teal_is_gamut_mapped(spec):
@@ -159,6 +172,17 @@ def test_css_block(spec):
                    "--ds-duration-fast:150ms", "--ds-layout-hit-target-min:24px", "--ds-layout-measure:68ch"):
         assert needle in block, needle
     assert ':root[data-tokens="v2"]' not in tokens.css_block(spec, "app/terminal.html")
+
+
+def test_every_var_in_the_block_is_defined(spec):
+    block = tokens.css_block(spec, "app/dashboard.html")
+    defined = set(re.findall(r"(--[\w-]+):", block))
+    assert set(re.findall(r"var\((--[\w-]+)\)", block)) <= defined
+    ink = tokens.palette(spec)["neutral"]["light"][11]
+    appearances = block.count("--ds-neutral-1:")  # one per appearance block: light, dark, and the forced Light/Dark ones
+    assert appearances >= 2
+    assert block.count(f"--ds-status-needs-on-solid:{ink};") == appearances  # ink is the same in every appearance
+    assert "--ds-status-working-on-solid:#FFFFFF;" in block
 
 
 def test_aliases_point_at_real_tokens(spec):
@@ -183,6 +207,8 @@ def test_apply_block_inserts_then_replaces():
     assert once.index(tokens.OPEN) < once.index("<style>a{}")
     twice = tokens.apply_block(once, tokens.OPEN + "y" + tokens.CLOSE)
     assert "x" + tokens.CLOSE not in twice and twice.count(tokens.OPEN) == 1
+    with pytest.raises(ValueError, match="more than one ds-tokens block"):
+        tokens.apply_block(twice + twice, tokens.OPEN + "z" + tokens.CLOSE)
 
 
 def test_swift_source(spec):
@@ -228,12 +254,18 @@ def test_check_pairs_flags_low_contrast(spec):
     assert any("fg.muted on bg." in e for e in tokens.check_pairs(spec))
 
 
-def test_check_accents(monkeypatch):
-    assert tokens.check_accents() == []
+def test_check_accents(spec, monkeypatch):
+    assert tokens.spec_hues(spec) == ({"signal": 150, "teal": 190}, [25, 62, 95, 252])
+    assert tokens.check_accents(spec) == []
     monkeypatch.setitem(tokens.ACCENT_HUES, "violet", 290)
     monkeypatch.setitem(tokens.ACCENT_HUES, "sky", 240)
-    errs = tokens.check_accents()
+    errs = tokens.check_accents(spec)
     assert any("violet" in e for e in errs) and any("sky" in e for e in errs)
+
+
+def test_check_accents_reads_hues_from_the_spec(spec):
+    spec["primitives"]["signal"]["light"][8] = "0.530 0.146 70"  # Signal moved next to amber (62)
+    assert any("signal (hue 70)" in e for e in tokens.check_accents(spec))
 
 
 def test_check_hex_notes(spec):
@@ -241,6 +273,12 @@ def test_check_hex_notes(spec):
     assert tokens.check_hex_notes(text, spec) == []
     bad = text.replace("# light sRGB: #FAFEFB", "# light sRGB: #000000", 1)
     assert tokens.check_hex_notes(bad, spec)
+    amber, blue = (re.search(rf"  {n}:.*?\n    # light sRGB: [^\n]+", text, re.S).group(0).splitlines()[-1]
+                   for n in ("amber", "blue"))
+    swapped = text.replace(amber, "@@").replace(blue, amber).replace("@@", blue)
+    assert swapped != text
+    errs = tokens.check_hex_notes(swapped, spec)
+    assert any("amber.light" in e for e in errs) and any("blue.light" in e for e in errs)
 
 
 def test_main(repo, capsys):
@@ -262,7 +300,9 @@ def _drift_repo(tmp: Path):
     (tmp / "app/page.html").write_text(
         f'{tokens.OPEN}:root{{--x:#123456}}{tokens.CLOSE}<style>a{{color:#fff;font-size:12px;border-radius:4px;'
         "box-shadow:0 1px 2px rgba(0,0,0,.2)}b{box-shadow:none;color:var(--x)}</style><a href='#add'></a>")
-    (tmp / "app/Sources/View.swift").write_text('let a = hex("FF9F0A"); Text("x").font(.system(size: 12)).cornerRadius: 8')
+    (tmp / "app/Sources/View.swift").write_text('let a = hex("FF9F0A"); Text("x").font(.system(size: 12)).cornerRadius: 8\n'
+                                                 'tv.font = .monospacedSystemFont(ofSize: 11, weight: .regular)\n'
+                                                 'b.font = .systemFont(ofSize: NSFont.systemFontSize)')
     (tmp / "app/Sources/Config.swift").write_text('let theme = hex("123456")')
     return tmp
 
@@ -270,14 +310,15 @@ def _drift_repo(tmp: Path):
 def test_drift_counts(tmp_path):
     counts = check_safety.drift_counts(_drift_repo(tmp_path))
     assert counts["app/page.html"] == {"colour": 3, "font_size": 1, "radius": 1, "shadow": 1}
-    assert counts["app/Sources/View.swift"] == {"colour": 1, "font_size": 1, "radius": 1}
+    assert counts["app/Sources/View.swift"] == {"colour": 1, "font_size": 2, "radius": 1}
     assert "app/Sources/Config.swift" not in counts
 
 
 def test_drift_ratchet(tmp_path):
     root = _drift_repo(tmp_path)
-    assert check_safety.check_drift(root) == [] and check_safety.drift_fell(root) == []  # no baseline: skipped
-    check_safety.update_drift(root)
+    errs = check_safety.check_drift(root)
+    assert len(errs) == 1 and "drift_baseline.json is missing" in errs[0] and check_safety.drift_fell(root) == []
+    check_safety.update_drift(root)  # bootstrap: no baseline yet
     assert check_safety.check_drift(root) == []
     swift = root / "app/Sources/View.swift"
     swift.write_text(swift.read_text() + '\nlet b = hex("00FF00")')
@@ -286,6 +327,29 @@ def test_drift_ratchet(tmp_path):
     swift.write_text("let nothing = 0")
     assert check_safety.check_drift(root) == []
     assert "app/Sources/View.swift colour" in check_safety.drift_fell(root)
+
+
+def test_update_drift_only_lowers(tmp_path):
+    root = _drift_repo(tmp_path)
+    check_safety.update_drift(root)
+    page, swift = root / "app/page.html", root / "app/Sources/View.swift"
+    page.write_text(page.read_text().replace("color:#fff;", ""))  # one colour fewer here
+    swift.write_text(swift.read_text() + '\nlet b = hex("00FF00")')  # one more there
+    (root / "app/Sources/New.swift").write_text('let c = hex("ABCDEF")')
+    base = json.loads(check_safety.update_drift(root).read_text())
+    assert base["app/page.html"]["colour"] == 2 and base["app/Sources/View.swift"]["colour"] == 1
+    assert base["app/Sources/New.swift"]["colour"] == 0
+    assert len(check_safety.check_drift(root)) == 2
+    check_safety.update_drift(root, allow_raise=True)
+    assert check_safety.check_drift(root) == []
+
+
+def test_second_token_block_is_counted(tmp_path):
+    root = _drift_repo(tmp_path)
+    check_safety.update_drift(root)
+    page = root / "app/page.html"
+    page.write_text(page.read_text() + f"{tokens.OPEN}a{{color:#ff0000}}{tokens.CLOSE}")
+    assert any("page.html: 4 literal colour" in e for e in check_safety.check_drift(root))
 
 
 def test_repo_drift_baseline_holds():
