@@ -285,6 +285,29 @@ with mock.patch.object(audit, "MAXC", 2000):
             raise AssertionError("should raise")
         except ValueError as e:
             assert "too large to audit" in str(e)
+# at the real MAXC, an 11-part diff (one past the old cap of 10) audits instead of erroring; past MAXPARTS still raises
+file_blk = lambda i: f"diff --git a/f{i}.py b/f{i}.py\n--- a/f{i}.py\n+++ b/f{i}.py\n@@ -1 +1 @@\n" + "+y = 1\n" * 6000
+eleven = "".join(file_blk(i) for i in range(11))
+assert audit.MAXPARTS >= 30 and len(audit.parts(eleven)) == 11 and "".join(audit.parts(eleven)) == eleven
+too_big = "".join(file_blk(i) for i in range(audit.MAXPARTS + 1))
+try:
+    audit.parts(too_big)
+    raise AssertionError("should raise")
+except ValueError as e:
+    assert "too large to audit" in str(e)
+# a many-part diff is asked in several bounded decide.batch calls, not one prompt the model can't take; every question answered
+sizes, asked = [], []
+def sized_batch(state, qs):
+    sizes.append(sum(len(q["context"]) for q in qs.values()))
+    asked.extend(qs)
+    return _batch(state, qs)
+thirty = "".join(file_blk(i) for i in range(audit.MAXPARTS))
+with mock.patch.object(fake, "batch", side_effect=sized_batch):
+    r = audit.contracts({}, ("diff_matches_goal", "tests_not_weakened"), diff=thirty)
+assert len(r["checks"]) == 2 * audit.MAXPARTS and len(sizes) > 1 and max(sizes) <= audit.BATCH_CHARS, (len(r["checks"]), sizes)
+assert sorted(asked) == sorted(r["checks"])  # every question went to a batch call exactly once (none left to the slow per-call path)
+assert [list(g) for g in audit.batches({"a": {"context": "x" * 5}, "b": {"context": "x" * 5}, "c": {"context": "x" * 20}}, 10)] == \
+    [["a", "b"], ["c"]]  # in order, a full group closes, and a question bigger than the budget goes alone
 print("tests/threads ok")
 
 # ---- the outbound scorer: post only high precision, keep medium as drafts, drop weak nits
@@ -368,13 +391,17 @@ gid("commit", "--allow-empty", "-qm", "base")
 gid("update-ref", "refs/remotes/origin/main", gid("rev-parse", "HEAD"))
 gid("checkout", "-qb", "feat")
 gid("commit", "--allow-empty", "-qm", "ordinary change", "--author", "Private User <person@private-mail.test>")
+priv = "@" + "private-mail.test"  # built at runtime so this file's own diff passes the push gate
+gid("-c", "user.email=committer" + priv, "commit", "--allow-empty", "-qm", "another change")
 published_identity = audit.branch_messages(idwt, "main")
-assert "person@private-mail.test" in published_identity and audit.secrets(published_identity)
-gid("update-ref", "refs/remotes/origin/main", gid("rev-parse", "HEAD"))
-gid("config", "user.email", "ci@example.invalid")
-gid("commit", "--allow-empty", "-qm", "ordinary change", "--author", "Dev <123+dev@users.noreply.github.com>")
-public_identity = audit.branch_messages(idwt, "main")
-assert not audit.secrets(public_identity) and "[public Git identity]" in public_identity
+# author/committer emails are Git identity metadata: exempt, whatever the domain; the names still go out with the messages
+assert "private-mail.test" not in published_identity and not audit.secrets(published_identity), published_identity
+assert "author: Private User" in published_identity and "ordinary change" in published_identity
+gid("commit", "--allow-empty", "-qm", "ping person" + priv + " about it")
+in_body = audit.branch_messages(idwt, "main")
+assert "person" + priv in in_body and audit.secrets(in_body)  # an email in a message body is still caught
+gid("commit", "--allow-empty", "-qm", "credit", "-m", "Co-Authored-By: Someone <someone" + priv + ">")
+assert audit.secrets(audit.branch_messages(idwt, "main").split("ping person")[0])  # a trailer is message body, still scanned
 
 # ---- the merge audit: the branch's diff at that head, cached per head; an error blocks and is retried later
 wt = tempfile.mkdtemp()

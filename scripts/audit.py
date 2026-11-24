@@ -140,9 +140,9 @@ def scrub_removed_private_keys(diff):
 EXAMPLE_VALUES = {'AKIAIOSFODNN7EXAMPLE', 'password = "test-password-123"'}
 LOW = ("local", "fallback", "heuristic", "none", "unavailable")  # providers whose answers are guesses: never block or post on their own
 MAXC = 45000  # context chars per question; a longer diff is asked in parts (every part must pass), up to MAXPARTS
-MAXPARTS = 10  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
+MAXPARTS = 30  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
 DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True}
-CACHE_VERSION = 3  # old merge passes did not scan each commit's added content
+CACHE_VERSION = 4  # 3: merge passes scan each commit's added content; 4: identity emails are no longer scanned
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?<!\w)(?:\+?1[-. ]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-. ]?[2-9]\d{2}[-. ]?\d{4}\b")
 HOME_RE = re.compile(r"(/(?:home|Users)/|[A-Za-z]:\\+Users\\+)[^/\\\s]+", re.I)
@@ -252,9 +252,30 @@ def _ok(q, r):
         math.isfinite(number) and 0 <= number <= 1
 
 
+BATCH_CHARS = 4 * MAXC  # context chars in one decide.batch call: a many-part diff is asked in several calls, not one huge prompt
+
+
+def batches(qs, n=None):
+    """The questions in groups, in order, each holding at most n context chars (a single larger question goes alone)."""
+    n = n or BATCH_CHARS
+    out: list[dict] = []
+    cur: dict = {}
+    size = 0
+    for k, q in qs.items():
+        c = len(q.get("context", ""))
+        if cur and size + c > n:
+            out.append(cur)
+            cur, size = {}, 0
+        cur[k] = q
+        size += c
+    return out + ([cur] if cur else [])
+
+
 def ask(state, qs):
     """{key: {type: bool|score, question|rubric, context}} -> {key: decide's answer}, in parallel: decide.batch, and any answer it
-    didn't give in the contract's shape asked again on its own (concurrently). Raises when decide itself fails."""
+    didn't give in the contract's shape asked again on its own (concurrently). The batch is cut into calls of at most BATCH_CHARS
+    context (`batches`), asked concurrently: a 30-part diff in one prompt overruns the model's context and timeout. Raises when
+    decide itself fails."""
     # The model may run remotely. Never send credential shapes found in goals,
     # removed diff lines, comments, paths, or threads to it.
     qs = {k: {**q, "context": redact_diff_pii(redact_secrets(q.get("context", "")))} for k, q in qs.items()}
@@ -269,10 +290,15 @@ def ask(state, qs):
     state = safe_state(state)
     dc, out = _decide(), {}
     if dc is not None and hasattr(dc, "batch") and qs:
-        try:
-            out = dc.batch(state, qs) or {}
-        except (TypeError, KeyError, ValueError):  # a batch question shape it doesn't take: the per-call API below is the contract
-            out = {}
+        def one_batch(group):
+            try:
+                return dc.batch(state, group) or {}
+            except (TypeError, KeyError, ValueError):  # a batch question shape it doesn't take: the per-call API below is the contract
+                return {}
+        groups = batches(qs)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(groups))) as ex:
+            for got in ex.map(one_batch, groups):
+                out.update(got)
     todo = [k for k in qs if not _ok(qs[k], out.get(k))]
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(todo))) as ex:
@@ -703,21 +729,18 @@ def branch_diff(path, target=None, sha="HEAD"):
 
 
 def branch_messages(path, target=None, sha="HEAD"):
-    """Messages and author/committer identities of every commit published with the diff."""
+    """Messages and author/committer names of every commit published with the diff. The identities' email addresses are left
+    out: they're structured Git metadata every forge shows anyway, not personal data the push leaks. An email in a message
+    body (a trailer included) is still scanned like any other published text."""
     base = base_ref(path, target)
     ancestor = base and git(path, "merge-base", base, sha)
     if not ancestor:
         return None
     span = f"{ancestor.strip()}..{sha}"
     messages = git(path, "log", "--format=%B", span)
-    identities = git(path, "log", "--format=author: %an <%ae>%ncommitter: %cn <%ce>", span)
+    identities = git(path, "log", "--format=author: %an%ncommitter: %cn", span)
     if messages is None or identities is None:
         return None
-    # A forge no-reply address and reserved synthetic addresses are deliberately
-    # public identity placeholders. Apply this only to structured Git metadata;
-    # the same address in a commit message still gets the normal outbound scan.
-    public = {"users.noreply.github.com", "example.invalid", "example.test"}
-    identities = EMAIL_RE.sub(lambda m: "[public Git identity]" if m[0].rsplit("@", 1)[-1].lower() in public else m[0], identities)
     return messages + "\n" + identities
 
 
