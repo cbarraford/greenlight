@@ -143,6 +143,8 @@ def test_usage_errors(repo):
     'const MI = {review: "review", ci: "nope"};',       # the pages' name maps
     'const G = {ok: "done", q: "nope"};',
     'const GLYPH = {idle: "nope"};',
+    'const MI = {review: "no--such-icon"};',             # a malformed name is reported, not skipped
+    'icon("-done", 14)',
     'icon(t ? "a\\",b" : "nope", 14)',                  # an escaped quote doesn't end the string
 ])
 def test_usage_follows_ternaries_helpers_and_maps(repo, code):
@@ -150,6 +152,18 @@ def test_usage_follows_ternaries_helpers_and_maps(repo, code):
     swift.write_text(swift.read_text() + f"\n{code}\n")
     errs = icons.check_usage(icons.load(repo)[0], repo)
     assert any(e.startswith("app/Sources/Views.swift:") and "no icon named" in e for e in errs), errs
+
+
+def test_unused_needs_matching_quotes(repo):
+    _svg(repo / "brand/icons/ui", "half-quoted", '<path d="M1 1"/>')
+    swift = repo / "app/Sources/Views.swift"
+    swift.write_text(swift.read_text() + '\nlet s = "half-quoted\'\n')
+    assert any("'half-quoted' is never used" in e for e in icons.check_usage(icons.load(repo)[0], repo))
+
+
+def test_check_reports_a_broken_spec(repo):
+    (repo / "brand/DESIGN.md").write_text("no front matter here\n")
+    assert any(e.startswith("brand/DESIGN.md:") for e in icons.run_check(repo))
 
 
 def test_named_skips_non_names():

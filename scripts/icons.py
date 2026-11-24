@@ -42,7 +42,7 @@ CALLS = re.compile(r"(?<![\w.])(?:dsIcon|dsIconHTML|ico|icon|g16|DSIcon\.image|b
 # The pages' name maps (a meaning → an icon): every value must exist.
 MAPS = re.compile(r"\bconst (?:GLYPH|MI|G) = \{([^}]*)\}")
 QUOTED = r"""(["'`]){}\1"""  # a name in matching quotes, backticks included
-NAME = re.compile(QUOTED.format("([a-z0-9]+(?:-[a-z0-9]+)*)"))
+NAME = re.compile(QUOTED.format("([a-z0-9-]+)"))  # loose, so a malformed name is reported, not skipped
 GENERATED = re.compile(r'<script id="ds-icons">.*?</script><!-- /ds-icons -->', re.S)
 
 
@@ -239,7 +239,8 @@ def named(text):
 def reserved(root=ROOT):
     """The status glyphs DESIGN.md's front matter names: part of the set before a surface draws them."""
     spec = tokens.load(root) if (Path(root) / tokens.SPEC).exists() else {}
-    return {s["glyph"] for s in spec.get("semantic", {}).get("status", {}).values() if "glyph" in s}
+    status = (spec.get("semantic") or {}).get("status") or {}
+    return {s["glyph"] for s in status.values() if isinstance(s, dict) and isinstance(s.get("glyph"), str)}
 
 
 def check_usage(icons, root=ROOT):
@@ -264,7 +265,10 @@ def run_check(root=ROOT):
     icons, errs = load(root)
     if "question" not in icons:
         errs.append("brand/icons/ui/question.svg is the fallback for unknown names and must exist")
-    errs += check_usage(icons, root)
+    try:
+        errs += check_usage(icons, root)
+    except ValueError as e:  # DESIGN.md's front matter doesn't parse; tokens.py check says why
+        errs.append(f"brand/DESIGN.md: {e}")
     try:
         want_all = expected(icons, root)
     except ValueError as e:
