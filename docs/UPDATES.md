@@ -27,24 +27,35 @@ Today the Mac app and the backend (`scripts/`, `SKILL.md`, `lifecycles/`, `promp
 
 ## Building and signing (CI)
 
-- **A GitHub Actions job on `macos-latest`** runs `app/build.sh` in a release mode that also copies the backend in. It signs with a
-  **Developer ID Application** cert, **notarizes** (`notarytool`), staples, zips, and signs the zip with an **Ed25519** key.
-  CryptoKit's `Curve25519` verifies it, so the app needs no extra dependency.
+Built in step 5; `docs/RELEASING.md` has the setup and how to cut a release.
+
+- **`.github/workflows/release.yml`** runs on the self-hosted macOS runner, and only in this repo.
+  - **Stable**: a `vX.Y.Z` tag on a commit that's on main.
+  - **Main**: every push to main, once the repo variable `RELEASE_MAIN` is on.
+- **`app/release.sh`** builds a universal app for macOS 14 or later, with the backend tarball inside (`Resources/backend.tar.gz`).
+  It signs with the **Developer ID Application** cert under the hardened runtime, whose only entitlement is the mic. Then it
+  **notarizes** (`notarytool`), staples and zips. Without the cert it signs ad hoc, and the feed records that; a stable release
+  refuses to.
+- **`app/bundle.sh`** writes the `Info.plist` and copies the resources, for both `build.sh` and `release.sh`.
+- **`scripts/release.py`**: the version, a reproducible backend tarball, the notes, and the feed, which it signs and checks.
 - **Why Developer ID**: the signing identity stays the same from release to release. macOS keeps the mic, speech and notification
   permissions, and the Keychain stops asking for access after every update (the `cdhash:` pinning issue from #54).
-- **Channels:**
-  - `stable`: a tag `vX.Y.Z` makes a GitHub Release.
-  - `main`: every merge to main makes a prerelease `main-<n>-<sha>`, where `<n>` is the commit count, so builds sort in order.
-- **Feed**: each channel gets a `channel-<name>.json` release asset:
-  `{version, build, schema, protocol, url, sha256, ed25519, notes_md, min_macos}`.
-  The feed file is signed with the same key, so a tampered feed fails like a tampered zip.
-- **Secrets**: the Developer ID cert, its notary credentials and the Ed25519 private key are CI secrets. Fork CI (#122) never sees
-  them: forks build unsigned and publish nothing.
+- **Versions:**
+  - `stable`: `X.Y.Z` from the tag.
+  - `main`: `main-<n>-<sha>`, where `<n>` is the commit count. It's also every build's `CFBundleVersion`, so builds sort in order.
+- **Feed**: `channel-<name>.json` is `{body: base64(JSON), sig: Ed25519 over those bytes, key}`. The app checks the bytes, then
+  parses them, so no JSON re-encoding has to match.
+  - The body has the version, build, commit, `schema`/`compat`/`protocol`, `min_macos`, `signing`, `notarized`, the notes, and
+    each file's URL, sha256 and size. So one signature covers the zip and the tarball too.
+  - Each build is a GitHub Release. The rolling prereleases `feed-stable` and `feed-main` hold each channel's current feed.
+- **Secrets**: the Developer ID cert, the notary key and the Ed25519 private key are CI secrets, and only push and tag events in
+  this repo can reach them. Pull requests (forks included) never run the release workflow.
 
 ## Checking and asking
 
 - **The app checks the feed** at launch and every 6 h. The request is an anonymous GET to GitHub with no identifiers in the URL or
-  headers. Settings › Updates can turn it off (and has the channel and a "Check now" button).
+  headers. Settings › Updates can turn it off (and has the channel and a "Check now" button). A missing, unreachable or
+  unverifiable feed is "no update": no prompt, and the next check tries again.
 - **A newer build** is downloaded in the background and checked (sha256, Ed25519, then `SecStaticCodeCheckValidity` against
   Greenlight's Team ID requirement). Then a quiet prompt:
   **"Greenlight 0.5.0 is ready. Everything comes back where it is."** with **Restart now**, **When idle**, **Later** and the release notes.
@@ -155,7 +166,8 @@ Events `update_check`, `update_download`, `update_apply` and `rollback`, with `c
 2. **Chief turns survive**: the separate turn runner, `chat.py follow`, and the app following turns and picking them up again.
 3. **Terminal history**: capture-pane on reattach.
 4. **Restart path**: `resume.json`, `restart.planned`, `update.sh`, crash-check rollback. Built and tested on the Mac mini.
-5. **CI release pipeline**: Developer ID signing, notarization, the Ed25519-signed feed, `stable` and `main` channels.
+5. **CI release pipeline** (built; needs the owner's secrets, see `docs/RELEASING.md`): Developer ID signing, notarization,
+   the Ed25519-signed feed, `stable` and `main` channels.
 6. **Updater UI**: Settings › Updates, the prompt, "when idle", the version handshake with a remote backend.
 
 Steps 1–3 help even without an updater (a clean relaunch, a page reload), so they can merge first.
