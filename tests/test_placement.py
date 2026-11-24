@@ -403,19 +403,32 @@ def test_tree_new_places_an_orca_create(monkeypatch, tmp_path):
     # the user clicked is their own pick of a checkout
     monkeypatch.setattr(dash, "repo_cfg", lambda p: None)
     monkeypatch.setattr(dash, "main_of", lambda p: None)
+    def rows(*rs):
+        monkeypatch.setattr(dash, "tree", lambda path, every=False: (greenlight.orca_cli, rs[0], list(rs)))
     calls = cli_with(monkeypatch, local="laptop")
-    monkeypatch.setattr(dash, "tree", lambda path: (greenlight.orca_cli, {"repoId": "r1", "path": path}))
+    rows({"repoId": "r1", "path": "/src/widgets", "hostId": "local"})
     out = dash.tree_new("/src/widgets", {"name": "fix-2"})
     assert "refused" in out["error"] and not any(c[:2] == ["worktree", "create"] for c in calls)
     calls = cli_with(monkeypatch, paired=True, created={"worktree": {"path": "/w/fix-3"}})
-    monkeypatch.setattr(dash, "tree", lambda path: (greenlight.orca_cli, {"repoId": "r-only", "path": path}))
-    assert dash.tree_new("/srv/gadgets", {"name": "fix-3"})["path"] == "/w/fix-3"  # the only checkout at that path
+    rows({"repoId": "r-only", "path": "/srv/gadgets", "hostId": "ssh:t1"})  # the only checkout at that path: the user's pick
+    assert dash.tree_new("/srv/gadgets", {"name": "fix-3"})["path"] == "/w/fix-3"
     assert ["worktree", "create", "--repo", "id:r-only", "--name", "fix-3"] in calls
-    real = greenlight.orca_cli  # another host has a checkout at the same path: the click didn't say which, so it's checked
-    twins = {"worktrees": [{"path": "/srv/gadgets", "repoId": "r-only"}, {"path": "/srv/gadgets", "repoId": "r-here"}]}
-    monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: twins if a[:2] == ("worktree", "ps") else real(*a, **k))
-    monkeypatch.setattr(dash, "tree", lambda path: (greenlight.orca_cli, {"repoId": "r-only", "path": path}))
-    assert "on laptop" in dash.tree_new("/srv/gadgets", {"name": "fix-4"})["error"]
+    # two hosts at one path, laptop's listed first: the click didn't say which, so this machine's checkout is used
+    rows({"repoId": "r-there", "path": "/srv/w", "hostId": "ssh:t1"}, {"repoId": "r-here", "path": "/srv/w", "hostId": "local"})
+    assert dash.tree_new("/srv/w", {"name": "fix-4"})["path"] == "/w/fix-3"
+    assert ["worktree", "create", "--repo", "id:r-here", "--name", "fix-4"] in calls
+    # twins and none of them here (no hostId is not "local"): checked like any create, and refused
+    rows({"repoId": "r-only", "path": "/srv/g"}, {"repoId": "r-only", "path": "/srv/g"})
+    assert "on laptop" in dash.tree_new("/srv/g", {"name": "fix-5"})["error"]
     other = []
-    monkeypatch.setattr(dash, "tree", lambda path: (lambda *a: other.append(a) or {"worktree": {"path": "/w/fix-2"}}, {"repoId": "r1"}))
+    monkeypatch.setattr(dash, "tree", lambda path, every=False: (lambda *a: other.append(a) or {"worktree": {"path": "/w/fix-2"}}, {"repoId": "r1"}, [{"repoId": "r1"}]))
     assert dash.tree_new("/src/widgets", {"name": "fix-2"})["path"] == "/w/fix-2" and other  # another ADE's call: as before
+
+
+def test_tree_every_returns_all_rows_at_a_path(monkeypatch):
+    ws = [{"path": "/src/w", "repoId": "a", "hostId": "ssh:t1"}, {"path": "/src/w", "repoId": "b", "hostId": "local"},
+          {"path": "/src/w", "repoId": "c", "isArchived": True}]
+    monkeypatch.setattr(dash, "ADES", ("orca",))
+    monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: {"worktrees": ws})
+    assert dash.tree("/src/w")[1]["repoId"] == "a"  # the first row, as the page shows it (delete acts on the same one)
+    assert [r["repoId"] for r in dash.tree("/src/w", every=True)[2]] == ["a", "b"]

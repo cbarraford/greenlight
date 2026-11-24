@@ -773,16 +773,18 @@ def created(path):
         return None
 
 
-def tree(path):
-    """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree."""
+def tree(path, every=False):
+    """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree. every: also every
+    live row at that path (two hosts can share one)."""
     for ade in ADES:
         try:
             call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
-        if w := next((w for w in ws if w.get("path") == path and not w.get("isArchived")), None):
-            return call, w
+        rows = [w for w in ws if w.get("path") == path and not w.get("isArchived")]
+        if rows:
+            return (call, rows[0], rows) if every else (call, rows[0])
     raise LookupError(f"no workspace at {path}")
 
 
@@ -919,13 +921,14 @@ def tree_new(path, o):
     gate = preflight(goal, "", o) if o.get("agent") and goal else None
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
-    call, w = tree(path)
+    call, w, twins = tree(path, every=True)
+    if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host: this machine's checkout there, if any
+        w = next((x for x in twins if x.get("hostId") == "local"), w)
     args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
             *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else [])]
     if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: place it the same way. The row is the user's
-        # pick only when no other host has a checkout at that path too (the page sends a path, not a host)
-        twins = [x for x in call("worktree", "ps", "--limit", "10000").get("worktrees") or [] if x.get("path") == path and not x.get("isArchived")]
-        args, why = greenlight.place_here(args, picked=len(twins) <= 1)
+        # pick when it's the only one at that path, or this machine's of several; else it's checked like any create
+        args, why = greenlight.place_here(args, picked=len(twins) == 1 or w.get("hostId") == "local")
         if why:
             return {"error": why}
     res = call(*args)
