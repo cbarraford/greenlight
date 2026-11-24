@@ -677,6 +677,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                               task=(ag.get("taskTitle") or ag.get("prompt") or "")[:160], tool=ag.get("toolName") or "",
                               input=(ag.get("toolInput") or "")[:160], since=ag.get("stateStartedAt"))
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
+        r["agent"]["last_output_at"] = w.get("lastOutputAt")
         state, why = state_of(r, blk)
         prog, steps, idx = progress(r)
         step_meta = {s["key"]: {k: s[k] for k in ("req", "done", "run", "owner", "phase") if s.get(k)}
@@ -1566,7 +1567,27 @@ def page(name, fresh=False, **designer):
     return {"name": name, "facts": f, **cached}
 
 
-def _claude_entries(f):
+def _parse_ts_ms(val):
+    """Parse an ISO-8601 timestamp string or epoch number into epoch milliseconds, or None."""
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+        return int(val * 1000) if val < 1e12 else int(val)
+    if not isinstance(val, str) or not val:
+        return None
+    try:
+        from datetime import UTC, datetime
+
+        s = val.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _claude_entries_ts(f):
     out = []
     try:
         with f.open(errors="replace") as fh:
@@ -1580,6 +1601,7 @@ def _claude_entries(f):
                 m = d.get("message") or {}
                 if not isinstance(m, dict) or d.get("type") not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
                     continue
+                ts = _parse_ts_ms(d.get("timestamp"))
                 ct = m.get("content")
                 for b in [{"type": "text", "text": ct}] if isinstance(ct, str) else ct or []:
                     if not isinstance(b, dict):
@@ -1591,19 +1613,23 @@ def _claude_entries(f):
                             t = cmd[1] + " " + (re.search(r"<command-args>(.*?)</command-args>", t, re.S) or ["", " "])[1]
                         elif t.lstrip().startswith("<"):  # caveats, reminders, local command output
                             continue
-                        out.append(("user" if d["type"] == "user" else "assistant", t.strip()))
+                        out.append(("user" if d["type"] == "user" else "assistant", t.strip(), ts))
                     elif b.get("type") == "tool_use":
                         i = b.get("input") or {}
                         if not isinstance(i, dict):
                             i = {}
                         arg = next((i[k] for k in ("command", "file_path", "pattern", "description", "url", "prompt") if i.get(k)), "")
-                        out.append(("tool", f"{b.get('name')} {' '.join(str(arg).split())}"))
+                        out.append(("tool", f"{b.get('name')} {' '.join(str(arg).split())}", ts))
     except OSError:
         pass
     return out
 
 
-def _codex_entries(f):
+def _claude_entries(f):
+    return [(r, t) for r, t, _ in _claude_entries_ts(f)]
+
+
+def _codex_entries_ts(f):
     out = []
     try:
         with f.open(errors="replace") as fh:
@@ -1613,27 +1639,32 @@ def _codex_entries(f):
                     p = (d.get("payload") or {}) if isinstance(d, dict) else {}
                 except (ValueError, AttributeError):
                     continue
-                if not isinstance(p, dict):
+                if not isinstance(d, dict) or not isinstance(p, dict):
                     continue
+                ts = _parse_ts_ms(d.get("timestamp") or p.get("timestamp"))
                 if p.get("type") == "message" and p.get("role") in ("user", "assistant"):
                     for b in p.get("content") or []:
                         if not isinstance(b, dict):
                             continue
                         t = b.get("text") or ""
                         if t.strip() and not t.lstrip().startswith("<"):
-                            out.append((p["role"], t.strip()))
+                            out.append((p["role"], t.strip(), ts))
                 elif p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
-                    out.append(("tool", f"{p.get('name') or 'shell'} {' '.join(str(p.get('arguments') or p.get('input') or '').split())}"))
+                    out.append(("tool", f"{p.get('name') or 'shell'} {' '.join(str(p.get('arguments') or p.get('input') or '').split())}", ts))
     except OSError:
         pass
     return out
+
+
+def _codex_entries(f):
+    return [(r, t) for r, t, _ in _codex_entries_ts(f)]
 
 
 _AGY_ARG_KEYS = ("CommandLine", "Path", "AbsolutePath", "FilePath", "TargetFile", "Query", "Pattern", "Url", "Prompt",
                  "command", "file_path", "path", "pattern", "url", "prompt")
 
 
-def _agy_entries(f):
+def _agy_entries_ts(f):
     out = []
     try:
         with f.open(errors="replace") as fh:
@@ -1644,15 +1675,16 @@ def _agy_entries(f):
                     continue
                 if not isinstance(d, dict):
                     continue
+                ts = _parse_ts_ms(d.get("timestamp"))
                 kind = d.get("type")
                 if kind == "USER_INPUT":
                     t = str(d.get("content") or "").strip()
                     if t and not t.startswith("<"):
-                        out.append(("user", t))
+                        out.append(("user", t, ts))
                 elif kind == "PLANNER_RESPONSE":
                     t = str(d.get("content") or "").strip()
                     if t:
-                        out.append(("assistant", t))
+                        out.append(("assistant", t, ts))
                     for tc in d.get("tool_calls") or []:
                         if not isinstance(tc, dict):
                             continue
@@ -1660,10 +1692,14 @@ def _agy_entries(f):
                         args = raw_args if isinstance(raw_args, dict) else {}
                         arg = next((args[k] for k in _AGY_ARG_KEYS if args.get(k)), "")
                         label = f"{tc.get('name') or 'tool'} {' '.join(str(arg).split())}".strip()
-                        out.append(("tool", label))
+                        out.append(("tool", label, ts))
     except OSError:
         pass
     return out
+
+
+def _agy_entries(f):
+    return [(r, t) for r, t, _ in _agy_entries_ts(f)]
 
 
 def _agy_transcript_files(path, cutoff):
@@ -1713,6 +1749,31 @@ def _entries_for(path, kind):
     return {"claude": _claude_entries, "codex": _codex_entries, "agy": _agy_entries}.get(kind, _claude_entries)(path)
 
 
+_ORIG_CLAUDE_ENTRIES = _claude_entries
+_ORIG_CODEX_ENTRIES = _codex_entries
+_ORIG_AGY_ENTRIES = _agy_entries
+
+
+def _entries_with_ts(path, kind):
+    """Call `_claude_entries`/`_codex_entries`/`_agy_entries` (respecting test mocks), keeping timestamps when available."""
+    dispatch = {
+        "claude": (_claude_entries, _ORIG_CLAUDE_ENTRIES, _claude_entries_ts),
+        "codex": (_codex_entries, _ORIG_CODEX_ENTRIES, _codex_entries_ts),
+        "agy": (_agy_entries, _ORIG_AGY_ENTRIES, _agy_entries_ts),
+    }
+    fn, orig, base_fn = dispatch.get(kind, dispatch["claude"])
+    if fn is orig:
+        return base_fn(path)
+    return [(r, t, None) for r, t in fn(path)]
+
+
+def _entry_dict(stem, n, role, text, kind, ts):
+    d = {"id": f"{stem}:{n}", "role": role, "text": text[:8000], "kind": kind}
+    if ts is not None:
+        d["ts"] = ts
+    return d
+
+
 def transcript_files(path):
     """Every agent session that ran in `path`, newest first: Claude Code transcripts, Codex rollouts, and agy transcripts."""
     fs = []
@@ -1738,26 +1799,45 @@ def transcript_files(path):
 RECENT = 300  # seconds
 
 
+def _pane_transcript(path, before=None, limit=120):
+    """Read recorded tmux pane log for `path` when available, else None."""
+    if not path:
+        return None
+    try:
+        import pane_log
+
+        if before and not pane_log.CURSOR_RE.fullmatch(before):
+            return None
+        return pane_log.read_workspace(path, before=before, limit=limit)
+    except Exception:
+        return None
+
+
 def transcript(name, before=None, limit=60):
-    """A page of the conversation in the workspace, oldest first, ending just before `before` ("<file>:<index>").
-    Older sessions continue where the newest one starts; `more` is the cursor for the page before this one."""
+    """A page of the agent's log in the workspace, oldest first, ending just before `before` ("<stem>:<index>").
+    Prefers recorded tmux pane logs (with per-line timestamps); falls back to Claude/Codex transcripts."""
     w = next((w for w, _ in live_agents().values() if w["displayName"] == name), None)
     if not w:
         return {"error": f"no workspace {name}", "before": before}  # before: the page can tell a failed "Load earlier" from a failed refresh
+    if pane := _pane_transcript(w.get("path"), before=before, limit=max(limit, 120)):
+        return pane
     files = transcript_files(w["path"])
     f, i = 0, None
     if before:
         stem, _, idx = before.rpartition(":")
         f = next((n for n, (x, k) in enumerate(files) if _transcript_stem(x, k) == stem), len(files))
         i = int(idx)
-    page = []
+    page: list[dict] = []
+    last_ts = None
     while f < len(files) and len(page) < limit:
         path, kind = files[f]
         st = _transcript_stem(path, kind)
-        es = _entries_for(path, kind)
+        es = _entries_with_ts(path, kind)
         i = len(es) if i is None else min(i, len(es))
         take = max(0, i - (limit - len(page)))
-        page[:0] = [{"id": f"{st}:{n}", "role": r, "text": t[:8000], "kind": kind} for n, (r, t) in enumerate(es[take:i], take)]
+        page[:0] = [_entry_dict(st, n, r, t, kind, ts) for n, (r, t, ts) in enumerate(es[take:i], take)]
+        if last_ts is None:
+            last_ts = next((ts for _, _, ts in reversed(es) if ts is not None), None)
         if take == 0:
             page.insert(0, {"id": f"{st}:start", "role": "sep",
                             "text": f"{kind} session · {time.strftime('%b %-d %H:%M', time.localtime(path.stat().st_ctime))}"})
@@ -1768,11 +1848,14 @@ def transcript(name, before=None, limit=60):
     more = f"{_transcript_stem(*files[f])}:{999999999 if i is None else i}" if f < len(files) else None  # 999999999: from that session's end
     # the newest page: also the tails of other sessions written to in the last RECENT seconds (a Codex review the main agent
     # started, say), so a busy newest session never starves them out of All output's refresh
-    recent = [] if before else [{"id": f"{_transcript_stem(path, kind)}:{n}", "role": r, "text": t[:8000], "kind": kind}
+    recent = [] if before else [_entry_dict(_transcript_stem(path, kind), n, r, t, kind, ts)
                                 for path, kind in files[1:] if time.time() - path.stat().st_mtime < RECENT
-                                for es in [_entries_for(path, kind)]
-                                for n, (r, t) in enumerate(es[-20:], max(0, len(es) - 20))]
-    return {"entries": page, "more": more, "before": before, "recent": recent}
+                                for es in [_entries_with_ts(path, kind)]
+                                for n, (r, t, ts) in enumerate(es[-20:], max(0, len(es) - 20))]
+    if last_ts is None and files:
+        with contextlib.suppress(OSError):
+            last_ts = int(files[0][0].stat().st_mtime * 1000)
+    return {"entries": page, "more": more, "before": before, "recent": recent, "source": "transcript", "last_output_ts": last_ts}
 
 
 # ---------- New task: a request (+ files) becomes a workspace whose agent starts on it at once ----------

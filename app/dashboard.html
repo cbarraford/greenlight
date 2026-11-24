@@ -188,21 +188,49 @@ main.ov{background:var(--canvas)}
 .aline .mono{font-size:var(--fs-2);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 button.aline{width:100%;border:0;font:inherit;color:inherit;text-align:left} button.aline:hover{background:var(--fill-hover)}
 button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3);opacity:0} button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
-/* All output: the agent's whole conversation over the whole window */
+/* All output: the agent's recorded log and conversation over the whole window */
 #aout{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:var(--bg);color:var(--text)} #aout [hidden]{display:none}
 #aout .aohd,#aout .aoft{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-4);background:var(--bar);flex-shrink:0}
 #aout .aohd{border-bottom:1px solid var(--hair)} #aout .aoft{border-top:1px solid var(--hair);min-height:44px}
 #aout .aot{display:flex;flex-direction:column;min-width:0;flex-grow:1} #aout .aot b{font-size:var(--fs-3);line-height:var(--lh-2);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #aout .aot span{font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
+#aout .aostrip{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--card);border-bottom:1px solid var(--hair);flex-shrink:0;font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text2)}
+#aout .aostrip .aos-item{display:inline-flex;align-items:center;gap:var(--sp-1);min-width:0;white-space:nowrap}
+#aout .aostrip .aos-item b{font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+#aout .aostrip .aos-tool{max-width:340px;overflow:hidden;text-overflow:ellipsis;padding:var(--sp-0) var(--sp-2);border-radius:var(--r-0);background:var(--fill);color:var(--text)}
+#aout .aostrip .aos-tool .mono{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#aout .aostrip .aos-sp{flex:1 1 auto}
+#aout .aostrip .aos-pr{display:inline-flex;align-items:center;gap:var(--sp-1);font-family:var(--mono);font-size:var(--fs-2);color:var(--text)}
+#aout .aostrip a.aos-pr{color:var(--accent-fg)}
+#aout .aostrip .aos-ci{display:inline-flex;align-items:center;gap:var(--sp-1);font-weight:500}
+#aout .aostrip .aos-step{color:var(--text3);font-variant-numeric:tabular-nums}
+#aout .aostrip .aos-step b{color:var(--text);font-weight:500}
 #aout .aolog{flex:1;overflow:auto;overscroll-behavior:contain;padding:var(--sp-4) max(16px,calc((100% - 880px) / 2));outline:0;-webkit-user-select:text;user-select:text}
+#aout .aolog.pane{background:var(--ds-bg-sunken);padding:var(--sp-3) var(--sp-4)}
+#aout .aolog.pane .aomore .btn{background:var(--card);box-shadow:var(--shadow-sm)}
+#aout .aolog.pane .aomore .btn:hover:not(:disabled){background:var(--fill-hover)}
 #aout .aolog:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
-.aoe{margin:0 0 var(--sp-3)} .aow{font-size:var(--fs-1);line-height:var(--lh-1);font-weight:500;color:var(--text3);margin-bottom:2px}
+.aoe{margin:0 0 var(--sp-3)} .aow{display:flex;align-items:baseline;gap:var(--sp-2);font-size:var(--fs-1);line-height:var(--lh-1);font-weight:500;color:var(--text3);margin-bottom:2px}
+.aots{font-family:var(--mono);font-size:var(--fs-1);line-height:var(--lh-2);color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums;-webkit-user-select:none;user-select:none}
+.aow .aots{margin-left:auto}
 .aotx{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-3);line-height:var(--lh-3);max-width:68ch}
 .aoe.you .aotx{padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);background:var(--fill);box-shadow:inset 2px 0 0 var(--accent)}
 .aoe.tool{margin:calc(-1 * var(--sp-2)) 0 var(--sp-3);font:var(--fs-2)/var(--lh-2) var(--mono);color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden} .aoe.tool::before{content:"› "}
 .aoe.tool.open{display:block}
+.aoe.tool.hasts{display:grid;grid-template-columns:68px minmax(0,1fr);gap:var(--sp-2);align-items:baseline}
+.aoe.tool.hasts::before{content:none}
+.aoe.tool.hasts .aotool{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.aoe.tool.hasts .aotool::before{content:"› "}
+.aoe.tool.hasts.open .aotool{display:block}
+.aoe.line{display:grid;grid-template-columns:68px minmax(0,1fr);gap:var(--sp-3);align-items:baseline;margin:0;padding:var(--sp-0) var(--sp-2);border-radius:var(--r-0);font:var(--ds-type-code)}
+.aoe.line:hover{background:var(--fill)}
+.aoe.line .aots{text-align:right}
+.aoe.line .aotx{max-width:none;font:inherit;color:var(--text)}
 .aosep{display:flex;align-items:center;gap:var(--sp-2);margin:var(--sp-4) 0 var(--sp-3);font-size:var(--fs-1);color:var(--text3)} .aosep::before,.aosep::after{content:"";flex:1;height:1px;background:var(--hair)}
+.aosep.aolook{margin:var(--sp-3) 0;color:var(--accent-fg);font-weight:500}
+.aosep.aolook::before,.aosep.aolook::after{background:var(--accent)}
+.aosep.aolook .aots{color:var(--text3);font-weight:400}
 .aomore{display:flex;justify-content:center;min-height:28px;margin-bottom:var(--sp-3);font-size:var(--fs-2);color:var(--text3)} .aonote{margin:var(--sp-6) 0;text-align:center;font-size:var(--fs-3);color:var(--text3)}
 #aout .aoft .aline{flex:1;min-width:0;background:none;padding:0} #aout .aerr{color:var(--red-ink);font-size:var(--fs-2)}
 .adot{width:12px;height:12px;flex-shrink:0;border-radius:var(--r-full);background:var(--blue);display:flex;align-items:center;justify-content:center}
@@ -1174,7 +1202,11 @@ function agentsStrip(docked){  // docked: the overview's strip, where idle crash
  icon(ui.agentsFolded ? "chevron-right" : "chevron-down", 12))), popBtn("agents")),
     live.length && !(ui.agentsFolded && !ui.only) ? h("div", {class:"acards"}, live.map(agentCard)) : null);
 }
-setInterval(() => { if (!document.hidden) document.querySelectorAll("[data-since]").forEach(e => e.textContent = clock(Number(e.dataset.since) || null)) }, 1000);
+setInterval(() => {
+  if (document.hidden) return;
+  document.querySelectorAll("[data-since]").forEach(e => e.textContent = clock(Number(e.dataset.since) || null));
+  if (ui.out) document.querySelectorAll("#aout [data-ts]").forEach(e => { const t = Number(e.dataset.ts); if (isFinite(t)) e.textContent = relTime(t) });
+}, 1000);
 
 /* ---------- views ---------- */
 function counts(){
@@ -1432,7 +1464,8 @@ function agentPanel(p){
   const paras = last.split(/\n\s*\n/), tail = paras.slice(-1)[0] || "";
   return h("section", {class:"panel"},
     h("div", {class:"shd"}, agentAv(a.type, 12, "av sm"),
-      h("h2", {style:"flex-grow:1"}, `${who} ${verb}`), h("span", {class:"el", "data-since": t0}, clock(t0))),
+      h("h2", {style:"flex-grow:1"}, `${who} ${verb}`), h("span", {class:"el", "data-since": t0}, clock(t0)),
+      h("button", {type:"button", class:"btn sm", onclick: () => openOut(p.name)}, icon("file-text", 12), "View log")),
     a.state === "working" && a.tool ? h("div", {class:"aline"}, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono"}, `${a.tool}${a.input ? ": " + a.input : ""}`)) : null,
     tail && tail.length <= 900 && a.state !== "waiting" ? h("p", {class:"amsg"}, tail) : null,  // a waiting agent's question is in the answer box  // the message once, as prose; the raw log stays folded
     paras.length > 1 || tail.length > 900 ? h("details", {open: !!ui.msgOpen, ontoggle: e => { ui.msgOpen = e.target.open }}, h("summary", {}, "Last message"), W.log({lines: last.split("\n")})) : null);
@@ -1620,22 +1653,57 @@ function answerSheet(){
 }
 function closeAnswer(){ ui.answering = null; render() }
 
-/* ---------- All output: the agent's whole conversation (dash.py transcript) over the whole window, refreshed while it's open ----------
+/* ---------- All output: the agent's recorded log (or transcript) over the whole window, refreshed while it's open ----------
    It lives outside #main, so a snapshot's re-render never resets it: new entries are appended, the scroll stays where you left it.
    At the bottom it follows new output; scrolled up, it holds still and counts what arrived. Back, or Esc, closes it. */
 const OUT_EVERY = {working: 3000};  // ms between refreshes; any other agent state: OUT_IDLE
-const OUT_IDLE = 5000, OUT_FOLLOW = 40;
+const OUT_IDLE = 5000, OUT_FOLLOW = 40, LOOKED_KEY = "gl_last_looked";
 let OUT_WAIT = 20000, OUT_QUIET = 30000;  // a reply later than OUT_WAIT counts as lost; a main session quiet for OUT_QUIET hands over (let: the tests shorten them)  // px from the bottom that still counts as "at the bottom"
+function relTime(ms){
+  if (ms == null || !isFinite(ms)) return "";
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function readLookedMap(){ try { const o = JSON.parse(localStorage.getItem(LOOKED_KEY) || "{}"); return o && typeof o === "object" ? o : {} } catch { return {} } }
+function getLastLooked(name){ const v = readLookedMap()[name]; return typeof v === "number" && isFinite(v) ? v : null }
+function setLastLooked(name, ts){
+  if (!name || typeof ts !== "number" || !isFinite(ts)) return;
+  try {
+    const m = readLookedMap(); m[name] = ts;
+    const keys = Object.keys(m);
+    if (keys.length > 200) keys.sort((a, b) => m[a] - m[b]).slice(0, keys.length - 200).forEach(k => delete m[k]);
+    localStorage.setItem(LOOKED_KEY, JSON.stringify(m));
+  } catch {}
+}
+function outMaxTs(o){
+  if (!o) return null;
+  let max = typeof o.lastOutputTs === "number" && isFinite(o.lastOutputTs) ? o.lastOutputTs : 0;
+  for (const e of o.entries) if (typeof e.ts === "number" && isFinite(e.ts) && e.ts > max) max = e.ts;
+  return max || null;
+}
+function saveOutLooked(o){
+  if (!o) return;
+  const max = outMaxTs(o);
+  if (max) setLastLooked(o.name, max);
+  else if (o.source === "pane") setLastLooked(o.name, Date.now());
+}
 function openOut(name){
   closeOut(false);
-  ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null, unseen: 0, follow: true, inflight: false, timer: 0};
+  ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null,
+    unseen: 0, follow: true, inflight: false, timer: 0, source: null, lastOutputTs: null, tool: "", toolInput: "", lastLooked: getLastLooked(name)};
   const p = puckOf(name) || {name, agent: {}};
   const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
     h("header", {class:"aohd"},
       h("button", {class:"btn back", id:"aout-back", title:"Back to the agents (Esc)", onclick: () => closeOut(true)}, icon("chevron-left"), "Back"),
       agentAv(p.agent.type, 12, "av sm"),
       h("div", {class:"aot"}, h("b", {id:"aout-t", title: mrTitle(p)}, `All output · ${mrTitle(p)}`), h("span", {id:"aout-sub"})),
+      p.path ? h("button", {class:"btn sm", id:"aout-basement", title:"Open this workspace's live terminal in the Basement", onclick: () => toBasement(name)}, icon("terminal", 12), "Basement") : null,
       h("button", {class:"btn sm", onclick: () => { closeOut(false); openPage(name) }}, "Open workspace")),
+    h("div", {class:"aostrip", id:"aout-strip", role:"region", "aria-label":"Agent status"}),
     h("div", {class:"aolog", id:"aout-log", tabindex:"0", role:"log", "aria-label":"Agent output", onscroll: outScrolled},
       h("div", {class:"aomore", id:"aout-more"}), h("div", {id:"aout-list"})),
     h("footer", {class:"aoft"}, h("div", {class:"aline", id:"aout-now"}),
@@ -1646,6 +1714,7 @@ function openOut(name){
 }
 function closeOut(refocus){
   const o = ui.out; if (!o) return;
+  saveOutLooked(o);
   clearTimeout(o.timer); ui.out = null;
   const el = document.getElementById("aout"); if (el) el.remove();
   const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
@@ -1656,7 +1725,7 @@ function closeOut(refocus){
 function outKeys(e){
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeOut(true); return }
   if (e.key !== "Tab") return;  // a modal: Tab cycles inside it (also WebKit, where native Tab skips buttons)
-  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
+  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout a[href]:not([hidden]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
   if (!f.length) return;
   e.preventDefault();
   f[k < 0 ? (e.shiftKey ? f.length - 1 : 0) : (k + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
@@ -1679,6 +1748,23 @@ function olderOut(){
   const cur = o.more, req = o.olderReq = (o.olderReq || 0) + 1;  // a retry gets its own 20s
   setTimeout(() => { if (ui.out === o && o.older && o.olderReq === req) gotOut({name: o.name, before: cur, error: "no answer"}) }, OUT_WAIT);
 }
+function lookedDivider(ts){
+  return h("div", {class:"aosep aolook", id:"aout-looked", role:"separator", "aria-label":"Since you last looked"},
+    h("span", {}, "Since you last looked"),
+    ts ? h("span", {class:"aots", "data-ts": String(ts), title: new Date(ts).toLocaleString()}, relTime(ts)) : null);
+}
+function syncLookedDivider(){
+  const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
+  const old = document.getElementById("aout-looked");
+  if (o.lastLooked == null) { if (old) old.remove(); return }
+  const firstNew = o.entries.find(e => typeof e.ts === "number" && isFinite(e.ts) && e.ts > o.lastLooked);
+  if (!firstNew) { if (old) old.remove(); return }
+  const target = list.querySelector(`[data-id="${CSS.escape(firstNew.id)}"]`);
+  if (!target) { if (old) old.remove(); return }
+  if (old && old.nextElementSibling === target) return;
+  if (old) old.remove();
+  list.insertBefore(lookedDivider(o.lastLooked), target);
+}
 function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page (before: the cursor asked with)
   const o = ui.out; if (!o || r.name !== o.name) return;
   if (r.before) {
@@ -1689,12 +1775,18 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     const add = arr(r.entries).filter(e => !o.ids.has(e.id));
     add.forEach(e => { o.ids.add(e.id); if (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]) o.tip[stemOf(e)] = idxOf(e) }); o.entries = add.concat(o.entries); o.more = r.more || null;
     document.getElementById("aout-list").prepend(...add.map(e => outEntry(e)));
+    syncLookedDivider();
     log.scrollTop = t0 + log.scrollHeight - h0;  // what you were reading stays put
     outMore(); return;
   }
   if (!o.inflight) return;  // a stale answer (an earlier open's): the next poll is already set
   o.inflight = false; o.err = r.error || null;
   if (!r.error) {
+    if (r.source) o.source = r.source;
+    if (typeof r.last_output_ts === "number" && isFinite(r.last_output_ts)) o.lastOutputTs = r.last_output_ts;
+    if (typeof r.tool === "string") { o.tool = r.tool; o.toolInput = typeof r.tool_input === "string" ? r.tool_input : "" }
+    const log = document.getElementById("aout-log");
+    if (log) log.classList.toggle("pane", o.source === "pane");
     const page = arr(r.entries), first = !o.loaded;
     // new to it: a line past the last one shown for its session (a session that flips between newest and recent never
     // brings its older, unseen lines in at the bottom), or any line of a session not shown yet
@@ -1713,32 +1805,41 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
       if (note) note.remove();  // "No output yet" was true until now
       if (gap) list.append(h("div", {class:"aosep gap"}, "More output arrived than one refresh holds: some may be skipped here"));
       list.append(...add.map(e => outEntry(e, e.other)));
-      if (o.follow && o.entries.length > 500) {
-        const drop = o.entries.length - 500;
-        o.entries.splice(0, drop);
-        for (let k = 0; k < drop && list.firstChild; k++) list.firstChild.remove();
+      const cap = o.source === "pane" ? 1000 : 500;
+      if (o.follow && o.entries.length > cap) {
+        const drop = o.entries.splice(0, o.entries.length - cap);
+        for (const e of drop) list.querySelector(`[data-id="${CSS.escape(e.id)}"]`)?.remove();
       }
+      syncLookedDivider();
       if (o.follow) outBottom(); else { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
   }
   outHead(); nextPoll();
 }
+function tsEl(ts){
+  if (typeof ts !== "number" || !isFinite(ts)) return null;
+  return h("span", {class:"aots", "data-ts": String(ts), title: new Date(ts).toLocaleString()}, relTime(ts));
+}
 function outEntry(e, other){  // other: a line of another session running alongside the main one
   const p = ui.out && puckOf(ui.out.name), who = agentMeta(e.kind || (p && p.agent.type)).name;  // the session that wrote it
+  const stamp = tsEl(e.ts);
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
+  if (e.role === "line") return h("div", {class:"aoe line", "data-id": e.id},
+    stamp || h("span", {class:"aots", "aria-hidden":"true"}), h("span", {class:"aotx"}, e.text || " "));
   if (e.role === "tool" && other) e = {...e, text: e.text + "  (another session)"};
-  if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open"); 
+  if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open");
       ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
       outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
-    const el = h("div", {class:"aoe tool", "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
+    const el = h("div", {class:"aoe tool" + (stamp ? " hasts" : ""), "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
       onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
-      onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }}, e.text);
+      onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }},
+      ...(stamp ? [stamp, h("span", {class:"aotool"}, e.text)] : [e.text]));
     if (!long) requestAnimationFrame(() => { if (el.isConnected && el.scrollHeight > el.clientHeight + 1)  // a narrow window folds a shorter one too
       Object.entries({tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"}).forEach(([k, v]) => el.setAttribute(k, v)) });
     return el }
   return h("div", {class:"aoe " + (e.role === "user" ? "you" : "said"), "data-id": e.id},
-    h("div", {class:"aow"}, (e.role === "user" ? "Prompt" : who) + (other ? " · another session" : "")), h("div", {class:"aotx"}, e.text));
+    h("div", {class:"aow"}, (e.role === "user" ? "Prompt" : who) + (other ? " · another session" : ""), stamp), h("div", {class:"aotx"}, e.text));
 }
 const stemOf = e => String(e.id).replace(/:[^:]*$/, "");
 const idxOf = e => { const n = Number(String(e.id).replace(/^.*:/, "")); return isFinite(n) ? n : -1 };  // "<session>:start" is before its first line
@@ -1746,6 +1847,7 @@ function outPaint(){  // the first page
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   list.replaceChildren(...o.entries.map(e => outEntry(e, e.other)));
   if (o.loaded && !o.entries.length) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
+  syncLookedDivider();
   outMore(); outBottom();
 }
 function outMore(){  // the top of the log: Load earlier, or where the sessions start
@@ -1777,20 +1879,52 @@ function outNew(){
   b.replaceChildren(o.unseen ? `${o.unseen} new` : "Latest", icon("chevron-down", 12));
   b.title = "Jump to the latest output";
 }
+function outStrip(o, p){
+  const strip = document.getElementById("aout-strip"); if (!strip) return;
+  const a = (p && p.agent) || {}, mr = (p && p.mr) || {};
+  const st = a.state === "working" ? ["blue", "Working"] : a.state === "waiting" ? ["wait", "Waiting"]
+    : p && p.state === "crashed" ? ["red", "Crashed"] : ["gray", "Idle"];
+  const lastTs = outMaxTs(o) || since(a.last_output_at) || (typeof a.idle_h === "number" && isFinite(a.idle_h) ? Date.now() - a.idle_h * 3.6e6 : null) || since(a.since);
+  const toolName = a.tool || o.tool || "", toolIn = a.tool ? (a.input || "") : (o.toolInput || "");
+  const toolText = toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "";
+  const [ciText, ciTone, ciIcon] = mr.iid || mr.pipeline ? ciSay({}, mr) : ["", null, null];
+  const ciLabel = ciTone === "ok" ? "CI passed" : ciTone === "bad" ? "CI failed" : ciTone === "run" ? `CI ${ciText}` : ciText ? `CI ${ciText}` : "";
+  const ciCol = {ok:"--green", bad:"--red", run:"--blue"}[ciTone];
+  const {n, i} = p ? stepsOf(p) : {n: 0, i: 0}, stepLabel = p && p.step ? (STEP_GOALS[p.step] || STEP_NAMES[p.step] || cap(String(p.step).replace(/_/g, " "))) : "";
+  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, i, n, stepLabel, p && p.state || ""].join("\u0000");
+  if (strip.dataset.key === key) return;
+  strip.dataset.key = key;
+  strip.replaceChildren(
+    statusPill(st[0], st[1]),
+    h("span", {class:"aos-item aos-out"}, lastTs ? ["Last output ", h("b", {"data-ts": String(lastTs), title: new Date(lastTs).toLocaleString()}, relTime(lastTs))] : "No output yet"),
+    toolText ? h("span", {class:"aos-item aos-tool", title: toolText}, h("span", {class:"mono"}, short(toolText, 80))) : null,
+    h("span", {class:"aos-sp"}),
+    mr.iid ? (safeHttpUrl(mr.web_url)
+      ? h("a", {class:"aos-pr", href: mr.web_url, title: mr.title || mrRef(mr)}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null)
+      : h("span", {class:"aos-pr"}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null))
+      : h("span", {class:"aos-item muted"}, "No PR"),
+    ciLabel ? h("span", {class:"aos-ci", style: ciCol ? `color:${ink(ciCol)}` : null}, icon(ciIcon, 12), ciLabel) : null,
+    n ? h("span", {class:"aos-item aos-step"}, `Step ${Math.min(i + 1, n)} of ${n}`, stepLabel ? [" · ", h("b", {}, p && p.state === "done" ? "Done" : stepLabel)] : null)
+      : stepLabel ? h("span", {class:"aos-item aos-step"}, h("b", {}, stepLabel)) : null);
+}
 function outHead(){  // who and what it's doing now, from the 5s snapshot; any refresh error
   const o = ui.out; if (!o) return;
   const p = puckOf(o.name), a = p ? p.agent : {}, sub = document.getElementById("aout-sub"), now = document.getElementById("aout-now");
   if (!sub || !now) return;
+  outStrip(o, p);
   const who = agentMeta(a.type).name, t0 = since(a.since);
   sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
     ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
-  const key = o.err ? "err\u0000" + o.err : [a.state, a.tool, a.input].join("\u0000");  // failing: only the error shows, so only it counts
+  const toolName = a.tool || o.tool || "", toolIn = a.tool ? (a.input || "") : (o.toolInput || "");
+  const key = o.err ? "err\u0000" + o.err : [a.state, toolName, toolIn].join("\u0000");  // failing: only the error shows, so only it counts
   if (now.dataset.key === key) return;  // unchanged: a screen reader doesn't hear the same alert again
   now.dataset.key = key;
   now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]
-    : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: a.tool ? `${a.tool}: ${a.input || ""}` : ""}, a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : "Working")]
+    : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: toolName ? `${toolName}: ${toolIn}` : ""}, toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "Working")]
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
 }
+document.addEventListener("visibilitychange", () => { if (document.hidden && ui.out) saveOutLooked(ui.out) });
+window.addEventListener("pagehide", () => { if (ui.out) saveOutLooked(ui.out) });
 function renderNone(main){  // no workspaces at all: start one; all hidden by the project or parked filter: clear them
   const none = !ui.snap.pucks.length, busy = !none && ui.snap.pucks.some(p => p.name in ui.acting && inView(p));
   main.classList.add("ov");

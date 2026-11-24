@@ -193,6 +193,12 @@ def launch(path, agent, prompt):
     tmux("new-session", "-d", "-s", s, "-c", path, "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l")
     with contextlib.suppress(OSError):  # the workspace page's Basement button attaches to it (last_agent.py); panes can't tell codex apart
         last_agent.note({path: (agent, s, int(time.time() * 1000))})
+    try:
+        import pane_log
+
+        pane_log.attach(s, cwd=path, socket=TMUX_SOCKET)
+    except Exception:
+        pass
     return {"terminal": {"handle": tmux("display-message", "-p", "-t", s, "#{pane_id}").strip(), "session": s}}
 
 

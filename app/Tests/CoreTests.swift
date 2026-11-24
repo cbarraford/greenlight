@@ -1107,5 +1107,14 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     rs.setHost("mac")
     check("project host: RulesStore.setHost persists mode and updates repoHostTarget",
           rs.repoHostMode == "mac" && rs.repoHostTarget == "mac" && rs.repoHosts["widgets"]?.target == "mac")
+
+    // 13. Pane recorder tmux hooks & quoting
+    let hooks = App.paneRecorderHooks()
+    check("app: paneRecorderHooks emits idempotent after-new-session and client-attached pipe-pane hooks",
+          hooks.count == 2
+          && hooks[0].contains("after-new-session[1]")
+          && hooks[1].contains("client-attached[1]")
+          && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
+          && App.tmuxQuote(#"a"b\c"#) == #""a\"b\\c""#)
     mainC.clear()
 }
