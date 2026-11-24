@@ -352,11 +352,10 @@ func staged(_ s: String) -> Staged {
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
-    if let open = text.range(of: "```stage") {
-        if let close = text[open.upperBound...].range(of: "```") {
-            stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            text.removeSubrange(open.lowerBound..<close.upperBound)
-        } else { text = String(text[..<open.lowerBound]) }
+    while let open = text.range(of: #"```[ \t]*stage(?![A-Za-z0-9])"#, options: [.regularExpression, .caseInsensitive]) {  // every one, ```Stage too: never for the transcript
+        guard let close = text[open.upperBound...].range(of: "```") else { text = String(text[..<open.lowerBound]); break }
+        if stage == nil { stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines) }  // the first is drawn
+        text.removeSubrange(open.lowerBound..<close.upperBound)
     }
     return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil, open: link)
 }
@@ -545,9 +544,198 @@ func dwimSkipped(_ plan: [String: Any]) -> String {
     return skipped.isEmpty ? "" : " Skipped " + skipped.joined(separator: "; ") + "."
 }
 
+/// A stage block's JSON, past the fence's own label (```stage json, ```Stage JSON, ```stage-card). nil when it isn't JSON:
+/// notes that open with a link, timestamp, bullet or placeholder ("[!12](…) green", "[10:30] standup", "Plan {draft}") aren't.
+func stageJSON(_ s: String) -> String? {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    let start = #"^(?:[._:-]?[A-Za-z][A-Za-z0-9_-]*)?\s*(?=\{\s*(?:\}|\z|["']|[A-Za-z_]\w*\s*:)|\[\s*(?:\z|\]\s*\z|["'\[{]|(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|(?:true|false|null)\b)\s*(?:,|\]\s*\z|\z)))"#
+    return t.range(of: start, options: .regularExpression).map { String(t[$0.upperBound...]) }
+}
+
+/// A stage block's HTML/SVG fragment, past an optional ```stage html/svg label. nil for plain notes ("Note:\n<foo>").
+func stageHTML(_ s: String) -> String? {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.hasPrefix("<") { return t }
+    return t.range(of: #"^(?i)[_.:-]?(?:html|svg)\s+(?=<[A-Za-z!?])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
+}
+
+/// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
+func isStageChart(_ o: [String: Any]) -> Bool {
+    (o["chart"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+}
+
+/// A markdown link whose target is a URL or a path, for its text: [!12](https://…). Not fns[0](x).
+let mdLink = #"\[([^\]]*)\]\((?:https?://|mailto:|\.{0,2}/|#|[\w-]+(?:\.[\w-]+)+/)[^)]*\)"#
+/// Markdown a stage line drops: links to their text, code ticks, and emphasis only in real pairs (**kwargs, x ** 2 stay).
+let mdMarks: [(String, String)] = [(mdLink, "$1"), ("`([^`\n]*)`", "$1"),
+    (#"(?<![\w*])\*\*(?=\S)([^*\n]*?\S)\*\*(?![\w*])"#, "$1"), (#"(?<![\w~])~~(?=\S)([^~\n]*?\S)~~(?![\w~])"#, "$1")]
+func unmark(_ s: String) -> String { mdMarks.reduce(s) { $0.replacingOccurrences(of: $1.0, with: $1.1, options: .regularExpression) } }
+
+/// One line of a card as the stage shows it (text only): links to their text, code and emphasis marks off, one line;
+/// true/false as yes/no; a list's values joined. `unnumber` drops a leading "1." or "2)" (the steps card counts for itself).
+func cardText(_ v: Any?, unnumber: Bool = false) -> String {
+    var t: String
+    if let n = v as? NSNumber { t = CFGetTypeID(n) == CFBooleanGetTypeID() ? (n.boolValue ? "yes" : "no") : "\(n)" }
+    else if let s = v as? String { t = s } else { t = v.map { jsonLines($0).map { cardText($0) }.filter { !$0.isEmpty }.joined(separator: ", ") } ?? "" }
+    t = unmark(t)
+    for (p, w) in [(#"\s+"#, " ")] + (unnumber ? [(#"^\s*\d+[.)]\s+"#, "")] : []) {
+        t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
+    }
+    return t.trimmingCharacters(in: .whitespaces)
+}
+
+/// A card item from a line or an object: label, detail and tone by their usual names, any other values kept in the detail.
+func cardItem(_ v: Any, unnumber: Bool) -> [String: String]? {
+    guard let d = v as? [String: Any] else { let l = cardText(v, unnumber: unnumber); return l.isEmpty ? nil : ["label": l, "detail": "", "tone": ""] }
+    let named = ["label", "title", "name", "mr", "ref", "id", "ws", "workspace", "path"].first { !cardText(d[$0]).isEmpty }  // else the first by key
+    let said = ["detail", "value", "text"].first { !cardText(d[$0]).isEmpty }
+    var rest = d.keys.filter { $0 != "tone" && $0 != named && $0 != said }.sorted().compactMap { k -> String? in
+        let t = cardText(d[k])
+        guard !t.isEmpty else { return nil }
+        return d[k] is NSNumber ? "\(k): \(t)" : t
+    }
+    let strip = { (s: String) in unnumber ? s.replacingOccurrences(of: #"^\s*\d+[.)]\s+"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) : s }
+    var label = strip(cardText(named.flatMap { d[$0] }))
+    if label.isEmpty, !rest.isEmpty { label = strip(rest.removeFirst()) }
+    var detail = ([cardText(said.flatMap { d[$0] })] + rest).filter { !$0.isEmpty }.joined(separator: " · ")
+    if label.isEmpty { (label, detail) = (strip(detail), "") }
+    let tone = d["tone"] as? String ?? ""
+    return label.isEmpty ? nil : ["label": label, "detail": detail, "tone": ["needs", "bad", "now", "ok"].contains(tone) ? tone : ""]
+}
+
+/// A native template kind (stage.html's TEMPLATES) that has the fields stage.html reads; else the block is read as a card.
+func templateDraws(_ o: [String: Any]) -> Bool {
+    let all = { (k: String, ok: (Any) -> Bool) in (o[k] as? [Any]).map { !$0.isEmpty && $0.allSatisfy(ok) } ?? false }
+    let has = { (v: Any, k: String) in (v as? [String: Any]).map { !cardText($0[k]).isEmpty } ?? false }
+    switch o["kind"] as? String {
+    case "table": return all("rows") { ($0 as? [Any]).map { !$0.isEmpty } ?? false }
+    case "timeline": return all("items") { has($0, "label") }
+    case "lifecycle": return all("stages") { has($0, "label") }
+    case "diff":
+        let okF = all("files") { has($0, "path") }, okL = all("lines") { ($0 as? [String: Any])?["s"] is String }
+        let emptyOrNil = { (v: Any?) in v == nil || v is NSNull || (v as? [Any])?.isEmpty == true }
+        return (okF || okL) && (emptyOrNil(o["files"]) || okF) && (emptyOrNil(o["lines"]) || okL)
+    default: return false
+    }
+}
+
+/// A template's strings as the stage shows them: markdown marks off (unmark), all the way down, spacing kept. A diff's code
+/// (its lines and file paths) stays exactly as written.
+func cardClean(_ v: Any) -> Any {
+    if let s = v as? String { return unmark(s) }
+    if let a = v as? [Any] { return a.map(cardClean) }
+    guard let d = v as? [String: Any] else { return v }
+    return Dictionary(uniqueKeysWithValues: d.map { k, x in (k, d["kind"] as? String == "diff" && (k == "lines" || k == "files") ? x : cardClean(x)) })
+}
+
+/// Chief's ```stage JSON that isn't a chart: a card ({title, items, eyebrow, kind, stat}, items as lines or objects, under items,
+/// steps, notes, list or lines, or just a list; plain values beside the title become lines too), drawn as stage.spec at once,
+/// never handed to Haiku or its fallback as raw text. A native template with its facts goes through whole. nil when it isn't
+/// one, or holds a shape a card can't show (a table without its kind, a list given as text): Haiku draws that.
+func stageCard(_ s: String) -> [String: Any]? {
+    guard let j = stageJSON(s), let any = try? JSONSerialization.jsonObject(with: Data(j.utf8)) else { return nil }
+    let o = (any as? [String: Any]) ?? (any as? [Any]).map { ["items": $0] } ?? [:]
+    guard !isStageChart(o) else { return nil }
+    if templateDraws(o) { return cardClean(o) as? [String: Any] }
+    let head = ["title", "heading", "kind", "eyebrow", "stat", "tone"]
+    let listKey = ["items", "steps", "notes", "list", "lines"].first { o[$0] != nil && !(o[$0] is NSNull) }
+    let noChart = { (k: String) in k == "chart" && ((o[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+        || (o[k] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && !$0.boolValue } == true) }
+    let rest = o.keys.filter { !head.contains($0) && $0 != listKey && !(o[$0] is NSNull) && !noChart($0) }.sorted()
+    let list: [Any]? = listKey.map { o[$0] as? [Any] } ?? []  // nil: a list given as text or an object
+    guard rest.allSatisfy({ o[$0] is String || o[$0] is NSNumber }), let raw = list else { return nil }
+    let numbered = !raw.isEmpty && raw.allSatisfy { ($0 as? String)?.range(of: #"^\s*\d+[.)]\s"#, options: .regularExpression) != nil }
+    let given = o["kind"] as? String ?? ""
+    let kind = ["list", "steps", "stat", "flow", "compare", "quote"].contains(given) ? given : (numbered || (listKey == "steps" && !raw.isEmpty)) ? "steps" : "list"
+    let prose = ["sub", "subtitle", "note", "summary", "body", "text", "detail"]  // said, not named: the value is the line
+    let extra = rest.compactMap { k -> [String: String]? in
+        let v = cardText(o[k])
+        return v.isEmpty ? nil : prose.contains(k) ? ["label": v, "detail": "", "tone": ""] : ["label": k, "detail": v, "tone": ""]
+    }
+    let items = Array((raw.compactMap { cardItem($0, unnumber: kind == "steps") } + extra).prefix(8))
+    let title = [o["title"], o["heading"]].map { cardText($0) }.first { !$0.isEmpty } ?? ""
+    guard !(title.isEmpty && items.isEmpty) else { return nil }
+    return ["title": title, "kind": kind, "eyebrow": cardText(o["eyebrow"]), "stat": cardText(o["stat"]), "items": items]
+}
+
+/// Stage-schema enum values (kind/tone/chart) that aren't user facts when falling back to plain lines.
+func isStageMeta(_ key: String, _ v: Any) -> Bool {
+    guard let s = v as? String else { return false }
+    switch key {
+    case "kind": return ["list", "steps", "stat", "flow", "compare", "quote", "table", "timeline", "diff", "lifecycle"].contains(s)
+    case "tone": return ["needs", "bad", "now", "ok"].contains(s)
+    case "chart": return ["bar", "line", "pie"].contains(s)
+    default: return false
+    }
+}
+
+/// Every string and number in a JSON value, in order (an object's title/heading first): what a block the stage can't draw still says.
+func jsonLines(_ v: Any) -> [String] {
+    if let s = v as? String { return [s] }
+    if let n = v as? NSNumber { return [cardText(n)] }
+    if let a = v as? [Any] { return a.flatMap(jsonLines) }
+    if let d = v as? [String: Any] {
+        let rank = { (k: String) in k == "title" ? 0 : k == "heading" ? 1 : 2 }
+        return d.keys.sorted { (rank($0), $0) < (rank($1), $1) }.flatMap { isStageMeta($0, d[$0]!) ? [] : jsonLines(d[$0]!) }
+    }
+    return []
+}
+
+/// Single-pass unescape for a broken JSON string token: keeps \\n literal as \n, turns \n/\t/\r into spaces, decodes \uXXXX.
+func unescapeJSON(_ s: String) -> String {
+    var out = "", i = s.startIndex
+    let hex4 = { (from: String.Index) -> (UInt32, String.Index)? in
+        guard let end = s.index(from, offsetBy: 4, limitedBy: s.endIndex), let v = UInt32(s[from..<end], radix: 16) else { return nil }
+        return (v, end)
+    }
+    while i < s.endIndex {
+        let ch = s[i], next = s.index(after: i)
+        guard ch == "\\", next < s.endIndex else { out.append(ch); i = next; continue }
+        let esc = s[next], after = s.index(after: next)
+        switch esc {
+        case "\"", "'", "\\", "/": out.append(esc); i = after
+        case "n", "t", "r", "b", "f": out.append(" "); i = after
+        case "u":
+            if let (u1, e1) = hex4(after) {
+                if (0xD800...0xDBFF).contains(u1), e1 < s.endIndex, s[e1...].hasPrefix("\\u"),
+                   let (u2, e2) = hex4(s.index(e1, offsetBy: 2)), (0xDC00...0xDFFF).contains(u2),
+                   let sc = UnicodeScalar(0x10000 + ((u1 - 0xD800) << 10) + (u2 - 0xDC00)) {
+                    out.append(Character(sc)); i = e2; continue
+                }
+                if let sc = UnicodeScalar(u1) { out.append(Character(sc)); i = e1; continue }
+            }
+            out.append("\\u"); i = after
+        default: out.append("\\"); out.append(esc); i = after
+        }
+    }
+    return out
+}
+
 /// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
+/// JSON (a ```stage block Haiku couldn't draw) is read as a card, else its values as lines, its quoted values when it doesn't
+/// parse: never the raw JSON.
 func fallbackSpec(_ text: String) -> [String: Any] {
-    let ss = sentences(plain(text) + "\n", from: 0).said
+    if let c = stageCard(text) { return c }
+    let ss: [String]
+    if let j = stageJSON(text) {
+        let quoted = { () -> [String] in  // malformed: quoted values left to right, title/heading first, metadata enum values out
+            let re = try! NSRegularExpression(pattern: #"(["'])((?:(?!\1)[^\\]|\\.)*)\1(\s*:)?|([A-Za-z_]\w*)\s*:"#)
+            var titled: String?, vals = [String](), key: (name: String, end: String.Index)?
+            for m in re.matches(in: j, range: NSRange(j.startIndex..., in: j)) {
+                guard let full = Range(m.range, in: j) else { continue }
+                if m.range(at: 3).location != NSNotFound, let r = Range(m.range(at: 2), in: j) { key = (unescapeJSON(String(j[r])), full.upperBound); continue }
+                if m.range(at: 4).location != NSNotFound, let r = Range(m.range(at: 4), in: j) { key = (String(j[r]), full.upperBound); continue }
+                guard let r = Range(m.range(at: 2), in: j) else { continue }
+                let val = unescapeJSON(String(j[r]))
+                let direct = key.flatMap { j[$0.end..<full.lowerBound].allSatisfy(\.isWhitespace) ? $0.name : nil }
+                key = nil
+                if let direct, isStageMeta(direct, val) { continue }
+                if titled == nil, let direct, direct == "title" || direct == "heading", !cardText(val).isEmpty { titled = val } else { vals.append(val) }
+            }
+            return (titled.map { [$0] } ?? []) + vals
+        }
+        ss = ((try? JSONSerialization.jsonObject(with: Data(j.utf8))).map(jsonLines) ?? quoted()).map { cardText($0) }.filter { !$0.isEmpty }
+    } else { ss = sentences(plain(text) + "\n", from: 0).said }  // JSON with nothing to say draws blank, never its source
     return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 
@@ -824,7 +1012,7 @@ let voiceNote = "(Voice mode: the user is talking to you out loud, and your repl
     + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
-    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); for a card, JSON {\"title\": …, \"items\": [short lines]}; otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
     + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
     + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
 

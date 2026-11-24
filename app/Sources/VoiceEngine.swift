@@ -375,9 +375,10 @@ final class Voice: NSObject, ObservableObject {
         guard !chiefDrew else { return }
         chiefDrew = true; shown = true
         drawSeq += 1
-        let j = h.replacingOccurrences(of: #"^(json|chart)\s*"#, with: "", options: .regularExpression)  // ```stage json
-        if j.hasPrefix("{"), let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any], o["chart"] != nil { js("stage.chart", [o]) }
-        else if h.hasPrefix("<") { js("stage.html", [h]) } else { draw(h, last: true, force: true) }
+        let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
+        if let o, isStageChart(o) { js("stage.chart", [o]) }
+        else if let card = stageCard(h) { js("stage.spec", [card]) }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
+        else if let html = stageHTML(h) { js("stage.html", [html]) } else { draw(h, last: true, force: true) }
     }
     func draw(_ text: String, last: Bool, force: Bool = false) {
         drawSeq += 1
