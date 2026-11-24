@@ -1437,10 +1437,34 @@ def stop_shell(task_id):
     return bool(hits)
 
 
+_SCREEN_MARK = r"[*_]*\[screen\][*_]*:?[*_]*"
+_SCREEN_RE = re.compile(rf"(?im)^[ \t]*{_SCREEN_MARK}[ \t]*|[ \t]+{_SCREEN_MARK}[ \t]*$|^[ \t]*`\[screen\]:?`:?[ \t]*$")
+
+
+def _split_screen(text):
+    """Split a voice-mode reply on the first [screen] marker outside a code fence, else (text, None)."""
+    for m in _SCREEN_RE.finditer(text):
+        if text[:m.start()].count("```") % 2 == 0:
+            return text[:m.start()].strip(), text[m.end():].strip()
+    return text, None
+
+
 def asked_question(reply):
     """The end of a reply that ends on a question (a `?` or the Options line, under the app's [hexes:] lines), else None:
     the question with the offer above it, "I can add a meter.\n\nWhere should it go?"."""
     text = re.sub(r"(\s*\[[a-z]+:[^\]\n]*\])+\s*\Z", "", reply or "").strip()
+    gist, detail = _split_screen(text)
+    if detail is not None:
+        g_body, g_opts = decisions.split_options(gist)
+        d_body, d_opts = decisions.split_options(detail)
+        opts = g_opts + d_opts
+        g_q, d_q = bool(re.search(r"\?\s*\Z", g_body)), bool(re.search(r"\?\s*\Z", d_body))
+        if not (g_q or d_q or opts):
+            return None
+        parts = [p for p in ([d_body, g_body] if g_q and not d_q else [g_body, d_body]) if p]
+        body = "\n\n".join(parts)
+        tail = f"\nOptions: {' | '.join(opts)}" if opts else ""
+        return (body + tail)[-1000:]
     paras = re.split(r"\n\s*\n", text)
     if not re.search(r"\?\s*\Z|^`?options:.*\Z", paras[-1], re.M | re.I):
         return None

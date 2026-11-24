@@ -47,6 +47,8 @@ def test_swift_to_js_bridge_exports_exist():
     }
     for ns, exported in bridges.items():
         called = set(re.findall(rf'callJS\(\s*"[^"]*\b{ns}\.([A-Za-z_$][\w$]*)"', swift))
+        if ns == "stage":  # voice mode's js(_:_:) helper calls the stage by name too
+            called |= set(re.findall(r'\bjs\(\s*"stage\.([A-Za-z_$][\w$]*)"', swift))
         missing = called - exported
         assert not missing, f"Swift callJS invokes missing {ns}.<method> not exported in HTML: {sorted(missing)}"
 

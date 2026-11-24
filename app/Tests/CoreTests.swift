@@ -718,6 +718,13 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let expiredRecorded = mainC.msgs.last?.text.contains("no longer open") == true
     mainC.reply(to: "Ship !9?", "legacy")
     mainC.reply(to: "Freeform alert", "noted", freeform: true)
+    let splitQ = Question(text: "- CI green\n\nMerge it?", options: ["merge", "hold"], ping: false)
+    mainC.questions.append(splitQ)
+    mainC.reply(to: "Merge it?\n\n- CI green", "merge", questionID: splitQ.id, freeform: true)
+    let splitAnswered = mainC.waiting.isEmpty && mainC.questions.first { $0.id == splitQ.id }?.answer == "merge"
+    mainC.reply(to: "Merge it?\n\n- CI green", "actually hold", questionID: splitQ.id, freeform: true)  // already answered: freeform falls back to send, never expires
+    check("core: freeform notification reply closes a reordered [screen] chat Question by questionID and falls back once answered",
+          splitAnswered && !(mainC.msgs.last?.text.contains("no longer open") == true))
     let msgWithOpts = Msg(.greenlight, "Pick one"); msgWithOpts.options = ["a", "b"]
     mainC.msgs.append(msgWithOpts)
     mainC.choose(msgWithOpts, "a")

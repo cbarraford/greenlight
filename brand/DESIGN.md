@@ -785,6 +785,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - Title is `title-lg`, sub is `body-copy` `fg.muted`, the stat is `display` tabular figures.
   - Items are rows. Tables use tabular figures with tone shown by a glyph (bad / now / ok), not by row tint.
 - **Eyebrow:** a `label` in `fg.muted`, sentence case. No uppercase, no tracking.
+- **Screen text:** Chief's `[screen]` detail, under the spoken gist. The gist is a `title-sm` lead; the detail reads as a page at `layout.measure`, top-aligned: headings `strong`, lists with `fg.muted` markers, inline code `code` on `element.rest`, fenced code on `bg.sunken`. Markdown is read for structure only: everything lands as text, links as their words.
 - **Charts:** follow §10.10 and the dataviz skill. The 8-hex hard-coded `PAL` becomes neutral steps plus the accent.
 - **Motion:** content enters at `base`/`out` with a 4px rise. The listening cursor blinks only while listening and stops under reduced motion.
 - **Iframes:** each one gets the theme variables, as today.

@@ -330,7 +330,21 @@ struct DropArea: NSViewRepresentable {
 // MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
 
 /// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), and the rest. An unclosed fence (still streaming) hides everything from it on.
-struct Staged: Equatable { var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil }
+/// The rest splits again at a `[screen]` line: `text` before it is what's spoken (the gist), `screen` after it is the detail that is
+/// only shown (on the stage, and in the transcript under the gist), never read out.
+struct Staged: Equatable {
+    var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil; var screen: String? = nil
+    /// What the transcript shows: the gist, then the detail.
+    var shown: String { [text, screen ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n") }
+    /// The finished reply's parts with the Options lines off, whichever part Chief ended with one: what's shown, the gist,
+    /// the detail alone, and the options. A gist that asks the options' question goes last in what's shown, over its buttons.
+    var parts: (shown: String, gist: String, detail: String?, options: [String]) {
+        let (gist, o1) = splitOptions(text), (more, o2) = splitOptions(screen ?? ""), options = o1 + o2
+        let order = !options.isEmpty && gist.contains("?") ? [more, gist] : [gist, more]
+        return (order.filter { !$0.isEmpty }.joined(separator: "\n\n"), gist, more.isEmpty ? nil : more, options)
+    }
+}
+/// Every reply splits, voice mode or not: a session that ends voice mode may keep writing the marker, and only the line goes.
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, end = false, hexes: [String]?
     if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
@@ -357,7 +371,13 @@ func staged(_ s: String) -> Staged {
         if stage == nil { stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines) }  // the first is drawn
         text.removeSubrange(open.lowerBound..<close.upperBound)
     }
-    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset, console: console?.isEmpty == false ? console : nil, open: link)
+    var screen: String?
+    if let r = screenMark(text) {  // the gist is spoken; what follows is only shown
+        screen = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        text = String(text[..<r.lowerBound])
+    }
+    return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset,
+                  console: console?.isEmpty == false ? console : nil, open: link, screen: screen?.isEmpty == false ? screen : nil)
 }
 
 /// The forges Greenlight tracks (greenlight.py's forge_project): the only hosts Chief's [open: …] may send the browser to.
@@ -371,6 +391,36 @@ func forgeURL(_ s: String) -> URL? {
           var host = c.host?.lowercased(), c.user == nil, c.password == nil, c.port == nil else { return nil }
     if host.hasPrefix("www.") { host.removeFirst(4) }
     return forgeHosts.contains(host) ? c.url : nil
+}
+
+/// The first `[screen]` marker: at the start of a line (the detail may follow on it) or at the end of one (the gist before it),
+/// bold or a colon around it allowed (backticks only when alone on its line), and outside a code fence, so prose quoting it isn't split.
+func screenMark(_ s: String) -> Range<String.Index>? {
+    var from = s.startIndex
+    let mark = #"[*_]*\[screen\][*_]*:?[*_]*"#
+    while let r = s.range(of: #"(?m)^[ \t]*"# + mark + #"[ \t]*|[ \t]+"# + mark + #"[ \t]*$|^[ \t]*`\[screen\]:?`:?[ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
+        if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
+        from = r.upperBound
+    }
+    return nil
+}
+
+/// A spoken sentence made easy to listen to: a commit hash isn't read out character by character (the screen keeps it).
+/// A hash is a whole word of 7 to 40 lowercase hex with a digit and a letter, not a number like 1e10000. In brackets it goes;
+/// after "commit" the word stays; anywhere else it's said as "a commit", so the sentence still reads.
+func forEar(_ s: String) -> String {
+    let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-/]|\.\w|\.\.)"#
+    return s.replacingOccurrences(of: #"[ \t]*\([ \t]*"# + hash + #"[ \t]*\)"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\b((?i:commits?))[ \t]+"# + hash, with: "$1", options: .regularExpression)
+        .replacingOccurrences(of: hash + #"[ \t]+(?=(?i:commits?)\b)"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: hash, with: "a commit", options: .regularExpression)
+        .trimmingCharacters(in: .whitespaces)
+}
+
+/// The gist as it streams, without an Options line (its buttons, never said). Removing it whole keeps `said` valid: the line
+/// is always removed, from its first characters on.
+func spokenSoFar(_ gist: String) -> String {
+    plain(gist).replacingOccurrences(of: #"(?im)^[ \t]*options:.*$"#, with: "", options: .regularExpression)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -1007,9 +1057,16 @@ func level(_ b: AVAudioPCMBuffer) -> Float {
     return max(0, min(1, (20 * log10(max(sqrt(sum / Float(b.frameLength)), 1e-6)) + 50) / 45))
 }
 
-let voiceNote = "(Voice mode: the user is talking to you out loud, and your reply is spoken aloud. Answer concisely, like a person talking: "
-    + "one or two short sentences, the answer first, no preamble or recap, more only if they ask; no markdown, links or lists in the spoken part. Their screen shows a stage beside your voice; a fast model draws your reply there by itself. "
-    + "To put detail there yourself (a list, steps, numbers, MR links) or when they ask you to draw or redraw something, add one ```stage fenced block: "
+let voiceNote = "(Voice mode: the user is talking to you out loud. Your reply has two parts. First the spoken part, read aloud: the gist, "
+    + "one or two short sentences, the answer first, no preamble or recap, like a person talking; no markdown, links or lists. Write it for the ear: "
+    + "never read out commit hashes, MR or PR numbers, IDs, branch names, file paths, URLs or symbols; say \"the latest commit\" or \"the three reviews on the API\" "
+    + "or name them by what they do; short sentences, plain words. Then a line [screen] and the full explanation as text: "
+    + "whenever the answer names workspaces, MRs, numbers, steps or reasons, those go there, each MR as a markdown link with what it needs. "
+    + "It's shown on their screen and in the transcript under the gist, never spoken, so the two needn't match, and it's exempt from the "
+    + "few-short-lines rule (lists and bold are fine there; still no tables or headings). Put [screen] alone on its line, and an Options line last, after the text. "
+    + "Leave [screen] out only when the gist says it all (a yes, a done, a single fact). Their screen shows a stage beside your voice: "
+    + "the [screen] text, or else a card a fast model draws from what you said. "
+    + "To draw it yourself instead, a chart or a picture, or when they ask you to draw or redraw something, add one ```stage fenced block (it outranks [screen] on the stage): "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
     + "(pie: one series, a slice per label; never hand-draw a chart in SVG); for a card, JSON {\"title\": …, \"items\": [short lines]}; otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "

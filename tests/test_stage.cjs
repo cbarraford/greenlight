@@ -96,5 +96,80 @@ const { launchBrowser } = require("./js_harness.cjs");
     await p.evaluate(l => { document.documentElement.dataset.look = l; stage.spec({ title: "t", kind: "stat", stat: "3", items: [{ label: "ci", detail: "passed" }] }); }, look);
     assert.ok(await p.isVisible(".items.stat span"), look);
   }
+  // the [screen] text: the spoken gist as a lead, the detail's markdown read as structure and drawn as text only
+  await p.evaluate(() => { delete document.documentElement.dataset.look; stage.text({ lead: "Two reviews need you.",
+    md: "## Waiting\n- **!4834** fixes `ws_state.py`\n- [!5013](https://x/5013) adds tests\n  and docs\n\n1. merge\n2. deploy\n\nLatest commit abc1234.\n<img src=x onerror=alert(1)>\n```\n<script>x</script>\n```" }); });
+  assert.equal(await p.textContent("#s.doc .lead"), "Two reviews need you.");
+  assert.equal(await p.textContent(".doc h2"), "Waiting");
+  assert.deepEqual(await p.locator(".doc ul li").allTextContents(), ["!4834 fixes ws_state.py", "!5013 adds tests and docs"]);
+  assert.equal(await p.textContent(".doc ul li b"), "!4834");
+  assert.equal(await p.textContent(".doc ul li code"), "ws_state.py");
+  assert.deepEqual(await p.locator(".doc ol li").allTextContents(), ["merge", "deploy"]);
+  assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
+  assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
+  assert.match(await p.textContent(".doc"), /Latest commit abc1234\.<img src=x onerror=alert\(1\)>/);  // the screen keeps the hash (and the line break)
+  // a pipe table becomes the grid, its cells text; numbered steps split by code keep counting
+  await p.evaluate(() => stage.text({ md: "| MR | CI |\n|---|:--:|\n| **!1** | <b>ok</b> |\n| !2 | failed |\n\n1. build\n```\nmake\n```\n2. deploy" }));
+  assert.deepEqual(await p.locator(".doc table.grid th").allTextContents(), ["MR", "CI"]);
+  assert.deepEqual(await p.locator(".doc table.grid tbody td").allTextContents(), ["!1", "<b>ok</b>", "!2", "failed"]);
+  assert.equal(await p.locator(".doc table.grid td b").textContent(), "!1");
+  assert.deepEqual(await p.$$eval(".doc ol", ls => ls.map(l => l.start)), [1, 2]);
+  await p.evaluate(() => stage.text({ md: "1. **[!5355](https://x/5355): decode fix.** Review it, `now`." }));  // Chief bolds its links
+  assert.equal(await p.textContent(".doc ol li"), "!5355: decode fix. Review it, now.");
+  assert.equal(await p.textContent(".doc ol li b"), "!5355: decode fix.");
+  // lines keep their breaks; emphasis, a quote and a rule are drawn, not shown as marks; snake_case stays as written
+  await p.evaluate(() => stage.text({ md: "CI: green\nReview: *waiting* on _Sam_\n\n> held by its goal\n> until Friday\n\n---\nsee my_var_name" }));
+  assert.equal(await p.locator(".doc p").first().locator("br").count(), 1);
+  assert.deepEqual(await p.locator(".doc em").allTextContents(), ["waiting", "Sam"]);
+  assert.equal(await p.textContent(".doc p.quote"), "held by its goaluntil Friday");
+  assert.equal(await p.locator(".doc hr").count(), 1);
+  assert.equal(await p.textContent(".doc p:last-child"), "see my_var_name");
+  await p.evaluate(() => stage.text({ md: "**!12 — *blocked* on review**\n\nTouches *.py and *.js files" }));  // em in bold; globs aren't em
+  assert.equal(await p.textContent(".doc p b"), "!12 — blocked on review");
+  assert.equal(await p.textContent(".doc p b em"), "blocked");
+  assert.equal(await p.textContent(".doc p:last-child"), "Touches *.py and *.js files");
+  assert.equal(await p.locator(".doc p:last-child em").count(), 0);
+  // bold+em, trailing/leading em in bold, inline code inside emphasis, snake_case in _em_, formatted links
+  await p.evaluate(() => stage.text({ md: "**!12 — *blocked*** and ***urgent*** and ***first* rest**\n\n**Use `**kwargs` here** · *Touches `*.py` files* · _fix ws_state.py_\n\n[**!5013**](https://x/5013) in [`ws_state.py`](https://x/ws)" }));
+  assert.deepEqual(await p.locator(".doc p").nth(0).locator("b").allTextContents(), ["!12 — blocked", "urgent", "first rest"]);
+  assert.deepEqual(await p.locator(".doc p").nth(0).locator("b em").allTextContents(), ["blocked", "urgent", "first"]);
+  assert.equal(await p.locator(".doc p").nth(1).locator("b code").textContent(), "**kwargs");
+  assert.equal(await p.locator(".doc p").nth(1).locator("em code").textContent(), "*.py");
+  assert.deepEqual(await p.locator(".doc p").nth(1).locator("em").allTextContents(), ["Touches *.py files", "fix ws_state.py"]);
+  assert.equal(await p.locator(".doc p").nth(2).locator("b").textContent(), "!5013");
+  assert.equal(await p.locator(".doc p").nth(2).locator("code").textContent(), "ws_state.py");
+  // unmatched * / ` runs stay literal (never recurse/stack-overflow), unclosed brackets stay linear, inline triple backticks aren't fences
+  const t0 = Date.now();
+  await p.evaluate(() => stage.text({ md: "- *****\n- " + "*".repeat(10000) + "\n\nUse ``` for fences\n\n```stage``` blocks draw charts.\n\n" + "[a](".repeat(16000) }));
+  assert.ok(Date.now() - t0 < 2000, "inline stayed linear on unclosed brackets and long star runs");
+  assert.equal(await p.locator(".doc ul li").nth(0).textContent(), "*****");
+  assert.equal(await p.locator(".doc ul li b").count(), 0);
+  assert.equal(await p.locator(".doc pre").count(), 0);
+  assert.equal(await p.locator(".doc p").nth(0).locator("code").count(), 0);
+  assert.equal(await p.locator(".doc p").nth(1).textContent(), "stage blocks draw charts.");
+  assert.equal(await p.locator(".doc p").nth(1).locator("code").textContent(), "stage");
+  // pipe tables keep pipes inside inline code and escaped pipes, and keep `-` data rows after the header divider
+  await p.evaluate(() => stage.text({ md: "| Command | Ok |\n|---|---|\n| `a | b` | a \\| b |\n| - | - |" }));
+  assert.deepEqual(await p.locator(".doc table.grid tbody td").allTextContents(), ["a | b", "a | b", "-", "-"]);
+  assert.equal(await p.locator(".doc table.grid tbody td code").textContent(), "a | b");
+  await p.evaluate(() => stage.text({ md: "just text" }));
+  assert.equal(await p.locator(".doc .lead").count(), 0);
+  assert.equal(await p.textContent(".doc p"), "just text");
+  await p.evaluate(() => stage.text(null));
+  assert.equal(await p.locator("#s.doc").count(), 1);
+  for (const look of ["default", "phosphor"]) {
+    await p.evaluate(l => { document.documentElement.dataset.look = l; stage.text({ lead: "Gist.", md: "- one" }); }, look);
+    assert.ok(await p.isVisible(".doc li"), look);
+  }
+  await p.evaluate(() => { delete document.documentElement.dataset.look; });
+  // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
+  await p.setViewportSize({ width: 340, height: 320 });
+  await p.evaluate(() => stage.text({ lead: "Long items.",
+    md: Array.from({ length: 24 }, (_, i) => `- \`scripts/deeply/nested/module_${i}.py\` at \`0123456789abcdef0123456789abcdef01234567\``).join("\n") }));
+  assert.ok(await p.evaluate(() => document.body.scrollWidth <= window.innerWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1), "narrow .doc wraps long inline code");
+  await p.evaluate(() => { document.body.scrollTop = 300; window.scrollTo(0, 300); });
+  assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
+  await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
+  assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

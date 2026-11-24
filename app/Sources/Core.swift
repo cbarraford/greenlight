@@ -469,7 +469,7 @@ final class Core: ObservableObject {
         notify(title: name, body: "That notification is no longer open. Your reply is saved in chat.", subtitle: nil, reply: false, id: "expired:\(about)")
     }
     func reply(to about: String, _ text: String, questionID: UUID? = nil, freeform: Bool = false) {
-        if let questionID {
+        if let questionID, !freeform {
             guard let q = notificationQuestion(about, id: questionID) else {
                 expiredNotification(about, reply: text)
                 return
@@ -483,7 +483,8 @@ final class Core: ObservableObject {
             return
         }
         unread = max(0, unread - 1)
-        if let q = waiting.first(where: { !$0.ping && $0.text == about }) { answer(q, text) }
+        let q = questionID.flatMap { id in waiting.first { !$0.ping && $0.id == id } } ?? waiting.first { !$0.ping && $0.text == about }
+        if let q { answer(q, text) }
         else { send("(Replying to your notification: \"\(about)\")\n\(text)", shown: text) }
     }
 
@@ -1006,16 +1007,20 @@ final class Core: ObservableObject {
                      : "Not sent and no room beside the files you added: \(out.joined(separator: ", ")). Attach them again to send them.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
-        let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
-        if !r.stopping && ok { voice.finished(st, body) } else if !r.watch && !r.checkIn { voice.failed(body) }
+        let parts = st.parts, body = st.shown.isEmpty ? "(no reply)" : parts.shown, options = parts.options  // the transcript: the gist, then any [screen] detail
+        if !r.stopping && ok { voice.finished(st, parts.detail == nil ? body : parts.gist, detail: parts.detail) }  // body: "(no reply)" is said too
+        else if !r.watch && !r.checkIn {  // a failure says the gist, never the detail
+            voice.failed(parts.detail == nil ? body : parts.gist.isEmpty ? "It stopped. What it wrote is in the transcript." : parts.gist)
+        }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
         m.options = options
         m.failed = !ok
         msgs.append(m)
-        if ok && !options.isEmpty { questions.append(Question(text: body, options: options, ping: false)) }
-        if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
+        var chatQ: Question?
+        if ok && !options.isEmpty { let q = Question(text: body, options: options, ping: false); questions.append(q); chatQ = q }
+        if ok && !r.stopping && !parts.shown.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
             picks += 1
             let n = picks
             light([], false)
@@ -1033,8 +1038,9 @@ final class Core: ObservableObject {
             DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }
         }
         if !popoverShown() && !r.stopping {
+            let said = parts.detail == nil ? body : [parts.gist, parts.detail ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")  // gist first: the question it asks
             missed += 1
-            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(said.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), questionID: chatQ?.id, freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
     }
