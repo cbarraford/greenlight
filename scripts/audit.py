@@ -252,9 +252,30 @@ def _ok(q, r):
         math.isfinite(number) and 0 <= number <= 1
 
 
+BATCH_CHARS = 4 * MAXC  # context chars in one decide.batch call: a many-part diff is asked in several calls, not one huge prompt
+
+
+def batches(qs, n=None):
+    """The questions in groups, in order, each holding at most n context chars (a single larger question goes alone)."""
+    n = n or BATCH_CHARS
+    out: list[dict] = []
+    cur: dict = {}
+    size = 0
+    for k, q in qs.items():
+        c = len(q.get("context", ""))
+        if cur and size + c > n:
+            out.append(cur)
+            cur, size = {}, 0
+        cur[k] = q
+        size += c
+    return out + ([cur] if cur else [])
+
+
 def ask(state, qs):
     """{key: {type: bool|score, question|rubric, context}} -> {key: decide's answer}, in parallel: decide.batch, and any answer it
-    didn't give in the contract's shape asked again on its own (concurrently). Raises when decide itself fails."""
+    didn't give in the contract's shape asked again on its own (concurrently). The batch is cut into calls of at most BATCH_CHARS
+    context (`batches`), asked concurrently: a 30-part diff in one prompt overruns the model's context and timeout. Raises when
+    decide itself fails."""
     # The model may run remotely. Never send credential shapes found in goals,
     # removed diff lines, comments, paths, or threads to it.
     qs = {k: {**q, "context": redact_diff_pii(redact_secrets(q.get("context", "")))} for k, q in qs.items()}
@@ -269,10 +290,15 @@ def ask(state, qs):
     state = safe_state(state)
     dc, out = _decide(), {}
     if dc is not None and hasattr(dc, "batch") and qs:
-        try:
-            out = dc.batch(state, qs) or {}
-        except (TypeError, KeyError, ValueError):  # a batch question shape it doesn't take: the per-call API below is the contract
-            out = {}
+        def one_batch(group):
+            try:
+                return dc.batch(state, group) or {}
+            except (TypeError, KeyError, ValueError):  # a batch question shape it doesn't take: the per-call API below is the contract
+                return {}
+        groups = batches(qs)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(groups))) as ex:
+            for got in ex.map(one_batch, groups):
+                out.update(got)
     todo = [k for k in qs if not _ok(qs[k], out.get(k))]
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(todo))) as ex:
