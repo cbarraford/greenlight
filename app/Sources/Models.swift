@@ -127,8 +127,9 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
 /// forge's refusal can run long).
 func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]?, _ mr: [String: Any]? = nil) -> String {
     let ref = o?["ref"] as? String ?? mr?["ref"] as? String, sha = o?["sha"] as? String ?? mr?["sha"] as? String
-    let at = [ref, sha.map { "head " + $0.prefix(12) }].compactMap { $0 }.filter { !$0.isEmpty && $0 != "head " }
-    let end = why.map { "failed: " + $0.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(300) } ?? "done"
+    let at = [ref.flatMap { $0.isEmpty ? nil : $0 }, sha.flatMap { $0.isEmpty ? nil : "head " + $0.prefix(12) }].compactMap { $0 }
+    let cut = { (t: String) in t.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(300) }
+    let end = why.map { "failed: " + cut($0) } ?? (o?["warn"] as? String).map { "done, but: " + cut($0) } ?? "done"  // warn: "no agent started"
     return "- \(what) on \(who)" + (at.isEmpty ? "" : " (\(at.joined(separator: ", ")))") + ": " + end
 }
 

@@ -513,7 +513,11 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           actedLine("ws1", "merge", nil, ["ref": "#153", "sha": "0123456789abcdef"]) == "- merge on ws1 (#153, head 0123456789ab): done"
           && actedLine("ws1", "merge", "drift", ["error": "drift"], ["ref": "#9", "sha": "feedbeef"]) == "- merge on ws1 (#9, head feedbeef): failed: drift"
           && actedLine("ws2", "mark ready", "exit 1", nil) == "- mark ready on ws2: failed: exit 1"
-          && actedLine("w", "merge", String(repeating: "x\n", count: 400), nil).count < 340)
+          && actedLine("w", "merge", String(repeating: "x\n", count: 400), nil) == "- merge on w: failed: " + String(repeating: "x ", count: 150)
+          && actedLine("w", "merge", nil, ["ref": "", "sha": ""]) == "- merge on w: done"
+          && actedLine("n", "new workspace", nil, ["ok": true, "warn": "Setup failed (x); no agent started"]) == "- new workspace on n: done, but: Setup failed (x); no agent started"
+          && mainC.made(#"{"ok":true,"name":"fix-it"}"#) == "fix-it" && mainC.made(#"{"ok":true,"path":"/srv/w/new"}"#) == "/srv/w/new"
+          && mainC.made(#"{"error":"no"}"#) == nil)
     for i in 0..<20 { mainC.acted("ws\(i)", "park", 0, "{}") }
     let capped = mainC.doneSince
     var sent: [String] = []

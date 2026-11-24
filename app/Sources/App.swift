@@ -1200,7 +1200,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var out = ""
             let h = op == "new" ? resolveRepoTargetHost(arg, repoHosts: repoHosts, defaultHost: winHost) : winHost
             ssh("\(pyCmd(on: h))/dash.py task \(op) '\(arg)'", on: h, stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
-                if op == "new" { chief.acted(arg, "start a task", code, out) }
+                if op == "new" { chief.acted(chief.made(out) ?? arg, "start a task in \(arg)", code, out) }
                 let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
@@ -2149,7 +2149,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
-                if let what = actedVerb[op], let c = self?.greenlight { c.acted(c.wsName(path: path), what, code, out) }
+                if let what = actedVerb[op], let c = self?.greenlight { c.acted(op == "new" ? c.made(out) ?? c.wsName(path: path) : c.wsName(path: path), what, code, out) }
             })
         case "dwim":  // ⌘J's palette, typed with nothing to jump to: a board command (dwim.py), else a question for Chief in the chat
             guard let t = (b["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return }

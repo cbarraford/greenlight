@@ -325,9 +325,6 @@ def board_note(query="", key="", seen=None, snapshot=None):
 
 
 WRAP = "USER MESSAGE (reply to this): "
-DONE = ""  # chat.py send --done: the dashboard buttons pressed since the last turn (done_note)
-
-
 def done_note(lines):
     """The dashboard buttons the user pressed since Chief's last turn and how each ended (the app's Core.acted, #175).
     Kept out of the message itself, so decisions.heard / turn_kind and GREENLIGHT_REQUEST still see only what was typed."""
@@ -1483,7 +1480,7 @@ def asked_question(reply):
     return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done=""):
     """Reserve this chat through answer handling, harness work, and pending-question commit."""
     global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
     path = os.path.join(DIR, ACTIVE_TURN)
@@ -1527,6 +1524,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         SCOPE_TURN_TOKEN = token
     terminal = None
     try:
+        TURN["done"] = done  # send --done: the buttons pressed since the last turn (done_note)
         terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
                                reservation=(token, reserved_gen))
     finally:
@@ -1737,7 +1735,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         req_val = question_context + ANSWER + text if question_context else text
         os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
         wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
-        text = wrap(done_note(DONE) + stale_note + board_note(msg, key, seen, request_snapshot))
+        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
@@ -1773,7 +1771,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         key = f"{engine}:new"
         seen_forget()
         seen = seen_load(key)
-        text = wrap(done_note(DONE) + stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
+        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         norm.base = (0, 0)  # a new thread: its totals start at 0
         try:
             cmd, t = mk(None, text)
@@ -1995,8 +1993,6 @@ def stop_chat():
 
 
 def send_turn(args, opt):
-    global DONE
-    DONE = opt("--done") or ""
     if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
         os.environ["GREENLIGHT_ONLY"] = opt("--only")
     text, files = sys.stdin.read(), None
@@ -2006,7 +2002,7 @@ def send_turn(args, opt):
             text, files = str(j.get("text") or ""), j.get("files") or []
         except (ValueError, AttributeError):
             return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
+    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files, done=opt("--done") or "")
 
 
 def dispatch(args):
