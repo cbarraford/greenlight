@@ -425,6 +425,22 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         check("config: PipeReader.finish() times out and closes a held pipe without waiting for the writer",
               isClosed(heldPipe.fileHandleForReading))
     }
+    // issue 128: Open in editor and a dropped or pasted file, as the app hands them on
+    let vs = "com.microsoft.VSCode", zed = "dev.zed.Zed", cursor = "com.todesktop.230313mzl4w4u92"
+    check("Open in editor: this Mac opens the folder in whichever editor; no folder, nothing",
+          editorOpen(bid: vs, host: "", cwd: "/w/a") == .folder("/w/a") && editorOpen(bid: zed, host: "local", cwd: "/w/a") == .folder("/w/a")
+          && editorOpen(bid: vs, host: "devbox", cwd: "") == nil)
+    check("Open in editor: a remote host is Zed's ssh:// project, else VS Code's or Cursor's vscode-remote URL, a space in the path encoded",
+          editorOpen(bid: zed, host: "devbox", cwd: "/srv/u/w/a") == .zedCLI("ssh://devbox/srv/u/w/a")
+          && editorOpen(bid: vs, host: "devbox", cwd: "/srv/u/w/a") == URL(string: "vscode://vscode-remote/ssh-remote+devbox/srv/u/w/a").map(EditorOpen.url)
+          && editorOpen(bid: cursor, host: "devbox", cwd: "/srv/u/my w") == URL(string: "cursor://vscode-remote/ssh-remote+devbox/srv/u/my%20w").map(EditorOpen.url))
+    check("a dropped file's name: tagged, plain characters, 80 at most, never hidden or empty",
+          droppedFileName("pasted.png", tag: "ab12cd34") == "ab12cd34-pasted.png"
+          && droppedFileName("my file;$(rm -rf).txt", tag: "t") == "t-my_file___rm_-rf_.txt"
+          && droppedFileName("../../.ssh/authorized_keys", tag: "t") == "t-file.._.._.ssh_authorized_keys"
+          && droppedFileName(".env", tag: "t") == "t-file.env" && droppedFileName("", tag: "t") == "t-file"
+          && droppedFileName(String(repeating: "x", count: 200), tag: "t") == "t-" + String(repeating: "x", count: 80)
+          && droppedFileName("a").count == 10)
 }
 
 /// Offline inbox/ping/question triage tests (used by `--unittest` without requiring a live agent).

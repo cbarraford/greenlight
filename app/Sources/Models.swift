@@ -318,6 +318,22 @@ func fmt(_ t: TimeInterval) -> String {
 
 func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
+/// Open in editor's way into a workspace: the folder itself on this Mac; on a remote host Zed's cli takes ssh://host/path,
+/// VS Code and Cursor their vscode-remote URL (VS Code asks once whether to let it open), the path percent-encoded.
+enum EditorOpen: Equatable { case folder(String), zedCLI(String), url(URL) }
+func editorOpen(bid: String, host: String, cwd: String) -> EditorOpen? {
+    guard !cwd.isEmpty else { return nil }
+    if host.isEmpty || host == "local" { return .folder(cwd) }
+    if bid == "dev.zed.Zed" { return .zedCLI("ssh://\(host)\(cwd)") }
+    guard let path = cwd.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+    return URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(host)\(path)").map(EditorOpen.url)
+}
+/// A dropped or pasted file's name where the pane's shell runs: a fresh tag first, plain characters only, never a dotfile.
+func droppedFileName(_ raw: String, tag: String = String(UUID().uuidString.prefix(8))) -> String {
+    let name = String(raw.replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
+    return "\(tag)-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
+}
+
 func kfmt(_ n: Int) -> String { n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1e6) : n >= 1000 ? "\(n / 1000)k" : "\(n)" }
 
 /// Greenlight's markdown → AttributedString, with bare URLs made clickable.

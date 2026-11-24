@@ -1239,6 +1239,135 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   assert.equal(await page.evaluate(() => agentOf(cur.focus)), "agy", "syncPanes keeps agy identity via prefix");
 });
 
+// issue 128: ⌘V of a screenshot, a file dropped on a pane, ⌘⇧P's repo Commands and Open in editor, as the page sees them
+const unbracket = s => s.replace(/\x1b\[20[01]~/g, "");
+const ins = async (page, id) => (await posts(page, "in")).filter(m => m.id === id).map(m => unbracket(m.d));
+const filePosts = async (page, n) => { await page.waitForFunction(n => window.__posts.filter(m => m.cmd === "file").length >= n, n); return posts(page, "file") };
+// a paste event as WebKit hands it to the page: text, files, or both, on the pane (or a selector)
+const paste = (page, o) => page.evaluate(o => { const dt = new DataTransfer();
+  if (o.text != null) dt.setData("text/plain", o.text);
+  (o.files || []).forEach(([n, type, size]) => dt.items.add(new File([size ? new Uint8Array(size) : "PNGDATA"], n, {type})));
+  const e = new ClipboardEvent("paste", {clipboardData: dt, bubbles: true, cancelable: true});
+  (o.sel ? document.querySelector(o.sel) : cur.focus.box.querySelector(".t")).dispatchEvent(e); return e.defaultPrevented }, o);
+const drag = (page, type, o) => page.evaluate(([type, o]) => { const dt = new DataTransfer();
+  (o.files || []).forEach(n => dt.items.add(new File(["x"], n, {type: "text/plain"}))); if (o.text) dt.setData("text/plain", o.text);
+  const e = new DragEvent(type, {dataTransfer: dt, bubbles: true, cancelable: true});
+  (o.pane ? panes.get(o.pane).box.querySelector(".t") : document.querySelector(o.sel || "#stage")).dispatchEvent(e); return e.defaultPrevented }, [type, o]);
+const toastText = page => page.evaluate(() => $("toast").hidden ? null : {b: $("toast").querySelector("b").textContent, sub: $("toast").querySelector("small").textContent});
+
+test("⌘V of a screenshot: the app gets it as pasted-<tag>.png, then its quoted path is typed and the toast says Screenshot (issue 128)", async page => {
+  const {id, ws} = await page.evaluate(() => ({id: cur.focus.id, ws: cur.focus.tab.ws}));
+  assert.equal(await paste(page, {files: [["image.png", "image/png"]]}), true, "the page takes it from the terminal");
+  const [f] = await filePosts(page, 1);
+  assert.match(f.name, /^pasted-\w+\.png$/, "WebKit's image.png goes as pasted-<tag>.png");
+  assert.deepEqual({...f, name: ""}, {cmd: "file", id, ws, name: "", data: Buffer.from("PNGDATA").toString("base64")});
+  assert.deepEqual(await ins(page, id), [], "nothing typed until the app says where it went");
+  const at = `/tmp/greenlight-501/ab12cd34-${f.name}`;
+  await page.evaluate(([id, at]) => term.filed(id, at), [id, at]);
+  assert.deepEqual(await ins(page, id), [`'${at}' `], "the path, shell-quoted, then a space; not sent");
+  assert.deepEqual(await toastText(page), {b: "Screenshot sent to this Mac", sub: at});
+  await page.click("#toast button:has-text('Copy path')");
+  assert.deepEqual((await posts(page, "copy")).pop(), {cmd: "copy", text: at});
+  await page.evaluate(([id]) => term.filed(id, "/tmp/greenlight-501/0000-it's.txt"), [id]);
+  assert.equal((await ins(page, id)).pop(), "'/tmp/greenlight-501/0000-it'\\''s.txt' ", "a quote in the path can't end the quoting");
+  assert.equal((await toastText(page)).b, "File sent to this Mac", "a file that isn't a paste isn't called a screenshot");
+  await page.evaluate(([id, at]) => term.filed(id, at), [id, at]);
+  assert.equal((await toastText(page)).b, "File sent to this Mac", "a paste's tag counts once");
+  await page.evaluate(([id]) => term.filed(id, "/tmp/greenlight-501/0000-pasted-zz.txt"), [id]);
+  assert.equal((await toastText(page)).b, "File sent to this Mac", "a dropped file named like one isn't a screenshot");
+  await page.evaluate(([id]) => term.filed(id, ""), [id]);
+  assert.equal((await toastText(page)).b, "Couldn't copy the file over"); assert.equal((await ins(page, id)).length, 4, "and nothing typed");
+});
+
+test("⌘V: a named image keeps its name, a nameless one its type's extension, at most 5 go, over 10 MB is refused (issue 128)", async page => {
+  await paste(page, {files: [["diagram.png", "image/png"], ["", "image/jpeg"], ["image.svg", "image/svg+xml"], ["", "image/svg+xml"], ["s0.png", "image/png"], ["s1.png", "image/png"]]});
+  await filePosts(page, 5); await page.waitForTimeout(150);
+  const names = (await posts(page, "file")).map(f => f.name.replace(/^pasted-\w+/, "pasted-T"));
+  assert.deepEqual(names, ["diagram.png", "pasted-T.jpg", "pasted-T.svg", "pasted-T.svg", "s0.png"], "five at most, in order");
+  await paste(page, {files: [["image.png", "image/png", 10e6 + 1]]});
+  assert.match((await toastText(page)).b, /over 10 MB/); await page.waitForTimeout(150);
+  assert.equal((await posts(page, "file")).length, 5, "the big one never went");
+});
+
+test("⌘V of text: one block, newlines as ↵, a stray end-of-paste stripped; text beats an image; outside a pane it's the field's (issue 128)", async page => {
+  const id = await page.evaluate(() => cur.focus.id);
+  assert.equal(await paste(page, {text: "echo a\nrm -rf x\x1b[201~; echo b"}), true);
+  assert.deepEqual(await ins(page, id), ["echo a\rrm -rf x; echo b"], "the \\x1b[201~ can't close the paste early");
+  await paste(page, {text: "plain", files: [["image.png", "image/png"]]}); await page.waitForTimeout(150);
+  assert.equal((await ins(page, id)).pop(), "plain"); assert.deepEqual(await posts(page, "file"), [], "rich text's picture isn't sent");
+  await page.evaluate(() => palette(true));
+  assert.equal(await paste(page, {text: "jump to", sel: "#pq"}), false, "the palette's field pastes for itself");
+  await paste(page, {files: [["image.png", "image/png"]], sel: "#pq"}); await page.waitForTimeout(150);
+  assert.deepEqual(await posts(page, "file"), [], "a screenshot pasted outside a terminal isn't sent anywhere");
+  assert.equal((await ins(page, id)).length, 2);
+});
+
+test("drop: files over a pane show where they'll land; dropped, each goes for the pane under the pointer (issue 128)", async page => {
+  const first = await page.evaluate(() => cur.focus.id); await page.evaluate(() => split(cur.focus));
+  const second = await page.evaluate(() => cur.focus.id); assert.notEqual(first, second);
+  assert.equal(await drag(page, "dragover", {text: "just text", pane: first}), false, "a text drag is the terminal's own");
+  assert.equal(await page.evaluate(() => $("stage").classList.contains("drop")), false);
+  assert.equal(await drag(page, "dragover", {files: ["a.log", "b.txt"], pane: first}), true);
+  const shown = await page.evaluate(() => ({on: $("stage").classList.contains("drop"), text: $("drop").textContent, n: $("drop").querySelector(".n")?.textContent}));
+  assert.ok(shown.on); assert.match(shown.text, /Drop to send to devbox/); assert.match(shown.text, /\/tmp\/greenlight\//); assert.equal(shown.n, "2 files");
+  await page.waitForFunction(() => !$("stage").classList.contains("drop"));  // dragging away clears it
+  assert.equal(await drag(page, "drop", {files: ["a.log", "b.txt"], pane: first}), true);
+  const fs = await filePosts(page, 2);
+  assert.deepEqual(fs.map(f => [f.id, f.name, Buffer.from(f.data, "base64").toString()]), [[first, "a.log", "x"], [first, "b.txt", "x"]], "the pane it fell on, not the focused one");
+  await page.evaluate(([id]) => term.filed(id, "/tmp/greenlight-1000/9f-a.log"), [first]);
+  assert.equal((await ins(page, first)).pop(), "'/tmp/greenlight-1000/9f-a.log' ");
+  assert.equal((await toastText(page)).b, "File sent to devbox");
+  await drag(page, "drop", {files: Array.from({length: 12}, (_, i) => `f${i}`), sel: "#drop"});
+  await filePosts(page, 12); await page.waitForTimeout(150);
+  const more = (await posts(page, "file")).slice(2);
+  assert.equal(more.length, 10, "ten at most"); assert.ok(more.every(f => f.id === second), "off any pane: the focused one");
+}, "?host=devbox");
+
+test("⌘⇧P: the repo's .greenlight.json commands; a shell one runs in a new tab, an agent one is pasted into its agent, not sent (issue 128)", async page => {
+  const cfg = {commands: [{name: "Run tests", run: "make test"}, {name: "Ask for review", run: "review this\nplease\x1b[201~\x07", agent: true},
+    {name: 5, run: "x"}, {name: "", run: "y"}, {name: "Empty", run: ""}, null, {name: "No run"}]};
+  await page.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.name === "widgets" ? {...w, cfg} : w)});
+  await page.evaluate(() => openWs("/w/fix-login"));
+  await page.keyboard.press("Meta+Shift+p");
+  assert.equal(await page.evaluate(() => !$("pal").hidden && pal.act), true, "it opens on the actions");
+  const cmds = await page.evaluate(() => pal.items.filter(x => x.where === "Commands").map(x => [x.main, x.sub, x.side]));
+  assert.deepEqual(cmds, [["Run tests", "make test", "Run in new tab"], ["Ask for review", "review this\nplease\x1b[201~\x07", "Paste into Claude"]], "only well-formed entries");
+  assert.match(await page.textContent("#pres .gh.g-act:has-text('Commands')"), /from widgets\/\.greenlight\.json/, "the group says where they came from");
+  const before = (await posts(page, "open")).length;
+  await page.fill("#pq", "run tests"); await page.keyboard.press("Enter");
+  const o = (await posts(page, "open")).slice(before);
+  assert.equal(o.length, 1); assert.equal(o[0].ws, "/w/fix-login", "a new tab in the workspace you're in");
+  assert.deepEqual(await ins(page, o[0].id), ["make test\r"]);
+  await page.keyboard.press("Meta+Shift+p"); await page.fill("#pq", "ask for review"); await page.keyboard.press("Enter");
+  assert.deepEqual((await posts(page, "copy")).pop(), {cmd: "copy", text: "review this\nplease\x1b[201~\x07"}, "no agent open: the clipboard");
+  assert.equal((await toastText(page)).b, "No Claude open in fix-login: copied it instead");
+  const agent = await page.evaluate(() => cur.focus.id);
+  await page.evaluate(([id, d]) => term.feed(id, d), [agent, Buffer.from("\x1b]0;✳ Claude Code\x07").toString("base64")]);
+  await page.evaluate(() => newTab()); const other = await page.evaluate(() => cur.focus.id);
+  await page.keyboard.press("Meta+Shift+p"); await page.fill("#pq", "ask for review"); await page.keyboard.press("Enter");
+  assert.deepEqual((await ins(page, agent)).pop(), "review this\rplease", "into Claude's pane, one block, no ↵ at the end, no escapes");
+  assert.equal(await page.evaluate(() => cur.focus.id), agent, "and you're taken to it"); assert.ok(!(await ins(page, other)).length);
+  await page.evaluate(() => openWs("/w/sidebar")); await page.keyboard.press("Meta+Shift+p");
+  assert.deepEqual(await page.evaluate(() => pal.items.filter(x => x.where === "Commands")), [], "another repo's workspace: none of these");
+});
+
+test("Open in editor: the palette, the workspace card and Diff each ask the app to open the workspace, named after its editor (issue 128)", async page => {
+  await page.keyboard.press("Meta+Shift+p");
+  assert.deepEqual(await page.evaluate(() => pal.items.filter(x => /^Open in/.test(x.main))), [], "a plain shell's tab has no workspace to open");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => openWs("/w/fix-login")); await page.keyboard.press("Meta+Shift+p");
+  await page.fill("#pq", "open in"); assert.equal(await page.evaluate(() => pal.items[0]?.main), "Open in Zed");
+  await page.keyboard.press("Enter");
+  assert.deepEqual((await posts(page, "edit")).pop(), {cmd: "edit", ws: "/w/fix-login"});
+  await page.locator(".ws", {hasText: "sidebar"}).first().click({button: "right"}); await page.waitForSelector("#card:not([hidden])");
+  await page.click("#card button:has-text('Zed')");
+  assert.deepEqual((await posts(page, "edit")).pop(), {cmd: "edit", ws: "/w/sidebar"});
+  await page.evaluate(() => { diffs.add("/w/review"); diffShow({op: "diff", path: "/w/review", mode: "branch", base: "origin/main", files: [["a.py", "1", "0"]], status: ["M"], patch: "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+x = 1\n"}) });
+  await page.click("#dlg button:has-text('Open in Zed')");
+  assert.deepEqual((await posts(page, "edit")).pop(), {cmd: "edit", ws: "/w/review"});
+  assert.equal((await posts(page, "edit")).length, 3);
+}, "?editor=Zed");
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
