@@ -717,8 +717,9 @@ test("answer: Chat about this opens a chat in the answer box, keeps the sheet op
   await at("working", "", 500);
   assert.match(await page.textContent(".sheet"), /The agent is replying…/);
   const asks = (await posts(page, "ask")).length;
-  await at("done", "Both would double the review. Port it?", 1000);
-  assert.equal((await posts(page, "ask")).length, asks, "a reply at its prompt needs no ask round trip");
+  await at("done", "…the review. Port it?", 1000);
+  assert.equal((await posts(page, "ask")).length, asks + 1, "a reply at its prompt is fetched in full (the stream cuts it to 400 characters)");
+  await page.evaluate(() => window.mc.asked({name: "plan-a", question: "Both would double the review. Port it?", kind: "prompt", options: []}));
   assert.equal(await page.$$eval(".athread p", es => es.length), 2, "the thread carried over");
   assert.match(await page.textContent("#aq"), /double the review/);
   assert.match(await page.textContent(".sheet .shd small"), /replied/);
@@ -741,6 +742,20 @@ test("answer: Chat about this opens a chat in the answer box, keeps the sheet op
   assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "2"});
   await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
   assert.equal(await page.evaluate(() => ui.ask["plan-a"].chat), null, "an option ends the chat");
+  assert.deepEqual(page._errs, []);
+});
+
+test("answer: in a chat, only a 'done' newer than your message is the agent's reply (#173)", async page => {
+  await page.evaluate(() => { openAnswer("plan-a"); window.mc.asked({name: "plan-a", question: "Which way?", kind: "menu", chat: "3", options: [{key: "1", label: "Keep it"}]}) });
+  await page.click("#achat"); await page.fill("#areply", "Why?"); await page.press("#areply", "Enter");
+  const t0 = await page.evaluate(() => { const t = Date.now(); window.mc.answered({name: "plan-a", ok: true, since: t}); return t });
+  const done = (since, last) => page.evaluate(([since, last, s]) => { Object.assign(s.pucks[0].agent, {state: "done", since, last}); s.pucks[0].state = "working"; window.mc.update(s) }, [since, last, JSON.parse(JSON.stringify(SNAP))]);
+  const asks = (await posts(page, "ask")).length;
+  await done(t0, "What would you like to clarify?");  // its own turn after "Chat about this", ended before your message went in
+  assert.equal((await posts(page, "ask")).length, asks, "not a reply to your message");
+  assert.match(await page.textContent(".sheet"), /Waiting for the agent to pick it up/);
+  await done(t0 + 5000, "Because of the release.");
+  assert.equal((await posts(page, "ask")).length, asks + 1, "its reply");
   assert.deepEqual(page._errs, []);
 });
 

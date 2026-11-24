@@ -63,18 +63,26 @@ with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastA
     asked = dash.ask_user("ws")
     assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"] and asked["said"] == "x", asked  # said: its message before the picker
 hist = Path(tempfile.mkdtemp()) / "h.md"
+PROMPT, AFTER = {"terminal": {"tail": ["❯"]}}, {"w1": ({"displayName": "ws"}, {"state": "done", "stateStartedAt": 5})}
+# the chat digit, the picker closing, the agent's own "what would you like to clarify?" turn ending, then the message as its own turn
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
-        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
-    assert dash.answer("ws", "Why not both?", chat=True)["ok"]
+        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash, "live_agents", return_value=AFTER), \
+        mock.patch.object(dash.greenlight, "orca", side_effect=[None, PROMPT, PROMPT, None]) as o:
+    r = dash.answer("ws", "Why not both?", chat=True)
     sent = [c.args for c in o.call_args_list]
-    assert sent[0][-2:] == ("--text", "3") and sent[2][-3:] == ("--text", "Why not both?", "--enter"), sent
+    assert r == {"ok": True, "since": 5} and sent[0][-2:] == ("--text", "3") and sent[3][-3:] == ("--text", "Why not both?", "--enter"), (r, sent)
     assert "asked the agent about its question" in hist.read_text()
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
-        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
+        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash, "live_agents", return_value=AFTER), \
+        mock.patch.object(dash.greenlight, "orca", side_effect=[None, PROMPT, PROMPT, None]) as o:
     assert dash.answer("ws", "1", chat=True)["ok"] and o.call_args_list[0].args[-1] == "3"  # a chat message that's only a digit is still a chat, not option 1
-with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
-        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
-    assert dash.answer("ws", "hm?", chat=True)["ok"] and o.call_args_list[0].args[-1] == "\x1b"  # no "Chat about this" here: Esc, as before
+with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.time, "sleep"), \
+        mock.patch.object(dash, "live_agents", return_value=AFTER), mock.patch.object(dash.greenlight, "orca", side_effect=[None, PROMPT, {"terminal": CHAT}]) as o:
+    assert "asked again" in dash.answer("ws", "hm?", chat=True)["error"] and o.call_count == 3  # it re-asked in its own turn: nothing typed over the picker
+with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "orca") as o:
+    assert "something else" in dash.answer("ws", "hm?", chat=True)["error"] and not o.called  # a picker with no "Chat about this": never Esc it
+with mock.patch.object(dash, "waiting_term", return_value=({}, {"state": "done", "lastAssistantMessage": "x" * 5000}, "t1", {"tail": ["❯"]})):
+    assert dash.ask_user("ws") == {"name": "ws", "question": "x" * 4000, "kind": "prompt", "options": []}  # a chat's reply, in full and with no suggestions
 # a chat's reply ends the agent's turn at its prompt ("done"): only a chat message may go to it, never a plain answer
 DONE = {"w1": ({"displayName": "ws", "worktreeId": "w1"}, {"state": "done"})}
 TERMS = {"terminals": [{"worktreeId": "w1", "agentIdentity": "claude", "handle": "t1"}]}
