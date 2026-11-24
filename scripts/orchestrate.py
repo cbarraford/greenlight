@@ -373,6 +373,251 @@ def store_backfill(r, goal):
     greenlight.backfills_update(lambda data: data.__setitem__(r["id"], record))
 
 
+def _drift_confirmed_in_inbox(drift, records):
+    pk = (drift or {}).get("ping_key")
+    if not pk:
+        return False
+    ans = next((d for d in reversed(records) if d.get("key") == pk and (d.get("answered") or 0) >= drift.get("ts", 0)), None)
+    return bool(ans and ans.get("choice") == 0)
+
+
+def _steward_drift_action(card, sha, target, drift):
+    if ws_state.is_stale_confirmed(card, sha, target):
+        return {"do": "skip", "why": "waiting for scan to catch up after drift confirmation"}
+    if card.get("steward"):
+        if card.get("steward_target") and target and target != card["steward_target"]:
+            if drift and drift.get("kind") == "target_changed" and drift.get("target") == target:
+                return {"do": "skip", "why": "paused on unconfirmed target_changed"}
+            return {"do": "drift", "kind": "target_changed", "old_value": card["steward_target"],
+                    "new_value": target, "sha": sha, "target": target}
+        if card.get("steward_head") and sha and sha != card["steward_head"] and not card.get("steward_expecting_from_sha"):
+            if drift and drift.get("kind") == "head_changed" and drift.get("sha") == sha:
+                return {"do": "skip", "why": "paused on unconfirmed head_changed"}
+            return {"do": "drift", "kind": "head_changed", "old_value": card["steward_head"],
+                    "new_value": sha, "sha": sha, "target": target}
+    return {"do": "skip", "why": f"paused on unconfirmed {drift.get('kind', 'drift')}"} if drift else None
+
+
+def _interrupted_rereview_guard(r, card, sha, target, records):
+    """Hold re-review while an interrupted-launch @stuck fork awaits the user's answer."""
+    if not any(d.get("sig") == f"rereview@{sha}" and d.get("agent") == "launch interrupted" for d in card.get("dispatches") or []):
+        return None
+    s = sig(r)
+    fork_v = (card.get("forks") or {}).get(s) or {}
+    if not (fork_v.get("done") and fork_v.get("choice") == FORK[-1]):
+        return None
+    recs = ws_state.decision_records() if records is None else records
+    ans = next((d for d in reversed(recs) if d.get("key") == fork_v.get("ping_key")
+                and (d.get("answered") or 0) >= fork_v.get("ts", 0)), None)
+    if not ans:
+        return {"do": "skip", "why": "interrupted re-review launch needs the user's answer"}
+    if ans.get("choice") != 0:
+        return {"do": "skip", "why": "the user left the interrupted re-review launch parked"}
+    return {"do": "rereview", "sha": sha, "target": target, "clear_interrupted": s}
+
+
+def _steward_plan_guard(r, card, records=None):
+    """Check steward-mode head/target drift and post-agent diff re-review before normal orchestrate actions."""
+    mr = r.get("mr") or {}
+    if not mr.get("iid") or mr.get("state") != "opened":
+        return None
+    sha, target = mr.get("sha") or "", mr.get("target_branch") or ""
+    drift = card.get("steward_drift")
+    if drift and _drift_confirmed_in_inbox(drift, ws_state.decision_records() if records is None else records):
+        return {"do": "confirm_drift"}
+    if card.get("steward") or drift:
+        if act := _steward_drift_action(card, sha, target, drift):
+            return act
+    if not card.get("steward") or ((r.get("agent") or {}).get("state") or "none") in ("working", "waiting"):
+        return None
+    if any(d.get("pending") for d in card.get("dispatches") or []):
+        return None  # let plan()'s pending/interrupted-launch handler settle uncertain launches first
+    pending_sha = card.get("steward_pending_rereview_sha") or ""
+    if sha and pending_sha == sha and sha != card.get("steward_reviewed_sha"):
+        return _interrupted_rereview_guard(r, card, sha, target, records) or {"do": "rereview", "sha": sha, "target": target}
+    return None
+
+
+def _act_confirm_drift(r, name):
+    """Apply a user's inbox confirmation of a pending head/target drift pause."""
+    c, pk = ws_state.confirm_drift(r["card"])
+    if pk and pk in greenlight.pinged():
+        with contextlib.suppress(Exception):
+            greenlight.resolve(pk, "confirmed via inbox")
+    log({"ws": name, "mr": ref_of(r), "did": "confirmed drift", "ok": True})
+    return [f"confirmed drift on {name}"]
+
+
+def _act_drift(r, name, a):
+    """Pause the workspace card and ask the user (merge-held, human-only) when head SHA or target branch drifts."""
+    key, ref = r["card"], ref_of(r)
+    kind, old_val, new_val = a["kind"], a["old_value"], a["new_value"]
+    sha, target = a.get("sha") or "", a.get("target") or ""
+    summary = (f"target branch changed ({old_val} → {new_val})" if kind == "target_changed"
+               else f"head changed unexpectedly ({old_val[:8]} → {new_val[:8]})")
+    ping_key = f"@drift:{key}:{ws_state.digest(f'{kind}:{sha}:{target}')}"
+    cur = (ws_state.load(key).get("steward_drift") or {})
+    old_ping = cur.get("ping_key")
+    open_pings = greenlight.pinged()
+    ping_ts = int(time.time())
+    if old_ping and old_ping != ping_key and old_ping in open_pings:
+        with contextlib.suppress(Exception):
+            greenlight.resolve(old_ping, f"superseded by {summary}")
+    _resolve_rereview_ping(key, sha, f"superseded by {summary}")
+    if ping_key not in open_pings:
+        opt = f"Confirm target {new_val}" if kind == "target_changed" else f"Confirm head {new_val[:8]}"
+        url = (r.get("mr") or {}).get("web_url") or ""
+        greenlight.ping(f"{name}: paused — {ref} {summary}. {url}\nOptions: {opt} | Keep waiting",
+                        key=ping_key, ws=[r["id"]], kind="merge-held", ask=True)
+    with ws_state.lock():
+        c = ws_state.load(key)
+        cur = c.get("steward_drift") or {}
+        if cur.get("kind") == kind and cur.get("sha") == sha and cur.get("target") == target:
+            return [f"left {name}: paused on unconfirmed {kind}"]
+        c["steward_drift"] = {"kind": kind, "sha": sha, "target": target, "old_value": old_val,
+                              "ping_key": ping_key, "ts": ping_ts}
+        ws_state.append_activity(c, f"Paused: {summary}", kind="drift", step=r["next"].get("step", ""),
+                                 sha=sha, target=target, ok=False)
+        ws_state.save(c)
+    log({"ws": name, "mr": ref, "did": f"paused ({kind})", "ok": False})
+    greenlight.note(name, f"{ref} {summary} → paused and asked the user (orchestrator)")
+    return [f"paused {name}: {summary}"]
+
+
+def _resolve_rereview_ping(key, sha, why):
+    prefix = f"@rereview:{key}:"
+    for pk in [k for k in greenlight.pinged() if k.startswith(prefix)]:
+        with contextlib.suppress(Exception):
+            greenlight.resolve(pk, why)
+
+
+def _rereview_live_ready(r, name, peers):
+    """Run fresh live worktree/agent/MR/peer pre-launch guards before dispatching a re-review fix."""
+    try:
+        live = live_worktree(r)
+    except Exception as e:  # noqa: BLE001
+        return f"couldn't re-read workspace before re-review fix: {str(e)[:100]}"
+    if live is None or branch_changed(r, live) or link_changed(r, live) or \
+            (live.get("comment") or "").strip() != (r.get("comment") or "").strip():
+        return "workspace branch, link, or goal changed during diff re-review"
+    if active_agent_blocks(live, r, False):
+        return "an agent started or is waiting during diff re-review"
+    try:
+        if (r.get("mr") or {}).get("iid") and current_mr_state(r) != scanned_mr_state(r):
+            return "MR head or lifecycle step changed during diff re-review"
+    except Exception as e:  # noqa: BLE001
+        return f"couldn't re-read MR state during diff re-review: {str(e)[:100]}"
+    for peer in peers:
+        if peer["id"] == r["id"] or (peer.get("forge"), peer.get("project"), (peer.get("mr") or {}).get("iid")) != \
+                (r.get("forge"), r.get("project"), (r.get("mr") or {}).get("iid")):
+            continue
+        try:
+            other = live_worktree(peer)
+        except Exception as e:  # noqa: BLE001 - fail closed on peer lookup failure
+            return f"couldn't recheck linked workspace before re-review fix: {str(e)[:100]}"
+        if other is None or any(x.get("state") in ("working", "waiting") for x in other.get("agents") or []):
+            return "another workspace has an active agent for this MR"
+        if any(d.get("pending") for d in ws_state.load(peer["card"]).get("dispatches") or []):
+            return "another workspace has a pending launch for this MR"
+    return None
+
+
+def _rereview_fail_closed(r, name, sha, target, summary, reason):
+    """Record a fail-closed diff re-review error/stall and ping the user without advancing steward_reviewed_sha."""
+    key, ref, mr = r["card"], ref_of(r), r.get("mr") or {}
+    ping_key = f"@rereview:{key}:{sha[:12]}"
+    with ws_state.lock():
+        c = ws_state.load(key)
+        c.update(steward_head=sha, steward_pending_rereview_sha=sha)
+        ws_state.append_activity(c, f"{reason} at {sha[:8]} (fail-closed)", kind="rereview",
+                                 step=r["next"].get("step", ""), sha=sha, target=target, detail=summary, ok=False)
+        ws_state.save(c)
+    if ping_key not in greenlight.pinged():
+        url = mr.get("web_url") or ""
+        greenlight.ping(f"{name}: {reason.lower()} at {sha[:8]} ({summary[:160]}). {url}\nOptions: retry on next tick | leave it",
+                        key=ping_key, ws=[r["id"]], kind="agent-stuck", ask=True)
+    log({"ws": name, "mr": ref, "did": "rereview held", "ok": False})
+    return [f"left {name}: {reason.lower()} (fail-closed): {summary[:120]}"]
+
+
+def _rereview_dispatch_fix(r, name, sha, target, summary, peers):
+    """Dispatch one fix agent for contract failures on sha; fail closed without advancing steward_reviewed_sha."""
+    key, ref = r["card"], ref_of(r)
+    fix_sig = f"rereview@{sha}"
+    card = ws_state.load(key)
+    if any(d.get("sig") == fix_sig for d in card.get("dispatches") or []):
+        return _rereview_fail_closed(r, name, sha, target, summary, "Diff re-review still failing after fix")
+    if why := _rereview_live_ready(r, name, peers):
+        return [f"left {name}: {why}"]
+    assignment = record_dispatch(r, fix_sig, expected=ws_state.situation_token(card))
+    if assignment is False:
+        return [f"left {name}: card assignment changed before re-review fix launch"]
+    handoff = f"Diff re-review at {sha[:8]} found contract issue(s): {summary}. Fix these and push."
+    agent, err = dispatch(r, ws_state.load(key), why_handoff=handoff, assignment=assignment, peers=peers)
+    if agent:
+        if record_dispatch(r, fix_sig, agent, expected=assignment) is False:
+            return [f"dispatch recording failed on {name}: accepted launch belongs to an older card assignment"]
+        with ws_state.lock():
+            c = ws_state.load(key)
+            c.update(steward_head=sha, steward_pending_rereview_sha=sha,
+                     steward_expecting_from_sha=sha, steward_last_agent_state="working")
+            ws_state.append_activity(c, f"Re-review failed at {sha[:8]}; dispatched {agent}", kind="rereview",
+                                     step=r["next"].get("step", ""), sha=sha, target=target, detail=summary, ok=False)
+            ws_state.save(c)
+        _resolve_rereview_ping(key, sha, f"dispatched {agent} to fix contracts")
+        log({"ws": name, "mr": ref, "did": f"dispatched {agent} (rereview)", "ok": True})
+        return [f"dispatched {agent} to {name}: re-review fix ({summary[:80]})"]
+    if greenlight.LIMIT_RE.search(err) or re.search(r"rejected|invalid agent|unknown agent|not configured|unsupported agent|no such agent|worktree not found|permission denied", err, re.I):
+        clear_pending(r, fix_sig, assignment)
+        return _rereview_fail_closed(r, name, sha, target, f"{summary}; dispatch failed: {err[:120]}", "Re-review fix dispatch failed")
+    with ws_state.lock():
+        c = ws_state.load(key)
+        c.update(steward_head=sha, steward_pending_rereview_sha=sha)
+        ws_state.append_activity(c, f"Re-review fix launch uncertain at {sha[:8]}", kind="rereview",
+                                 step=r["next"].get("step", ""), sha=sha, target=target, detail=err[:160], ok=False)
+        ws_state.save(c)
+    log({"ws": name, "mr": ref, "did": "rereview dispatch uncertain", "ok": False})
+    return [f"dispatch failed on {name}: {err[:150]}"]
+
+
+def _act_rereview(r, name, a, peers=()):
+    """Re-review the diff at the head SHA via audit.merge_audit after a code agent finishes; fail closed on error."""
+    import audit
+    key, ref, mr = r["card"], ref_of(r), r.get("mr") or {}
+    sha, target = a.get("sha") or "", a.get("target") or ""
+    if clear_sig := a.get("clear_interrupted"):
+        with ws_state.lock():
+            c = ws_state.load(key)
+            c["dispatches"] = [d for d in c.get("dispatches") or []
+                               if not (d.get("sig") == f"rereview@{sha}" and d.get("agent") == "launch interrupted")]
+            c.get("forks", {}).pop(clear_sig, None)
+            ws_state.save(c)
+    if not r.get("path"):
+        verdict = {"ok": False, "failed": [], "error": "no local worktree path to run diff re-review"}
+    else:
+        goal = audit.goal_of(r, mr) or r.get("goal") or mr.get("title") or ""
+        try:
+            verdict = audit.merge_audit(r["path"], sha=sha, target=target, goal=goal,
+                                        project=r["project"], iid=mr["iid"], forge=r["forge"], tag=audit.ident(r, mr))
+        except Exception as e:  # noqa: BLE001 - fail closed on any audit error
+            verdict = {"ok": False, "failed": [], "error": f"{type(e).__name__}: {e}"}
+    if verdict.get("ok") and not verdict.get("unverified"):
+        detail = audit.summary(verdict)
+        with ws_state.lock():
+            c = ws_state.load(key)
+            c.update(steward_reviewed_sha=sha, steward_head=sha, steward_pending_rereview_sha="")
+            ws_state.append_activity(c, f"Re-reviewed diff at {sha[:8]}", kind="rereview",
+                                     step=r["next"].get("step", ""), sha=sha, target=target, detail=detail, ok=True)
+            ws_state.save(c)
+        _resolve_rereview_ping(key, sha, f"re-review passed at {sha[:8]}")
+        log({"ws": name, "mr": ref, "did": "re-reviewed diff", "ok": True})
+        return [f"re-reviewed {name} at {sha[:8]}: ok"]
+    summary = audit.summary(verdict) if not verdict.get("unverified") else "audit unverified (local fallback)"
+    if verdict.get("failed"):
+        return _rereview_dispatch_fix(r, name, sha, target, summary, peers)
+    return _rereview_fail_closed(r, name, sha, target, summary, "Diff re-review error")
+
+
 def plan(rows, cards, judge=True):
     """[{ws, do, ...}]: what this tick does, in order. judge=False: forks are reported, not sent to decide.py."""
     acts, n, records = [], 0, None
@@ -381,6 +626,11 @@ def plan(rows, cards, judge=True):
         act = lambda r=r, **a: acts.append({"ws": r["name"], "id": r["id"]} | a)
         if r.get("_mr_inconclusive") or r.get("_card_error"):
             act(do="skip", why="MR lookup or card refresh is inconclusive; preserving the previous handoff")
+            continue
+        if card.get("steward_drift") and records is None:
+            records = ws_state.decision_records()
+        if guard := _steward_plan_guard(r, card, records):
+            act(**guard)
             continue
         if goal := backfill_goal(r):
             act(do="goal", goal=goal)
@@ -506,6 +756,9 @@ def record_dispatch(r, s, agent=None, verdict=None, expected=None):
             if expected and assignment != expected:
                 return False
             pending.update(agent=agent, pending=False)
+            if c.get("steward"):
+                c["steward_expecting_from_sha"] = (r.get("mr") or {}).get("sha") or c.get("sha") or ""
+                c["steward_last_agent_state"] = "working"
             if verdict:
                 c["forks"][s] = verdict | {"done": True}
         else:
@@ -587,6 +840,23 @@ def guard_merge(r, cmd, snapshot=None, peers=()):
     sha = (r.get("mr") or {}).get("sha")
     if merging and not sha:
         return None, "no scanned head commit to pin the merge to"
+    if merging and r.get("card"):
+        card = ws_state.load(r["card"])
+        target = (r.get("mr") or {}).get("target_branch") or ""
+        sha_s = str(sha or "")
+        if card.get("steward_drift"):
+            return None, f"merge paused on unconfirmed {card['steward_drift'].get('kind', 'drift')}"
+        if card.get("steward"):
+            if ws_state.is_stale_confirmed(card, sha_s, target):
+                return None, "scan is stale after drift confirmation; rescan before merging"
+            if card.get("steward_target") and target and card["steward_target"] != target:
+                _act_drift(r, r["name"], {"kind": "target_changed", "old_value": card["steward_target"],
+                                          "new_value": target, "sha": sha_s, "target": target})
+                return None, f"target branch changed ({card['steward_target']} → {target}); paused and asked user"
+            if card.get("steward_head") and sha_s != card["steward_head"] and not card.get("steward_expecting_from_sha"):
+                _act_drift(r, r["name"], {"kind": "head_changed", "old_value": card["steward_head"],
+                                          "new_value": sha_s, "sha": sha_s, "target": target})
+                return None, f"head changed unexpectedly ({card['steward_head'][:8]} → {sha_s[:8]}); paused and asked user"
     try:
         live = live_worktree(r, snapshot)
     except Exception as e:  # noqa: BLE001
@@ -804,7 +1074,20 @@ def phase_cards(rows):
             moved.append(f"{r['name']}: {t[0] or '(new)'} → {t[1]}")
         if r.get("_state_reset") or c.get("stale_pings"):
             open_pings = greenlight.pinged()
-            keys = set(c.get("stale_pings") or []) | ({k for k in open_pings if k.startswith(stuck_key(r, ""))} if r.get("_state_reset") else set())
+            mr = r.get("mr") or {}
+            cur_sha, cur_target = mr.get("sha") or "", mr.get("target_branch") or ""
+            target_drifted = bool(c.get("steward_target") and cur_target and cur_target != c["steward_target"])
+            active_rereview = (
+                f"@rereview:{r['card']}:{cur_sha[:12]}"
+                if c.get("steward") and not c.get("steward_drift") and not target_drifted and not r.get("_goal_changed")
+                and cur_sha and c.get("steward_pending_rereview_sha") == cur_sha
+                else ""
+            )
+            keys = set(c.get("stale_pings") or []) | (
+                {k for k in open_pings if k.startswith(stuck_key(r, "")) or
+                 (k.startswith(f"@rereview:{r['card']}:") and k != active_rereview)}
+                if r.get("_state_reset") else set()
+            )
             retry = []
             for k in keys:
                 if k in open_pings:
@@ -914,7 +1197,7 @@ def act(rows, cards, acts):
                 continue
         if a["do"] == "skip" and str(a.get("why", "")).startswith("dispatch cap") and launches < OPTS["max_dispatch"]:
             a = plan([r], cards)[-1]  # an earlier launch failed; give this row the unused slot
-        launch_action = a["do"] == "dispatch" or a["do"] == "fork" and not (a.get("verdict") or {}).get("done") and \
+        launch_action = a["do"] in ("dispatch", "rereview") or a["do"] == "fork" and not (a.get("verdict") or {}).get("done") and \
             (a.get("verdict") or {}).get("choice") != FORK[-1]
         request = (r.get("forge"), r.get("project"), (r.get("mr") or {}).get("iid")) if (r.get("mr") or {}).get("iid") else None
         if launch_action and request in claimed:
@@ -950,6 +1233,12 @@ def act(rows, cards, acts):
 def act_one(r, name, a, cards, snapshot=None, peers=()):
     done, key = [], r["card"]
     ref = ref_of(r)
+    if a["do"] == "confirm_drift":
+        return _act_confirm_drift(r, name)
+    if a["do"] == "drift":
+        return _act_drift(r, name, a)
+    if a["do"] == "rereview":
+        return _act_rereview(r, name, a, peers)
     if a["do"] == "goal":
         try:
             live = live_worktree(r, snapshot)
@@ -992,6 +1281,10 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             return done
         ok, out = run_cmd(cmd)
         log({"ws": name, "mr": ref, "did": f"ran {' '.join(a['cmd'][:4])}", "ok": ok})
+        ws_state.record_activity(key, f"{'Ran' if ok else 'Failed'} {a['action']}", kind="cmd",
+                                 step=r["next"].get("step", ""), sha=(r.get("mr") or {}).get("sha") or "",
+                                 target=(r.get("mr") or {}).get("target_branch") or "",
+                                 detail="" if ok else out[-160:], ok=ok)
         greenlight.note(name, f"{ref} {a['action']} → ran `{' '.join(a['cmd'])}` ({'ok' if ok else 'failed: ' + out[-120:]}) (orchestrator)")
         done.append(f"{'ran' if ok else 'FAILED'} {name}: {a['action']}" + ("" if ok else f" ({out[-120:]})"))
     elif a["do"] == "dispatch" or a["do"] == "fork" and a.get("verdict"):
@@ -1145,6 +1438,10 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
                             if latest_verdict.get("ping_key"):
                                 greenlight.resolve(latest_verdict["ping_key"], "superseded by retry answer on linked workspace")
                 log({"ws": name, "mr": ref, "did": f"dispatched {agent}", "step": r["next"]["step"]})
+                ws_state.record_activity(key, f"Dispatched {agent} for {r['next']['step']}", kind="dispatch",
+                                         step=r["next"]["step"], sha=(r.get("mr") or {}).get("sha") or "",
+                                         target=(r.get("mr") or {}).get("target_branch") or "",
+                                         detail=r["next"]["action"][:160], ok=True)
                 greenlight.note(name, f"{ref} {r['next']['step']}: {r['next']['action'][:160]} → dispatched {agent} with its state card (orchestrator)")
             except Exception as e:  # launch already happened; it still consumes this tick's dispatch slot
                 done.append(f"dispatch recording failed on {name}: {type(e).__name__}: {str(e)[:100]}")

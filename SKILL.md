@@ -97,6 +97,14 @@ cbarraford/greenlight, the diagnostic trail included, or `blocked` with the reas
 the title and description and ask `Options: file it | edit | cancel`. Only on "file it", run the same command with
 `--execute`; give them the `url` it prints. The app's Help › Report a Bug… does the same.
 
+## Steward mode
+
+**Steward mode** is a per-workspace/MR flag on the workspace state card (`ws_state.py`), handled by `orchestrate.py` (the sole actor on MRs — no separate engine or permission model):
+- Enable or disable when the user says `steward #N` / `steward !N` (or `stop steward #N`): `python3 ~/.claude/skills/greenlight/scripts/ws_state.py steward <ws|#N|!N> on|off` (ends automatically when the MR merges or closes).
+- **Diff re-review:** When a code agent finishes on a stewarded MR, `orchestrate.py` re-reviews the diff at the head SHA via `audit.merge_audit` (dispatches fixes on contract failures, fails closed on audit errors).
+- **Merge drift guard:** `audit.py checked-merge` (and `orchestrate.py`) checks head SHA and target branch against the card baseline and live forge before every merge, pausing and asking the user (`merge-held`, human-only) on unexpected change (`ws_state.py steward <ws|#N|!N> confirm` to accept).
+- **Permissions & activity:** Reuses the repo lifecycle's `automerge` option, `autonomy.py` opt-ins (`merge-held` stays human-only), and `decide.py` `@stuck` handling. Every stage transition, action, re-review, and drift pause is recorded in the card's per-MR activity log (`ws_state.py steward <ws|#N|!N> log` and the hex popover's Log tab).
+
 ## Automations
 
 There are two kinds, and "my automations" means both. Managing them is orchestration, so you do it yourself (no agent needed).

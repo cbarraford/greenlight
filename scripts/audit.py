@@ -26,7 +26,9 @@ answers its thread, and its evidence): weak nits are dropped, medium ones kept a
 (every score from a real model, mean >= audit.post) are posted. A comment that fails SafeToPublish is never posted.
 """
 import concurrent.futures
+import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -1015,8 +1017,79 @@ def same_target(c, project, iid, forge, sha, target):
     return forge_refs(project, iid, forge) == (sha, target, c["target_oid"])
 
 
+def _pause_card_drift(card_key, row, ref, kind, expected, actual, sha, target):
+    """Pause one workspace card on head/target drift and ensure a merge-held prompt exists for the user."""
+    import ws_state
+    summary = (f"target branch changed ({expected} → {actual})" if kind == "target_changed"
+               else f"head changed ({(expected or '')[:8]} → {(actual or '')[:8]})")
+    ping_key = f"@drift:{card_key}:{ws_state.digest(f'{kind}:{sha}:{target}')}"
+    old_ping = None
+    with contextlib.suppress(Exception), ws_state.lock():
+        c = ws_state.load(card_key)
+        already_confirmed = c.get("steward") and (
+            (kind == "head_changed" and c.get("steward_head") == sha)
+            or (kind == "target_changed" and c.get("steward_target") == target)
+        )
+        if already_confirmed:
+            return  # do not re-pause an already-confirmed change on a stale scan
+        cur = c.get("steward_drift") or {}
+        same = cur.get("kind") == kind and cur.get("sha") == sha and cur.get("target") == target
+        if not same:
+            old_ping = cur.get("ping_key")
+            c["steward_drift"] = {"kind": kind, "sha": sha, "target": target, "old_value": expected,
+                                  "ping_key": ping_key, "ts": int(time.time())}
+            ws_state.append_activity(c, f"Merge paused: {summary}", kind="drift", step="merge",
+                                     sha=sha, target=target, ok=False)
+            ws_state.save(c)
+    ws_ids = [row["id"]] if row and row.get("id") else []
+    url = ((row or {}).get("mr") or {}).get("web_url") or ""
+    opt = f"Confirm target {actual}" if kind == "target_changed" else f"Confirm head {(actual or '')[:8]}"
+    with contextlib.suppress(Exception):
+        import greenlight
+        open_pings = greenlight.pinged()
+        if old_ping and old_ping != ping_key and old_ping in open_pings:
+            with contextlib.redirect_stdout(io.StringIO()):
+                greenlight.resolve(old_ping, f"superseded by {summary}")
+        if ping_key not in open_pings:
+            with contextlib.redirect_stdout(io.StringIO()):
+                greenlight.ping(
+                    f"{(row or {}).get('name') or ref}: merge paused — {ref} {summary}. {url}\nOptions: {opt} | Keep waiting",
+                    key=ping_key, ws=ws_ids, kind="merge-held", ask=True,
+                )
+
+
+def _pause_merge_drift(forge, project, iid, kind, expected, actual, sha, target):
+    """Pause every workspace card linked to this MR and ask the user (merge-held, human-only) on head/target drift."""
+    import ws_state
+    ref = f"#{iid}" if forge == "github" else f"!{iid}"
+    with contextlib.suppress(Exception):
+        for card_key, row in ws_state.cards_for_mr(forge, project, iid):
+            _pause_card_drift(card_key, row, ref, kind, expected, actual, sha, target)
+
+
+def check_merge_drift(forge, project, iid, target, sha):
+    """Check all workspace cards linked to this MR for unconfirmed drift or baseline drift. Returns error or None."""
+    import ws_state
+    ref = f"#{iid}" if forge == "github" else f"!{iid}"
+    for card_key, row in ws_state.cards_for_mr(forge, project, iid):
+        c = ws_state.load(card_key)
+        if c.get("steward_drift"):
+            return f"merge paused: unconfirmed {c['steward_drift'].get('kind', 'drift')} for {project}#{iid}"
+        if not c.get("steward"):
+            continue
+        if ws_state.is_stale_confirmed(c, sha, target):
+            return f"scan is stale after drift confirmation for {project}#{iid}; rescan before merging"
+        if c.get("steward_target") and target and c["steward_target"] != target:
+            _pause_card_drift(card_key, row, ref, "target_changed", c["steward_target"], target, sha, target)
+            return f"merge target changed for {project}#{iid}; expected {c['steward_target']}, got {target}"
+        if c.get("steward_head") and sha and c["steward_head"] != sha and not c.get("steward_expecting_from_sha"):
+            _pause_card_drift(card_key, row, ref, "head_changed", c["steward_head"], sha, sha, target)
+            return f"merge head changed for {project}#{iid}; expected {c['steward_head'][:12]}, got {sha[:12]}"
+    return None
+
+
 def checked_merge(forge, project, iid, target, sha, target_oid, cmd):
-    """Run the forge merge only while its head, target and target commit still match the audited pair."""
+    """Run the forge merge only while its head, target and target commit still match the audited pair and card baseline."""
     valid = (["gh", "pr", "merge", str(iid), "-R", project] if forge == "github" else
              ["glab", "mr", "merge", str(iid), "-R", project, "--yes"])
     methods = {"--merge", "--squash", "--rebase"}
@@ -1026,14 +1099,30 @@ def checked_merge(forge, project, iid, target, sha, target_oid, cmd):
         return 4
     refs = forge_refs(project, iid, forge)
     if refs != (sha, target, target_oid):
+        if isinstance(refs, tuple) and len(refs) == 3:
+            if refs[1] and refs[1] != target:
+                _pause_merge_drift(forge, project, iid, "target_changed", target, refs[1], refs[0] or "", refs[1])
+            elif refs[0] and refs[0] != sha:
+                _pause_merge_drift(forge, project, iid, "head_changed", sha, refs[0], refs[0], refs[1] or target)
         print(f"AUDIT ERROR merge target, target commit or head changed for {project}#{iid}; expected {target} at {sha[:12]}")
+        return 4
+    if drift_err := check_merge_drift(forge, project, iid, target, sha):
+        print(f"AUDIT ERROR {drift_err}")
         return 4
     pin = ["--match-head-commit" if forge == "github" else "--sha", sha]
     try:
-        return subprocess.run(cmd + pin, timeout=90).returncode
+        rc = subprocess.run(cmd + pin, timeout=90).returncode
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"AUDIT ERROR merge command failed: {type(e).__name__}: {e}")
         return 4
+    if rc == 0:
+        with contextlib.suppress(Exception):
+            import ws_state
+            ref = f"#{iid}" if forge == "github" else f"!{iid}"
+            for card_key, _ in ws_state.cards_for_mr(forge, project, iid):
+                ws_state.record_activity(card_key, f"Merged {ref} into {target} at {sha[:8]}",
+                                         kind="merge", step="merge", sha=sha, target=target, ok=True)
+    return rc
 
 
 def forge_diff(project, iid, forge, sha=None):

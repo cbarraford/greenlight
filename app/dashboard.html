@@ -269,6 +269,9 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .abadge::after{content:"";width:36%;height:36%;border-radius:var(--r-full);background:var(--ds-fg-on-solid)}
 .hbell{position:absolute;border-radius:var(--r-full);background:var(--orange);color:var(--on-orange);box-shadow:0 0 0 2px var(--canvas);display:flex;align-items:center;justify-content:center;pointer-events:none}
 .hx .hbell svg{position:static}
+.stbadge{position:absolute;border-radius:var(--r-full);background:var(--accent-solid);color:var(--on-accent);box-shadow:0 0 0 2px var(--canvas);display:flex;align-items:center;justify-content:center;pointer-events:none}
+.stbadge.drift{background:var(--orange);color:var(--on-orange)}
+.hx .stbadge svg{position:static}
 /* stacks: 3+ in the same situation collapse into one hex; hover fans them out */
 .fan{position:absolute;pointer-events:none;z-index:2}
 .fan.open{pointer-events:auto;z-index:10}
@@ -378,6 +381,21 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--fill-hover)}
 #hcard .mg .lnk{border:0;background:none;color:var(--text2);font:inherit;font-size:var(--fs-2);text-decoration:underline}
 #hcard .hf i{width:6px;height:6px;border-radius:var(--r-full);flex-shrink:0}
 #hcard .hf .hfx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hcard .hctabs{display:flex;align-items:center;gap:var(--sp-1);padding:var(--sp-1);border-radius:var(--r-1);background:var(--fill)}
+#hcard .hctabs [role="tab"]{border:0;background:transparent;color:var(--text2);font:inherit;font-size:var(--fs-2);font-weight:500;padding:var(--sp-1) var(--sp-2);border-radius:var(--r-0);cursor:pointer}
+#hcard .hctabs [role="tab"][aria-selected="true"]{background:var(--card);color:var(--text);box-shadow:var(--shadow-sm)}
+#hcard .hctabs .sttog{margin-left:auto;display:inline-flex;align-items:center;gap:var(--sp-1);border:0;border-radius:var(--r-0);background:transparent;color:var(--text2);font:inherit;font-size:var(--fs-1);font-weight:500;padding:var(--sp-1) var(--sp-2);cursor:pointer}
+#hcard .hctabs .sttog:hover{background:var(--fill-hover);color:var(--text)}
+#hcard .hctabs .sttog.on{background:var(--accent-subtle);color:var(--accent-fg)}
+#hcard .hcdrift{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);background:var(--orange-tint);color:var(--orange-ink);font-size:var(--fs-2)}
+#hcard .hcdrift span{flex:1;min-width:0}
+#hcard .hclog{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--sp-2);max-height:240px;overflow-y:auto}
+#hcard .hclog li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--sp-2);align-items:start;padding:var(--sp-1) var(--sp-2);border-radius:var(--r-1);background:var(--fill);font-size:var(--fs-2);line-height:var(--lh-2)}
+#hcard .hclog .hldot{width:6px;height:6px;border-radius:var(--r-full);margin-top:var(--sp-2);background:var(--green)}
+#hcard .hclog li.err .hldot{background:var(--red)}
+#hcard .hclog .hlmeta{display:flex;flex-wrap:wrap;gap:var(--sp-2);font-size:var(--fs-1);color:var(--text3)}
+#hcard .hclog .hldet{font-size:var(--fs-1);color:var(--text2);overflow-wrap:anywhere}
+#hcard .hclog .hlts{font-size:var(--fs-1);color:var(--text3);white-space:nowrap;font-variant-numeric:tabular-nums}
 div.ghost{position:fixed;left:0;top:0;z-index:50;pointer-events:none;display:flex;align-items:center;gap:var(--sp-2);opacity:.9}
 div.ghost .gl{height:24px;display:flex;align-items:center;padding:0 var(--sp-3);border-radius:var(--r-full);background:var(--sheet);box-shadow:var(--elev);font-size:var(--fs-2);font-weight:600;color:var(--text);white-space:nowrap}
 body.dockhot div.ghost .gl{background:var(--accent-solid);color:var(--on-accent)} div.ghost.flip{flex-direction:row-reverse}
@@ -946,6 +964,9 @@ function hexEl(p, R, opts = {}){
       !compact && R >= 40 && lb.sub && !(lb.num === "No MR" && lb.sub === "Goal" && R < 60) ? h("span", {}, lb.num === "No MR" && lb.sub === "Goal" ? "No MR" : lb.sub) : null),
     p.asked ? (() => { const z = Math.max(11, Math.round(R * .2));  // greenlight asked about it: the inbox bell, top-left (the agent dot is top-right)
       return h("span", {class:"hbell", style:`left:${R - R * .34 - z / 2}px;top:${R - R * .68 - z / 2}px;width:${z}px;height:${z}px`}, bellSvg(Math.round(z * .64), true)) })() : null,
+    (p.steward || p.steward_drift) && !compact ? (() => { const z = Math.max(12, Math.round(R * .2));  // steward mode or drift pause: small badge at bottom-center
+      return h("span", {class:`stbadge${p.steward_drift ? " drift" : ""}`, title: p.steward_drift ? "Paused on head/target drift" : "Steward watching to merge",
+        style:`left:${R - z / 2}px;top:${R + R * .68 - z / 2}px;width:${z}px;height:${z}px`}, icon(p.steward_drift ? "alert" : "flag", Math.round(z * .62))) })() : null,
     p.agent && p.agent.state === "working" ? h("span", {class:"abadge", style:`left:${R + R * .34 - b / 2}px;top:${R - R * .68 - b / 2}px;width:${b}px;height:${b}px`}) : null);
 }
 
@@ -1837,7 +1858,24 @@ const CI_SAY = {success: ["Passed", "--green"], failed: ["Failed", "--red"], can
 // the agent's state at a glance: idle a ring, working a turning arc, waiting (asking you) the needs diamond, crashed the octagon
 const GLYPH = {idle: "ring", working: "working", waiting: "needs-fill", crashed: "crashed-fill"};
 function glyph(k){ return k ? icon(GLYPH[k], 16, "gl " + k) : null }
-function hoverCard(p){
+function activityLogEl(p){
+  const items = arr(p.activity);
+  if (!items.length) return h("div", {class: "he"}, h("b", {}, "No activity yet"), h("span", {class: "hm"}, "Stage transitions, orchestrator actions, diff re-reviews and drift pauses appear here."));
+  return h("ol", {class: "hclog", role: "log", "aria-label": "MR activity log"}, items.map(e => {
+    const when = e.ts ? ago(Math.max(0, Date.now() / 1000 - e.ts) / 3600) : "";
+    return h("li", {class: e.ok === false ? "err" : null},
+      h("i", {class: "hldot", "aria-hidden": "true"}),
+      h("div", {},
+        h("div", {}, e.summary || e.kind || "event"),
+        e.detail ? h("div", {class: "hldet"}, short(e.detail, 140)) : null,
+        (e.step || e.sha || e.target) ? h("div", {class: "hlmeta"},
+          e.step ? h("span", {}, e.step) : null,
+          e.sha ? h("span", {class: "mono"}, e.sha.slice(0, 8)) : null,
+          e.target ? h("span", {}, `→ ${e.target}`) : null) : null),
+      h("span", {class: "hlts"}, when === "now" ? "now" : when ? `${when}` : ""));
+  }));
+}
+function hoverCard(p, tab = "overview"){
   const mr = p.mr && p.mr.iid ? p.mr : null, col = c(STATE[p.state].color), {n, i} = stepsOf(p), a = p.agent || {};
   const who = /codex/i.test(a.type || "") ? "Codex" : "Claude", gs = ["working", "waiting"].includes(a.state) ? a.state : p.state === "crashed" ? "crashed" : a.type ? "idle" : null;  // as acard: a live agent outranks the crash
   const sa = ago((Date.now() / 1000 - ui.snap.scanned) / 3600);
@@ -1863,7 +1901,36 @@ function hoverCard(p){
       : a.state === "working" ? null
       : ["needs", "raised", "crashed"].includes(p.state) ? h("div", {class: "hacts"}, mv.length ? null : nextBtn(p), h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, askLabel(p)))
       : mv.length ? null : nextBtn(p);
-  return h("div", {id: "hcard", role: "dialog", "aria-modal": "false", "aria-label": `${mr ? mrRef(mr) + " " : ""}${mr ? mr.title : p.name}`, "data-name": p.name},
+  const actsLen = arr(p.activity).length, drift = p.steward_drift;
+  const swapTab = next => () => {
+    ui.cardTab = next;
+    const old = document.getElementById("hcard"); if (!old) return;
+    const fresh = hoverCard(puckOf(p.name) || p, next);
+    fresh.style.left = old.style.left; fresh.style.top = old.style.top;
+    fresh.addEventListener("mouseleave", leaveCard);
+    old.replaceWith(fresh);
+    const r = fresh.getBoundingClientRect();
+    fresh.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 40 - fresh.offsetHeight))}px`;
+  };
+  const tabs = h("div", {class: "hctabs", role: "tablist", "aria-label": "Card view"},
+    h("button", {type: "button", role: "tab", "aria-selected": String(tab !== "log"), onclick: swapTab("overview")}, "Overview"),
+    h("button", {type: "button", role: "tab", "aria-selected": String(tab === "log"), onclick: swapTab("log")}, actsLen ? `Log (${actsLen})` : "Log"),
+    mr && mr.state === "opened" ? h("button", {type: "button", class: `sttog${p.steward ? " on" : ""}`, title: p.steward ? "Turn off steward mode" : "Watch this MR to merge",
+      onclick: () => post({cmd: "steward", op: p.steward ? "off" : "on", name: p.name})},
+      icon("flag", 12), p.steward ? "Steward" : "Watch") : null);
+  const driftBar = drift ? h("div", {class: "hcdrift", role: "alert"},
+    icon("alert", 14),
+    h("span", {}, drift.kind === "target_changed" ? `Target changed → ${drift.target || "?"}` : `Head changed → ${(drift.sha || "").slice(0, 8)}`),
+    h("button", {type: "button", class: "btn sm", onclick: () => post({cmd: "steward", op: "confirm", name: p.name})}, "Confirm")) : null;
+  const panel = tab === "log" ? [tabs, driftBar, activityLogEl(p)] : [
+    driftBar,
+    recEl(p),  // what to do about it, when that's you (or an agent step nobody's on)
+    mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
+    tabs,
+    arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
+    ...body,
+  ];
+  return h("div", {id: "hcard", role: "dialog", "aria-modal": "false", "aria-label": `${mr ? mrRef(mr) + " " : ""}${mr ? mr.title : p.name}`, "data-name": p.name, "data-tab": tab},
     h("div", {class: "row"}, statusPill(STATE[p.state].color.slice(2), STATE[p.state].label),
       h("span", {class: "hm"}, sa === "now" ? "scanned just now" : `scanned ${sa} ago`)),
     h("div", {class: "hhd"}, mr ? h("div", {class: "id"}, h("b", {}, mrRef(mr)), h("span", {class: "hm"}, [p.project, mr.author].filter(Boolean).join(" · "))) : h("span", {class: "hm"}, p.project),
@@ -1871,10 +1938,7 @@ function hoverCard(p){
       sayOf(p) ? h("div", {class: "say", style: `color:${ink(STATE[p.state].color)}`}, short(sayOf(p), 140)) : null,  // what it's waiting on, in a line
       arr(p.steps).length ? null : lifeLine(p),  // where it is in its life, and who holds it (on the step line when there is one)
       branch ? h("div", {class: "br"}, branch, mr && mr.target_branch ? h("span", {class: "hm"}, ` → ${mr.target_branch}`) : null) : null),
-    recEl(p),  // what to do about it, when that's you (or an agent step nobody's on)
-    mv.length ? movesEl(p, mv) : null, acts,  // the smart button on top, then the response, right under its reason
-    arr(p.steps).length ? stepsEl(p) : null,  // a goal-only tree has no lifecycle
-    ...body,
+    ...panel,
     h("div", {class: "hf"}, glyph(gs),
       h("span", {class: "hfx"}, gs === "crashed" ? `${a.type ? who : "Agent"} crashed` : a.type ? `${who} ${{working: "is working", waiting: "is waiting"}[a.state] || "is idle"}` : "No agent",
         a.type && a.state !== "working" && a.idle_h != null ? h("span", {class: "hm"}, ` · ${ago(a.idle_h)}`) : null),
@@ -2479,6 +2543,30 @@ window.mc = {
     if (r.error) { delete ui.parking[r.name]; console.log("dash: park failed:", r.error); render() }
   },
   tasked(r){ tasked(r) },
+  steward(r){
+    if (!r || !r.name) return;
+    if (r.error) { note("Steward update failed", r.error, true); return }
+    if (ui.raw && Array.isArray(ui.raw.pucks)) {
+      const p = ui.raw.pucks.find(x => x.name === r.name);
+      if (p) {
+        p.steward = !!r.steward;
+        if (r.steward_drift) p.steward_drift = r.steward_drift; else delete p.steward_drift;
+        if (Array.isArray(r.activity)) p.activity = r.activity;
+      }
+      relift();
+    }
+    render();
+    const old = document.getElementById("hcard");
+    if (old && old.dataset.name === r.name) {
+      const p = puckOf(r.name);
+      if (p) {
+        const fresh = hoverCard(p, old.dataset.tab || "overview");
+        fresh.style.left = old.style.left; fresh.style.top = old.style.top;
+        fresh.addEventListener("mouseleave", leaveCard);
+        old.replaceWith(fresh);
+      }
+    }
+  },
   rescanned(code){ if (code) { ui.rescan = 0; ui.rescanFail = Date.now(); console.log("dash: rescan failed, exit " + code) } footer() },
   update(snap){
     if (snap.error) { console.log("dash:", snap.error); return }
