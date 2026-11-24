@@ -77,7 +77,7 @@ test("the sidebar starts hidden (the Pipe); ⌘B opens it (the Basement) and tel
   assert.deepEqual((await posts(page, "side")).pop(), {cmd: "side", open: true});
   await page.keyboard.press("Meta+b"); assert.deepEqual((await posts(page, "side")).pop(), {cmd: "side", open: false});
   const sliding = () => page.evaluate(() => document.body.classList.contains("sliding"));
-  assert.equal(await sliding(), true, "it slides out (0.25 s default)"); assert.equal(await page.$eval("#side", e => getComputedStyle(e).display), "flex", "still showing mid-slide");
+  assert.equal(await sliding(), true, "it slides out (the 0.32 s drawer by default)"); assert.equal(await page.$eval("#side", e => getComputedStyle(e).display), "flex", "still showing mid-slide");
   await page.waitForTimeout(400); assert.equal(await sliding(), false, "and the slide cleans up");
   assert.equal(await page.$eval("#side", e => getComputedStyle(e).display), "none");
   await page.evaluate(() => term.slide(0)); await page.evaluate(() => toggleSide());
@@ -388,8 +388,8 @@ test("look: premade looks, worn at once; every color by hand, live, and Undo wal
   await page.click("#shead [aria-label='Customize look']"); await page.click("#dlg .dz button:has-text('Forest')");
   assert.equal(await page.$$eval("#dlg input[type=color]", i => i.length), 13);
   assert.equal(await page.inputValue("#dlg input[aria-label='sidebar and tab strip background']"), "#151d18");
-  assert.match(await page.inputValue("#dlg input[aria-label='red: failed']"), /^#[0-9a-f]{6}$/, "a color-mix or default reads as hex too");
-  await page.fill("#dlg input[aria-label='red: failed']", "#ff0000"); assert.equal(await v("r"), "#ff0000", "live, and worn");
+  assert.match(await page.inputValue("#dlg input[aria-label='crashed or failed']"), /^#[0-9a-f]{6}$/, "a color-mix or default reads as hex too");
+  await page.fill("#dlg input[aria-label='crashed or failed']", "#ff0000"); assert.equal(await v("r"), "#ff0000", "live, and worn");
   await page.click("#dlg button:has-text('Undo')"); assert.notEqual(await v("r"), "#ff0000", "Undo walks it back");
   await page.fill("#dlg input[aria-label='chrome text']", "#fafafa"); await page.click("#dlg button:has-text('Done')");
   assert.deepEqual((await lastSave(page)).skin, {...(await page.evaluate(() => PRESETS[2].colors)), fg: "#fafafa"});
@@ -505,7 +505,7 @@ test("⌘J: MR number, title, description and people match; > lists actions; Esc
   assert.equal(await page.$eval("#pv", p => getComputedStyle(p).display !== "none" && p.getBoundingClientRect().width), 290, "the preview pane stays beside the results");
   await page.keyboard.press("Tab");
   assert.deepEqual(await page.$$eval("#pres .r", r => [...new Set(r.map(x => x.classList[1]))]), ["r-tab"], "⇥: Terminals only");
-  assert.equal(await page.$eval("#pres .r", r => getComputedStyle(r).flexDirection + getComputedStyle(r).height), "row34px", "rows keep their own layout, not the sidebar's .tab/.ws");
+  assert.equal(await page.$eval("#pres .r", r => getComputedStyle(r).flexDirection + getComputedStyle(r).height), "row32px", "rows (32, DESIGN.md §10.15) keep their own layout, not the sidebar's .tab/.ws");
   await page.keyboard.press("Escape"); assert.equal(await page.$eval("#pal", p => p.hidden), true, "Esc on empty closes");
 });
 
@@ -1067,6 +1067,74 @@ test("the wheel without Greenlight's tmux: an app's mouse modes get no ⌃⌥⇧
   assert.equal((await ins()).pop(), "k", "after a reconnect, no exit before the key: the host may have no tmux now");
   await wheel({deltaY: -2});
   assert.equal((await ins()).pop(), "k", "and no wheel reports until the new connection prints the mark");
+});
+
+test("the tree from the keyboard: one tab stop; ↑↓ walk, ← folds or climbs, → unfolds, ↵ opens; row actions show on focus", async page => {
+  const stops = () => page.$$eval("#tree [tabindex='0']", x => x.length);
+  const at = () => page.evaluate(() => document.activeElement.dataset.k || "");
+  assert.equal(await stops(), 1, "one tab stop in the tree");
+  await page.evaluate(() => document.querySelector("#tree .grp.sec[data-k='g§ws']").focus());
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(await page.getAttribute("#tree .grp.sec[data-k='g§ws']", "aria-expanded"), "false", "← folds a section");
+  assert.equal(await at(), "g§ws", "and the keyboard stays on it through the re-render");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await page.getAttribute("#tree .grp.sec[data-k='g§ws']", "aria-expanded"), "true", "→ unfolds it");
+  await page.keyboard.press("ArrowDown"); assert.match(await at(), /^gws\//, "↓: its first project");
+  await page.keyboard.press("ArrowDown"); assert.equal(await at(), "w/w/sidebar", "↓: that project's first workspace");
+  assert.equal(await page.$eval("#tree .ws[data-k='w/w/sidebar'] .ib", b => getComputedStyle(b).display), "flex", "its + shows on focus, not only on hover");
+  await page.keyboard.press("ArrowLeft"); assert.match(await at(), /^gws\//, "← from a row: up to its project");
+  await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  assert.equal((await posts(page, "open")).pop().ws, "/w/sidebar", "↵ opens the workspace");
+  assert.equal(await stops(), 1);
+});
+
+test("sidebar states: a skeleton until the workspaces come, then none; no workspaces says so and offers New workspace…", async page => {
+  const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await fresh.goto(PAGE); await fresh.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
+  await fresh.evaluate(() => { term.restore(null); if (document.body.classList.contains("noside")) toggleSide() });
+  assert.equal(await fresh.$$eval("#tree .skel i", x => x.length), 6, "3 rows a section, 2 sections");
+  await fresh.evaluate(() => term.workspaces({trees: []}));
+  assert.equal(await fresh.$("#tree .skel"), null);
+  assert.match(await fresh.textContent("#tree .nows"), /No workspaces yet/);
+  assert.equal(await fresh.textContent("#tree .nows button"), "New workspace…");
+  await fresh.evaluate(t => term.workspaces(t), TREES);
+  assert.equal(await fresh.$("#tree .nows"), null, "gone once there are some");
+  await fresh.close();
+});
+
+test("refresh is busy until the workspaces come back", async page => {
+  const busy = () => page.getAttribute("#shead [aria-label='Refresh workspaces']", "aria-busy");
+  await page.click("#shead [aria-label='Refresh workspaces']");
+  assert.equal((await posts(page, "trees")).length > 0, true);
+  assert.equal(await busy(), null, "no flash: it waits 200ms");
+  await page.waitForTimeout(260); assert.equal(await busy(), "true");
+  await page.evaluate(t => term.workspaces(t), TREES); await page.waitForTimeout(450);
+  assert.equal(await busy(), null);
+});
+
+test("a host that can't be reached says so on its row; Retry opens its sessions again", async page => {
+  page = await boot(page.context().browser(), null, "?host=devbox&hosts=" + encodeURIComponent(JSON.stringify(["mini", "devbox"])));
+  await page.click("#tree .hchip:has-text('mini')");
+  const o = (await posts(page, "open")).pop();
+  await page.evaluate(id => term.exited(id, 255), o.id);
+  assert.match(await page.textContent("#tree .hc .lost"), /Can't reach mini/);
+  await page.click("#tree .hc .lost button");
+  const again = (await posts(page, "open")).pop();
+  assert.deepEqual([again.id, again.session, again.ws], [o.id, o.session, "@mini"]);
+  assert.equal(await page.$("#tree .lost"), null);
+  assert.deepEqual(page._errs, []); await page.close();
+});
+
+test("appearance: the chrome follows the system, the window's Light/Dark holds it, and the terminals keep their colors", async page => {
+  const look = () => page.evaluate(() => [document.documentElement.dataset.appearance || "", getComputedStyle($("bar")).backgroundColor]);
+  const [a0, dark] = await look(); assert.equal(a0, "", "the system's");
+  const theme = await page.evaluate(() => JSON.stringify([...panes.values()][0].t.options.theme));
+  await page.evaluate(() => term.mode("light")); const [a1, lit] = await look();
+  assert.equal(a1, "light"); assert.notEqual(lit, dark, "the strip goes light");
+  assert.equal(await page.evaluate(() => JSON.stringify([...panes.values()][0].t.options.theme)), theme, "the terminals keep theirs");
+  await page.evaluate(() => term.mode("")); assert.deepEqual(await look(), ["", dark], "Auto: back to the system");
+  assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue("--strip")), "", "no look worn: the tokens, nothing inline");
 });
 
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {

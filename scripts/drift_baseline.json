@@ -62,9 +62,9 @@
   "shadow": 0
  },
  "app/terminal.html": {
-  "colour": 136,
-  "font_size": 145,
-  "radius": 124,
-  "shadow": 5
+  "colour": 61,
+  "font_size": 0,
+  "radius": 0,
+  "shadow": 0
  }
 }

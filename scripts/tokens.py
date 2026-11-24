@@ -304,8 +304,8 @@ def css_name(path):
     return "--ds-" + re.sub(r"[._]", "-", path)
 
 
-# Old page variables → new tokens, applied only under <html data-tokens="v2">. terminal.html sets its variables
-# inline from paint(), which outranks any stylesheet, so it gets none until rollout step 4.
+# Old page variables → new tokens, applied only under <html data-tokens="v2">. terminal.html maps its own names onto
+# the tokens in its stylesheet (rollout step 4), so it needs none here.
 ALIASES = {
     "app/dashboard.html": {
         "--bg": "bg.canvas", "--bar": "bg.chrome", "--strip": "bg.chrome", "--canvas": "bg.canvas",
@@ -392,6 +392,18 @@ def _flat(node, path=""):
             yield p, v
 
 
+def appearance_rules(spec, hc_decls, ring_hc):
+    """Settings › Appearance (or the window's Light/Dark) over the system: <html data-appearance="light|dark">.
+    They come before the accent rules, which have the same specificity and must still win."""
+    rules = []
+    for mode in ("dark", "light"):
+        sel = f':root[data-appearance="{mode}"]'
+        rules.append(f"{sel}{{color-scheme:{mode};{_decls(mode_decls(spec, mode))}}}")
+    rules.append(f'@media (prefers-contrast: more){{:root[data-appearance="dark"]{{{hc_decls("dark")}{ring_hc}}}'
+                 f':root[data-appearance="light"]{{{hc_decls("light")}{ring_hc}}}}}')
+    return rules
+
+
 def accent_rules():
     teal = _decls((f"--ds-accent-{i}", f"var(--ds-teal-{i})") for i in range(1, 13))
     graph = {9: 12, 10: 11, 11: 12}
@@ -424,7 +436,7 @@ def css_block(spec, page):
              f"@media (prefers-color-scheme: light){{:root{{{_decls(mode_decls(spec, 'light'))}}}}}",
              f"@media (prefers-contrast: more){{:root{{{hc_decls('dark')}{ring_hc}}}}}",
              f"@media (prefers-contrast: more) and (prefers-color-scheme: light){{:root{{{hc_decls('light')}}}}}",
-             *accent_rules(), alias_rule(page)]
+             *appearance_rules(spec, hc_decls, ring_hc), *accent_rules(), alias_rule(page)]
     body = "\n".join(r for r in rules if r)
     return f"{OPEN}/* {NOTE} */\n{body}\n{CLOSE}"
 
