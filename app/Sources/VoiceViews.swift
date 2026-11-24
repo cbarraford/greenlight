@@ -345,8 +345,8 @@ func staged(_ s: String) -> Staged {
         text.removeSubrange(r)
     }
     var link: URL?
-    while let r = text.range(of: #"\[open:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief opens a PR/MR/issue in the browser: the first allowed one; every one is hidden
-        if link == nil { link = forgeURL(text[r].dropFirst(6).replacingOccurrences(of: "]", with: "")) }
+    while let r = text.range(of: #"\[open:((?:[^\[\]\n]|\[[^\]\n]*\](?:\([^)\n]*\)?)?)*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief opens a PR/MR/issue in the browser: the first allowed one; every one is hidden
+        if link == nil { link = forgeURL(String(text[r].dropFirst(6).dropLast(text[r].hasSuffix("]") ? 1 : 0))) }
         text.removeSubrange(r)
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
@@ -362,9 +362,11 @@ func staged(_ s: String) -> Staged {
 
 /// The forges Greenlight tracks (greenlight.py's forge_project): the only hosts Chief's [open: …] may send the browser to.
 let forgeHosts: Set<String> = ["github.com", "gitlab.com"]
-/// Chief's [open: URL] as a URL the browser may open: http(s) on a forge host (or its www.), no user:password@, no odd port; else nil.
+/// Chief's [open: URL] (or [open: [!3](URL)]) as a URL the browser may open: http(s) on a forge host (or its www.), no user:password@, no odd port; else nil.
 func forgeURL(_ s: String) -> URL? {
-    let t = s.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "<>`\"'"))
+    var t = s.trimmingCharacters(in: .whitespaces)
+    if let m = t.range(of: #"^\[[^\]]*\]\([^)]*\)$"#, options: .regularExpression), let o = t[m].range(of: "](") { t = String(t[o.upperBound...].dropLast()) }  // [!3](url): Chief's Markdown link
+    t = t.trimmingCharacters(in: CharacterSet(charactersIn: "<>`\"' "))
     guard let c = URLComponents(string: t), let scheme = c.scheme?.lowercased(), ["http", "https"].contains(scheme),
           var host = c.host?.lowercased(), c.user == nil, c.password == nil, c.port == nil else { return nil }
     if host.hasPrefix("www.") { host.removeFirst(4) }

@@ -114,6 +114,11 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               "https://me" + "@github.com/a", "https://github.com" + "@evil.com/a", "https://github.com:8443/a", "https://gist.github.com/a", "github.com/a/b", ""]
               .allSatisfy { forgeURL($0) == nil }
           && staged("No.\n[open: https://evil.com/x]") == Staged(text: "No.", stage: nil))
+    check("[open: [!3](URL)]: a Markdown link inside opens its URL and leaves nothing behind, streaming or done",
+          staged("Here.\n[open: [!3](https://gitlab.com/acme/widgets/-/merge_requests/3)]\nMore.")
+              == Staged(text: "Here.\n\nMore.", stage: nil, open: URL(string: "https://gitlab.com/acme/widgets/-/merge_requests/3"))
+          && staged("Here. [open: [!3](https://gitl").text == "Here." && staged("Here. [open: [!3](https://gitlab.com/a/b)").text == "Here."
+          && staged("[open: [x](https://evil.com/a)]").open == nil)
     check("projects: a pick is never empty: none, or none still listed, is all; a gone one drops out of the rest",
           livePick(nil, known: ["a"]) == nil && livePick([], known: nil) == nil && livePick([], known: ["a"]) == nil && livePick(["gone"], known: ["a", ""]) == nil
           && livePick(["a", "gone"], known: ["a", ""]) == ["a"] && livePick([""], known: ["a", ""]) == [""] && livePick(["gone"], known: nil) == ["gone"])
@@ -528,6 +533,22 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     check("core: chat streaming handles all event kinds, options, context meter, and compact",
           chatMsg?.text == "Done." && chatMsg?.options == ["yes", "no"] && matchedQ != nil
           && mainC.context == 1200 && mainC.window == 200000 && compactMsg.contains("Compacted"))
+
+    var browsed: [URL] = []
+    mainC.browse = { browsed.append($0) }
+    responder = { r, _, _ in
+        guard r.contains("chat.py send") else { return ([], 0) }
+        return ([#"{"e":"text_reset"}"#, #"{"e":"text","delta":"Opening it.\n[open: https://github.com/acme/widgets/pull/7]"}"#,
+                 #"{"e":"text_reset"}"#, #"{"e":"text","delta":"It's open."}"#, #"{"e":"done","ok":true,"text":"It's open."}"#], 0)
+    }
+    mainC.send("Pop up PR 7")
+    let carried = browsed, openMsg = mainC.msgs.last?.text
+    responder = { r, _, _ in
+        r.contains("chat.py send") ? ([#"{"e":"done","ok":false,"text":"Failed.\n[open: https://github.com/acme/widgets/pull/8]"}"#], 1) : ([], 0)
+    }
+    mainC.send("Pop up PR 8")
+    check("core: [open: URL] opens once a reply finishes, even from a block a later one replaced; a failed reply opens nothing",
+          carried == [URL(string: "https://github.com/acme/widgets/pull/7")!] && openMsg == "It's open." && browsed == carried)
 
     // 6. Watch turn & ping auto/suggest/start
     mainC.pucks = [["name": "ws-watch", "state": "needs", "why": "ci"]]
