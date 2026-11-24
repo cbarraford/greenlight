@@ -1551,7 +1551,7 @@ function askState(p){
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
   const reply = a.state === "done" && chatOn(p) && (!st.sent || st.typed == null || since(a.since) > since(st.typed));  // its reply ends its turn: a "done" newer than the message
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
-    const chat = chatLive(st) ? {...st.chat, at: Date.now()} : null;  // a reply in time carries the chat on (its clock restarts); a long stretch of work ends it
+    const chat = chatLive(st) ? st.chat : null;  // a reply in time carries the chat on; a long stretch of work ends it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
     post({cmd: "ask", name: p.name});  // a reply too: the stream cuts the agent's message to 400 characters
   }
@@ -1563,7 +1563,7 @@ function askState(p){
    discuss it, not a refusal; at a prompt it's a plain message. Its replies end its turn at its prompt, so a chat goes on through
    "done" as well as "waiting" (chatOn). You answer by choosing an option when the agent asks again, or by just saying it.
    Choosing an option, End chat, a permission prompt, the agent crashing, or a long stretch of work (CHAT_KEEP) ends the chat. */
-const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms from a chat message to the agent's next question that still counts as its reply; entries kept
+const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms a chat lasts after your last message or keystroke (so a task you answered in words doesn't come back as a reply); entries kept
 function sendAnswer(name, text, said){  // said: in a chat, the agent's messages this one replies to
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
@@ -1599,7 +1599,7 @@ function answerBox(p, onPage){
     h("div", {class:"shd"}, onPage ? null : statusPill("wait", "Needs you"),  // the page title already carries the pill
       agentAv(a.type, 12, "av sm"),
       h("small", {style:"flex-grow:1"}, `${ag.name} ${a.state === "done" ? "replied" : "is waiting"}`, mins != null ? h("span", {class:"el"}, ` · ${mins < 1 ? "just now" : ago(mins / 60) + " ago"}`) : null),
-      talking && !fresh ? h("button", {type:"button", class:"afull", title: a.state === "waiting" ? "Stop chatting and go back to answering" : "Stop chatting; it no longer waits on you here",
+      talking && !(fresh && menu) ? h("button", {type:"button", class:"afull", title: a.state === "waiting" ? "Stop chatting and go back to answering" : "Stop chatting; it no longer waits on you here",
         disabled: st.sending, onclick: () => endChat(st)}, "End chat") : null,
       folds ? h("button", {type:"button", class:"afull", "aria-expanded": String(!!ui.afull), "aria-controls":"aq", onclick: () => { ui.afull = !ui.afull; render() }}, icon(ui.afull ? "chevron-down" : "chevron-right", 12), ui.afull ? "Less" : "Full message") : null),
     chatThread(st, more),
@@ -1612,7 +1612,7 @@ function answerBox(p, onPage){
             h("span", {class:"osend"}, mine && st.sending ? "Sending…" : mine ? "Sent" : ["Send", svg(UP)])) })) : null,
     canChat ? h("div", {class:"achat"}, h("button", {type:"button", class:"btn sm", id:"achat", disabled: busy, title:"Talk the question over with the agent before you answer it",
       onclick: () => { st.chat = {thread: [], at: Date.now()}; render(); const t = document.getElementById("areply"); if (t) t.focus() }}, icon("chat", 13), "Chat about this")) : null,
-    fresh ? h("div", {class:"achat"}, h("span", {class:"ahint"}, "Ask about it or say what's unclear. The agent replies here, and you answer when you're ready."),
+    fresh && menu ? h("div", {class:"achat"}, h("span", {class:"ahint"}, "Ask about it or say what's unclear. The agent replies here, and you answer when you're ready."),
       h("button", {type:"button", class:"afull", id:"aback", disabled: st.sending, onclick: () => endChat(st)}, icon("chevron-left", 12), "Back to the options")) : null,
     menu && !(talking && rs.chat) ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); reply() }},  // a picker takes text only through its "Chat about this"
       h("textarea", {id:"areply", rows:"1", placeholder: fresh ? "Ask the agent about this question…" : talking ? "Keep chatting, or give your answer…" : opts.length ? "Or write a reply…" : "Reply to the agent…",

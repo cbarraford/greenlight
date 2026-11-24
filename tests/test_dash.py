@@ -62,7 +62,7 @@ assert dash.chat_key(dash.menu(CHAT["tail"])) == "3" and dash.chat_key(dash.menu
 with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x", "stateStartedAt": 1}, "t1", CHAT)):
     asked = dash.ask_user("ws")
     assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"] and asked["said"] == "x", asked  # said: its message before the picker
-with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "", "stateStartedAt": None}, "t1", CHAT)):
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x", "stateStartedAt": None}, "t1", CHAT)):
     asked = dash.ask_user("ws")  # an ADE that can't say when a turn ends or what was said (herdr): no chat, and still no "Chat about this" answer
     assert asked["chat"] is None and [o["key"] for o in asked["options"]] == ["1", "2"], asked
 hist = Path(tempfile.mkdtemp()) / "h.md"
