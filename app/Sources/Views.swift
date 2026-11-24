@@ -496,7 +496,7 @@ struct Inbox: View {
                 HStack(alignment: .top, spacing: DS.Space.s12) {
                     Image(ds: "done", size: iconSize(DS.TypeRole.title.size)).foregroundColor(dim)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Nothing needs you").fontWeight(.semibold)
+                        Text("No questions waiting").fontWeight(.semibold)
                         Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: DS.TypeRole.label.size)).foregroundColor(dim)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, DS.Space.s16).padding(.top, DS.Space.s8).padding(.bottom, DS.Space.s16)
@@ -587,7 +587,7 @@ struct InboxLine: View {
     var body: some View {
         Button { c.inboxPick = q.id } label: {
             HStack(spacing: DS.Space.s8) {
-                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)
+                Image(ds: "needs-fill", size: 12).foregroundColor(StatusInk.needs)
                 Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1).frame(width: 92, alignment: .leading)
                 Text(q.label.1).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub).lineLimit(1)
                 Spacer(minLength: DS.Space.s4)
@@ -606,7 +606,7 @@ struct QuestionRow: View {
         let (mr, said) = q.label
         VStack(alignment: .leading, spacing: DS.Space.s8) {
             HStack(spacing: DS.Space.s8) {
-                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)  // ping or chat, it waits on you
+                Image(ds: "needs-fill", size: 12).foregroundColor(StatusInk.needs)  // ping or chat, it waits on you
                 Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1)
                 if let mr { Text(mr).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub) }
                 Spacer(minLength: 0)
@@ -619,8 +619,9 @@ struct QuestionRow: View {
                 }
                 if c.replyingTo != q.id {
                     Button { c.replyText = ""; c.replyingTo = q.id } label: { HStack(spacing: 6) { kbd("R"); Text(q.options.isEmpty ? "Reply" : "Other…") } }
-                        .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub)
-                        .padding(.horizontal, DS.Space.s12).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
+                        .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size))
+                        .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(surface)).contentShape(Rectangle())
                 }
             }
             ViewThatFits(in: .horizontal) {
@@ -652,9 +653,7 @@ struct QuestionRow: View {
                 Button("Dismiss") { c.dismiss(q) }.buttonStyle(.plain).foregroundColor(sub).padding(.leading, DS.Space.s8)
                     .help("Dismiss without answering (⌫)")
             }.font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim)
-        }.padding(DS.Space.s12)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
-            .padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)
+        }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s8)  // a row in the popover, not a card inside it (§10.13)
     }
     func send() {
         let t = c.replyText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -715,9 +714,9 @@ struct AnswerChip: View {
                 Text(title)
             }
         }.buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size, weight: likely ? .semibold : .regular))
-            .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(minHeight: 30)
-            .background(Capsule().fill(StatusInk.needs.opacity(likely ? (hover.on ? 0.32 : 0.22) : hover.on ? 0.14 : 0)).background(Capsule().fill(surface)))
-            .overlay(Capsule().stroke(StatusInk.needs.opacity(hover.on || likely ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
+            .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)  // a secondary button (§10.2): the suggested one says so with a check and weight
+            .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(hover.on ? DS.Palette.elementHover : DS.Palette.elementRest, dark: isDark)))
+            .contentShape(Rectangle()).onHover { hover.on = $0 }
             .accessibilityLabel(likely ? "\(title), suggested" : title)
     }
 }
@@ -757,7 +756,7 @@ struct InboxOverlay: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.clear.contentShape(Rectangle()).onTapGesture { c.inboxOpen = false }  // no scrim: the dashboard stays readable
-            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 400).padding(.top, DS.Layout.barHeight + DS.Space.s8).padding(.trailing, DS.Space.s12).padding(.bottom, DS.Space.s16)
+            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 400).padding(.top, DS.Layout.barHeight + DS.Space.s8).padding(.trailing, DS.Space.s16).padding(.bottom, DS.Space.s16)
             Button("") { c.inboxOpen = false }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

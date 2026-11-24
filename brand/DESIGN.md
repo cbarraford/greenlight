@@ -631,7 +631,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
   - **Rows:**
     1. Avatar (agent mark, 20), title `strong`, elapsed time `caption` tabular figures, right-aligned.
     2. Meta in `label` `fg.muted`: ref · project · goal.
-    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it.
+    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it. The strip is at most 240 tall and scrolls, so the board stays in view.
     4. The lifecycle bar (§10.10) and the MR's facts, only when there are any.
   - **Actions:** one action button. Only the first needs-you card's is primary: one primary per view. The others are secondary.
   - **Status:** shown by the status pill, never by tinting the whole card. A crashed card gets a 2px `status.crashed.solid` leading edge as the only tint.
@@ -641,7 +641,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 
 ### 10.8 Rows: list, tree, menu
 - **Row:** 28 (tree, menu) or 32 (list), radius `sm`, inset 4 from the container edge, 8 horizontal padding.
-- **Workspace list row:** flat, never a card. A mini hex, the title in `strong` with a neutral tag, then one `label` line of name · project and what it says; the agent and a secondary `sm` action on the right. The state shows in the hex alone.
+- **Workspace list row:** flat, never a card. A mini hex, the title in `strong` with a neutral tag, then one `label` line of name · project and what it says; the agent and a secondary `sm` action on the right. The state shows as the hex's colour plus the step word, never colour alone.
 - **States:**
   - H: `element.rest`.
   - P: `element.hover`.
@@ -741,7 +741,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   5. Stat tiles in a 4-up grid of `label` and value.
   6. Footer with quiet links.
 - **Sizing:** it never scrolls inside itself. If content overflows, drop the tiles first.
-- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph. Empty state: "Nothing needs you". Escape or clicking outside closes it.
+- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph, never cards; an open item's answers are secondary buttons (§10.2). Empty state: "No questions waiting" (the bar may still count workspaces that need you). Escape or clicking outside closes it.
 
 ### 10.14 Toast and tooltip
 - **Toast:**
