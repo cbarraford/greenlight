@@ -255,7 +255,7 @@ struct RunCard: View, Looked {
     /// The reply as it streams, with the look's cursor.
     var liveText: some View {
         let cur = Text(mono ? " █" : " ▍").foregroundColor(mono ? fg : link)
-        let rest = unmood(staged(r.live).text)
+        let rest = unmood(staged(r.live).shown)
         // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
         return Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
             .font(chatFace(size: DS.TypeRole.bodyCopy.size)).lineSpacing(DS.TypeRole.bodyCopy.line - DS.TypeRole.bodyCopy.size - 3).textSelection(.enabled).foregroundColor(fg)

@@ -344,24 +344,26 @@ final class Voice: NSObject, ObservableObject {
     func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
     func live(_ r: Run) {
         guard on else { return }
-        let st = staged(r.live), p = plain(st.text)
+        let st = staged(r.live), p = forEar(plain(st.text))  // the gist only: a [screen] part is shown at the end, never said
         if let h = st.stage { stage(h) }
         let (ss, to) = sentences(p, from: said)
         said = to
         ss.forEach { say($0) }
-        if !chiefDrew && !drawing && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
+        if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }
-    func finished(_ st: Staged, _ body: String) {
+    /// The turn's end: say the rest of the gist (`spoken`, the reply before any [screen] line), and show the detail.
+    func finished(_ st: Staged, _ spoken: String) {
         guard on else { return }
         if let h = st.stage { stage(h) }
-        let p = plain(body) + "\n"
+        let p = forEar(plain(spoken)) + "\n"
         sentences(p, from: min(said, p.count)).said.forEach { say($0) }
         said = 0
         if st.end && isLive {  // its goodbye was only just handed over: stop once it has said it (or soon, if it never does)
             ending = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.on, self.ending { self.stopAll() } }
         } else if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
-        if !chiefDrew { draw(plain(body), last: true) }
+        if !chiefDrew, let screen = st.screen { chiefDrew = true; shown = true; drawSeq += 1; js("stage.text", [["lead": plain(spoken), "md": screen]]) }
+        if !chiefDrew { draw(plain(spoken), last: true) }
     }
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {

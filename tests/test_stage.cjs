@@ -96,5 +96,27 @@ const { launchBrowser } = require("./js_harness.cjs");
     await p.evaluate(l => { document.documentElement.dataset.look = l; stage.spec({ title: "t", kind: "stat", stat: "3", items: [{ label: "ci", detail: "passed" }] }); }, look);
     assert.ok(await p.isVisible(".items.stat span"), look);
   }
+  // the [screen] text: the spoken gist as a lead, the detail's markdown read as structure and drawn as text only
+  await p.evaluate(() => { delete document.documentElement.dataset.look; stage.text({ lead: "Two reviews need you.",
+    md: "## Waiting\n- **!4834** fixes `ws_state.py`\n- [!5013](https://x/5013) adds tests\n  and docs\n\n1. merge\n2. deploy\n\nLatest commit abc1234.\n<img src=x onerror=alert(1)>\n```\n<script>x</script>\n```" }); });
+  assert.equal(await p.textContent("#s.doc .lead"), "Two reviews need you.");
+  assert.equal(await p.textContent(".doc h2"), "Waiting");
+  assert.deepEqual(await p.locator(".doc ul li").allTextContents(), ["!4834 fixes ws_state.py", "!5013 adds tests and docs"]);
+  assert.equal(await p.textContent(".doc ul li b"), "!4834");
+  assert.equal(await p.textContent(".doc ul li code"), "ws_state.py");
+  assert.deepEqual(await p.locator(".doc ol li").allTextContents(), ["merge", "deploy"]);
+  assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
+  assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
+  assert.match(await p.textContent(".doc"), /Latest commit abc1234\. <img src=x onerror=alert\(1\)>/);  // the screen keeps the hash
+  await p.evaluate(() => stage.text({ md: "just text" }));
+  assert.equal(await p.locator(".doc .lead").count(), 0);
+  assert.equal(await p.textContent(".doc p"), "just text");
+  await p.evaluate(() => stage.text(null));
+  assert.equal(await p.locator("#s.doc").count(), 1);
+  for (const look of ["default", "phosphor"]) {
+    await p.evaluate(l => { document.documentElement.dataset.look = l; stage.text({ lead: "Gist.", md: "- one" }); }, look);
+    assert.ok(await p.isVisible(".doc li"), look);
+  }
+  await p.evaluate(() => { delete document.documentElement.dataset.look; });
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

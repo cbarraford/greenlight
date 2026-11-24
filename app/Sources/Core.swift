@@ -1006,8 +1006,8 @@ final class Core: ObservableObject {
                      : "Not sent and no room beside the files you added: \(out.joined(separator: ", ")). Attach them again to send them.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
-        let (body, options) = splitOptions(st.text.isEmpty ? "(no reply)" : st.text)
-        if !r.stopping && ok { voice.finished(st, body) } else if !r.watch && !r.checkIn { voice.failed(body) }
+        let (body, options) = splitOptions(st.shown.isEmpty ? "(no reply)" : st.shown)  // the transcript: the gist, then any [screen] detail
+        if !r.stopping && ok { voice.finished(st, splitOptions(st.text).0) } else if !r.watch && !r.checkIn { voice.failed(body) }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)

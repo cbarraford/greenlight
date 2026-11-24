@@ -144,6 +144,14 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && fallbackSpec("{\"chart\":\"bar\",\"title\":\"Deploys\",\"labels\":[\"Mon\",\"Tue")["title"] as? String == "Deploys"
           && (fallbackSpec("{\"title\":\"MRs\",\"kind\":\"table\",\"rows\":[]}")["items"] as? [[String: String]])?.isEmpty == true
           && (fallbackSpec("{\"title\":\"Audit\",\"kind\":\"list\",\"findings\":[{\"label\":\"Bug\",\"tone\":\"bad\"}]}")["items"] as? [[String: String]])?.map { $0["label"]! } == ["Bug"])
+    let split = staged("Two reviews need you.\n[screen]\n- **!4834** at abc1234\n```stage\n<b>x</b>\n```"), streaming = staged("Two reviews need you.\n[scr")
+    check("voice: a [screen] line splits the spoken gist from the shown detail; the transcript gets both, a stage block still comes out",
+          split.text == "Two reviews need you." && split.screen == "- **!4834** at abc1234" && split.stage == "<b>x</b>"
+          && split.shown == "Two reviews need you.\n\n- **!4834** at abc1234" && staged("All green.").screen == nil && staged("All green.").shown == "All green."
+          && staged("Gist.\n[SCREEN]\n").screen == nil && streaming.screen == nil && sentences(plain(streaming.text), from: 0).said == ["Two reviews need you."])
+    check("voice: a commit hash isn't read out; words, numbers and refs are",
+          forEar("The latest commit (abc1234) fixed it.") == "The latest commit fixed it." && forEar("Commit 9f8e7d6c5b4a fails.") == "Commit fails."
+          && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too.")
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
