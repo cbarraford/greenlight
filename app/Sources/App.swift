@@ -15,110 +15,96 @@ import WebKit
 // MARK: app
 
 /// The orb's look: hovered, pressed (FloatHost reports it), and which way it goes from here.
-final class OrbState: ObservableObject { @Published var hover = false; @Published var pressed = false; @Published var up = true; @Published var matte = true; var tap: () -> Void = {} }
+final class OrbState: ObservableObject { @Published var hover = false; @Published var pressed = false; @Published var up = true; var tap: () -> Void = {} }
 
-func hc(_ s: String) -> Color { Color(nsColor: hex(s)) }
-/// The orb's two faces. Up: a soft matte light-green button (or, Settings → Appearance, a lit traffic light in a beige housing). Down: the terminal button, an amber dot on it.
+/// The orb's face (brand/DESIGN.md §8.4): the mark on a 40pt bg.raised disc with elevation 2; hovered, a step higher (no
+/// animation). Up (to Center) the mark is lit in the accent; down (to the Basement) it's the terminal glyph.
+/// ponytail: the mark isn't drawn yet (redesign step 7), so the hex glyph stands in for it. The matte, traffic-light and
+/// terminal-disc faces are retired.
 struct LevelFace: View {
-    let up: Bool, matte: Bool
+    let up: Bool
+    var hover = false
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
-        if up && matte {
-            ZStack(alignment: .topTrailing) {
-                Circle().fill(RadialGradient(colors: [hc("DDF6E3"), hc("B6E7C3")], center: UnitPoint(x: 0.4, y: 0.3), startRadius: 2, endRadius: 30))
-                    .overlay(Circle().strokeBorder(hc("9CD6AC").opacity(0.7), lineWidth: 1)).shadow(color: hc("1E4A2B").opacity(0.22), radius: 6, y: 3)
-                Image(ds: "chevron-up", size: iconSize(18, scaled: false), medium: true).foregroundColor(hc("2E6F43")).frame(maxWidth: .infinity, maxHeight: .infinity)
-                Circle().fill(hc("56E08B")).frame(width: 8, height: 8).shadow(color: hc("56E08B"), radius: 3).overlay(Circle().stroke(hc("D2F1DA"), lineWidth: 2)).padding(9)
-            }
-        } else if up {
-            ZStack {
-                Circle().fill(hc("E9DEC6")).overlay(Circle().strokeBorder(hc("C9B992"), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.45), radius: 3, y: 2).shadow(color: hc("3CE678").opacity(0.45), radius: 5)
-                Circle().fill(hc("14130F")).padding(5)
-                Circle().fill(RadialGradient(gradient: Gradient(stops: [.init(color: hc("CFFFE0"), location: 0), .init(color: hc("5DF08E"), location: 0.22),
-                                                                         .init(color: hc("18C25A"), location: 0.55), .init(color: hc("0A7A35"), location: 1)]),
-                                             center: UnitPoint(x: 0.5, y: 0.6), startRadius: 0, endRadius: 19))
-                    .padding(8).shadow(color: hc("50F08C").opacity(0.75), radius: 4)
-                Ellipse().fill(.white.opacity(0.55)).frame(width: 10, height: 5).rotationEffect(.degrees(-20)).offset(x: -7, y: -11)
-            }
-        } else {
-            ZStack(alignment: .topTrailing) {
-                Circle().fill(hc("1C1C1F")).overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)).shadow(color: .black.opacity(0.55), radius: 3, y: 2)
-                Image(ds: "terminal", size: iconSize(20, scaled: false)).foregroundColor(hc("ECECEE")).frame(maxWidth: .infinity, maxHeight: .infinity)
-                Circle().fill(hc("FFB340")).frame(width: 8, height: 8).overlay(Circle().stroke(hc("1C1C1F"), lineWidth: 2)).padding(9)
-            }
-        }
+        let d = scheme == .dark
+        Circle().fill(Color(DS.Palette.bgRaised, dark: d))
+            .overlay(Circle().strokeBorder(Color(DS.Palette.borderSubtle, dark: d), lineWidth: 1))  // elevation's 1px ring
+            .shadow(color: .black.opacity(d ? 0.35 : 0.06), radius: 2, y: 2)
+            .shadow(color: .black.opacity(d ? 0.45 : 0.10), radius: hover ? 14 : 10, y: hover ? 6 : 4)  // elevation 2; 2+ hovered
+            .overlay(Image(ds: up ? "hex" : "terminal", size: iconSize(DS.TypeRole.titleSm.size, scaled: false), medium: true)
+                .foregroundColor(Color(up ? accentSet.fg : DS.Palette.fgDefault, dark: d)))
+            .frame(width: 40, height: 40)
     }
 }
 
-/// The window bar's floor indicator: L1 B1 B2, the level you're on lit and named; click another to go there.
-final class FloorState: ObservableObject { @Published var at = "pipe"; @Published var project = ""; @Published var colors = [String]() }  // project: the window's, centered in the title bar; colors: its squares (none: All projects)
+/// The window bar's floor control (§10.19): a native segmented control, Center, Basement and Pipe, each with its glyph, in
+/// sentence case. No floor colours, no glow: the selected segment is the system's own. On macOS 26 it sits on Liquid Glass.
+final class FloorState: ObservableObject { @Published var at = "pipe"; @Published var project = ""; @Published var colors = [String]() }  // project: the window's, centered in the title bar; colors: its projects' (none: All projects)
 struct Floors: View {
     @ObservedObject var s: FloorState
-    @ObservedObject var c: Core  // its look bumps when the mode or theme changes
-    var light: Bool { _ = c.look; return !theme.dark }
+    @ObservedObject var c: Core  // its look bumps when the appearance changes
     var pick: () -> Void = {}  // the project chip: a terminal window's Open projects, L1's menu
     let go: (String) -> Void
-    static let levels = [("greenlight", "L1", "GREENLIGHT", "#2E6F43", "#FFFFFF", "#56E08B"), ("basement", "B1", "BASEMENT", "#FFB340", "#1C1C1F", "#FFB340"),
-                         ("pipe", "B2", "PIPE", "#A8661C", "#FFF3E0", "#E08A2E")]
+    /// (floor, name, glyph): center = the mark (the hex stands in until step 7), basement = terminal, pipe = a single pane.
+    static let levels = [("greenlight", "Center", "hex"), ("basement", "Basement", "terminal"), ("pipe", "Pipe", "window")]
     var body: some View {
-        HStack(spacing: 10) {
-        if let devName {  // a dev copy: whose it is, dashed so it doesn't read as a floor
-            HStack(spacing: 4) { Image(ds: "hammer", size: iconSize(8, scaled: false), medium: true); Text(devName).lineLimit(1).truncationMode(.middle) }
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
-                .padding(.horizontal, 8).frame(height: 20)
-                .background(RoundedRectangle(cornerRadius: 7).strokeBorder(hexColor(light ? "#5F5F64" : "#9A9AA0"), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                .help("Dev copy of the \(devName) workspace").accessibilityLabel("Dev copy: \(devName)")
-        }
-        HStack(spacing: 2) {
-            ForEach(0..<3, id: \.self) { i in
-                let l = Self.levels[i], on = l.0 == s.at
-                Button { if !on { go(l.0) } } label: {
-                    Text(on ? "\(l.1) · \(l.2)" : l.1).font(.system(size: 9.5, weight: on ? .bold : .semibold, design: .monospaced)).tracking(on ? 1.1 : 0.95)
-                        .foregroundColor(on ? hexColor(l.4) : hexColor(light ? "#5F5F64" : "#9A9AA0"))
-                        .padding(.horizontal, on ? 8 : 7).frame(height: 16)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(on ? hexColor(l.3) : .clear).shadow(color: on ? hexColor(l.5).opacity(0.45) : .clear, radius: 5))
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).help(on ? "You're on \(l.1) · \(l.2.capitalized)" : "Go to \(l.1) · \(l.2.capitalized)")
-                .accessibilityLabel("\(l.1) · \(l.2.capitalized)").accessibilityAddTraits(on ? .isSelected : [])
+        let _ = c.look
+        HStack(spacing: DS.Space.s8) {
+            if let devName {  // a dev copy: a "Dev" tag with the debug glyph, whose workspace in its help
+                Label { Text("Dev") } icon: { Image(ds: "hammer", size: iconSize(DS.TypeRole.labelSm.size, scaled: false)) }
+                    .font(ds(DS.TypeRole.labelSm)).foregroundColor(dim).padding(.horizontal, DS.Space.s4).frame(height: 20)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(surface))
+                    .help("Dev copy of the \(devName) workspace").accessibilityLabel("Dev copy: \(devName)")
             }
-        }.padding(2)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        HStack(spacing: 2) {  // Auto / Light / Dark, in the same track
-            ForEach([("auto", "contrast", "Auto (match macOS)"), ("light", "sun", "Light"), ("dark", "moon", "Dark")], id: \.0) { m in
-                let on = appearanceMode == m.0
-                Button { c.restyle { ud.set(m.0, forKey: "appearance") }; (NSApp.delegate as? App)?.tick() } label: {
-                    Image(ds: m.1, size: iconSize(10, scaled: false), medium: true)
-                        .foregroundColor(hexColor(on ? (light ? "#1D1D1F" : "#F5F5F7") : (light ? "#5F5F64" : "#9A9AA0")))
-                        .frame(width: 22, height: 16)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(on ? Color(white: light ? 0 : 1, opacity: light ? 0.1 : 0.14) : .clear))
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).help(m.2).accessibilityLabel("Appearance: \(m.2)").accessibilityAddTraits(on ? .isSelected : [])
-            }
-        }.padding(2)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
-        }.frame(width: 300 + devTagWidth, height: 28, alignment: .trailing).padding(.trailing, 10)
+            FloorSegments(at: s.at, go: go).fixedSize()
+        }.modifier(ChromeGlass()).frame(width: 300 + devTagWidth, height: 28, alignment: .trailing).padding(.trailing, DS.Space.s8)
     }
 }
-/// The project chip: the window's projects, centered in the title bar like a title; a click opens the picker.
+/// The floors as an NSSegmentedControl: SwiftUI's segmented picker shows a title or an image, and each floor wants both.
+struct FloorSegments: NSViewRepresentable {
+    let at: String, go: (String) -> Void
+    final class Coord: NSObject { var go: (String) -> Void = { _ in }; @objc func pick(_ c: NSSegmentedControl) { go(Floors.levels[c.selectedSegment].0) } }
+    func makeCoordinator() -> Coord { Coord() }
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let c = NSSegmentedControl(labels: Floors.levels.map(\.1), trackingMode: .selectOne, target: context.coordinator, action: #selector(Coord.pick(_:)))
+        for (i, l) in Floors.levels.enumerated() {
+            c.setImage(DSIcon.image(l.2, size: 16), forSegment: i); c.setImageScaling(.scaleNone, forSegment: i)
+            c.setToolTip("Go to \(l.1)", forSegment: i)
+        }
+        c.segmentStyle = .automatic; c.controlSize = .regular
+        c.setAccessibilityLabel("Floor")
+        return c
+    }
+    func updateNSView(_ c: NSSegmentedControl, context: Context) {
+        context.coordinator.go = { f in if f != at { go(f) } }
+        let i = Floors.levels.firstIndex { $0.0 == at } ?? 0
+        if c.selectedSegment != i { c.selectedSegment = i }
+    }
+}
+/// Liquid Glass for the native control layer only (§5), where the toolchain has it; plain chrome otherwise.
+struct ChromeGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) { content.glassEffect(.regular, in: Capsule()) } else { content }
+    }
+}
+/// The project chip (§10.19): the project's monogram tag, its name in `label` and a chevron, as a quiet button centered in the
+/// title bar; a click opens the picker. All projects shows the grid glyph in place of a monogram.
 struct ProjectChip: View {
     @ObservedObject var s: FloorState
     @ObservedObject var c: Core
-    var light: Bool { _ = c.look; return !theme.dark }
     let pick: () -> Void
     var body: some View {
+        let _ = c.look
         if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
-            Button(action: pick) {  // the chip (design A): its squares, the name, a chevron
-                HStack(spacing: 6) {
-                    if s.colors.isEmpty { Image(ds: "grid", size: iconSize(9, scaled: false)).opacity(0.55) }
-                    ForEach(Array(s.colors.prefix(4).enumerated()), id: \.offset) { RoundedRectangle(cornerRadius: 2.5).fill(hexColor($0.element)).frame(width: 9, height: 9) }
-                    Text(s.project).lineLimit(1).truncationMode(.tail)
-                    Image(ds: "chevron-down", size: iconSize(8, scaled: false), medium: true).opacity(0.6)
-                }.font(.system(size: 11.5, weight: .semibold)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
-                    .padding(.horizontal, 7).frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
+            Button(action: pick) {
+                HStack(spacing: DS.Space.s4) {
+                    Group {
+                        if s.colors.isEmpty { Image(ds: "grid", size: iconSize(DS.TypeRole.caption.size, scaled: false)) }
+                        else { Text(String(s.project.prefix(1)).uppercased()).font(ds(DS.TypeRole.labelSm)) }
+                    }.foregroundColor(dim).frame(width: 18, height: 18).background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(surface))
+                    Text(s.project).font(ds(DS.TypeRole.label)).foregroundColor(fg).lineLimit(1).truncationMode(.tail)
+                    Image(ds: "chevron-down", size: iconSize(9, scaled: false), medium: true).foregroundColor(dim)
+                }.padding(.horizontal, DS.Space.s4).frame(height: DS.Layout.controlHeightSm)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).frame(maxWidth: 260).help("\(s.project) · Show projects…").accessibilityLabel("Projects: \(s.project)")
         }
@@ -142,7 +128,7 @@ func floorBar(_ w: NSWindow, _ f: Floors) {
 struct OrbFace: View {
     @ObservedObject var s: OrbState
     var body: some View {
-        LevelFace(up: s.up, matte: s.matte).frame(width: 50, height: 50).brightness(s.hover ? 0.04 : 0).scaleEffect(s.pressed ? 0.94 : 1).frame(width: 64, height: 64)
+        LevelFace(up: s.up, hover: s.hover).scaleEffect(s.pressed ? 0.97 : 1).frame(width: 64, height: 64)  // the panel leaves room for the shadow
             .contentShape(Circle()).onHover { s.hover = $0 }
             .help(s.up ? "Up to Greenlight Center · ⌘⇧G\nDrag to reposition" : "Down to the Basement (terminal) · ⌘⇧T\nDrag to reposition")
             .accessibilityElement().accessibilityLabel(s.up ? "Go up to Greenlight Center" : "Go down to the Basement").accessibilityAddTraits(.isButton)
@@ -164,7 +150,7 @@ final class RideState: ObservableObject {
 }
 /// The ride: the window you leave shrinks into the orb, the orb flips, the other grows out of the same spot.
 struct RideView: View {
-    let up: Bool, from: Shot, orb: CGPoint, matte: Bool; var face = true
+    let up: Bool, from: Shot, orb: CGPoint; var face = true
     @ObservedObject var s: RideState
     func win(_ w: Shot, _ q: Squash) -> some View {
         VStack(spacing: 0) {
@@ -177,10 +163,10 @@ struct RideView: View {
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
-            ZStack { hc("0A0A0C"); hc("E8E4DA").opacity(s.tone) }.opacity(s.veil)
+            ZStack { Color(DS.Palette.bgCanvas, dark: true); Color(DS.Palette.bgCanvas, dark: false).opacity(s.tone) }.opacity(s.veil)
             win(from, s.from)
             if let t = s.toShot { win(t, s.to) }
-            if face { LevelFace(up: s.faceUp, matte: matte).frame(width: 50, height: 50).rotation3DEffect(.degrees(s.flip), axis: (x: 0, y: 1, z: 0)).position(orb) }  // Floating orbs off: the windows still squash and grow, with no orb between them
+            if face { LevelFace(up: s.faceUp).rotation3DEffect(.degrees(s.flip), axis: (x: 0, y: 1, z: 0)).position(orb) }  // Floating orbs off: the windows still squash and grow, with no orb between them
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -592,15 +578,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     lazy var inboxHost: NSHostingView<InboxOverlay> = { let h = NSHostingView(rootView: InboxOverlay(c: greenlight)); h.sizingOptions = []; return h }()
     var settingsSub: AnyCancellable?, inboxSub: AnyCancellable?
     lazy var fluid: WKWebView = makeWeb()
+    /// Web views whose page has drawn once (it said "ready"). §10.1: a window shows only after its web view first renders, so it
+    /// never flashes white or black: until then it's ordered in at alpha 0, and comes up on the page's ready (or after 2 s).
+    var paintedWebs = Set<ObjectIdentifier>()
+    func revealOnPaint(_ w: NSWindow, _ web: WKWebView) {
+        guard !uitest, !w.isVisible, !paintedWebs.contains(ObjectIdentifier(web)) else { return }
+        w.alphaValue = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak w] in w?.alphaValue = 1 }  // a page that never says ready still shows
+    }
+    func painted(_ web: WKWebView) {
+        paintedWebs.insert(ObjectIdentifier(web))
+        guard let w = web.window, w.alphaValue < 1 else { return }
+        DispatchQueue.main.async { [weak w] in w?.alphaValue = 1 }  // the next turn of the run loop: the page's first frame is up
+    }
     func makeWeb() -> WKWebView {
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "mc")  // dashboard.html → app: ready, page
         UITestServer.installErrorCollector(cfg)
         let v = WKWebView(frame: .zero, configuration: cfg)
         v.navigationDelegate = self
-        // Black, not white, while the page repaints during a divider drag or resize.
+        // The canvas, not white or black, while the page repaints during a divider drag or resize (§10.1).
         v.setValue(false, forKey: "drawsBackground")
-        v.underPageBackgroundColor = .black
+        v.underPageBackgroundColor = dsDynamic(DS.Palette.bgCanvas)
         return v
     }
 
@@ -621,11 +620,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: v == "agents" ? 900 : 1000, height: v == "agents" ? 420 : 640),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = title
-        w.backgroundColor = .black
+        w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // §10.1: the canvas, never black
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 320, height: 160)
         w.delegate = self
-        w.appearance = window.appearance
         let web = makeWeb()
         w.contentView = web
         if let u = page("dashboard") { web.loadFileURL(u, allowingReadAccessTo: u.deletingLastPathComponent()) }
@@ -700,8 +698,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = greenlight.name
-        w.backgroundColor = .black
-        w.titleVisibility = .hidden  // the floors say L1 · GREENLIGHT; the title stays for the Window menu and Mission Control
+        w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // §10.1: the canvas, never black
+        w.titleVisibility = .hidden  // the floor bar says Center; the title stays for the Window menu and Mission Control
         w.isReleasedWhenClosed = false  // the close button hides it; the menubar star, Dock or ⌃⌥M bring it back
         w.minSize = NSSize(width: (!greenlight.chatOut && !chatHidden) ? App.paneMinWidth : 480, height: 520)
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
@@ -890,11 +888,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
         guard m.frameInfo.isMainFrame, trustedOrigin(m.webView, for: m.name) else { return }
-        if m.name == "term" { if let b = m.body as? [String: Any] { termMessage(b, from: m.webView) }; return }
+        if m.name == "term" {
+            if let b = m.body as? [String: Any] { if b["cmd"] as? String == "ready", let w = m.webView { painted(w) }; termMessage(b, from: m.webView) }
+            return
+        }
         guard let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let from = m.webView else { return }
         let l = l1(from)  // a second Greenlight Center window: its own projects and chat
         if cmd == "ready", let l { l.pushedRepos = ""; l.pushedChat = ""; l.c.attached = [] }
         if cmd == "ready" {
+            painted(from)
             from.evaluateJavaScript("mc.mode(\(modeJSON(for: from)))")
             let id = ObjectIdentifier(from)
             if canShowDash(for: from) {
@@ -1103,6 +1105,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         _ = menu("File", [("New Window", "appNewWindow", "n"), ("New Greenlight Center Window", "appNewL1", ""), ("Open Projects…", "appOpenProjects", "N")], target: self)
         _ = menu("Edit", [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("-", "", ""), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
                           ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")])
+        let look = NSMenu(title: "Appearance")  // View › Appearance: the same choice as Settings › Appearance (§10.19)
+        for (i, (_, t)) in Self.appearances.enumerated() {
+            let it = look.addItem(withTitle: t, action: #selector(appAppearanceMenu(_:)), keyEquivalent: ""); it.target = self; it.tag = i
+        }
+        let view = NSMenu(title: "View")
+        view.addItem(withTitle: "Appearance", action: nil, keyEquivalent: "").submenu = look
+        bar.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = view
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
                                             ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"), (micMenuTitle(muted: false), "appMuteMic", "M"),
                                             ("Up to Greenlight Center", "appGoUp", "G"), ("Basement (Terminal)", "appToggleTerm", "T"), ("Jump to Terminal…", "appJumpTerm", "j"),
@@ -1229,7 +1238,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.voice.toggleMic()
     }
     /// The menu items aimed at the app: only the mic's depends on state (off while voice mode is; its title says what it does now).
+    /// The appearance choices: (stored value, menu and picker title).
+    static let appearances = [("auto", "System"), ("light", "Light"), ("dark", "Dark")]
+    @objc func appAppearanceMenu(_ item: NSMenuItem) {
+        guard Self.appearances.indices.contains(item.tag) else { return }
+        greenlight.restyle { ud.set(Self.appearances[item.tag].0, forKey: "appearance") }; tick()
+    }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(appAppearanceMenu(_:)) { item.state = Self.appearances.indices.contains(item.tag) && Self.appearances[item.tag].0 == appearanceMode ? .on : .off; return true }
         guard item.action == #selector(appMuteMic) else { return true }
         item.title = micMenuTitle(muted: greenlight.voice.micMuted)
         return greenlight.voice.on
@@ -1248,10 +1264,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     let split = Split()
     /// ponytail: NSSplitView leaves its old divider drawn over the web view after a move; draw none, the pane draws its own edge.
     class Split: NSSplitView { override var dividerColor: NSColor { .clear } }
-    let chatEdge = NSBox()  // the chat pane's 1px left edge in the theme's line color; tick() follows theme changes
+    let chatEdge = NSBox()  // the chat pane's 1px left edge
     lazy var chatSlot: NSView = {
         let v = NSView(), edge = chatEdge
-        edge.boxType = .custom; edge.titlePosition = .noTitle; edge.borderWidth = 0; edge.fillColor = theme.blend(0.1); edge.translatesAutoresizingMaskIntoConstraints = false
+        edge.boxType = .custom; edge.titlePosition = .noTitle; edge.borderWidth = 0; edge.fillColor = dsDynamic(DS.Palette.borderSubtle); edge.translatesAutoresizingMaskIntoConstraints = false  // §10.1: one hairline, border.subtle, following the appearance
         v.addSubview(edge, positioned: .above, relativeTo: nil)
         NSLayoutConstraint.activate([edge.leadingAnchor.constraint(equalTo: v.leadingAnchor), edge.widthAnchor.constraint(equalToConstant: 1),
                                      edge.topAnchor.constraint(equalTo: v.topAnchor), edge.bottomAnchor.constraint(equalTo: v.bottomAnchor)])
@@ -1304,7 +1320,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                          backing: .buffered, defer: false)
         w.title = greenlight.name
         w.titlebarAppearsTransparent = true
-        w.backgroundColor = theme.bg
+        w.backgroundColor = dsDynamic(DS.Palette.bgSurface)  // the chat pane's own surface
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 340, height: 360)
         w.contentView = NSView()
@@ -1424,8 +1440,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func makeL1(_ id: Int, only: [String]?, from: NSWindow? = nil) -> L1 {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
-        w.backgroundColor = .black; w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
-        w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self; w.appearance = window.appearance
+        w.backgroundColor = dsDynamic(DS.Palette.bgCanvas); w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
+        w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
         c.follow(greenlight)
         c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
@@ -1561,8 +1577,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.title = "Terminal"
         w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
-        w.backgroundColor = theme.bg
-        w.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)  // tick keeps it in step with the switch
+        w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // the page's band takes over once it loads
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 300, height: 160)
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
@@ -1694,6 +1709,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func basement() {
         upstairs = false
+        if let web = termWindow.contentView as? WKWebView { revealOnPaint(termWindow, web) }
         presentWindow(termWindow)
         if !uitest { (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.focus()") }
         syncOrbs()
@@ -2008,7 +2024,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
         let orb = CGPoint(x: c.x - S.minX, y: S.maxY - c.y)
         func shot(_ w: NSWindow, _ img: NSImage?) -> Shot {
-            Shot(img: img, band: w === window ? NSColor(white: 0.93, alpha: 1) : w.backgroundColor,
+            Shot(img: img, band: w === window ? DS.Palette.bgChrome.ns(dark: isDark) : w.backgroundColor,
                  rect: CGRect(x: w.frame.minX - S.minX, y: S.maxY - w.frame.maxY, width: w.frame.width, height: w.frame.height), top: w.frame.height - w.contentLayoutRect.height)
         }
         let k = reduce ? 1 : greenlight.rideTime / 0.6  // every beat below is written for a 0.6s ride
@@ -2020,7 +2036,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let s = RideState(); s.tone = up ? 0 : 1; s.faceUp = up
             let p = NSPanel(contentRect: S, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true; p.level = .floating
-            p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, matte: greenlight.orbStyle == "matte", face: !greenlight.orbsHidden, s: s))
+            p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, face: !greenlight.orbsHidden, s: s))
             p.setFrame(S, display: true); p.orderFrontRegardless(); rideWin = p
             hideFloaters()
             termWindow.parent?.removeChildWindow(termWindow)
@@ -2122,17 +2138,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if hintStale { (hintCore ?? greenlight).hint = "" }  // a window hidden or moved mid-hover: drop the hint
         if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
         if case let t = l1Title(l1Floor.project), window.title != t { window.title = t }  // the Window menu tells the Greenlight Centers apart
-        if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // Auto: macOS flipped, so every view re-renders
-        let look = NSAppearance(named: theme.dark ? .darkAqua : .aqua)  // the window bar's switch (Auto follows macOS)
-        for w in termWins.values where w.appearance?.name != look?.name { w.appearance = look }
+        if NSApp.appearance?.name != appAppearance?.name { NSApp.appearance = appAppearance }  // Settings › Appearance: System, Light or Dark, every window
+        if pushedDark != isDark { pushedDark = isDark; greenlight.look += 1 }  // the appearance flipped, so every view re-renders
         if pushedTerm != theme.name { pushedTerm = theme.name  // the terminals' chrome follows the mode; their screens stay as they are
             let m = termMode; termWebs.forEach { $0.callJS("window.term && term.mode", [m["mode"]!, m["lightBg"]!, m["lightFg"]!]) }
             if projectsLoaded { refreshProjects() } }
-        if fluid.appearance?.name != look?.name { fluid.appearance = look }
-        if window.appearance?.name != look?.name { window.appearance = look }  // else the full-screen title bar drops in white
-        if chatWindow.appearance?.name != look?.name { chatWindow.appearance = look }
-        if chatEdge.fillColor != theme.blend(0.1) { chatEdge.fillColor = theme.blend(0.1) }
-        for w in viewWindows.values where w.appearance?.name != look?.name { w.appearance = look; w.contentView?.appearance = look }
         if greenlight.run != nil { greenlight.now = Date() }
         greenlight.checkIn()
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
@@ -2146,12 +2156,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         syncDashPaths()
         for l in l1s.values {  // the other Greenlight Center windows: their own projects, their chat always in its pane
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
-            if l.w.appearance?.name != look?.name { l.w.appearance = look; l.web.appearance = look }
             if case let t = l1Title(l.floor.project), l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
             if l.c.run == nil, l.c.connected != greenlight.connected { l.c.connected = greenlight.connected }  // ponytail: same host, so the main chat's online light stands in until this one runs a turn
         }
-        if orbState.matte != (greenlight.orbStyle == "matte") { orbState.matte = greenlight.orbStyle == "matte" }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
         if pushedSlide != greenlight.sidebarSlide { pushedSlide = greenlight.sidebarSlide; termWebs.forEach { $0.evaluateJavaScript("window.term && term.slide(\(greenlight.sidebarSlide))") } }
@@ -2166,7 +2174,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let js = String(data: (try? JSONSerialization.data(withJSONObject: [stack])) ?? Data(), encoding: .utf8) ?? "[]"
             broadcast("(s => { s.setProperty('--mono', \(js)[0]); \(colors) })(document.documentElement.style)")
         }
-        if chatWindow.backgroundColor != theme.bg { chatWindow.backgroundColor = theme.bg }
         if chatWindow.title != greenlight.name { chatWindow.title = greenlight.name }
         guard let b = item?.button else { return }
         // Touch the status item only on change: any menubar update keeps a full-screen window's title bar pinned down.
@@ -2185,20 +2192,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var starKey = ""
 
-    /// The theme's colors as the dashboard's --mc-* variables; its :root falls back to its own palette without them.
-    /// The default themes send none, so the dashboard looks as designed. The accent tints chrome only, never a state color.
+    /// What a page needs to wear the app's choices (§2.3, §2.5): its data-accent, which the pages' token sets pick the accent up
+    /// from, and --mc-* only for a choice that isn't the default: a terminal theme of your own (its surfaces and text) or an accent
+    /// other than Signal (for the pages not yet on the tokens). The defaults send none, so every page looks as designed.
     func themeVars() -> String {
         func css(_ c: NSColor) -> String {
             let c = c.usingColorSpace(.sRGB) ?? c
             return String(format: "#%02X%02X%02X", Int(c.redComponent * 255 + 0.5), Int(c.greenComponent * 255 + 0.5), Int(c.blueComponent * 255 + 0.5))
         }
-        let own = theme.name != (theme.dark ? "Greenlight" : "GitHub Light"), a = accentHex.map(hex) ?? theme.accent
-        let sa = a.usingColorSpace(.sRGB) ?? a, light = sa.redComponent * 0.299 + sa.greenComponent * 0.587 + sa.blueComponent * 0.114 > 0.6
-        let vars: [(String, NSColor?)] = [("bg", theme.bg), ("surface", theme.blend(0.05)), ("raised", theme.blend(0.1)),
-                                          ("text", theme.fg), ("text2", theme.blend(0.82)), ("dim", theme.blend(0.6))].map { ($0.0, own ? $0.1 : nil) }
-        let acc: [(String, String?)] = own || accentHex != nil ? [("accent", css(a)), ("on-accent", light ? "#111113" : "#FFFFFF")] : [("accent", nil), ("on-accent", nil)]
-        return (vars.map { ($0.0, $0.1.map(css)) } + acc)
-            .map { k, v in v.map { "s.setProperty('--mc-\(k)', '\($0)');" } ?? "s.removeProperty('--mc-\(k)');" }.joined(separator: " ")
+        let own = theme.name != (theme.dark ? "Greenlight" : "GitHub Light"), a = accentSet, tinted = a.id != "signal"
+        let vars: [(String, String?)] = [("bg", theme.bg), ("surface", theme.blend(0.05)), ("raised", theme.blend(0.1)),
+                                         ("text", theme.fg), ("text2", theme.blend(0.82)), ("dim", theme.blend(0.6))].map { ($0.0, own ? css($0.1) : nil) }
+            + [("accent", tinted ? "#" + dsHex(a.solid, dark: isDark) : nil), ("on-accent", tinted ? "#" + dsHex(a.onSolid, dark: isDark) : nil)]
+        return "document.documentElement.dataset.accent = '\(a.id)'; "  // one of three fixed ids
+            + vars.map { k, v in v.map { "s.setProperty('--mc-\(k)', '\($0)');" } ?? "s.removeProperty('--mc-\(k)');" }.joined(separator: " ")
     }
 
     @objc func click() {
@@ -2363,6 +2370,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         upstairs = true
         greenlight.unread = 0
         tick()
+        revealOnPaint(window, fluid)
         presentWindow(window)
         placeChat()
     }

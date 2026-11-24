@@ -226,7 +226,7 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
 
 /// "#RRGGBB" from the dashboard's theme; gray if it isn't one.
 func hexColor(_ s: String) -> Color {
-    guard s.hasPrefix("#"), s.count == 7, Int(s.dropFirst(), radix: 16) != nil else { return Theme.queued }
+    guard s.hasPrefix("#"), s.count == 7, Int(s.dropFirst(), radix: 16) != nil else { return StatusInk.queued }
     return Color(nsColor: hex(String(s.dropFirst())))
 }
 
@@ -826,7 +826,7 @@ func defaultLook(dark d: Bool) -> Look {
     let p = DS.Palette.self
     return Look(id: "default", name: "Default", page: dsHex(p.bgCanvas, dark: d), stage: dsHex(p.bgSurface, dark: d), card: dsHex(p.elementRest, dark: d),
                 text: dsHex(p.fgDefault, dark: d), text2: dsHex(p.fgMuted, dark: d), dim: dsHex(p.fgMuted, dark: d), line: dsHex(p.borderSubtle, dark: d),
-                accent: dsHex(p.accentSolid, dark: d), link: dsHex(p.accentFg, dark: d), you: dsHex(p.accentFg, dark: d), font: sansCSS, dark: d)
+                accent: dsHex(accentSet.solid, dark: d), link: dsHex(accentSet.fg, dark: d), you: dsHex(DS.Palette.accentFg, dark: d), font: sansCSS, dark: d)
 }
 /// Phosphor: always the dark scales. Signal's text step on the darkest neutral, its subtle step for wells, its solid for rules.
 let phosphorLook: Look = {
@@ -870,7 +870,7 @@ extension Looked {
     var fg: Color { hx(lk.text) }
     var accent: Color { hx(lk.accent) }
     var link: Color { hx(lk.link) }
-    var onAccent: Color { mono ? page : Color(DS.Palette.accentOnSolid, dark: lk.dark) }
+    var onAccent: Color { mono ? page : Color(accentSet.onSolid, dark: lk.dark) }
     var card: Color { hx(lk.card) }
     var surface: Color { hx(lk.card) }
     var line: Color { hx(lk.line) }

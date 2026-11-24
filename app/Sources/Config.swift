@@ -158,23 +158,23 @@ struct Theme {
     func blend(_ f: CGFloat) -> NSColor { bg.blended(withFraction: f, of: fg) ?? fg }
     func mix(_ f: CGFloat) -> Color { Color(nsColor: blend(f)) }
     var dark: Bool { (bg.usingColorSpace(.sRGB)?.brightnessComponent ?? 0) < 0.5 }
+}
 
-    // The dashboard's tokens (dashboard.html :root), so the native panes and the HTML share one scale.
-    static let r1: CGFloat = 6, r2: CGFloat = 10, r3: CGFloat = 14, r4: CGFloat = 20  // --r-1…4: controls, cards, sheets
-    static let fs1: CGFloat = 11, fs2: CGFloat = 12, fs3: CGFloat = 13, fs4: CGFloat = 15, fs5: CGFloat = 18, fs6: CGFloat = 22  // --fs-1…6, before sys()'s size setting
-    static let glyph: CGFloat = 9  // small icons in a fixed frame (close, chevron, check)
-    static let sp1: CGFloat = 4, sp2: CGFloat = 8, sp3: CGFloat = 12, sp4: CGFloat = 16, sp5: CGFloat = 24, sp6: CGFloat = 32  // --sp-1…6, 4pt grid
-    /// State colors, dark | light, as the dashboard's. Never the accent: orange always means "needs you", red "crashed".
-    static func state(_ d: String, _ l: String) -> Color { Color(nsColor: hex(theme.dark ? d : l)) }
-    static var needs: Color { state("FF9F0A", "F08A00") }     // --orange: needs you
-    static var yourMove: Color { state("FFD60A", "E6B800") }  // --yellow
-    static var working: Color { state("0A84FF", "0A7AFF") }   // --blue
-    static var crashed: Color { state("FF453A", "E5392F") }   // --red
-    static var queued: Color { state("8E8E93", "8E8E93") }    // --gray
-    static var done: Color { state("30D158", "2BA84A") }      // --green
-    static var needsInk: Color { state("FF9F0A", "A85A00") }  // --orange-ink / --red-ink: state text on a card
-    static var crashedInk: Color { state("FF6B61", "C62828") }
-    static var workingInk: Color { state("6FB4FF", "0062CC") }  // --blue-ink: Working text; Theme.working stays the dot and tint
+/// Small icons in a fixed frame (close, chevron, check), before iconSize().
+let glyphSize: CGFloat = 9
+/// Status colours (brand/DESIGN.md §2.4) in the app's appearance: one meaning each, never the accent. The solid fills are for
+/// the states asking for you (needs, crashed); the rest use their text step. Queued, waiting and done are neutral.
+enum StatusInk {
+    static func c(_ t: DSColor) -> Color { Color(t, dark: isDark) }
+    static var needs: Color { c(DS.Palette.statusNeedsSolid) }
+    static var yourMove: Color { c(DS.Palette.statusYourMoveFg) }
+    static var working: Color { c(DS.Palette.statusWorkingFg) }
+    static var crashed: Color { c(DS.Palette.statusCrashedSolid) }
+    static var queued: Color { c(DS.Palette.statusQueuedFg) }
+    static var done: Color { c(DS.Palette.statusDoneFg) }
+    static var needsInk: Color { c(DS.Palette.statusNeedsFg) }
+    static var crashedInk: Color { c(DS.Palette.statusCrashedFg) }
+    static var workingInk: Color { c(DS.Palette.statusWorkingFg) }
 }
 
 func hex(_ s: String) -> NSColor {
@@ -206,7 +206,19 @@ let themes = [
     Theme("Rosé Pine Dawn", "FAF4ED", "575279", "D7827E", "286983"),
     Theme("Tokyo Night Day", "E1E2E7", "3760BF", "2E7DE9", "2E7DE9"),
 ]
-let accents = ["F5A524", "FF7A45", "F7768E", "FF79C6", "BD93F9", "7AA2F7", "2AC3DE", "9ECE6A"]
+/// The accents (brand/DESIGN.md §2.3): Signal (the default), Teal and Graphite. Each is the 12-step scale's semantic set.
+struct AccentSet { let id, name: String; let solid, hover, fg, subtle, ring, onSolid: DSColor }
+let accents = [
+    AccentSet(id: "signal", name: "Signal", solid: DS.Palette.accentSolid, hover: DS.Palette.accentHover, fg: DS.Palette.accentFg,
+              subtle: DS.Palette.accentSubtle, ring: DS.Palette.accentRing, onSolid: DS.Palette.accentOnSolid),
+    AccentSet(id: "teal", name: "Teal", solid: DS.AccentTeal.solid, hover: DS.AccentTeal.hover, fg: DS.AccentTeal.fg,
+              subtle: DS.AccentTeal.subtle, ring: DS.AccentTeal.ring, onSolid: DS.AccentTeal.onSolid),
+    AccentSet(id: "graphite", name: "Graphite", solid: DS.AccentGraphite.solid, hover: DS.AccentGraphite.hover, fg: DS.AccentGraphite.fg,
+              subtle: DS.AccentGraphite.subtle, ring: DS.AccentGraphite.ring, onSolid: DS.AccentGraphite.onSolid),
+]
+/// An accent from before the redesign (one of eight swatch hexes, or nil for the theme's own) to the nearest of the three
+/// (§2.3): Cyan, Blue and Purple become Teal; Green, Amber, Orange, Rose, Pink and the theme's own become Signal.
+func migratedAccent(_ oldHex: String?) -> String { ["2AC3DE", "7AA2F7", "BD93F9"].contains(oldHex?.uppercased() ?? "") ? "teal" : "signal" }
 /// Fonts from terminal apps; only the installed ones are offered.
 let fontChoices = ["System", "SF Mono", "Menlo", "Monaco", "JetBrains Mono", "Fira Code", "Cascadia Code", "Hack", "Source Code Pro",
                    "IBM Plex Mono", "Iosevka", "Berkeley Mono", "Geist Mono", "Inter", "Helvetica Neue", "Avenir Next"]
@@ -215,25 +227,32 @@ let fontChoices = ["System", "SF Mono", "Menlo", "Monaco", "JetBrains Mono", "Fi
 func named(_ key: String, _ fallback: String) -> Theme { themes.first { $0.name == (ud.string(forKey: key) ?? fallback) } ?? themes[0] }
 var darkTheme = named("darkTheme", "Greenlight")
 var lightTheme = named("lightTheme", "GitHub Light")
-/// The window bar's Auto/Light/Dark switch: every floor wears lightTheme or darkTheme; Auto follows macOS (the app's own appearance, which no window overrides).
+/// Settings › Appearance › Appearance (§2.2): "auto" follows macOS (the default); "light" or "dark" overrides it for every
+/// window, through NSApp.appearance. No window or floor forces its own.
 var appearanceMode: String { ud.string(forKey: "appearance") ?? "auto" }
+var appAppearance: NSAppearance? { appearanceMode == "auto" ? nil : NSAppearance(named: appearanceMode == "dark" ? .darkAqua : .aqua) }
 var isDark: Bool { appearanceMode == "auto" ? NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua : appearanceMode == "dark" }
+/// The terminal canvas's theme for the current appearance (§2.5: named themes style the terminal only).
 var theme: Theme { isDark ? darkTheme : lightTheme }
-var accentHex = ud.string(forKey: "accent")  // nil = the theme's own
+/// The accent's id ("signal", "teal", "graphite"); a stored pre-redesign swatch migrates once.
+var accentName = ud.string(forKey: "accentName").flatMap { n in accents.contains { $0.id == n } ? n : nil } ?? migratedAccent(ud.string(forKey: "accent"))
+var accentSet: AccentSet { accents.first { $0.id == accentName } ?? accents[0] }
 var chatFont = ud.string(forKey: "chatFont") ?? "System"
 var codeFont = ud.string(forKey: "codeFont") ?? "SF Mono"
 var fontSize = ud.object(forKey: "fontSize") as? Double ?? 13
 
-var accent: Color { Color(nsColor: accentHex.map(hex) ?? theme.accent) }
-var bg: Color { Color(nsColor: theme.bg) }
-var fg: Color { Color(nsColor: theme.fg) }
-var card: Color { theme.mix(0.05) }
-var surface: Color { theme.mix(0.07) }
-var line: Color { theme.mix(0.1) }
-var edge: Color { theme.mix(0.17) }
-var dim: Color { theme.mix(0.6) }
-var sub: Color { theme.mix(0.82) }
-var bubble: Color { Color(nsColor: theme.bubble) }
+// The app's native colours: the semantic tokens (§2) in the current appearance.
+var accent: Color { Color(accentSet.solid, dark: isDark) }
+var bg: Color { Color(DS.Palette.bgCanvas, dark: isDark) }
+var fg: Color { Color(DS.Palette.fgDefault, dark: isDark) }
+var card: Color { Color(DS.Palette.bgSurface, dark: isDark) }
+var surface: Color { Color(DS.Palette.elementRest, dark: isDark) }
+var line: Color { Color(DS.Palette.borderSubtle, dark: isDark) }
+var edge: Color { Color(DS.Palette.borderDefault, dark: isDark) }
+var dim: Color { Color(DS.Palette.fgMuted, dark: isDark) }
+var sub: Color { Color(DS.Palette.fgMuted, dark: isDark) }
+var faint: Color { Color(DS.Palette.fgFaint, dark: isDark) }
+var bubble: Color { Color(DS.Palette.elementRest, dark: isDark) }
 
 /// `.system(size:)` at the chosen size; `design: .monospaced` uses the code font. Interface chrome stays in the system font.
 /// The box an icon gets beside text of `pt` points (brand/DESIGN.md §9): about a quarter more than the type size, as SF Symbols
@@ -254,6 +273,10 @@ func ds(_ t: DSType, mono: Bool = false, face: String = "System") -> Font { sys(
 extension Color {
     /// A colour token in the given appearance.
     init(_ c: DSColor, dark: Bool) { self.init(nsColor: c.ns(dark: dark)) }
+}
+/// A colour token as an NSColor that follows whatever appearance it's drawn in (window backgrounds, AppKit views).
+func dsDynamic(_ c: DSColor) -> NSColor {
+    NSColor(name: nil) { a in c.ns(dark: a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) }
 }
 /// A colour token as "RRGGBB", for the places that still carry colours as hex strings (Look).
 func dsHex(_ c: DSColor, dark: Bool) -> String { String(format: "%06X", dark ? c.dark : c.light) }
