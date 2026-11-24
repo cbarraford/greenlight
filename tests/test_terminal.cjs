@@ -528,13 +528,13 @@ test("auto names: quiet output asks once; a name you type stops it", async page 
 
 test("tab icon: Claude's ✳ title, tmux's ⌬ for codex (not shown in the name), else the shell", async page => {
   const id = (await posts(page, "open"))[0].id, icon = () => page.$eval("#tabs .tab.on svg", e => e.outerHTML);
-  assert.match(await icon(), /M4 17l6-5/);
+  assert.match(await icon(), /data-icon="terminal"/);
   await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;⌬ mr-5162\x07")))), id);
   await page.waitForFunction(() => document.querySelector("#tabs .tab.on .nm").textContent === "mr-5162");
-  assert.match(await icon(), /M12 2.5l8.2/);
+  assert.match(await icon(), /data-icon="openai"/);
   await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;✳ fix it\x07")))), id);
   await page.waitForFunction(() => document.querySelector("#tabs .tab.on .nm").textContent === "fix it");
-  assert.match(await icon(), /D97757/);
+  assert.match(await icon(), /data-icon="claude"[^>]*|ic-claude/);
   // the sidebar row renames too, and a typed name sticks: titles and auto-naming never overwrite it
   await page.dblclick("#tree .tm.on .wn"); await page.waitForSelector("#tree .tm input:focus");
   await page.keyboard.type("Codex review"); await page.keyboard.press("Enter");
@@ -880,7 +880,7 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   assert.deepEqual(await page.evaluate(() => tabs.filter(t => t.auto).map(t => [t.name, t.auto.kind, t.ws])), [["Fix CI · !7", "ci", "/w/ar"]]);
   assert.equal(await page.evaluate(() => cur.key), was, "focus stays where it was");
   assert.equal((await posts(page, "in")).pop().d, "claude $'unattended: fix'\r");
-  assert.equal(await page.$$eval("#side svg path[d^='M9.2']", x => x.length), 1, "the bolt");
+  assert.equal(await page.$$eval('#side svg[data-icon="bolt"]', x => x.length), 1, "the bolt");
   await page.evaluate(t => term.workspaces(t), w([ci]));
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 1, "once per head");
   await page.evaluate(() => { paneOf(tabs.find(t => t.auto))[0].out = Date.now() });

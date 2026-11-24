@@ -373,11 +373,11 @@ test("hover card footer: one glyph for the agent (a live one outranks a crash), 
     const g = document.querySelector("#hcard .hf .gl"), l = document.querySelector("#hcard .hf .lk");
     return [g && g.getAttribute("class"), l && l.getAttribute("href"), document.querySelector("#hcard .hfx").textContent] }, [agent, state, mr]);
   const mr = {iid: 12, ref: "!12", state: "opened", title: "x", web_url: "https://gl/12"};
-  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["gl idle", "https://gl/12", "Claude is idle"]);
-  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["gl working", "https://gl/12", "Claude is working"]);
-  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["gl waiting", null, "Codex is waiting"]);
-  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["gl crashed", null, "Claude crashed"]);
-  assert.deepEqual(await foot({}, "crashed", null), ["gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["dsi gl idle", "https://gl/12", "Claude is idle"]);
+  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["dsi gl working", "https://gl/12", "Claude is working"]);
+  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["dsi gl waiting", null, "Codex is waiting"]);
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["dsi gl crashed", null, "Claude crashed"]);
+  assert.deepEqual(await foot({}, "crashed", null), ["dsi gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
   assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
 });
 
@@ -576,7 +576,7 @@ test("Agents strip: working and waiting agents on 'needs' and 'raised' workspace
   const pills = () => page.$$eval(".agents .shead .pill", es => es.map(e => e.textContent));
   const live = ["ask-wait", "ask-work", "back-ask", "back-up", "quiet-work", "raise-wait", "raise-work"];
   assert.deepEqual(await cards(), live, "agents on 'needs' and 'raised' workspaces show");
-  assert.deepEqual(await pills(), ["Working 4", "3 awaiting answer"], "the pills count the cards");
+  assert.deepEqual(await pills(), ["Working 4", "3 need you"], "the pills count the cards");
   assert.equal(await page.textContent(".agents .crash"), "3 crashed", "the chip counts crashed workspaces, as the footer does");
   assert.equal(await page.evaluate(() => counts().crashed), 3, "counts(), which feeds the map's legend and the footer, agrees");
   assert.equal(await page.locator(".agents .shead .muted").count(), 0, "no 'No agents working' line while agents work");
@@ -589,14 +589,14 @@ test("Agents strip: working and waiting agents on 'needs' and 'raised' workspace
   assert.deepEqual(await page.$$eval("#main .cell:not(.dim)", es => es.map(e => e.dataset.name).sort()), ["back-ask", "back-up", "down"], "the chip lights the workspaces it counted");
   assert.deepEqual(await cards(), ["back-ask", "back-up"], "the ones whose agent is live again keep their cards");
   assert.equal(await page.textContent(".agents .acard[data-name='back-ask'] .open"), "Answer", "a waiting agent on a crashed workspace is asked, not inspected");
-  assert.deepEqual(await pills(), ["Working 1", "1 awaiting answer"], "and the pills follow the chip's filter");
+  assert.deepEqual(await pills(), ["Working 1", "1 needs you"], "and the pills follow the chip's filter");
   await page.evaluate(() => { ui.q = ""; render() });  // clear the chip's search
   await page.click(".agents button.fold");
   assert.equal(await page.locator(".agents .acard").count(), 0, "Hide folds them");
   assert.match(await page.textContent(".agents button.fold"), /^Show 7 agents\b/, "the fold counts them all");
   await page.evaluate(() => { ui.agentsFolded = false; ui.q = "raise-"; renderMain() });
   assert.deepEqual(await cards(), ["raise-wait", "raise-work"], "a search narrows the cards");
-  assert.deepEqual(await pills(), ["Working 1", "1 awaiting answer"], "and the pills with them");
+  assert.deepEqual(await pills(), ["Working 1", "1 needs you"], "and the pills with them");
   assert.equal(await page.locator(".agents .shead .muted").count(), 0, "no empty line while some match");
   await page.evaluate(() => { ui.q = "zzz-nothing"; renderMain() });
   assert.equal(await page.textContent(".agents .shead .muted"), "No agents match the search", "a search that hides them isn't 'No agents working'");
@@ -606,7 +606,7 @@ test("Agents strip: working and waiting agents on 'needs' and 'raised' workspace
   try {  // the detached Agents window: the same agents, plus the crashed ones as cards
     await det.evaluate(s => { window.mc.update(s); ui.only = "agents"; ui.agentsFolded = false; render() }, {...SNAP, pucks});
     assert.deepEqual(await det.$$eval(".agents .acard", es => es.map(e => e.dataset.name).sort()), [...live, "down"].sort());
-    assert.deepEqual(await det.$$eval(".agents .shead .pill", es => es.map(e => e.textContent)), ["Working 4", "3 awaiting answer"]);
+    assert.deepEqual(await det.$$eval(".agents .shead .pill", es => es.map(e => e.textContent)), ["Working 4", "3 need you"]);
     await det.evaluate(() => { ui.q = "down"; renderMain() });
     assert.deepEqual(await det.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["down"], "a search can leave only a crashed card");
     await det.evaluate(() => { ui.q = "zzz-nothing"; renderMain() });
@@ -821,7 +821,7 @@ test("bridge: the app's theme colors restyle surfaces and chrome, never the stat
   await page.evaluate(() => { const s = document.documentElement.style; s.setProperty("--mc-bg", "#2E3440"); s.setProperty("--mc-accent", "#FF0000"); s.setProperty("--mc-on-accent", "#111113") });
   const after = await look();
   assert.equal(after.bg, "#2E3440");
-  assert.equal(before.btn, "rgb(46, 111, 67)", "no theme: the primary button is Sage green");
+  assert.equal(before.btn, "rgb(0, 130, 58)", "no theme: the primary button is Signal green (brand/DESIGN.md accent.solid, light)");
   assert.equal(after.btn, "rgb(255, 0, 0)", "the primary button takes the theme accent");
   assert.deepEqual([after.orange, after.red, after.blue], [before.orange, before.red, before.blue], "a theme accent changed a state color");
 });

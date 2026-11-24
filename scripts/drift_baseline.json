@@ -1,0 +1,70 @@
+{
+ "app/Sources/App.swift": {
+  "colour": 70,
+  "font_size": 3,
+  "radius": 10
+ },
+ "app/Sources/Core.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/Icons.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/Models.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/UITest.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/Views.swift": {
+  "colour": 25,
+  "font_size": 4,
+  "radius": 20
+ },
+ "app/Sources/Vim.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/VoiceEngine.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/VoiceViews.swift": {
+  "colour": 106,
+  "font_size": 44,
+  "radius": 6
+ },
+ "app/Sources/main.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/dashboard.html": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 5,
+  "shadow": 1
+ },
+ "app/stage.html": {
+  "colour": 24,
+  "font_size": 68,
+  "radius": 15,
+  "shadow": 0
+ },
+ "app/terminal.html": {
+  "colour": 136,
+  "font_size": 145,
+  "radius": 124,
+  "shadow": 5
+ }
+}

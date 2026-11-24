@@ -10,7 +10,11 @@ Run locally (`make lint`) and in CI to prevent AI-introduced regressions:
   6. No inline event handlers inside app/*.html (except avatar fallback).
   7. Valid JS syntax across inline `<script>` blocks in app/*.html and `tests/*.cjs` / `tests/*.js`.
   8. No dynamic JS execution (`eval`, `new Function`, `document.write`) or `debugger` in app/*.html.
+  9. Design-token drift ratchet: literal colours, font sizes, radii and shadows in app/*.html (outside the
+     generated `ds-tokens` block) and in Swift (outside Config.swift and Tokens.swift) may only go down from
+     scripts/drift_baseline.json. Lower the baseline with `check_safety.py --update-drift` once they fall.
 """
+import json
 import os
 import re
 import shutil
@@ -236,6 +240,70 @@ def check_js_unsafe_patterns(root=ROOT):
     return errs
 
 
+DRIFT_BASELINE = "scripts/drift_baseline.json"
+DRIFT_HTML = {
+    "colour": r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![\w-])|\b(?:rgba?|hsla?|oklch)\(",
+    "font_size": r"font-size:\s*[\d.]+px|\bfont:\s*(?:\d{3}\s+)?[\d.]+px",
+    "radius": r"border-radius:\s*[\d.]+(?:px|%)",
+    # a shadow drawn only with tokens (a hairline, a leading edge, a ring) is fine; one with a literal colour is drift
+    "shadow": r"box-shadow:(?![^;}]*var\()\s*(?!none)[^;}]+|drop-shadow\((?![^)]*var\()",
+}
+DRIFT_SWIFT = {
+    "colour": r'"#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"|\bColor\((?:red|white|hue):|NSColor\((?:srgbRed|red|white|calibrated\w*|device\w*):',
+    "font_size": r"\.system\(size:",
+    "radius": r"cornerRadius:\s*[\d.]+",
+}
+DRIFT_SWIFT_EXEMPT = {"Config.swift", "Tokens.swift"}  # where the tokens themselves live
+TOKEN_BLOCK = re.compile(r'<style id="ds-tokens">.*?</style><!-- /ds-tokens -->', re.S)
+
+
+def drift_counts(root=ROOT):
+    """{file: {kind: count}} of literal design values that bypass the tokens."""
+    root = Path(root)
+    out = {}
+    for page in sorted((root / "app").glob("*.html")):
+        text = TOKEN_BLOCK.sub("", page.read_text(encoding="utf-8", errors="replace"))
+        out[str(page.relative_to(root))] = {k: len(re.findall(p, text)) for k, p in DRIFT_HTML.items()}
+    for path in swift_files(root):
+        if path.name in DRIFT_SWIFT_EXEMPT:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        out[str(path.relative_to(root))] = {k: len(re.findall(p, text)) for k, p in DRIFT_SWIFT.items()}
+    return out
+
+
+def check_drift(root=ROOT):
+    """Fail when any file uses more literal design values than its baseline (a missing baseline skips the check)."""
+    base_path = Path(root) / DRIFT_BASELINE
+    if not base_path.is_file():
+        return []
+    base = json.loads(base_path.read_text())
+    errs = []
+    for rel, counts in drift_counts(root).items():
+        for kind, n in counts.items():
+            allowed = base.get(rel, {}).get(kind, 0)
+            if n > allowed:
+                errs.append(f"{rel}: {n} literal {kind} values (baseline {allowed}); use a --ds-* / DS token "
+                            "from brand/DESIGN.md instead")
+    return errs
+
+
+def drift_fell(root=ROOT):
+    """Files and kinds now below their baseline, so the baseline can be lowered."""
+    base_path = Path(root) / DRIFT_BASELINE
+    if not base_path.is_file():
+        return []
+    base = json.loads(base_path.read_text())
+    return [f"{rel} {kind}" for rel, counts in drift_counts(root).items() for kind, n in counts.items()
+            if n < base.get(rel, {}).get(kind, 0)]
+
+
+def update_drift(root=ROOT):
+    path = Path(root) / DRIFT_BASELINE
+    path.write_text(json.dumps(drift_counts(root), indent=1, sort_keys=True) + "\n")
+    return path
+
+
 def run_all(root=ROOT):
     errs = []
     errs.extend(check_swift_eval_js(root))
@@ -245,16 +313,23 @@ def run_all(root=ROOT):
     errs.extend(check_html_csp_and_handlers(root))
     errs.extend(check_js_syntax(root))
     errs.extend(check_js_unsafe_patterns(root))
+    errs.extend(check_drift(root))
     return errs
 
 
 def main():
+    if "--update-drift" in sys.argv[1:]:
+        print(f"ok  wrote {update_drift(ROOT).relative_to(ROOT)}")
+        return
     errs = run_all(ROOT)
     if errs:
         for e in errs:
             print(f"SAFETY FAIL: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"ok  safety checks passed ({len(swift_files())} Swift file(s), 3 HTML pages, JS syntax, scripts/)")
+    print(f"ok  safety checks passed ({len(swift_files())} Swift file(s), 3 HTML pages, JS syntax, scripts/, drift)")
+    fell = drift_fell(ROOT)
+    if fell:
+        print(f"note: token drift fell ({', '.join(fell)}); lower the baseline with `check_safety.py --update-drift`")
 
 
 if __name__ == "__main__":

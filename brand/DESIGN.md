@@ -26,20 +26,20 @@ primitives:
     dark:  ["0.172 0.018 150", "0.205 0.024 150", "0.245 0.045 150", "0.278 0.063 150", "0.310 0.075 150", "0.348 0.087 150", "0.400 0.102 150", "0.490 0.123 150", "0.550 0.150 150", "0.590 0.150 150", "0.780 0.105 150", "0.950 0.048 150"]
     # dark sRGB:  #0A120C #0F1A11 #0F2615 #0C3117 #0B3A1B #0C4620 #0E5628 #197338 #05893E #21954A #85CB94 #D9F8DE
   amber:    # status: needs you
-    light: ["0.993 0.004 62", "0.982 0.010 62", "0.962 0.023 62", "0.938 0.039 62", "0.914 0.056 62", "0.889 0.074 62", "0.852 0.102 62", "0.790 0.145 62", "0.760 0.170 62", "0.720 0.165 62", "0.500 0.114 62", "0.235 0.055 62"]
+    light: ["0.993 0.004 62", "0.982 0.010 62", "0.962 0.023 62", "0.938 0.039 62", "0.914 0.056 62", "0.889 0.074 62", "0.852 0.102 62", "0.790 0.145 62", "0.760 0.170 62", "0.720 0.165 62", "0.500 0.114 62", "0.235 0.054 62"]
     # light sRGB: #FFFCFA #FEF8F2 #FEEFE3 #FEE5D1 #FFDBBD #FFD0A9 #FFC088 #FCA34D #FC9417 #EC8904 #905203 #301700
     dark:  ["0.172 0.020 62", "0.205 0.027 62", "0.245 0.051 62", "0.278 0.064 62", "0.310 0.071 62", "0.348 0.080 62", "0.400 0.092 62", "0.490 0.112 62", "0.780 0.160 62", "0.820 0.127 62", "0.780 0.119 62", "0.950 0.031 62"]
     # dark sRGB:  #160E07 #20140A #311A03 #3E2000 #492700 #572F00 #6A3A00 #8C4F02 #FF9D36 #FFB169 #EEA563 #FEEADA
   yellow:   # status: your move
-    light: ["0.993 0.010 95", "0.982 0.020 95", "0.962 0.041 95", "0.938 0.059 95", "0.914 0.076 95", "0.889 0.092 95", "0.852 0.112 95", "0.790 0.140 95", "0.880 0.165 95", "0.840 0.165 95", "0.500 0.102 95", "0.235 0.049 95"]
+    light: ["0.993 0.010 95", "0.982 0.020 95", "0.962 0.041 95", "0.938 0.059 95", "0.914 0.076 95", "0.889 0.092 95", "0.852 0.112 95", "0.790 0.140 95", "0.880 0.165 95", "0.840 0.165 95", "0.500 0.102 95", "0.235 0.048 95"]
     # light sRGB: #FFFDF5 #FDF9EA #FBF3D4 #F7EBBE #F2E3A9 #EDDA94 #E5CE75 #D7B93F #FAD53B #ECC825 #766202 #251D00
     dark:  ["0.172 0.020 95", "0.205 0.026 95", "0.245 0.050 95", "0.278 0.057 95", "0.310 0.063 95", "0.348 0.071 95", "0.400 0.082 95", "0.490 0.100 95", "0.880 0.165 95", "0.920 0.127 95", "0.780 0.115 95", "0.950 0.053 95"]
     # dark sRGB:  #131006 #1B1709 #282000 #312800 #3A2F01 #463901 #564700 #725F02 #FAD53B #FFE47D #CEB75B #F9EFC7
   blue:     # status: working
-    light: ["0.993 0.003 252", "0.982 0.009 252", "0.962 0.018 252", "0.938 0.030 252", "0.914 0.042 252", "0.889 0.055 252", "0.852 0.074 252", "0.790 0.109 252", "0.550 0.164 252", "0.510 0.152 252", "0.500 0.149 252", "0.235 0.068 252"]
+    light: ["0.993 0.003 252", "0.982 0.008 252", "0.962 0.018 252", "0.938 0.030 252", "0.914 0.042 252", "0.889 0.055 252", "0.852 0.074 252", "0.790 0.109 252", "0.550 0.164 252", "0.510 0.152 252", "0.500 0.149 252", "0.235 0.068 252"]
     # light sRGB: #FBFDFF #F5FAFF #EAF4FF #DDECFF #CFE5FF #C1DEFF #ACD2FE #86BFFF #0172CD #0167B9 #0164B4 #011E3D
-    dark:  ["0.172 0.022 252", "0.205 0.029 252", "0.245 0.054 252", "0.278 0.076 252", "0.310 0.090 252", "0.348 0.104 252", "0.400 0.119 252", "0.490 0.147 252", "0.560 0.167 252", "0.600 0.179 252", "0.780 0.115 252", "0.950 0.024 252"]
-    # dark sRGB:  #091019 #0D1824 #0B2139 #05294C #02315C #003A6E #014885 #0061B0 #0275D2 #0281E6 #80BCFF #E3F0FF
+    dark:  ["0.172 0.022 252", "0.205 0.029 252", "0.245 0.054 252", "0.278 0.076 252", "0.310 0.090 252", "0.348 0.104 252", "0.400 0.119 252", "0.490 0.146 252", "0.560 0.167 252", "0.600 0.179 252", "0.780 0.115 252", "0.950 0.024 252"]
+    # dark sRGB:  #091019 #0D1824 #0B2139 #05294C #02315C #003A6E #014885 #0161AF #0275D2 #0281E6 #80BCFF #E3F0FF
   red:      # status: crashed / failed
     light: ["0.993 0.003 25", "0.982 0.008 25", "0.962 0.018 25", "0.938 0.031 25", "0.914 0.044 25", "0.889 0.058 25", "0.852 0.080 25", "0.790 0.121 25", "0.570 0.200 25", "0.530 0.200 25", "0.500 0.170 25", "0.235 0.076 25"]
     # light sRGB: #FFFCFC #FFF7F6 #FFEEEC #FFE3E0 #FFD8D4 #FFCCC7 #FFBBB4 #FF9B93 #D42F34 #C51D28 #B02A2D #3B0A0A
@@ -499,16 +499,13 @@ Each concept gets a greyscale sketch at 32px. Pick three, render them in Icon Co
 ### 9.1 The set
 - **One custom SVG set replaces all three sets** (dashboard `ICONS`, terminal `I`/`IC`/`G`/`MI`, and SF Symbols in custom views).
 - **Native views use the same SVGs** as template images, so native and web match exactly. SF Symbols stay only inside system controls (NSMenu, NSAlert, open panels) and as a fallback while the set grows.
-- **Source:** `brand/icons/ui/<name>.svg`. The generator emits a JS module (`app/icons.js`, inlined into each page by the build) and a Swift asset folder.
+- **Source:** `brand/icons/ui/<name>.svg`, plus the agent marks in `brand/icons/marks/`. `scripts/icons.py generate` inlines them into dashboard.html and terminal.html as a `<script id="ds-icons">` block (`dsIcon`, `dsIconHTML`; the pages' CSP allows no external scripts), and into `app/Sources/Icons.swift` (`Image(ds:size:medium:)`, template NSImages from the same SVG). `icons.py check` (in `make lint`) validates every file and that every icon is used and every name used exists.
 
 ### 9.2 Drawing spec
-- **Two drawn sizes, each hand-fitted:** 16 (the default: rows, tabs, chips, buttons) and 20 (toolbar, empty states). Don't draw a 24; a 24 is a 20 drawing on a 24 canvas.
+- **One drawing, any size:** every icon is drawn once on the 16 grid. Both renderers keep the on-screen stroke at 1.5px at 16px and above (1.75px for Medium) by scaling the stroke width against the size, and let it thin with the icon below 16. A hand-fitted 20 drawing is added only where the scaled 16 looks wrong at toolbar size (none needed so far).
 - **16 grid:**
   - 1px padding, giving a 14px live area.
   - Circles have a 13px diameter, squares are 12×12, wide rectangles 14×10.
-- **20 grid:**
-  - 1.5px padding, giving a 17px live area.
-  - Circles have a 16px diameter, squares are 15×15.
 - **Stroke:**
   - 1.5px on both sizes, matched to SF Symbols Regular next to 12–13pt text.
   - Next to `strong` or 600-weight text, use the Medium weight at 1.75px. These are the only two weights.
@@ -875,7 +872,7 @@ Every ban comes with the move to make instead. The critique agent (§13) checks 
 | Buttons | More than one primary per view; ghost, gradient or shadowed buttons; one-off variants | The five button variants (§10.2), one primary |
 | Buttons | Vague labels ("OK", "Submit", "Go") | A verb plus an object, with `…` when another step follows |
 | Buttons | `cursor: pointer` on ordinary controls | The default cursor; pointer only on links |
-| Icons | Mixed stroke widths or grids; a hand-drawn one-off glyph | The shared set: 16/20 grid, 1.5 or 1.75 stroke, round joins |
+| Icons | Mixed stroke widths or grids; a hand-drawn one-off glyph | The shared set: 16 grid, 1.5 or 1.75 stroke, round joins |
 | Icons | Coloured icon background tiles; duotone; emoji as icons | `currentColor` on the bare glyph; filled only when selected |
 | Icons | A redrawn or stand-in brand mark (the Codex hexagon) | The official mark, or a neutral monogram |
 | App icon | Baked glow, shadow or specular; a custom outline; words; UI screenshots | Flat layers in Icon Composer, the system squircle, one idea |
@@ -894,7 +891,11 @@ A UI change is done only when every step below passes. Agents run it themselves 
    - `tokens.py check` regenerates the CSS and Swift from this file's front matter and fails on any diff (parity).
    - It re-runs the contrast checks: step 11 ≥ Lc 60 and step 12 ≥ Lc 90 on step 2, text on solid ≥ 4.5:1, and every `fg.*`/`status.*.fg` on every `bg.*` ≥ WCAG AA.
    - Gamut mapping is by chroma reduction only.
-2. **Drift ratchet.** A `check_safety.py` rule counts literal hex/rgb/oklch, `font-size: Npx`, `border-radius` and `box-shadow` values outside the token blocks in the three HTML files, and `Color(hex:)`/`.system(size:)` outside `Config.swift`. The count may only go down. The redesign PRs bring it to zero.
+2. **Drift ratchet.** `check_safety.py` counts, per file:
+   - in the three HTML files, outside the generated `ds-tokens` block: literal colours (hex, `rgb()`, `hsl()`, `oklch()`), `font-size`/`font` in px, `border-radius` and `box-shadow`/`drop-shadow`;
+   - in Swift, outside `Config.swift` and the generated `Tokens.swift`: quoted hex strings, `Color(white:)`-style constructors, `.system(size:)` and literal `cornerRadius`.
+
+   No count may rise above `scripts/drift_baseline.json`. When counts fall, `check_safety.py --update-drift` lowers the baseline. The redesign PRs bring it to zero.
 3. **Icons.** `icons.py check`: every `brand/icons/ui/*.svg` has a viewBox of 16 or 20, stroke 1.5 or 1.75, round caps and joins, `currentColor` only, and no transforms. Every name used in code exists. Every file is used somewhere.
 4. **Existing gates.** `make lint`, `make test-py`, `make test-js`, `make typecheck`, `make check-diff` and `make test-ui`, plus `scripts/audit.py review` before the PR.
 5. **Screenshot matrix** (`scripts/uitest.py`, saved as PR artifacts):
@@ -922,7 +923,7 @@ A UI change is done only when every step below passes. Agents run it themselves 
 
 Each step is one PR with its own screenshots.
 
-1. **Tokens:** `scripts/tokens.py` (stdlib), which generates CSS custom properties for the three HTML files and `Theme` for Swift from this front matter. Add the parity, contrast and drift checks. No visual change yet: the old variable names alias to the new tokens.
+1. **Tokens:** `scripts/tokens.py` (stdlib) generates a `ds-tokens` block of `--ds-*` custom properties in each HTML file, and `DS` in `app/Sources/Tokens.swift`, from this front matter. Add the parity, contrast and drift checks. No visual change yet: the old variable names keep their values. `<html data-tokens="v2">` points them at the new tokens to preview the redesign. The dashboard and stage do this now; terminal.html, whose variables are set inline, gets it in step 4. Later steps move each surface onto `--ds-*` and `DS` directly.
 2. **Icon set:** draw `brand/icons/ui/` (§9.3) and add `icons.py check`, `app/icons.js` and the Swift loader. Swap the glyphs in all three pages and the native views.
 3. **Dashboard:** bars, cards, the board, list view, workspace page, hover card, sheets, widgets, empty, loading and error states.
 4. **Basement and Pipe:** sidebar, tabs, panes, palette, dialogs, keyboard support for the tree.
@@ -931,8 +932,9 @@ Each step is one PR with its own screenshots.
 7. **App icon:** concept sketches, then three in Icon Composer, then one, then the `.icon` and `scripts/build_icons.sh`. Retire `Orb`, `MergeLight` and `ThreeFloors`.
 8. **Docs:** rewrite `brand/README.md` from this file, and point AGENTS.md's "visual design" rule at `brand/DESIGN.md`.
 
-### Open questions for review
-- **Chat and stage looks:** this spec keeps Default and Phosphor and parks five. Should any others stay?
-- **Accents:** cutting to Signal, Teal and Graphite drops five user-visible accent choices. Is that acceptable?
-- **Floor names:** "Greenlight Center" becomes "Center" in the floor bar (the full name stays in the window title). Should the Basement and Pipe names stay?
-- **Native icons:** this spec replaces SF Symbols in custom views with the shared set. The alternative is SF Symbols natively and a web set matched to them. That's cheaper, but the two drift.
+### Resolved questions
+The owner answered these after the first review, keeping the spec as written:
+- **Chat and stage looks:** Default and Phosphor only. The other five are parked.
+- **Accents:** three, Signal, Teal and Graphite. Old choices migrate per §2.3.
+- **Floor names:** Center, Basement and Pipe in the floor bar. "Greenlight Center" stays in the window title.
+- **Native icons:** the shared SVG set everywhere. SF Symbols stay only inside system controls.

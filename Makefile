@@ -12,9 +12,11 @@ help: ## list targets
 
 test: lint test-py test-js typecheck ## lint, test-py, test-js and typecheck
 
-lint: ## ruff bug/security lint, static safety checks, JS static lint, and shellcheck
+lint: ## ruff bug/security lint, static safety checks, design tokens, JS static lint, and shellcheck
 	ruff check scripts/ tests/ app/kokoro.py
 	$(PY) scripts/check_safety.py
+	$(PY) scripts/tokens.py check
+	$(PY) scripts/icons.py check
 	$(PY) scripts/js_lint.py
 	shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
 

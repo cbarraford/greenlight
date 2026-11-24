@@ -26,7 +26,7 @@ struct LevelFace: View {
             ZStack(alignment: .topTrailing) {
                 Circle().fill(RadialGradient(colors: [hc("DDF6E3"), hc("B6E7C3")], center: UnitPoint(x: 0.4, y: 0.3), startRadius: 2, endRadius: 30))
                     .overlay(Circle().strokeBorder(hc("9CD6AC").opacity(0.7), lineWidth: 1)).shadow(color: hc("1E4A2B").opacity(0.22), radius: 6, y: 3)
-                Image(systemName: "chevron.up").font(.system(size: 18, weight: .semibold)).foregroundColor(hc("2E6F43")).frame(maxWidth: .infinity, maxHeight: .infinity)
+                Image(ds: "chevron-up", size: iconSize(18, scaled: false), medium: true).foregroundColor(hc("2E6F43")).frame(maxWidth: .infinity, maxHeight: .infinity)
                 Circle().fill(hc("56E08B")).frame(width: 8, height: 8).shadow(color: hc("56E08B"), radius: 3).overlay(Circle().stroke(hc("D2F1DA"), lineWidth: 2)).padding(9)
             }
         } else if up {
@@ -43,7 +43,7 @@ struct LevelFace: View {
         } else {
             ZStack(alignment: .topTrailing) {
                 Circle().fill(hc("1C1C1F")).overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)).shadow(color: .black.opacity(0.55), radius: 3, y: 2)
-                Image(systemName: "terminal").font(.system(size: 20, weight: .medium)).foregroundColor(hc("ECECEE")).frame(maxWidth: .infinity, maxHeight: .infinity)
+                Image(ds: "terminal", size: iconSize(20, scaled: false)).foregroundColor(hc("ECECEE")).frame(maxWidth: .infinity, maxHeight: .infinity)
                 Circle().fill(hc("FFB340")).frame(width: 8, height: 8).overlay(Circle().stroke(hc("1C1C1F"), lineWidth: 2)).padding(9)
             }
         }
@@ -63,7 +63,7 @@ struct Floors: View {
     var body: some View {
         HStack(spacing: 10) {
         if let devName {  // a dev copy: whose it is, dashed so it doesn't read as a floor
-            HStack(spacing: 4) { Image(systemName: "hammer.fill").font(.system(size: 8, weight: .bold)); Text(devName).lineLimit(1).truncationMode(.middle) }
+            HStack(spacing: 4) { Image(ds: "hammer", size: iconSize(8, scaled: false), medium: true); Text(devName).lineLimit(1).truncationMode(.middle) }
                 .font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
                 .padding(.horizontal, 8).frame(height: 20)
                 .background(RoundedRectangle(cornerRadius: 7).strokeBorder(hexColor(light ? "#5F5F64" : "#9A9AA0"), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
@@ -85,10 +85,10 @@ struct Floors: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(white: light ? 0 : 1, opacity: light ? 0.07 : 0.08))))
         HStack(spacing: 2) {  // Auto / Light / Dark, in the same track
-            ForEach([("auto", "circle.lefthalf.filled", "Auto (match macOS)"), ("light", "sun.max", "Light"), ("dark", "moon", "Dark")], id: \.0) { m in
+            ForEach([("auto", "contrast", "Auto (match macOS)"), ("light", "sun", "Light"), ("dark", "moon", "Dark")], id: \.0) { m in
                 let on = appearanceMode == m.0
                 Button { c.restyle { ud.set(m.0, forKey: "appearance") }; (NSApp.delegate as? App)?.tick() } label: {
-                    Image(systemName: m.1).font(.system(size: 10, weight: .semibold))
+                    Image(ds: m.1, size: iconSize(10, scaled: false), medium: true)
                         .foregroundColor(hexColor(on ? (light ? "#1D1D1F" : "#F5F5F7") : (light ? "#5F5F64" : "#9A9AA0")))
                         .frame(width: 22, height: 16)
                         .background(RoundedRectangle(cornerRadius: 5).fill(on ? Color(white: light ? 0 : 1, opacity: light ? 0.1 : 0.14) : .clear))
@@ -111,10 +111,10 @@ struct ProjectChip: View {
         if !s.project.isEmpty && s.at != "pipe" {  // the Pipe is just the terminals: no project chip there
             Button(action: pick) {  // the chip (design A): its squares, the name, a chevron
                 HStack(spacing: 6) {
-                    if s.colors.isEmpty { Image(systemName: "square.grid.2x2.fill").font(.system(size: 9)).opacity(0.55) }
+                    if s.colors.isEmpty { Image(ds: "grid", size: iconSize(9, scaled: false)).opacity(0.55) }
                     ForEach(Array(s.colors.prefix(4).enumerated()), id: \.offset) { RoundedRectangle(cornerRadius: 2.5).fill(hexColor($0.element)).frame(width: 9, height: 9) }
                     Text(s.project).lineLimit(1).truncationMode(.tail)
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
+                    Image(ds: "chevron-down", size: iconSize(8, scaled: false), medium: true).opacity(0.6)
                 }.font(.system(size: 11.5, weight: .semibold)).foregroundColor(hexColor(light ? "#1D1D1F" : "#F5F5F7"))
                     .padding(.horizontal, 7).frame(height: 22)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Color(white: light ? 0 : 1, opacity: light ? 0.05 : 0.06))
