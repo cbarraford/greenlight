@@ -19,8 +19,7 @@ final class OrbState: ObservableObject { @Published var hover = false; @Publishe
 
 /// The orb's face (brand/DESIGN.md §8.4): the mark on a 40pt bg.raised disc with elevation 2; hovered, a step higher (no
 /// animation). Up (to Center) the mark is lit in the accent; down (to the Basement) it's the terminal glyph.
-/// ponytail: the mark isn't drawn yet (redesign step 7), so the hex glyph stands in for it. The matte, traffic-light and
-/// terminal-disc faces are retired.
+/// The matte, traffic-light and terminal-disc faces are retired.
 struct LevelFace: View {
     let up: Bool
     var hover = false
@@ -31,8 +30,11 @@ struct LevelFace: View {
             .overlay(Circle().strokeBorder(Color(DS.Palette.borderSubtle, dark: d), lineWidth: 1))  // elevation's 1px ring
             .shadow(color: .black.opacity(d ? 0.35 : 0.06), radius: 2, y: 2)
             .shadow(color: .black.opacity(d ? 0.45 : 0.10), radius: hover ? 14 : 10, y: hover ? 6 : 4)  // elevation 2; 2+ hovered
-            .overlay(Image(ds: up ? "hex" : "terminal", size: iconSize(DS.TypeRole.titleSm.size, scaled: false), medium: true)
-                .foregroundColor(Color(up ? accentSet.fg : DS.Palette.fgDefault, dark: d)))
+            .overlay(up ? AnyView(ZStack {  // the mark: blades muted, its light in the accent
+                    Image(nsImage: GreenlightMark.image(.idle, size: 22)).foregroundColor(Color(DS.Palette.fgMuted, dark: d))
+                    Image(nsImage: GreenlightMark.image(.light, size: 22)).foregroundColor(Color(accentSet.fg, dark: d))
+                }) : AnyView(Image(ds: "terminal", size: iconSize(DS.TypeRole.titleSm.size, scaled: false), medium: true)
+                    .foregroundColor(Color(DS.Palette.fgDefault, dark: d))))
             .frame(width: 40, height: 40)
     }
 }
@@ -45,7 +47,7 @@ struct Floors: View {
     @ObservedObject var c: Core  // its look bumps when the appearance changes
     var pick: () -> Void = {}  // the project chip: a terminal window's Open projects, L1's menu
     let go: (String) -> Void
-    /// (floor, name, glyph): center = the mark (the hex stands in until step 7), basement = terminal, pipe = a single pane.
+    /// (floor, name, glyph): center = the mark, basement = terminal, pipe = a single pane.
     static let levels = [("greenlight", "Center", "hex"), ("basement", "Basement", "terminal"), ("pipe", "Pipe", "window")]
     var body: some View {
         let _ = c.look
@@ -68,7 +70,7 @@ struct FloorSegments: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSegmentedControl {
         let c = NSSegmentedControl(labels: Floors.levels.map(\.1), trackingMode: .selectOne, target: context.coordinator, action: #selector(Coord.pick(_:)))
         for (i, l) in Floors.levels.enumerated() {
-            c.setImage(DSIcon.image(l.2, size: 16), forSegment: i); c.setImageScaling(.scaleNone, forSegment: i)
+            c.setImage(l.0 == "greenlight" ? GreenlightMark.image(.lit) : DSIcon.image(l.2, size: 16), forSegment: i); c.setImageScaling(.scaleNone, forSegment: i)
             c.setToolTip("Go to \(l.1)", forSegment: i)
         }
         c.segmentStyle = .automatic; c.controlSize = .regular
@@ -2180,12 +2182,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let working = greenlight.run != nil
         let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the stars are all alike
             + (greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : ""))
-        let key = "\(working) \(accent)"
+        let key = "\(working)"
         if key != starKey {
             starKey = key
-            let img = NSImage(systemSymbolName: working ? "star.fill" : "star", accessibilityDescription: "Greenlight")
-            img?.isTemplate = !working
-            b.image = working ? img?.withSymbolConfiguration(.init(paletteColors: [NSColor(accent)])) : img
+            b.image = GreenlightMark.image(working ? .lit : .idle)  // the mark, a template always: the menu bar stays monochrome (§8.4)
             item?.length = working && devName == nil ? 64 : NSStatusItem.variableLength  // fixed while the timer ticks, or the menubar icons jitter each second (a copy's name doesn't fit 64)
         }
         if b.title != title { b.title = title }

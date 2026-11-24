@@ -1073,8 +1073,8 @@ struct SettingsView: View {
                 TextField("Greenlight", text: $c.name).textFieldStyle(.roundedBorder).frame(width: 220)
             }
         }
-        box("Dock icon", aside: "Finder always shows the Orb.") {
-            HStack(spacing: DS.Space.s12) { ForEach([("Orb", "Orb"), ("MergeLight", "Merge Light"), ("ThreeFloors", "Three Floors")], id: \.0) { dockTile($0.0, $0.1) } }
+        box("Dock icon", aside: "Debug is the same icon with a grey light. Dev copies start on it.") {
+            HStack(spacing: DS.Space.s12) { ForEach([("Default", "Default"), ("Debug", "Debug")], id: \.0) { dockTile($0.0, $0.1) } }
                 .padding(DS.Space.s12)
         }
     }
@@ -1083,7 +1083,7 @@ struct SettingsView: View {
         let on = c.dockIcon == id
         return Button { c.dockIcon = id } label: {
             VStack(spacing: DS.Space.s8) {
-                Image(nsImage: Bundle.main.image(forResource: id) ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
+                Image(nsImage: Bundle.main.image(forResource: id == "Debug" ? "GreenlightDebug" : "Greenlight") ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
                 Text(name).font(sys(size: DS.TypeRole.label.size, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub).multilineTextAlignment(.center)
             }.padding(DS.Space.s12).frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg))
