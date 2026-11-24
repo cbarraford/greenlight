@@ -781,10 +781,119 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
 
-    // MARK: dashboard data (dash.py where greenlight runs)
+    // MARK: dashboard data (dash.py where greenlight runs, plus local Mac when any project runs there)
 
     var rescanning = false
-    var dashSnapObj: [String: Any]?  // newest validated snapshot, replayed once a dashboard page is ready and its project filter is known
+    var dashSnapObj: [String: Any]?  // newest validated snapshot (merged across server + local Mac when needed)
+    var serverSnapObj: [String: Any]?, localSnapObj: [String: Any]?
+    var repoHosts = [String: RepoHostInfo]()  // per-repo host preference & resolved target ("server" | "mac")
+    var snapHostByName = [String: String](), snapHostByPath = [String: String]()
+    var treeHostByName = [String: String](), treeHostByPath = [String: String]()
+    var cachedWsHostByPath: [String: String] = (ud.dictionary(forKey: "wsHostByPathCache") as? [String: String]) ?? [:]
+    var wsHostByName = [String: String](), wsHostByPath = [String: String]()  // rebuilt from merged trees + snapshots
+    var localScanned = false
+    var initialServerTreesDone = false, initialLocalTreesDone = isLocalHost(host)
+
+    var anyMacNeeded: Bool {
+        !isLocalHost(host) && (repoHosts.values.contains { $0.target == "mac" }
+            || isLocalHost(greenlight.chatHost) || l1s.values.contains { isLocalHost($0.c.chatHost) })
+    }
+
+    private func rebuildWorkspaceHostIndex() {
+        let fresh = snapHostByPath.merging(treeHostByPath) { _, t in t }  // native trees win over snapshots
+        let startupPending = !initialServerTreesDone || !initialLocalTreesDone
+        let byPath = startupPending ? cachedWsHostByPath.merging(fresh) { _, f in f } : fresh
+        wsHostByPath = byPath
+        wsHostByName = snapHostByName.merging(treeHostByName) { _, t in t }
+        if byPath != cachedWsHostByPath {
+            cachedWsHostByPath = byPath
+            ud.set(byPath, forKey: "wsHostByPathCache")
+        }
+    }
+
+    func workspaceHost(name: String? = nil, path: String? = nil, fallback: String? = nil) -> String {
+        if let path, let h = wsHostByPath[path] ?? cachedWsHostByPath[path] { return h }
+        if let name, let h = wsHostByName[name] { return h }
+        return fallback ?? greenlight.chatHost
+    }
+
+    func paneTarget(_ ws: String) -> (host: String, cwd: String)? {
+        guard let at = paneWhere(ws) else { return nil }
+        if !ws.hasPrefix("@"), !at.cwd.isEmpty, let h = wsHostByPath[at.cwd] ?? cachedWsHostByPath[at.cwd] { return (h, at.cwd) }
+        return at
+    }
+
+    func mergeRepoHosts(_ incoming: [String: RepoHostInfo]) {
+        repoHosts = mergeRepoHostMaps(repoHosts, incoming)
+        syncHostForActiveWindows(clearOnChange: false)
+        ensureLocalDashIfNeeded()
+    }
+
+    func updateRepoHost(_ repo: String, _ info: RepoHostInfo, clearOnChange: Bool = true) {
+        repoHosts = setRepoHostInMap(repoHosts, repo: repo, info: info)
+        syncHostForActiveWindows(clearOnChange: clearOnChange)
+        ensureLocalDashIfNeeded()
+    }
+
+    private func effectiveProjList() -> [[String: Any]] {
+        projList.isEmpty ? buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true) : projList
+    }
+
+    private func canSyncSilently(_ c: Core) -> Bool {
+        !initialServerTreesDone || !initialLocalTreesDone || (c.run == nil && !c.msgs.contains { $0.role == .you })
+    }
+
+    private func syncHostForActiveWindows(clearOnChange: Bool) {
+        let list = effectiveProjList(), saved = savedProjects
+        let mainTarget = resolveProjectHost(only: l1Only ?? sharedOnly, projList: list, savedProjects: saved, repoHosts: repoHosts)
+        if clearOnChange && mainTarget != greenlight.chatHost {
+            let label = projectChip(only: sharedOnly, projList: list, projectsLoaded: true).text
+            greenlight.switchProject(to: mainTarget, label: label)
+        } else if !clearOnChange && canSyncSilently(greenlight) {
+            greenlight.syncChatHost(mainTarget)
+        }
+        for l in l1s.values {
+            let target = resolveProjectHost(only: live(l.only) ?? l.only, projList: list, savedProjects: saved, repoHosts: repoHosts)
+            if clearOnChange && target != l.c.chatHost {
+                let label = projectChip(only: l.only, projList: list, projectsLoaded: true).text
+                l.c.switchProject(to: target, label: label)
+            } else if !clearOnChange && canSyncSilently(l.c) {
+                l.c.syncChatHost(target)
+            }
+        }
+    }
+
+    private func indexSnapshotHosts(_ obj: [String: Any], fallbackHost: String) {
+        var byName = [String: String](), byPath = [String: String]()
+        for p in obj["pucks"] as? [[String: Any]] ?? [] where p["nativeHost"] as? Bool != false {
+            let h = (p["_runHost"] as? String) ?? fallbackHost
+            if let n = p["name"] as? String, !n.isEmpty { byName[n] = h }
+            if let path = p["path"] as? String, !path.isEmpty { byPath[path] = h }
+        }
+        for t in obj["trees"] as? [[String: Any]] ?? [] where t["nativeHost"] as? Bool != false {
+            let h = (t["_runHost"] as? String) ?? fallbackHost
+            if let path = t["path"] as? String, !path.isEmpty, byPath[path] == nil { byPath[path] = h }
+            if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty, byName[n] == nil { byName[n] = h }
+        }
+        snapHostByName = byName
+        snapHostByPath = byPath
+        rebuildWorkspaceHostIndex()
+    }
+
+    private func publishDashSnap() {
+        let obj: [String: Any]? = (!isLocalHost(host) && localSnapObj != nil)
+            ? mergeSnapshots(serverSnapObj, localSnapObj, primaryHost: host, secondaryHost: "local")
+            : serverSnapObj ?? localSnapObj
+        guard let obj, JSONSerialization.isValidJSONObject(obj),
+              let clean = try? JSONSerialization.data(withJSONObject: obj),
+              let js = String(data: clean, encoding: .utf8) else { return }
+        indexSnapshotHosts(obj, fallbackHost: host)
+        dashSnapObj = obj
+        for w in webs where readyDash.contains(ObjectIdentifier(w)) {
+            w.callJS("window.mc && mc.update", [obj])
+        }
+        queueBuilds(js)
+    }
 
     /// A fresh greenlight scan, at launch and from the footer's ↻; the stream picks up the new last.json.
     func rescan() {
@@ -795,22 +904,53 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             self?.greenlight.acted("Greenlight", "rescan", code, "")
             DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
         })
+        if anyMacNeeded && !uitest && !selftest {
+            localScanned = true
+            ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")
+        }
     }
 
-    var dashProc: Process?
+    var dashProc: Process?, localDashProc: Process?
     func streamDash() {
         dashProc = ssh("\(py)/dash.py stream 5", onLine: { [weak self] l in
             guard let self, l.hasPrefix("{"), let d = l.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                  JSONSerialization.isValidJSONObject(obj),
-                  let clean = try? JSONSerialization.data(withJSONObject: obj),
-                  let js = String(data: clean, encoding: .utf8) else { return }
-            self.dashSnapObj = obj
-            for w in self.webs where self.readyDash.contains(ObjectIdentifier(w)) {
-                w.callJS("window.mc && mc.update", [obj])
+                  JSONSerialization.isValidJSONObject(obj) else { return }
+            if obj["error"] != nil {
+                if self.serverSnapObj == nil && self.localSnapObj == nil {
+                    for w in self.webs where self.readyDash.contains(ObjectIdentifier(w)) {
+                        w.callJS("window.mc && mc.update", [obj])
+                    }
+                }
+                return
             }
-            self.queueBuilds(js)
+            self.serverSnapObj = obj
+            self.publishDashSnap()
         }, onExit: { [weak self] _ in DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.streamDash() } })
+    }
+
+    func ensureLocalDashIfNeeded() {
+        guard anyMacNeeded, localDashProc == nil, !uitest, !selftest else { return }
+        if !localScanned {
+            localScanned = true
+            ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")
+        }
+        streamLocalDash()
+    }
+
+    func streamLocalDash() {
+        guard !isLocalHost(host), !uitest, !selftest else { return }
+        localDashProc = ssh("\(pyCmd(on: "local"))/dash.py stream 5", on: "local", onLine: { [weak self] l in
+            guard let self, l.hasPrefix("{"), let d = l.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  JSONSerialization.isValidJSONObject(obj) else { return }
+            if obj["error"] != nil { return }  // keep existing snapshots; local scan will populate last.json
+            self.localSnapObj = obj
+            self.publishDashSnap()
+        }, onExit: { [weak self] _ in
+            self?.localDashProc = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.ensureLocalDashIfNeeded() }
+        })
     }
 
     // Background page builds: pucks whose layout is stale, greenlight.designParallel at a time.
@@ -830,7 +970,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                   p["state"] as? String != "done", !building.contains(name), tried[name] != sig,
                   name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil else { continue }
             building.insert(name); tried[name] = sig
-            ssh("\(py)/dash.py page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort)) >/dev/null", onExit: { [weak self] _ in
+            let h = workspaceHost(name: name, path: p["path"] as? String, fallback: host)
+            ssh("\(pyCmd(on: h))/dash.py page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort)) >/dev/null", on: h, onExit: { [weak self] _ in
                 self?.building.remove(name); self?.pushBuilds()
             })
         }
@@ -860,9 +1001,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard !suggesting.contains(name) else { return }
         suggesting.insert(name)
         var out = ""
-        ssh("\(py)/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", onLine: { out += $0 }, onExit: { [weak self] code in
+        let h = workspaceHost(name: name)
+        ssh("\(pyCmd(on: h))/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", on: h, onLine: { out += $0 }, onExit: { [weak self] code in
             self?.suggesting.remove(name)
-            let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
+            let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
             self?.broadcast("window.mc && mc.suggest(\(js))")
             self?.termWebs.forEach { $0.evaluateJavaScript("window.term && term.suggest(\(js))") }  // the sidebar card's button
         })
@@ -927,7 +1069,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "project" {  // L1's Open projects (or Clear filters: null)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
-            if let l { l.only = livePick(only, known: nil); saveL1s(); syncL1(); syncDashPaths() } else { setPick(only) }  // the main one: one pick for every floor and terminal window
+            if let l {
+                let oldOnly = livePick(l.only, known: nil), newOnly = livePick(only, known: nil)
+                l.only = newOnly; saveL1s(); syncL1(); syncDashPaths()
+                if newOnly != oldOnly {
+                    let list = effectiveProjList()
+                    let target = resolveProjectHost(only: live(newOnly) ?? newOnly, projList: list, savedProjects: savedProjects, repoHosts: repoHosts)
+                    let label = projectChip(only: newOnly, projList: list, projectsLoaded: true).text
+                    l.c.switchProject(to: target, label: label)
+                    ensureLocalDashIfNeeded()
+                }
+            } else { setPick(only) }  // the main one: one pick for every floor and terminal window
         }
         if cmd == "window" {  // L1's Open projects, New window: another Greenlight Center, with its own Chief
             let only = b["only"] as? [String]
@@ -966,13 +1118,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // Names go into a shell command: allow only what workspace names use (dash.py checks again).
         let isWsName: (String) -> Bool = { $0.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil }
         let badNameErr = "Unsupported characters in workspace name."
+        let winHost = l?.c.chatHost ?? greenlight.chatHost
         if cmd == "page", let w = from.window { noteFocus(w) }  // a workspace opened while you're in that window
         if cmd == "page", let name = b["name"] as? String {
             guard isWsName(name) else { from.callJS("window.mc && mc.page", [["name": name, "error": badNameErr]]); return }
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
-            ssh("\(py)/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", onLine: { out += $0 }, onExit: { code in
-                let js = safeJSON(out, fallback: ["name": name, "error": "couldn't load this page from \(host) (exit \(code))"])
+            let h = workspaceHost(name: name, fallback: winHost)
+            ssh("\(pyCmd(on: h))/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", on: h, onLine: { out += $0 }, onExit: { code in
+                let js = safeJSON(out, fallback: ["name": name, "error": "couldn't load this page from \(hostDisplayName(h)) (exit \(code))"])
                 from.evaluateJavaScript("mc.page(\(js))")
             })
         }
@@ -986,8 +1140,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 return
             }
             var out = ""
-            ssh("\(py)/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", onLine: { out += $0 }, onExit: { code in
-                let js = safeJSON(out, fallback: ["name": name, "before": before.isEmpty ? NSNull() : before, "error": "\(host) didn't answer (exit \(code))"])
+            let h = workspaceHost(name: name, fallback: winHost)
+            ssh("\(pyCmd(on: h))/dash.py transcript '\(name)'\(before.isEmpty ? "" : " --before '\(before)'")", on: h, onLine: { out += $0 }, onExit: { code in
+                let js = safeJSON(out, fallback: ["name": name, "before": before.isEmpty ? NSNull() : before, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.transcript(\(js))")
             })
         }
@@ -999,13 +1154,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.callJS(cmd == "ask" ? "window.mc && mc.asked" : "window.mc && mc.answered", [["name": name, "error": badNameErr]])
                 return
             }
-            let remote = cmd == "answer" ? "\(py)/dash.py answer '\(name)'"
-                : "\(py)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
+            let h = workspaceHost(name: name, fallback: winHost), pyH = pyCmd(on: h)
+            let remote = cmd == "answer" ? "\(pyH)/dash.py answer '\(name)'"
+                : "\(pyH)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
             if cmd == "answer" { greenlight.log(.greenlight, name, .action, "answering its agent: \(text)") }
-            ssh(remote, stdin: text, onLine: { out += $0 }, onExit: { code in
+            ssh(remote, on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
                 if cmd == "answer" { self.greenlight.acted(name, "answer", code, out) }
-                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.\(cmd == "ask" ? "asked" : "answered")(\(js))")
             })
         }
@@ -1013,10 +1169,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "park", let name = b["name"] as? String, let on = b["on"] as? Bool {
             guard isWsName(name) else { from.callJS("window.mc && mc.parked", [["name": name, "error": badNameErr]]); return }
             var out = ""
+            let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, on ? "parking" : "unparking")
-            ssh("\(py)/dash.py park '\(name)' \(on ? "on" : "off")", onLine: { out += $0 }, onExit: { code in
+            ssh("\(pyCmd(on: h))/dash.py park '\(name)' \(on ? "on" : "off")", on: h, onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(name, on ? "park" : "unpark", code, out)
-                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.parked(\(js))")
             })
         }
@@ -1025,22 +1182,24 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
            let name = b["name"] as? String {
             guard isWsName(name) else { from.callJS("window.mc && mc.steward", [["name": name, "error": badNameErr]]); return }
             var out = ""
+            let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, "steward \(op)")
-            ssh("\(py)/dash.py steward \(op) \(shellQuote(name))", onLine: { out += $0 }, onExit: { [weak self] code in
+            ssh("\(pyCmd(on: h))/dash.py steward \(op) \(shellQuote(name))", on: h, onLine: { out += $0 }, onExit: { [weak self] code in
                 self?.greenlight.acted(name, "steward \(op)", code, out)
                 let obj = (out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
-                    ?? ["op": op, "name": name, "error": "\(host) didn't answer (exit \(code))"]
+                    ?? ["op": op, "name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"]
                 for w in self?.webs ?? [] where self?.readyDash.contains(ObjectIdentifier(w)) == true {
                     w.callJS("window.mc && mc.steward", [obj])
                 }
             })
         }
-        // New task: dash.py task repos | new <repo>; the request and its files go on stdin as JSON.
+        // New task: dash.py task repos | new <repo>; runs on the repo's host (or the window's active Chief host).
         if cmd == "task", let op = b["op"] as? String, ["repos", "new"].contains(op),
            let arg = b["arg"] as? String, isWsName(arg) {
             var out = ""
-            ssh("\(py)/dash.py task \(op) '\(arg)'", stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
-                let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(host) didn't answer (exit \(code))"])
+            let h = op == "new" ? resolveRepoTargetHost(arg, repoHosts: repoHosts, defaultHost: winHost) : winHost
+            ssh("\(pyCmd(on: h))/dash.py task \(op) '\(arg)'", on: h, stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
+                let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })
         }
@@ -1052,10 +1211,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if cmd == "merge" || cmd == "undraft" || cmd == "signoff", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
             var out = ""
             let op = cmd == "undraft" ? "ready" : cmd, who = greenlight.pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path
+            let h = workspaceHost(path: path, fallback: winHost)
             greenlight.log(.greenlight, who, .action, ["merge": "merging", "ready": "marking ready", "signoff": "signing off"][op] ?? op)
-            ssh("\(py)/dash.py tree \(op) '\(path)'", onLine: { out += $0 }, onExit: { code in
+            ssh("\(pyCmd(on: h))/dash.py tree \(op) '\(path)'", on: h, onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(who, op, code, out)
-                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(host) didn't answer (exit \(code))"])
+                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.merged(\(js))")
             })
         }
@@ -1068,10 +1228,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if prompt.isEmpty { return }
             guard isWsName(name) else { from.callJS("window.mc && mc.ran", [["name": name, "error": badNameErr]]); return }
             var out = ""
+            let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
-            ssh("\(py)/dash.py run '\(name)'", stdin: prompt, onLine: { out += $0 }, onExit: { code in
+            ssh("\(pyCmd(on: h))/dash.py run '\(name)'", on: h, stdin: prompt, onLine: { out += $0 }, onExit: { code in
                 self.greenlight.acted(name, "start agent", code, out)
-                let js = safeJSON(out, fallback: ["name": name, "error": "\(host) didn't answer (exit \(code))"])
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.ran(\(js))")
             })
         }
@@ -1360,10 +1521,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var readyDash = Set<ObjectIdentifier>(), waitingDash = Set<ObjectIdentifier>()  // dashboard webviews that have received mc.paths vs ones waiting on projectsLoaded
     var sharedOnly: [String]? { ud.array(forKey: "termOnly0") as? [String] }  // the one pick every floor and window shows; nil: all projects
     func setPick(_ only: [String]?, except: WKWebView? = nil) {
+        let oldOnly = livePick(sharedOnly, known: nil)
         let only = livePick(only, known: nil)  // none ticked is all: never stored empty
         ud.set(only, forKey: "termOnly0"); syncL1(); syncDashPaths()
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
+        if only != oldOnly {
+            let list = effectiveProjList()
+            let target = resolveProjectHost(only: live(only) ?? only, projList: list, savedProjects: savedProjects, repoHosts: repoHosts)
+            let label = projectChip(only: only, projList: list, projectsLoaded: true).text
+            greenlight.switchProject(to: target, label: label)
+            ensureLocalDashIfNeeded()
+        }
     }
     var l1Only: [String]? { live(sharedOnly) }  // nil until projects are listed
     /// A pick as the windows show it, against the listed projects: nil (all) until listed, and for a pick none of whose
@@ -1409,10 +1578,26 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func refreshProjects() {
         let trees = (lastTreesObj?["trees"] as? [[String: Any]]) ?? []
+        if let rawHosts = lastTreesObj?["repoHosts"] {
+            repoHosts = mergeRepoHostMaps(repoHosts, parseRepoHosts(rawHosts))
+        }
+        var byPath = [String: String](), byName = [String: String]()
+        for t in trees where t["nativeHost"] as? Bool != false {
+            if let path = t["path"] as? String, !path.isEmpty {
+                let h = (t["_runHost"] as? String) ?? host
+                byPath[path] = h
+                if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty { byName[n] = h }
+            }
+        }
+        treeHostByPath = byPath
+        treeHostByName = byName
+        rebuildWorkspaceHostIndex()
         projList = buildProjectList(saved: savedProjects, trees: trees, dark: isDark, fallback: lastTreesObj == nil)
         projectsLoaded = true
         syncL1()
         syncDashPaths()
+        syncHostForActiveWindows(clearOnChange: false)
+        ensureLocalDashIfNeeded()
     }
     /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
     /// them is up. Read straight from the pick, not asked of a page: nothing to wait on, and no answer from a window you've left.
@@ -1460,6 +1645,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas); w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
+        c.serverConnected = greenlight.serverConnected
+        c.syncChatHost(resolveProjectHost(only: live(only) ?? only, projList: effectiveProjList(), savedProjects: savedProjects, repoHosts: repoHosts))
+        ensureLocalDashIfNeeded()
         c.follow(greenlight)
         c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
         c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
@@ -1532,7 +1720,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         l.c.cancelPlans()
         for work in l.c.launchWorks.values { work.cancel() }
         l.c.launchWorks.removeAll(); l.c.toastListeners.removeAll()
-        ssh("\(l.c.chief) stop; \(l.c.chief) new; cd \(shellPath(greenlightHome)) && rm -rf chat-\(l.id)")
+        let h = l.c.chatHost, p = hostPaths(for: h)
+        ssh("\(l.c.chief(on: h)) stop; \(l.c.chief(on: h)) new; cd \(shellPath(p.home)) && rm -rf chat-\(l.id)", on: h)
+        if h != host {
+            ssh("\(l.c.chief(on: host)) stop; \(l.c.chief(on: host)) new; cd \(shellPath(greenlightHome)) && rm -rf chat-\(l.id)", on: host)
+        }
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
@@ -1648,7 +1840,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             for p in r as? [[String: Any]] ?? [] {
                 guard let s = p["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil,
-                      !self.heldElsewhere(s, except: { $0.hasPrefix("\(wid):") }), let at = paneWhere(p["ws"] as? String ?? "") else { continue }
+                      !self.heldElsewhere(s, except: { $0.hasPrefix("\(wid):") }), let at = paneTarget(p["ws"] as? String ?? "") else { continue }
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
@@ -1817,7 +2009,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
         return "exec ssh -qt -o ControlPath=none -o ServerAliveInterval=30 \((devSsh(host) + ["--", host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec $SHELL -lc " + shellQuote(inner)))"
     }
-    var termLoaded = false, treesProc: Process?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
+    var termLoaded = false, treesProc: Process?, localTreesProc: Process?, serverTreesObj: [String: Any]?, localTreesObj: [String: Any]?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
     func editorApp() -> (bid: String, url: URL, name: String)? {
         [("dev.zed.Zed", "Zed"), ("com.todesktop.230313mzl4w4u92", "Cursor"), ("com.microsoft.VSCode", "VS Code")].lazy
@@ -1831,7 +2023,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let d = (try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         web?.evaluateJavaScript("term.toast(\(d))")
     }
-    /// Every installed ADE's worktrees (dash.py trees), where greenlight lives. Runs at launch so L1 resolves its project selector before rendering hexes.
+    private func publishTrees() {
+        let obj: [String: Any]? = (!isLocalHost(host) && localTreesObj != nil)
+            ? mergeTreesPayload(serverTreesObj, localTreesObj, primaryHost: host, secondaryHost: "local")
+            : serverTreesObj ?? localTreesObj
+        if let obj, JSONSerialization.isValidJSONObject(obj) {
+            lastTreesObj = obj
+            refreshProjects()
+            termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
+        } else if !projectsLoaded {
+            refreshProjects()  // fallback to projects.json so filtered L1 windows never hang on a failed trees fetch
+        }
+    }
+
+    /// Every installed ADE's worktrees (dash.py trees), where greenlight lives (and local Mac when a remote server is configured).
     func pushTrees() {
         guard treesProc == nil else { return }
         treesAt = Date()
@@ -1839,16 +2044,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         treesProc = ssh("\(py)/dash.py trees", onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self else { return }
             self.treesProc = nil
+            self.initialServerTreesDone = true
             if out.hasPrefix("{"), let d = out.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                JSONSerialization.isValidJSONObject(obj) {
-                self.lastTreesObj = obj
-                self.refreshProjects()
-                self.termWebs.forEach { $0.callJS("window.term && term.workspaces", [obj]) }
-            } else if !self.projectsLoaded {
-                self.refreshProjects()  // fallback to projects.json so filtered L1 windows never hang on a failed trees fetch
+                self.serverTreesObj = obj
             }
+            self.publishTrees()
         })
+        if !isLocalHost(host) && localTreesProc == nil && !uitest && !selftest {
+            var localOut = ""
+            localTreesProc = ssh("\(pyCmd(on: "local"))/dash.py trees", on: "local", onLine: { localOut += $0 }, onExit: { [weak self] _ in
+                guard let self else { return }
+                self.localTreesProc = nil
+                self.initialLocalTreesDone = true
+                if localOut.hasPrefix("{"), let d = localOut.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                   JSONSerialization.isValidJSONObject(obj) {
+                    self.localTreesObj = obj
+                    self.publishTrees()
+                }
+            })
+        }
     }
     func termMessage(_ b: [String: Any], from web: WKWebView?) {
         guard let wid = termId(web) else { return }  // a closed window's page, still flushing
@@ -1874,7 +2091,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if let obj = lastTreesObj { web?.callJS("window.term && term.workspaces", [obj]) }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":
-            guard let session, let at = paneWhere(b["ws"] as? String ?? "") else { return }
+            guard let session, let at = paneTarget(b["ws"] as? String ?? "") else { return }
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
@@ -1884,7 +2101,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
         case "close":  // you closed it: the session goes too (quitting the app only detaches)
             ptys.removeValue(forKey: id)?.stop(); ptySession[id] = nil
-            if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneWhere(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
+            if let session, !heldElsewhere(session, except: { $0 == id }), let at = paneTarget(b["ws"] as? String ?? "") { ssh("\(App.tmux) kill-session -t \(shellQuote("=" + session)) 2>/dev/null", on: at.host) }
         case "hide": if wid == 0 { termWindow.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }  // its last tab closed
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }
@@ -1912,9 +2129,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
         case "turn":  // a Claude pane's spinner stayed gone: dash.py turn reads its screen (greenlight's agent_state), answered with term.turn
-            guard let session, let ws = b["ws"] as? String, !ws.hasPrefix("@"), paneWhere(ws) != nil else { return }  // @host shells: not the scripts' host
+            guard let session, let ws = b["ws"] as? String, !ws.hasPrefix("@"), let at = paneTarget(ws) else { return }  // @host shells: not the scripts' host
             var out = ""
-            ssh("\(py)/dash.py turn \(shellQuote(session))", onLine: { out += $0 }, onExit: { [weak web] code in
+            ssh("\(pyCmd(on: at.host))/dash.py turn \(shellQuote(session))", on: at.host, onLine: { out += $0 }, onExit: { [weak web] code in
                 let o = out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? ["session": session, "error": "exit \(code)"]
                 web?.callJS("window.term && term.turn", [o])
             })
@@ -1924,9 +2141,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let op = b["op"] as? String, ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff"].contains(op), (b["text"] as? String)?.count ?? 0 <= 8192, let path = b["path"] as? String,
                   path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") else { return }
             var out = ""
-            ssh("\(py)/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", stdin: b["text"] as? String ?? "",
+            let h = workspaceHost(path: path, fallback: greenlight.chatHost)
+            ssh("\(pyCmd(on: h))/dash.py tree \(op) '\(path)'\(b["force"] as? Bool == true ? " --force" : "")", on: h, stdin: b["text"] as? String ?? "",
                 onLine: { out += $0 }, onExit: { [weak self, weak web] code in
-                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(host) didn't answer (exit \(code))"])
+                let js = safeJSON(out, fallback: ["op": op, "path": path, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 web?.evaluateJavaScript("term.tree(\(js))")
                 if op != "info" && op != "diff" { self?.pushTrees() }
             })
@@ -1973,7 +2191,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             termBadges[wid] = max(0, b["n"] as? Int ?? 0)
             let n = termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
         case "file":  // a dropped or pasted file: written where the pane's shell runs (uid-private 0700 dir, 0600 file), its path goes back to be pasted
-            guard let at = paneWhere(b["ws"] as? String ?? ""), let data = b["data"] as? String, data.count <= 14_000_000,
+            guard let at = paneTarget(b["ws"] as? String ?? ""), let data = b["data"] as? String, data.count <= 14_000_000,
                   data.range(of: #"^[A-Za-z0-9+/=]*$"#, options: .regularExpression) != nil else { return }
             let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
             let fname = "\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
@@ -1983,7 +2201,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 web?.callJS("window.term && term.filed", [tid, code == 0 && !writtenPath.isEmpty ? writtenPath : ""])
             })
         case "port":  // a dev-server port chip: localhost here, else through an ssh tunnel to the pane's host first; its state goes back to every window
-            guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneWhere(b["ws"] as? String ?? ""),
+            guard let port = b["port"] as? Int, (1024...65535).contains(port), let at = paneTarget(b["ws"] as? String ?? ""),
                   let u = URL(string: "http://localhost:\(port)") else { return }
             if at.host.isEmpty || at.host == "local" { NSWorkspace.shared.open(u); return }
             let key = "\(at.host):\(port)"
@@ -2001,12 +2219,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 if p.isRunning { NSWorkspace.shared.open(u); self?.tunnelState(key, "open") } else { self?.tunnelState(key, "failed") }
             }
         case "untunnel":  // Cancel / Close on a port row: ends that tunnel
-            guard let port = b["port"] as? Int, let at = paneWhere(b["ws"] as? String ?? "") else { return }
+            guard let port = b["port"] as? Int, let at = paneTarget(b["ws"] as? String ?? "") else { return }
             let key = "\(at.host):\(port)"
             if let p = tunnels.removeValue(forKey: key) { p.terminate() }
             tunnelState(key, "closed")
         case "edit":  // Open in editor: Zed, Cursor or VS Code, whichever is installed first; over ssh for a remote host
-            guard let at = paneWhere(b["ws"] as? String ?? ""), !at.cwd.isEmpty else { return }
+            guard let at = paneTarget(b["ws"] as? String ?? ""), !at.cwd.isEmpty else { return }
             guard let (bid, app, _) = editorApp() else { return toastTerm(web, "No Zed, Cursor or VS Code installed") }
             if at.host.isEmpty || at.host == "local" {
                 NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
@@ -2192,7 +2410,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
             if case let t = l1Title(l.floor.project), l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
-            if l.c.run == nil, l.c.connected != greenlight.connected { l.c.connected = greenlight.connected }  // ponytail: same host, so the main chat's online light stands in until this one runs a turn
+            l.c.serverConnected = greenlight.serverConnected
+            let wantConnected = isLocalHost(l.c.chatHost) ? true : greenlight.serverConnected
+            if l.c.run == nil, l.c.connected != wantConnected { l.c.connected = wantConnected }
         }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
             termWebs.forEach { $0.evaluateJavaScript("window.term && term.localName(\(js))") } }
@@ -2386,9 +2606,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         Core.quitting = true  // the chats' ssh processes end below; their turns go on and are followed at the next launch
         tunnels.values.forEach { $0.terminate() }
         dashProc?.terminate(); dashProc = nil
+        localDashProc?.terminate(); localDashProc = nil
         greenlight.outboxProc?.terminate(); greenlight.outboxProc = nil
         greenlight.proc?.terminate(); greenlight.proc = nil
         treesProc?.terminate(); treesProc = nil
+        localTreesProc?.terminate(); localTreesProc = nil
         l1s.values.forEach { $0.c.proc?.terminate(); if !$0.c.voice.idle { $0.c.voice.stopAll() } }
         Speech.shared.stop()
         uitestServer?.stop()

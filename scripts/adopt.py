@@ -307,21 +307,25 @@ def plan(rows=None, rows_ts=None, cap=CAP, now=None):
                 verdict, reason = "no-repo", f"no repo in the ADE for {c['project']}"
             else:
                 repo = repos[c["project"]]
-                c["repo"] = repo
-                if repo["path"] not in busy_cache:
-                    busy_cache[repo["path"]] = checked_out(repo["path"])
-                busy = busy_cache[repo["path"]]
-                want_b = f"mr-{c['iid']}" if c["role"] == "review" else c["source_branch"]
-                hit = want_b if want_b and want_b in busy else None
-                if hit:
-                    verdict, reason = "busy", f"{hit} is checked out in {busy[hit]}"
-                elif len(create) >= cap:
-                    verdict, reason = "deferred", f"over the {cap}-per-run cap: next run"
+                host_info = greenlight.resolve_repo_host(c["project"], path=repo.get("path"))
+                if sys.platform != "darwin" and host_info["target"] == "mac":
+                    verdict, reason = "skip", f"{c['project']} runs on Mac (host={host_info['mode']})"
                 else:
-                    verdict, reason = "create", f"{c['role']} MR with no workspace" + (
-                        f" (I'm blocking it: {c['block']})" if c.get("block") else "")
-                    c["name"] = ws_name(c)
-                    create.append(c)
+                    c["repo"] = repo
+                    if repo["path"] not in busy_cache:
+                        busy_cache[repo["path"]] = checked_out(repo["path"])
+                    busy = busy_cache[repo["path"]]
+                    want_b = f"mr-{c['iid']}" if c["role"] == "review" else c["source_branch"]
+                    hit = want_b if want_b and want_b in busy else None
+                    if hit:
+                        verdict, reason = "busy", f"{hit} is checked out in {busy[hit]}"
+                    elif len(create) >= cap:
+                        verdict, reason = "deferred", f"over the {cap}-per-run cap: next run"
+                    else:
+                        verdict, reason = "create", f"{c['role']} MR with no workspace" + (
+                            f" (I'm blocking it: {c['block']})" if c.get("block") else "")
+                        c["name"] = ws_name(c)
+                        create.append(c)
         c.update(verdict=verdict, reason=reason)
         items.append(c)
 

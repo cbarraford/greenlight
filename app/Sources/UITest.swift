@@ -212,10 +212,10 @@ final class UITestServer {
         let screens = NSScreen.screens.map { s in [Int(s.visibleFrame.minX), Int(s.visibleFrame.minY), Int(s.visibleFrame.width), Int(s.visibleFrame.height)] }
         let others: [[String: Any]] = app.l1s.values.sorted { $0.id < $1.id }.map { l in
             ["id": l.id, "only": l.only ?? NSNull(), "chip": l.floor.project, "title": l.w.title, "visible": l.w.isVisible, "frame": frame(l.w),
-             "scope": app.scope(l) ?? NSNull()]
+             "scope": app.scope(l) ?? NSNull(), "chatHost": l.c.chatHost]
         }
         return ["main": ["only": app.sharedOnly ?? NSNull(), "chip": app.l1Floor.project, "title": app.window.title, "visible": app.window.isVisible,
-                         "frame": frame(app.window)] as [String: Any],
+                         "frame": frame(app.window), "chatHost": app.greenlight.chatHost] as [String: Any],
                 "others": others, "saved": ud.array(forKey: "l1Windows") ?? [], "projectsLoaded": app.projectsLoaded, "screens": screens]
     }
 

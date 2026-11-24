@@ -972,5 +972,140 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     RunLoop.main.run(until: Date() + 0.1)
     check("core: RulesStore round-trip, legacy gemini-4-neon migration, and helpers",
           rs.repos.contains("widgets") && rs.instructions == "Be brief" && migrated && !bigChunk.isEmpty)
+
+    // 12. Per-project host setting, resolution, snapshot/tree merging, and project switch clearing chat context onto target host
+    let hostMap = parseRepoHosts([
+        "greenlight-ios": ["mode": "mac", "target": "mac", "needs_mac": true, "reason": "Xcode project"],
+        "greenlight": ["mode": "auto", "target": "mac", "needs_mac": true, "reason": "macOS/iOS app"],
+        "backend": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""],
+        "api": ["mode": "server", "target": "server", "needs_mac": false, "reason": ""],
+    ])
+    let hostProjs: [[String: Any]] = [
+        ["id": "pios", "name": "iOS", "repos": ["org/greenlight-ios"], "paths": ["/w/ios"]],
+        ["id": "pgl", "name": "Greenlight", "repos": ["greenlight"], "paths": ["/w/gl"]],
+        ["id": "papi", "name": "API", "repos": ["api", "backend"], "paths": ["/w/api"]],
+    ]
+    check("project host: server default for All/server repos, local for mac/auto-mac projects, mixed -> server",
+          resolveProjectHost(only: nil, projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "devbox"
+          && resolveProjectHost(only: ["pios"], projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "local"
+          && resolveProjectHost(only: ["pgl"], projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "local"
+          && resolveProjectHost(only: ["papi"], projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "devbox"
+          && resolveProjectHost(only: ["pios", "pgl"], projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "local"
+          && resolveProjectHost(only: ["pios", "papi"], projList: hostProjs, repoHosts: hostMap, defaultHost: "devbox") == "devbox"
+          && resolveProjectHost(only: ["papi"], projList: hostProjs, repoHosts: hostMap, defaultHost: "local") == "local"
+          && resolveRepoTargetHost("org/greenlight-ios", repoHosts: hostMap, defaultHost: "devbox") == "local"
+          && resolveRepoTargetHost("api", repoHosts: hostMap, defaultHost: "devbox") == "devbox"
+          && hostBadgeName("local", defaultHost: "devbox") == "Mac"
+          && hostBadgeName("devbox", defaultHost: "devbox") == "devbox")
+
+    let mergedSnap = mergeSnapshots(
+        ["ts": 10, "scanned": 10, "pucks": [["name": "srv-1", "path": "/srv/1", "nativeHost": true]], "trees": [["path": "/mac/1", "nativeHost": false], ["path": "/srv/tree", "nativeHost": true]]],
+        ["ts": 12, "scanned": 12, "pucks": [
+            ["name": "srv-1", "path": "/srv/1", "nativeHost": false],
+            ["name": "mac-1", "path": "/mac/1", "nativeHost": true],
+        ], "trees": [["path": "/srv/1", "nativeHost": false]]],
+        primaryHost: "devbox", secondaryHost: "local"
+    )
+    let mergedPucks = (mergedSnap?["pucks"] as? [[String: Any]]) ?? []
+    let mergedSnapTrees = (mergedSnap?["trees"] as? [[String: Any]]) ?? []
+    let mergedTrees = mergeTreesPayload(
+        ["trees": [["path": "/srv/a", "project": "greenlight", "nativeHost": true]], "panes": ["mc-srv": ["state": "done"]],
+         "repoHosts": ["greenlight": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""]]],
+        ["trees": [["path": "/srv/a", "project": "greenlight", "nativeHost": false],
+                   ["path": "/mac/a", "project": "greenlight", "nativeHost": true]], "panes": ["mc-mac": ["state": "working"]],
+         "repoHosts": ["greenlight": ["mode": "server", "target": "server", "needs_mac": true, "reason": "macOS/iOS app"]]],
+        primaryHost: "devbox", secondaryHost: "local"
+    )
+    let combinedHost = parseRepoHosts(mergedTrees?["repoHosts"])["greenlight"]
+    let mergedPanes = (mergedTrees?["panes"] as? [String: Any]) ?? [:]
+    let mergedTreeList = (mergedTrees?["trees"] as? [[String: Any]]) ?? []
+    let foldedMap = mergeRepoHostMaps([:], parseRepoHosts([
+        "ios-app": ["mode": "server", "target": "server", "needs_mac": false, "reason": ""],
+        "acme/ios-app": ["mode": "mac", "target": "mac", "needs_mac": true, "reason": "Xcode project"],
+    ]))
+    let preservedAutoMap = mergeRepoHostMaps([:], parseRepoHosts([
+        "mac-app": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""],
+        "acme/mac-app": ["mode": "server", "target": "server", "needs_mac": true, "reason": "macOS/iOS app"],
+    ]))
+    let downgradedMap = setRepoHostInMap(foldedMap, repo: "ios-app",
+                                         info: RepoHostInfo(mode: "server", target: "server", needsMac: false, reason: ""))
+    let savedOnlyHost = resolveProjectHost(
+        only: ["pempty"],
+        projList: [["id": "pempty", "name": "Empty", "repos": [String](), "paths": [String]()]],
+        savedProjects: [["id": "pempty", "name": "Empty", "repos": ["acme/ios-app"], "dirs": [String]()]],
+        repoHosts: foldedMap, defaultHost: "devbox"
+    )
+    check("project host: nativeHost wins on paired Orca dedupe, org/repo fold is deterministic, and savedProjects resolves empty-tree projects",
+          mergedPucks.count == 2
+          && mergedSnapTrees.count == 1 && mergedSnapTrees[0]["path"] as? String == "/srv/tree"
+          && mergedPucks.first { $0["name"] as? String == "mac-1" }?["_runHost"] as? String == "local"
+          && mergedPucks.first { $0["name"] as? String == "srv-1" }?["_runHost"] as? String == "devbox"
+          && mergedTreeList.count == 2
+          && mergedTreeList.first { $0["path"] as? String == "/srv/a" }?["_runHost"] as? String == "devbox"
+          && mergedPanes["mc-srv"] != nil && mergedPanes["mc-mac"] != nil
+          && combinedHost?.mode == "auto" && combinedHost?.target == "mac" && combinedHost?.needsMac == true
+          && foldedMap["ios-app"]?.target == "mac"
+          && preservedAutoMap["mac-app"]?.mode == "auto" && preservedAutoMap["mac-app"]?.target == "mac" && preservedAutoMap["mac-app"]?.needsMac == true
+          && downgradedMap["ios-app"]?.target == "server" && downgradedMap["acme/ios-app"]?.target == "server" && downgradedMap["acme/ios-app"]?.needsMac == true
+          && savedOnlyHost == "local")
+
+    // Verify switchProject clears docked attachments, tracks clearing per host (slow old host never blocks new host),
+    // keeps serverConnected separate from local connected, and preserves DWIM toast runHost across switches.
+    var oldNewFinish: ((Int32) -> Void)?
+    sshOverride = { remote, h, stdin, onLine, onExit in
+        sshLog.append((remote, h, stdin))
+        if remote.contains("chat.py new") && h == "devbox" { oldNewFinish = onExit; return Process() }
+        let (lines, code) = responder(remote, h, stdin)
+        for l in lines { onLine(l) }
+        onExit(code)
+        return Process()
+    }
+    sshLog.removeAll()
+    responder = { r, _, _ in
+        if r.contains("chat.py send") { return ([#"{"e":"done","ok":true,"text":"Running on Mac"}"#], 0) }
+        if r.contains("dwim.py undo") { return ([#"{"ok":true,"undone":["w1"],"kept":[]}"#], 0) }
+        return ([], 0)
+    }
+    let swC = Core(session: 9)
+    var undocked = [String]()
+    swC.unattach = { undocked.append($0) }
+    swC.attached = [Attached(id: "old-ws", label: "old-ws", color: .gray, mrs: 1, text: "old ctx", sent: true)]
+    swC.serverConnected = false
+    swC.syncChatHost("devbox")
+    let offlineOnSrv = !swC.connected
+    swC.msgs.append(Msg(.you, "old server msg"))
+    swC.context = 5000; swC.window = 200000
+    swC.show(DwimToast(text: "Parked w1", undo: "u-srv", runHost: "devbox"), for: nil)
+    swC.switchProject(to: "local", label: "iOS")
+    let newCalls = sshLog.filter { $0.remote.contains("chat.py new") }
+    let switchedClean = swC.chatHost == "local" && swC.context == 0 && swC.window == 0
+        && swC.attached.isEmpty && undocked == ["old-ws"]
+        && swC.connected && swC.clearing == 0
+        && swC.msgs.count == 1 && swC.msgs[0].text == "Switched to iOS on this Mac. New conversation."
+        && newCalls.map(\.host) == ["devbox", "local"]
+    sshLog.removeAll()
+    swC.send("build ios app")
+    let sentOnLocalWhileOldHung = sshLog.contains { $0.remote.contains("chat.py send") && $0.host == "local" }
+    swC.undoToast()
+    let undoHitOldHost = sshLog.contains { $0.remote.contains("dwim.py undo") && $0.host == "devbox" }
+    oldNewFinish?(0)
+    check("project host: switchProject clears attachments, doesn't block on old host, keeps connected accurate, and preserves DWIM undo host",
+          offlineOnSrv && switchedClean && sentOnLocalWhileOldHung && undoHitOldHost)
+
+    sshOverride = { remote, h, stdin, onLine, onExit in
+        sshLog.append((remote, h, stdin))
+        let (lines, code) = responder(remote, h, stdin)
+        for l in lines { onLine(l) }
+        onExit(code)
+        return Process()
+    }
+    responder = { r, _, _ in
+        if r.contains("task 'host-set'") { return ([#"{"repo":"widgets","mode":"mac","target":"mac","needs_mac":false,"reason":"","options":{"host":"mac"},"source":"yours"}"#], 0) }
+        return ([], 0)
+    }
+    rs.repo = "widgets"
+    rs.setHost("mac")
+    check("project host: RulesStore.setHost persists mode and updates repoHostTarget",
+          rs.repoHostMode == "mac" && rs.repoHostTarget == "mac" && rs.repoHosts["widgets"]?.target == "mac")
     mainC.clear()
 }

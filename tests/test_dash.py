@@ -803,8 +803,11 @@ with mock.patch.object(ade_basement, "pane_states", return_value={"mc-a": {"stat
          mock.patch.object(dash, "trees", return_value=[]), \
          mock.patch.dict(dash.greenlight.CONFIG, {"agents": ["agy", "codex", "claude"]}):
         dash.main()
-    assert json.loads(_trees_out.getvalue()) == {"trees": [], "panes": {"mc-a": {"state": "done", "title": "✳ Done"}},
-                                                 "agents": ["agy", "codex", "claude"]}
+    _trees_payload = json.loads(_trees_out.getvalue())
+    assert _trees_payload["trees"] == []
+    assert _trees_payload["panes"] == {"mc-a": {"state": "done", "title": "✳ Done"}}
+    assert isinstance(_trees_payload["repoHosts"], dict)
+    assert _trees_payload["agents"] == ["agy", "codex", "claude"]
 with mock.patch.object(ade_basement, "pane_states", side_effect=OSError("no tmux")):
     assert dash.basement_panes() == {}
 print("basement panes ok")
