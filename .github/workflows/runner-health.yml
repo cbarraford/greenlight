@@ -1,11 +1,10 @@
 name: runner-health
 # Daily, before nightly: each self-hosted runner checks the tools and disk CI needs, so a broken
 # host fails here with a clear message instead of halfway through a PR run.
-# ponytail: runner names can't live in the repo, so this targets OS labels: two Linux slots run at
-# once and land on both Linux hosts while they're idle, but can double up on one if the other is busy.
-# Upgrade: a repo variable listing the runner names, fed into the matrix. An offline runner just
-# leaves its job queued (GitHub drops it after 24 h); seeing that needs an admin token, which
-# GITHUB_TOKEN can't have.
+# Runner names can't live in the repo, so each Linux runner carries a neutral `slot-N` label (added via
+# the runners API; re-registering a runner drops it, so re-add it). ponytail: hardcoded slot list, add a
+# slot here when you add a runner. An offline runner just leaves its job queued (GitHub drops it after
+# 24 h); seeing that needs an admin token, which GITHUB_TOKEN can't have.
 on:
   schedule:
     - cron: "30 6 * * *"
@@ -19,8 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        slot: [Linux-1, Linux-2, macOS]
-    runs-on: [self-hosted, "${{ startsWith(matrix.slot, 'Linux') && 'Linux' || 'macOS' }}"]
+        slot: [slot-1, slot-2, slot-3, slot-4, slot-5, slot-6, slot-7, slot-8, slot-9, slot-10, slot-11, slot-12, macOS]
+    runs-on: [self-hosted, "${{ matrix.slot }}"]
     timeout-minutes: 5
     steps:
       - name: Tools and disk
@@ -28,7 +27,8 @@ jobs:
           fail=0
           need() { command -v "$1" >/dev/null 2>&1 || { echo "::error::$1 is not on the runner PATH (actions-runner/.path)"; fail=1; }; }
           need python3; need git
-          python3 -c 'import sys, venv; sys.exit(sys.version_info < (3, 12))' || { echo "::error::python3 is older than 3.12 or lacks venv"; fail=1; }
+          python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' || { echo "::error::python3 is older than 3.12"; fail=1; }
+          python3 -m venv "$RUNNER_TEMP/venv-check" >/dev/null || { echo "::error::python3 -m venv fails (apt install python3.12-venv)"; fail=1; }
           if [ "$RUNNER_OS" = macOS ]; then
             need swiftc; need tmux
             if pgrep -x Greenlight-ci >/dev/null; then echo "::error::a Greenlight-ci process outlived its run; kill it on the host"; fail=1; fi
