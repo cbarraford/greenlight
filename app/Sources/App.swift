@@ -337,6 +337,12 @@ func cascadeFrame(_ f: NSRect, min m: NSSize, in screen: NSRect?) -> NSRect {
     r.origin.y = min(max(r.minY, s.minY), s.maxY - r.height)
     return r
 }
+/// The frame a floor switch hands the next window: `f`, grown to its minimum `m` from the top-left corner (a window's
+/// title bar stays where it was).
+func sharedFrame(_ f: NSRect, min m: NSSize) -> NSRect {
+    let w = max(f.width, m.width), h = max(f.height, m.height)
+    return NSRect(x: f.minX, y: f.maxY - h, width: w, height: h)
+}
 /// Whether a dashboard window may render snapshots yet: All-projects windows don't wait; filtered ones wait until the project list is loaded
 /// so the UI doesn't flash another project's hexes before narrowing to the saved pick.
 func canShowDashboard(only: [String]?, projectsLoaded: Bool) -> Bool { only == nil || projectsLoaded }
@@ -447,6 +453,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] in
+            if let w = $0.object as? NSWindow, w === self?.window { _ = self?.closeShare(w) }  // Center has no delegate: its close button, as a guest
+        }
+        for n in [NSWindow.willEnterFullScreenNotification, NSWindow.willExitFullScreenNotification, NSWindow.didExitFullScreenNotification] {  // the main window has no delegate
+            NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { w in self?.fullScreen(n, w) } }
+        }
         for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { self?.noteFocus($0) } }
         }
@@ -703,7 +715,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // §10.1: the canvas, never black
         w.titleVisibility = .hidden  // the floor bar says Center; the title stays for the Window menu and Mission Control
         w.isReleasedWhenClosed = false  // the close button hides it; the menubar star, Dock or ⌃⌥M bring it back
-        w.minSize = NSSize(width: (!greenlight.chatOut && !chatHidden) ? App.paneMinWidth : 480, height: 520)
+        w.minSize = centerMinSize
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
@@ -1480,7 +1492,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                          chat.topAnchor.constraint(equalTo: home.topAnchor), chat.bottomAnchor.constraint(equalTo: home.bottomAnchor)])
         }
         let pane = !greenlight.chatOut && !chatHidden
-        window.minSize = NSSize(width: pane ? App.paneMinWidth : 480, height: 520)
+        window.minSize = centerMinSize; termWins[0]?.minSize = centerMinSize  // one size for every floor: the Basement's can't go below Center's
         if pane { App.widen(window, to: App.paneMinWidth, display: window.isVisible) }
         if chatSlot.isHidden == pane {
             chatSlot.isHidden = !pane
@@ -1664,7 +1676,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         l.floor.at = "greenlight"
         let go: (String) -> Void = { [unowned self] f in  // ponytail: down to the Basement or the Pipe is a cut; the ride is the main window's
-            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f]); basement() }
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f]); basement(from: l1s[id]?.w) }
         floorGo[ObjectIdentifier(w)] = (l.floor, go)
         floorBar(w, Floors(s: l.floor, c: greenlight, pick: { [weak self, weak l] in if let l { self?.l1Pick(in: l) } }, go: go))
         l1s[id] = l; syncL1()
@@ -1794,7 +1806,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.titlebarAppearsTransparent = true
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // the page's band takes over once it loads
         w.isReleasedWhenClosed = false
-        w.minSize = NSSize(width: 300, height: 160)
+        w.minSize = id == 0 ? centerMinSize : NSSize(width: 300, height: 160)  // the orb's window shares Center's frame (issue 177), so its minimum too
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         w.delegate = self
         let cfg = WKWebViewConfiguration()
@@ -1810,7 +1822,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         termWins[id] = w
         let fs = FloorState(); floors[id] = fs
         let go: (String) -> Void = { [unowned self, weak web] f in
-            if f != "greenlight" { web?.callJS("window.term && term.opens", [f]) } else if id == 0 { appGoUp() } else { show() }
+            if f != "greenlight" { web?.callJS("window.term && term.opens", [f]) } else if id == 0 { appGoUp() } else { hand(window, from: termWins[id]); show() }
         }
         floorGo[ObjectIdentifier(w)] = (fs, go)
         floorBar(w, Floors(s: fs, c: greenlight, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }, go: go))
@@ -1931,7 +1943,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         upstairs ? ride(up: false) : basement()
     }
-    func basement() {
+    /// The Basement in front. `from`: the window it replaces (default: Center when it's up), whose frame it takes.
+    func basement(from: NSWindow? = nil) {
+        hand(termWindow, from: from ?? (upstairs && window.isVisible ? window : nil))
         upstairs = false
         if let web = termWindow.contentView as? WKWebView { revealOnPaint(termWindow, web) }
         presentWindow(termWindow)
@@ -2260,6 +2274,84 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var orbHost: NSWindow { upstairs ? window : termWindow }
 
+    // MARK: One window size for every floor (issue 177): Center, the Basement and the Pipe share a frame and a Space
+
+    /// Center's smallest frame: its dashboard, and the chat pane when it's docked. The orb's terminal window has it too.
+    var centerMinSize: NSSize { NSSize(width: (!greenlight.chatOut && !chatHidden) ? App.paneMinWidth : 480, height: 520) }
+    /// The full-screen window a floor switch left (`host`, kept in its Space underneath) and the floor shown over it (`guest`,
+    /// a full-screen auxiliary at its frame), so every floor stays on that one Space. `frame`: the guest's to go back to.
+    var fsShare: (host: NSWindow, guest: NSWindow, frame: NSRect, zoom: (AnyObject?, Selector?))?
+    var preFullScreen = [ObjectIdentifier: NSRect](), fsClosing = false
+
+    /// A floor switch from `from` to `to`: `to` takes `from`'s frame, so the size never changes. Out of a full-screen
+    /// window, `to` joins that window's Space rather than making one of its own; back to it, the guest steps out again.
+    func hand(_ to: NSWindow, from: NSWindow?) {
+        guard let from, from !== to else { return }
+        if let sh = fsShare, from === sh.host || from === sh.guest {
+            if to === sh.guest { return }
+            leaveShare()
+            if to !== sh.host { joinShare(to, host: sh.host) }
+            return
+        }
+        if from.styleMask.contains(.fullScreen) { return joinShare(to, host: from) }
+        guard !to.styleMask.contains(.fullScreen) else { return }  // its own Space already: macOS takes you there
+        let f = sharedFrame(from.frame, min: to.minSize)
+        if f != to.frame { to.setFrame(f, display: false) }
+    }
+    func joinShare(_ g: NSWindow, host: NSWindow) {
+        if restoreFrame?.w === g { restoreFrame = nil }  // back in before it was out of sight
+        let zb = g.standardWindowButton(.zoomButton)
+        fsShare = (host, g, preFullScreen[ObjectIdentifier(host)] ?? sharedFrame(g.frame, min: g.minSize), (zb?.target, zb?.action))
+        g.collectionBehavior.remove([.fullScreenPrimary, .fullScreenNone])
+        g.collectionBehavior.insert(.fullScreenAuxiliary)  // shown with the full-screen window, in its Space; it can't make another
+        zb?.target = self; zb?.action = #selector(exitSharedFullScreen)  // its green button: out of full screen, as the host's would
+        g.setFrame(host.frame, display: false)
+    }
+    /// The guest out of the shared Space, a normal window again once it's out of sight: a ride still has to take its
+    /// picture, and whoever switched floors orders it out (`stepAside`). Its frame goes back to the floors' own.
+    func leaveShare() {
+        guard let sh = fsShare else { return }
+        fsShare = nil
+        let zb = sh.guest.standardWindowButton(.zoomButton); zb?.target = sh.zoom.0; zb?.action = sh.zoom.1
+        restoreFrame = (sh.guest, sh.frame)
+        if !sh.guest.isVisible { unguest(sh.guest) }
+    }
+    var restoreFrame: (w: NSWindow, frame: NSRect)?
+    func unguest(_ w: NSWindow) {
+        guard let r = restoreFrame, r.w === w else { return }
+        restoreFrame = nil
+        w.collectionBehavior.remove(.fullScreenAuxiliary)
+        w.setFrame(r.frame, display: false)
+    }
+    @objc func exitSharedFullScreen() { fsShare?.host.toggleFullScreen(nil) }
+    /// Ordering a full-screen window out would empty its Space: the host stays in it, under its guest.
+    func stepAside(_ w: NSWindow) {
+        guard w !== fsShare?.host else { return }
+        w.orderOut(nil); unguest(w)
+    }
+    /// The host leaves full screen under its guest: the guest's floor, which you were on, comes back as a window at the host's frame.
+    func fullScreen(_ n: Notification.Name, _ w: NSWindow) {
+        if n == NSWindow.willEnterFullScreenNotification { preFullScreen[ObjectIdentifier(w)] = w.frame; return }
+        if n == NSWindow.willExitFullScreenNotification {
+            if let sh = fsShare, sh.host === w { leaveShare(); stepAside(sh.guest); stayOn = sh.guest }  // out of the Space before it goes
+            return
+        }
+        preFullScreen[ObjectIdentifier(w)] = nil
+        guard let g = stayOn else { return }
+        stayOn = nil
+        if fsClosing { fsClosing = false; w.orderOut(nil); return }
+        g.setFrame(sharedFrame(w.frame, min: g.minSize), display: false)
+        presentWindow(g); w.orderOut(nil)
+        syncOrbs()
+    }
+    var stayOn: NSWindow?
+    /// The guest's close button: the host goes too, out of full screen first so its Space goes with it.
+    func closeShare(_ w: NSWindow) -> Bool {
+        guard let sh = fsShare, sh.guest === w else { return false }
+        fsClosing = true; hideFloaters(); sh.host.toggleFullScreen(nil)
+        return true
+    }
+
     // MARK: Basement ↔ Greenlight Center: one level at a time, the orb rides between them
 
     var upstairs = false, riding = false, termSide = false, rideWin: NSPanel?, keepAt: NSPoint?
@@ -2269,8 +2361,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         Diag.event("floor", ["to": up ? "upstairs" : "basement"])
         let from = orbHost, to = up ? window : termWindow
         guard from.isVisible, let scr = from.screen ?? NSScreen.main else { return up ? show() : basement() }
+        hand(to, from: from)  // before the snapshots: the other level grows into this one's frame
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
-        guard greenlight.rideTime > 0 else { if !up { from.orderOut(nil); hideFloaters() }; return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
+        guard greenlight.rideTime > 0 else { if !up { stepAside(from); hideFloaters() }; return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
         riding = true
         let S = scr.frame, reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
@@ -2288,13 +2381,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let s = RideState(); s.tone = up ? 0 : 1; s.faceUp = up
             let p = NSPanel(contentRect: S, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true; p.level = .floating
+            p.collectionBehavior = [.fullScreenAuxiliary, .transient]  // a full-screen level's ride plays in its Space
             p.contentView = NSHostingView(rootView: RideView(up: up, from: shot(from, img), orb: orb, face: !greenlight.orbsHidden, s: s))
             p.setFrame(S, display: true); p.orderFrontRegardless(); rideWin = p
             hideFloaters()
             termWindow.parent?.removeChildWindow(termWindow)
             // the other level comes up behind the overlay, all but invisible, so it's drawn by the time it grows
             to.alphaValue = 0.01
-            DispatchQueue.main.async { [self] in from.orderOut(nil); if up { show() } else { basement() } }  // once the picture covers it
+            DispatchQueue.main.async { [self] in stepAside(from); if up { show() } else { basement() } }  // once the picture covers it
             // one smooth stroke each way, no stops: in to the orb (0.3s), the orb flips, out of it (0.3s)
             if reduce { at(0, 0.2) { s.from.a = 0; s.veil = 0.92 } } else {  // Reduce Motion: a crossfade
                 at(0, 0.3, Animation.easeIn) { s.from = Squash(sx: 0.02, sy: 0.02, r: 300, a: 0) }
@@ -2373,6 +2467,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     func windowShouldClose(_ w: NSWindow) -> Bool {
         if w === chatWindow { popChat(out: false); return false }
+        if NSApp.currentEvent?.type != .keyDown, closeShare(w) { return false }  // the didExit that follows hides the host; the guest's gone already
         if let wid = termWins.first(where: { $0.value === w })?.key {  // ⌘W closes the tab; the close button hides the orb's window (shells kept), closes a New window one (shells killed)
             if NSApp.currentEvent?.type == .keyDown { (w.contentView as? WKWebView)?.evaluateJavaScript("term.closeTab()") }
             else if wid == 0 { w.orderOut(nil); hideFloaters() } else { closeTermWindow(wid) }
@@ -2621,7 +2716,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
     func show() {
-        if !upstairs, termWindow.isVisible { termWindow.orderOut(nil); hideFloaters() }
+        if !upstairs, termWindow.isVisible { hand(window, from: termWindow); stepAside(termWindow); hideFloaters() }
         upstairs = true
         greenlight.unread = 0
         tick()
