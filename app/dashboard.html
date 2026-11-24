@@ -2308,19 +2308,21 @@ function taskSheetEl(){
       : ["Creates ", h("span", {class:"mono"}, taskSlug(line())), ` in ${repo.name}`];
   }
 }
-function note(title, detail, bad){  // a card action's outcome, in the toast (DESIGN.md §10.14: timed, paused on hover)
-  const was = ui.task.done?.error ? ui.task.done : null;
+function note(title, detail, bad){  // a card action's outcome, in the toast. A New task error under it is replaced, as one error replaces another
+  const was = ui.task.done?.title && ui.task.done.error ? ui.task.done : null;  // a card's error (New task's have no title: replaced as before)
+  if (bad) detail = detail.length > 600 ? "…" + detail.slice(-600) : detail;  // each error's end (stderr's cause), before any join
   if (!bad && was) return;  // a success doesn't cover an error showing (the hex coming back shows the success)
   if (bad && was) [title, detail] = [`${(was.n || 1) + 1} actions failed`, `${was.n ? "" : was.title + ": "}${was.error}\n${title}: ${detail}`];  // and a second joins it
-  ui.task.done = {title, detail, error: bad ? detail : null, n: bad && was ? (was.n || 1) + 1 : 0}; toastTimer(); render();
+  ui.task.done = {title, detail, error: bad ? detail : null, n: bad && was ? (was.n || 1) + 1 : 0}; toastTimer(NOTE_MS); render();
 }
 function toastEl(){
   const d = ui.task.done; if (!d) return null;
-  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer},
+  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: () => toastTimer(NOTE_MS),
+      onfocusin: () => clearTimeout(ui.task.t), onfocusout: e => e.currentTarget.contains(e.relatedTarget) || toastTimer(NOTE_MS)},
     h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
-    h("span", {class:"tmsg"}, h("b", {}, d.title), d.error ? h("code", {}, d.error.length > 600 ? "…" + d.error.slice(-600) : d.error)  // the end of stderr is the cause
+    h("span", {class:"tmsg"}, h("b", {}, d.title), d.error ? h("code", {}, d.error)  // cut per error in note(); a long join scrolls
       : d.detail ? h("span", {}, short(d.detail, 160)) : null),
-    h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: () => { clearTimeout(ui.task.t); ui.task.done = null; render() }}, icon("close")));
+    h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: () => { clearTimeout(ui.task.t); ui.task.done = ui.task.fresh = null; render() }}, icon("close")));  // fresh: a task started under it
   const x = () => { clearTimeout(ui.task.t); ui.task.done = ui.task.fresh = null; render() };
   return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`, onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer,  // read it at your pace: the clock waits
       onfocusin: () => clearTimeout(ui.task.t), onfocusout: e => e.currentTarget.contains(e.relatedTarget) || toastTimer()}, h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
@@ -2353,7 +2355,8 @@ function tasked(r){
   if (r.error || !ui.task.done?.title || !ui.task.done.error) ui.task.done = r.error ? {error: r.error} : {name: r.name, repo: r.repo || r.arg};  // a card's error stays: the new task shows on the map
   toastTimer(); render();
 }
-function toastTimer(){ clearTimeout(ui.task.t); ui.task.t = setTimeout(() => { ui.task.done = ui.task.fresh = null; render() }, 12000) }
+function toastTimer(ms = 12000){ clearTimeout(ui.task.t); ui.task.t = setTimeout(() => { ui.task.done = ui.task.fresh = null; render() }, ms) }
+const NOTE_MS = 5000;  // DESIGN.md §10.14: a toast with only its × lasts 5s, paused on hover or focus
 document.addEventListener("paste", e => {  // a pasted screenshot goes into an open New task
   if (!ui.task.sheet) return;
   const fs = [...(e.clipboardData ? e.clipboardData.files : [])];

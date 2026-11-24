@@ -475,7 +475,7 @@ test("card actions: the hex leaves on the click, comes back when its state moves
   assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
 });
 
-test("card actions: errors keep their end and stay up; a late reply still says so; a failing scan isn't re-asked every 5s; an empty move hides nothing", async page => {
+test("card actions: errors keep their end, join, and time out at 5s; a late reply still says so; a failing scan isn't re-asked every 5s; an empty move hides nothing", async page => {
   const snap = JSON.parse(JSON.stringify(SNAP));
   Object.assign(snap.pucks[0], {agent: {...snap.pucks[0].agent, state: "idle"}, sig: "e1", mr: {iid: 12, ref: "!12", state: "merged", title: "x"},
     moves: [{kind: "signoff", step: "deploy", run: "make deploy"}]});
@@ -488,6 +488,9 @@ test("card actions: errors keep their end and stay up; a late reply still says s
   assert.ok(shown.endsWith("\nError: the real cause") && shown.startsWith("…"), "the error's tail (stderr's cause) was cut: " + shown.slice(-40));
   await page.evaluate(() => { ui.task.done = null; clearTimeout(ui.task.t); ui.task.t = 0; note("Didn't merge", "y", true) });
   assert.notEqual(await page.evaluate(() => ui.task.t), 0, "an error toast has no timer (DESIGN.md §10.14: toasts are timed)");
+  await page.evaluate(() => { const st = window.setTimeout; window.__ms = []; window.setTimeout = (f, ms) => { window.__ms.push(ms); return st(f, ms) }; note("Didn't merge", "z", true); window.setTimeout = st });
+  assert.ok((await page.evaluate(() => window.__ms)).includes(5000), "a close-only toast isn't 5s (DESIGN.md §10.14)");
+  await page.evaluate(() => { ui.task.done = null; note("Didn't merge", "y", true) });
   await page.evaluate(() => note("Merged", "Squash"));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "a success covered the error");
   await page.evaluate(() => note("Deploy didn't finish", "exit 2", true));
@@ -517,8 +520,19 @@ test("card actions: errors keep their end and stay up; a late reply still says s
   // a New task's success doesn't cover a card's error (the new workspace is ringed on the map anyway)
   await page.evaluate(() => { ui.task.fresh = null; tasked({op: "new", name: "t1", repo: "widgets"}) });
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "The agent didn't start");
+  await page.click(".toast .btn.x");
+  assert.equal(await page.evaluate(() => ui.task.fresh), null, "the task's ring outlives the toast it was under");
+  // a New task error up: a card's outcome replaces it (as before), never joins it as "undefined: …"
+  await page.evaluate(() => { ui.task.done = {error: "repo gone"}; note("Merged !12 into main", "Squash") });
+  assert.equal(await page.textContent(".toast .tmsg b"), "Merged !12 into main", "a New task error swallowed a card's success");
+  await page.evaluate(() => { ui.task.done = {error: "repo gone"}; note("Didn't merge !12", "405", true) });
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge !12");
+  // joined errors keep each one's title: a long first one is cut to its own end, not cut off by the second
+  await page.evaluate(() => { ui.task.done = null; note("Deploy didn't finish", "x".repeat(900) + " real cause", true); note("Didn't merge !12", "405", true) });
+  const joined = await page.textContent(".toast.bad .tmsg code");
+  assert.ok(joined.startsWith("Deploy didn't finish: …") && joined.includes(" real cause\nDidn't merge !12: 405"), joined.slice(0, 40));
   // its state moves while the action runs (the agent stopped): that isn't the result, so the reply's sig is the baseline
-  await page.evaluate(() => { ui.task.done = null; ui.rescanFail = 0; const p = puckOf("plan-a"); p.moves = [{kind: "signoff", step: "deploy", run: "make deploy"}]; document.body.append(hoverCard(p)) });
+  await page.evaluate(() => { ui.task.done = null; ui.rescanFail = 0; const p = puckOf("plan-a"); p.moves = [{kind: "signoff", step: "deploy", run: "make deploy"}]; hideCard(); document.body.append(hoverCard(p)) });
   await page.click("#hcard .mg .go");
   snap.pucks[0].sig = "e2";
   await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
