@@ -143,7 +143,7 @@ def launch(path, agent, prompt):
     # -i: the agent's PATH (~/.local/bin for claude) is set in .zshrc/.bashrc, which a bare `sh -c` from tmux never reads
     tmux("new-session", "-d", "-s", s, "-c", path, "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l")
     with contextlib.suppress(OSError):  # the workspace page's Basement button attaches to it (last_agent.py); panes can't tell codex apart
-        last_agent.note({path: (agent, s)})
+        last_agent.note({path: (agent, s, int(time.time() * 1000))})
     return {"terminal": {"handle": tmux("display-message", "-p", "-t", s, "#{pane_id}").strip(), "session": s}}
 
 

@@ -1150,10 +1150,14 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // its tab is open: show it, no new one
   assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;⌬ review\x07")))), at.id);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // a tab there runs codex (tmux's ⌬): that one, not a second copy
+  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
   await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;✳ review\x07")))), at.id);
   await page.evaluate(() => show(tabs[0]));
-  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a tab there already runs Claude: that one, not a second copy
-  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a ✳ title with no live session is a quit Claude: continue it
+  const cl = (await opens()).pop(); assert.equal((await opens()).length, 3); assert.deepEqual(await typed(cl.id), ["claude --continue\r"]);
   await page.evaluate(() => term.ws("/w/shipped", {harness: "claude", session: "bad session; x"}));  // a bad session name: ignored
   const sh = (await posts(page, "open")).filter(o => o.ws === "/w/shipped");
   assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.deepEqual(await typed(sh[0].id), ["claude --continue\r"]);
@@ -1166,7 +1170,8 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(() => term.ws("/w/review", {}));
   assert.equal(await page.evaluate(() => cur.focus.session), plain, "the latest tab, not the agent's");
   await page.evaluate(() => show(tabs[0]));
-  await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // a Claude tab isn't codex: continue codex
+  await page.evaluate(id => term.feed(id, btoa("\x1b]0;zsh\x07")), at.id);  // codex quit there
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // no tab runs codex: continue it
   const cx = (await opens()).pop(); assert.deepEqual(await typed(cx.id), ["/opt/cx/codex resume --last\r"]);
   await page.evaluate(() => term.ws("/w/review", {harness: "pi", bin: "/x/../pi; rm"}));  // a bad bin: the PATH's
   assert.deepEqual(await typed((await opens()).pop().id), ["pi --continue\r"]);

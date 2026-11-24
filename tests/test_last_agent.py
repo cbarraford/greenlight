@@ -28,21 +28,26 @@ def test_harness_of_maps_ade_ids():
         assert last_agent.harness_of(bad) is None
 
 
-def test_note_records_and_only_writes_on_change(home):
-    last_agent.note({"/w/a": ("codex", None), "/w/b": ("claude", "mc-1a2b3c4d")})
-    assert {k: {x: v[x] for x in v if x != "at"} for k, v in last_agent.load().items()} == {
-        "/w/a": {"harness": "codex"}, "/w/b": {"harness": "claude", "session": "mc-1a2b3c4d"}}
-    before = last_agent.FILE.stat().st_mtime_ns
+NOW = int(last_agent.time.time() * 1000)
+strip = lambda recs: {k: {x: v[x] for x in v if x != "used"} for k, v in recs.items()}
+
+
+def test_note_records_newest_and_writes_only_on_a_change(home):
+    last_agent.note({"/w/a": ("codex", None, NOW), "/w/b": ("claude", "mc-1a2b3c4d", NOW)})
+    assert strip(last_agent.load()) == {"/w/a": {"harness": "codex"}, "/w/b": {"harness": "claude", "session": "mc-1a2b3c4d"}}
     with mock.patch.object(last_agent.os, "replace") as rep:
-        last_agent.note({"/w/a": ("codex", None)})  # the same sighting again: nothing written
+        last_agent.note({"/w/a": ("codex", None, NOW + 5000)})  # the same agent seconds later: nothing written
+        last_agent.note({"/w/a": ("claude", None, NOW - 1)})  # an older agent the ADE still lists: kept out
         assert not rep.called
-    assert last_agent.FILE.stat().st_mtime_ns == before
-    last_agent.note({"/w/b": ("codex", None)})  # a newer agent replaces the record, session and all
-    assert last_agent.load()["/w/b"]["harness"] == "codex" and "session" not in last_agent.load()["/w/b"]
+    last_agent.note({"/w/a": ("codex", None, NOW + last_agent.REFRESH_MS)})  # a minute on: refreshed
+    assert last_agent.load()["/w/a"]["used"] == NOW + last_agent.REFRESH_MS
+    last_agent.note({"/w/b": ("codex", None, NOW + 1)})  # a newer agent replaces the record, session and all
+    assert strip(last_agent.load())["/w/b"] == {"harness": "codex"}
 
 
 def test_note_drops_bad_input(home):
-    last_agent.note({"relative": ("claude", None), "/w/x": ("cursor", None), "/w/y": ("claude", "bad session; rm"), "/w/v": ("claude", "user-made")})
+    last_agent.note({"relative": ("claude", None, NOW), "/w/x": ("cursor", None, NOW), "/w/y": ("claude", "bad session; rm", NOW),
+                     "/w/v": ("claude", "user-made", NOW), "/w/t": ("claude", None, "soon")})
     assert sorted(last_agent.load()) == ["/w/v", "/w/y"] and not any("session" in r for r in last_agent.load().values())
     last_agent.note({})
     assert sorted(last_agent.load()) == ["/w/v", "/w/y"]
@@ -53,45 +58,44 @@ def test_load_tolerates_a_corrupt_file(home):
     assert last_agent.load() == {}
     last_agent.FILE.write_text(json.dumps([1, 2]))
     assert last_agent.load() == {}
-    last_agent.FILE.write_text(json.dumps({"/w/a": {"harness": "nope"}, "/w/b": "x", "/w/c": {"harness": "pi"}}))
-    assert list(last_agent.load()) == ["/w/c"]
+    last_agent.FILE.write_text(json.dumps({"/w/a": {"harness": "nope"}, "/w/b": "x", "/w/c": {"harness": "pi", "used": "17"},
+                                           "/w/d": {"harness": "pi", "used": "soon"}, "/w/e": {"harness": "pi", "used": True},
+                                           "/w/f": {"harness": "pi", "session": 7}}))
+    assert last_agent.load() == {"/w/c": {"harness": "pi", "used": 17}, "/w/f": {"harness": "pi", "used": 0}}
+    assert last_agent.resume(last_agent.load()["/w/c"], [], created=NOW) == {}  # no crash on what's left
 
 
 def test_note_drops_worktrees_gone_a_day(home, tmp_path):
-    here = str(tmp_path)
-    old = int(last_agent.time.time()) - last_agent.STALE_S - 10
-    last_agent.FILE.write_text(json.dumps({"/w/gone": {"harness": "claude", "at": old}, "/w/new-gone": {"harness": "codex", "at": old + 20},
-                                           here: {"harness": "pi", "at": old}}))
-    last_agent.note({"/w/z": ("claude", None)})
-    assert sorted(last_agent.load()) == sorted(["/w/new-gone", here, "/w/z"])  # a day gone and no folder: dropped
+    old = NOW - last_agent.STALE_MS - 10
+    last_agent.FILE.write_text(json.dumps({"/w/gone": {"harness": "claude", "used": old}, "/w/recent": {"harness": "codex", "used": NOW - 1000},
+                                           str(tmp_path): {"harness": "pi", "used": old}}))
+    last_agent.note({"/w/z": ("claude", None, NOW)})
+    assert sorted(last_agent.load()) == sorted(["/w/recent", str(tmp_path), "/w/z"])  # a day gone and no folder: dropped
 
 
-def test_live_sessions_are_the_ones_an_agent_still_runs_in():
-    panes = [{"session": "mc-a", "cmd": "claude"}, {"session": "mc-b", "cmd": "zsh"}, {"session": "mc-c", "cmd": "-bash"},
-             {"session": "mc-d", "cmd": "codex"}, {"session": "mc-d", "cmd": "zsh"}, {"session": "mc-e", "cmd": ""}, {"session": "mc-f"}]
-    assert last_agent.live(panes) == {"mc-a", "mc-d"}
+def test_runs_needs_the_harness_command_in_that_session():
+    rec = {"harness": "codex", "session": "mc-a", "used": 1}
+    assert last_agent.runs(rec, [{"session": "mc-a", "cmd": "node"}])
+    assert last_agent.runs(rec, [{"session": "mc-a", "cmd": "zsh"}, {"session": "mc-a", "cmd": "codex"}])
+    assert not last_agent.runs(rec, [{"session": "mc-a", "cmd": "-zsh"}])  # quit: its shell is left
+    assert not last_agent.runs(rec, [{"session": "mc-a", "cmd": "vim"}])  # something the user ran since
+    assert not last_agent.runs(rec, [{"session": "mc-b", "cmd": "codex"}])
+    assert not last_agent.runs({"harness": "claude", "used": 1}, [{"session": "mc-a", "cmd": "claude"}])
+    assert not last_agent.runs({"harness": "claude", "session": "mc-a", "used": 1}, [{"session": "mc-a", "cmd": "node"}])
 
 
-def test_observe_prefers_an_attachable_basement_pane(home):
-    agents = [("/w/a", {"agentType": "codex"}), ("/w/b", {"agentType": "claude"}), ("/w/c", {}), ("/w/ab", None)]
-    panes = [{"session": "mc-b", "cwd": "/w/b/sub", "title": "✳ Claude", "at": "5"},
-             {"session": "mc-b0", "cwd": "/w/b", "title": "✳ Older", "at": "4"},  # the most recently active one wins
-             {"session": "mc-shell", "cwd": "/w/a", "title": "zsh", "at": "9"},  # a plain shell isn't an agent
-             {"session": "mc-out", "cwd": "/elsewhere", "title": "✳ Claude", "at": "9"}]  # in no workspace
+def test_observe_goes_by_last_use(home):
+    agents = [("/w/a", {"agentType": "codex", "updatedAt": NOW}), ("/w/b", {"agentType": "codex", "updatedAt": 1000}),
+              ("/w/c", {}), ("/w/ab", None), ("/w/d", {"agentType": "pi", "state": "working"})]  # d: an ADE with no times (herdr)
+    panes = [{"session": "mc-b", "cwd": "/w/b/sub", "title": "✳ Claude", "at": "5", "cmd": "claude"},  # newer than b's codex
+             {"session": "mc-b0", "cwd": "/w/b", "title": "✳ Older", "at": "4", "cmd": "claude"},
+             {"session": "mc-a", "cwd": "/w/a", "title": "✳ Claude", "at": "5", "cmd": "claude"},  # older than a's codex
+             {"session": "mc-q", "cwd": "/w/c", "title": "✳ Quit", "at": "9", "cmd": "zsh"},  # Claude quit: its title stays
+             {"session": "mc-out", "cwd": "/elsewhere", "title": "✳ Claude", "at": "9", "cmd": "claude"}]  # in no workspace
     last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
-    rec = last_agent.load()
-    assert rec["/w/a"]["harness"] == "codex" and "session" not in rec["/w/a"]
-    assert (rec["/w/b"]["harness"], rec["/w/b"]["session"]) == ("claude", "mc-b")
-    assert "/w/c" not in rec and "/w/ab" not in rec
-
-
-def test_observe_keeps_a_record_whose_agent_still_runs(home):
-    last_agent.note({"/w/a": ("codex", "mc-cx")})  # ade_basement.launch: no title gives codex away
-    panes = [{"session": "mc-cl", "cwd": "/w/a", "title": "✳ Claude", "at": "1"}]
-    last_agent.observe([("/w/a", {"agentType": "claude"})], panes, lambda t: t.startswith("✳"), alive={"mc-cx", "mc-cl"})
-    assert last_agent.load()["/w/a"]["session"] == "mc-cx"
-    last_agent.observe([("/w/a", {"agentType": "claude"})], panes, lambda t: t.startswith("✳"), alive={"mc-cl"})  # codex quit
-    assert last_agent.load()["/w/a"]["session"] == "mc-cl"
+    assert strip(last_agent.load()) == {"/w/a": {"harness": "codex"}, "/w/b": {"harness": "claude", "session": "mc-b"},
+                                        "/w/d": {"harness": "pi"}}
+    assert last_agent.load()["/w/d"]["used"] >= NOW
 
 
 def test_owner_is_the_longest_containing_worktree():
@@ -101,22 +105,25 @@ def test_owner_is_the_longest_containing_worktree():
 
 
 def test_resume():
-    assert last_agent.resume(None, set()) == {}  # never ran an agent: the plain button
-    a, b = {"harness": "claude", "session": "mc-a", "at": 100}, {"harness": "codex", "at": 100}
-    assert last_agent.resume(a, {"mc-a"}) == {"harness": "claude", "session": "mc-a"}  # its agent still runs: attach
-    assert last_agent.resume(a, {"mc-a"}, busy=True) == {"harness": "claude", "session": "mc-a"}
-    assert last_agent.resume(a, set()) == {"harness": "claude"}  # gone (or only a shell left): continue its last session
-    assert last_agent.resume(b, set(), binary="/opt/codex") == {"harness": "codex", "bin": "/opt/codex"}
-    assert last_agent.resume(b, set(), busy=True) == {}  # working in another ADE: don't start a second copy
-    assert last_agent.resume(b, set(), created=100_000) == {"harness": "codex"}
-    assert last_agent.resume(b, set(), created=100_001) == {}  # older than the worktree: a deleted workspace's at that path
+    running = [{"session": "mc-a", "cmd": "claude"}]
+    assert last_agent.resume(None, running) == {}  # never ran an agent: the plain button
+    a, b = {"harness": "claude", "session": "mc-a", "used": 100}, {"harness": "codex", "used": 100}
+    assert last_agent.resume(a, running) == {"harness": "claude", "session": "mc-a"}  # its agent still runs: attach
+    assert last_agent.resume(a, running, busy=True) == {"harness": "claude", "session": "mc-a"}
+    assert last_agent.resume(a, [{"session": "mc-a", "cmd": "zsh"}]) == {"harness": "claude"}  # quit: continue its last session
+    assert last_agent.resume(b, [], binary="/opt/codex") == {"harness": "codex", "bin": "/opt/codex"}
+    assert last_agent.resume(b, [], busy=True) == {}  # working in another ADE: don't start a second copy
+    assert last_agent.resume(b, [], created=100) == {"harness": "codex"}
+    assert last_agent.resume(b, [], created=101) == {}  # used before the worktree was made: a deleted workspace's at that path
+    assert last_agent.resume({"harness": "pi", "used": 0}, [], created=101) == {"harness": "pi"}  # no time known: it stands
 
 
 def test_basement_launch_records_its_session(home):
     with mock.patch.object(ade_basement, "tmux", side_effect=lambda *a: "%9\n" if a[0] == "display-message" else ""):
         out = ade_basement.launch("/w/feat", "codex", "go")
     s = out["terminal"]["session"]
-    assert last_agent.resume(last_agent.load()["/w/feat"], {s}) == {"harness": "codex", "session": s}
+    rec = last_agent.load()["/w/feat"]
+    assert last_agent.resume(rec, [{"session": s, "cmd": "node"}], created=NOW - 1) == {"harness": "codex", "session": s}
 
 
 def test_basement_launch_survives_an_unwritable_home(home):
@@ -138,14 +145,14 @@ def _tmux_rows(*rows):
 
 
 def test_add_resume_on_pucks(home, monkeypatch):
-    last_agent.note({"/w/old": ("opencode", "mc-gone"), "/w/exited": ("claude", "mc-sh2")})
+    last_agent.note({"/w/old": ("opencode", "mc-gone", NOW), "/w/exited": ("claude", "mc-sh2", NOW)})
     monkeypatch.setitem(dash.greenlight.CONFIG, "harnesses", {"opencode": {"bin": "/opt/oc/opencode"}, "claude": {"bin": "x; rm"}})
     pucks = [{"path": p, "agent": {"state": st}} for p, st in
              (("/w/live", "done"), ("/w/old", "none"), ("/w/busy", "working"), ("/w/new", "none"), ("/w/exited", "none"))]
     agents = [("/w/live", {"agentType": "claude"}), ("/w/old", {}), ("/w/busy", {"agentType": "codex", "state": "working"}),
               ("/w/new", {}), ("/w/exited", {})]
     tm = _tmux_rows(["%1", "mc-live", "/w/live", "✳ Done", "1", "claude"], ["%2", "mc-sh", "/w/new", "zsh", "1", "zsh"],
-                    ["%3", "mc-sh2", "/w/exited", "zsh", "1", "-zsh"])  # Claude quit: its session is a shell now
+                    ["%3", "mc-sh2", "/w/exited", "✳ Done", "1", "-zsh"])  # Claude quit there: its title stays, its shell runs
     with mock.patch.object(ade_basement.subprocess, "run", return_value=tm):
         dash.add_resume(pucks, agents)
     by = {p["path"]: p["resume"] for p in pucks}
@@ -153,19 +160,22 @@ def test_add_resume_on_pucks(home, monkeypatch):
                   "/w/busy": {}, "/w/new": {}, "/w/exited": {"harness": "claude"}}
 
 
-def test_add_resume_ignores_a_deleted_workspaces_record(home, tmp_path):
+def test_add_resume_on_a_recreated_workspace(home, tmp_path):
     wt = tmp_path / "wt"
     wt.mkdir()
     (wt / ".git").write_text("gitdir: x")
-    last_agent.FILE.write_text(json.dumps({str(wt): {"harness": "claude", "at": 1}}))  # from long before this worktree
+    last_agent.FILE.write_text(json.dumps({str(wt): {"harness": "claude", "used": 1000}}))  # the deleted workspace's, long before
     pucks = [{"path": str(wt), "agent": {}}]
     with mock.patch.object(ade_basement.subprocess, "run", return_value=_tmux_rows()):
         dash.add_resume(pucks, [(str(wt), {})])
-    assert pucks[0]["resume"] == {}
+    assert pucks[0]["resume"] == {}  # its agent isn't this one's
+    with mock.patch.object(ade_basement.subprocess, "run", return_value=_tmux_rows()):
+        dash.add_resume(pucks, [(str(wt), {"agentType": "claude", "updatedAt": dash.created(str(wt)) + 1000})])  # the new one, same harness
+    assert pucks[0]["resume"] == {"harness": "claude"}
 
 
 def test_add_resume_without_tmux(home):
-    last_agent.note({"/w/a": ("pi", "mc-a")})
+    last_agent.note({"/w/a": ("pi", "mc-a", NOW)})
     pucks = [{"path": "/w/a", "agent": {}}]
     with mock.patch.object(ade_basement.subprocess, "run", side_effect=FileNotFoundError("tmux")):
         dash.add_resume(pucks, [("/w/a", {})])

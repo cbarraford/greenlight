@@ -1300,7 +1300,9 @@ const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !activeOnly
 const RESUME = {claude: "claude --continue", codex: "codex resume --last", opencode: "opencode --continue", gemini: "gemini --resume latest", pi: "pi --continue", agy: "agy --continue"};
 const SESSION_OK = s => typeof s === "string" && /^mc-[\w-]{1,64}$/.test(s);  // App.swift resumeOf, and its open
 const BIN_OK = b => typeof b === "string" && DIR_OK(b);
-const RUNS = {claude: isClaude, codex: p => (p.title || "")[0] === "⌬"};  // the agents a pane's title gives away
+// a tab running that harness, by its title: only codex's ⌬ (tmux's, from what the pane runs now). A Claude tab is already its
+// session (dash.py records each live one), and a quit Claude leaves its ✳ title behind
+const RUNS = {codex: p => (p.title || "")[0] === "⌬"};
 const latestTab = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0];
 // A workspace page's Basement button (issue 157), r = its puck's resume (dash.py add_resume): a tab on its last agent's session,
 // else that session attached (its agent still runs there), else a tab of that worktree running that harness, else the harness

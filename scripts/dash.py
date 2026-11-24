@@ -772,13 +772,12 @@ def add_resume(pucks, agents):
         tm, is_agent = ab.panes(cmd=True), lambda t: ab.state(t) is not None
     except Exception:  # no tmux, or no server yet: nothing to attach to
         tm, is_agent = [], lambda t: False
-    alive = last_agent.live(tm)
     with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
-        last_agent.observe(agents, tm, is_agent, alive)
+        last_agent.observe(agents, tm, is_agent)
     recs = last_agent.load()
     for p in pucks:
         rec = recs.get(p["path"])
-        p["resume"] = last_agent.resume(rec, alive, busy=(p.get("agent") or {}).get("state") == "working",
+        p["resume"] = last_agent.resume(rec, tm, busy=(p.get("agent") or {}).get("state") == "working",
                                         created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 
