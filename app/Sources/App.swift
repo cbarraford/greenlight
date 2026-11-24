@@ -2357,7 +2357,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The host leaves full screen under its guest: the guest's floor, which you were on, comes back as a window at the host's frame.
     func fullScreen(_ n: Notification.Name, _ w: NSWindow) {
         if n == NSWindow.willEnterFullScreenNotification { preFullScreen[ObjectIdentifier(w)] = w.frame; entering.insert(ObjectIdentifier(w)); return }
-        if n == NSWindow.didEnterFullScreenNotification { entering.remove(ObjectIdentifier(w)); return }
+        if n == NSWindow.didEnterFullScreenNotification {
+            entering.remove(ObjectIdentifier(w))
+            if closeAfterEnter === w { closeAfterEnter = nil; hideAfterExit = w; w.toggleFullScreen(nil) }  // its guest closed mid-entry: out, then hidden
+            return
+        }
         if n == NSWindow.willExitFullScreenNotification {
             if let sh = fsShare, sh.host === w {  // out of the Space before it goes
                 stayOn = (sh.guest, fsClosing, w)
@@ -2367,6 +2371,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             return
         }
         preFullScreen[ObjectIdentifier(w)] = nil
+        if hideAfterExit === w { hideAfterExit = nil; w.orderOut(nil); return }
         guard let (g, closing, host) = stayOn, host === w else { return }
         stayOn = nil
         let pair = w === window || w === termWindow  // Center and the orb's terminal are one level at a time; an L1 or a New window stays up
@@ -2377,12 +2382,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     var stayOn: (w: NSWindow, closing: Bool, host: NSWindow)?
     var entering = Set<ObjectIdentifier>()  // mid-animation into full screen: a toggle then is ignored, and its willExit never comes
+    weak var closeAfterEnter: NSWindow?, hideAfterExit: NSWindow?
     /// The guest's close button. Over Center or the orb's terminal, that level goes too, out of full screen first so its
     /// Space goes with it; over an L1 or a New window, the guest just leaves (as it does off full screen).
     func closeShare(_ w: NSWindow) -> Bool {
         guard let sh = fsShare, sh.guest === w else { return false }
         hideFloaters()
-        if (sh.host === window || sh.host === termWindow) && sh.host.styleMask.contains(.fullScreen) && !entering.contains(ObjectIdentifier(sh.host)) { fsClosing = true; sh.host.toggleFullScreen(nil) }
+        let pair = sh.host === window || sh.host === termWindow
+        if pair && entering.contains(ObjectIdentifier(sh.host)) { closeAfterEnter = sh.host; leaveShare(); stepAside(w) }  // the toggle would be ignored now
+        else if pair && sh.host.styleMask.contains(.fullScreen) { fsClosing = true; sh.host.toggleFullScreen(nil) }
         else { leaveShare(); stepAside(w) }
         return true
     }
