@@ -2193,8 +2193,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "file":  // a dropped or pasted file: written where the pane's shell runs (uid-private 0700 dir, 0600 file), its path goes back to be pasted
             guard let at = paneTarget(b["ws"] as? String ?? ""), let data = b["data"] as? String, data.count <= 14_000_000,
                   data.range(of: #"^[A-Za-z0-9+/=]*$"#, options: .regularExpression) != nil else { return }
-            let name = String((b["name"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "_", options: .regularExpression).prefix(80))
-            let fname = "\(UUID().uuidString.prefix(8))-\(name.isEmpty || name.hasPrefix(".") ? "file" + name : name)"
+            let fname = droppedFileName(b["name"] as? String ?? "")
             var writtenPath = ""
             ssh("umask 077; d=\"${XDG_RUNTIME_DIR:-/tmp}/greenlight-$(id -u)\"; [ ! -L \"$d\" ] && mkdir -p \"$d\" && chmod 700 \"$d\" && [ -O \"$d\" ] && p=\"$d/\"\(shellQuote(fname)) && base64 -d > \"$p\" && printf '%s\\n' \"$p\"",
                 on: at.host, stdin: data, onLine: { writtenPath = $0 }, onExit: { [weak web] code in
@@ -2226,12 +2225,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "edit":  // Open in editor: Zed, Cursor or VS Code, whichever is installed first; over ssh for a remote host
             guard let at = paneTarget(b["ws"] as? String ?? ""), !at.cwd.isEmpty else { return }
             guard let (bid, app, _) = editorApp() else { return toastTerm(web, "No Zed, Cursor or VS Code installed") }
-            if at.host.isEmpty || at.host == "local" {
-                NSWorkspace.shared.open([URL(fileURLWithPath: at.cwd)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-            } else if bid == "dev.zed.Zed" {  // zed's cli opens ssh://host/path as a remote project
-                let p = Process(); p.executableURL = app.appendingPathComponent("Contents/MacOS/cli"); p.arguments = ["ssh://\(at.host)\(at.cwd)"]; try? p.run()
-            } else if let u = URL(string: "\(bid == "com.microsoft.VSCode" ? "vscode" : "cursor")://vscode-remote/ssh-remote+\(at.host)\(at.cwd)") {
-                NSWorkspace.shared.open(u)
+            switch editorOpen(bid: bid, host: at.host, cwd: at.cwd) {
+            case .folder(let dir)?: NSWorkspace.shared.open([URL(fileURLWithPath: dir)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+            case .zedCLI(let arg)?:  // zed's cli opens ssh://host/path as a remote project
+                let p = Process(); p.executableURL = app.appendingPathComponent("Contents/MacOS/cli"); p.arguments = [arg]; try? p.run()
+            case .url(let u)?: NSWorkspace.shared.open(u)
+            case nil: toastTerm(web, "Couldn't open \(at.cwd) on \(at.host)")
             }
         case "error":
             NSLog("greenlight terminal error: %@", b["text"] as? String ?? "")
