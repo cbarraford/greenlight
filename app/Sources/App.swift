@@ -338,10 +338,13 @@ func cascadeFrame(_ f: NSRect, min m: NSSize, in screen: NSRect?) -> NSRect {
     return r
 }
 /// The frame a floor switch hands the next window: `f`, grown to its minimum `m` from the top-left corner (a window's
-/// title bar stays where it was).
-func sharedFrame(_ f: NSRect, min m: NSSize) -> NSRect {
-    let w = max(f.width, m.width), h = max(f.height, m.height)
-    return NSRect(x: f.minX, y: f.maxY - h, width: w, height: h)
+/// title bar stays where it was), and when it grew, shifted back inside `screen` (`f`'s own).
+func sharedFrame(_ f: NSRect, min m: NSSize, in screen: NSRect? = nil) -> NSRect {
+    var r = NSRect(x: f.minX, y: f.maxY - max(f.height, m.height), width: max(f.width, m.width), height: max(f.height, m.height))
+    guard let s = screen, r.size != f.size else { return r }
+    r.origin.x = max(min(r.minX, s.maxX - r.width), s.minX)
+    r.origin.y = max(min(r.minY, s.maxY - r.height), s.minY)
+    return r
 }
 /// Whether a dashboard window may render snapshots yet: All-projects windows don't wait; filtered ones wait until the project list is loaded
 /// so the UI doesn't flash another project's hexes before narrowing to the saved pick.
@@ -1301,6 +1304,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         let view = NSMenu(title: "View")
         view.addItem(withTitle: "Appearance", action: nil, keyEquivalent: "").submenu = look
+        let fs = view.addItem(withTitle: "Enter Full Screen", action: #selector(toggleFullScreen(_:)), keyEquivalent: "f")  // in place of AppKit's, which would send a guest's to itself
+        fs.keyEquivalentModifierMask = [.control, .command]; fs.target = self
         bar.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = view
         NSApp.windowsMenu = menu("Window", [("Minimize", "performMiniaturize:", "m"), ("Zoom", "performZoom:", ""), ("Close", "performClose:", "w"),
                                             ("-", "", ""), ("Show/Hide Chat", "appToggleChat", "C"), ("Live Chat", "appLive", "L"), (micMenuTitle(muted: false), "appMuteMic", "M"),
@@ -1435,6 +1440,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.restyle { ud.set(Self.appearances[item.tag].0, forKey: "appearance") }; tick()
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleFullScreen(_:)) {
+            let w = fsShare.map { NSApp.keyWindow === $0.guest ? $0.host : NSApp.keyWindow } ?? NSApp.keyWindow
+            item.title = w?.styleMask.contains(.fullScreen) == true ? "Exit Full Screen" : "Enter Full Screen"
+            return w != nil
+        }
         if item.action == #selector(appAppearanceMenu(_:)) { item.state = Self.appearances.indices.contains(item.tag) && Self.appearances[item.tag].0 == appearanceMode ? .on : .off; return true }
         guard item.action == #selector(appMuteMic) else { return true }
         item.title = micMenuTitle(muted: greenlight.voice.micMuted)
@@ -1742,7 +1752,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
-        floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
+        dropShare(l.w); floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
         l.w.setFrameAutosaveName(""); NSWindow.removeFrame(usingName: l1FrameName(l.id))
         l.split.autosaveName = nil; ud.removeObject(forKey: "NSSplitView Subview Frames \(l1FrameName(l.id, "chatSplit"))")
     }
@@ -1822,7 +1832,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         termWins[id] = w
         let fs = FloorState(); floors[id] = fs
         let go: (String) -> Void = { [unowned self, weak web] f in
-            if f != "greenlight" { web?.callJS("window.term && term.opens", [f]) } else if id == 0 { appGoUp() } else { hand(window, from: termWins[id]); show() }
+            if f != "greenlight" { web?.callJS("window.term && term.opens", [f]) } else if id == 0 { appGoUp() } else { show(from: termWins[id]) }
         }
         floorGo[ObjectIdentifier(w)] = (fs, go)
         floorBar(w, Floors(s: fs, c: greenlight, pick: { [weak web] in web?.evaluateJavaScript("window.pickProjects && pickProjects(true)") }, go: go))
@@ -1856,6 +1866,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
+            self.dropShare(w)
             self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
@@ -1918,7 +1929,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// ⌘⇧T: down to the Basement from Greenlight; in the Basement, hides or shows the terminal.
     func toggleTerm() {
         if upstairs { return ride(up: false) }
-        if termWindow.isVisible && termWindow.isKeyWindow { termWindow.orderOut(nil); hideFloaters(); return }
+        if termWindow.isVisible && termWindow.isKeyWindow { hideLevel(termWindow); return }
         basement()
     }
     /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
@@ -2287,6 +2298,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// window, `to` joins that window's Space rather than making one of its own; back to it, the guest steps out again.
     func hand(_ to: NSWindow, from: NSWindow?) {
         guard let from, from !== to else { return }
+        if let sh = fsShare, to === sh.guest, from !== sh.host { leaveShare(); unguest(to) }  // a window on another monitor takes the guest back
         if let sh = fsShare, from === sh.host || from === sh.guest {
             if to === sh.guest { return }
             leaveShare()
@@ -2295,10 +2307,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if from.styleMask.contains(.fullScreen) { return joinShare(to, host: from) }
         guard !to.styleMask.contains(.fullScreen) else { return }  // its own Space already: macOS takes you there
-        let f = sharedFrame(from.frame, min: to.minSize)
+        let f = sharedFrame(from.frame, min: to.minSize, in: from.screen?.visibleFrame)
         if f != to.frame { to.setFrame(f, display: false) }
     }
     func joinShare(_ g: NSWindow, host: NSWindow) {
+        leaveShare()  // one share at a time: another monitor's full-screen window takes the guest over
         if restoreFrame?.w === g { restoreFrame = nil }  // back in before it was out of sight
         let zb = g.standardWindowButton(.zoomButton)
         fsShare = (host, g, preFullScreen[ObjectIdentifier(host)] ?? sharedFrame(g.frame, min: g.minSize), (zb?.target, zb?.action))
@@ -2325,6 +2338,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     @objc func exitSharedFullScreen() { fsShare?.host.toggleFullScreen(nil) }
     /// Ordering a full-screen window out would empty its Space: the host stays in it, under its guest.
+    /// ⌃⌥M or ⌘⇧T out of sight: in a shared full-screen Space, the app hides (both levels, the Space kept), as the
+    /// full-screen window couldn't be ordered out alone.
+    func hideLevel(_ w: NSWindow) {
+        if let sh = fsShare, w === sh.guest || w === sh.host { NSApp.hide(nil) } else { w.orderOut(nil); hideFloaters() }
+    }
     func stepAside(_ w: NSWindow) {
         guard w !== fsShare?.host else { return }
         w.orderOut(nil); unguest(w)
@@ -2333,23 +2351,40 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func fullScreen(_ n: Notification.Name, _ w: NSWindow) {
         if n == NSWindow.willEnterFullScreenNotification { preFullScreen[ObjectIdentifier(w)] = w.frame; return }
         if n == NSWindow.willExitFullScreenNotification {
-            if let sh = fsShare, sh.host === w { leaveShare(); stepAside(sh.guest); stayOn = sh.guest }  // out of the Space before it goes
+            if let sh = fsShare, sh.host === w {  // out of the Space before it goes
+                stayOn = (sh.guest, fsClosing); fsClosing = false
+                leaveShare(); stepAside(sh.guest)
+            }
             return
         }
         preFullScreen[ObjectIdentifier(w)] = nil
-        guard let g = stayOn else { return }
+        guard let (g, closing) = stayOn else { return }
         stayOn = nil
-        if fsClosing { fsClosing = false; w.orderOut(nil); return }
-        g.setFrame(sharedFrame(w.frame, min: g.minSize), display: false)
-        presentWindow(g); w.orderOut(nil)
+        let pair = w === window || w === termWindow  // Center and the orb's terminal are one level at a time; an L1 or a New window stays up
+        if closing { if pair { w.orderOut(nil) }; return }
+        g.setFrame(sharedFrame(w.frame, min: g.minSize, in: w.screen?.visibleFrame), display: false)
+        presentWindow(g); if pair { w.orderOut(nil) }
         syncOrbs()
     }
-    var stayOn: NSWindow?
-    /// The guest's close button: the host goes too, out of full screen first so its Space goes with it.
+    var stayOn: (w: NSWindow, closing: Bool)?
+    /// The guest's close button. Over Center or the orb's terminal, that level goes too, out of full screen first so its
+    /// Space goes with it; over an L1 or a New window, the guest just leaves (as it does off full screen).
     func closeShare(_ w: NSWindow) -> Bool {
         guard let sh = fsShare, sh.guest === w else { return false }
-        fsClosing = true; hideFloaters(); sh.host.toggleFullScreen(nil)
+        hideFloaters()
+        if sh.host === window || sh.host === termWindow { fsClosing = true; sh.host.toggleFullScreen(nil) } else { leaveShare(); stepAside(w) }
         return true
+    }
+    /// A share's window closing for good (an L1, a New window), or the app quitting: the guest back to a normal window.
+    func dropShare(_ w: NSWindow? = nil) {
+        guard let sh = fsShare, w == nil || w === sh.host || w === sh.guest else { return }
+        leaveShare(); unguest(sh.guest)
+    }
+    /// View › Enter Full Screen (⌃⌘F) from a guest acts on the window it's in the Space of, as its green button does:
+    /// the guest itself would make a second Space.
+    @objc func toggleFullScreen(_ sender: Any?) {
+        if let sh = fsShare, NSApp.keyWindow === sh.guest { return sh.host.toggleFullScreen(nil) }
+        NSApp.keyWindow?.toggleFullScreen(nil)
     }
 
     // MARK: Basement ↔ Greenlight Center: one level at a time, the orb rides between them
@@ -2698,6 +2733,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
     func applicationWillTerminate(_ n: Notification) {
+        dropShare()  // a guest's autosaved frame: the floors' own, not the screen's
         Core.quitting = true  // the chats' ssh processes end below; their turns go on and are followed at the next launch
         tunnels.values.forEach { $0.terminate() }
         dashProc?.terminate(); dashProc = nil
@@ -2715,8 +2751,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
-    func show() {
-        if !upstairs, termWindow.isVisible { hand(window, from: termWindow); stepAside(termWindow); hideFloaters() }
+    /// `from`: the window you switched up from, whose frame Center takes (default: the Basement it replaces).
+    func show(from: NSWindow? = nil) {
+        hand(window, from: from ?? (!upstairs && termWindow.isVisible ? termWindow : nil))
+        if !upstairs, termWindow.isVisible { stepAside(termWindow); hideFloaters() }
         upstairs = true
         greenlight.unread = 0
         tick()
@@ -2727,7 +2765,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     /// The star and ⌃⌥M: hide the window when it's in front, else bring it up.
     func toggle() {
-        if NSApp.isActive && (upstairs ? window.isKeyWindow || chatWindow.isKeyWindow : termWindow.isKeyWindow) { orbHost.orderOut(nil); hideFloaters() }
+        if NSApp.isActive && (upstairs ? window.isKeyWindow || chatWindow.isKeyWindow : termWindow.isKeyWindow) { hideLevel(orbHost) }
         else if upstairs { show() } else { basement() }
     }
 

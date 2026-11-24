@@ -311,12 +311,15 @@ def verify_shared_full_screen(ui1: uitest.UITestSession) -> None:
     except AssertionError:
         print("skip full-screen floors: macOS didn't enter full screen (a locked screen or no GUI session)")
         return
-    time.sleep(1.0)  # the Space's animation
+    time.sleep(1.5)  # the Space's animation
+    if not ui1.state()["windows"]["dashboard"]["fullScreen"]:  # a locked screen lets it in for a moment, then throws it out
+        print("skip full-screen floors: macOS left full screen at once (a locked screen?)")
+        return
     for to in ("basement", "pipe"):
         assert ui1.action("floor", to=to)["ok"]
         s = ui1.state()
         d, t = s["windows"]["dashboard"], s["windows"]["terminal"]
-        assert s["fsShare"] == {"host": "dashboard", "guest": "terminal"}, s["fsShare"]
+        assert s["fsShare"] == {"host": "dashboard", "guest": "terminal"}, (s["fsShare"], s["upstairs"], s["windows"])
         assert t["visible"] and t["aux"] and not t["fullScreen"] and t["onActiveSpace"], f"{to} isn't in Center's Space: {t}"
         assert d["fullScreen"] and tuple(t[k] for k in FRAME) == tuple(d[k] for k in FRAME), (d, t)
     assert ui1.action("floor", to="center")["ok"]

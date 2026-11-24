@@ -206,12 +206,12 @@ final class UITestServer {
     /// "view:<name>": a view the main window gave its own window (its pop-out button).
     private func view(_ target: String, app: App) -> NSWindow? { target.hasPrefix("view:") ? app.viewWindows[String(target.dropFirst(5))] : nil }
 
-    /// Every Greenlight Center window as the app holds it: its projects, title-bar chip, title, frame, and what's saved for a relaunch.
     /// A window's frame (AppKit's: origin bottom-left) and whether it's full screen, on the active Space, a full-screen auxiliary.
     static func winState(_ w: NSWindow) -> [String: Any] {
         ["visible": w.isVisible, "x": Int(w.frame.minX), "y": Int(w.frame.minY), "width": Int(w.frame.width), "height": Int(w.frame.height),
          "fullScreen": w.styleMask.contains(.fullScreen), "onActiveSpace": w.isOnActiveSpace, "aux": w.collectionBehavior.contains(.fullScreenAuxiliary)]
     }
+    /// Every Greenlight Center window as the app holds it: its projects, title-bar chip, title, frame, and what's saved for a relaunch.
     static func l1State(_ app: App) -> [String: Any] {
         func frame(_ w: NSWindow) -> [Int] { [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height)] }
         let screens = NSScreen.screens.map { s in [Int(s.visibleFrame.minX), Int(s.visibleFrame.minY), Int(s.visibleFrame.width), Int(s.visibleFrame.height)] }
