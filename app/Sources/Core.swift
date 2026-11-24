@@ -196,10 +196,23 @@ final class Core: ObservableObject {
     let feed = Feed()
     var fedFrom: [String: Watched]?  // the last snapshot the feed saw; nil: the next one is the baseline
     func log(_ src: FeedLine.Src, _ who: String, _ kind: FeedLine.Kind, _ text: String) { if verbose { feed.add(src, who, kind, text) } }
-    /// A dashboard button's command, and how it ended: its JSON's error, else the exit code.
-    func acted(_ who: String, _ what: String, _ code: Int32, _ out: String) {
-        let err = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) .flatMap { $0 as? [String: Any] }?["error"] as? String
-        log(.greenlight, who, code == 0 && err == nil ? .action : .failed, "\(what): " + (err ?? (code == 0 ? "done" : "exit \(code)")))
+    /// A dashboard button's command, and how it ended: its JSON's error, else the exit code. Into the feed, and (tell) queued
+    /// for Chief's next turn, so it doesn't ask about a merge you just did or miss one that failed (#175).
+    func acted(_ who: String, _ what: String, _ code: Int32, _ out: String, tell: Bool = true) {
+        let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any]
+        let err = o?["error"] as? String, why = err ?? (code == 0 ? nil : "exit \(code)")
+        log(.greenlight, who, why == nil ? .action : .failed, "\(what): " + (why ?? "done"))
+        if tell && o?["risks"] == nil { doneSince = Array((doneSince + [actedLine(who, what, why, o)]).suffix(10)) }  // risks: it only asked to confirm
+    }
+    /// Buttons pressed since Chief's last turn (acted), oldest first; the next turn takes them (takeDone).
+    var doneSince: [String] = []
+    /// The note that opens Chief's next turn, once: "" when no button was pressed since the last one.
+    func takeDone() -> String {
+        guard !doneSince.isEmpty else { return "" }
+        defer { doneSince = [] }
+        return "(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; each line is how it ended. "
+            + "Don't ask about or redo what's done, and say so if they ask whether you saw it. The board may lag behind a button: "
+            + "refresh the workspaces before you say where these stand.)\n" + doneSince.joined(separator: "\n") + "\n"
     }
     /// A snapshot's agent and lifecycle changes, into the feed.
     func fed(_ pucks: [[String: Any]]) {
@@ -763,6 +776,7 @@ final class Core: ObservableObject {
                 + new.map(\.text).joined(separator: "\n") + "\n\n" + payload
             for i in attached.indices { attached[i].sent = true }
         }
+        payload = takeDone() + payload  // the buttons pressed since the last turn, ahead of what was typed
         if !focus.isEmpty && focus != focusSent {  // only when it changed: the chat session remembers the last one
             payload = "(Greenlight, not typed by the user: they were last in \(focus). \"This\", \"here\" or \"it\" likely means that.)\n" + payload
             focusSent = focus
@@ -798,7 +812,7 @@ final class Core: ObservableObject {
     private func checkInTurn() {
         msgs.append(Msg(.note, "Nothing done here in \(checkInMins) minutes: asking what's next."))
         let r = Run("What to work on next", on: chatHost); r.checkIn = true
-        start(r, chatSend, stdin:
+        start(r, chatSend, stdin: takeDone() +
             "(Greenlight's idle check-in, not typed by the user: they're at their Mac but haven't done anything in Greenlight for \(checkInMins) minutes.) "
             + "From the board, suggest which 1–3 workspaces they should work on next, most valuable first: for each, where it is in its lifecycle, "
             + "why now, and the one next action, with its MR link. A few lines. End with an Options line naming the workspaces.")
@@ -843,7 +857,7 @@ final class Core: ObservableObject {
             guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = visible.merging(self.fresh) { $1 }; return }
             let liveList = visible.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
             let r = Run("Watching the workspaces", on: chatHost); r.watch = true
-            self.start(r, self.chatSend, stdin:
+            self.start(r, self.chatSend, stdin: self.takeDone() +
                 "(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)\n\(liveList)\n"
                 + "Look into them (refresh the workspaces if the board is stale). If one needs a decision or an answer only the user can give, "
                 + "ask one short question about it, with its MR link and a final Options line. Otherwise reply exactly: (nothing)")

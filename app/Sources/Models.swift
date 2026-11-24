@@ -122,6 +122,14 @@ func newNeeds(_ old: [String: String]?, _ pucks: [[String: Any]]) -> (now: [Stri
     return (now, old.map { o in now.filter { o[$0.key] == nil } } ?? [:])
 }
 
+/// One dashboard button for Chief (Core.acted): what, on which workspace, the MR and head commit when dash.py named them, and how
+/// it ended. why: nil when it worked, else the error (cut short: a forge's refusal can run long).
+func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]?) -> String {
+    let at = [o?["ref"] as? String, (o?["sha"] as? String).map { "head " + $0.prefix(12) }].compactMap { $0 }.filter { !$0.isEmpty }
+    let end = why.map { "failed: " + $0.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(300) } ?? "done"
+    return "- \(what) on \(who)" + (at.isEmpty ? "" : " (\(at.joined(separator: ", ")))") + ": " + end
+}
+
 /// The watch's news split by the window you're in (focusScope's JSON, the same rule as dash.py's board): `ask` is about its
 /// worktrees or repos, `hold` is another project's and waits until you're in a window that shows it. nil scope: every project's.
 func inScope(_ fresh: [String: String], _ pucks: [[String: Any]], _ scope: String?) -> (ask: [String: String], hold: [String: String]) {

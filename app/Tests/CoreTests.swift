@@ -503,6 +503,18 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.verbose = true
     mainC.acted("ws1", "merge", 0, "{}")
     mainC.acted("ws1", "merge", 1, #"{"error":"conflict"}"#)
+    // #175: each button's end waits for Chief's next turn, once; a rescan and a delete that only asked to confirm don't
+    mainC.acted("Greenlight", "rescan", 0, "", tell: false)
+    mainC.acted("ws1", "delete the workspace", 0, #"{"risks":["it's pinned"]}"#)
+    let queued = mainC.doneSince, told = mainC.takeDone(), toldAgain = mainC.takeDone()
+    let mergedLine = actedLine("ws1", "merge", nil, ["ref": "#153", "sha": "0123456789abcdef"])
+    let failedLine = actedLine("ws2", "mark ready", "exit 1", nil)
+    check("core: acted tells Chief's next turn what each button did, once",
+          queued.count == 2 && queued[0] == "- merge on ws1: done" && queued[1] == "- merge on ws1: failed: conflict"
+          && told.hasPrefix("(Greenlight, not typed by the user") && told.contains("refresh the workspaces") && told.hasSuffix("failed: conflict\n")
+          && toldAgain.isEmpty && mergedLine == "- merge on ws1 (#153, head 0123456789ab): done"
+          && failedLine == "- mark ready on ws2: failed: exit 1"
+          && actedLine("w", "merge", String(repeating: "x\n", count: 400), nil).count < 340)
     mainC.fed([["name": "w1", "state": "working", "step": "ci", "owner": "agent"]])
     mainC.fed([["name": "w1", "state": "needs", "step": "review", "owner": "me"]])
     mainC.model = "codex"
