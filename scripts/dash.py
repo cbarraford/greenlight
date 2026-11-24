@@ -16,7 +16,8 @@
                                                     (stdin); a new worktree of path's repo (stdin {name, base, goal, agent, setup, answers, force}: as task new);
                                                     the diff (stdin: head | branch)
     dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
-    dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
+    dash.py answer <ws> [--chat] < text             answer the waiting agent (a menu choice number, or a reply + Enter);
+                                                    --chat: talk its question over ("Chat about this"), also once it replied ("done")
     dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
     dash.py task repos -                            one JSON line: the repos a task can go to (New task)
     dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs.
@@ -1351,12 +1352,14 @@ def run(name, prompt, worktree_id=None):
 MENU_RE = re.compile(r"^\s*(?:[❯›●▸]\s*)?(\d)\.\s+(\S.*)$")
 
 
-def waiting_term(name):
-    """(worktree, agent, terminal handle, terminal read) for the workspace's waiting agent, or an error string."""
+def waiting_term(name, done_ok=False):
+    """(worktree, agent, terminal handle, terminal read) for the workspace's waiting agent, or an error string.
+    done_ok: an agent that ended its turn at its prompt ("done") counts too: a chat's reply ends that way."""
     w, ag = next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
     if not w:
         return f"no workspace {name}"
-    if ag.get("state") != "waiting":
+    state = (ag or {}).get("state")
+    if state != "waiting" and not (done_ok and state == "done"):
         return "its agent isn't waiting on you any more"
     terms = [t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
              if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")]
@@ -1413,7 +1416,7 @@ def ask_user(name, model=None, effort="low"):
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
         chat = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True))
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:],  # said: in a chat, its reply
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:] if chat else "",  # said: in a chat, its reply
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != chat]}
     cache = DASH / "ask" / f"{safe(name)}.json"
@@ -1507,8 +1510,9 @@ def pending_questions(path, agent_type=None):
 def answer(name, text, chat=False):
     """Answer the waiting agent. Never types over text the user left unsent in that terminal.
     chat: the text talks its question over instead of answering it. Over a picker that offers "Chat about this", that
-    entry closes it (the agent hears you want to discuss it, not that you declined), then the text goes in as a message."""
-    t = waiting_term(name)
+    entry closes it (the agent hears you want to discuss it, not that you declined), then the text goes in as a message.
+    A chat also reaches an agent that replied and ended its turn at its prompt ("done"), not only one that's "waiting"."""
+    t = waiting_term(name, done_ok=chat)
     if isinstance(t, str):
         return {"error": t}
     w, ag, h, rd = t

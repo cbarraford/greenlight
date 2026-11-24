@@ -75,6 +75,13 @@ with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)),
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
         mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
     assert dash.answer("ws", "hm?", chat=True)["ok"] and o.call_args_list[0].args[-1] == "\x1b"  # no "Chat about this" here: Esc, as before
+# a chat's reply ends the agent's turn at its prompt ("done"): only a chat message may go to it, never a plain answer
+DONE = {"w1": ({"displayName": "ws", "worktreeId": "w1"}, {"state": "done"})}
+TERMS = {"terminals": [{"worktreeId": "w1", "agentIdentity": "claude", "handle": "t1"}]}
+with mock.patch.object(dash, "live_agents", return_value=DONE), mock.patch.object(dash.greenlight, "orca", side_effect=[TERMS, {"terminal": {"tail": ["❯"]}}]):
+    assert dash.waiting_term("ws", done_ok=True)[2] == "t1"
+with mock.patch.object(dash, "live_agents", return_value=DONE):
+    assert "isn't waiting" in dash.waiting_term("ws")
 # the pending AskUserQuestion comes from the newest transcript, and goes once it has a result
 d = tempfile.mkdtemp()
 Q = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}
