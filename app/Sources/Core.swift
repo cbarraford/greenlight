@@ -649,7 +649,7 @@ final class Core: ObservableObject {
             self.transcribing = false
             if let text, !text.isEmpty {
                 self.input += (self.input.isEmpty ? "" : " ") + text
-                if let err { self.msgs.append(Msg(.note, "Voice stopped early (\(err)): the input has what it heard before that.")) }
+                if let err { self.msgs.append(Msg(.note, "Voice: \(err); kept what it heard.")) }
             } else { self.msgs.append(Msg(.note, "Voice: \(err ?? "heard nothing").")) }
         }}
     }

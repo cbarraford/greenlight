@@ -160,9 +160,9 @@ var keys: [String: String?] = [:]
 let keyLock = NSLock()
 
 /// The whole of a recording's speech from the Apple recognizer's results (#172). On-device, a pause or 60 s of speech ends an
-/// utterance: its last result carries speechRecognitionMetadata, and the results after it, the final one included, hold
-/// only the next utterance. Each ended utterance is kept and the next added after it, in order. (Apple's servers send one growing
-/// utterance and end it with the final result: the same thing, once.)
+/// utterance: its last result carries speechRecognitionMetadata, and every result after it, including the final one, holds only
+/// the next utterance. Each ended utterance is kept and the next added after it, in order. Apple's servers send one utterance
+/// that grows across pauses; its final result ends it, so it is kept once.
 struct Transcript {
     private var done: [String] = [], current = ""
     var text: String { (done + [current]).filter { !$0.isEmpty }.joined(separator: " ") }

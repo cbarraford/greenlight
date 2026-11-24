@@ -837,7 +837,7 @@ func runTranscriptTests(check: (String, Bool) -> Void) {
         return t.text
     }
     check("dictation: partials revise one utterance, even shrinking and changing its first word; the final one is the text",
-          heard([("Grin light", false, false), ("Greenlight", false, false), ("Greenlight check the", false, false), ("Greenlight, check the pipeline.", false, true)])
+          heard([("Grin light check", false, false), ("Greenlight", false, false), ("Greenlight check the", false, false), ("Greenlight, check the pipeline.", false, true)])
           == "Greenlight, check the pipeline.")
     check("dictation: a pause ends an utterance (metadata) and the next one is added after it, not in its place (#172)",
           heard([("I want to check", false, false), ("I want to check the pipeline status", false, false), ("I want to check the pipeline status", true, false),
