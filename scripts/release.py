@@ -9,6 +9,7 @@
     release.py verify FEED [--pub HEX] [--app ZIP] [--backend TGZ]   the feed's signature, then the files' sha256
     release.py notes --channel C [--ref REF] [--repo OWNER/NAME]   release notes (Markdown): a stable tag's commits since
                                                            the previous one, or a main build's own commit
+    release.py guard --build N [--current FEED]            refuse a build older than the channel's current feed's
     release.py keygen                                      a new feed key pair (the private half goes in a CI secret)
     release.py pubkey                                      the public half of $GREENLIGHT_FEED_KEY
 
@@ -42,7 +43,7 @@ import update  # noqa: E402
 ROOT = Path(os.path.realpath(__file__)).parent.parent
 PUBKEY_FILE = ROOT / "app" / "feed-key.pub"  # the public half, compiled into the app; missing until the owner runs keygen
 CHANNELS = ("stable", "main")
-TAG_RE = re.compile(r"v(\d{1,4})\.(\d{1,4})\.(\d{1,4})\Z")
+TAG_RE = re.compile(r"v(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\Z")  # no leading zeros: v1.02.3 would be 1.2.3 too
 BACKEND = ("scripts/", "lifecycles/", "prompts/", "examples/", "SKILL.md", "README.md", "LICENSE")  # tracked files only
 MIN_MACOS = "14.0"
 KEY_ENV = "GREENLIGHT_FEED_KEY"
@@ -73,12 +74,9 @@ def version(channel: str, ref: str | None = None, root: Path = ROOT) -> dict[str
         return {"channel": channel, "version": short, "short": short, "build": build, "commit": commit, "tag": tag}
     if channel != "main":
         raise ReleaseError(f"unknown channel {channel!r}")
-    try:
-        last = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*.[0-9]*.[0-9]*", root=root)
-    except ReleaseError:
-        last = ""
-    m = TAG_RE.fullmatch(last)
-    short = ".".join(str(int(x)) for x in m.groups()) if m else "0.0.0"
+    tags = [t for t in git("tag", "--list", "v*", "--merged", "HEAD", root=root).split() if TAG_RE.fullmatch(t)]
+    last = max(tags, key=tag_num, default="")  # the highest vX.Y.Z behind HEAD: not a v1.3.0-rc1 that happens to be nearer
+    short = last[1:] if last else "0.0.0"
     ver = f"main-{build}-{commit[:7]}"
     return {"channel": channel, "version": ver, "short": short, "build": build, "commit": commit, "tag": ver}
 
@@ -108,22 +106,52 @@ def notes(channel: str, ref: str | None = None, repo: str = "", root: Path = ROO
     return "\n".join(body) + "\n"
 
 
+def committed(root: Path = ROOT) -> list[tuple[str, int, str]]:
+    """(path, mode, blob) for each backend file in HEAD: what the commit holds, not what the worktree has now."""
+    out = git("ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", *BACKEND, root=root)
+    rows = []
+    for row in filter(None, out.split("\0")):
+        meta, path = row.split("\t", 1)
+        mode, kind, blob = meta.split()
+        if kind == "blob" and mode != "120000" and "__pycache__" not in path:
+            rows.append((path, int(mode, 8), blob))
+    return sorted(rows)
+
+
 def backend_files(root: Path = ROOT) -> list[str]:
-    files = git("ls-files", "-z", "--", *BACKEND, root=root).split("\0")
-    return sorted(f for f in files if f and "__pycache__" not in f and (root / f).is_file())
+    return [path for path, _, _ in committed(root)]
+
+
+def blobs(shas: list[str], root: Path = ROOT) -> list[bytes]:
+    """Each blob's bytes, in one `git cat-file --batch`."""
+    p = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"], input="".join(f"{s}\n" for s in shas).encode(),
+                       capture_output=True, timeout=120)
+    if p.returncode:
+        raise ReleaseError(f"git cat-file failed: {p.stderr.decode(errors='replace').strip()[-300:]}")
+    data, at = [], 0
+    for sha in shas:
+        nl = p.stdout.index(b"\n", at)
+        got, _, size = p.stdout[at:nl].decode().split()
+        if got != sha:
+            raise ReleaseError(f"git cat-file gave {got}, not {sha}")
+        data.append(p.stdout[nl + 1:nl + 1 + int(size)])
+        at = nl + 1 + int(size) + 1
+    return data
 
 
 def backend(ver: str, out: Path, root: Path = ROOT) -> dict[str, Any]:
-    """The tracked backend files under greenlight-<v>/, plus VERSION: sorted, owned by root, dated by the commit and gzipped
-    without a timestamp, so the same commit gives the same bytes on any machine."""
+    """HEAD's backend files under greenlight-<v>/, plus VERSION: read from the commit (uncommitted edits stay out), sorted,
+    owned by root, dated by the commit, and gzipped without a timestamp. The tar is the same for a commit on any machine;
+    the gzip bytes are too wherever zlib is the same build (the CI runner)."""
     if not update.VERSION_RE.fullmatch(ver):
         raise ReleaseError(f"bad version {ver!r}")
     when = int(git("log", "-1", "--format=%ct", root=root))
     top = f"greenlight-{ver}"
+    files = committed(root)
+    entries = [(path, data, mode) for (path, mode, _), data in zip(files, blobs([b for _, _, b in files], root))]
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tf:
-        for rel, data, mode in [*((f, (root / f).read_bytes(), (root / f).stat().st_mode) for f in backend_files(root)),
-                                ("VERSION", f"{ver}\n".encode(), 0o644)]:
+        for rel, data, mode in [*entries, ("VERSION", f"{ver}\n".encode(), 0o644)]:
             ti = tarfile.TarInfo(f"{top}/{rel}")
             ti.size, ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = len(data), when, 0, 0, "", ""
             ti.mode = 0o755 if mode & 0o111 else 0o644
@@ -205,6 +233,21 @@ def verify(path: Path, pub: bytes | None, files: dict[str, Path | None]) -> dict
             "checked": sorted(k for k, f in files.items() if f is not None)}
 
 
+def guard(build: int, current: Path | None) -> dict[str, Any]:
+    """Refuse a build older than the one the channel's feed already offers (an old tag pushed late, or an old run
+    re-run): the feed only moves forward. The same build again is a re-run, and passes."""
+    if current is None or not current.exists():
+        return {"ok": True, "current": None}
+    try:
+        body = json.loads(base64.b64decode(json.loads(current.read_text())["body"], validate=True))
+        now = int(body["build"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise ReleaseError(f"can't read the channel's current feed: {e}") from None
+    if build < now:
+        raise ReleaseError(f"build {build} is older than the feed's build {now} ({body.get('version')}): nothing published")
+    return {"ok": True, "current": now}
+
+
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="release.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -230,6 +273,9 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("--channel", required=True, choices=CHANNELS)
     n.add_argument("--ref")
     n.add_argument("--repo", default="")
+    g = sub.add_parser("guard")
+    g.add_argument("--build", type=int, required=True)
+    g.add_argument("--current")
     sub.add_parser("keygen")
     sub.add_parser("pubkey")
     return ap
@@ -245,6 +291,8 @@ def run(a: argparse.Namespace) -> dict[str, Any]:
     if a.cmd == "verify":
         pub = bytes.fromhex(a.pub) if a.pub else default_pub()
         return verify(Path(a.feed), pub, {"app": Path(a.app) if a.app else None, "backend": Path(a.backend) if a.backend else None})
+    if a.cmd == "guard":
+        return guard(a.build, Path(a.current) if a.current else None)
     if a.cmd == "notes":
         return {"notes": notes(a.channel, a.ref, a.repo)}
     if a.cmd == "keygen":

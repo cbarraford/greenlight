@@ -54,7 +54,8 @@ Built in step 5; `docs/RELEASING.md` has the setup and how to cut a release.
 ## Checking and asking
 
 - **The app checks the feed** at launch and every 6 h. The request is an anonymous GET to GitHub with no identifiers in the URL or
-  headers. Settings › Updates can turn it off (and has the channel and a "Check now" button).
+  headers. Settings › Updates can turn it off (and has the channel and a "Check now" button). A missing, unreachable or
+  unverifiable feed is "no update": no prompt, and the next check tries again.
 - **A newer build** is downloaded in the background and checked (sha256, Ed25519, then `SecStaticCodeCheckValidity` against
   Greenlight's Team ID requirement). Then a quiet prompt:
   **"Greenlight 0.5.0 is ready. Everything comes back where it is."** with **Restart now**, **When idle**, **Later** and the release notes.

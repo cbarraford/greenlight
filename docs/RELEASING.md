@@ -8,13 +8,19 @@ Releases come out on two update channels (see `docs/UPDATES.md`), both built by 
 | `main` | every push to `main`, once `RELEASE_MAIN` is on | `main-<commits>-<sha>` | a prerelease of that name; the 20 newest are kept |
 
 The build number (the app's `CFBundleVersion`) is the commit count, so it orders builds across both channels. A main build's
-short version is the latest stable tag's (`0.0.0` before the first).
+short version is the highest stable tag behind it (`0.0.0` before the first). A tag is `vX.Y.Z` with no leading zeros
+(`v1.02.3` doesn't build), so no two tags give the same version.
+
+A channel's feed only moves forward: a build older than the one the feed already offers (an old tag pushed late, an old run
+re-run) stops before it builds anything. Re-running the same build is fine: it replaces that build's files and points the feed
+at it again.
 
 Each release holds three files:
 - `Greenlight-<version>.zip`: the app. It's universal (Apple silicon and Intel), runs on macOS 14 or later, and carries the
   backend inside.
-- `greenlight-backend-<version>.tar.gz`: the backend, the same for every machine. It's reproducible: the same commit gives the
-  same bytes.
+- `greenlight-backend-<version>.tar.gz`: the backend, the same for every machine. It's read from the commit (uncommitted edits
+  never get in), so the same commit gives the same tar anywhere. The gzip bytes match too where zlib is the same build, as on
+  the release runner; another machine's zlib can compress the same tar differently.
 - `channel-<name>.json`: the signed feed for this build.
 
 The rolling prereleases `feed-stable` and `feed-main` hold each channel's current feed. That's what the app checks:
@@ -38,7 +44,8 @@ main build without them is signed ad hoc, and its feed says so (`"signing": "adh
    rm /tmp/feed-key.json   # keep no other copy of the private half
    ```
 
-   Commit `app/feed-key.pub`. Each build checks its feed against that file before it publishes anything.
+   Commit `app/feed-key.pub`. Each build checks its feed against that file before it publishes anything, and a build
+   without the file stops at its first step.
 2. **Apple Developer ID** (needs the Apple Developer Program, $99/yr).
    - Make a **Developer ID Application** certificate.
    - Export it from Keychain Access as a `.p12` **with its chain**: select the certificate and Apple's *Developer ID
@@ -61,7 +68,14 @@ main build without them is signed ad hoc, and its feed says so (`"signing": "adh
 
 The release job runs on the self-hosted macOS runner. It needs the Command Line Tools (`swiftc`, `lipo`, `codesign`, `xcrun
 notarytool`, `stapler`), `python3` 3.10 or later, `gh` and `openssl` on its `PATH`. Its first step checks for them. The
-signing identity goes into a throwaway keychain that the job deletes when it ends, even if it fails.
+signing identity goes into a throwaway keychain that the job deletes when it ends, even if it fails. The feed key reaches only
+the step that signs the feed.
+
+**The runner is the trust boundary.** That runner also builds pull requests from this repo's own branches (`tests.yml`) and the
+nightly coverage, so anything that can push a branch here could leave something on it (a `PATH` shim, a shell rc) that the
+next release runs with the secrets. Fork PRs never reach it. Only people and agents you'd trust with the secrets should be able
+to push branches; for more than that, give releases their own runner (a separate label or machine), and put the secrets in a
+GitHub Environment limited to `main` and `v*` tags.
 
 ## Cutting a stable release
 
@@ -71,7 +85,9 @@ Merge everything for it, then tag the merged commit:
 git fetch origin && git tag v0.1.0 origin/main && git push origin v0.1.0
 ```
 
-The notes are the commit subjects since the previous stable tag. To fix them after the release, edit them on GitHub; the feed
+Push one tag at a time, and the next once the first is running: GitHub keeps only one pending run per channel, so a third
+tag pushed while one builds and one waits replaces the waiting one (re-run it from the Actions tab once the others finish, if
+it's still the newest). The notes are the commit subjects since the previous stable tag. To fix them after the release, edit them on GitHub; the feed
 keeps the notes it was built with.
 
 ## Building locally (a dry run, nothing published)
@@ -98,6 +114,10 @@ exact bytes of `body`, so the app checks those bytes before it parses them. The 
 - `app` and `backend`, each `{url, sha256, size}`.
 
 Because the sha256s are inside the signed body, one signature covers the files too.
+
+Replacing a channel's feed deletes the old `channel-<name>.json` before uploading the new one (GitHub has no atomic replace),
+so for a moment, or until a re-run if every upload try fails, the URL can 404. The app treats a missing or unreachable feed
+as "no update".
 
 `scripts/ed25519.py` signs in CI: stdlib Python, RFC 8032's reference algorithm, checked against the RFC's test vectors. The app
 will verify with CryptoKit.

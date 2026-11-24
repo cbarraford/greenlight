@@ -66,13 +66,53 @@ def test_version_for_main_before_and_after_a_stable_tag_and_for_stable(repo):
     sh(repo, "tag", "v1.2.3")
     sh(repo, "commit", "-q", "--allow-empty", "-m", "second (#2)")
     assert release.version("main", root=repo)["short"] == "1.2.3" and release.version("main", root=repo)["build"] == 2
-    s = release.version("stable", "v01.2.3", root=repo)
-    assert (s["version"], s["short"], s["tag"]) == ("1.2.3", "1.2.3", "v01.2.3")
-    for bad in ("1.2.3", "v1.2", "v1.2.3-rc1", "main", None):
+    s = release.version("stable", "v1.2.3", root=repo)
+    assert (s["version"], s["short"], s["tag"]) == ("1.2.3", "1.2.3", "v1.2.3")
+    assert release.version("stable", "v0.10.0", root=repo)["version"] == "0.10.0"
+    for bad in ("1.2.3", "v1.2", "v1.2.3-rc1", "v01.2.3", "v1.02.3", "v1.2.03", "main", None):  # v1.02.3 would be a second 1.2.3
         with pytest.raises(release.ReleaseError):
             release.version("stable", bad, root=repo)
     with pytest.raises(release.ReleaseError):
         release.version("beta", root=repo)
+
+
+def test_main_short_version_is_the_highest_real_tag_not_a_nearer_rc(repo):
+    sh(repo, "tag", "v1.2.0")
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "second (#2)")
+    for t in ("v1.3.0-rc1", "v1.3.0.1", "v01.9.0"):
+        sh(repo, "tag", t)
+    sh(repo, "commit", "-q", "--allow-empty", "-m", "third (#3)")
+    assert release.version("main", root=repo)["short"] == "1.2.0"
+    sh(repo, "tag", "v1.10.0")
+    sh(repo, "tag", "v1.9.0", "HEAD~1")  # older and nearer by date, lower by version
+    assert release.version("main", root=repo)["short"] == "1.10.0"
+
+
+def test_backend_ships_the_commit_not_uncommitted_edits(repo, tmp_path):
+    clean = release.backend("main-1-abc1234", tmp_path / "a", root=repo)
+    (repo / "SKILL.md").write_text("# edited, not committed\n")
+    (repo / "LICENSE").unlink()
+    dirty = release.backend("main-1-abc1234", tmp_path / "b", root=repo)
+    assert dirty["sha256"] == clean["sha256"]
+    with tarfile.open(dirty["path"]) as tf:
+        assert tf.extractfile("greenlight-main-1-abc1234/SKILL.md").read() == b"# skill\n"
+        assert tf.extractfile("greenlight-main-1-abc1234/LICENSE").read() == b"MIT\n"
+
+
+def test_guard_lets_the_feed_only_move_forward(signed, tmp_path, capsys):
+    assert release.guard(3, None) == {"ok": True, "current": None}
+    assert release.guard(3, tmp_path / "none.json") == {"ok": True, "current": None}  # no feed yet: the first build
+    assert release.guard(7, signed["out"]) == {"ok": True, "current": 7}  # the same build again: a re-run
+    assert release.guard(8, signed["out"])["current"] == 7
+    with pytest.raises(release.ReleaseError, match="older than the feed's build 7"):
+        release.guard(6, signed["out"])
+    capsys.readouterr()
+    assert release.main(["guard", "--build", "6", "--current", str(signed["out"])]) == 1
+    assert "nothing published" in json.loads(capsys.readouterr().out)["error"]
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not a feed")
+    with pytest.raises(release.ReleaseError, match="can't read"):
+        release.guard(9, bad)
 
 
 def test_backend_holds_tracked_backend_files_only_and_is_reproducible(repo, tmp_path):
@@ -212,3 +252,29 @@ def test_release_workflow_runs_only_here_and_keeps_expressions_out_of_scripts():
         if in_run and line.strip() and indent <= run_indent:
             in_run = False
         assert not (in_run and "${{" in line), f"an expression inside a run script (use env:): {line.strip()}"
+
+
+def _step(wf: str, name: str) -> str:
+    """One step's text, from its `- name:` line to the next step."""
+    start = wf.index(f"- name: {name}")
+    nxt = wf.find("\n      - ", start + 1)
+    return wf[start:nxt if nxt > 0 else len(wf)]
+
+
+def test_release_workflow_guards_the_key_the_feed_and_reruns():
+    wf = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    # the signing key reaches only the step that signs; the rest only learn whether it is set
+    assert wf.count("secrets.GREENLIGHT_FEED_KEY }}") == 1 and "GREENLIGHT_FEED_KEY: ${{" in _step(wf, "Notes and the signed feed")
+    # no feed-key.pub, no build: never a check against the secret's own public half
+    assert "app/feed-key.pub" in _step(wf, "Check the tools") and "pubkey" not in wf
+    assert '--pub "$(cat app/feed-key.pub)"' in _step(wf, "Notes and the signed feed")
+    # an older build than the channel's feed stops before anything is built
+    order = [wf.index(f"- name: {n}") for n in ("Version", "Only forward", "Backend tarball", "Publish this build")]
+    assert order == sorted(order) and "release.py guard" in _step(wf, "Only forward")
+    # a re-run replaces its own release's files instead of failing on `release create`
+    pub = _step(wf, "Publish this build")
+    assert pub.index('gh release view "$TAG"') < pub.index("gh release create") and "--clobber" in pub
+    # the feed's delete-then-upload is retried, and a final failure fails the job
+    feed = _step(wf, "Point the channel's feed at it")
+    assert "for try in 1 2 3" in feed and "exit 1" in feed
+    assert "never cancelled, one tag at a time" not in wf  # GitHub replaces a pending run in the group

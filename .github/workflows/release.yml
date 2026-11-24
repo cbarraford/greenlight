@@ -13,7 +13,8 @@ on:
 permissions:
   contents: write  # releases and their assets
 
-# main: the newest push wins (an older build still running is cancelled). stable: never cancelled, one tag at a time.
+# main: the newest push wins (an older build still running is cancelled). stable: a running build is never cancelled and
+# tags build one at a time, but GitHub keeps only one *pending* run per group: push a tag, then the next once it's running.
 concurrency:
   group: release-${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'main' }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -30,7 +31,7 @@ jobs:
       REF_NAME: ${{ github.ref_name }}
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
-      GREENLIGHT_FEED_KEY: ${{ secrets.GREENLIGHT_FEED_KEY }}
+      HAS_FEED_KEY: ${{ secrets.GREENLIGHT_FEED_KEY != '' }}  # the key itself goes to the one step that signs
       HAS_SIGN_ID: ${{ secrets.DEVELOPER_ID_P12 != '' }}
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
     steps:
@@ -47,7 +48,8 @@ jobs:
             git merge-base --is-ancestor HEAD origin/main || { echo "::error::$REF_NAME is not on main: tag a merged commit"; exit 1; }
             [ "$HAS_SIGN_ID" = true ] && [ "$HAS_NOTARY" = true ] || { echo "::error::a stable release must be Developer ID signed and notarized: set DEVELOPER_ID_P12 and NOTARY_KEY_P8"; exit 1; }
           fi
-          [ -n "$GREENLIGHT_FEED_KEY" ] || { echo "::error::GREENLIGHT_FEED_KEY is not set: nothing can be published (see docs/RELEASING.md)"; exit 1; }
+          [ "$HAS_FEED_KEY" = true ] || { echo "::error::GREENLIGHT_FEED_KEY is not set: nothing can be published (see docs/RELEASING.md)"; exit 1; }
+          [ -s app/feed-key.pub ] || { echo "::error::app/feed-key.pub isn't committed: the feed can't be checked against the app's key (see docs/RELEASING.md)"; exit 1; }
 
       - name: Version
         id: v
@@ -60,6 +62,21 @@ jobs:
               print(f"{k}={v[k]}")
           PY
           cat "$RUNNER_TEMP/version.json"
+
+      - name: Only forward (not older than the channel's current feed)
+        env:
+          BUILD: ${{ steps.v.outputs.build }}
+        run: |
+          cur=()
+          # the feed release's channel-<name>.json, if there is one yet; a failed download fails the build (no guessing)
+          if names=$(gh release view "feed-$CHANNEL" --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then :
+          elif grep -q "release not found" <<<"$names"; then names=""  # no feed yet: the channel's first build
+          else echo "::error::can't read the $CHANNEL feed: $names"; exit 1; fi
+          if grep -qx "channel-$CHANNEL.json" <<<"$names"; then
+            gh release download "feed-$CHANNEL" --repo "$REPO" --pattern "channel-$CHANNEL.json" --output "$RUNNER_TEMP/current.json" --clobber
+            cur=(--current "$RUNNER_TEMP/current.json")
+          fi
+          python3 scripts/release.py guard --build "$BUILD" "${cur[@]}"
 
       - name: Backend tarball
         env:
@@ -116,6 +133,7 @@ jobs:
           ZIP: ${{ steps.app.outputs.zip }}
           SIGNING: ${{ steps.app.outputs.signing }}
           NOTARIZED: ${{ steps.app.outputs.notarized }}
+          GREENLIGHT_FEED_KEY: ${{ secrets.GREENLIGHT_FEED_KEY }}
         run: |
           out="$RUNNER_TEMP/out" notarized=()
           if [ "$NOTARIZED" = true ]; then notarized=(--notarized); fi
@@ -125,10 +143,7 @@ jobs:
             --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz" --signing "$SIGNING" "${notarized[@]}" --notes "$out/notes.md" \
             --base-url "https://github.com/$REPO/releases/download/$TAG" --out "$out/channel-$CHANNEL.json"
           # The feed must check out with the key the app has (app/feed-key.pub), or nothing is published
-          if [ -f app/feed-key.pub ]; then pub=$(cat app/feed-key.pub); else
-            echo "::warning::app/feed-key.pub isn't committed: checking with the secret's own public half"
-            pub=$(python3 scripts/release.py pubkey | python3 -c 'import json,sys; print(json.load(sys.stdin)["public"])'); fi
-          python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$pub" --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz"
+          python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$(cat app/feed-key.pub)" --app "$ZIP" --backend "$out/greenlight-backend-$VER.tar.gz"
 
       - name: Publish this build
         env:
@@ -139,7 +154,11 @@ jobs:
         run: |
           out="$RUNNER_TEMP/out"
           files=("$ZIP" "$out/greenlight-backend-$VER.tar.gz" "$out/channel-$CHANNEL.json")
-          if [ "$CHANNEL" = stable ]; then
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # a re-run (or a dispatch of a commit already built): replace this build's files, then carry on to the feed
+            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
+            gh release edit "$TAG" --repo "$REPO" --notes-file "$out/notes.md"
+          elif [ "$CHANNEL" = stable ]; then
             gh release create "$TAG" "${files[@]}" --repo "$REPO" --verify-tag --title "Greenlight $VER" --notes-file "$out/notes.md" --latest
           else
             gh release create "$TAG" "${files[@]}" --repo "$REPO" --target "$COMMIT" --title "Greenlight $VER" --notes-file "$out/notes.md" --prerelease --latest=false
@@ -151,7 +170,12 @@ jobs:
           gh release view "$feed" --repo "$REPO" >/dev/null 2>&1 ||
             gh release create "$feed" --repo "$REPO" --target main --prerelease --latest=false --title "Greenlight $CHANNEL channel" \
               --notes "The $CHANNEL channel's current feed, channel-$CHANNEL.json, which Greenlight checks for updates. Builds are the other releases."
-          gh release upload "$feed" "$RUNNER_TEMP/out/channel-$CHANNEL.json" --repo "$REPO" --clobber
+          # --clobber deletes the old feed before the upload (GitHub has no atomic replace): retry so the gap stays short
+          for try in 1 2 3; do
+            gh release upload "$feed" "$RUNNER_TEMP/out/channel-$CHANNEL.json" --repo "$REPO" --clobber && exit 0
+            echo "::warning::feed upload try $try failed"; sleep 10
+          done
+          echo "::error::channel-$CHANNEL.json didn't upload: the $CHANNEL feed is missing until this job is re-run"; exit 1
 
       - name: Keep the 20 newest main builds
         if: env.CHANNEL == 'main'
