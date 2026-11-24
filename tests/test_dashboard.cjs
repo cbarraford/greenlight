@@ -695,6 +695,47 @@ test("answer: the chosen option says Sending… until the agent picks it up", as
   assert.match(await page.textContent(".aopts button.on"), /Sending…/);
 });
 
+test("answer: Chat about this opens a chat in the answer box, keeps the sheet open, and the thread carries on until an option is chosen (#173)", async page => {
+  const MENU = {name: "plan-a", question: "Which way?", kind: "menu", chat: "3", options: [{key: "1", label: "Keep it"}, {key: "2", label: "Port it"}]};
+  await page.evaluate(m => { openAnswer("plan-a"); window.mc.asked(m) }, MENU);
+  assert.deepEqual(await page.$$eval(".aopts button .lbl", es => es.map(e => e.textContent)), ["Keep it", "Port it"], "Chat about this isn't an answer option");
+  assert.equal(await page.$("#areply"), null, "a picker has no reply box until you choose to chat");
+  await page.click("#achat");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "areply", "the composer takes the caret");
+  await page.click("#aback");
+  assert.equal(await page.$("#areply"), null, "Back to the options closes it");
+  await page.click("#achat");
+  await page.fill("#areply", "Why not both?");
+  await page.press("#areply", "Enter");
+  assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "Why not both?", chat: true});
+  await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
+  await page.waitForTimeout(2000);
+  assert.ok(await page.$(".sheet .abox"), "a chat keeps the sheet open for the reply");
+  assert.deepEqual(await page.$$eval(".athread p", es => es.map(e => [e.className, e.textContent]).reverse()), [["ag", "Which way?"], ["you", "Why not both?"]]);
+  // the agent works, then replies at its prompt: the thread stays, the reply box goes on as a plain message
+  await page.evaluate(s => { s.pucks[0].agent.state = "working"; s.pucks[0].state = "working"; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
+  assert.match(await page.textContent(".sheet"), /The agent is replying…/);
+  await page.evaluate(s => { s.pucks[0].agent.last = "Both would double the review. Port it?"; s.pucks[0].agent.since += 1000; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
+  await page.evaluate(() => window.mc.asked({name: "plan-a", question: "Both would double the review. Port it?", kind: "prompt", options: []}));
+  assert.equal(await page.$$eval(".athread p", es => es.length), 2, "the thread carried over");
+  assert.match(await page.textContent("#aq"), /double the review/);
+  await page.fill("#areply", "And the tests?");
+  await page.click("#asend");
+  assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "And the tests?"}, "at its prompt a message is just a message");
+  await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
+  assert.equal(await page.$$eval(".athread p", es => es.length), 4);
+  // it asks again with its picker: choosing an option answers it and ends the chat
+  await page.evaluate(s => { s.pucks[0].agent.last = "Which way?"; s.pucks[0].agent.since += 2000; window.mc.update(s) }, JSON.parse(JSON.stringify(SNAP)));
+  await page.evaluate(m => window.mc.asked(m), MENU);
+  assert.equal(await page.$("#achat"), null, "already chatting: the composer is open, no second Chat button");
+  assert.ok(await page.$("#areply"), "you can keep chatting over the picker");
+  await page.click(".aopts button:has-text('Port it')");
+  assert.deepEqual((await posts(page, "answer")).pop(), {cmd: "answer", name: "plan-a", text: "2"});
+  await page.evaluate(() => window.mc.answered({name: "plan-a", ok: true}));
+  assert.equal(await page.evaluate(() => ui.ask["plan-a"].chat), null, "an option ends the chat");
+  assert.deepEqual(page._errs, []);
+});
+
 test("connecting: after 15s with no update it says so, and Retry says hello to the app again", async page => {
   await page.clock.install();
   await page.evaluate(() => { ui.snap = null; armConn(); render() });

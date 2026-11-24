@@ -1155,10 +1155,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 return
             }
             let h = workspaceHost(name: name, fallback: winHost), pyH = pyCmd(on: h)
-            let remote = cmd == "answer" ? "\(pyH)/dash.py answer '\(name)'"
+            let chat = b["chat"] as? Bool == true  // "Chat about this": talk the question over, don't answer it
+            let remote = cmd == "answer" ? "\(pyH)/dash.py answer '\(name)'\(chat ? " --chat" : "")"
                 : "\(pyH)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
             var out = ""
-            if cmd == "answer" { greenlight.log(.greenlight, name, .action, "answering its agent: \(text)") }
+            if cmd == "answer" { greenlight.log(.greenlight, name, .action, "\(chat ? "chatting with" : "answering") its agent: \(text)") }
             ssh(remote, on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
                 if cmd == "answer" { self.greenlight.acted(name, "answer", code, out) }
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])

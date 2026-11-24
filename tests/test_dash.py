@@ -56,6 +56,25 @@ with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)),
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "history_file", return_value=Path(tempfile.mkdtemp()) / "h.md"), \
         mock.patch.object(dash.greenlight, "orca") as o:
     assert dash.answer("ws", "2")["ok"] and o.call_args.args[-2:] == ("--text", "2")
+# "Chat about this" (#173): the page offers it as a chat, not as an answer; a chat message picks it, then goes in as a message
+CHAT = {"draft": "", "tail": ["│ Which way?", "❯ 1. Keep it", "  2. Port it", "────", "  3. Chat about this", "Enter to select"]}
+assert dash.chat_key(dash.menu(CHAT["tail"])) == "3" and dash.chat_key(dash.menu(MENU["tail"])) is None
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x"}, "t1", CHAT)):
+    asked = dash.ask_user("ws")
+    assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"], asked
+hist = Path(tempfile.mkdtemp()) / "h.md"
+with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
+        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
+    assert dash.answer("ws", "Why not both?", chat=True)["ok"]
+    sent = [c.args for c in o.call_args_list]
+    assert sent[0][-2:] == ("--text", "3") and sent[2][-3:] == ("--text", "Why not both?", "--enter"), sent
+    assert "asked the agent about its question" in hist.read_text()
+with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", CHAT)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
+        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
+    assert dash.answer("ws", "1", chat=True)["ok"] and o.call_args_list[0].args[-1] == "3"  # a chat message that's only a digit is still a chat, not option 1
+with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
+        mock.patch.object(dash.time, "sleep"), mock.patch.object(dash.greenlight, "orca", side_effect=[None, {"terminal": {"tail": ["❯"]}}, None]) as o:
+    assert dash.answer("ws", "hm?", chat=True)["ok"] and o.call_args_list[0].args[-1] == "\x1b"  # no "Chat about this" here: Esc, as before
 # the pending AskUserQuestion comes from the newest transcript, and goes once it has a result
 d = tempfile.mkdtemp()
 Q = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}

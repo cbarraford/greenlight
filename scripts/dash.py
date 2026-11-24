@@ -1377,6 +1377,14 @@ def menu(tail):
     return opts if len(opts) >= 2 else []
 
 
+CHAT_RE = re.compile(r"chat about (?:this|it)\.?", re.I)  # Claude Code's picker: "Chat about this" sets the question aside to talk it over
+
+
+def chat_key(opts):
+    """The digit of the picker's "Chat about this" entry, else None."""
+    return next((k for k, label in opts if CHAT_RE.fullmatch(label.strip())), None)
+
+
 def picker(tail):
     """The on-screen question above a menu and each option's description: (question, {digit: detail})."""
     lines = [str(x).rstrip() for x in tail][-30:]
@@ -1404,9 +1412,10 @@ def ask_user(name, model=None, effort="low"):
     opts = menu(rd.get("tail") or [])
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu",
+        chat = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True))
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat,
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
-                "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something."]}
+                "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != chat]}
     cache = DASH / "ask" / f"{safe(name)}.json"
     key = hashlib.sha1(q.encode()).hexdigest()[:12]
     try:
@@ -1495,8 +1504,10 @@ def pending_questions(path, agent_type=None):
     return None
 
 
-def answer(name, text):
-    """Answer the waiting agent. Never types over text the user left unsent in that terminal."""
+def answer(name, text, chat=False):
+    """Answer the waiting agent. Never types over text the user left unsent in that terminal.
+    chat: the text talks its question over instead of answering it. Over a picker that offers "Chat about this", that
+    entry closes it (the agent hears you want to discuss it, not that you declined), then the text goes in as a message."""
     t = waiting_term(name)
     if isinstance(t, str):
         return {"error": t}
@@ -1505,10 +1516,10 @@ def answer(name, text):
         return {"error": "there's unsent text in that agent's input box; answer it in its workspace"}
     opts = menu(rd.get("tail") or [])
     text = " ".join(_strip_ctrl(text).split())  # one line: a newline would submit half the answer
-    if opts and text in {k for k, _ in opts}:
+    if opts and not chat and text in {k for k, _ in opts}:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text)
-    elif opts:  # Esc closes the picker, then the answer goes in as a plain message
-        greenlight.orca("terminal", "send", "--terminal", h, "--text", "\x1b")
+    elif opts:  # "Chat about this" (a chat) or Esc closes the picker, then the text goes in as a plain message
+        greenlight.orca("terminal", "send", "--terminal", h, "--text", (chat and chat_key(opts)) or "\x1b")
         for _ in range(20):  # ponytail: polls ~8s for the picker to close
             time.sleep(0.4)
             if not menu(greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []):
@@ -1521,7 +1532,7 @@ def answer(name, text):
     hf = greenlight.history_file(name)
     hf.parent.mkdir(parents=True, exist_ok=True)
     with hf.open("a") as f:
-        f.write(f"- {time.strftime('%Y-%m-%d %H:%M')} you answered the agent: {' '.join(text.split())[:300]}\n")
+        f.write(f"- {time.strftime('%Y-%m-%d %H:%M')} you {'asked the agent about its question' if chat else 'answered the agent'}: {' '.join(text.split())[:300]}\n")
     return {"ok": True}
 
 
@@ -2187,7 +2198,7 @@ def main():
                 print(json.dumps(ask_user(a[1], **opt)))
             else:
                 text = sys.stdin.read().strip()[:4000]
-                print(json.dumps({"name": a[1], **(answer(a[1], text) if text else {"error": "empty answer"})}))
+                print(json.dumps({"name": a[1], **(answer(a[1], text, chat="--chat" in a[2:]) if text else {"error": "empty answer"})}))
         except Exception as e:
             oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
