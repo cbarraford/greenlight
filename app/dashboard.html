@@ -91,9 +91,11 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 /* top bar */
 .bar{height:var(--bar-h);flex-shrink:0;display:flex;align-items:center;gap:var(--sp-3);padding:0 var(--sp-4);background:var(--bar);border-bottom:1px solid var(--hair);z-index:5}
-.title{display:flex;flex-direction:column;gap:0;min-width:max-content;flex-grow:1}  /* the count never truncates; the search gives way */
+.title{display:flex;align-items:center;gap:var(--ds-space-8);min-width:max-content;flex-grow:1}  /* the count never truncates; the search gives way */
 .title b{font-size:var(--fs-4);line-height:var(--lh-4);font-weight:600;letter-spacing:var(--ds-type-title-sm-track);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.title span{font-size:var(--fs-1);line-height:var(--lh-1);color:var(--orange-ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title .count{min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center;font-style:normal;
+  background:var(--ds-status-needs-solid);color:var(--ds-status-needs-on-solid)}  /* §10.11: the attention count, a badge after the title */
+.title .count.crashed{background:var(--ds-status-crashed-solid);color:var(--ds-status-crashed-on-solid)}
 .seg{display:inline-flex;padding:2px;border-radius:var(--r-1);background:var(--fill)}
 .seg button{height:24px;padding:0 var(--sp-3);border:0;border-radius:var(--r-0);background:none;font-size:var(--fs-2);font-weight:500;color:var(--text2)}
 .seg button:hover{color:var(--text)}
@@ -118,7 +120,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .btn.ghost{background:var(--fill)}
 .btn.ico{width:28px;padding:0;justify-content:center;position:relative;background:none;color:var(--text2)}
 .btn.ico:hover:not(:disabled){background:var(--fill);color:var(--text)}
-.btn.ico.on{color:var(--accent-fg);background:var(--accent-subtle)}
+.btn.ico.on{color:var(--text);background:var(--ds-element-active)}  /* a toggle that is on: a neutral fill, as a macOS toolbar toggle; the accent stays for the one primary */
 .btn.ico .badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);
   font-size:var(--fs-1);line-height:16px;font-weight:600;font-style:normal;text-align:center;box-shadow:0 0 0 2px var(--bar)}
 .btn.ico .badge.needs{background:var(--orange);color:var(--on-orange)}
@@ -1245,9 +1247,9 @@ function topBar(){
   }
   const n = ui.snap ? counts() : {}, live = !!ui.snap && ui.snap.pucks.length > 0;  // not live: nothing to switch or search; the page's own button starts the first task
   const att = (n.needs || 0) + (n.raised || 0) + (n.crashed || 0);
-  const bits = [att && h("span", {style:`color:${ink(n.crashed && !n.needs ? "--red" : "--orange")}`}, `${att} need${att > 1 ? "" : "s"} attention`), !att && n.working && `${n.working} working`].filter(Boolean);
+  const attn = att && `${att} need${att > 1 ? "" : "s"} attention`;
   bar.append(h("div", {class:"title"}, h("b", {}, "Spaces"),
-      h("span", {}, bits.flatMap((b, i) => i ? [" · ", b] : [b]))),
+      att ? h("i", {class:"count" + (n.crashed && !n.needs ? " crashed" : ""), role:"img", title: attn, "aria-label": attn}, String(att)) : null),
     h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
       onclick: () => { ui.view = v; localSet("view", v); render() }}, v === "overview" ? "Overview" : "List"))),
     h("span", {class:"qwrap" + (live ? "" : " wait")}, icon("search"), h("input", {class:"search", id:"q", type:"search", readonly: !live, "aria-disabled": live ? null : "true", placeholder:"Search", value: ui.q, "aria-label":"Search workspaces",
