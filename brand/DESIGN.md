@@ -631,9 +631,9 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
   - **Rows:**
     1. Avatar (agent mark, 20), title `strong`, elapsed time `caption` tabular figures, right-aligned.
     2. Meta in `label` `fg.muted`: ref · project · goal.
-    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most.
-    4. The lifecycle bar (§10.10).
-  - **Actions:** one action button (primary only when the card is needs-you).
+    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it.
+    4. The lifecycle bar (§10.10) and the MR's facts, only when there are any.
+  - **Actions:** one action button. Only the first needs-you card's is primary: one primary per view. The others are secondary.
   - **Status:** shown by the status pill, never by tinting the whole card. A crashed card gets a 2px `status.crashed.solid` leading edge as the only tint.
   - **Empty / loading:** while scanning there's one skeleton card per expected agent, the same shape as a real card. With no agents the strip collapses to a single `caption` line, "No agents running".
   - **Error:** a card for an agent that can't be reached keeps its last state, dimmed to 60%, with a `caption` "Lost contact 2m ago".
@@ -641,6 +641,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 
 ### 10.8 Rows: list, tree, menu
 - **Row:** 28 (tree, menu) or 32 (list), radius `sm`, inset 4 from the container edge, 8 horizontal padding.
+- **Workspace list row:** flat, never a card. A mini hex, the title in `strong` with a neutral tag, then one `label` line of name · project and what it says; the agent and a secondary `sm` action on the right. The state shows in the hex alone.
 - **States:**
   - H: `element.rest`.
   - P: `element.hover`.
