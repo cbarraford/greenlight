@@ -124,10 +124,10 @@ def verify_terminal_pty_and_tabs(ui1: uitest.UITestSession, shot_dir: Path) -> N
     ui1.wait_for("terminal", "Boolean(document.querySelector('#pal') && document.querySelector('#pal').hidden)", timeout=10)
     print(f"ok  Terminal ⌘J palette open/filter/close verified ({r['width']}x{r['height']}, {r['bytes']} bytes)")
 
-    # Multi-tab operations: open a second tab via #add, switch back to first tab, then close extra tab
+    # Multi-tab operations: open a second tab via #newtab, switch back to first tab, then close extra tab
     initial_tabs = ui1.eval("terminal", "document.querySelectorAll('#tabs .tab').length")["result"]
     assert isinstance(initial_tabs, int) and initial_tabs >= 1, initial_tabs
-    assert ui1.click("terminal", "#add")["result"] is True
+    assert ui1.click("terminal", "#newtab")["result"] is True
     ui1.wait_for("terminal", f"document.querySelectorAll('#tabs .tab').length === {initial_tabs + 1}", timeout=10)
     assert ui1.eval(
         "terminal",
