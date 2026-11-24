@@ -16,7 +16,9 @@
                                                     (stdin); a new worktree of path's repo (stdin {name, base, goal, agent, setup, answers, force}: as task new);
                                                     the diff (stdin: head | branch)
     dash.py ask <ws> [--model M] [--effort E]       one JSON line: the waiting agent's question and the answers to offer
-    dash.py answer <ws> < text                      answer the waiting agent (a menu choice number, or a reply + Enter)
+                                                    (a "done" agent: its last message in full, for a chat's reply)
+    dash.py answer <ws> [--chat] < text             answer the waiting agent (a menu choice number, or a reply + Enter);
+                                                    --chat: talk its question over ("Chat about this"), also once it replied ("done")
     dash.py park <ws> on|off                        add or drop "(parked)" on that workspace's goal (the left dock)
     dash.py task repos -                            one JSON line: the repos a task can go to (New task)
     dash.py task new <repo> < {text, files}         start a workspace on that repo with an agent working the request; files are data URLs.
@@ -1354,12 +1356,14 @@ def run(name, prompt, worktree_id=None):
 MENU_RE = re.compile(r"^\s*(?:[❯›●▸]\s*)?(\d)\.\s+(\S.*)$")
 
 
-def waiting_term(name):
-    """(worktree, agent, terminal handle, terminal read) for the workspace's waiting agent, or an error string."""
+def waiting_term(name, done_ok=False):
+    """(worktree, agent, terminal handle, terminal read) for the workspace's waiting agent, or an error string.
+    done_ok: an agent that ended its turn at its prompt ("done") counts too: a chat's reply ends that way."""
     w, ag = next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
     if not w:
         return f"no workspace {name}"
-    if ag.get("state") != "waiting":
+    state = (ag or {}).get("state")
+    if state != "waiting" and not (done_ok and state == "done"):
         return "its agent isn't waiting on you any more"
     terms = [t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
              if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")]
@@ -1378,6 +1382,14 @@ def menu(tail):
         return []
     opts = [(m[1], m[2].strip()) for x in lines if (m := MENU_RE.match(x))]
     return opts if len(opts) >= 2 else []
+
+
+CHAT_RE = re.compile(r"chat about (?:this|it)\.?", re.I)  # Claude Code's picker: "Chat about this" sets the question aside to talk it over
+
+
+def chat_key(opts):
+    """The digit of the picker's "Chat about this" entry, else None."""
+    return next((k for k, label in opts if CHAT_RE.fullmatch(label.strip())), None)
 
 
 def picker(tail):
@@ -1399,17 +1411,21 @@ def picker(tail):
 
 
 def ask_user(name, model=None, effort="low"):
-    t = waiting_term(name)
+    t = waiting_term(name, done_ok=True)  # "done": the page asks only in a chat, for its reply in full (the stream cuts it to 400)
     if isinstance(t, str):
         return {"name": name, "error": t}
     w, ag, h, rd = t
     q = (ag.get("lastAssistantMessage") or "").strip()
+    if ag.get("state") == "done":
+        return {"name": name, "question": q[-4000:], "kind": "prompt", "options": []}
     opts = menu(rd.get("tail") or [])
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu",
+        key = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True)),
+        chat = key if ag.get("stateStartedAt") and "lastAssistantMessage" in ag else None  # an ADE that says when a turn ends and what was said (not herdr, basement)
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:] if chat else "",  # said: in a chat, its reply
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
-                "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something."]}
+                "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != key]}
     cache = DASH / "ask" / f"{safe(name)}.json"
     key = hashlib.sha1(q.encode()).hexdigest()[:12]
     try:
@@ -1498,34 +1514,71 @@ def pending_questions(path, agent_type=None):
     return None
 
 
-def answer(name, text):
-    """Answer the waiting agent. Never types over text the user left unsent in that terminal."""
-    t = waiting_term(name)
+def _picker_closed(h):
+    """Polls ~8s for the agent's picker to close; False when it's still up."""
+    for _ in range(20):  # ponytail
+        time.sleep(0.4)
+        if not menu(_tail(h)):
+            return True
+    return False
+
+
+def _tail(h):
+    return greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []
+
+
+def _turn_ended(name, before, secs=90):
+    """After "Chat about this" the agent takes a turn of its own ("what would you like to clarify?"): wait for that turn to end,
+    so the message is its own turn and the page can tell its reply. A turn ended once the state left the picker's (a newer
+    stateStartedAt than `before`, or "working" seen in between, for an ADE without one). Only "done", at its prompt, takes text:
+    the agent then; "asked" when it's waiting on a picker or a permission prompt; "busy" when the turn didn't end in time."""
+    worked = False
+    for _ in range(secs):  # ponytail: polls the ADE once a second, up to 90s
+        time.sleep(1)
+        ag = next((ag or {} for w, ag in live_agents().values() if w["displayName"] == name), {})
+        st, new = ag.get("state"), worked or (before and ag.get("stateStartedAt") not in (None, before))
+        worked = worked or st == "working"
+        if st in ("done", "waiting") and new:
+            return ag if st == "done" else "asked"
+    return "busy"
+
+
+def answer(name, text, chat=False):
+    """Answer the waiting agent. Never types over text the user left unsent in that terminal.
+    chat: the text talks its question over instead of answering it. Over a picker that offers "Chat about this", that
+    entry closes it (the agent hears you want to discuss it, not that you declined), then the text goes in as a message.
+    A chat also reaches an agent that replied and ended its turn at its prompt ("done"), not only one that's "waiting".
+    since: the agent's state start when the text went in; the page takes a later "done" as the agent's reply."""
+    t = waiting_term(name, done_ok=chat)
     if isinstance(t, str):
         return {"error": t}
     w, ag, h, rd = t
     if (rd.get("draft") or "").strip():
         return {"error": "there's unsent text in that agent's input box; answer it in its workspace"}
-    opts = menu(rd.get("tail") or [])
+    opts = [] if ag.get("state") == "done" else menu(rd.get("tail") or [])  # at its prompt, a numbered list in its reply isn't a picker
     text = " ".join(_strip_ctrl(text).split())  # one line: a newline would submit half the answer
-    if opts and text in {k for k, _ in opts}:
+    key = chat_key(opts) if chat else None
+    if chat and opts and not key:  # a permission prompt, say: Esc would turn it down
+        return {"error": "the agent is asking something else now; answer that first"}
+    if opts and not chat and text in {k for k, _ in opts}:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text)
-    elif opts:  # Esc closes the picker, then the answer goes in as a plain message
-        greenlight.orca("terminal", "send", "--terminal", h, "--text", "\x1b")
-        for _ in range(20):  # ponytail: polls ~8s for the picker to close
-            time.sleep(0.4)
-            if not menu(greenlight.orca("terminal", "read", "--terminal", h, "--limit", "60")["terminal"].get("tail") or []):
-                break
-        else:
+    elif opts:  # "Chat about this" (a chat) or Esc closes the picker, then the text goes in as a plain message
+        greenlight.orca("terminal", "send", "--terminal", h, "--text", key or "\x1b")
+        if not _picker_closed(h):
             return {"error": "the agent's menu didn't close; answer it in its workspace"}
+        if chat:
+            ended = _turn_ended(name, ag.get("stateStartedAt"))
+            if isinstance(ended, str):
+                return {"error": "the agent asked something again; answer that first" if ended == "asked" else "the agent is still busy; send it again in a moment"}
+            ag = ended
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text, "--enter")
     else:
         greenlight.orca("terminal", "send", "--terminal", h, "--text", text, "--enter")
     hf = greenlight.history_file(name)
     hf.parent.mkdir(parents=True, exist_ok=True)
     with hf.open("a") as f:
-        f.write(f"- {time.strftime('%Y-%m-%d %H:%M')} you answered the agent: {' '.join(text.split())[:300]}\n")
-    return {"ok": True}
+        f.write(f"- {time.strftime('%Y-%m-%d %H:%M')} you {'asked the agent about its question' if chat else 'answered the agent'}: {' '.join(text.split())[:300]}\n")
+    return {"ok": True, "since": ag.get("stateStartedAt")}
 
 
 def validate(layout):
@@ -2315,7 +2368,7 @@ def main():
                 print(json.dumps(ask_user(a[1], **opt)))
             else:
                 text = sys.stdin.read().strip()[:4000]
-                print(json.dumps({"name": a[1], **(answer(a[1], text) if text else {"error": "empty answer"})}))
+                print(json.dumps({"name": a[1], **(answer(a[1], text, chat="--chat" in a[2:]) if text else {"error": "empty answer"})}))
         except Exception as e:
             oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))

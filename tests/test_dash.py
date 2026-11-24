@@ -56,6 +56,52 @@ with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)),
 with mock.patch.object(dash, "waiting_term", return_value=({}, {}, "t1", MENU)), mock.patch.object(dash.greenlight, "history_file", return_value=Path(tempfile.mkdtemp()) / "h.md"), \
         mock.patch.object(dash.greenlight, "orca") as o:
     assert dash.answer("ws", "2")["ok"] and o.call_args.args[-2:] == ("--text", "2")
+# "Chat about this" (#173): the page offers it as a chat, not as an answer; a chat message picks it, then goes in as a message
+CHAT = {"draft": "", "tail": ["│ Which way?", "❯ 1. Keep it", "  2. Port it", "────", "  3. Chat about this", "Enter to select"]}
+assert dash.chat_key(dash.menu(CHAT["tail"])) == "3" and dash.chat_key(dash.menu(MENU["tail"])) is None
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x", "stateStartedAt": 1}, "t1", CHAT)):
+    asked = dash.ask_user("ws")
+    assert asked["chat"] == "3" and [o["key"] for o in asked["options"]] == ["1", "2"] and asked["said"] == "x", asked  # said: its message before the picker
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"lastAssistantMessage": "x", "stateStartedAt": None}, "t1", CHAT)):
+    asked = dash.ask_user("ws")  # an ADE that can't say when a turn ends or what was said (herdr): no chat, and still no "Chat about this" answer
+    assert asked["chat"] is None and [o["key"] for o in asked["options"]] == ["1", "2"], asked
+with mock.patch.object(dash, "waiting_term", return_value=({"path": ""}, {"stateStartedAt": 1}, "t1", CHAT)):
+    assert dash.ask_user("ws")["chat"] is None  # an ADE that never says what the agent said (basement): no chat
+hist = Path(tempfile.mkdtemp()) / "h.md"
+PICK, PROMPT = {"stateStartedAt": 1}, {"terminal": {"tail": ["❯"]}}
+ps = lambda *states: [{"w1": ({"displayName": "ws"}, {"state": st, "stateStartedAt": at})} for st, at in states]
+def chat_send(text, live, orca_calls, pick=PICK, term=CHAT):
+    with mock.patch.object(dash, "waiting_term", return_value=({}, pick, "t1", term)), mock.patch.object(dash.greenlight, "history_file", return_value=hist), \
+            mock.patch.object(dash.time, "sleep"), mock.patch.object(dash, "live_agents", side_effect=live), \
+            mock.patch.object(dash.greenlight, "orca", side_effect=orca_calls) as o:
+        return dash.answer("ws", text, chat=True), [c.args for c in o.call_args_list]
+# the chat digit, the picker closing, the agent's own "what would you like to clarify?" turn ending, then the message as its own turn
+r, sent = chat_send("Why not both?", ps(("waiting", 1), ("working", 2), ("done", 5)), [None, PROMPT, None])
+assert r == {"ok": True, "since": 5} and sent[0][-2:] == ("--text", "3") and sent[2][-3:] == ("--text", "Why not both?", "--enter"), (r, sent)
+assert "asked the agent about its question" in hist.read_text()
+r, sent = chat_send("1", ps(("done", 5)), [None, PROMPT, None])
+assert r["ok"] and sent[0][-1] == "3"  # a chat message that's only a digit is still a chat, not option 1
+r, sent = chat_send("hm?", ps(("waiting", 7)), [None, PROMPT])
+assert "asked something again" in r["error"] and len(sent) == 2  # it asked again (or hit a permission prompt) in its own turn: nothing typed
+r, sent = chat_send("Why?", ps(*[("working", 2)] * 90), [None, PROMPT])
+assert "still busy" in r["error"] and len(sent) == 2  # never typed into a working agent
+r, sent = chat_send("Why?", ps(("waiting", None), ("working", None), ("done", None)), [None, PROMPT, None], pick={"stateStartedAt": None})
+assert r == {"ok": True, "since": None} and sent[2][-1] == "--enter"  # no state times (herdr): "working" seen, then "done"
+r, sent = chat_send("hm?", [], [], term=MENU)
+assert "something else" in r["error"] and not sent  # a picker with no "Chat about this": never Esc it
+with mock.patch.object(dash, "waiting_term", return_value=({}, {"state": "done", "stateStartedAt": 9}, "t1", {"draft": "", "tail": ["Two ways:", "1. Keep the cache", "2. Drop it", "❯ try \"keep it\""]})), \
+        mock.patch.object(dash.greenlight, "history_file", return_value=hist), mock.patch.object(dash.greenlight, "orca") as o:
+    assert dash.answer("ws", "Drop it.", chat=True) == {"ok": True, "since": 9}  # at its prompt, a numbered list in its reply isn't a picker
+    assert o.call_args.args[-3:] == ("--text", "Drop it.", "--enter")
+with mock.patch.object(dash, "waiting_term", return_value=({}, {"state": "done", "lastAssistantMessage": "x" * 5000}, "t1", {"tail": ["❯"]})):
+    assert dash.ask_user("ws") == {"name": "ws", "question": "x" * 4000, "kind": "prompt", "options": []}  # a chat's reply, in full and with no suggestions
+# a chat's reply ends the agent's turn at its prompt ("done"): only a chat message may go to it, never a plain answer
+DONE = {"w1": ({"displayName": "ws", "worktreeId": "w1"}, {"state": "done"})}
+TERMS = {"terminals": [{"worktreeId": "w1", "agentIdentity": "claude", "handle": "t1"}]}
+with mock.patch.object(dash, "live_agents", return_value=DONE), mock.patch.object(dash.greenlight, "orca", side_effect=[TERMS, {"terminal": {"tail": ["❯"]}}]):
+    assert dash.waiting_term("ws", done_ok=True)[2] == "t1"
+with mock.patch.object(dash, "live_agents", return_value=DONE):
+    assert "isn't waiting" in dash.waiting_term("ws")
 # the pending AskUserQuestion comes from the newest transcript, and goes once it has a result
 d = tempfile.mkdtemp()
 Q = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which?", "options": []}]}}]}}

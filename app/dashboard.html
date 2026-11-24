@@ -611,7 +611,7 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .abox{display:flex;flex-direction:column;gap:var(--sp-2)}
 .abox .pill{flex-shrink:0}
 .abox .shd small{font-size:var(--fs-2);font-weight:400;color:var(--text2)} .abox .shd small .el{color:var(--text3)}
-.abox .shd .afull{display:flex;align-items:center;gap:var(--sp-1);padding:0;border:0;background:none;font:inherit;font-size:var(--fs-2);color:var(--text2)} .abox .shd .afull[aria-expanded=true] .ic{transform:rotate(90deg)}
+.abox .shd .afull,.achat .afull{display:flex;align-items:center;gap:var(--sp-1);padding:0;border:0;background:none;font:inherit;font-size:var(--fs-2);color:var(--text2)} .abox .shd .afull[aria-expanded=true] .ic{transform:rotate(90deg)}
 .abox .afq{font-size:var(--fs-3);line-height:var(--lh-3);font-weight:400;color:var(--text2)}
 .aq{margin:0;font-size:var(--fs-4);line-height:var(--lh-4);font-weight:600;white-space:pre-wrap;max-height:40vh;overflow:auto;max-width:68ch}
 .afull summary{display:flex;align-items:center;gap:var(--sp-1);list-style:none;font-size:var(--fs-2);color:var(--text2)}.afull summary::-webkit-details-marker{display:none}.afull[open] summary .ic{transform:rotate(90deg)} .afull .aq{margin-top:var(--sp-2);font-size:var(--fs-3);line-height:var(--lh-3);font-weight:400;color:var(--text2)}
@@ -643,6 +643,11 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .areply .btn{height:40px;font-weight:600}
 .areply .btn.primary{height:40px} .areply textarea::placeholder,.areply input::placeholder,.pclar input::placeholder{color:var(--faint);opacity:1}
 .ast{font-size:var(--fs-2);color:var(--text3)} .ast.err{color:var(--red-ink)}
+/* "Chat about this" (DESIGN.md §10.17): you, a right-aligned element.rest bubble; the agent, full width; both body-copy */
+.athread{display:flex;flex-direction:column-reverse;gap:var(--sp-2);max-height:40vh;overflow:auto;padding-bottom:var(--sp-2);border-bottom:1px solid var(--hair)}
+.athread p{margin:0;font:var(--ds-type-body-copy);letter-spacing:var(--ds-type-body-copy-track);white-space:pre-wrap;overflow-wrap:anywhere;max-width:var(--ds-layout-measure);color:var(--text2)}
+.athread p.you{align-self:flex-end;max-width:min(80%,var(--ds-layout-measure));padding:var(--sp-2) var(--sp-3);border-radius:var(--ds-radius-md);background:var(--ds-element-rest);color:var(--text)}
+.achat{display:flex;align-items:center;gap:var(--sp-3)} .achat .ahint{flex-grow:1;margin:0} .achat .afull{flex-shrink:0}
 
 /* sheets (DESIGN.md §10.15) */
 .sheetbg{position:fixed;inset:0;z-index:50;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;padding:60px var(--sp-4) var(--sp-4)}
@@ -1149,7 +1154,7 @@ function unStages(e){  // a real leave forgets it; the 5s re-render's removal bl
 const outLine = (p, act, ...kids) => h("button", {class:"aline", id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
   onclick: () => openOut(p.name)}, ...kids, h("span", {class:"aexp", "aria-hidden":"true"}, icon("expand", 12)));
 function agentCard(p){  // one size everywhere: who and the action, the steps as a bar, what it's doing now, then the MR's facts
-  const a = p.agent, wait = a.state === "waiting", ag = agentMeta(a.type), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
+  const a = p.agent, wait = asking(p), ag = agentMeta(a.type), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
   const said = String(a.last || "").split("\n").filter(Boolean).pop() || "";
   const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : short(said || "Working", 160);
   const {n, i} = stepsOf(p), t0 = since(a.since), title = String(mr.title || p.goal || p.name).replace(/^Draft:\s*/i, ""), steps = p.steps || [];
@@ -1183,15 +1188,15 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       wait && long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null));
 }
 /* the action a human request asks for, said the same in every row that offers it */
-const askLabel = p => p.agent.state === "waiting" ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
-  : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only a waiting agent has a question
+const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
+  : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only an agent asking (a question, or a chat's reply) has one
 function agentsStrip(docked){  // docked: the overview's strip, where idle crashed workspaces show only in the "N crashed" chip; every live agent shows, whatever its workspace's state
-  const busy = p => ["working", "waiting"].includes(p.agent.state), all = shown();
+  const busy = p => p.agent.state === "working" || asking(p), all = shown();
   const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, idle ones show only in the chip); hid: the search hides some
   const crashed = all.filter(p => p.state === "crashed").length;  // crashed workspaces, as the footer, the hexes and the chip's own filter count them
   const idle = all.filter(p => p.agent.type && !busy(p) && p.state !== "crashed").length;  // as the hover card: an idle agent on a crashed workspace reads "crashed"
   const working = live.filter(p => p.agent.state === "working").length;  // the pills count the cards below them
-  const waiting = live.filter(p => p.agent.state === "waiting").length;
+  const waiting = live.filter(asking).length;
   const pills = [working ? statusPill("blue", `Working ${working}`) : null, waiting ? statusPill("orange", `${waiting} need${waiting === 1 ? "s" : ""} you`, {title:"Agents waiting on your answer"}) : null];  // agents only: waiting-on-others and done sit on the shelf
   return h("section", {class:"agents"},
     h("div", {class:"shead"}, h("h2", {}, "Agents"), ...pills, crashed ? h("button", {class:"crash", onclick: () => { ui.q = "Crashed"; render() }}, icon("crashed-fill", 12, ""), `${crashed} crashed`) : null,
@@ -1356,7 +1361,7 @@ function listAgent(p){
   const a = p.agent, t0 = since(a.since), go = e => { e.stopPropagation(); openPage(p.name) };
   const av = () => a.type ? agentAv(a.type, 9, "av xs") : null;
   const sub = (...k) => h("span", {class:"lsub"}, ...k), el = () => h("span", {class:"el", "data-since": t0}, clock(t0));
-  if (a.state === "waiting") return h("div", {class:"lag"}, h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"),
+  if (asking(p)) return h("div", {class:"lag"}, h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"),
     sub(av(), "waiting ", el()));
   if (a.state === "working") { const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : DOING[p.step] || "Working";
     return h("div", {class:"lag"}, sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)), sub(av(), "working ", el())) }
@@ -1369,7 +1374,7 @@ function listAgent(p){
 function listRow(p){
   const col = c(STATE[p.state].color), mr = p.mr || {}, {n, i} = stepsOf(p), mine = ["needs", "raised", "crashed"].includes(p.state);
   const steps = p.steps || [], go = () => openPage(p.name);
-  return h("article", {class:"lrow" + (p.state === "needs" || p.agent.state === "waiting" ? " needs" : "") + (inDock(p) ? " indock" : ""), "data-name": p.name, "data-dock": dockable(p),
+  return h("article", {class:"lrow" + (p.state === "needs" || asking(p) ? " needs" : "") + (inDock(p) ? " indock" : ""), "data-name": p.name, "data-dock": dockable(p),
       role:"button", tabindex:"0", onclick: go, onkeydown: e => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()),
       onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     s("svg", {class:"lhex", width:44, height:44, viewBox:"-22 -22 44 44", role:"img", "aria-label": STATE[p.state].label},
@@ -1405,7 +1410,7 @@ function renderList(main){
   for (const [k, rows] of groups) {
     if (!rows.length) continue;
     const st = by === "state" && STATE[k], fold = st && k === "done" && !ui.listOnly && !ui.showDone;
-    rows.sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state) || (b.agent.state === "waiting") - (a.agent.state === "waiting") || (b.agent.idle_h || 0) - (a.agent.idle_h || 0));  // a blocked question first, as on the overview
+    rows.sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state) || asking(b) - asking(a) || (b.agent.idle_h || 0) - (a.agent.idle_h || 0));  // a blocked question first, as on the overview
     list.append(h("h2", {class:"lsec"}, st ? stateGlyph(st) : null,
       st ? st.label : k, h("b", {}, rows.length), h("span", {class:"rule"}),
       fold || k === "done" && ui.showDone ? h("button", {class:"lmore", onclick: () => { ui.showDone = !ui.showDone; renderMain() }}, fold ? "Show" : "Hide") : null));
@@ -1554,7 +1559,7 @@ function activity(r){
 function renderPage(main){
   const p = ui.snap.pucks.find(x => x.name === ui.page.name);
   if (!p) { main.append(h("div", {class:"empty"}, "This workspace was deleted or archived.")); return }
-  const r = ui.page.resp, ml = (r && r.facts.mr_live) || {}, st = p.asked ? p.was : p.state, wait = st === "needs" && p.agent.state === "waiting", mr = p.mr || {};
+  const r = ui.page.resp, ml = (r && r.facts.mr_live) || {}, st = p.asked ? p.was : p.state, wait = (st === "needs" && p.agent.state === "waiting") || (p.agent.state === "done" && chatOn(p)), box = wait || chatOn(p), mr = p.mr || {};  // box: a chat shows while the agent replies
   const t = mrTitle(p), m = t.match(/^(\w+(?:\([^)]*\))?!?):\s+(.+)$/);
   const pill = wait ? ["Needs you", "wait"] : st === "crashed" ? ["Crashed", "red"] : st === "done" ? ["Done", "green"]
     : p.agent.state === "working" ? [DOING[p.step] || STEP_NAMES[p.step] || p.step, "blue"] : [STATE[st].label, st === "raised" ? "yellow" : st === "quiet" ? "purple" : "blue"];
@@ -1565,49 +1570,78 @@ function renderPage(main){
       h("div", {class:"ht"}, h("div", {class:"h1r"}, h("h1", {title: t}, m ? m[2] : t), statusPill(pill[1], pill[0])),
         h("div", {class:"meta"}, [mr.iid && h("span", {class:"mono"}, mrRef(mr)), m && h("span", {class:"mono"}, m[1]), p.project, mr.author, mr.draft && "draft"].filter(Boolean)
 .flatMap((x, k) => k ? [h("span", {}, "·"), typeof x === "string" ? h("span", {}, x) : x] : [typeof x === "string" ? h("span", {}, x) : x])))),
-    wait ? null : h("div", {class:"panel now" + (st === "raised" ? " yellow" : "")}, h("div", {class:"tx"}, h("b", {}, brief), fl ? h("span", {class:"why"}, fl) : null),
+    box ? null : h("div", {class:"panel now" + (st === "raised" ? " yellow" : "")}, h("div", {class:"tx"}, h("b", {}, brief), fl ? h("span", {class:"why"}, fl) : null),
       safeHttpUrl(mr.web_url) ? h("a", {class:"btn nact" + (st === "raised" ? " yellow" : ""), href: mr.web_url}, `${you ? "Review" : "Open"} in ${forgeName(mr)}`, icon("external", 13)) : null),
     p.asked ? h("section", {class:"needs"}, pingBox(p.asked)) : null,
-    wait ? h("section", {class:"needs"}, answerBox(p, true)) : null,
+    box ? h("section", {class:"needs"}, answerBox(p, true)) : null,
     p.steps && p.steps.length ? lifecycle(p, ml) : null,
     h("div", {class:"cols"},
-      h("div", {class:"l"}, wait ? null : agentPanel(p), insights(r)),  // waiting: the answer box above is the agent's panel
+      h("div", {class:"l"}, box ? null : agentPanel(p), insights(r)),  // waiting or chatting: the answer box above is the agent's panel
       h("aside", {class:"r"}, mrFacts(p, ml), activity(r)))));
 }
 
 /* ---------- answering a waiting agent: its question, the answers to offer, a free reply ---------- */
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
+function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), within CHAT_KEEP of your last word or a reply that ended its turn
+function chatOn(p){ return chatLive(ui.ask[p.name]) && ["working", "done"].includes(p.agent.state) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
+function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "done" && chatOn(p)) }  // waits on you: a question, or a chat's reply
 function askState(p){
-  const st = ui.ask[p.name], key = [p.agent.state, p.agent.since, p.agent.last].join("|");  // since: an agent can ask again with no text in between
-  if (p.agent.state === "waiting" && (!st || (st.key !== key && !st.loading))) {
-    ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : ""};
-    post({cmd: "ask", name: p.name});
+  const a = p.agent, st = ui.ask[p.name], key = [a.state, a.since, a.last].join("|");  // since: an agent can ask again with no text in between
+  if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
+  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.failed);  // its reply ends its turn: a "done" newer than your message (or its turn after one failed over a picker); never a turn you didn't start
+  if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
+    const chat = !chatLive(st) ? null : reply ? {...st.chat, at: Date.now()} : st.chat;  // a reply in time carries the chat on, with its own CHAT_KEEP to read and answer it
+    ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
+    post({cmd: "ask", name: p.name});  // a reply too: the stream cuts the agent's message to 400 characters
   }
   return ui.ask[p.name] || {};
 }
-function sendAnswer(name, text){
+/* "Chat about this": a question can be talked over before it's answered. st.chat = {thread, at} lives in the question's own
+   answer box: the thread (its question, your messages, the agent's replies) above the agent's latest message, then the composer.
+   Every chat message goes as dash.py answer --chat: over a picker that picks its "Chat about this", so the agent hears you want to
+   discuss it, not a refusal; at a prompt it's a plain message. Its replies end its turn at its prompt, so a chat goes on through
+   "done" as well as "waiting" (chatOn). You answer by choosing an option when the agent asks again, or by just saying it.
+   Choosing an option, End chat, a permission prompt, the agent crashing, or a long stretch of work (CHAT_KEEP) ends the chat. */
+const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms a chat lasts after your last message, keystroke or its reply (a task you answered in words that runs longer doesn't come back as a reply); entries kept
+function sendAnswer(name, text, said){  // said: in a chat, the agent's messages this one replies to
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
-  st.sending = true; st.err = null; st.sentText = text;
+  st.sending = true; st.err = null; st.failed = false; st.sentText = text; st.pend = said ? [...said, {who: "you", text}] : null;
+  if (said && st.chat) st.chat.tried = true;  // even if it fails, the picker may be gone: the chat stays to try again
   const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
-  if (p) act(p, "The answer didn't send");
-  post({cmd: "answer", name, text}); render();
+  if (p && !said) act(p, "The answer didn't send");  // a chat keeps the sheet and its hex: the reply comes back here
+  post({cmd: "answer", name, text, ...(said && {chat: true})}); render();
+}
+function endChat(st){ st.chat = null; render() }
+function chatThread(st, more){  // the chat so far, newest at the bottom (column-reverse keeps the scroll there); the agent's latest message follows it
+  const t = arr(st.chat && st.chat.thread).concat(more || []);
+  return t.length ? h("div", {class:"athread", role:"log", "aria-label":"Your chat about this question"},
+    t.slice().reverse().map(e => h("p", {class: e.who === "you" ? "you" : "ag"}, (x => x.length > 2000 ? x.slice(0, 1999) + "…" : x)(String(e.text || "").trim())))) : null;  // its line breaks kept
 }
 function answerBox(p, onPage){
-  const st = askState(p), a = p.agent, rs = st.resp || {}, sent = st.sent && a.state === "waiting";
-  if (a.state !== "waiting") return h("div", {class:"ast"}, st.sent ? "Sent. The agent is back to work." : p.state === "needs" && (p.action || p.why)  // a request with no question: say what it is
+  const st = askState(p), a = p.agent, rs = st.resp || {}, open = asking(p), sent = st.sent && open;
+  if (a.state === "working" && chatLive(st)) return h("div", {class:"abox"}, chatThread(st, st.sending ? st.pend : null),  // mid-send, the agent is already on its own "Chat about this" turn
+    st.err && !st.sending ? h("div", {class:"ast err"}, `${st.err}. Your message is kept for when it stops.`)
+      : h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), st.sending ? "Sending…" : "The agent is replying…"));
+  if (!open) return h("div", {class:"ast"}, st.sent ? "Sent. The agent is back to work." : p.state === "needs" && (p.action || p.why)  // a request with no question: say what it is
     ? `Nothing to answer: ${short(p.action || p.why, 200).replace(/\.$/, "")}. Open the workspace to act on it.` : "The agent isn't waiting on you any more.");
   const q = String(rs.question || a.last || "").trim(), ag = agentMeta(a.type);
-  const opts = arr(rs.options), menu = rs.kind === "menu";
+  const opts = arr(rs.options), menu = rs.kind === "menu", talking = !!st.chat, fresh = talking && !st.chat.thread.length, canChat = menu && !!rs.chat && !talking;
+  const said = talking && !fresh && menu && String(rs.said || "").trim(), heard = arr(st.chat && st.chat.thread).filter(e => e.who === "agent").map(e => e.text);
+  const more = said && said !== q && !heard.includes(said) ? [{who: "agent", text: said}] : [];  // asked again: its reply came before the picker
   const full = q ? (t => t.length > 1600 ? t.slice(0, 1599) + "…" : t)(q.split(/\n\s*\n/).slice(-3).join("\n\n")) : "Waiting on you.";
   const LI = /^\s*(\d+[.)]|[-*•])\s+/, items = full.split("\n").filter(l => LI.test(l));
   const lean = opts.length && !st.loading && items.length === opts.length ? full.split("\n").filter(l => !LI.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim() : full;  // only the list the buttons repeat folds away; any other list stays
   const folds = lean && lean !== full, mins = a.since ? Math.round((Date.now() - since(a.since)) / 60000) : null, val = o => menu ? o.key : o.label;
+  const reply = () => sendAnswer(p.name, st.draft, talking ? [...more, {who: "agent", text: q}] : null), busy = st.sending || sent, locked = busy || (talking && st.loading);  // in a chat, wait to know whether a picker is up
   return h("div", {class:"abox"},
     h("div", {class:"shd"}, onPage ? null : statusPill("wait", "Needs you"),  // the page title already carries the pill
       agentAv(a.type, 12, "av sm"),
-      h("small", {style:"flex-grow:1"}, `${ag.name} is waiting`, mins != null ? h("span", {class:"el"}, ` · ${mins < 1 ? "just now" : ago(mins / 60) + " ago"}`) : null),
+      h("small", {style:"flex-grow:1"}, `${ag.name} ${a.state === "done" ? "replied" : "is waiting"}`, mins != null ? h("span", {class:"el"}, ` · ${mins < 1 ? "just now" : ago(mins / 60) + " ago"}`) : null),
+      talking && !(fresh && menu) ? h("button", {type:"button", class:"afull", title: a.state === "waiting" ? "Stop chatting and go back to answering" : "Stop chatting; it no longer waits on you here",
+        disabled: st.sending, onclick: () => endChat(st)}, "End chat") : null,
       folds ? h("button", {type:"button", class:"afull", "aria-expanded": String(!!ui.afull), "aria-controls":"aq", onclick: () => { ui.afull = !ui.afull; render() }}, icon(ui.afull ? "chevron-down" : "chevron-right", 12), ui.afull ? "Less" : "Full message") : null),
+    chatThread(st, more),
     folds && ui.afull ? h("p", {class:"aq afq", id:"aq"}, full) : h("p", {class:"aq", id:"aq"}, (lean || full).replace(/\n{2,}/g, "\n").trim()),  // the full message replaces the short one; no blank lines in the short one
     !st.loading && opts.length ? h("span", {class:"ahint", id:"ahint"}, "Choose an option to send it immediately") : null,
     st.loading ? h("div", {class:"ast"}, h("span", {class:"spin", style:"width:11px;height:11px;display:inline-block;vertical-align:-1px;margin-right:6px"}), "Finding the answers…")
@@ -1615,14 +1649,19 @@ function answerBox(p, onPage){
           return h("button", {class: mine ? "on" : null, disabled: st.sending || sent,  // ponytail: no .first highlight, the data marks no default
             onclick: () => sendAnswer(p.name, val(o))}, h("span", {class:"ot"}, h("b", {class:"lbl"}, o.label), o.detail ? h("span", {class:"det"}, o.detail) : null),
             h("span", {class:"osend"}, mine && st.sending ? "Sending…" : mine ? "Sent" : ["Send", svg(UP)])) })) : null,
-    menu ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); sendAnswer(p.name, st.draft) }},
-      h("textarea", {id:"areply", rows:"1", placeholder: opts.length ? "Or write a reply…" : "Reply to the agent…", "aria-label": opts.length ? "Or write a reply" : "Your reply", title:"Enter sends · Shift+Enter for a new line",
-        disabled: st.sending, oninput: e => { st.draft = e.target.value; grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
+    canChat ? h("div", {class:"achat"}, h("button", {type:"button", class:"btn sm", id:"achat", disabled: busy, title:"Talk the question over with the agent before you answer it",
+      onclick: () => { st.chat = {thread: [], at: Date.now()}; render(); const t = document.getElementById("areply"); if (t) t.focus() }}, icon("chat", 13), "Chat about this")) : null,
+    fresh && menu ? h("div", {class:"achat"}, h("span", {class:"ahint"}, "Ask about it or say what's unclear. The agent replies here, and you answer when you're ready."),
+      h("button", {type:"button", class:"afull", id:"aback", disabled: st.sending, onclick: () => endChat(st)}, icon("chevron-left", 12), "Back to the options")) : null,
+    menu && !(talking && rs.chat) ? null : h("form", {class:"areply", onsubmit: e => { e.preventDefault(); reply() }},  // a picker takes text only through its "Chat about this"
+      h("textarea", {id:"areply", rows:"1", placeholder: fresh ? "Ask the agent about this question…" : talking ? "Keep chatting, or give your answer…" : opts.length ? "Or write a reply…" : "Reply to the agent…",
+        "aria-label": talking ? "Your message about this question" : opts.length ? "Or write a reply" : "Your reply", title:"Enter sends · Shift+Enter for a new line",
+        disabled: locked, oninput: e => { st.draft = e.target.value; if (st.chat) st.chat.at = Date.now(); grow(e.target); document.getElementById("asend").disabled = !st.draft.trim() },
         onkeydown: e => {  // as the input did: Enter sends, Shift+Enter is a new line
           if (e.key !== "Enter" || e.isComposing || e.shiftKey || e.altKey || e.ctrlKey) return;
-          e.preventDefault(); sendAnswer(p.name, st.draft);
+          e.preventDefault(); reply();
         }}, st.draft || ""),
-      h("div", {class:"srow"}, h("button", {type:"submit", class:"btn primary", id:"asend", title:"Enter sends · Shift+Enter for a new line", disabled: st.sending || !String(st.draft || "").trim()}, "Send reply"))),
+      h("div", {class:"srow"}, h("button", {type:"submit", class:"btn primary", id:"asend", title:"Enter sends · Shift+Enter for a new line", disabled: locked || !String(st.draft || "").trim()}, talking ? "Send" : "Send reply"))),
     st.err ? h("div", {class:"ast err"}, st.err) : st.sending ? h("div", {class:"ast"}, "Sending…") : sent ? h("div", {class:"ast"}, `Sent “${short(st.sentText, 60)}”. Waiting for the agent to pick it up…`) : null);
 }
 /* greenlight's question about this workspace (a bell ping that names it): its options, or a reply field; answering = answering in the bell */
@@ -2108,7 +2147,7 @@ function hoverCard(p, tab = "overview"){
   }
   const mv = arr(p.moves);  // open MRs' moves, pre-MR signoffs, and post-merge steps (dash.py moves)  // dash.py moves: the smart button replaces the next step
   const open = h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, "Open workspace");
-  const acts = a.state === "waiting" ? h("div", {class: "hacts"}, h("button", {class: "btn sm ans", onclick: () => { hideCard(); openAnswer(p.name) }}, "Answer"), open)  // its question, answered from here
+  const acts = asking(p) ? h("div", {class: "hacts"}, h("button", {class: "btn sm ans", onclick: () => { hideCard(); openAnswer(p.name) }}, "Answer"), open)  // its question, answered from here
       : a.state === "working" ? null
       : ["needs", "raised", "crashed"].includes(p.state) ? h("div", {class: "hacts"}, mv.length ? null : nextBtn(p), h("button", {class: "btn sm", onclick: () => { hideCard(); openPage(p.name) }}, askLabel(p)))
       : mv.length ? null : nextBtn(p);
@@ -2799,13 +2838,20 @@ window.mc = {
   },
   asked(r){
     const st = ui.ask[r.name]; if (!st) return;
-    st.loading = false; st.resp = r.error ? null : r; st.err = r.error || null; render();
+    st.loading = false; st.resp = r.error ? null : r; st.err = r.error || null;
+    if (r.kind === "menu" && !r.chat) st.chat = null;  // a permission prompt, not its question asked again: the chat is over
+    render();
+    const t = st.chat && ui.answering === r.name && document.getElementById("areply"); if (t && !t.disabled) t.focus();  // the reply came: back to the composer
   },
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;
     st.sending = false; acted(r.name, r.error, null, ui.answering === r.name || ui.page?.name === r.name);  // the sheet or page shows its own error
-    if (r.error) st.err = r.error;
-    else { st.sent = true; st.draft = ""; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
+    if (r.error) { st.err = r.error; st.failed = !!st.pend && !!st.resp && st.resp.kind === "menu" }  // failed: a chat message over a picker, which may be gone now
+    else if (st.pend) {  // a chat: the thread grows, and the sheet stays open for the agent's reply
+      st.sent = true; st.draft = ""; st.typed = r.since;  // the agent's state start when the text went in
+      st.chat = {thread: arr(st.chat && st.chat.thread).concat(st.pend).slice(-CHAT_MAX), at: Date.now()};
+    }
+    else { st.sent = true; st.draft = ""; st.chat = null; setTimeout(() => { if (ui.answering === r.name) closeAnswer() }, 1800) }
     render();
   },
   transcript(r){ gotOut(r) },  // All output's pages
