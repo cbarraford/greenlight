@@ -93,6 +93,7 @@ def screen(handle):
 
 
 _STATE_PRIO = {"done": 0, "working": 1, "waiting": 2}
+_TITLE_PREFIX = {"codex": "⌬ ", "agy": "◈ "}
 
 
 def pane_states():
@@ -102,13 +103,15 @@ def pane_states():
         kind = agent_type(p["title"], p.get("cmd", ""))
         if not kind:
             continue
-        needs_tail = kind != "claude" or p["title"][:1] == "✳" or not ("⠀" <= p["title"][:1] <= "⣿")
+        needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
         s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
         if not s:
             continue
+        pref = _TITLE_PREFIX.get(kind, "")
+        title = p["title"] if not pref or p["title"].startswith(pref) else pref + p["title"]
         prev = out.get(p["session"])
         if prev is None or _STATE_PRIO[s] >= _STATE_PRIO[prev["state"]]:
-            out[p["session"]] = {"state": s, "title": p["title"]}
+            out[p["session"]] = {"state": s, "title": title}
     return out
 
 
@@ -146,7 +149,7 @@ def worktrees():
             kind = agent_type(p["title"], p.get("cmd", ""))
             if not kind:
                 continue
-            needs_tail = kind != "claude" or p["title"][:1] == "✳" or not ("⠀" <= p["title"][:1] <= "⣿")
+            needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
             s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
             if s:
                 ags.append({"state": s, "agentType": kind, "updatedAt": int(p["at"] or 0) * 1000,

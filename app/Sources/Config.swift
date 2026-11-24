@@ -321,6 +321,7 @@ func harnessOf(_ model: String) -> String {
 /// (harness, model id or nil for that harness's default), matching `harness.route`.
 func routeModel(_ model: String) -> (harness: String, id: String?) {
     let h = harnessOf(model)
+    if !knownHarnesses.contains(h) { return ("claude", model.isEmpty ? nil : model) }
     if model == h { return (h, nil) }
     if model.hasPrefix(h + ":") {
         let rest = String(model.dropFirst(h.count + 1))
@@ -347,11 +348,12 @@ func llmInvocation(_ prompt: String, model: String, effort: String = "low") -> (
     let h = ["claude", "codex", "agy"].contains(routed.harness) ? routed.harness : "claude"
     let bin = localHarnessBin(h)
     if h == "codex" {
+        let eff = (effort == "xhigh" || effort == "max") ? "high" : effort
         var args = ["exec", "--skip-git-repo-check", "-c", "sandbox_mode=read-only"]
         var shell = "cd /tmp && exec codex exec --skip-git-repo-check -c sandbox_mode=read-only"
         if let id = routed.id { args += ["-m", id]; shell += " -m \(shellQuote(id))" }
-        args += ["-c", "model_reasoning_effort=\(effort)", "-"]
-        shell += " -c model_reasoning_effort=\(shellQuote(effort)) -"
+        args += ["-c", "model_reasoning_effort=\(eff)", "-"]
+        shell += " -c model_reasoning_effort=\(shellQuote(eff)) -"
         return (h, bin, args, prompt, shell)
     }
     if h == "agy" {
@@ -365,8 +367,8 @@ func llmInvocation(_ prompt: String, model: String, effort: String = "low") -> (
         return (h, bin, args, line + "\n", shell)
     }
     let id = routed.id ?? "claude-haiku-5-5"
-    return ("claude", bin, ["-p", "--model", id, "--effort", effort], prompt,
-            "cd /tmp && exec claude -p --model \(shellQuote(id)) --effort \(shellQuote(effort))")
+    return ("claude", bin, ["-p", "--tools", "", "--no-session-persistence", "--model", id, "--effort", effort], prompt,
+            "cd /tmp && exec claude -p --tools '' --no-session-persistence --model \(shellQuote(id)) --effort \(shellQuote(effort))")
 }
 /// Extract the final text response from `agy --output-format stream-json` output ("" on failure).
 func parseAgyStreamResult(_ output: String) -> String {

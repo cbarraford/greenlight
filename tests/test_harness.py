@@ -128,10 +128,10 @@ def test_codex_effort_follows_models_cache(harness_env, gl_home):
     (gl_home / "codex" / "models_cache.json").write_text(json.dumps({"models": [
         {"slug": "gpt-old", "supported_reasoning_levels": lv("low", "medium", "high")},
         {"slug": "gpt-new", "supported_reasoning_levels": lv("low", "medium", "high", "xhigh", "max")},
-        {"slug": "gpt-hidden", "visibility": "hide", "supported_reasoning_levels": lv("medium")}]}))
+        {"slug": "gpt-hidden", "visibility": "hide", "supported_reasoning_levels": lv("medium", "high")}]}))
     assert harness.codex_effort("gpt-old", "max") == "high" and harness.codex_effort("gpt-old", "xhigh") == "high"
     assert harness.codex_effort("gpt-new", "max") == "max" and harness.codex_effort("gpt-unknown", "max") == "max"
-    assert harness.codex_effort("gpt-hidden", "low") == "medium"  # nothing at or below: its lowest
+    assert harness.codex_effort("gpt-hidden", "low") == "medium"  # nothing at or below: its lowest, not highest
     assert harness.codex_effort(None, None) is None
     assert "model_reasoning_effort=high" in harness.argv("codex", "x", model="gpt-old", effort="max")[0]
     assert harness.argv("agy", "x", model="claude-opus-5-5", effort="high")[0][-2:] == ["--effort", "high"]
@@ -155,6 +155,7 @@ def test_models_lists_every_installed_harness(harness_env, gl_home, monkeypatch)
     assert "secret" not in ms and "codex:secret" not in ms and ms["codex:astra-9"]["harness"] == "codex" and "codex" in ms
     assert ms["gemini-4-neon-low"]["name"] == "Gemini 4 Neon (Low)"
     assert ms["agy:claude-opus-5-5-high"] == {"id": "agy:claude-opus-5-5-high", "name": "Claude Opus 5.5 (High) · agy", "harness": "agy"}
+    assert ms["agy"] == {"id": "agy", "name": "Antigravity default", "harness": "agy"}
     assert "opencode" not in ms and all(harness.route(i)[0] == m["harness"] for i, m in ms.items())
     harness.models()
     assert len(calls) == 1  # agy's list is cached for a day
@@ -173,6 +174,15 @@ def test_ask_runs_the_picked_harness_toolless(harness_env, monkeypatch):
     assert harness.ask("p", None) == "plain\n" and seen[-1][-2:] == ["--model", "claude-haiku-5-5"]  # claude's cheap default
     assert harness.ask("p", None, default="codex") == "plain\n" and "-m" not in seen[-1]  # codex: its own default
     assert harness.answer("agy", '{"event":"result","result":{"status":"ERROR","response":"x"}}') == ""
+    # Codex-only host: missing claude binary falls back cleanly to default harness
+    monkeypatch.setattr(harness, "installed", lambda n: n == "codex")
+    def missing_claude(cmd, **kw):
+        seen.append(cmd)
+        if cmd[0] == "claude":
+            raise FileNotFoundError("claude")
+        return harness.subprocess.CompletedProcess(cmd, 0, stdout="codex fallback\n", stderr="")
+    monkeypatch.setattr(harness.subprocess, "run", missing_claude)
+    assert harness.ask("p", "claude-haiku-5-5", default="codex") == "codex fallback\n" and seen[-1][:2] == ["codex", "exec"]
     monkeypatch.setattr(harness.subprocess, "run", lambda cmd, **kw: harness.subprocess.CompletedProcess(cmd, 1, stdout="error text", stderr=""))
     assert harness.ask("p", "claude-gone-1") == ""
 

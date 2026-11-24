@@ -1232,6 +1232,11 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   await page.click("#dlg .dl.ad");
   await page.fill("#dlg .dn textarea", "check this");
   assert.match(await page.textContent("#dlg button.pri"), /Paste 1 note into Codex/);
+  assert.match(await page.textContent("#dlg .dn .lb"), /Note to Codex on a\.py:1/);
+  // syncPanes preserves agy/codex identity even when pane_states sends an unprefixed title + agent field
+  const sess = await page.evaluate(() => { cur.focus.out = 0; return cur.focus.session; });
+  await page.evaluate(s => term.workspaces({agents: ["agy"], trees: [], panes: {[s]: {state: "working", title: "raw-agy", agent: "agy"}}}), sess);
+  assert.equal(await page.evaluate(() => agentOf(cur.focus)), "agy", "syncPanes keeps agy identity via prefix");
 });
 
 (async () => {

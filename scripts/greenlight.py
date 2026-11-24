@@ -187,11 +187,15 @@ ORCA_AGENTS = {"agy": "antigravity"}  # greenlight's harness names that Orca kno
 FROM_ORCA_AGENTS = {v: k for k, v in ORCA_AGENTS.items()}
 
 
+_KNOWN_AGENTS = ("claude", "codex", "agy", "opencode", "pi", "gemini")
+
+
 def canonical_agent(name):
     """Normalize ADE-specific agent ids (e.g. Orca's 'antigravity') to greenlight's harness name."""
     if not isinstance(name, str):
         return name
-    return FROM_ORCA_AGENTS.get(name.strip().lower(), name)
+    low = name.strip().lower()
+    return FROM_ORCA_AGENTS.get(low, low if low in _KNOWN_AGENTS else name)
 
 
 def orca_agent(args):

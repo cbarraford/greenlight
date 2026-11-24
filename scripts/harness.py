@@ -187,7 +187,7 @@ def codex_effort(model, effort):
     if not known or effort in known:
         return effort
     below = [lv for lv in known if EFFORTS.index(lv) <= EFFORTS.index(effort)]
-    return (below or known)[-1]
+    return below[-1] if below else known[0]
 
 
 CLAUDE_MODELS = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"),
@@ -238,6 +238,7 @@ def models():
         out.append({"id": "codex", "name": "Codex default", "harness": "codex"})
     if installed("agy"):
         out += [{"id": _id("agy", s), "name": n if s.startswith("gemini-") else f"{n} · agy", "harness": "agy"} for s, n in _agy_models()]
+        out.append({"id": "agy", "name": "Antigravity default", "harness": "agy"})
     for h, n in (("opencode", "OpenCode"), ("pi", "Pi"), ("gemini", "Gemini CLI")):
         if installed(h):
             out.append({"id": h, "name": n, "harness": h})
@@ -261,12 +262,20 @@ def answer(h, out):
 
 def ask(prompt, model=None, effort=None, default="claude", timeout=180, cwd=None):
     """One toolless headless answer from whichever harness runs `model` (no model: `default` with its cheap default).
+    Falls back to `default` if the named harness binary isn't installed on this host (e.g. app default on a Codex-only host).
     "" when it fails: a failed `claude -p` prints its error on stdout, and that must not pass for an answer."""
     import tempfile
     h, model = route(model or (HAIKU if default == "claude" else default), default)
     cmd, text = argv(h, prompt, model=model, effort=effort, tools=False)
     with tempfile.TemporaryDirectory(prefix="greenlight-llm-") as empty:
-        p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=timeout, cwd=cwd or empty)
+        try:
+            p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=timeout, cwd=cwd or empty)
+        except FileNotFoundError:
+            if h == default or not installed(default):
+                raise
+            h, model = default, (HAIKU if default == "claude" else None)
+            cmd, text = argv(h, prompt, model=model, effort=effort, tools=False)
+            p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=timeout, cwd=cwd or empty)
     return "" if p.returncode else answer(h, p.stdout)
 
 

@@ -293,19 +293,30 @@ final class Core: ObservableObject {
 
     @Published var availableModels: [(String, String)] = models
     var modelsLoaded = false
+    var modelsLoading = false
     func loadModels() {
-        guard !modelsLoaded else { return }
-        modelsLoaded = true
+        guard !modelsLoaded && !modelsLoading else { return }
+        modelsLoading = true
         var out = ""
         ssh("\(py)/harness.py models", onLine: { out += $0 }, onExit: { [weak self] code in
-            guard code == 0, let data = out.data(using: .utf8),
-                  let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
-            let parsed: [(String, String)] = rows.compactMap { r in
-                guard let id = r["id"] as? String, !id.isEmpty, let name = r["name"] as? String, !name.isEmpty else { return nil }
-                return (name, id)
+            let parsed: [(String, String)]
+            if code == 0, let data = out.data(using: .utf8),
+               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                parsed = rows.compactMap { r in
+                    guard let id = r["id"] as? String, !id.isEmpty, let name = r["name"] as? String, !name.isEmpty else { return nil }
+                    return (name, id)
+                }
+            } else {
+                parsed = []
             }
-            guard !parsed.isEmpty else { return }
-            DispatchQueue.main.async { self?.availableModels = parsed }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.modelsLoading = false
+                if !parsed.isEmpty {
+                    self.modelsLoaded = true
+                    self.availableModels = parsed
+                }
+            }
         })
     }
 
@@ -956,11 +967,13 @@ final class Core: ObservableObject {
             r.turnId = id
             savePending(r, id)
         case "start":
+            loadModels()
             let engine = j["engine"] as? String ?? "claude"
             let rawModel = j["model"] as? String
             let selected = (rawModel != nil && rawModel != "default") ? rawModel : engine
+            let fallbackName = engine == "agy" ? "Antigravity" : engine.capitalized
             let shown = availableModels.first { $0.1 == selected || $0.1 == "\(engine):\(selected ?? "")" }?.0
-                ?? models.first { $0.1 == selected }?.0 ?? engine.capitalized
+                ?? models.first { $0.1 == selected }?.0 ?? fallbackName
             r.status = "Starting \(shown)"
             log(.chief, name, .status, "started on \(host): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":

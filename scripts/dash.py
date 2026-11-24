@@ -830,12 +830,20 @@ def tree(path, every=False):
 
 def turn(session):
     """How a Basement pane's agent ended its turn, read off its screen the way greenlight reads any agent's: ade_common.agent_state
-    (System One when set up, else the patterns). The page asks once Claude's spinner has stayed gone a few seconds, so its
+    (System One when set up, else the patterns). The page asks once the agent's spinner has stayed gone a few seconds, so its
     "Finished" means finished, not a question in prose, a loop, a usage limit or a logout."""
     import ade_basement  # here: its tmux socket is the app's (GREENLIGHT_TMUX_SOCKET)
     lines = ade_basement.tmux("capture-pane", "-p", "-t", f"={session}:").splitlines()
+    agent_label = "Claude Code"
+    try:
+        meta = ade_basement.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_title}\t#{pane_current_command}").strip()
+        title, _, cmd = meta.partition("\t")
+        kind = ade_basement.agent_type(title, cmd)
+        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}.get(kind or "", "Claude Code")
+    except Exception:
+        pass
     with diag.span("turn") as sp:
-        r = ade_common.agent_state(lines, "Claude Code")
+        r = ade_common.agent_state(lines, agent_label)
         sp["provider"], sp["state"] = r["provider"], r["state"]
     return {"state": r["state"], "prob": r["prob"]}
 
@@ -1233,7 +1241,7 @@ def suggest(name, model=None, effort="low"):
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
     label, text = split_label(ask(prompt, model, effort))
     if not text:  # the model run failed: an error makes the card's button a retry instead of "Please wait…" for this state
-        return {"name": name, "sig": s, "error": f"{model} gave no answer (a usage limit, or a model this host can't run)"}
+        return {"name": name, "sig": s, "error": f"{model or greenlight.CONFIG['llm_harness']} gave no answer (a usage limit, or a model this host can't run)"}
     tip, text = split_advice(text)
     out = {"name": name, "sig": s, "prompt": text[:1000], "label": label, "advice": tip[:300]}
     _write_json(cache, out | {"ok": True})  # ask() succeeded: a one-line reply (no label) is real too
@@ -1337,7 +1345,7 @@ def waiting_term(name):
 def menu(tail):
     """An agent question menu on screen: [(digit, label)], or [] when the agent waits at its normal prompt."""
     lines = [str(x).rstrip() for x in tail][-30:]
-    if any(x.strip() in ("❯", "›") for x in lines):  # the empty input box: a plain end-of-turn question
+    if any(re.fullmatch(r"(?:[│┃|]\s*)?[❯›>](?:\s*[│┃|])?", x.strip()) for x in lines):  # empty input box: plain end-of-turn question
         return []
     opts = [(m[1], m[2].strip()) for x in lines if (m := MENU_RE.match(x))]
     return opts if len(opts) >= 2 else []
@@ -1370,7 +1378,8 @@ def ask_user(name, model=None, effort="low"):
     opts = menu(rd.get("tail") or [])
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
         pq, det = picker(rd.get("tail") or [])
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "questions": pending_questions(w.get("path") or ""),
+        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu",
+                "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something."]}
     cache = DASH / "ask" / f"{safe(name)}.json"
     key = hashlib.sha1(q.encode()).hexdigest()[:12]
@@ -1428,24 +1437,36 @@ def _agy_pending_questions(f):
                 if not isinstance(d, dict):
                     continue
                 kind = d.get("type")
-                if kind == "USER_INPUT":
+                if kind in ("USER_INPUT", "GENERIC"):
                     pend = None
                 elif kind == "PLANNER_RESPONSE":
                     asked = next((tc for tc in (d.get("tool_calls") or [])
                                   if isinstance(tc, dict) and tc.get("name") == "ask_question"), None)
-                    pend = ((asked.get("args") or {}).get("questions") if asked else None)
+                    raw_qs = (asked.get("args") or {}).get("questions") if asked else None
+                    if isinstance(raw_qs, str):
+                        try:
+                            raw_qs = json.loads(raw_qs)
+                        except ValueError:
+                            raw_qs = None
+                    pend = raw_qs if isinstance(raw_qs, list) else None
     except OSError:
         return None
     return pend if isinstance(pend, list) and pend else None
 
 
-def pending_questions(path):
-    """The questions of an unanswered ask tool in the newest Claude or agy transcript, else None."""
+def pending_questions(path, agent_type=None):
+    """The questions of an unanswered ask tool in the recent Claude or agy transcripts, else None."""
     fs = [(f, kind) for f, kind in transcript_files(path) if kind in ("claude", "agy")] if path else []
     if not fs:
         return None
-    f, kind = fs[0]
-    return _claude_pending_questions(f) if kind == "claude" else _agy_pending_questions(f)
+    want = greenlight.canonical_agent(agent_type) if agent_type else None
+    if want in ("claude", "agy"):
+        fs = [x for x in fs if x[1] == want] + [x for x in fs if x[1] != want]
+    for f, kind in fs[:5]:
+        qs = _claude_pending_questions(f) if kind == "claude" else _agy_pending_questions(f)
+        if qs:
+            return qs
+    return None
 
 
 def answer(name, text):
@@ -1620,17 +1641,21 @@ def _agy_entries(f):
 
 
 def _agy_transcript_files(path, cutoff):
+    from urllib.parse import unquote
     root = Path(os.environ.get("AGY_HOME") or Path.home() / ".gemini/antigravity-cli")
     db_path = root / "conversation_summaries.db"
     if not db_path.is_file():
         return []
-    want = {path.rstrip("/"), f"file://{path.rstrip('/')}"}
+    norm = path.rstrip("/")
+    encoded_uri = Path(norm).as_uri().rstrip("/") if norm.startswith("/") else f"file://{norm}"
+    want = {norm, f"file://{norm}", encoded_uri}
     out = []
     try:
         db = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=2)
         try:
-            rows = db.execute("select conversation_id, workspace_uris from conversation_summaries where workspace_uris like ?",
-                              (f"%{path.rstrip('/')}%",)).fetchall()
+            rows = db.execute("select conversation_id, workspace_uris from conversation_summaries "
+                              "where workspace_uris like ? or workspace_uris like ?",
+                              (f"%{norm}%", f"%{encoded_uri}%")).fetchall()
         finally:
             db.close()
     except (OSError, sqlite3.Error):
@@ -1640,7 +1665,7 @@ def _agy_transcript_files(path, cutoff):
             uris = json.loads(uris_raw) if isinstance(uris_raw, str) else []
         except ValueError:
             uris = []
-        if not any(isinstance(u, str) and u.rstrip("/") in want for u in uris):
+        if not any(isinstance(u, str) and (u.rstrip("/") in want or unquote(u).rstrip("/") in want) for u in uris):
             continue
         tr = root / "brain" / str(cid) / ".system_generated" / "logs" / "transcript.jsonl"
         try:

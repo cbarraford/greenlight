@@ -809,16 +809,16 @@ with mock.patch.object(ade_basement, "pane_states", side_effect=OSError("no tmux
     assert dash.basement_panes() == {}
 print("basement panes ok")
 
-# agy transcripts, pending ask_question, multi-agent menu pickers, and <harness>:<model> opts
+# agy transcripts, pending ask_question (list and JSON-encoded string + GENERIC clear + %20 URI), multi-agent menu pickers, and <harness>:<model> opts
 import sqlite3  # noqa: E402
 _agy_home = Path(tempfile.mkdtemp())
-_ws_dir = "/w/agy-demo"
+_ws_dir = "/w/agy demo"
 _cid1, _cid2 = "conv-aaa-111", "conv-bbb-222"
 _db = sqlite3.connect(_agy_home / "conversation_summaries.db")
 _db.execute("create table conversation_summaries (conversation_id text, workspace_uris text)")
-_db.execute("insert into conversation_summaries values (?, ?)", (_cid1, json.dumps([f"file://{_ws_dir}"])))
-_db.execute("insert into conversation_summaries values (?, ?)", (_cid2, json.dumps([f"file://{_ws_dir}"])))
-_db.execute("insert into conversation_summaries values (?, ?)", ("conv-other", json.dumps([f"file://{_ws_dir}-other"])))
+_db.execute("insert into conversation_summaries values (?, ?)", (_cid1, json.dumps(["file:///w/agy%20demo"])))
+_db.execute("insert into conversation_summaries values (?, ?)", (_cid2, json.dumps(["file:///w/agy%20demo"])))
+_db.execute("insert into conversation_summaries values (?, ?)", ("conv-other", json.dumps(["file:///w/agy%20demo-other"])))
 _db.commit()
 _db.close()
 _t1 = _agy_home / "brain" / _cid1 / ".system_generated" / "logs" / "transcript.jsonl"
@@ -832,7 +832,7 @@ _t1.write_text("\n".join([
 ]) + "\n")
 _t2.write_text("\n".join([
     json.dumps({"type": "USER_INPUT", "content": "Should I merge?"}),
-    json.dumps({"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "ask_question", "args": {"questions": [{"question": "Merge now?", "options": ["Yes", "No"]}]}}]}),
+    json.dumps({"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "ask_question", "args": {"questions": json.dumps([{"question": "Merge now?", "options": ["Yes", "No"]}])}}]}),
 ]) + "\n")
 os.utime(_t1, (time.time() - 10, time.time() - 10))
 os.utime(_t2, (time.time() - 1, time.time() - 1))
@@ -845,10 +845,14 @@ with mock.patch.dict(os.environ, {"AGY_HOME": str(_agy_home), "CODEX_HOME": str(
     _tr = dash.transcript("agy-ws")
     assert any(e["id"].startswith(f"{_cid2}:") and e.get("kind") == "agy" for e in _tr["entries"])
     assert any(e["id"].startswith(f"{_cid1}:") and e["text"] == "All tests pass." for e in _tr["entries"])
-# Codex (›) and agy (▸) question menus are recognized; Codex empty › prompt is not a menu
+    # GENERIC tool result clears a previously answered ask_question
+    _t2.write_text(_t2.read_text() + json.dumps({"type": "GENERIC", "content": "answered"}) + "\n")
+    assert dash.pending_questions(_ws_dir) is None
+# Codex (›), agy (▸), and unboxed > prompts: menus recognized; empty prompts are not menus
 assert dash.menu(["Pick:", "› 1. Approve", "  2. Skip"]) == [("1", "Approve"), ("2", "Skip")]
 assert dash.menu(["Pick:", "▸ 1. Yes", "  2. No"]) == [("1", "Yes"), ("2", "No")]
 assert dash.menu(["1. Foo", "2. Bar", "›"]) == []
+assert dash.menu(["1. Foo", "2. Bar", ">"]) == []
 # --model accepts <harness>:<model> ids
 assert dash._model_opts(["page", "ws", "--model", "agy:claude-opus-5-5-high", "--effort", "low"]) == {"model": "agy:claude-opus-5-5-high", "effort": "low"}
 print("agy transcripts, menus & trees agents ok")

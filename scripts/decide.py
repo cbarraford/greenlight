@@ -321,10 +321,13 @@ def haiku_parse(qs, keys, d):
 
 def haiku(state, qs, c):
     text, schema, keys = haiku_prompt(state, qs)
+    import harness  # here, not at the top: harness imports greenlight, which may import us
+    h, model = harness.route(c.get("haiku_model") or HAIKU)
+    api_model = model or HAIKU
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or _secret("anthropic")
-    if key and c["haiku_model"].startswith("claude-"):  # the Messages API only serves Claude; another model runs on its CLI
+    if key and h == "claude" and api_model.startswith("claude-"):  # the Messages API only serves Claude; another model runs on its CLI
         r = post(c["anthropic_url"], {
-            "model": c["haiku_model"], "max_tokens": 1024, "thinking": {"type": "disabled"},
+            "model": api_model, "max_tokens": 1024, "thinking": {"type": "disabled"},
             "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": schema}},
             "system": HAIKU_SYSTEM, "messages": [{"role": "user", "content": text}]},
             {"x-api-key": key, "anthropic-version": "2026-10-21"}, c["timeout"])
@@ -337,11 +340,9 @@ def haiku(state, qs, c):
             raise RuntimeError("haiku: reply wasn't JSON") from None
     if c.get("_deadline") is not None and c["_deadline"] < 2.0:
         raise RuntimeError("haiku via claude -p: deadline too short for CLI startup")
-    import harness  # here, not at the top: harness imports greenlight, which may import us
-    h, model = harness.route(c["haiku_model"])
     if h != "claude":
         return agent_answer(h, model, text, schema, qs, keys, c)
-    cmd = [harness.binary("claude"), "-p", "--model", model or HAIKU, "--output-format", "json", "--json-schema", json.dumps(schema),
+    cmd = [harness.binary("claude"), "-p", "--model", api_model, "--output-format", "json", "--json-schema", json.dumps(schema),
            "--tools", "", "--no-session-persistence", "--append-system-prompt", HAIKU_SYSTEM]
     try:
         p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=max(c["timeout"], 60), cwd=str(HOME) if HOME.is_dir() else None)
@@ -361,9 +362,11 @@ def agent_answer(h, model, text, schema, qs, keys, c):
     import harness
     prompt = (HAIKU_SYSTEM + "\n\nReply with only a JSON object matching this JSON schema, no prose and no code fence:\n"
               + json.dumps(schema) + "\n\n" + text)
+    cli_timeout = max(c["timeout"], 90)
+    if c.get("_deadline") is not None:
+        cli_timeout = min(cli_timeout, max(c["_deadline"], 1.0))
     try:
-        out = harness.ask(prompt, model=f"{h}:{model}" if model else h, effort="low", timeout=max(c["timeout"], 90),
-                          cwd=str(HOME) if HOME.is_dir() else None)
+        out = harness.ask(prompt, model=f"{h}:{model}" if model else h, effort="low", timeout=cli_timeout)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         raise RuntimeError(f"haiku via {h}: {e}") from None
     start, end = out.find("{"), out.rfind("}")

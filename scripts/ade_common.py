@@ -91,7 +91,7 @@ def draft(lines):
     for i, x in enumerate(lines):
         t = x.strip()
         inner = BOX_RE.sub("", t).strip() if BOX_RE.search(t) else None
-        if t and t[:1] in "❯›":
+        if t and t[:1] in "❯›>":
             box.append((i, t))
         elif inner is not None and inner.startswith(">"):
             box.append((i, inner))

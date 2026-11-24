@@ -762,12 +762,13 @@ const isAgent = p => !!agentOf(p);
 let defAgent = "claude";  // first of config agents (from dash.py trees), defaults to claude
 const normAgent = a => { const s = String(a || "").trim().toLowerCase(); return s === "antigravity" ? "agy" : s || "claude" };
 const agentLabel = a => ({claude: "Claude", codex: "Codex", agy: "Antigravity", gemini: "Gemini", opencode: "OpenCode", pi: "Pi"}[normAgent(a)] || a || "Claude");
-const agentIcon = (a, w) => (I[normAgent(a)] || I.claude)(w);
+const agentIcon = (a, w) => (I[normAgent(a)] || I.shell)(w);
 const agentCmd = (a, prompt) => {
   const k = normAgent(a);
   if (!prompt) return k;
   if (k === "agy" || k === "gemini") return `${k} -i ${ansi(prompt)}`;
   if (k === "opencode") return `${k} --prompt ${ansi(prompt)}`;
+  if (k === "pi") return `${k} -- ${ansi(prompt)}`;
   return `${k} ${ansi(prompt)}`;
 };
 const paneIcon = (p, w) => isClaude(p) ? I.claude(w) : isCodex(p) ? I.codex(w) : isAgy(p) ? I.agy(w) : I.shell(w);  // ⌬: codex, ◈: agy (tmux set-titles-string)
@@ -791,12 +792,13 @@ function sniff(p, s){
   if (changed && !editing) render();
 }
 // Claude works while its spinner line ("✶ Skedaddling… (3s · …)") is on screen; Codex and agy show a timer or interrupt hint
-const BUSY = /^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)|esc to interrupt|\(esc to cancel\b|ctrl\+c to (?:interrupt|stop|cancel)|\bWorking\s*\(\d+s\b/i;
+const BUSY_CLAUDE = /^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)/;
+const BUSY_OTHER = /^(?:[•·⠋-⣿◈⌬]\s*)?(?:Working\s*\(\d+s\b|.*(?:esc to interrupt|\(esc to cancel\b|ctrl\+c to (?:interrupt|stop|cancel)))/i;
 function working(p){
   if (!panes.has(p.id)) return;
-  const b = p.t.buffer.active, was = p.st; let spin = /^[⠀-⣿]/.test(p.title || "");
+  const b = p.t.buffer.active, was = p.st, busyRe = isClaude(p) ? BUSY_CLAUDE : BUSY_OTHER; let spin = /^[⠀-⣿]/.test(p.title || "");
   for (let y = b.length - 1, n = 0; y >= Math.max(0, b.length - 80) && n < 15 && !spin; y--) {  // the last 15 lines with text
-    const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = BUSY.test(l) } }
+    const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = busyRe.test(l) } }
   p.st = spin ? "work" : "idle";
   if (was !== "work" && p.st === "work") p.workAt = Date.now();  // the Working section counts from here
   if (p.st === "work") { p.wait = false; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0 }  // back at work: that wasn't the end
@@ -813,7 +815,10 @@ function syncPanes(map){
     if (hostOf(p.tab.ws) !== HOST) continue;
     const info = map[p.session];
     if (!info || typeof info !== "object") continue;
-    if (typeof info.title === "string" && info.title && (!p.title || now - (p.out || 0) > 2000)) p.title = info.title;
+    if (typeof info.title === "string" && info.title && (!p.title || now - (p.out || 0) > 2000)) {
+      const pref = info.agent === "codex" ? "⌬ " : info.agent === "agy" ? "◈ " : "";
+      p.title = pref && !info.title.startsWith(pref) ? pref + info.title : info.title;
+    }
     const was = p.st, st = info.state;
     if (st === "working") {
       if (was === "idle" && p.idleAt && now - p.idleAt < 15e3 && (p.out || 0) <= p.idleAt) continue;  // stale poll from before live PTY saw it finish
@@ -2258,9 +2263,10 @@ function diffShow(o){
   const openAgent = () => wsTabs(ws).flatMap(paneOf).find(isAgent), dest = el("span", "note2");
   const num = v => +v || 0, add = o.files.reduce((n, f) => n + num(f[1]), 0), del = o.files.reduce((n, f) => n + num(f[2]), 0);
   nav.append(el("div", "dsum", `${o.files.length} file${o.files.length === 1 ? "" : "s"} · <span class="pl">+${add}</span> <span class="mi">−${del}</span>`));
+  const targetWho = () => { const ap = openAgent(); return agentLabel(ap ? agentOf(ap) : defAgent) };
   // the footer says where notes go: pasted into this workspace's open agent (you press ↩), or the clipboard when none is open
   const count = () => {
-    const k = notes.filter(n => n.text.trim()).length, ap = openAgent(), who = agentLabel(ap ? agentOf(ap) : defAgent), b = $("dlg").querySelector("button.pri"), s = k > 1 ? "s" : "";
+    const k = notes.filter(n => n.text.trim()).length, ap = openAgent(), who = targetWho(), b = $("dlg").querySelector("button.pri"), s = k > 1 ? "s" : "";
     nn.forEach((x, f) => { const m = notes.filter(n => n.f === f).length; x.textContent = m || ""; x.hidden = !m });
     dest.textContent = !k ? "Click a line to start a note" : ap ? `Pasted into ${who}, not sent: you press Enter` : `No ${who} pane open: notes go to the clipboard`;
     if (b) { b.textContent = ap ? (k ? `Paste ${k} note${s} into ${who}` : `Paste notes into ${who}`) : k ? `Copy ${k} note${s}` : "Copy notes"; b.disabled = !k }
@@ -2269,7 +2275,7 @@ function diffShow(o){
     if (!n && r.nextSibling?.classList?.contains("dn")) return r.nextSibling.querySelector("textarea").focus();
     if (!n) notes.push(n = {f, at, text: ""});
     const box = el("div", "dn"), col = el("div"), lb = el("span", "lb"), ta = Object.assign(el("textarea"), {rows: 2, maxLength: 2000, value: n.text});
-    lb.textContent = `Note to Claude on ${f}:${at}`; ta.setAttribute("aria-label", `Note on ${f} line ${at}`); ta.oninput = () => { n.text = ta.value; count() };
+    lb.textContent = `Note to ${targetWho()} on ${f}:${at}`; ta.setAttribute("aria-label", `Note on ${f} line ${at}`); ta.oninput = () => { n.text = ta.value; count() };
     const x = Object.assign(el("button", "lite"), {type: "button", textContent: "Remove"}); x.onclick = () => { notes.splice(notes.indexOf(n), 1); box.remove(); count() };
     col.append(lb, ta); box.append(col, x); r.after(box); if (!n.text) ta.focus(); count();
   };
@@ -2287,7 +2293,7 @@ function diffShow(o){
     if (m) { at = +m[1]; r.textContent = l; view.append(r); continue }
     const n = l[0] === "-" ? null : at++, f = file;
     r.append(Object.assign(el("i"), {textContent: n ?? ""}), l);
-    if (n != null) { r.title = "Leave Claude a note on this line"; r.onclick = () => note(r, f, n) }
+    if (n != null) { r.title = `Leave ${targetWho()} a note on this line`; r.onclick = () => note(r, f, n) }
     view.append(r);
     if (n != null) notes.filter(x => x.f === f && x.at === n).forEach(x => note(r, f, n, x));  // notes written before a switch or a reopen
   }
@@ -2296,11 +2302,11 @@ function diffShow(o){
   const seg = el("div", "seg"); seg.setAttribute("role", "radiogroup"); seg.setAttribute("aria-label", "Compare");
   [["Uncommitted", "head"], [`Branch vs ${o.base || "its base"}`, "branch"]].forEach(([t, m]) => { const b = Object.assign(el("button"), {type: "button", textContent: t}); b.setAttribute("role", "radio"); b.setAttribute("aria-checked", o.mode === m); b.onclick = () => diffOpen(ws, m); seg.append(b) });
   const ed = Object.assign(el("button", "lite"), {type: "button", textContent: `Open in ${EDITOR}`}); ed.onclick = () => post({cmd: "edit", ws});
-  dlgForm(`Diff · ${wsName(ws)}`, body, "Paste notes into Claude", () => {
+  dlgForm(`Diff · ${wsName(ws)}`, body, `Paste notes into ${targetWho()}`, () => {
     const k = notes.filter(n => n.text.trim()); if (!k.length) return false;
     toAgent(ws, `Notes on the diff (${o.mode === "head" ? "uncommitted changes" : "this branch vs " + o.base}):\n` + k.map(n => `- ${n.f}:${n.at}: ${n.text.trim()}`).join("\n"));
     notes.length = 0; return true;
-  }, () => diffs.delete(ws), {cls: "big cc", sub: "Click a line to leave Claude a note on it", head: [seg], left: [ed, dest]});
+  }, () => diffs.delete(ws), {cls: "big cc", sub: `Click a line to leave ${targetWho()} a note on it`, head: [seg], left: [ed, dest]});
   count();
 }
 // a dev server's port, from processes started in this worktree's terminals: a click opens it (through an ssh tunnel when the host is remote)

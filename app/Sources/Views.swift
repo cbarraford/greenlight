@@ -2277,7 +2277,7 @@ struct ChatView: View, Looked {
 
     /// Model and effort, as a quiet button; opens Settings.
     var modelButton: some View {
-        let m = c.modelName, e = c.isClaude ? effortName(c.effort) : nil
+        let m = c.modelName, e = c.supportsEffort ? effortName(c.effort) : nil
         let label = mono ? "--model \(m.lowercased().replacingOccurrences(of: " ", with: "-"))" + (e.map { " --effort \($0.lowercased())" } ?? "") : m + (e.map { " · \($0)" } ?? "")
         return Button { c.settingsOpen = true } label: {
             HStack(spacing: DS.Space.s4) {

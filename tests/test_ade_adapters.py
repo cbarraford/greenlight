@@ -318,8 +318,8 @@ def test_basement_full_lifecycle(tmp_path):
 
 def test_basement_detects_codex_and_agy_panes(tmp_path):
     rows = "\n".join([
-        "\t".join(["%1", "mc-a", "/w/feat-1", "⌬ codex", "1700001", "codex"]),
-        "\t".join(["%2", "mc-b", "/w/widgets", "◈ agy", "1700002", "agy"]),
+        "\t".join(["%1", "mc-a", "/w/feat-1", "my-codex-task", "1700001", "codex"]),
+        "\t".join(["%2", "mc-b", "/w/widgets", "my-agy-task", "1700002", "agy"]),
         "\t".join(["%3", "mc-c", "/w/widgets", "zsh", "1700003", "zsh"]),
     ])
 
@@ -342,6 +342,10 @@ def test_basement_detects_codex_and_agy_panes(tmp_path):
         assert wts["/w/widgets"]["agents"][0]["agentType"] == "agy" and wts["/w/widgets"]["agents"][0]["state"] == "waiting"
         terms = {t["handle"]: t for t in ade_basement.call("terminal", "list")["terminals"]}
         assert terms["%1"]["agentIdentity"] == "codex" and terms["%2"]["agentIdentity"] == "agy" and terms["%3"]["agentIdentity"] is None
+        ps = ade_basement.pane_states()
+        assert ps["mc-a"] == {"state": "working", "title": "⌬ my-codex-task"}
+        assert ps["mc-b"] == {"state": "waiting", "title": "◈ my-agy-task"}
+        assert "mc-c" not in ps
 
 
 def test_basement_tmux_no_server_vs_error():
