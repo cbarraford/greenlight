@@ -183,6 +183,7 @@ final class Run: ObservableObject {
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
     var model = ""  // the --model it was sent with: the picker can change mid-turn
+    var open: URL?  // an [open: URL] from a reply block a later one replaced (text_reset)
     init(_ q: String) { question = q }
 }
 
