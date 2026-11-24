@@ -352,6 +352,13 @@ func cascadeFrame(_ f: NSRect, min m: NSSize, in screen: NSRect?) -> NSRect {
 /// Whether a dashboard window may render snapshots yet: All-projects windows don't wait; filtered ones wait until the project list is loaded
 /// so the UI doesn't flash another project's hexes before narrowing to the saved pick.
 func canShowDashboard(only: [String]?, projectsLoaded: Bool) -> Bool { only == nil || projectsLoaded }
+/// True when a saved terminals.json payload holds at least one tab to restore at launch.
+func hasSavedTermTabs(_ data: Data?) -> Bool {
+    guard let data,
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let tabs = obj["tabs"] as? [Any] else { return false }
+    return !tabs.isEmpty
+}
 /// The title-bar project chip for a window: hidden while a saved pick is still loading, instead of flashing "All projects".
 func projectChip(only: [String]?, projList: [[String: Any]], projectsLoaded: Bool) -> (text: String, colors: [String]) {
     if only != nil && !projectsLoaded { return ("", []) }
@@ -530,7 +537,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hintSink = greenlight.$hint.receive(on: RunLoop.main).sink { [weak self] in guard let self else { return }; self.hint($0, from: self.greenlight) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         tick()
-        if devDir == nil && ud.bool(forKey: "autorun") { _ = termWindow }  // auto-run lives in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
+        if devDir == nil && (ud.bool(forKey: "autorun") || hasSavedTermTabs(try? Data(contentsOf: termState(0)))) { _ = termWindow }  // auto-run and restored tabs' alerts live in the Basement's page: load it, hidden. Not in a copy: it never auto-runs
         if let devDir { watchPages(devDir + "/web") }
 
         if !uitest {
@@ -1784,7 +1791,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
         let session = (b["session"] as? String).flatMap { $0.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil }
-        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "error", "localName", "trees"].contains(c) {
+        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "error", "localName", "trees", "turn"].contains(c) {
             Diag.event("action", ["cmd": c, "page": "terminal"])  // the command, never its payload; keystrokes and resizes aren't actions
         }
         switch b["cmd"] as? String {
@@ -1839,6 +1846,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let n = c.split(whereSeparator: { !"0123456789.".contains($0) }).compactMap { Double($0) }
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
+        case "turn":  // a Claude pane's spinner stayed gone: dash.py turn reads its screen (greenlight's agent_state), answered with term.turn
+            guard let session, let ws = b["ws"] as? String, !ws.hasPrefix("@"), paneWhere(ws) != nil else { return }  // @host shells: not the scripts' host
+            var out = ""
+            ssh("\(py)/dash.py turn \(shellQuote(session))", onLine: { out += $0 }, onExit: { [weak web] code in
+                let o = out.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? ["session": session, "error": "exit \(code)"]
+                web?.callJS("window.term && term.turn", [o])
+            })
         case "suggest":  // the sidebar card's next-step button: dash.py suggest (cached per state), answered with term.suggest
             if let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil { suggest(name) }
         case "tree":  // the sidebar's workspace menu: dash.py tree info|rm|goal|cfg|merge|new|diff <path>, answered with term.tree(json)
@@ -2108,7 +2122,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.checkIn()
         greenlight.watchTurn()  // one held back by a running turn or the 5-minute gap
         if lastTreesObj == nil && Date().timeIntervalSince(treesAt) > 10 { pushTrees() }
-        else if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : devDir == nil && ud.bool(forKey: "autorun") ? 60 : .infinity) { pushTrees() }  // auto-run: the main window watches the workspaces even while hidden
+        else if termLoaded, Date().timeIntervalSince(treesAt) > (termWins.values.contains(where: \.isVisible) ? 30 : devDir == nil ? 60 : .infinity) { pushTrees() }  // keep workspaces and Basement pane states fresh while hidden (auto-run and background-tab alerts)
         syncOrbs()
         let bell = "\(greenlight.waiting.count), \(greenlight.inboxOpen), \(greenlight.askedJSON)"  // re-pushed whenever a question changes, not only the count
         if pushedBell != bell { pushedBell = bell; broadcast("window.mc && mc.bell(\(bell))") }

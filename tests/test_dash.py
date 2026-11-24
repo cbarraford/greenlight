@@ -758,3 +758,45 @@ with mock.patch.object(sys, "argv", ["dash.py", "page", "fix-auth"]), \
     dash.main()
 assert json.loads(_page_out.getvalue().strip()) == {"name": "fix-auth", "error": "orca down"} and _page_oops.call_count == 1
 print("page cli resilience ok")
+
+# `dash.py turn <mc-session>`: a Basement pane's screen through greenlight's own agent_state (the page's "Finished" badge)
+import ade_basement  # noqa: E402
+_seen = []
+_screens = {"=mc-ask:": "⏺ I can fix it two ways.\nShould I keep the old flag?\n\n❯ \n? for shortcuts\n",
+            "=mc-done:": "⏺ Pushed and opened the MR.\n\n❯ \n? for shortcuts\n",
+            "=mc-limit:": "⏺ Working on it\nYou've hit your usage limit · resets 5pm\n\n❯ \n"}
+_cap = lambda *a: _seen.append(a) or _screens[a[-1]]
+import decide  # noqa: E402
+with mock.patch.object(ade_basement, "tmux", side_effect=_cap), \
+     mock.patch.object(decide, "choice", return_value={"provider": "local", "confidence": 0, "choice": "", "probs": {}}):  # the patterns, not a model
+    assert dash.turn("mc-ask")["state"] == "waiting_for_user", "a question asked in prose isn't finished"
+    assert dash.turn("mc-done")["state"] == "finished"
+    assert dash.turn("mc-limit")["state"] == "rate_limited"
+assert _seen[0] == ("capture-pane", "-p", "-t", "=mc-ask:"), _seen[0]
+for _argv, _want in ((["dash.py", "turn", "mc-done"], {"session": "mc-done", "state": "finished"}),
+                     (["dash.py", "turn", "mc-x"], {"session": "mc-x", "error": "tmux down"})):
+    _turn_out = _io.StringIO()
+    with mock.patch.object(sys, "argv", _argv), mock.patch.object(sys, "stdout", _turn_out), mock.patch.object(dash, "oops"), \
+         mock.patch.object(ade_basement, "tmux", side_effect=_cap if _argv[2] == "mc-done" else RuntimeError("tmux down")):
+        dash.main()
+    _got = json.loads(_turn_out.getvalue())
+    assert {k: _got[k] for k in _want} == _want, _got
+with mock.patch.object(sys, "argv", ["dash.py", "turn", "bad;session"]), mock.patch.object(sys, "stdout", _io.StringIO()):
+    try:
+        dash.main()
+        raise AssertionError("a session that isn't mc-… must be refused")
+    except SystemExit:
+        pass
+print("turn ok")
+
+# `dash.py trees` includes live Basement tmux agent pane states (`panes`), tolerating tmux failures
+with mock.patch.object(ade_basement, "pane_states", return_value={"mc-a": {"state": "done", "title": "✳ Done"}}):
+    assert dash.basement_panes() == {"mc-a": {"state": "done", "title": "✳ Done"}}
+    _trees_out = _io.StringIO()
+    with mock.patch.object(sys, "argv", ["dash.py", "trees"]), mock.patch.object(sys, "stdout", _trees_out), \
+         mock.patch.object(dash, "trees", return_value=[]):
+        dash.main()
+    assert json.loads(_trees_out.getvalue()) == {"trees": [], "panes": {"mc-a": {"state": "done", "title": "✳ Done"}}}
+with mock.patch.object(ade_basement, "pane_states", side_effect=OSError("no tmux")):
+    assert dash.basement_panes() == {}
+print("basement panes ok")

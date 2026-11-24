@@ -371,8 +371,8 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 // The T orb's terminal: Ghostty's VT core (ghostty-web, wasm) drawing login shells the app runs on ptys, one per pane; tabs hold split panes.
 // The sidebar groups tabs by workspace (a worktree path; "" is Local, your home): the strip shows the current workspace's tabs.
 // Each pane is a tmux session the app keeps alive across restarts; the layout is saved through the app (terminals.json).
-// app → page: term.restore(state), term.workspaces({trees}), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
-// page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
+// app → page: term.restore(state), term.workspaces({trees}), term.turn(dash.py turn answer), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
+// page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), turn (a pane's session: how its agent's turn ended), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
 const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, lightBg, lightFg, optAlt, ...colors} = look, root = document.documentElement.style;
@@ -602,7 +602,7 @@ function drag(e, dv, down){
   const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); removeEventListener("blur", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
   addEventListener("mousemove", move); addEventListener("mouseup", up); addEventListener("blur", up);
 }
-function kill(p){ clearTimeout(p.scanT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
+function kill(p){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
   const tab = p.tab, parent = p.box.parentElement;
@@ -646,15 +646,17 @@ const paneIcon = (p, w) => isClaude(p) ? I.claude(w) : (p.title || "")[0] === "�
 const tabName = tab => tab.name || paneTitle(tab.focus);
 const shown = t => t === "~" || t === HOME ? "Session" : /^[~/]\S*\/\S/.test(t) ? t.split("/").filter(Boolean).pop() : t;  // display only: "~" reads as noise, a path by its last folder (the tooltip has it all)
 // titles (OSC 0/2) and real bells, read here: ghostty-web only checks titles on string writes and rings on any BEL, OSC terminators included
-// ponytail: per-chunk regex, a sequence split across two reads is missed; buffer the tail if that ever shows
 const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 function sniff(p, s){
+  if (p.oscBuf) { s = p.oscBuf + s; p.oscBuf = "" }
+  const tail = s.match(/(?:\x1b\][^\x07\x1b]*\x1b?|\x1b)$/);  // carry an OSC sequence split across PTY read chunks
+  if (tail && tail[0].length <= 512) { p.oscBuf = tail[0]; s = s.slice(0, -tail[0].length) }
   let changed = false;
   for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
   for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { let d = v; try { d = decodeURIComponent(v) } catch {} if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
   if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true; if (isClaude(p)) ping(p, "needs you", paneTitle(p)) }
   if (isClaude(p) && !p.scanT) p.scanT = setTimeout(() => { p.scanT = 0; working(p) }, 500);  // at most twice a second, and once after the last chunk
-  else if (!isClaude(p)) p.st = "";
+  else if (!isClaude(p)) { p.st = ""; p.wait = false; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0 }
   // ponytail: OSC 9/777 only arrive when tmux passes them through (allow-passthrough); the bell and the title always do
   for (const [, v] of s.matchAll(/\x1b\](?:9;(?!4;)|777;notify;)([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) ping(p, "says", v.replace(/;/, ": "));
   if (changed && !editing) render();
@@ -668,8 +670,54 @@ function working(p){
     const l = b.getLine(y)?.translateToString(true).trim(); if (l) { n++; spin = BUSY.test(l) } }
   p.st = spin ? "work" : "idle";
   if (was !== "work" && p.st === "work") p.workAt = Date.now();  // the Working section counts from here
-  if (was === "work" && p.st === "idle") ping(p, "Claude finished", paneTitle(p));
+  if (p.st === "work") { p.wait = false; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0 }  // back at work: that wasn't the end
+  else if (was === "work") { p.idleAt = Date.now(); p.endT = setTimeout(() => turnEnded(p), TURN_QUIET) }
   if (was !== p.st && !editing) render();
+}
+// Backend state() (ade_basement.py via dash.py trees): keeps restored or background panes in sync even before PTY output arrives.
+let lastPanes = null;
+function syncPanes(map){
+  if (!map || typeof map !== "object") return;
+  lastPanes = map;
+  const now = Date.now();
+  for (const p of panes.values()) {
+    if (hostOf(p.tab.ws) !== HOST) continue;
+    const info = map[p.session];
+    if (!info || typeof info !== "object") continue;
+    if (typeof info.title === "string" && info.title && (!p.title || now - (p.out || 0) > 2000)) p.title = info.title;
+    const was = p.st, st = info.state;
+    if (st === "working") {
+      if (was === "idle" && p.idleAt && now - p.idleAt < 15e3 && (p.out || 0) <= p.idleAt) continue;  // stale poll from before live PTY saw it finish
+      p.st = "work"; p.wait = false; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0;
+      if (was !== "work") p.workAt = now;
+    } else if (st === "waiting") {
+      p.st = "idle"; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0;
+      if (!p.wait) { p.wait = true; if (!p.bell) ping(p, "needs you", paneTitle(p)) }
+    } else if (st === "done") {
+      p.st = "idle"; p.wait = false;
+      if (was === "work" && !p.endT && !p.askT) { p.idleAt = now; turnEnded(p) }
+    }
+  }
+}
+// a turn's end: the spinner must stay gone TURN_QUIET (it blinks out between tool calls), then greenlight reads the screen
+// (dash.py turn: ade_common.agent_state), so "Finished" isn't a question asked in prose, a loop, a usage limit or a logout
+var TURN_QUIET = 5000;
+const TURN = {finished: ["Claude finished", "Finished"], waiting_for_user: ["is asking", "Asking"], unsent_draft: ["has an unsent draft", "Unsent draft"],
+  stuck_looping: ["looks stuck", "Stuck"], rate_limited: ["hit a usage limit", "Rate limited"], logged_out: ["is logged out", "Logged out"]};
+function turnEnded(p){
+  p.endT = 0;
+  if (!panes.has(p.id) || p.st !== "idle") return;
+  const asIs = () => { p.askT = 0; if (panes.has(p.id) && p.st === "idle") { ping(p, "Claude finished", paneTitle(p)); if (!editing) render() } };
+  if (p.tab.ws?.[0] === "@") return asIs();  // a host's shell, not a workspace: the app doesn't ask (the plain reading)
+  post({cmd: "turn", id: p.id, session: p.session, ws: p.tab.ws});
+  p.askT = setTimeout(asIs, 20e3);  // no answer (offline, an old app): the plain reading
+}
+function turnRead(o){
+  const p = [...panes.values()].find(p => p.session === o?.session);
+  if (!p?.askT) return; clearTimeout(p.askT); p.askT = 0;
+  if (p.st !== "idle" || o.state === "working") return;  // it went back to work meanwhile
+  const [what, why] = TURN[o.state] || TURN.finished;
+  ping(p, what, paneTitle(p), why); if (!editing) render();
 }
 function rename(tab, side = false){
   if (tab !== cur) show(tab);
@@ -1556,7 +1604,9 @@ $("sdv").onmousedown = e => {
 };
 
 // the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
-const ser = n => n.classList.contains("pane") ? {s: n._p.session} : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
+const ser = n => n.classList.contains("pane")
+  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && isClaude(n._p) ? {title: n._p.title} : {})}
+  : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
 let saveT, lastSaved = "";
 const snap = () => JSON.stringify({cur: tabs.indexOf(cur), side: sideW, shut: [...shut], noAskDel, uses, lights, skin, skinLight, skinHist, acct: acctCfg,
   tabs: tabs.map(x => ({ws: x.ws, set: x.set, name: x.name, manual: x.manual, sig: x.sig, auto: x.auto, job: x.job, tree: ser(x.r.firstElementChild)})), autoDone});
@@ -1567,7 +1617,12 @@ function save(){
 }
 // rebuild a saved tab: panes mount while their tab is showing, so each fits a real size
 function build(tab, n, mounts){
-  if (n.s) { const {p, mount} = newPane(tab, undefined, n.s); mounts.push(mount); tab.focus ||= p; return p.box }
+  if (n.s) {
+    const {p, mount} = newPane(tab, undefined, n.s);
+    if (n.st === "work") { p.st = "work"; p.workAt = Date.now() }
+    if (typeof n.title === "string") p.title = n.title;
+    mounts.push(mount); tab.focus ||= p; return p.box;
+  }
   const wrap = el("div", "split" + (n.col ? " col" : ""));
   const a = build(tab, n.kids[0], mounts), b = build(tab, n.kids[1], mounts);
   a.style.flex = n.flex?.[0] || ""; b.style.flex = n.flex?.[1] || "";
@@ -1593,10 +1648,11 @@ function restore(st){
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
   restored = true;
-  if (pendingWs) { const w = pendingWs; pendingWs = null; openWs(w); lastSaved = snap(); return }
+  if (pendingWs) { const w = pendingWs; pendingWs = null; openWs(w); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
+  if (lastPanes) { syncPanes(lastPanes); render() }
 }
 
 // ⌘J Jump: terminals, workspaces and hosts (or, after ">", the Basement's actions). The name matches fuzzily (a subsequence, scored up for runs and word starts);
@@ -2054,13 +2110,13 @@ function portsFill(box, ws, o){
 }
 // an agent that finished, wants you, or says so (OSC 9/777): one notification per change, none for the pane you're looking at or auto-run's tabs
 var pinged = new Map();
-function ping(p, what, text){
+function ping(p, what, text, why){
   if (p.tab.auto || (p === cur?.focus && document.hasFocus())) return;
-  p.bell = true; p.why = what === "Claude finished" ? "Finished" : "Asking";
+  p.bell = true; p.why = why || (what === "Claude finished" ? "Finished" : "Asking");
   if (Date.now() - (pinged.get(p.id) || 0) < 10e3) return;
   pinged.set(p.id, Date.now());
   const ws = wsName(p.tab.ws);
-  if (document.hasFocus()) return toast(what === "Claude finished" ? `${ws} finished` : what === "says" ? `${ws} says` : `${ws} is asking a question`, {sub: String(text).slice(0, 120), act: ["Show", () => focusPane(p)]});
+  if (document.hasFocus()) return toast(what === "Claude finished" ? `${ws} finished` : what === "says" ? `${ws} says` : why && why !== "Asking" ? `${ws} ${what}` : `${ws} is asking a question`, {sub: String(text).slice(0, 120), act: ["Show", () => focusPane(p)]});
   post({cmd: "notify", title: `${ws}: ${what}`, body: String(text).slice(0, 300)});
 }
 function badgeSync(){ const n = [...panes.values()].filter(p => p.bell && isClaude(p)).length, w = $("shead")?.querySelector(".wait");
@@ -2112,6 +2168,7 @@ window.term = {
   focus: () => { if (!ready || !restored) return; if (!tabs.length) newTab(acctHome()); else cur.focus.t.focus() },
   restore,
   tree: o => { treeDone(o) },
+  turn: o => turnRead(o),
   filed: (id, path) => { const p = panes.get(id); if (!p) return; if (!path) return toast("Couldn't copy the file over"); p.t.paste(shq(path) + " ");
     toast(`${/-pasted\.png$/.test(path) ? "Screenshot" : "File"} sent to ${hostOf(p.tab.ws) === "local" ? "this Mac" : hostOf(p.tab.ws)}`, {sub: path, act: ["Copy path", () => post({cmd: "copy", text: path})]}) },
   tunnel: (key, st) => { tun.set(key, st); const c = $("card"), pr = !c.hidden && c.querySelector(".ports"); if (pr && facts.get(cardWs)) portsFill(pr, cardWs, facts.get(cardWs)) },
@@ -2122,11 +2179,12 @@ window.term = {
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
   closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
-    panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear();
+    panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; return out },
   workspaces: o => { trees = o?.trees || []; treesIn = true; const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
+    syncPanes(o?.panes);
     setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
   palette: open => restored && palette(open),
 };

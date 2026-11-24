@@ -9,6 +9,7 @@
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+    dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
                                                     teardown to run); set the goal (stdin); write the main checkout's .greenlight.json
@@ -54,6 +55,7 @@ import lifestage  # noqa: E402
 
 DASH = greenlight.STATE / "dash"
 NAME_RE = re.compile(r"^[\w.@+/-]{1,200}$")
+SESSION_RE = re.compile(r"^mc-[\w-]{1,64}$")  # a Basement pane's tmux session (the page names them mc-…)
 HIST_RE = re.compile(r"^- (\d{4}-\d\d-\d\d \d\d:\d\d) (.*)")
 
 # Puck states, most urgent first. Size in the overview follows this order.
@@ -750,6 +752,14 @@ def trees():
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
 
 
+def basement_panes():
+    """Live Basement tmux agent pane states ({session: {state, title}}), regardless of GREENLIGHT_ADE."""
+    try:
+        return importlib.import_module("ade_basement").pane_states()
+    except Exception:
+        return {}
+
+
 def created(path):
     """ms: a linked worktree's `.git` is a one-line file `git worktree add` writes and nothing rewrites."""
     try:  # ponytail: `git worktree repair/move` rewrites it too; the branch's first reflog entry if that misleads
@@ -769,6 +779,18 @@ def tree(path):
         if w := next((w for w in ws if w.get("path") == path and not w.get("isArchived")), None):
             return call, w
     raise LookupError(f"no workspace at {path}")
+
+
+def turn(session):
+    """How a Basement pane's agent ended its turn, read off its screen the way greenlight reads any agent's: ade_common.agent_state
+    (System One when set up, else the patterns). The page asks once Claude's spinner has stayed gone a few seconds, so its
+    "Finished" means finished, not a question in prose, a loop, a usage limit or a logout."""
+    import ade_basement  # here: its tmux socket is the app's (GREENLIGHT_TMUX_SOCKET)
+    lines = ade_basement.tmux("capture-pane", "-p", "-t", f"={session}:").splitlines()
+    with diag.span("turn") as sp:
+        r = ade_common.agent_state(lines, "Claude Code")
+        sp["provider"], sp["state"] = r["provider"], r["state"]
+    return {"state": r["state"], "prob": r["prob"]}
 
 
 def tree_info(path):
@@ -1871,7 +1893,14 @@ def main():
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
-        print(json.dumps({"trees": trees()}))
+        print(json.dumps({"trees": trees(), "panes": basement_panes()}))
+    elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
+        try:
+            out = turn(a[1])
+        except Exception as e:
+            oops(a, e)
+            out = {"error": str(e)[:200]}
+        print(json.dumps({"session": a[1], **out}))
     elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "auto-merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]

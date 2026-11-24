@@ -146,6 +146,11 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && projectChip(only: nil, projList: [], projectsLoaded: false).text == "All projects"
           && projectChip(only: ["pgreenlight"], projList: builtProjs, projectsLoaded: true).text == "Greenlight"
           && projectChip(only: ["gone"], projList: builtProjs, projectsLoaded: true).text == "All projects")
+    check("terminal: hasSavedTermTabs detects non-empty saved layouts for launch preload",
+          !hasSavedTermTabs(nil)
+          && !hasSavedTermTabs(Data("not json".utf8))
+          && !hasSavedTermTabs(Data(#"{"tabs":[]}"#.utf8))
+          && hasSavedTermTabs(Data(#"{"tabs":[{"ws":"/w/a","tree":{"s":"mc-1"}}]}"#.utf8)))
     let mainScr = NSRect(x: 0, y: 0, width: 1440, height: 875), right = NSRect(x: 1440, y: 0, width: 2560, height: 1415)
     check("windows: a restored frame stays on a screen that's there, and comes back from one that's gone",
           fitOnScreen(NSRect(x: 1600, y: 200, width: 1280, height: 800), screens: [mainScr, right]) == NSRect(x: 1600, y: 200, width: 1280, height: 800)

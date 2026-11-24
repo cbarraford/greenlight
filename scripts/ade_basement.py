@@ -55,6 +55,22 @@ def screen(handle):
     return [x for x in tmux("capture-pane", "-p", "-t", handle).splitlines() if x.strip()]
 
 
+_STATE_PRIO = {"done": 0, "working": 1, "waiting": 2}
+
+
+def pane_states():
+    """Map Basement tmux session -> {state, title} for every agent pane on TMUX_SOCKET."""
+    out: dict[str, dict[str, str]] = {}
+    for p in panes():
+        s = state(p["title"], screen(p["handle"]) if p["title"][:1] == "✳" else None)
+        if not s:
+            continue
+        prev = out.get(p["session"])
+        if prev is None or _STATE_PRIO[s] >= _STATE_PRIO[prev["state"]]:
+            out[p["session"]] = {"state": s, "title": p["title"]}
+    return out
+
+
 def saved():
     try:
         return [r for r in json.loads(REPOS.read_text()) if isinstance(r, str)]
