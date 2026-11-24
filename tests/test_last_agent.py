@@ -121,9 +121,10 @@ def test_basement_ade_quit_titles_dont_count(home):
     assert last_agent.load()["/w/a"]["session"] == "mc-live"
     assert last_agent.resume(last_agent.load()["/w/a"], panes) == {"harness": "claude", "session": "mc-live"}
     last_agent.note({"/w/b": ("codex", "mc-cx", NOW)})  # a launched codex, still running: a quit ✳ there doesn't replace it
-    last_agent.observe([("/w/b", {"agentType": "claude", "updatedAt": quit_t, "handle": "%3"})],
-                       [{"session": "mc-q", "cwd": "/w/b", "title": "✳ x", "at": str(quit_t // 1000), "cmd": "zsh"}], lambda t: t.startswith("✳"))
-    assert last_agent.load()["/w/b"]["session"] == "mc-cx"
+    running = [{"session": "mc-q", "cwd": "/w/b", "title": "✳ x", "at": str(quit_t // 1000), "cmd": "zsh"},
+               {"session": "mc-cx", "cwd": "/w/b", "title": "⌬ x", "at": str(NOW // 1000), "cmd": "codex"}]
+    last_agent.observe([("/w/b", {"agentType": "claude", "updatedAt": quit_t, "handle": "%3"})], running, lambda t: t.startswith("✳"))
+    assert last_agent.resume(last_agent.load()["/w/b"], running) == {"harness": "codex", "session": "mc-cx"}
 
 
 def test_a_newer_agent_elsewhere_beats_an_old_live_basement_pane(home):

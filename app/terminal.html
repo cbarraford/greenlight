@@ -1313,9 +1313,12 @@ function resumeWs(ws, r){
   if (t) return show(t), true;
   if (s) return newTab(ws, undefined, false, s), true;
   if (!Object.hasOwn(RESUME, r.harness)) return false;
-  const ag = Object.hasOwn(RUNS, r.harness) && latestTab(t => t.ws === ws && paneOf(t).some(RUNS[r.harness]));
+  // ...or one this started in the last minute: until the next snapshot records its pane, a second click would start a second copy
+  const ag = latestTab(t => t.ws === ws && (t.resumed?.h === r.harness && Date.now() - t.resumed.at < 60e3
+    || Object.hasOwn(RUNS, r.harness) && paneOf(t).some(RUNS[r.harness])));
   if (ag) return show(ag), true;
-  return newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]), true;
+  newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]);
+  return cur.resumed = {h: r.harness, at: Date.now()}, true;
 }
 function openWs(ws, r){
   if (resumeWs(ws, r)) return;

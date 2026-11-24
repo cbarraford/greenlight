@@ -1158,6 +1158,9 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a ✳ title with no live session is a quit Claude: continue it
   const cl = (await opens()).pop(); assert.equal((await opens()).length, 3); assert.deepEqual(await typed(cl.id), ["claude --continue\r"]);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // clicked again before the next snapshot: that tab, no second copy
+  assert.equal((await opens()).length, 3); assert.equal(await page.evaluate(() => cur.focus.session), cl.session);
   await page.evaluate(() => term.ws("/w/shipped", {harness: "claude", session: "bad session; x"}));  // a bad session name: ignored
   const sh = (await posts(page, "open")).filter(o => o.ws === "/w/shipped");
   assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.deepEqual(await typed(sh[0].id), ["claude --continue\r"]);
@@ -1171,6 +1174,7 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   assert.equal(await page.evaluate(() => cur.focus.session), plain, "the latest tab, not the agent's");
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(id => term.feed(id, btoa("\x1b]0;zsh\x07")), at.id);  // codex quit there
+  await page.evaluate(() => tabs.forEach(t => { if (t.resumed) t.resumed.at -= 61e3 }));  // and the ones this started are a minute old
   await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // no tab runs codex: continue it
   const cx = (await opens()).pop(); assert.deepEqual(await typed(cx.id), ["/opt/cx/codex resume --last\r"]);
   await page.evaluate(() => term.ws("/w/review", {harness: "pi", bin: "/x/../pi; rm"}));  // a bad bin: the PATH's
