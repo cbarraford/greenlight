@@ -832,6 +832,65 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
           "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
 }
 
+// MARK: voice mode's status line (#176): what Chief is doing, on the stage's strip, while it says nothing. Never spoken.
+
+/// Seconds of a running turn with nothing said before the strip gets a fresh line (and again after each line).
+let statusQuiet = 20.0  // plus Haiku's second or two: a line about every 20-25 s
+/// Words a status line keeps at most: it's a glance, not a report.
+let statusWords = 12
+
+/// What Chief has been doing, newest last, for the status line's model: its last few steps' titles (never their details: a shell
+/// step's is the whole command line, with whatever tokens, hosts or paths it holds) and whether each is still going, its plan, and
+/// a thinking phrase. Not the connecting status either (a host name). Empty when there's nothing to go on.
+func statusActivity(_ r: Run) -> String {
+    var out = r.steps.suffix(6).map { s in "- \(s.ok == nil ? "running" : s.ok == true ? "done" : "failed") · \(String(s.title.prefix(120)))" }
+    if let p = r.plan, p.total > 0 { out.append("Plan: \(p.done) of \(p.total) done" + (p.title.isEmpty ? "" : ", now: \(p.title)")) }
+    let now = r.status.trimmingCharacters(in: .whitespacesAndNewlines)
+    if r.thinking, !now.isEmpty { out.append("Status: \(String(now.prefix(120)))") }
+    return out.joined(separator: "\n")
+}
+
+/// A status line fit for the strip: one sentence, at most `statusWords` words, markdown and line breaks off, a full stop at the end.
+/// nil when it's empty or says what a line this turn already said (case, spacing and the final mark aside): the strip keeps that one.
+func statusLine(_ raw: String, shown: [String]) -> String? {
+    var t = plain(raw).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    if let end = t.range(of: #"[.!?](\s|$)"#, options: .regularExpression) { t = String(t[..<end.lowerBound]) }  // the first sentence
+    let words = t.split(separator: " ")
+    t = words.prefix(statusWords).joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " ,;:-–—…."))
+    guard t.rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
+    t += words.count > statusWords ? "…" : "."
+    let key = { (s: String) in s.lowercased().filter { $0.isLetter || $0.isNumber } }
+    return shown.contains { key($0) == key(t) } ? nil : t
+}
+
+/// The reply's [screen] detail is on its way: the block streaming now has one and no step has started since its text (else it was
+/// commentary before more work, and the quiet that follows still gets lines).
+func screenStreaming(_ r: Run) -> Bool {
+    staged(r.live).screen != nil && !(r.steps.last.map { $0.start > r.textAt } ?? false)
+}
+
+/// The strip's line when the model can't write one (no key, an error): the newest step still going ("Ran gh pr list" as "Running
+/// gh pr list"), else the newest one as it's titled; before any step, the turn's own status (a thinking phrase).
+func statusFallback(_ r: Run, shown: [String]) -> String? {
+    if let s = r.steps.last(where: { $0.ok == nil }) {
+        return statusLine(s.title.hasPrefix("Ran ") ? "Running " + s.title.dropFirst(4) : s.title, shown: shown)
+    }
+    return statusLine(r.steps.last?.title ?? r.status, shown: shown)
+}
+
+/// Haiku writes the strip's line from Chief's activity: one short present-tense sentence, nothing it doesn't see, no repeat.
+func statusSpec(_ heard: String, _ activity: String, shown: [String], done: @escaping (String?) -> Void) {
+    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["line"], "properties": ["line": ["type": "string"]]]
+    haiku("A voice assistant is working on the user's request and hasn't spoken for a while. Write the one status line their screen "
+            + "shows meanwhile: what it is doing right now, one sentence in the present tense, under \(statusWords) words, no first person, "
+            + "e.g. \"Checking PR 153's CI.\" or \"Reading the auth workspace's last test run.\" Name the newest thing still running; "
+            + "when it's the same work as before, say how it's going instead (\"Still waiting on the test run.\"). "
+            + "Use only names, numbers and refs from the activity; never invent any. No markdown, no emoji, no commands or paths.",
+          (heard.isEmpty ? "" : "The user said: \(heard)\n\n") + "Its activity, newest last:\n\(activity)"
+            + (shown.isEmpty ? "" : "\n\nLines already shown (say something new):\n" + shown.map { "- " + $0 }.joined(separator: "\n")),
+          schema) { o in done(o?["line"] as? String) }
+}
+
 /// The stage's card for one workspace: its MR, where it is and what's next, from the dashboard's snapshot.
 func workspaceSpec(_ p: [String: Any]) -> [String: Any] {
     let s = { (k: String) in p[k] as? String ?? "" }, mr = p["mr"] as? [String: Any] ?? [:]

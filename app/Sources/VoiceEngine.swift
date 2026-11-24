@@ -58,6 +58,9 @@ final class Voice: NSObject, ObservableObject {
     var mutes = 0  // each mute bumps it: a GPT-Live hand-off scheduled before one is dropped
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
+    /// The stage's status line (#176): when this turn last said something (or showed a line), the lines it showed, a line on its
+    /// way, and whether the strip shows one. statusSeq moves on each clear, so a line asked for before it doesn't land.
+    var quietSince = Date(), statusShown = [String](), statusAsking = false, statusUp = false, statusSeq = 0, tickGen = 0
     /// GPT-Live mode (Speech kind "live", fixed as voice mode starts): it listens, takes turns and speaks; Chief does the work.
     let live = LiveVoice()
     var isLive = false, liveUp = false
@@ -192,6 +195,7 @@ final class Voice: NSObject, ObservableObject {
             self.starting = false
             self.on = true
             self.fallback = ""; self.toldFallback = ""
+            if let r = self.core?.run, !r.watch, !r.checkIn { self.startStatus(r) }  // started partway through a turn: it gets lines too
             self.claimedAt = Date().timeIntervalSince1970
             DistributedNotificationCenter.default().postNotificationName(voiceClaim, object: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName,
                                                                          userInfo: ["at": self.claimedAt, "pid": Int(getpid())], deliverImmediately: true)
@@ -336,6 +340,7 @@ final class Voice: NSObject, ObservableObject {
         waitWord = waitWords.randomElement()!
         guard on else { return }
         wait(waitWord, r.question)
+        startStatus(r)
         if r.spoken { instant(r.question) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
@@ -343,12 +348,51 @@ final class Voice: NSObject, ObservableObject {
         }
     }
     func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
+    /// The status line's clock for a turn: from its start, or from voice mode starting partway through it. One clock at a time.
+    func startStatus(_ r: Run) {
+        clearStatus(); statusShown = []; tickGen += 1
+        statusTick(r, tickGen)
+    }
+    /// Every 2 s of a turn: after `statusQuiet` seconds with nothing said, a fresh line on the stage's strip. Never spoken.
+    func statusTick(_ r: Run, _ g: Int) {
+        guard on, g == tickGen else { return }
+        guard core?.run === r, !r.stopping else { if core?.run == nil || r.stopping { clearStatus() }; return }  // cleared, switched away or stopped: no stale line
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.statusTick(r, g) }
+        if screenStreaming(r) { return clearStatus() }  // its [screen] detail is streaming: the reply
+        // still saying something; the wait word alone doesn't count, so the first line isn't pushed back by it
+        if lines.contains(where: { $0 != waitWord }) || (lines.isEmpty && speaking > 0) { quietSince = Date(); return }
+        guard !statusAsking, Date().timeIntervalSince(quietSince) >= statusQuiet else { return }
+        askStatus(r)
+    }
+    /// Haiku's line from Chief's activity (the newest step's title without a key, or on an error or a repeat), in place on the strip.
+    func askStatus(_ r: Run) {
+        statusAsking = true
+        let shown = statusShown, seq = statusSeq, activity = statusActivity(r)
+        let done = { [weak self] (raw: String?) in
+            guard let self else { return }
+            self.statusAsking = false
+            guard self.on, seq == self.statusSeq, self.core?.run === r, !r.stopping, !screenStreaming(r) else { return }  // it spoke, or the turn ended or stopped, meanwhile
+            self.quietSince = Date()  // the next after another quiet stretch, a line or not
+            guard let line = raw.flatMap({ statusLine($0, shown: shown) }) ?? statusFallback(r, shown: shown) else { return }
+            self.statusShown.append(line); self.statusUp = true
+            self.js("stage.status", [line])
+        }
+        if activity.isEmpty { return done(nil) }
+        statusSpec(r.spoken ? String(r.question.prefix(300)) : "", activity, shown: shown, done: done)  // what was said, never a typed paste
+    }
+    /// Something was said, or the turn or voice mode ended: the strip goes, and the quiet clock starts again.
+    func clearStatus() {
+        statusSeq += 1; quietSince = Date()
+        guard statusUp else { return }
+        statusUp = false; js("stage.status", [""])
+    }
     func live(_ r: Run) {
         guard on else { return }
         let st = staged(r.live), p = spokenSoFar(st.text)  // the gist only: a [screen] part is shown at the end, never said
         if let h = st.stage { stage(h) }
         let (ss, to) = sentences(p, from: said)
         said = to
+        if !ss.isEmpty || st.screen != nil { clearStatus() }  // the reply is here, said or (after you cut in) not, or its [screen] detail
         ss.forEach { say(forEar($0)) }  // per sentence, so `said` stays an offset into text that only grows
         if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }
@@ -357,6 +401,7 @@ final class Voice: NSObject, ObservableObject {
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
         defer { chiefDrew = false }  // watch/checkIn turns skip began(); clear so the next turn can draw
         guard on else { return }
+        clearStatus()
         if let h = st.stage { stage(h) }
         let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = spokenSoFar(spoken) + "\n"  // as live() counted `said`
         sentences(p, from: min(said, p.count)).said.forEach { say(forEar($0)) }
@@ -374,6 +419,7 @@ final class Voice: NSObject, ObservableObject {
     func failed(_ text: String) {
         chiefDrew = false
         guard on else { return }
+        clearStatus()
         said = 0
         wait("Listening", plain(text))
         say(forEar(text))
@@ -408,6 +454,7 @@ final class Voice: NSObject, ObservableObject {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard on, !muted, !t.isEmpty, t.rangeOfCharacter(from: .alphanumerics) != nil else { return }
         lastSpoken = String((lastSpoken + " " + t).suffix(600))
+        if !filler { clearStatus() }  // the reply (or anything said) takes over from the status line; the wait word doesn't
         if isLive {  // GPT-Live acknowledges by itself (no filler); without a hand-off (a typed message) it can't speak, and Apple's voice doesn't stand in
             guard !filler, delegation != nil else { return }
             liveDrop = false
@@ -577,7 +624,7 @@ final class Voice: NSObject, ObservableObject {
     var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
-        hush()
+        hush(); clearStatus()
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
