@@ -1014,7 +1014,7 @@ struct StageFiles: View {
                         .font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1)
                 }
                 if !c.fileNote.isEmpty {
-                    Label(c.fileNote, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11, weight: .medium)).foregroundColor(hx(l.dark ? "FF9F0A" : "9A6700"))
+                    Label { Text(c.fileNote) } icon: { Image(ds: "alert", size: 14) }.font(.system(size: 11, weight: .medium)).foregroundColor(hx(l.dark ? "FF9F0A" : "9A6700"))
                         .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
                 }
             }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
@@ -1024,11 +1024,11 @@ struct StageFiles: View {
     func chip(_ f: ChatFile) -> some View {
         HStack(spacing: 5) {
             if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 3)) }
-            else { Image(systemName: f.kind == "pdf" ? "doc.richtext" : "doc.text").font(.system(size: 11)).foregroundColor(hx(l.dim)) }
+            else { Image(ds: "file-text", size: iconSize(11, scaled: false)).foregroundColor(hx(l.dim)) }
             Text(f.name).font(.system(size: 11, weight: .semibold)).foregroundColor(hx(l.text)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
             Text(byteSize(f.data.count)).font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1).fixedSize()
             Button { c.files.removeAll { $0.id == f.id } } label: {
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundColor(hx(l.dim)).frame(width: 16, height: 16)
+                Image(ds: "close", size: iconSize(9, scaled: false), medium: true).foregroundColor(hx(l.dim)).frame(width: 16, height: 16)
             }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
         }.padding(.leading, 4).padding(.trailing, 3).frame(height: 24)
             .background(RoundedRectangle(cornerRadius: 6).fill(hx(l.stage))).overlay(RoundedRectangle(cornerRadius: 6).stroke(hx(l.line)))
@@ -1043,7 +1043,7 @@ struct StageDropHint: View {
         RoundedRectangle(cornerRadius: 12).fill(hx(l.page).opacity(0.85))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(hx(l.accent), style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
             .overlay(VStack(spacing: 8) {
-                Image(systemName: "paperclip").font(.system(size: 22)).foregroundColor(hx(l.accent))
+                Image(ds: "attach", size: iconSize(22, scaled: false)).foregroundColor(hx(l.accent))
                 Text("Drop to attach").font(.system(size: 15, weight: .semibold)).foregroundColor(hx(l.text))
                 Text("Goes with what you say next: \(ChatFile.supported)").font(.system(size: 11)).foregroundColor(hx(l.dim)).multilineTextAlignment(.center)
             }.padding(.horizontal, 20))
@@ -1094,7 +1094,7 @@ struct ConversationLook: View {
                 Spacer(minLength: 4)
                 s.ctx { Text("\(s.c.ctxShort) context").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(s.high ? hx("9A6700") : hx(l.dim)) }
                 s.clearButton {
-                    Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .semibold)).foregroundColor(.white).frame(width: 34, height: 34).background(Circle().fill(hx(l.text)))
+                    Image(ds: "compose", size: iconSize(13, scaled: false), medium: true).foregroundColor(.white).frame(width: 34, height: 34).background(Circle().fill(hx(l.text)))
                 }
             }.padding(.leading, 16).padding(.trailing, 5).padding(.vertical, 5)
                 .background(Capsule().fill(hx(l.card))).overlay(Capsule().stroke(hx(l.line)))
@@ -1128,7 +1128,7 @@ struct OrbLook: View {
             HStack(spacing: 12) {
                 s.ctx { Text(s.known ? "\(s.pct)% · \(s.tokens)" : "\(s.tokens) tokens").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
                 s.clearButton {
-                    Label("Start over", systemImage: "arrow.counterclockwise").font(.system(size: 13, weight: .semibold)).foregroundColor(hx(l.text))
+                    Label { Text("Start over") } icon: { Image(ds: "undo") }.font(.system(size: 13, weight: .semibold)).foregroundColor(hx(l.text))
                         .padding(.horizontal, 16).frame(height: 36).background(Capsule().fill(hx(l.stage))).overlay(Capsule().stroke(hx("FFFFFF", 0.14)))
                 }
             }
@@ -1443,23 +1443,23 @@ struct VoiceButtons: View, Looked {
         HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
             if v.on {
                 if !v.transcript {  // the stage has no composer: its +. Drops on the stage and ⌘V attach too
-                    knob("paperclip", t.attach) { c.pickFiles(NSApp.keyWindow) }
+                    knob("attach", t.attach) { c.pickFiles(NSApp.keyWindow) }
                 }
-                knob(v.transcript ? "waveform" : "text.bubble", t.view) { v.transcript.toggle() }
-                knob(v.captions ? "captions.bubble.fill" : "captions.bubble", t.caption) { v.captions.toggle() }
+                knob(v.transcript ? "waveform" : "chat-text", t.view) { v.transcript.toggle() }
+                knob(v.captions ? "captions-fill" : "captions", t.caption) { v.captions.toggle() }
                 Button(action: v.toggleMic) {  // muted: filled in a warning color the look's accent (the voice button's) isn't
-                    shell(Image(systemName: v.micMuted ? "mic.slash.fill" : "mic"), on: v.micMuted, fill: v.micMuted ? hx(mutedFill(lk)) : nil)
+                    shell(Image(ds: v.micMuted ? "mic-off" : "mic"), on: v.micMuted, fill: v.micMuted ? hx(mutedFill(lk)) : nil)
                 }.buttonStyle(.plain).modifier(Tip(c: c, text: t.mic.help)).accessibilityLabel(t.mic.label)
             }
             // one style for live and standard chat
-            knob("paintpalette", t.style) { v.look = nextLook }
-            Button(action: v.toggle) { shell(Image(systemName: "waveform").font(sys(size: Theme.fs3, weight: .semibold)), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
+            knob("palette", t.style) { v.look = nextLook }
+            Button(action: v.toggle) { shell(Image(ds: "waveform", size: iconSize(Theme.fs3), medium: true), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
                 .buttonStyle(.plain).modifier(Tip(c: c, text: t.voice.help)).accessibilityLabel(t.voice.label)
-            knob(out ? "rectangle.righthalf.inset.filled" : "arrow.up.forward.square", t.pop) { c.popChat(!out) }  // its own window, or back
+            knob(out ? "panel" : "external", t.pop) { c.popChat(!out) }  // its own window, or back
         }
     }
     func knob(_ icon: String, _ t: (help: String, label: String), _ act: @escaping () -> Void) -> some View {
-        Button(action: act) { shell(Image(systemName: icon)) }.buttonStyle(.plain).modifier(Tip(c: c, text: t.help)).accessibilityLabel(t.label)
+        Button(action: act) { shell(Image(ds: icon)) }.buttonStyle(.plain).modifier(Tip(c: c, text: t.help)).accessibilityLabel(t.label)
     }
     /// The knob in the look: a ring (Orb), a 6pt tile (Conversation), a square (On Air, HUD), a green box (Phosphor), bare (Editorial, Zen).
     func shell<V: View>(_ icon: V, on: Bool = false, fill: Color? = nil) -> some View {

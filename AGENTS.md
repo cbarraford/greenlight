@@ -59,7 +59,7 @@ without the user's yes, and never attach anything but a bundle.
 Run the local verification suite before considering any change done:
 
 ```bash
-make lint        # ruff (scripts/, tests/, app/kokoro.py), check_safety.py (incl. JS syntax, token drift), tokens.py check, shellcheck
+make lint        # ruff (scripts/, tests/, app/kokoro.py), check_safety.py (incl. JS syntax, token drift), tokens.py check, icons.py check, shellcheck
 make test-py     # all Python test suites (auto-routes script tests and pytest tests)
 make test-js     # Playwright Chromium UI & security tests (add `make test-webkit` for WKWebView parity)
 make typecheck   # macOS: Swift typecheck with -warnings-as-errors -strict-concurrency=targeted
@@ -83,3 +83,4 @@ make coverage    # Python tests with combined coverage.xml (PR CI enforces >= 70
 - **Shell scripts:** Use `set -euo pipefail`, quote all expansions, and pass `shellcheck -S warning`.
 - **Visual design:** Always design in Greenlight's own visual language (`app/Sources/Config.swift` `struct Theme`/`themes`/`accents` and `app/dashboard.html` `:root`).
 - **Design tokens:** `brand/DESIGN.md`'s front matter is the token source. Never edit the generated `<style id="ds-tokens">` blocks or `app/Sources/Tokens.swift` by hand; change the spec and run `python3 scripts/tokens.py generate`. New UI code uses `--ds-*` / `DS` tokens, and `check_safety.py`'s drift baseline (`scripts/drift_baseline.json`) only goes down.
+- **Icons:** one set, `brand/icons/ui/*.svg` (16 grid, 1.5 stroke, round joins, `currentColor`; `-fill` names are the filled variants) plus the agents' marks in `brand/icons/marks/`. Use `dsIcon(name, px)` / `dsIconHTML` in the pages and `Image(ds: name, size:)` in Swift (`iconSize(pt)` for a size beside text); never inline an `<svg>` path or an SF Symbol in a custom view. Add or change an SVG, then run `python3 scripts/icons.py generate`; `icons.py sheet out.html` draws a contact sheet.

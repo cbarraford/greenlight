@@ -373,11 +373,11 @@ test("hover card footer: one glyph for the agent (a live one outranks a crash), 
     const g = document.querySelector("#hcard .hf .gl"), l = document.querySelector("#hcard .hf .lk");
     return [g && g.getAttribute("class"), l && l.getAttribute("href"), document.querySelector("#hcard .hfx").textContent] }, [agent, state, mr]);
   const mr = {iid: 12, ref: "!12", state: "opened", title: "x", web_url: "https://gl/12"};
-  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["gl idle", "https://gl/12", "Claude is idle"]);
-  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["gl working", "https://gl/12", "Claude is working"]);
-  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["gl waiting", null, "Codex is waiting"]);
-  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["gl crashed", null, "Claude crashed"]);
-  assert.deepEqual(await foot({}, "crashed", null), ["gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "needs", mr), ["dsi gl idle", "https://gl/12", "Claude is idle"]);
+  assert.deepEqual(await foot({type: "claude", state: "working"}, "crashed", mr), ["dsi gl working", "https://gl/12", "Claude is working"]);
+  assert.deepEqual(await foot({type: "codex", state: "waiting"}, "needs", null), ["dsi gl waiting", null, "Codex is waiting"]);
+  assert.deepEqual(await foot({type: "claude", state: "idle"}, "crashed", null), ["dsi gl crashed", null, "Claude crashed"]);
+  assert.deepEqual(await foot({}, "crashed", null), ["dsi gl crashed", null, "Agent crashed"]);  // no type: don't guess Claude
   assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
 });
 

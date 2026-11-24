@@ -236,6 +236,10 @@ var sub: Color { theme.mix(0.82) }
 var bubble: Color { Color(nsColor: theme.bubble) }
 
 /// `.system(size:)` at the chosen size; `design: .monospaced` uses the code font. Interface chrome stays in the system font.
+/// The box an icon gets beside text of `pt` points (brand/DESIGN.md §9): about a quarter more than the type size, as SF Symbols
+/// sit. It follows Settings › Text size like sys(), unless `scaled` is false.
+func iconSize(_ pt: CGFloat, scaled: Bool = true) -> CGFloat { (pt * (scaled ? fontSize / 13 : 1) * 1.25).rounded() }
+
 func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default, face: String = "System") -> Font {
     let s = size * fontSize / 13, f = design == .monospaced ? codeFont : face
     if f == "System" { return .system(size: s, weight: weight, design: design) }

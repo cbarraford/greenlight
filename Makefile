@@ -16,6 +16,7 @@ lint: ## ruff bug/security lint, static safety checks, design tokens, JS static 
 	ruff check scripts/ tests/ app/kokoro.py
 	$(PY) scripts/check_safety.py
 	$(PY) scripts/tokens.py check
+	$(PY) scripts/icons.py check
 	$(PY) scripts/js_lint.py
 	shellcheck -S warning app/build.sh scripts/*.sh .githooks/pre-commit .githooks/pre-push
 

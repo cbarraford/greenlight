@@ -1,10 +1,15 @@
 {
  "app/Sources/App.swift": {
   "colour": 70,
-  "font_size": 9,
+  "font_size": 3,
   "radius": 10
  },
  "app/Sources/Core.swift": {
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
+ },
+ "app/Sources/Icons.swift": {
   "colour": 0,
   "font_size": 0,
   "radius": 0
@@ -21,7 +26,7 @@
  },
  "app/Sources/Views.swift": {
   "colour": 25,
-  "font_size": 6,
+  "font_size": 4,
   "radius": 20
  },
  "app/Sources/Vim.swift": {
@@ -36,7 +41,7 @@
  },
  "app/Sources/VoiceViews.swift": {
   "colour": 106,
-  "font_size": 48,
+  "font_size": 44,
   "radius": 6
  },
  "app/Sources/main.swift": {
@@ -45,7 +50,7 @@
   "radius": 0
  },
  "app/dashboard.html": {
-  "colour": 149,
+  "colour": 146,
   "font_size": 75,
   "radius": 96,
   "shadow": 38
@@ -57,7 +62,7 @@
   "shadow": 7
  },
  "app/terminal.html": {
-  "colour": 138,
+  "colour": 136,
   "font_size": 145,
   "radius": 124,
   "shadow": 83
