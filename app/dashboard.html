@@ -875,7 +875,7 @@ function widget(spec, small){
 }
 
 /* ---------- hexes ---------- */
-/* greenlight asked about these workspaces (mc.bell's asked, from `greenlight.py ping --ws`): they read "Needs you", never shelved or stacked,
+/* greenlight asked about these workspaces (mc.bell's asked, from `greenlight.py ping --ws`): they read "Needs you", never shelved or folded into a step stack (on a shared MR, its stack carries the bell),
    until the question is answered, superseded or resolved. Applied to the whole snapshot so every view, count and page agrees. */
 function lift(p){
   const q = (ui.bell.asked || []).find(q => arr(q.ws).includes(p.name));
@@ -914,7 +914,7 @@ function hexLabel(p){
     sub: p.state === "needs" && p.step !== "review" ? (p.agent && p.agent.state === "waiting" ? "Answer" : "Needs you") : p.state === "crashed" ? "Crashed" : fixCI(p) ? "Fix CI" : !(p.mr && p.mr.iid) ? "Goal" : HEXSUB[p.step] || STEP_NAMES[p.step] || p.step || ""};
 }
 const fixCI = p => p.step === "ci_green" && p.mr && p.mr.pipeline === "failed";  // the step is green CI and the last pipeline failed
-/* opts: {num, sub} override the label, stacked draws two cards behind, compact = number only */
+/* opts: {num, sub} override the label, stacked draws two cards behind, compact = number only, who = the workspace's name in place of the number */
 function hexEl(p, R, opts = {}){
   if (opts.dock) {  // the docks' 44px hexes: state outline and tint only; the number sits on top (.dlab), the mosaic and signals are too small to read
     const o = R * .06;
@@ -940,6 +940,7 @@ function hexEl(p, R, opts = {}){
     h("div", {class:"hin", style:`width:${Math.max(nuc * 1.9, R * 1.5)}px;top:${ly}px`},
       !compact && R >= 40 && STATE[p.state].glyph ? icon((p.state === "needs" || p.state === "crashed" ? FILLED[STATE[p.state].glyph] : null) || STATE[p.state].glyph, R >= 60 ? 16 : 12, "hg") : null,  // the state's shape, so the hex never leans on colour alone
       named ? h("b", {class:"hname"}, p.name.split("/").pop().replace(/-/g, " ")) : null,  // big enough: which task, then its MR
+      opts.who ? h("b", {class:"hname", style:`font-size:var(--fs-1);width:${Math.round(R * 1.6)}px`}, p.name.split("/").pop().replace(/-/g, " ")) :
       lb.num === "No MR" && !opts.num ? h("b", {class:"hname", style: compact || R < 40 ? `font-size:var(--fs-1);-webkit-line-clamp:1;width:${Math.round(R * 1.75)}px;margin:0 auto;text-align:center` : null}, compact || R < 40 ? p.name.split("/").pop().split("-")[0] : p.name.split("/").pop().replace(/-/g, " ")) :  // no MR yet: its name says which one
       h("b", {style:`font-size:${compact ? Math.max(12, Math.round(R * .28)) : named ? 11 : R >= 60 ? 14 : R >= 46 ? 13 : 12}px` + (named ? ";font-weight:500" : "")}, lb.num),
       !compact && R >= 40 && lb.sub && !(lb.num === "No MR" && lb.sub === "Goal" && R < 60) ? h("span", {}, lb.num === "No MR" && lb.sub === "Goal" ? "No MR" : lb.sub) : null),
@@ -969,10 +970,29 @@ function honey(n, W, H, minR = 40, maxA = 3){  // maxA: how far the ellipse may 
   }
 }
 
+/* one hex per MR: two or more workspaces on the same MR fold into one stack led by the most urgent of them (its state, step and MR);
+   the fan and the drill-in still reach each workspace's own page */
+const mrKey = p => p.mr && p.mr.iid ? `${p.project || ""} ${mrRef(p.mr)}` : null;
+function sameMR(pucks){
+  const by = new Map(), out = [];
+  for (const p of pucks) {
+    const k = mrKey(p);
+    if (!k) { out.push(p); continue }
+    if (!by.has(k)) out.push(by.set(k, []).get(k));
+    by.get(k).push(p);
+  }
+  return out.map(g => !Array.isArray(g) ? g : g.length < 2 ? g[0] : mrGroup(g));
+}
+function mrGroup(g){
+  const m = [...g].sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state) || !!b.asked - !!a.asked);  // most urgent first; asked (lifted to "needs") wins a tie
+  return {...m[0], name: "mr:" + mrKey(m[0]), members: m, dup: true};  // the lead's state, progress, agent and bell
+}
+const stackTitle = st => st.dup ? mrRef(st.mr) : STEP_NAMES[st.step] || st.step;  // an MR's stack goes by its number, the rest by their step
+
 /* stacks: same (state, step, owner) 3+ times → one hex, fanned into honeycomb rings by stackFan() */
 function stackUp(pucks){
   const by = {}, out = [];
-  for (const p of pucks) if (p.asked) out.push(p); else (by[[p.state, p.step, p.owner].join("/")] ||= []).push(p);  // greenlight asked: always its own hex
+  for (const p of sameMR(pucks)) if (p.asked || p.members) out.push(p); else (by[[p.state, p.step, p.owner].join("/")] ||= []).push(p);  // greenlight asked, or an MR's own stack: never folded into a step stack
   for (const [k, g] of Object.entries(by)) {
     if (g.length < 3) out.push(...g);
     else out.push({name: "stack:" + k, state: g[0].state, step: g[0].step, members: g, agent: {}, mr: null});
@@ -992,7 +1012,7 @@ function stackFan(st, hx, hy, R, WW, HH){
   // open, the stack grows to at least 2x its hex (as far as the field allows) and the members scale up to fill it
   const ring = K * SQ3 + 1.2, ext = Math.max(ring * 27, Math.min(2 * R, (WW - 8) / 2, (HH - 8) / SQ3)), rs = ext / ring, mr = Math.round(rs * .89);
   const cx = Math.max(ext + 4, Math.min(WW - ext - 4, hx)), cy = Math.max(ext * .9 + 4, Math.min(HH - ext * .9 - 4, hy));
-  const label = STEP_NAMES[st.step] || st.step, n = st.members.length;
+  const label = stackTitle(st), n = st.members.length;
   const fan = h("div", {class:"fan" + (ui.openStack === st.name ? " open" : ""), style:`left:${cx - ext}px;top:${cy - ext}px;width:${2 * ext}px;height:${2 * ext}px`});
   const set = on => {
     clearTimeout(ui.stackT);
@@ -1015,12 +1035,12 @@ function stackFan(st, hx, hy, R, WW, HH){
     fan.append(h("div", {class:`fp${matches(p) ? "" : " dim"}${ui.picked.has(p.name) ? " picked" : ""}${inDock(p) ? " indock" : ""}`, "data-name": p.name, "data-dock": dockable(p), style:`--x:${x}px;--y:${y}px;--hx:${sx + R - mr}px;--hy:${sy + R - mr}px;--d:${i * 10}ms`,
       "aria-label": `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
       onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
-      onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true})));
+      onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, mr, {compact: true, who: st.dup})));  // an MR's fan: the number is the hub's, so each says which workspace
   });
   fan.append(h("div", {class:`hub${st.members.some(matches) ? "" : " dim"}${st.members.some(m => ui.picked.has(m.name)) ? " picked" : ""}${inDock(st) ? " indock" : ""}`, "data-dock": dockable(st), style:`--hx:${sx}px;--hy:${sy}px;--cx:${ext - R}px;--cy:${ext - R}px;--hs:${Math.min(.55, rs * .85 / R).toFixed(3)}`,
-    role:"button", tabindex:"0", "aria-label":`${label}, ${n} workspaces. Hover to fan out, click to open.`,
+    role:"button", tabindex:"0", "aria-label":`${label}, ${n} workspaces${st.dup ? " on the same MR" : ""}. Hover to fan out, click to open.`,
     onclick: () => drill(st.name), onkeydown: e => e.key === "Enter" && drill(st.name)},
-    hexEl(st, R, {stacked: true, num: label, sub: STATE[st.state].label}),
+    hexEl(st, R, {stacked: true, num: label, sub: st.dup ? hexLabel(st).sub : STATE[st.state].label}),
     h("span", {class:"badge"}, `×${n}`)));
   return fan;
 }
@@ -1210,7 +1230,7 @@ function renderOverview(main){
   const items = st ? st.members : stacks;
   if (st) shelf.length = 0;
   const crumbs = st ? [h("button", {class:"crumb", onclick: () => drill(null)}, "Workspaces"), h("span", {class:"sep"}, "›"),
-    h("h2", {}, `${STEP_NAMES[st.step] || st.step} · ${STATE[st.state].label}`), h("span", {}, `${st.members.length} workspaces`)] : [h("h2", {class:"sect"}, "Workspaces")];
+    h("h2", {}, `${stackTitle(st)} · ${STATE[st.state].label}`), h("span", {}, `${st.members.length} workspaces${st.dup ? " on this MR" : ""}`)] : [h("h2", {class:"sect"}, "Workspaces")];
   const on = counts();
   const head = h("div", {class:"whead"}, ...crumbs, h("span", {class:"sp"}),
     ...ORDER.filter(k => !SHELF.includes(k) && on[k]).map(k => h("span", {class:"lg"}, stateGlyph(STATE[k]), STATE[k].label, h("b", {}, on[k]))));  // the shelf counts its own
@@ -1243,7 +1263,7 @@ function renderOverview(main){
  "data-dock": dockable(p), style:`left:${x - R}px;top:${y - R}px`,
         "aria-label": p.asked ? `${p.name}, ${p.why}` : `${p.name}, ${STATE[p.state].label}: ${p.action || p.why}`, onclick: () => { if (ui.picked.has(p.name)) unpick(); openPage(p.name) }, role:"button", tabindex:"0",
         onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false),
-        onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, R)));
+        onkeydown: e => e.key === "Enter" && openPage(p.name)}, hexEl(p, R, st && st.dup && R < 50 ? {who: true} : {})));  // an MR's hexes too small to name themselves all read its number
     });
     main.insertBefore(wrap, shelfEl);
   }
@@ -2037,7 +2057,7 @@ function dockToggle(it){  // ⌘-click a hex or stack: into the chat's context, 
   dockSync();
 }
 function dockLabel(it){
-  if (it.members) return `${STEP_NAMES[it.step] || it.step} · ${it.members.length}`;
+  if (it.members) return `${stackTitle(it)} · ${it.members.length}`;
   const n = hexLabel(it).num;
   return n === "No MR" ? short(it.name, 18) : n;
 }
@@ -2048,7 +2068,7 @@ function dockText(it){
 function dockSync(){
   const css = getComputedStyle(document.documentElement);
   post({cmd: "context", items: ui.dock.map(d => ({key: d.key, label: dockLabel(d.item), color: css.getPropertyValue(STATE[d.item.state].color).trim(),
-    mrs: (d.item.members || [d.item]).length, text: dockText(d.item)}))});
+    mrs: d.item.dup ? 1 : (d.item.members || [d.item]).length, text: dockText(d.item)}))});
   renderDock(); if (ui.snap) renderMain();  // the field's in-dock halos
 }
 function renderDock(fromRender){
@@ -2072,7 +2092,7 @@ function renderDock(fromRender){
         h(it.members ? "span" : "button", {type: it.members ? null : "button", class: "dopen", "aria-label": it.members ? null : `Open ${nm}`, onclick: it.members ? null : () => openPage(it.name)},  // one workspace opens; a group has no single page
           hexEl(it.members ? it : {...it, mr: null}, R, {num: "", sub: "", stacked: !!it.members, dock: true}),
           h("span", {class: "dlab", style: `height:${2 * R}px`}, it.members ? `×${it.members.length}` : it.mr && it.mr.iid ? mrRef(it.mr) : ""),  // the number in the hex, the name below it
-          h("span", {class: "dname"}, it.members ? STEP_NAMES[it.step] || it.step : it.name)),
+          h("span", {class: "dname"}, it.members ? stackTitle(it) : it.name)),
         h("button", {type: "button", class: "dx", "aria-label": `Remove ${nm} from chat`, title: "Remove from chat", onclick: () => { ui.dock = ui.dock.filter(x => x.key !== k.key); dockSync() }}, icon("close", 10)));
     }),
     dr ? "" : h("div", {class: "dcount"}, ui.dock.length ? `${ui.dock.length} in chat` : "Drag here to add to chat"));

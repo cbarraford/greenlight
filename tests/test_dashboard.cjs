@@ -1384,6 +1384,41 @@ test("empty state: .empty clears the Context rail gutter and does not clip at na
   assert.ok(geom.epRight <= geom.dockLeft + 1, `.empty paragraph clipped under #dock: ${JSON.stringify(geom)}`);
 });
 
+test("one hex per MR: workspaces on the same MR fold into one stack that still reaches each of them (#158)", async page => {
+  const mr = (iid, project = "acme/widgets") => ({iid, ref: "!" + iid, title: "Solvency", state: "opened", web_url: `https://gitlab.example/${project}/-/merge_requests/${iid}`});
+  const ws = (name, state, m, step = "ci_green") => ({...puck(name, name, "idle"), state, step, mr: m, project: m ? m.web_url.split("/").slice(3, 5).join("/") : "acme/widgets"});
+  const pucks = [ws("gated-inbounds", "working", mr(5304)), {...ws("solvency-5304", "needs", mr(5304), "threads"), steps: ["mr_open", "ci_green", "threads", "merge"], step_index: 2, agent: {...puck("x", "x", "waiting").agent}}, ws("elsewhere", "working", mr(5304, "acme/other")), ws("no-mr", "working", null)];
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks});
+  const hubs = await page.$$eval("#main .fan .hub", es => es.map(e => e.getAttribute("aria-label")));
+  assert.deepEqual(hubs, ["!5304, 2 workspaces on the same MR. Hover to fan out, click to open."], "the two workspaces on !5304 are one hex");
+  assert.match(await page.textContent("#main .fan .hub"), /!5304/, "the stack goes by its MR's number");
+  assert.equal(await page.locator("#main .fan .hub .hx.st-needs").count(), 1, "led by its most urgent workspace");
+  assert.match(await page.textContent("#main .fan .hub"), /Answer/, "with its label: its agent waits on an answer");
+  assert.equal(await page.getAttribute("#main .fan .hub .prog", "stroke-dasharray"), "0.86 0.14 ".repeat(2) + "0 4", "and its progress: step 3 of 4");
+  assert.deepEqual(await page.$$eval("#main .fieldwrap > .cell", es => es.map(e => e.dataset.name).sort()), ["elsewhere", "no-mr"], "the same number in another project is another MR");
+  assert.deepEqual(await page.$$eval("#main .fan .fp", es => es.map(e => e.dataset.dock).sort()), ["gated-inbounds", "solvency-5304"], "its fan holds both");
+  assert.deepEqual(await page.$$eval("#main .fan .fp .hname", es => es.map(e => e.textContent).sort()), ["gated inbounds", "solvency 5304"], "the number is the hub's: each member says which workspace it is");
+  assert.deepEqual(await page.evaluate(() => stackUp(shown()).find(p => p.dup).members.map(p => p.name)), ["solvency-5304", "gated-inbounds"], "most urgent first, whatever the snapshot's order");
+  await page.evaluate(() => hl("gated-inbounds", true));
+  assert.equal(await page.locator("#main .fan .hub.hl").count(), 1, "its agent card's hover rings the MR's hex");
+  await page.evaluate(() => hl("gated-inbounds", false));
+  await page.evaluate(() => dockToggle(stackUp(shown()).find(p => p.dup)));
+  const ctx = (await posts(page, "context")).pop().items;
+  assert.deepEqual(ctx.map(i => [i.label, i.mrs]), [["!5304 · 2", 1]], "docked, it's one MR to the chat");
+  await page.evaluate(() => dockToggle(stackUp(shown()).find(p => p.dup)));
+  await page.click("#main .fan .hub");
+  assert.match(await page.textContent("#main .whead"), /!5304 · Needs you.*2 workspaces on this MR/, "drilled in, the breadcrumb names the MR");
+  assert.deepEqual(await page.$$eval("#main .fieldwrap > .cell", es => es.map(e => e.dataset.name).sort()), ["gated-inbounds", "solvency-5304"], "each workspace gets its own hex in there");
+  await page.click("#main .cell[data-name='gated-inbounds']");
+  assert.equal(await page.evaluate(() => ui.page && ui.page.name), "gated-inbounds", "and its own page");
+  await page.evaluate(() => { ui.page = null; drill(null); ui.picked = new Set(["gated-inbounds", "solvency-5304"]); render() });
+  assert.equal(await page.locator("#main .hub.picked").count(), 1, "picking the MR lights one hex, not two");
+  assert.equal(await page.locator("#main .fieldwrap > .cell.picked").count(), 0);
+  await page.evaluate(() => { ui.picked = new Set(); ui.raw = {...ui.raw, pucks: [...ui.raw.pucks].reverse()}; ui.bell = {...ui.bell, asked: [{ws: ["gated-inbounds"], text: "Which one?"}]}; relift(); render() });  // asked one second: it leads by the tie-break alone
+  assert.equal(await page.locator("#main .fan .hub .hbell").count(), 1, "greenlight asked about one of them: the MR's hex carries the bell");
+  assert.equal(await page.evaluate(() => stackUp(shown()).find(p => p.dup).members[0].name), "gated-inbounds", "and the asked one leads the tie");
+});
+
 test("hovering an agent whose hex is in a stack highlights the stack hub and member, and hovering a fanned hex highlights its card", async page => {
   const mk = (name, step) => ({...puck(name, "Goal " + name, "working"), state: "working", step, owner: "working"});
   const pucks = [mk("st-1", "ci_green"), mk("st-2", "ci_green"), mk("st-3", "ci_green"), mk("solo-1", "threads")];
