@@ -1036,8 +1036,9 @@ final class Core: ObservableObject {
             DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }
         }
         if !popoverShown() && !r.stopping {
+            let said = parts.detail == nil ? body : [parts.gist, parts.detail ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")  // gist first: the question it asks
             missed += 1
-            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(body.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
+            notify(title: r.checkIn ? "\(name): what to work on next" : r.watch ? "\(name) asks" : "Done: \(r.question.prefix(60))", body: String(said.prefix(240)), subtitle: r.checkIn || r.watch ? nil : fmt(m.duration), freeform: true)
         }
         if !(ok && st.reset) { next() }  // a reset sends it once clear
     }

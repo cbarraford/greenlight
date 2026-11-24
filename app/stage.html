@@ -218,10 +218,10 @@ const TEMPLATES = {
 };
 // Markdown's inline marks as nodes, text only: `code`, **bold**, *em* or _em_, a [link](url) as its text.
 const wrap = (tag, inner) => { const e = $(tag); e.append(...inline(inner)); return e; };  // a link or code inside bold too
-const inline = t => str(t).split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*|(?<!\w)_[^_]+_(?!\w)|\[[^\]]+\]\([^)\s]*\))/).filter(Boolean).map(x =>
+const inline = t => str(t).split(/(`[^`]+`|\*\*(?:[^*]|\*(?!\*))+\*\*|\*[^*\s](?:[^*]*[^*\s])?\*|(?<!\w)_[^_]+_(?!\w)|\[[^\]]+\]\([^)\s]*\))/).filter(Boolean).map(x =>
   x[0] === "`" && x.length > 2 && x.endsWith("`") ? $("code", null, x.slice(1, -1))
   : x.startsWith("**") && x.endsWith("**") && x.length > 4 ? wrap("b", x.slice(2, -2))
-  : /^(\*[^*\s][^*]*\*|_[^_]+_)$/.test(x) ? wrap("em", x.slice(1, -1))
+  : /^(\*[^*\s](?:[^*]*[^*\s])?\*|_[^_]+_)$/.test(x) ? wrap("em", x.slice(1, -1))
   : /^\[[^\]]+\]\([^)\s]*\)$/.test(x) ? document.createTextNode(x.slice(1, x.indexOf("](")))
   : document.createTextNode(x));
 // A pipe table's rows as cells (its |---| rule dropped), drawn as the table template's grid.

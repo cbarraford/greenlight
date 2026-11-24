@@ -152,7 +152,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     let quoted = "Add a line `[screen]` then the detail.\n```\n[screen]\n```\nDone.", twice = staged("Gist.\n [screen] \nOne.\n[screen]\nTwo.")
     check("voice: only a [screen] at a line's start and outside a code fence splits; a second one stays in the detail",
           staged(quoted).screen == nil && staged(quoted).text == quoted && twice.text == "Gist." && twice.screen == "One.\n[screen]\nTwo.")
-    let loose = ["Gist.\n**[screen]**\n- a", "Gist.\n[Screen]:\n- a", "Gist.\n[screen] - a", "Gist.\n**[screen]:**\n- a", "Gist. [screen]\n- a"].map { staged($0) }
+    let loose = ["Gist.\n**[screen]**\n- a", "Gist.\n[Screen]:\n- a", "Gist.\n[screen] - a", "Gist.\n**[screen]:**\n- a", "Gist. [screen]\n- a", "Gist.\n\n`[screen]`\n- a"].map { staged($0) }
     check("voice: a bold, colon, same-line or line-ending [screen] still splits, so the detail is never read out",
           loose.allSatisfy { $0.text == "Gist." && $0.screen == "- a" })
     let opts = staged("Merge it?\nOptions: merge | hold\n[screen]\n- CI green").parts, after = staged("Merge it?\n[screen]\n- CI green\nOptions: merge | hold").parts

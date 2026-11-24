@@ -397,7 +397,7 @@ func forgeURL(_ s: String) -> URL? {
 /// bold or a colon around it allowed, and outside a code fence, so a reply that mentions or quotes it mid-sentence isn't split.
 func screenMark(_ s: String) -> Range<String.Index>? {
     var from = s.startIndex
-    let mark = #"[*_]*\[screen\][*_]*:?[*_]*"#
+    let mark = #"[*_`]*\[screen\][*_`]*:?[*_`]*"#
     while let r = s.range(of: #"(?m)^[ \t]*"# + mark + #"[ \t]*|[ \t]*"# + mark + #"[ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
         if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
         from = r.upperBound

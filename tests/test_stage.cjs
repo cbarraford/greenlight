@@ -124,6 +124,11 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.textContent(".doc p.quote"), "held by its goaluntil Friday");
   assert.equal(await p.locator(".doc hr").count(), 1);
   assert.equal(await p.textContent(".doc p:last-child"), "see my_var_name");
+  await p.evaluate(() => stage.text({ md: "**!12 — *blocked* on review**\n\nTouches *.py and *.js files" }));  // em in bold; globs aren't em
+  assert.equal(await p.textContent(".doc p b"), "!12 — blocked on review");
+  assert.equal(await p.textContent(".doc p b em"), "blocked");
+  assert.equal(await p.textContent(".doc p:last-child"), "Touches *.py and *.js files");
+  assert.equal(await p.locator(".doc p:last-child em").count(), 0);
   await p.evaluate(() => stage.text({ md: "just text" }));
   assert.equal(await p.locator(".doc .lead").count(), 0);
   assert.equal(await p.textContent(".doc p"), "just text");
