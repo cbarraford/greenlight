@@ -499,16 +499,13 @@ Each concept gets a greyscale sketch at 32px. Pick three, render them in Icon Co
 ### 9.1 The set
 - **One custom SVG set replaces all three sets** (dashboard `ICONS`, terminal `I`/`IC`/`G`/`MI`, and SF Symbols in custom views).
 - **Native views use the same SVGs** as template images, so native and web match exactly. SF Symbols stay only inside system controls (NSMenu, NSAlert, open panels) and as a fallback while the set grows.
-- **Source:** `brand/icons/ui/<name>.svg`. The generator emits a JS module (`app/icons.js`, inlined into each page by the build) and a Swift asset folder.
+- **Source:** `brand/icons/ui/<name>.svg`, plus the agent marks in `brand/icons/marks/`. `scripts/icons.py generate` inlines them into dashboard.html and terminal.html as a `<script id="ds-icons">` block (`dsIcon`, `dsIconHTML`; the pages' CSP allows no external scripts), and into `app/Sources/Icons.swift` (`Image(ds:size:medium:)`, template NSImages from the same SVG). `icons.py check` (in `make lint`) validates every file and that every icon is used and every name used exists.
 
 ### 9.2 Drawing spec
-- **Two drawn sizes, each hand-fitted:** 16 (the default: rows, tabs, chips, buttons) and 20 (toolbar, empty states). Don't draw a 24; a 24 is a 20 drawing on a 24 canvas.
+- **One drawing, any size:** every icon is drawn once on the 16 grid. Both renderers keep the on-screen stroke at 1.5px at 16px and above (1.75px for Medium) by scaling the stroke width against the size, and let it thin with the icon below 16. A hand-fitted 20 drawing is added only where the scaled 16 looks wrong at toolbar size (none needed so far).
 - **16 grid:**
   - 1px padding, giving a 14px live area.
   - Circles have a 13px diameter, squares are 12×12, wide rectangles 14×10.
-- **20 grid:**
-  - 1.5px padding, giving a 17px live area.
-  - Circles have a 16px diameter, squares are 15×15.
 - **Stroke:**
   - 1.5px on both sizes, matched to SF Symbols Regular next to 12–13pt text.
   - Next to `strong` or 600-weight text, use the Medium weight at 1.75px. These are the only two weights.
@@ -875,7 +872,7 @@ Every ban comes with the move to make instead. The critique agent (§13) checks 
 | Buttons | More than one primary per view; ghost, gradient or shadowed buttons; one-off variants | The five button variants (§10.2), one primary |
 | Buttons | Vague labels ("OK", "Submit", "Go") | A verb plus an object, with `…` when another step follows |
 | Buttons | `cursor: pointer` on ordinary controls | The default cursor; pointer only on links |
-| Icons | Mixed stroke widths or grids; a hand-drawn one-off glyph | The shared set: 16/20 grid, 1.5 or 1.75 stroke, round joins |
+| Icons | Mixed stroke widths or grids; a hand-drawn one-off glyph | The shared set: 16 grid, 1.5 or 1.75 stroke, round joins |
 | Icons | Coloured icon background tiles; duotone; emoji as icons | `currentColor` on the bare glyph; filled only when selected |
 | Icons | A redrawn or stand-in brand mark (the Codex hexagon) | The official mark, or a neutral monogram |
 | App icon | Baked glow, shadow or specular; a custom outline; words; UI screenshots | Flat layers in Icon Composer, the system squircle, one idea |
