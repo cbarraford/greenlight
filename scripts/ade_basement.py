@@ -33,11 +33,12 @@ def tmux(*args):
     return p.stdout
 
 
-def panes():
-    """Every pane: handle (%id), session, folder, title, last activity (s)."""
-    f = SEP.join(("#{pane_id}", "#{session_name}", "#{pane_current_path}", "#{pane_title}", "#{window_activity}"))
-    return [dict(zip(("handle", "session", "cwd", "title", "at"), l.split(SEP))) for l in tmux("list-panes", "-a", "-F", f).splitlines()
-            if l.count(SEP) == 4]
+def panes(cmd=False):
+    """Every pane: handle (%id), session, folder, title, last activity (s); cmd: also what runs in it (#{pane_current_command})."""
+    keys = ("handle", "session", "cwd", "title", "at", *(("cmd",) if cmd else ()))
+    f = SEP.join(("#{pane_id}", "#{session_name}", "#{pane_current_path}", "#{pane_title}", "#{window_activity}",
+                  *(("#{pane_current_command}",) if cmd else ())))
+    return [dict(zip(keys, l.split(SEP))) for l in tmux("list-panes", "-a", "-F", f).splitlines() if l.count(SEP) == len(keys) - 1]
 
 
 SPIN = re.compile(r"^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)")  # Claude's "✶ Skedaddling… (3s · …)" line: inside tmux it doesn't animate its title

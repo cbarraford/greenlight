@@ -1295,24 +1295,25 @@ const DIR_OK = d => /^\/[\w./@+-]{1,300}$/.test(d) && !d.includes("..");  // as 
 // what this window lists: in-view trees, plus each in-view project's folders that aren't a tree already
 const visTrees = () => [...trees.filter(inView), ...allP.filter(p => !activeOnly() || activeOnly().includes(p.id)).flatMap(p => p.dirs)
   .filter((d, i, a) => a.indexOf(d) === i && !wsInfo(d)).map(d => ({project: "", name: d.split("/").pop() || d, path: d, dir: true}))];
-// a harness continuing its last session in the folder it starts in (harness.py's names; the app passes no others). ponytail: the
-// PATH's binary, not config.json's harnesses.<name>.bin
+// a harness continuing its last session in the folder it starts in (harness.py's names; the app passes no others); r.bin, config.json's
+// harnesses.<name>.bin, replaces the name
 const RESUME = {claude: "claude --continue", codex: "codex resume --last", opencode: "opencode --continue", gemini: "gemini --resume latest", pi: "pi --continue", agy: "agy --continue"};
-const SESSION_OK = s => typeof s === "string" && /^[\w.-]{1,64}$/.test(s);  // App.swift resumeOf
-const isAgent = p => isClaude(p) || (p.title || "")[0] === "⌬";
+const SESSION_OK = s => typeof s === "string" && /^mc-[\w-]{1,64}$/.test(s);  // App.swift resumeOf, and its open
+const BIN_OK = b => typeof b === "string" && DIR_OK(b);
+const RUNS = {claude: isClaude, codex: p => (p.title || "")[0] === "⌬"};  // the agents a pane's title gives away
 const latestTab = f => tabs.filter(f).sort((a, b) => b.used - a.used)[0];
 // A workspace page's Basement button (issue 157), r = its puck's resume (dash.py add_resume): a tab on its last agent's session,
-// else that session attached (still alive in tmux), else a tab of that worktree running an agent, else the harness continuing its
-// last session there. false: nothing to resume, so the plain Basement button.
+// else that session attached (its agent still runs there), else a tab of that worktree running that harness, else the harness
+// continuing its last session there. false: nothing to resume, so the plain Basement button.
 function resumeWs(ws, r){
   if (!r || typeof r !== "object" || !ws.startsWith("/")) return false;
   const s = SESSION_OK(r.session) ? r.session : "", t = s && latestTab(t => paneOf(t).some(p => p.session === s));
   if (t) return show(t), true;
   if (s) return newTab(ws, undefined, false, s), true;
-  const ag = latestTab(t => t.ws === ws && paneOf(t).some(isAgent));
-  if (ag) return show(ag), true;
   if (!Object.hasOwn(RESUME, r.harness)) return false;
-  return newTab(ws, RESUME[r.harness]), true;
+  const ag = Object.hasOwn(RUNS, r.harness) && latestTab(t => t.ws === ws && paneOf(t).some(RUNS[r.harness]));
+  if (ag) return show(ag), true;
+  return newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]), true;
 }
 function openWs(ws, r){
   if (resumeWs(ws, r)) return;

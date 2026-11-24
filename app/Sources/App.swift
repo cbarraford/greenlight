@@ -1700,12 +1700,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
     func toConsole(_ w: String) { toWorkspace(w) }
     var wantWs: String?, wantResume: [String: String] = [:]  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
-    /// A puck's `resume` (dash.py add_resume) as the page may get it: a harness greenlight knows and a tmux session's name, nothing else.
+    /// A puck's `resume` (dash.py add_resume) as the page may get it: a harness greenlight knows, a tmux session's name and a plain absolute binary path, nothing else.
     func resumeOf(_ o: Any?) -> [String: String] {
         let d = o as? [String: Any] ?? [:]
         var out: [String: String] = [:]
         if let h = d["harness"] as? String, ["claude", "codex", "opencode", "gemini", "pi", "agy"].contains(h) { out["harness"] = h }
-        if let s = d["session"] as? String, s.range(of: #"^[\w.-]{1,64}$"#, options: .regularExpression) != nil { out["session"] = s }
+        if let s = d["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil { out["session"] = s }  // as open's
+        if let b = d["bin"] as? String, b.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !b.contains("..") { out["bin"] = b }
         return out
     }
     /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree. resume (a workspace page's button, issue 157):

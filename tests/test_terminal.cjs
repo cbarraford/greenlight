@@ -1160,6 +1160,16 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(() => term.ws("/w/fix-login", {}));  // never ran an agent: as before, a plain shell
   const pl = (await posts(page, "open")).filter(o => o.ws === "/w/fix-login");
   assert.equal(pl.length, 1); assert.deepEqual(await typed(pl[0].id), []);
+  // /w/review has a newer plain tab than its Claude one: nothing recorded keeps the old button (its latest tab)
+  await page.evaluate(() => { newTab("/w/review"); show(tabs[0]) });
+  const plain = await page.evaluate(() => latestTab(t => t.ws === "/w/review").focus.session);
+  await page.evaluate(() => term.ws("/w/review", {}));
+  assert.equal(await page.evaluate(() => cur.focus.session), plain, "the latest tab, not the agent's");
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // a Claude tab isn't codex: continue codex
+  const cx = (await opens()).pop(); assert.deepEqual(await typed(cx.id), ["/opt/cx/codex resume --last\r"]);
+  await page.evaluate(() => term.ws("/w/review", {harness: "pi", bin: "/x/../pi; rm"}));  // a bad bin: the PATH's
+  assert.deepEqual(await typed((await opens()).pop().id), ["pi --continue\r"]);
 });
 
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {

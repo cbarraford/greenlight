@@ -754,19 +754,32 @@ def trees():
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
 
 
+BIN_RE = re.compile(r"^/[\w./@+-]{1,300}$")  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
+
+
+def harness_bin(h):
+    """config.json's harnesses.<h>.bin when it's a plain absolute path (the page types it), else None: the PATH's."""
+    b = ((greenlight.CONFIG.get("harnesses") or {}).get(h) or {}).get("bin")
+    return b if isinstance(b, str) and BIN_RE.match(b) and ".." not in b else None
+
+
 def add_resume(pucks, agents):
-    """Each puck's `resume`, what its page's Basement button opens (last_agent.py): the last agent's own tmux session while it's
-    alive, else its harness to continue there. Records what's running now first: the ADE's agents and the app's Claude panes."""
+    """Each puck's `resume`, what its page's Basement button opens (last_agent.py): the last agent's own tmux session while it
+    still runs there, else its harness to continue there. Records what's running now first: the ADE's agents and the app's
+    Claude panes."""
     try:
         ab = importlib.import_module("ade_basement")
-        tm, is_agent = ab.panes(), lambda t: ab.state(t) is not None
+        tm, is_agent = ab.panes(cmd=True), lambda t: ab.state(t) is not None
     except Exception:  # no tmux, or no server yet: nothing to attach to
         tm, is_agent = [], lambda t: False
+    alive = last_agent.live(tm)
     with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
-        last_agent.observe(agents, tm, is_agent)
-    alive = {p["session"] for p in tm}
+        last_agent.observe(agents, tm, is_agent, alive)
+    recs = last_agent.load()
     for p in pucks:
-        p["resume"] = last_agent.resume(p["path"], alive, busy=(p.get("agent") or {}).get("state") == "working")
+        rec = recs.get(p["path"])
+        p["resume"] = last_agent.resume(rec, alive, busy=(p.get("agent") or {}).get("state") == "working",
+                                        created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 
 def basement_panes():
