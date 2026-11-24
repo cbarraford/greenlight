@@ -81,20 +81,24 @@ def test_runs_needs_the_harness_command_in_that_session():
     assert not last_agent.runs(rec, [{"session": "mc-a", "cmd": "vim"}])  # something the user ran since
     assert not last_agent.runs(rec, [{"session": "mc-b", "cmd": "codex"}])
     assert not last_agent.runs({"harness": "claude", "used": 1}, [{"session": "mc-a", "cmd": "claude"}])
-    assert not last_agent.runs({"harness": "claude", "session": "mc-a", "used": 1}, [{"session": "mc-a", "cmd": "node"}])
+    claude = {"harness": "claude", "session": "mc-a", "used": 1}
+    assert last_agent.runs(claude, [{"session": "mc-a", "cmd": "2.1.308"}])  # macOS: the native Claude is its version file
+    assert last_agent.runs(claude, [{"session": "mc-a", "cmd": "node"}])  # an npm install
+    assert not last_agent.runs(claude, [{"session": "mc-a", "cmd": "1.2"}, {"session": "mc-a", "cmd": "zsh"}])
 
 
 def test_observe_goes_by_last_use(home):
     agents = [("/w/a", {"agentType": "codex", "updatedAt": NOW}), ("/w/b", {"agentType": "codex", "updatedAt": 1000}),
-              ("/w/c", {}), ("/w/ab", None), ("/w/d", {"agentType": "pi", "state": "working"})]  # d: an ADE with no times (herdr)
+              ("/w/c", {}), ("/w/ab", None), ("/w/d", {"agentType": "pi", "state": "working"}), ("/w/e", {})]  # d: an ADE with no times (herdr)
     panes = [{"session": "mc-b", "cwd": "/w/b/sub", "title": "✳ Claude", "at": "5", "cmd": "claude"},  # newer than b's codex
              {"session": "mc-b0", "cwd": "/w/b", "title": "✳ Older", "at": "4", "cmd": "claude"},
-             {"session": "mc-a", "cwd": "/w/a", "title": "✳ Claude", "at": "5", "cmd": "claude"},  # older than a's codex
+             {"session": "mc-a", "cwd": "/w/a", "title": "✳ Claude", "at": "5", "cmd": "2.1.308"},  # older than a's codex
+             {"session": "mc-e", "cwd": "/w/e", "title": "✳ Mac", "at": "5", "cmd": "2.1.308"},  # a Mac's native Claude
              {"session": "mc-q", "cwd": "/w/c", "title": "✳ Quit", "at": "9", "cmd": "zsh"},  # Claude quit: its title stays
              {"session": "mc-out", "cwd": "/elsewhere", "title": "✳ Claude", "at": "9", "cmd": "claude"}]  # in no workspace
     last_agent.observe(agents, panes, lambda t: t.startswith("✳"))
     assert strip(last_agent.load()) == {"/w/a": {"harness": "codex"}, "/w/b": {"harness": "claude", "session": "mc-b"},
-                                        "/w/d": {"harness": "pi"}}
+                                        "/w/d": {"harness": "pi"}, "/w/e": {"harness": "claude", "session": "mc-e"}}
     assert last_agent.load()["/w/d"]["used"] >= NOW
 
 
@@ -146,18 +150,20 @@ def _tmux_rows(*rows):
 
 def test_add_resume_on_pucks(home, monkeypatch):
     last_agent.note({"/w/old": ("opencode", "mc-gone", NOW), "/w/exited": ("claude", "mc-sh2", NOW)})
-    monkeypatch.setitem(dash.greenlight.CONFIG, "harnesses", {"opencode": {"bin": "/opt/oc/opencode"}, "claude": {"bin": "x; rm"}})
+    monkeypatch.setitem(dash.greenlight.CONFIG, "harnesses", {"opencode": {"bin": "/opt/oc/opencode"}, "claude": {"bin": "x; rm"}, "pi": "/opt/pi"})
     pucks = [{"path": p, "agent": {"state": st}} for p, st in
-             (("/w/live", "done"), ("/w/old", "none"), ("/w/busy", "working"), ("/w/new", "none"), ("/w/exited", "none"))]
+             (("/w/live", "done"), ("/w/old", "none"), ("/w/busy", "working"), ("/w/new", "none"), ("/w/exited", "none"),
+              ("/w/ask", "waiting"), ("/w/pi", "none"))]
     agents = [("/w/live", {"agentType": "claude"}), ("/w/old", {}), ("/w/busy", {"agentType": "codex", "state": "working"}),
-              ("/w/new", {}), ("/w/exited", {})]
+              ("/w/new", {}), ("/w/exited", {}), ("/w/ask", {"agentType": "claude", "state": "waiting"}), ("/w/pi", {"agentType": "pi", "updatedAt": NOW})]
     tm = _tmux_rows(["%1", "mc-live", "/w/live", "✳ Done", "1", "claude"], ["%2", "mc-sh", "/w/new", "zsh", "1", "zsh"],
                     ["%3", "mc-sh2", "/w/exited", "✳ Done", "1", "-zsh"])  # Claude quit there: its title stays, its shell runs
     with mock.patch.object(ade_basement.subprocess, "run", return_value=tm):
         dash.add_resume(pucks, agents)
     by = {p["path"]: p["resume"] for p in pucks}
     assert by == {"/w/live": {"harness": "claude", "session": "mc-live"}, "/w/old": {"harness": "opencode", "bin": "/opt/oc/opencode"},
-                  "/w/busy": {}, "/w/new": {}, "/w/exited": {"harness": "claude"}}
+                  "/w/busy": {}, "/w/new": {}, "/w/exited": {"harness": "claude"},
+                  "/w/ask": {}, "/w/pi": {"harness": "pi"}}  # waiting on you in another ADE: no second copy; a bad config entry: no bin
 
 
 def test_add_resume_on_a_recreated_workspace(home, tmp_path):

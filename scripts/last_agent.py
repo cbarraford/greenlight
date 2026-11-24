@@ -28,8 +28,10 @@ HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 FILE = HOME / "last_agent.json"
 HARNESSES = ("claude", "codex", "opencode", "gemini", "pi", "agy")  # harness.H's names (tests/test_last_agent.py checks)
 ALIASES = {"antigravity": "agy", "claude-code": "claude", "claude code": "claude", "gemini-cli": "gemini"}  # the ADEs' ids
-# what tmux names a pane running each (its process group's argv[0]): the npm-installed ones run under node
-CMDS = {"claude": {"claude"}, "codex": {"codex", "node"}, "opencode": {"opencode", "node", "bun"}, "gemini": {"gemini", "node"},
+# what tmux names a pane running each (Linux: its process group's argv[0]; macOS: the file it runs, so the native Claude is its
+# version, e.g. 2.1.308, and cmd() calls that claude): the npm-installed ones run under node
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+CMDS = {"claude": {"claude", "node"}, "codex": {"codex", "node"}, "opencode": {"opencode", "node", "bun"}, "gemini": {"gemini", "node"},
         "pi": {"pi", "node"}, "agy": {"agy", "antigravity"}}
 SESSION_RE = re.compile(r"^mc-[\w-]{1,64}$")  # the app's own sessions (sid(), launch); App.swift's open and resumeOf check the same
 STALE_MS = 86400_000  # a record whose worktree has been gone this long is dropped
@@ -106,8 +108,9 @@ def owner(cwd, paths):
 
 
 def cmd(pane):
-    """What a pane runs, as CMDS names it (a login shell's leading - and any folder dropped)."""
-    return (pane.get("cmd") or "").lstrip("-").rsplit("/", 1)[-1]
+    """What a pane runs, as CMDS names it (a login shell's leading - and any folder dropped; a bare version is Claude's)."""
+    c = (pane.get("cmd") or "").lstrip("-").rsplit("/", 1)[-1]
+    return "claude" if VERSION_RE.match(c) else c
 
 
 def runs(rec, panes):
@@ -145,7 +148,7 @@ def observe(agents, panes, is_agent):
 def resume(rec, panes, busy=False, created=None, binary=None):
     """What the Basement button does for a workspace, from its record: {"harness", "session"} attaches to the session (its agent
     still runs there), {"harness"} starts the harness's continue command there ("bin": config.json's harnesses.<name>.bin),
-    {} is a plain shell. busy: its agent is working somewhere we can't attach to, and a second copy would fight it.
+    {} is a plain shell. busy: its agent is working, or waiting on you, somewhere we can't attach to: a second copy would fight it.
     created (ms): the worktree's birth; a record used before it is a deleted workspace's at the same path. ponytail: a used
     of 0 (an ADE that gives no times, herdr) can't be told apart, so it stands."""
     if not rec or (created and rec["used"] and rec["used"] < created):

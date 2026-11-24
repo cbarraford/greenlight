@@ -759,7 +759,9 @@ BIN_RE = re.compile(r"^/[\w./@+-]{1,300}$")  # a harness binary the page may typ
 
 def harness_bin(h):
     """config.json's harnesses.<h>.bin when it's a plain absolute path (the page types it), else None: the PATH's."""
-    b = ((greenlight.CONFIG.get("harnesses") or {}).get(h) or {}).get("bin")
+    hs = greenlight.CONFIG.get("harnesses")
+    c = hs.get(h) if isinstance(hs, dict) else None
+    b = c.get("bin") if isinstance(c, dict) else None  # a malformed config.json must not take the snapshot down
     return b if isinstance(b, str) and BIN_RE.match(b) and ".." not in b else None
 
 
@@ -777,7 +779,7 @@ def add_resume(pucks, agents):
     recs = last_agent.load()
     for p in pucks:
         rec = recs.get(p["path"])
-        p["resume"] = last_agent.resume(rec, tm, busy=(p.get("agent") or {}).get("state") == "working",
+        p["resume"] = last_agent.resume(rec, tm, busy=(p.get("agent") or {}).get("state") in ("working", "waiting"),
                                         created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 
