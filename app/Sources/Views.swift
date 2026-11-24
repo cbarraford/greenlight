@@ -798,9 +798,9 @@ struct SettingsView: View {
                       ("Appearance", "contrast", "theme dark light system accent color colour font size text chat look phosphor dashboard source custom"),
                       ("Chat & voice", "chat", "model effort dictation voice whisper engine shortcut"),
                       ("Keyboard", "keyboard", "vim shortcuts keys"),
-                      ("Terminal", "terminal", "tab names basement orbs floors sidebar slide ride animation up button"),
+                      ("Terminal", "terminal", "tab names model effort basement orbs floors sidebar slide ride animation up button"),
                       ("Hosts", "server", "ssh host state code relaunch connection")]
-    static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions system one jev haiku typesafe decisions"),
+    static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions model effort system one jev haiku typesafe decisions"),
                      ("Autonomy", "wand", "confidence auto answer preselect likely calibration graduate ping gate check-in watch dismiss undo"),
                      ("Projects", "folder", "folders default folder new terminals open"),
                      ("Repositories", "branch", "repo lifecycle stages rules prompts auto-run project solo merge host mac server auto"),
@@ -1044,29 +1044,6 @@ struct SettingsView: View {
     /// One width for every menu picker, so values line up down the form.
     var menuWidth: CGFloat { 216 }
 
-    static let effortNotes = ["low": "Fastest replies, least reasoning.", "medium": "Balances reasoning against response time.",
-                              "high": "More reasoning; replies take longer.", "xhigh": "Extended reasoning for hard problems; noticeably slower.",
-                              "max": "The most reasoning; the slowest replies."]
-
-    /// Native segments; a menu when the five don't fit.
-    func effortPicker(_ label: String, _ v: Binding<String>, off: Bool = false) -> some View {
-        let p = Picker(label, selection: v) { ForEach(efforts, id: \.self) { Text(effortName($0)).tag($0) } }.labelsHidden()
-        return ViewThatFits(in: .horizontal) { p.pickerStyle(.segmented).fixedSize(); p.frame(width: menuWidth) }.disabled(off).opacity(off ? 0.45 : 1)
-    }
-    func modelOptions(for current: String, where keep: (String) -> Bool) -> [(String, String)] {
-        var list = c.availableModels.filter { keep($0.1) }
-        if !list.contains(where: { $0.1 == current }) {
-            let label = models.first { $0.1 == current }?.0 ?? current
-            list.append((label, current))
-        }
-        return list
-    }
-    /// Any Claude, Codex, or agy model for background agents (pages, suggestions, tab naming).
-    func writerModelPicker(_ label: String, _ v: Binding<String>) -> some View {
-        let opts = modelOptions(for: v.wrappedValue) { ["claude", "codex", "agy"].contains(harnessOf($0)) }
-        return Picker(label, selection: v) { ForEach(opts, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing).onAppear(perform: c.loadModels)
-    }
-
     // MARK: This Mac
 
     @ViewBuilder var general: some View {
@@ -1202,11 +1179,7 @@ struct SettingsView: View {
     @ViewBuilder var chat: some View {
         heading("Chat & voice", "The chat pane's model, and dictating into it from any app.")
         box("Model") {
-            let chatOpts = modelOptions(for: c.model) { _ in true }
-            row("Chat model", "Changes apply from your next message.") {
-                Picker("Model", selection: $c.model) { ForEach(chatOpts, id: \.1) { Text($0.0).tag($0.1) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing).onAppear(perform: c.loadModels)
-            }
-            row("Effort", c.supportsEffort ? Self.effortNotes[c.effort] : harnessOf(c.model) == "agy" ? "Choose the effort in Chat model." : "\(c.modelName) doesn't use an effort level.") { effortPicker("Effort", $c.effort, off: !c.supportsEffort) }
+            ruled(ModelSelector(c: c, title: "Chat model", hint: "Changes apply from your next message.", model: $c.model, effort: $c.effort))
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
             toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
         }
@@ -1359,7 +1332,9 @@ struct SettingsView: View {
         }
         box("Tab names") {
             toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
-            dependent(off: !c.termAutoName) { row("Naming model") { writerModelPicker("Naming model", $c.termNameModel) } }
+            dependent(off: !c.termAutoName) {
+                ruled(ModelSelector(c: c, title: "Naming model", model: $c.termNameModel, effort: $c.termNameEffort, allowedHarnesses: writerHarnesses))
+            }
         }
     }
 
@@ -1435,9 +1410,8 @@ struct SettingsView: View {
             }
         }
         box("Background agents") {
-            row("Workspace pages", "Builds each workspace's page on the dashboard.") { writerModelPicker("Workspace pages model", $c.designModel) }
+            ruled(ModelSelector(c: c, title: "Workspace pages", hint: "Builds each workspace's page on the dashboard.", model: $c.designModel, effort: $c.designEffort, allowedHarnesses: writerHarnesses))
             dependent(off: false) {
-                row("Effort") { effortPicker("Workspace pages effort", $c.designEffort, off: !modelSupportsEffort(c.designModel)) }
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
                     if c.designParallel > 0 {
                         Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
@@ -1447,8 +1421,7 @@ struct SettingsView: View {
                     }.labelsHidden().pickerStyle(.segmented).fixedSize()
                 }
             }
-            row("Next-step suggestions", "Suggests the next action on each hex when its state moves.") { writerModelPicker("Suggestions model", $c.nextModel) }
-            dependent(off: false) { row("Effort") { effortPicker("Suggestions effort", $c.nextEffort, off: !modelSupportsEffort(c.nextModel)) } }
+            ruled(ModelSelector(c: c, title: "Next-step suggestions", hint: "Suggests the next action on each hex when its state moves.", model: $c.nextModel, effort: $c.nextEffort, allowedHarnesses: writerHarnesses))
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
             }

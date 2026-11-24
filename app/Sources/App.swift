@@ -1942,16 +1942,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !uitest { (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.focus()") }
         syncOrbs()
     }
-    /// A 2–4 word tab name from a tab's recent output: claude -p on this Mac (Settings → Terminal's model, low effort); "" when it fails.
-    func aiTabName(_ text: String, model: String, done: @escaping (String) -> Void) {
+    /// A 2–4 word tab name from a tab's recent output: headless LLM call on this Mac (Settings → Terminal's model & effort); "" when it fails.
+    func aiTabName(_ text: String, model: String, effort: String = "low", done: @escaping (String) -> Void) {
         claudeP("Name this terminal tab in 2 to 4 words, from what is going on in it (the project, task or tool). "
-            + "Reply with only the name: no quotes, no punctuation at the end.\n\n" + String(text.suffix(6000)), model: model) { out in
+            + "Reply with only the name: no quotes, no punctuation at the end.\n\n" + String(text.suffix(6000)), model: model, effort: effort) { out in
             done(String(String(out.split(separator: "\n").first ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*. ").union(.whitespaces)).prefix(40)))
         }
     }
-    /// Headless LLM call (Claude, Codex, or agy) at low effort: its stdout reply, "" when it fails.
-    func claudeP(_ prompt: String, model: String, done: @escaping (String) -> Void) {
-        let inv = llmInvocation(prompt, model: model, effort: "low")
+    /// Headless LLM call (Claude, Codex, or agy): its stdout reply, "" when it fails.
+    func claudeP(_ prompt: String, model: String, effort: String = "low", done: @escaping (String) -> Void) {
+        let inv = llmInvocation(prompt, model: model, effort: effort)
         let finish: (String) -> String = { inv.harness == "agy" ? parseAgyStreamResult($0) : $0 }
         if !devSsh(host).isEmpty {  // a dev copy asks the host's CLI: one here would connect in the copy's name
             var out = ""
@@ -2214,7 +2214,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let tab = b["tab"] as? Int ?? 0, auto = b["auto"] as? Bool ?? false
             let reply: (String) -> Void = { [weak web] n in web?.evaluateJavaScript("term.named(\(tab), \(js(n)))") }
             if auto && !greenlight.termAutoName { return reply("") }  // still answer: the page counts auto runs in flight
-            aiTabName(b["text"] as? String ?? "", model: greenlight.termNameModel, done: reply)
+            aiTabName(b["text"] as? String ?? "", model: greenlight.termNameModel, effort: greenlight.termNameEffort, done: reply)
         case "badge":  // agents waiting on you, per window: the Dock icon shows the sum
             termBadges[wid] = max(0, b["n"] as? Int ?? 0)
             let n = termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil

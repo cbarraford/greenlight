@@ -369,6 +369,163 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           App.appearances.map(\.0) == ["auto", "light", "dark"] && Floors.levels.map(\.1) == ["Center", "Basement", "Pipe"])
     ud.set("gemini-4-neon", forKey: "testSavedModel")
     check("config: savedModel migrates legacy gemini-4-neon id", savedModel("testSavedModel", fallback: "codex") == "gemini-4-neon-medium")
+    do {
+        // ModelManufacturer, baked-effort splitting, modelIcon, nearestEffort, and buildModelCatalog
+        check("config: ModelManufacturer.of classifies Anthropic, OpenAI, Google, and Other models",
+              ModelManufacturer.of("claude-opus-5-5") == .anthropic
+              && ModelManufacturer.of("claude") == .anthropic
+              && ModelManufacturer.of("agy:claude-opus-5-5-high") == .anthropic
+              && ModelManufacturer.of("gpt-6.2-sol") == .openai
+              && ModelManufacturer.of("o4-mini") == .openai
+              && ModelManufacturer.of("codex") == .openai
+              && ModelManufacturer.of("codex:astra-9") == .openai
+              && ModelManufacturer.of("gpt-oss-120b-medium") == .openai
+              && ModelManufacturer.of("gemini-4-neon-high") == .google
+              && ModelManufacturer.of("agy") == .google
+              && ModelManufacturer.of("gemini") == .google
+              && ModelManufacturer.of("opencode") == .other
+              && ModelManufacturer.of("pi") == .other
+              && ModelManufacturer.of("mystery-7") == .other)
+
+        let sp1 = splitBakedEffort(id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)")
+        let sp2 = splitBakedEffort(id: "gemini-4-neon-xhigh", name: "Gemini 4 Neon · Extra high")
+        let sp3 = splitBakedEffort(id: "agy:claude-opus-5-5-low", name: "Claude Opus 5.5 (Low) · agy")
+        let sp4 = splitBakedEffort(id: "claude-opus-5-5", name: "Opus 5.5")
+        let sp5 = splitBakedEffort(id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)")
+        check("config: splitBakedEffort collapses agy baked-effort slugs and strips effort labels",
+              sp1.baseID == "gemini-4-neon" && sp1.baseName == "Gemini 4 Neon" && sp1.bakedEffort == "high"
+              && sp2.baseID == "gemini-4-neon" && sp2.baseName == "Gemini 4 Neon" && sp2.bakedEffort == "xhigh"
+              && sp3.baseID == "agy:claude-opus-5-5" && sp3.baseName == "Claude Opus 5.5 · agy" && sp3.bakedEffort == "low"
+              && sp4.baseID == "claude-opus-5-5" && sp4.baseName == "Opus 5.5" && sp4.bakedEffort == nil
+              && sp5.baseID == "gemini-pro-orchestrator-neon" && sp5.bakedEffort == nil)
+
+        let iconSamples: [(String, String, String)] = [
+            ("claude-opus-5-5", "claude", "sparkles"),
+            ("claude-sonnet-5-5", "claude", "spark"),
+            ("claude-haiku-5-5", "claude", "bolt"),
+            ("claude-fable-5-2", "claude", "wand"),
+            ("gpt-6.2-sol", "codex", "sparkles"),
+            ("gpt-6-luna", "codex", "bolt"),
+            ("o4-mini", "codex", "bolt"),
+            ("gpt-daybreak-blue-latest", "codex", "wand"),
+            ("gpt-oss-120b", "agy", "branch"),
+            ("gemini-4-neon", "agy", "sparkles"),
+            ("gemini-4-carbon", "agy", "spark"),
+            ("gemini-3.8-flash", "agy", "bolt"),
+            ("gemini-pro-orchestrator-neon", "agy", "grid"),
+            ("codex", "codex", "terminal"),
+            ("agy", "agy", "terminal"),
+            ("opencode", "opencode", "terminal"),
+            ("claude-unknown-1", "claude", "claude"),
+            ("codex:custom-1", "codex", "openai"),
+            ("agy:custom-1", "agy", "agy"),
+        ]
+        check("config: modelIcon maps every model tier and manufacturer to a valid DS icon",
+              iconSamples.allSatisfy { modelIcon(for: $0.0, harness: $0.1) == $0.2 && DSIcons.all[$0.2] != nil }
+              && ModelManufacturer.allCases.allSatisfy { DSIcons.all[$0.icon] != nil && !$0.name.isEmpty })
+
+        check("config: nearestEffort matches exact, clamps down, falls back to lowest, and handles unknown levels",
+              nearestEffort("high", in: ["low", "medium", "high"]) == "high"
+              && nearestEffort("max", in: ["low", "medium", "high", "xhigh"]) == "xhigh"
+              && nearestEffort("xhigh", in: ["low", "medium", "high"]) == "high"
+              && nearestEffort("low", in: ["medium", "high"]) == "medium"
+              && nearestEffort("unknown", in: ["low", "medium", "high"]) == "medium"
+              && nearestEffort("high", in: ["medium"]) == "medium")
+
+        let sampleRaw: [(String, String)] = [
+            ("Opus 5.5", "claude-opus-5-5"),
+            ("Haiku 5.5", "claude-haiku-5-5"),
+            ("Claude Opus 5.5 (Low) · agy", "agy:claude-opus-5-5-low"),
+            ("Claude Opus 5.5 (High) · agy", "agy:claude-opus-5-5-high"),
+            ("GPT-6.2-Sol", "gpt-6.2-sol"),
+            ("Codex default", "codex"),
+            ("GPT-OSS 120B (Medium) · agy", "gpt-oss-120b-medium"),
+            ("Gemini 4 Neon (High)", "gemini-4-neon-high"),
+            ("Gemini 4 Neon (Low)", "gemini-4-neon-low"),
+            ("Gemini 4 Neon (XHigh)", "gemini-4-neon-xhigh"),
+            ("Gemini 4 Neon (Medium)", "gemini-4-neon-medium"),
+            ("Gemini CLI", "gemini"),
+            ("OpenCode", "opencode"),
+        ]
+        let fullCat = buildModelCatalog(from: sampleRaw, current: "gemini-4-neon-high")
+        let writerCat = buildModelCatalog(from: sampleRaw, current: "claude-haiku-5-5") { writerHarnesses.contains(harnessOf($0)) }
+        let anthropic = fullCat.first { $0.manufacturer == .anthropic }
+        let openai = fullCat.first { $0.manufacturer == .openai }
+        let google = fullCat.first { $0.manufacturer == .google }
+        let other = fullCat.first { $0.manufacturer == .other }
+        let neon = google?.choices.first { $0.id == "gemini-4-neon" }
+        let agyOpus = anthropic?.choices.first { $0.id == "agy:claude-opus-5-5" }
+        let oss = openai?.choices.first { $0.id == "gpt-oss-120b" }
+        let gemCli = google?.choices.first { $0.id == "gemini" }
+        let activeNeon = activeModelSelection(in: fullCat, modelId: "gemini-4-neon-high")
+        let customCat = buildModelCatalog(from: sampleRaw, current: "mystery-custom")
+        let neonMax = neon?.resolve(desiredEffort: "max")
+        let neonLow = neon?.resolve(desiredEffort: "low")
+        check("config: buildModelCatalog groups by manufacturer, collapses baked-effort variants, and preserves current selection",
+              fullCat.map(\.manufacturer) == [.anthropic, .openai, .google, .other]
+              && writerCat.map(\.manufacturer) == [.anthropic, .openai, .google]
+              && anthropic?.choices.map(\.name) == ["Opus 5.5", "Opus 5.5 · agy", "Haiku 5.5"]  // most expensive first
+              && agyOpus?.supportedEfforts == ["low", "high"]
+              && neon?.supportedEfforts == ["low", "medium", "high", "xhigh"]
+              && neon?.supportsEffortSlider == true
+              && neonMax?.modelId == "gemini-4-neon-xhigh" && neonMax?.effort == "xhigh"
+              && neonLow?.modelId == "gemini-4-neon-low" && neonLow?.effort == "low"
+              && oss?.supportsEffortSlider == false && oss?.fixedEffort == "medium"
+              && gemCli?.supportedEfforts.isEmpty == true && gemCli?.fixedEffort == nil
+              && other?.choices.map(\.id) == ["opencode"]
+              && activeNeon?.group.manufacturer == .google && activeNeon?.choice.id == "gemini-4-neon"
+              && neon.map { currentModelEffort(for: $0, modelId: "gemini-4-neon-high", storedEffort: "low") } == "high"
+              && customCat.first { $0.manufacturer == .other }?.choices.contains { $0.id == "mystery-custom" } == true)
+
+        // Cost order: Claude by list price, other providers by codename tier, a harness's own default last.
+        let costRaw: [(String, String)] = [
+            ("Haiku 5.5", "claude-haiku-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Opus 5.5", "claude-opus-5-5"),
+            ("Fable 5.2", "claude-fable-5-2"), ("Fable 5.1", "claude-fable-5-1"),
+            ("Codex default", "codex"), ("GPT-6-Luna", "gpt-6-luna"), ("GPT-6.2-Astra", "gpt-6.2-astra"),
+            ("GPT-6.2-Sol", "gpt-6.2-sol"), ("GPT-6.1-Sol", "gpt-6.1-sol"), ("GPT-OSS 120B (Medium) · agy", "gpt-oss-120b-medium"),
+            ("Gemini 3.8 Flash (Medium)", "gemini-3.8-flash-medium"), ("Gemini 4 Argon (Medium)", "gemini-4-argon-medium"),
+            ("Antigravity default", "agy"), ("Gemini 4 Neon (High)", "gemini-4-neon-high"),
+        ]
+        let costCat = buildModelCatalog(from: costRaw, current: "claude-opus-5-5")
+        let ids = { (m: ModelManufacturer) in costCat.first { $0.manufacturer == m }?.choices.map(\.id) ?? [] }
+        check("config: ModelSelector lists each provider's models most expensive first",
+              ids(.anthropic) == ["claude-fable-5-1", "claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+              && ids(.openai) == ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6-luna", "gpt-oss-120b", "codex"]
+              && ids(.google) == ["gemini-4-neon", "gemini-4-argon", "gemini-3.8-flash", "agy"]
+              && modelCostRank("agy:claude-opus-5-5") == modelCostRank("claude-opus-5-5")
+              && modelCostRank("claude-mystery-9") > modelCostRank("claude-haiku-5-5"))
+
+        // Favorites: a model and its effort, toggled by the star, saved to ud, labelled with the effort.
+        let favNeon = neon.map { modelFavorite(for: $0, desiredEffort: "max") }
+        let favCli = gemCli.map { modelFavorite(for: $0, desiredEffort: "high") }
+        let favOpus = ModelFavorite(model: "claude-opus-5-5", effort: "high")
+        let once = togglingFavorite(favOpus, in: [])
+        if let d = try? JSONEncoder().encode([favOpus, favNeon].compactMap { $0 }) { ud.set(d, forKey: "testModelFavorites") }
+        ud.set(Data("not json".utf8), forKey: "testBadFavorites")
+        check("config: favorites remember model and effort, toggle, persist, and label with the effort",
+              favNeon == ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh")
+              && favCli == ModelFavorite(model: "gemini", effort: "")
+              && once == [favOpus] && togglingFavorite(favOpus, in: once).isEmpty
+              && togglingFavorite(ModelFavorite(model: "claude-opus-5-5", effort: "low"), in: once).count == 2
+              && savedModelFavorites("testModelFavorites") == [favOpus, ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh")]
+              && savedModelFavorites("testBadFavorites").isEmpty && savedModelFavorites("testUnsetFavorites").isEmpty
+              && modelFavoriteLabel(favOpus, in: fullCat) == "Opus 5.5 · High"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh"), in: fullCat) == "Gemini 4 Neon · Extra high"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini", effort: ""), in: fullCat) == "Gemini CLI"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh"), in: []) == "Gemini 4 Neon · Extra high")
+
+        let selCore = Core()
+        selCore.modelFavorites = [favOpus]
+        let favPersisted = savedModelFavorites() == [favOpus]
+        selCore.modelFavorites = []
+        check("config: Core.modelFavorites persists to ud", favPersisted && savedModelFavorites().isEmpty)
+        selCore.termNameEffort = "high"
+        let selView = ModelSelector(c: selCore, title: "Test model", hint: "Hint", model: Binding(get: { selCore.model }, set: { selCore.model = $0 }), effort: Binding(get: { selCore.effort }, set: { selCore.effort = $0 }))
+        _ = selView
+        check("config: Core.termNameEffort persists to ud and effortNotes covers every effort level",
+              ud.string(forKey: "termNameEffort") == "high"
+              && efforts.allSatisfy { !(effortNotes[$0] ?? "").isEmpty })
+    }
     let rs = RulesStore()
     rs.got(["stages": [["key": "qa", "req": "qa", "done": "label= "]], "builtins": ["ci": "CI"], "options": ["k": "ok"], "rules": "r", "intro": "i", "source": "default"])
     rs.save()

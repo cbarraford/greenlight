@@ -306,9 +306,10 @@ final class UITestServer {
                 app.setChat(hidden: !app.chatHidden)
                 done(["ok": true, "chatShown": app.chatShown])
             case "openSettings":
+                if let tab = req["tab"] as? String, !tab.isEmpty { app.greenlight.settingsTab = tab }
                 app.greenlight.settingsOpen = true
                 app.presentWindow(app.settingsWindow)
-                done(["ok": true, "settingsOpen": true])
+                done(["ok": true, "settingsOpen": true, "tab": app.greenlight.settingsTab])
             case "closeSettings":
                 app.greenlight.settingsOpen = false
                 app.settingsWindow.orderOut(nil)
