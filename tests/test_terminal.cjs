@@ -1255,13 +1255,14 @@ const drag = (page, type, o) => page.evaluate(([type, o]) => { const dt = new Da
   (o.pane ? panes.get(o.pane).box.querySelector(".t") : document.querySelector(o.sel || "#stage")).dispatchEvent(e); return e.defaultPrevented }, [type, o]);
 const toastText = page => page.evaluate(() => $("toast").hidden ? null : {b: $("toast").querySelector("b").textContent, sub: $("toast").querySelector("small").textContent});
 
-test("⌘V of a screenshot: the app gets it as pasted.png, then its quoted path is typed and the toast says Screenshot (issue 128)", async page => {
+test("⌘V of a screenshot: the app gets it as pasted-<tag>.png, then its quoted path is typed and the toast says Screenshot (issue 128)", async page => {
   const {id, ws} = await page.evaluate(() => ({id: cur.focus.id, ws: cur.focus.tab.ws}));
   assert.equal(await paste(page, {files: [["image.png", "image/png"]]}), true, "the page takes it from the terminal");
   const [f] = await filePosts(page, 1);
-  assert.deepEqual(f, {cmd: "file", id, ws, name: "pasted.png", data: Buffer.from("PNGDATA").toString("base64")}, "WebKit's image.png goes as pasted.png");
+  assert.match(f.name, /^pasted-\w+\.png$/, "WebKit's image.png goes as pasted-<tag>.png");
+  assert.deepEqual({...f, name: ""}, {cmd: "file", id, ws, name: "", data: Buffer.from("PNGDATA").toString("base64")});
   assert.deepEqual(await ins(page, id), [], "nothing typed until the app says where it went");
-  const at = "/tmp/greenlight-501/ab12cd34-pasted.png";
+  const at = `/tmp/greenlight-501/ab12cd34-${f.name}`;
   await page.evaluate(([id, at]) => term.filed(id, at), [id, at]);
   assert.deepEqual(await ins(page, id), [`'${at}' `], "the path, shell-quoted, then a space; not sent");
   assert.deepEqual(await toastText(page), {b: "Screenshot sent to this Mac", sub: at});
@@ -1270,15 +1271,19 @@ test("⌘V of a screenshot: the app gets it as pasted.png, then its quoted path 
   await page.evaluate(([id]) => term.filed(id, "/tmp/greenlight-501/0000-it's.txt"), [id]);
   assert.equal((await ins(page, id)).pop(), "'/tmp/greenlight-501/0000-it'\\''s.txt' ", "a quote in the path can't end the quoting");
   assert.equal((await toastText(page)).b, "File sent to this Mac", "a file that isn't a paste isn't called a screenshot");
+  await page.evaluate(([id, at]) => term.filed(id, at), [id, at]);
+  assert.equal((await toastText(page)).b, "File sent to this Mac", "a paste's tag counts once");
+  await page.evaluate(([id]) => term.filed(id, "/tmp/greenlight-501/0000-pasted-zz.txt"), [id]);
+  assert.equal((await toastText(page)).b, "File sent to this Mac", "a dropped file named like one isn't a screenshot");
   await page.evaluate(([id]) => term.filed(id, ""), [id]);
-  assert.equal((await toastText(page)).b, "Couldn't copy the file over"); assert.equal((await ins(page, id)).length, 2, "and nothing typed");
+  assert.equal((await toastText(page)).b, "Couldn't copy the file over"); assert.equal((await ins(page, id)).length, 4, "and nothing typed");
 });
 
-test("⌘V: a named or JPEG image keeps a sensible name, at most 5 go, over 10 MB is refused (issue 128)", async page => {
-  await paste(page, {files: [["diagram.png", "image/png"], ["", "image/jpeg"], ...Array.from({length: 4}, (_, i) => [`s${i}.png`, "image/png"])]});
-  const fs = await filePosts(page, 5); await page.waitForTimeout(150);
-  assert.deepEqual((await posts(page, "file")).map(f => f.name), ["diagram.png", "pasted.jpeg", "s0.png", "s1.png", "s2.png"], "five at most, in order");
-  assert.equal(fs.length, 5);
+test("⌘V: a named image keeps its name, a nameless one its type's extension, at most 5 go, over 10 MB is refused (issue 128)", async page => {
+  await paste(page, {files: [["diagram.png", "image/png"], ["", "image/jpeg"], ["image.svg", "image/svg+xml"], ["", "image/svg+xml"], ["s0.png", "image/png"], ["s1.png", "image/png"]]});
+  await filePosts(page, 5); await page.waitForTimeout(150);
+  const names = (await posts(page, "file")).map(f => f.name.replace(/^pasted-\w+/, "pasted-T"));
+  assert.deepEqual(names, ["diagram.png", "pasted-T.jpg", "pasted-T.svg", "pasted-T.svg", "s0.png"], "five at most, in order");
   await paste(page, {files: [["image.png", "image/png", 10e6 + 1]]});
   assert.match((await toastText(page)).b, /over 10 MB/); await page.waitForTimeout(150);
   assert.equal((await posts(page, "file")).length, 5, "the big one never went");
@@ -1298,7 +1303,6 @@ test("⌘V of text: one block, newlines as ↵, a stray end-of-paste stripped; t
 });
 
 test("drop: files over a pane show where they'll land; dropped, each goes for the pane under the pointer (issue 128)", async page => {
-  page = await boot(page.context().browser(), null, "?host=devbox");
   const first = await page.evaluate(() => cur.focus.id); await page.evaluate(() => split(cur.focus));
   const second = await page.evaluate(() => cur.focus.id); assert.notEqual(first, second);
   assert.equal(await drag(page, "dragover", {text: "just text", pane: first}), false, "a text drag is the terminal's own");
@@ -1306,7 +1310,7 @@ test("drop: files over a pane show where they'll land; dropped, each goes for th
   assert.equal(await drag(page, "dragover", {files: ["a.log", "b.txt"], pane: first}), true);
   const shown = await page.evaluate(() => ({on: $("stage").classList.contains("drop"), text: $("drop").textContent, n: $("drop").querySelector(".n")?.textContent}));
   assert.ok(shown.on); assert.match(shown.text, /Drop to send to devbox/); assert.match(shown.text, /\/tmp\/greenlight\//); assert.equal(shown.n, "2 files");
-  await page.waitForTimeout(300); assert.equal(await page.evaluate(() => $("stage").classList.contains("drop")), false, "dragging away clears it");
+  await page.waitForFunction(() => !$("stage").classList.contains("drop"));  // dragging away clears it
   assert.equal(await drag(page, "drop", {files: ["a.log", "b.txt"], pane: first}), true);
   const fs = await filePosts(page, 2);
   assert.deepEqual(fs.map(f => [f.id, f.name, Buffer.from(f.data, "base64").toString()]), [[first, "a.log", "x"], [first, "b.txt", "x"]], "the pane it fell on, not the focused one");
@@ -1317,14 +1321,13 @@ test("drop: files over a pane show where they'll land; dropped, each goes for th
   await filePosts(page, 12); await page.waitForTimeout(150);
   const more = (await posts(page, "file")).slice(2);
   assert.equal(more.length, 10, "ten at most"); assert.ok(more.every(f => f.id === second), "off any pane: the focused one");
-  assert.deepEqual(page._errs, []); await page.close();
-});
+}, "?host=devbox");
 
 test("⌘⇧P: the repo's .greenlight.json commands; a shell one runs in a new tab, an agent one is pasted into its agent, not sent (issue 128)", async page => {
   const cfg = {commands: [{name: "Run tests", run: "make test"}, {name: "Ask for review", run: "review this\nplease\x1b[201~\x07", agent: true},
     {name: 5, run: "x"}, {name: "", run: "y"}, {name: "Empty", run: ""}, null, {name: "No run"}]};
   await page.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.name === "widgets" ? {...w, cfg} : w)});
-  await page.evaluate(() => openWs("/w/fix-login")); await page.waitForTimeout(100);
+  await page.evaluate(() => openWs("/w/fix-login"));
   await page.keyboard.press("Meta+Shift+p");
   assert.equal(await page.evaluate(() => !$("pal").hidden && pal.act), true, "it opens on the actions");
   const cmds = await page.evaluate(() => pal.items.filter(x => x.where === "Commands").map(x => [x.main, x.sub, x.side]));
@@ -1349,7 +1352,6 @@ test("⌘⇧P: the repo's .greenlight.json commands; a shell one runs in a new t
 });
 
 test("Open in editor: the palette, the workspace card and Diff each ask the app to open the workspace, named after its editor (issue 128)", async page => {
-  page = await boot(page.context().browser(), null, "?editor=Zed");
   await page.keyboard.press("Meta+Shift+p");
   assert.deepEqual(await page.evaluate(() => pal.items.filter(x => /^Open in/.test(x.main))), [], "a plain shell's tab has no workspace to open");
   await page.keyboard.press("Escape");
@@ -1363,8 +1365,8 @@ test("Open in editor: the palette, the workspace card and Diff each ask the app 
   await page.evaluate(() => { diffs.add("/w/review"); diffShow({op: "diff", path: "/w/review", mode: "branch", base: "origin/main", files: [["a.py", "1", "0"]], status: ["M"], patch: "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+x = 1\n"}) });
   await page.click("#dlg button:has-text('Open in Zed')");
   assert.deepEqual((await posts(page, "edit")).pop(), {cmd: "edit", ws: "/w/review"});
-  assert.equal((await posts(page, "edit")).length, 3); assert.deepEqual(page._errs, []); await page.close();
-});
+  assert.equal((await posts(page, "edit")).length, 3);
+}, "?editor=Zed");
 
 (async () => {
   const browser = await launchBrowser();
