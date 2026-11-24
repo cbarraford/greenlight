@@ -140,7 +140,7 @@ def scrub_removed_private_keys(diff):
 EXAMPLE_VALUES = {'AKIAIOSFODNN7EXAMPLE', 'password = "test-password-123"'}
 LOW = ("local", "fallback", "heuristic", "none", "unavailable")  # providers whose answers are guesses: never block or post on their own
 MAXC = 45000  # context chars per question; a longer diff is asked in parts (every part must pass), up to MAXPARTS
-MAXPARTS = 10  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
+MAXPARTS = 30  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
 DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True}
 CACHE_VERSION = 3  # old merge passes did not scan each commit's added content
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -703,21 +703,18 @@ def branch_diff(path, target=None, sha="HEAD"):
 
 
 def branch_messages(path, target=None, sha="HEAD"):
-    """Messages and author/committer identities of every commit published with the diff."""
+    """Messages and author/committer names of every commit published with the diff. The identities' email addresses are left
+    out: they're structured Git metadata every forge shows anyway, not personal data the push leaks. An email in a message
+    body (a trailer included) is still scanned like any other published text."""
     base = base_ref(path, target)
     ancestor = base and git(path, "merge-base", base, sha)
     if not ancestor:
         return None
     span = f"{ancestor.strip()}..{sha}"
     messages = git(path, "log", "--format=%B", span)
-    identities = git(path, "log", "--format=author: %an <%ae>%ncommitter: %cn <%ce>", span)
+    identities = git(path, "log", "--format=author: %an%ncommitter: %cn", span)
     if messages is None or identities is None:
         return None
-    # A forge no-reply address and reserved synthetic addresses are deliberately
-    # public identity placeholders. Apply this only to structured Git metadata;
-    # the same address in a commit message still gets the normal outbound scan.
-    public = {"users.noreply.github.com", "example.invalid", "example.test"}
-    identities = EMAIL_RE.sub(lambda m: "[public Git identity]" if m[0].rsplit("@", 1)[-1].lower() in public else m[0], identities)
     return messages + "\n" + identities
 
 
