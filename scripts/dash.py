@@ -953,13 +953,16 @@ def tree_new(path, o):
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
     call, w, twins = tree(path, every=True)
-    if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host: this machine's checkout there, if any
-        w = next((x for x in twins if x.get("hostId") == "local"), w)
+    picked = True
+    if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: placed below. The page sends a path, not a
+        # host: of several rows there, this machine's checkout of the same repo; the row is the user's pick when it's the
+        # only one, or that local one; else the create is checked like any other
+        w = next((x for x in twins if greenlight.is_local(x) and x.get("repo") == w.get("repo")), w) if len(twins) > 1 else w
+        picked = len(twins) == 1 or greenlight.is_local(w)
     args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,
             *(["--base-branch", base] if base else []), *(["--comment", goal] if goal else [])]
-    if call is greenlight.orca_cli:  # Orca's own CLI skips greenlight.orca: place it the same way. The row is the user's
-        # pick when it's the only one at that path, or this machine's of several; else it's checked like any create
-        args, why = greenlight.place_here(args, picked=len(twins) == 1 or w.get("hostId") == "local")
+    if call is greenlight.orca_cli:
+        args, why = greenlight.place_here(args, picked=picked)
         if why:
             return {"error": why}
     res = call(*args)
