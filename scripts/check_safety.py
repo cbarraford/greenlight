@@ -250,7 +250,7 @@ DRIFT_HTML = {
 }
 DRIFT_SWIFT = {
     "colour": r'"#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"|\bColor\((?:red|white|hue):|NSColor\((?:srgbRed|red|white|calibrated\w*|device\w*):',
-    "font_size": r"\.system\(size:",
+    "font_size": r"\.system\(size:|\b(?:system|monospacedSystem|monospacedDigitSystem|boldSystem)Font\(ofSize:\s*\d",
     "radius": r"cornerRadius:\s*[\d.]+",
 }
 DRIFT_SWIFT_EXEMPT = {"Config.swift", "Tokens.swift"}  # where the tokens themselves live
@@ -262,7 +262,7 @@ def drift_counts(root=ROOT):
     root = Path(root)
     out = {}
     for page in sorted((root / "app").glob("*.html")):
-        text = TOKEN_BLOCK.sub("", page.read_text(encoding="utf-8", errors="replace"))
+        text = TOKEN_BLOCK.sub("", page.read_text(encoding="utf-8", errors="replace"), count=1)  # only the generated one
         out[str(page.relative_to(root))] = {k: len(re.findall(p, text)) for k, p in DRIFT_HTML.items()}
     for path in swift_files(root):
         if path.name in DRIFT_SWIFT_EXEMPT:
@@ -272,12 +272,16 @@ def drift_counts(root=ROOT):
     return out
 
 
+def load_drift_baseline(root=ROOT):
+    path = Path(root) / DRIFT_BASELINE
+    return json.loads(path.read_text()) if path.is_file() else None
+
+
 def check_drift(root=ROOT):
-    """Fail when any file uses more literal design values than its baseline (a missing baseline skips the check)."""
-    base_path = Path(root) / DRIFT_BASELINE
-    if not base_path.is_file():
-        return []
-    base = json.loads(base_path.read_text())
+    """Fail when any file uses more literal design values than its baseline, or the baseline is missing."""
+    base = load_drift_baseline(root)
+    if base is None:
+        return [f"{DRIFT_BASELINE} is missing: restore it from git (`--update-drift --allow-raise` only to bootstrap)"]
     errs = []
     for rel, counts in drift_counts(root).items():
         for kind, n in counts.items():
@@ -290,17 +294,18 @@ def check_drift(root=ROOT):
 
 def drift_fell(root=ROOT):
     """Files and kinds now below their baseline, so the baseline can be lowered."""
-    base_path = Path(root) / DRIFT_BASELINE
-    if not base_path.is_file():
-        return []
-    base = json.loads(base_path.read_text())
+    base = load_drift_baseline(root) or {}
     return [f"{rel} {kind}" for rel, counts in drift_counts(root).items() for kind, n in counts.items()
             if n < base.get(rel, {}).get(kind, 0)]
 
 
-def update_drift(root=ROOT):
-    path = Path(root) / DRIFT_BASELINE
-    path.write_text(json.dumps(drift_counts(root), indent=1, sort_keys=True) + "\n")
+def update_drift(root=ROOT, allow_raise=False):
+    """Lower the baseline to today's counts. A count only rises (or a new file gets one) with `allow_raise`."""
+    path, counts, base = Path(root) / DRIFT_BASELINE, drift_counts(root), load_drift_baseline(root)
+    if base is not None and not allow_raise:
+        counts = {rel: {k: min(n, base.get(rel, {}).get(k, 0)) for k, n in kinds.items()}
+                  for rel, kinds in counts.items()}
+    path.write_text(json.dumps(counts, indent=1, sort_keys=True) + "\n")
     return path
 
 
@@ -319,7 +324,7 @@ def run_all(root=ROOT):
 
 def main():
     if "--update-drift" in sys.argv[1:]:
-        print(f"ok  wrote {update_drift(ROOT).relative_to(ROOT)}")
+        print(f"ok  wrote {update_drift(ROOT, '--allow-raise' in sys.argv[1:]).relative_to(ROOT)}")
         return
     errs = run_all(ROOT)
     if errs:

@@ -36,6 +36,7 @@ def make_clean_repo(tmp: Path):
             '<script>const ok = 1 + 2;</script>\n'
         )
     (tmp / "tests" / "test_ok.cjs").write_text("const x = 42;\n")
+    (tmp / "scripts" / "drift_baseline.json").write_text("{}\n")
 
 
 def init_git(repo: Path):
