@@ -333,6 +333,22 @@ test("with workspaces on the page, a failed start's Reopen still opens the sheet
   assert.deepEqual((await posts(page, "task")).map(m => m.op), ["repos"]);
 });
 
+test("Basement on a workspace page carries its last agent (issue 157): the tooltip says attach or continue", async page => {
+  const pk = (name, resume) => ({...SNAP.pucks.find(p => p.name === name), resume});
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [pk("plan-a", {harness: "codex"}), pk("plan-b", {harness: "claude", session: "mc-1a2b3c4d"})]});
+  const tip = async n => { await page.evaluate(n => openPage(n), n); return page.getAttribute("#bar button:has-text('Basement')", "title") };
+  assert.equal(await tip("plan-a"), "Continue its last Codex session in the Basement (B1)");
+  await page.click("#bar button:has-text('Basement')");
+  assert.equal(await tip("plan-b"), "Attach to its Claude Code session in the Basement (B1)");
+  await page.click("#bar button:has-text('Basement')");
+  assert.deepEqual((await posts(page, "basement")).map(m => [m.path, m.resume]), [["/w/plan-a", {harness: "codex"}], ["/w/plan-b", {harness: "claude", session: "mc-1a2b3c4d"}]]);
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [pk("plan-a", {harness: "toString"}), pk("plan-b", undefined)]});
+  assert.equal(await tip("plan-a"), "Open this workspace in the Basement (B1)", "only harnesses it knows");
+  assert.equal(await tip("plan-b"), "Open this workspace in the Basement (B1)");
+  await page.click("#bar button:has-text('Basement')");
+  assert.deepEqual((await posts(page, "basement")).pop().resume, {}, "no agent yet: nothing to resume");
+});
+
 test("toast: the dismiss button closes it", async page => {
   await page.evaluate(() => window.mc.tasked({op: "new", arg: "widgets", ok: true, name: "plan-b", repo: "widgets"}));
   await page.click(".toast button[aria-label='Dismiss']");

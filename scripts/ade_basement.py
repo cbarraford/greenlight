@@ -4,6 +4,7 @@ No ADE app at all: worktrees are git's, terminals are the Greenlight app's own t
 agent is a pane whose title Claude sets (braille spinner = working, ✳ = idle). Repos are the main checkouts of every pane's
 folder plus the ones listed in ~/.greenlight/repos.json (each worktree this makes adds its repo there).
 """
+import contextlib
 import json
 import re
 import os
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 
 import harness
+import last_agent
 from ade_common import MENU_ITEM_RE, default_agent, flags, git, git_info, goals, plain, draft, repo_list, set_goal, worktree_add, worktree_remove
 
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
@@ -139,6 +141,8 @@ def launch(path, agent, prompt):
     s = f"mc-{secrets.token_hex(4)}"
     # -i: the agent's PATH (~/.local/bin for claude) is set in .zshrc/.bashrc, which a bare `sh -c` from tmux never reads
     tmux("new-session", "-d", "-s", s, "-c", path, "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l")
+    with contextlib.suppress(OSError):  # the workspace page's Basement button attaches to it (last_agent.py); panes can't tell codex apart
+        last_agent.note({path: (agent, s)})
     return {"terminal": {"handle": tmux("display-message", "-p", "-t", s, "#{pane_id}").strip(), "session": s}}
 
 

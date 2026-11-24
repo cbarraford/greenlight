@@ -943,7 +943,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             fluid.callJS("window.mc && mc.openPage", [name]); show()  // the hive lives in the main window
         }
         // A workspace's Basement button: down to B1, on that worktree.
-        if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path) }
+        if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path, resume: resumeOf(b["resume"])) }
         if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
         if cmd == "inbox" { greenlight.settingsOpen = false; if l != nil { show(); greenlight.inboxOpen = true } else { greenlight.inboxOpen.toggle() } }  // one inbox, the main window's
@@ -1699,13 +1699,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Chief's [console: …]: a tmux session (mc-…), a worktree path or the end of one, or a tab's name; terminal.html's term.ws finds the tab.
     /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
     func toConsole(_ w: String) { toWorkspace(w) }
-    var wantWs: String?  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
-    /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree, its latest tab there or a new shell in it.
-    func toWorkspace(_ path: String) {
-        wantFloor = "basement"; wantWs = path
-        let p = String(data: (try? JSONSerialization.data(withJSONObject: path, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "\"\""
-        (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term ? (term.opens('basement'), term.ws(\(p)), 1) : 0") { [weak self] r, _ in
-            if r as? Int == 1 { self?.wantWs = nil; self?.wantFloor = nil }
+    var wantWs: String?, wantResume: [String: String] = [:]  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
+    /// A puck's `resume` (dash.py add_resume) as the page may get it: a harness greenlight knows and a tmux session's name, nothing else.
+    func resumeOf(_ o: Any?) -> [String: String] {
+        let d = o as? [String: Any] ?? [:]
+        var out: [String: String] = [:]
+        if let h = d["harness"] as? String, ["claude", "codex", "opencode", "gemini", "pi", "agy"].contains(h) { out["harness"] = h }
+        if let s = d["session"] as? String, s.range(of: #"^[\w.-]{1,64}$"#, options: .regularExpression) != nil { out["session"] = s }
+        return out
+    }
+    /// The dashboard's Basement buttons: B1 (the sidebar open) on that worktree. resume (a workspace page's button, issue 157):
+    /// its last agent's live tmux session, else that agent continuing its last session there; else its latest tab or a new shell.
+    func toWorkspace(_ path: String, resume: [String: String] = [:]) {
+        wantFloor = "basement"; wantWs = path; wantResume = resume
+        (termWindow.contentView as? WKWebView)?.callJS("window.term && ((p, r) => (term.opens('basement'), term.ws(p, r), 1))", [path, resume]) { [weak self] r, _ in
+            if r as? Int == 1 { self?.wantWs = nil; self?.wantResume = [:]; self?.wantFloor = nil }
         }
         upstairs ? ride(up: false) : basement()
     }
@@ -1838,7 +1846,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.slide(\(greenlight.sidebarSlide))")
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
             web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
-            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.evaluateJavaScript("term.ws(\(js(p)))") } }
+            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
             if let obj = lastTreesObj { web?.callJS("window.term && term.workspaces", [obj]) }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "open":

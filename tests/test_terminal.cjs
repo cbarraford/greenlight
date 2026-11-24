@@ -1137,6 +1137,31 @@ test("appearance: the chrome follows the system, the window's Light/Dark holds i
   assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue("--strip")), "", "no look worn: the tokens, nothing inline");
 });
 
+test("a workspace page's Basement button: its agent's live session, else a tab running it, else the harness continuing (issue 157)", async page => {
+  const opens = async () => (await posts(page, "open")).filter(o => o.ws === "/w/review");
+  const typed = async id => (await posts(page, "in")).filter(m => m.id === id).map(m => m.d);
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // exited: a new tab there continuing its last session
+  let [o] = await opens(); assert.ok(o, "a tab in the worktree");
+  assert.deepEqual(await typed(o.id), ["codex resume --last\r"]);
+  await page.evaluate(() => term.ws("/w/review", {harness: "nope; rm -rf ~"}));  // not a harness: the plain button, its latest tab
+  assert.equal((await opens()).length, 1, "no command for an unknown harness");
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // alive: attach to it, type nothing
+  const at = (await opens()).pop(); assert.equal(at.session, "mc-1a2b3c4d"); assert.deepEqual(await typed(at.id), []);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // its tab is open: show it, no new one
+  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;✳ review\x07")))), at.id);
+  await page.evaluate(() => show(tabs[0]));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a tab there already runs Claude: that one, not a second copy
+  assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  await page.evaluate(() => term.ws("/w/shipped", {harness: "claude", session: "bad session; x"}));  // a bad session name: ignored
+  const sh = (await posts(page, "open")).filter(o => o.ws === "/w/shipped");
+  assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.deepEqual(await typed(sh[0].id), ["claude --continue\r"]);
+  await page.evaluate(() => term.ws("/w/fix-login", {}));  // never ran an agent: as before, a plain shell
+  const pl = (await posts(page, "open")).filter(o => o.ws === "/w/fix-login");
+  assert.equal(pl.length, 1); assert.deepEqual(await typed(pl[0].id), []);
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));

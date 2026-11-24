@@ -50,6 +50,7 @@ import audit  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
+import last_agent  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
 
@@ -687,6 +688,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
+    add_resume(pucks, [(r["path"], live[r["id"]][1]) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -750,6 +752,21 @@ def trees():
                                                              "rebase", "threads", "mergeable", "by", "assignees",
                                                              "target_branch", "labels", "milestone", "description", "sha")}
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
+
+
+def add_resume(pucks, agents):
+    """Each puck's `resume`, what its page's Basement button opens (last_agent.py): the last agent's own tmux session while it's
+    alive, else its harness to continue there. Records what's running now first: the ADE's agents and the app's Claude panes."""
+    try:
+        ab = importlib.import_module("ade_basement")
+        tm, is_agent = ab.panes(), lambda t: ab.state(t) is not None
+    except Exception:  # no tmux, or no server yet: nothing to attach to
+        tm, is_agent = [], lambda t: False
+    with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
+        last_agent.observe(agents, tm, is_agent)
+    alive = {p["session"] for p in tm}
+    for p in pucks:
+        p["resume"] = last_agent.resume(p["path"], alive, busy=(p.get("agent") or {}).get("state") == "working")
 
 
 def basement_panes():
