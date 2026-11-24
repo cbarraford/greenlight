@@ -994,7 +994,17 @@ final class Core: ObservableObject {
             return
         }
         if !r.stopping, let id = r.turnId { savePending(r, id, as: lostKey) }  // still running there: the next launch follows it
-        finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(hostDisplayName(r.runHost)) (exit \(code)).")
+        finish(r, ok: false, text: r.stopping ? "Stopped." : Core.lostText(r.runHost, code))
+    }
+
+    /// Why a turn ended without its reply: a Mac with no greenlight to run gets the fix, not a dropped-connection notice.
+    static func lostText(_ h: String, _ code: Int32, server: String = host) -> String {
+        if isLocalHost(h) && !isLocalHost(server) && (code == localBackendMissing || (code == 2 && !FileManager.default.fileExists(
+            atPath: (hostPaths(for: h, defaultHost: server).code as NSString).expandingTildeInPath + "/scripts/chat.py"))) {
+            return "Greenlight's scripts aren't on this Mac, and copying them from \(server) failed (exit \(code)). "
+                + "Check that this Mac can ssh to \(server), or set localGreenlightCode to a greenlight checkout here."
+        }
+        return "Lost the connection to \(hostDisplayName(h)) (exit \(code))."
     }
 
     private func event(_ l: String, _ r: Run) {
