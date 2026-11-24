@@ -12,7 +12,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bg                         # one JSON line: this chat's background shells + working Orca agents
   chat.py bgstop <task_id>           # kill one background shell
 """
-import contextlib, fcntl, glob, hashlib, json, os, random, re, signal, subprocess, sys, threading, time, uuid
+import contextlib, fcntl, glob, hashlib, io, json, os, random, re, signal, subprocess, sys, threading, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import attach  # noqa: E402
@@ -1453,6 +1453,8 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         if os.path.exists(os.path.join(DIR, RESETTING)):
             return emit(e="done", ok=False, text="This chat's Clear was interrupted; clear it again before sending.",
                         context=0, window=None, ms=None)
+        if (sent_in := os.environ.pop(TURN_GEN, "")) and sent_in != generation_unlocked():  # a Clear came after send started it
+            return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
         delivery = os.path.join(DIR, QUESTION_DELIVERY + scope_suffix())
         try:
             active = json.load(open(path))
@@ -1770,41 +1772,210 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         return norm.pending_done
 
 
+# A turn runs in its own session, apart from the `send` that started it: the app (or its ssh) can quit, restart or lose
+# the connection and the turn goes on. Its events go to turns/<id>.jsonl, which `send` and later `follow` stream.
+TURNS = "turns"
+TURN_ID = re.compile(r"[0-9a-f]{32}\Z")
+TURN_KEEP = 24 * 3600  # a finished turn's file is deleted after this; it holds the reply's text, like the transcript
+TURN_GRACE = 10  # seconds a turn may run before its runner's identity is on file
+END = {"e": "end"}  # the runner's last line: nothing more will come
+QUICK = {"new", "stop", "bg", "bgstop"}  # answered here and now, not turns
+TURN_GEN = "GREENLIGHT_TURN_GEN"  # the runner's environment: the conversation generation its turn was sent in
+
+
+def turn_paths(tid):
+    base = os.path.join(DIR, TURNS, tid)
+    return base + ".jsonl", base + ".json", base + ".in"
+
+
+def runner_alive(tid):
+    """True while the turn's runner (the very process, by its start time) still runs, or it has only just started."""
+    log, meta, _ = turn_paths(tid)
+    try:
+        with open(meta) as fh:
+            rec = json.load(fh)
+        if not rec.get("birth"):  # its start time couldn't be read (ps failed): fall back to whether the pid is there at all
+            os.kill(int(rec["pid"]), 0)
+            return True
+        return auto.process_start(int(rec["pid"])) == rec["birth"]
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        with contextlib.suppress(OSError):
+            return time.time() - os.path.getmtime(log) < TURN_GRACE
+        return False
+
+
+def prune_turns(everything=False, now=None):
+    """Delete the files of turns whose runner is gone: all of them (Clear), or those older than TURN_KEEP."""
+    now = time.time() if now is None else now
+    gone = []
+    for log in glob.glob(os.path.join(DIR, TURNS, "*.jsonl")):
+        tid = os.path.basename(log)[:-6]
+        with contextlib.suppress(OSError):
+            if TURN_ID.fullmatch(tid) and (everything or now - os.path.getmtime(log) > TURN_KEEP) and not runner_alive(tid):
+                for f in turn_paths(tid):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(f)
+                gone.append(tid)
+    return gone
+
+
+def start_turn(args, data):
+    """Start `chat.py _run <id> <args>` in its own session, its message in a private file and its stdout the turn's log."""
+    os.makedirs(os.path.join(DIR, TURNS), mode=0o700, exist_ok=True)
+    os.chmod(os.path.join(DIR, TURNS), 0o700)  # mode= only applies to a folder makedirs creates
+    prune_turns()
+    tid = uuid.uuid4().hex
+    log, meta, inp = turn_paths(tid)
+    with os.fdopen(os.open(inp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as fh:
+        fh.write(data)
+    with scope_lock():
+        gen = generation_unlocked()  # the conversation it's for: a Clear before its runner gets going cancels it
+    out = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
+    try:
+        p = subprocess.Popen([sys.executable, os.path.realpath(__file__), "_run", tid, *args], stdin=subprocess.DEVNULL,
+                             stdout=out, stderr=subprocess.DEVNULL, cwd=DIR, start_new_session=True,
+                             env=os.environ | {TURN_GEN: gen})
+    finally:
+        os.close(out)
+    tmp = f"{meta}.{os.getpid()}.tmp"
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+        fh.write(json.dumps({"pid": p.pid, "birth": auto.process_start(p.pid)}))
+    os.replace(tmp, meta)
+    return tid, p
+
+
+def follow(tid, poll=0.1, child=None):
+    """Stream a turn's events from its first, until its end. A turn that ended without a `done` (its runner killed or
+    crashed) gets one, so the app never waits forever. 3: no such turn (pruned, or cleared). child: the runner's Popen,
+    when this process started it (send): polled so a killed runner is reaped, not left a zombie that still looks alive."""
+    if not TURN_ID.fullmatch(tid or "") or not os.path.exists(turn_paths(tid)[0]):
+        return 3
+    done, pos, last_look = False, 0, False
+    with open(turn_paths(tid)[0], "rb") as fh:
+        while True:
+            fh.seek(pos)
+            chunk = fh.read()
+            lines = chunk.split(b"\n")
+            for raw in lines[:-1]:  # the last piece has no newline yet: read again once it's whole
+                pos += len(raw) + 1
+                try:
+                    j = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(j, dict):
+                    continue
+                if j == END:
+                    return 0 if done else _ended()
+                done = done or j.get("e") == "done"
+                sys.stdout.write(raw.decode("utf-8", "replace") + "\n")
+                sys.stdout.flush()
+            if lines[:-1]:
+                continue
+            if last_look:
+                return 0 if done else _ended()
+            if child is not None:
+                child.poll()
+            if not runner_alive(tid):
+                last_look = True  # one more read: it may have written its last lines as it went
+                continue
+            time.sleep(poll)
+
+
+def _ended():
+    emit(e="done", ok=False, text="This reply stopped before it finished.", context=0, window=None, ms=None)
+    return 0
+
+
+def run_turn(tid, args):
+    """The runner: the turn itself, with its message from the private file (then deleted), and END as its last line."""
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        inp = turn_paths(tid)[2]
+        with open(inp) as fh:
+            data = fh.read()
+        os.remove(inp)
+        sys.stdin = io.StringIO(data)
+        dispatch(args)
+    finally:
+        print(json.dumps(END), flush=True)
+
+
 def main():
     os.makedirs(DIR, exist_ok=True)
     args = sys.argv[1:]
     cmd = args[0] if args else "send"
+    if cmd == "_run" and len(args) > 1 and TURN_ID.fullmatch(args[1]):
+        return run_turn(args[1], args[2:])
+    if cmd == "follow":
+        sys.exit(follow(args[1] if len(args) > 1 else ""))
+    if cmd in QUICK:
+        return dispatch(args)
+    tid, child = start_turn(args, "" if cmd == "compact" else sys.stdin.read())  # send (the default) and compact are turns
+    print(json.dumps({"e": "turn", "id": tid}), flush=True)  # the app keeps it until the reply: `follow` after a restart
+    sys.exit(follow(tid, child=child))
+
+
+def clear_chat():
+    """Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR."""
+    with scope_lock():
+        with open(os.path.join(DIR, RESETTING), "w") as fh:
+            fh.write("resetting")
+        scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
+            glob.glob(os.path.join(DIR, "session*_scope-*"))
+        for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
+            decisions.forget_chat(chat=(CHAT or "main") + suffix)
+        decisions.forget_chat(chat=CHAT)
+        cancel_running_unlocked()
+        rotate_generation_unlocked()
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(DIR, ACTIVE_TURN))
+        for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
+                                                        glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
+                                                        glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
+            if os.path.exists(os.path.join(DIR, f)):
+                os.remove(os.path.join(DIR, f))
+        attach.clear(DIR)
+        prune_turns(everything=True)  # the old conversation's replies; a turn still stopping keeps its file until it's done
+        os.remove(os.path.join(DIR, RESETTING))
+
+
+def stop_chat():
+    with scope_lock():
+        try:
+            active_path = os.path.join(DIR, ACTIVE_TURN)
+            with open(active_path) as fh:
+                active = json.load(fh)
+            active["cancelled"] = True
+            with open(active_path, "w") as fh:
+                fh.write(json.dumps(active))
+        except (OSError, ValueError):
+            pass
+        cancel_running_unlocked()
+
+
+def send_turn(args, opt):
+    if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
+        os.environ["GREENLIGHT_ONLY"] = opt("--only")
+    text, files = sys.stdin.read(), None
+    if "--attach" in args:
+        try:
+            j = json.loads(text)
+            text, files = str(j.get("text") or ""), j.get("files") or []
+        except (ValueError, AttributeError):
+            return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
+    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
+
+
+def dispatch(args):
+    os.makedirs(DIR, exist_ok=True)
+    cmd = args[0] if args else "send"
     opt = lambda k: args[i + 1] if k in args and (i := args.index(k)) + 1 < len(args) else None
     if cmd == "new":
-        # Clear starts a new conversation for this entire Center window; each Center has its own CHAT_DIR.
-        with scope_lock():
-            open(os.path.join(DIR, RESETTING), "w").write("resetting")
-            scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
-                glob.glob(os.path.join(DIR, "session*_scope-*"))
-            for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
-                decisions.forget_chat(chat=(CHAT or "main") + suffix)
-            decisions.forget_chat(chat=CHAT)
-            cancel_running_unlocked()
-            rotate_generation_unlocked()
-            with contextlib.suppress(OSError):
-                os.remove(os.path.join(DIR, ACTIVE_TURN))
-            for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
-                                                            glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
-                                                            glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
-                if os.path.exists(os.path.join(DIR, f)):
-                    os.remove(os.path.join(DIR, f))
-            attach.clear(DIR)
-            os.remove(os.path.join(DIR, RESETTING))
+        clear_chat()
     elif cmd == "stop":
-        with scope_lock():
-            try:
-                active_path = os.path.join(DIR, ACTIVE_TURN)
-                active = json.load(open(active_path))
-                active["cancelled"] = True
-                open(active_path, "w").write(json.dumps(active))
-            except (OSError, ValueError):
-                pass
-            cancel_running_unlocked()
+        stop_chat()
     elif cmd == "bg":
         print(json.dumps(background()))
     elif cmd == "bgstop":
@@ -1815,17 +1986,7 @@ def main():
         else:
             turn("/compact", opt("--model"), None, compact=True)
     else:
-        if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
-            os.environ["GREENLIGHT_ONLY"] = opt("--only")
-        text, files = sys.stdin.read(), None
-        if "--attach" in args:
-            try:
-                j = json.loads(text)
-                text, files = str(j.get("text") or ""), j.get("files") or []
-            except (ValueError, AttributeError):
-                return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-        turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
-
+        send_turn(args, opt)
 
 if __name__ == "__main__":
     diag.install("chat")
