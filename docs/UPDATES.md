@@ -98,24 +98,34 @@ kills the turn. Instead:
 
 ## Backend swap (local and remote)
 
+Built in step 1: `scripts/update.py` (`version`, `status`, `install`, `swap`, `rollback`, `adopt`; JSON on stdout).
+
 - **Layout:**
 
   ```
-  ~/.greenlight/code/versions/<version>/   (one folder per version)
-  ~/.greenlight/code/current               (symlink to the active version)
+  ~/.greenlight/code/versions/<version>/   (one folder per version, each with memory -> ../../memory)
+  ~/.greenlight/code/current               (relative symlink to versions/<version>)
+  ~/.greenlight/code/memory/               (the notes every version shares; never copied from a release)
   ~/.claude/skills/greenlight              (symlink to current, for a downloaded install)
   ```
 
-- **Switching**: after the `orchestrate.py` tick lock and `ws_state.lock()` are taken, the app swaps `current` with
-  `ln -sfn` plus `rename(2)`, so the switch is atomic.
-  - Processes that were already running keep their own folder. **Every script must resolve its own path with `realpath`**, and
-    most already use `Path(__file__).resolve()`. `chat.py` uses `abspath` (`SCRIPTS`, and the `SKILL.md` path in the prompt), so a
-    turn running across a switch would start the new version's scripts partway through. Fix: use `realpath`.
-  - **Bug this exposes**: `auto.py install` writes `Path(__file__).resolve()` into the systemd/launchd unit, which would pin the
-    scheduler to one version folder. The unit must point at `current/scripts/auto.py`, not the resolved path. `auto.py install` is
-    rerun on every swap so an old unit is corrected.
-- **Smoke test**: the new version must pass `diag.py doctor --quick` within 30 s of the switch, or `current` goes back to the
-  previous version. Two versions are kept on disk.
+- **Installing** (`update.py install SRC`): unpacks a folder or a `.tar.gz` into a staging folder, checks it, and renames it
+  into `versions/`. It refuses archives with `..`, absolute paths, hard links, devices or symlinks that point outside, and
+  anything over 200 MB. It drops `.git`, `memory`, `app` and caches, and it doesn't switch anything.
+- **Switching** (`update.py swap V`): takes the `orchestrate.py` tick lock and `ws_state.lock()` (waiting up to `--wait`
+  seconds, then `busy`), and moves `current` with a single `rename(2)`.
+  - Processes that were already running keep their own folder, because every script resolves its own path with `realpath`.
+    `chat.py`, `auto.py`'s import path and `greenlight.py`/`orchestrate.py`'s `audit.py` path used to follow the symlink instead.
+  - `auto.py install` writes `current/scripts/auto.py` into the systemd/launchd unit for a versioned install (`stable_script`),
+    not the resolved version folder. Each swap reinstalls a unit that still runs a version folder or a copy.
+  - A swap is refused for a git checkout (`managed_git`), a copy (`managed_copy`: run `adopt`), a version that isn't installed,
+    and state whose schema the version can't read.
+- **Smoke test**: the new version's scripts must compile and its `diag.py doctor --quick` must answer with JSON within 30 s,
+  or `current` goes back. The doctor's own verdicts (auth, disk) describe the machine, not the version, so they don't fail it.
+- **Keeping versions**: the current and previous version stay. Older ones are deleted 24 h after they were replaced, because a
+  long automation may still be running from one.
+- **Adopting a copy** (`update.py adopt`): a `sync.sh` copy at the skill path becomes `versions/<its VERSION>`. Its `memory/`
+  notes move to `code/memory` (a note already there wins), and the skill path becomes a link to `current`.
 
 ## State and schema
 
@@ -140,11 +150,8 @@ Events `update_check`, `update_download`, `update_apply` and `rollback`, with `c
 
 ## Work, in order
 
-1. **Backend**:
-   - use `realpath` everywhere, and point the `auto.py` unit at `current`;
-   - the versioned install layout, a locked `swap` subcommand, and `doctor --quick`;
-   - `diag.py version`.
-   - Testable on Linux.
+1. **Backend** (done in #139): `realpath` everywhere, the `auto.py` unit through `current`, the versioned install layout,
+   `update.py` with a locked `swap`, `doctor --quick`, and `diag.py version`.
 2. **Chief turns survive**: the separate turn runner, `chat.py follow`, and the app following turns and picking them up again.
 3. **Terminal history**: capture-pane on reattach.
 4. **Restart path**: `resume.json`, `restart.planned`, `update.sh`, crash-check rollback. Built and tested on the Mac mini.

@@ -410,7 +410,7 @@ def plan(rows, cards, judge=True):
                     act(do="skip", why="the user left the interrupted launch parked")
                     continue
         if nxt["owner"] == "greenlight" and (cmd := nxt.get("cmd")):
-            checked_merge = isinstance(cmd, list) and len(cmd) > 2 and cmd[:3] == [sys.executable, str(Path(greenlight.__file__).with_name("audit.py")), "checked-merge"]
+            checked_merge = isinstance(cmd, list) and len(cmd) > 2 and cmd[:3] == [sys.executable, str(Path(greenlight.__file__).resolve().with_name("audit.py")), "checked-merge"]
             if not isinstance(cmd, list) or cmd[:1] not in (["glab"], ["gh"]) and not checked_merge:
                 act(do="skip", why=f"next.cmd isn't a glab/gh call: {cmd!r:.80}")
             elif "merge" in cmd and held(r):
@@ -581,7 +581,7 @@ def link_changed(r, live):
 
 def guard_merge(r, cmd, snapshot=None, peers=()):
     """Re-read the goal before any forge action; pin merges to the scanned head commit."""
-    checked_merge = len(cmd) > 2 and cmd[:3] == [sys.executable, str(Path(greenlight.__file__).with_name("audit.py")), "checked-merge"]
+    checked_merge = len(cmd) > 2 and cmd[:3] == [sys.executable, str(Path(greenlight.__file__).resolve().with_name("audit.py")), "checked-merge"]
     merging = checked_merge or cmd[1:3] in MERGE
     readying = "ready" in cmd or "--ready" in cmd
     sha = (r.get("mr") or {}).get("sha")

@@ -14,7 +14,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
 """
 import contextlib, fcntl, glob, hashlib, json, os, random, re, signal, subprocess, sys, threading, time, uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import attach  # noqa: E402
 import decisions  # noqa: E402
 import diag  # noqa: E402
@@ -39,10 +39,10 @@ def chat_identity():
 PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_SESSIONS = os.path.join(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions")
-SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.dirname(os.path.realpath(__file__))
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
-    "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md") + " and its memory notes. "
+    "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "SKILL.md") + " and its memory notes. "
     "A request that only asks (status, research, a billing or usage lookup, inspecting logs, code or an MR) you answer "
     "yourself, here, from the sources you can read (greenlight.py, the ADE, glab/gh, APIs and files on this host); "
     "never create a workspace to answer one (`greenlight.py ade worktree create` refuses it; `--change \"<what>\"` "

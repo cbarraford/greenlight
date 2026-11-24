@@ -35,9 +35,10 @@ import uuid
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import diag  # noqa: E402
 import harness  # noqa: E402
+import update  # noqa: E402
 from greenlight import CONFIG, LIMIT_RE, STATE, ping  # noqa: E402
 
 FILE = STATE / "automations.json"
@@ -404,7 +405,7 @@ def main():
         f = Path.home() / "Library/LaunchAgents/greenlight-auto.plist"
         f.parent.mkdir(parents=True, exist_ok=True)
         # launchd starts with a bare PATH: keep this shell's, so glab/gh/orca and the agents are found
-        f.write_text(PLIST.format(exe=xml_escape(sys.executable), path=xml_escape(str(Path(__file__).resolve())),
+        f.write_text(PLIST.format(exe=xml_escape(sys.executable), path=xml_escape(str(update.stable_script("auto.py", __file__))),
                                   env_path=xml_escape(os.environ.get("PATH", ""))))
         subprocess.run(["launchctl", "unload", str(f)], capture_output=True)
         subprocess.run(["launchctl", "load", "-w", str(f)], check=True)
@@ -417,7 +418,7 @@ def main():
             return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
         d = Path.home() / ".config/systemd/user"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "greenlight-auto.service").write_text(UNIT.format(exe=_sd_quote(sys.executable), path=_sd_quote(Path(__file__).resolve())))
+        (d / "greenlight-auto.service").write_text(UNIT.format(exe=_sd_quote(sys.executable), path=_sd_quote(update.stable_script("auto.py", __file__))))
         (d / "greenlight-auto.timer").write_text(TIMER)
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "--user", "enable", "--now", "greenlight-auto.timer"], check=True)

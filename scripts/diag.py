@@ -7,6 +7,8 @@
     diag.py bundle [--since 7d] [--out F|-]                 a bug-report bundle (summary, errors, recent events), re-checked for leaks
     diag.py report --title T [--body-file F|-] [--execute]  preview the GitHub issue for a bug; --execute files it (gh)
     diag.py doctor                                          setup checks: forge auth, agent CLIs, disk, the automations timer
+    diag.py doctor --quick                                  the same without network checks (update.py's smoke test)
+    diag.py version                                         {version, schema, compat, protocol}: the app checks it matches
 
 Events go to $GREENLIGHT_HOME/diag/events.jsonl, and the app's own events go to ~/Library/Logs/Greenlight/app.jsonl.
 Both files rotate at 5 MB and keep three old copies. Nothing is uploaded.
@@ -46,7 +48,7 @@ HASH = re.compile(r"[0-9a-f]{10}")
 # string-valued keys. An identifier (a workspace, repo, MR or automation) goes under a key ending in _h, from h().
 KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "name", "gate", "verdict", "provider",
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
-        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check"}
+        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey"),
@@ -402,13 +404,14 @@ def crashes(after, n=5):
     return out
 
 
-def doctor():
-    """Setup checks an AI can read: each {check, ok, ...}, numbers and enums only."""
+def doctor(quick=False):
+    """Setup checks an AI can read: each {check, ok, ...}, numbers and enums only.
+    quick: no network (skips glab/gh auth), for update.py's smoke test of a new version."""
     out = []
 
     def add(check, ok, **kw):
         out.append(clean({"check": check, "ok": ok, **kw}))
-    for tool in ("glab", "gh"):
+    for tool in () if quick else ("glab", "gh"):
         if not shutil.which(tool):
             add(f"{tool}_auth", None, state="missing")
             continue
@@ -614,7 +617,8 @@ def main(argv=None):
     b = sub.add_parser("bundle")
     b.add_argument("--since", default="7d")
     b.add_argument("--out", help="a file, or - for stdout (default: a new file in $GREENLIGHT_HOME/diag)")
-    sub.add_parser("doctor")
+    sub.add_parser("doctor").add_argument("--quick", action="store_true", help="no network checks")
+    sub.add_parser("version")
     r = sub.add_parser("report")
     r.add_argument("--title", default="")
     r.add_argument("--body-file", help="the description: a file, or - for stdin")
@@ -627,8 +631,11 @@ def main(argv=None):
             print(json.dumps(e))
     elif a.cmd == "errors":
         print(json.dumps(errors(read(since(a.since))), indent=1))
+    elif a.cmd == "version":
+        import update  # lazy: update imports diag
+        print(json.dumps(update.version_info()))
     elif a.cmd == "doctor":
-        d = doctor()
+        d = doctor(a.quick)
         print(json.dumps(d, indent=1))
         sys.exit(0 if d["ok"] else 1)
     elif a.cmd == "bundle":
