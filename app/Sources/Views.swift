@@ -561,6 +561,23 @@ struct Inbox: View {
 }
 
 /// A key, as the inbox shows it: "1", "R", "⇧⌫".
+/// §10.4: an input's fill. Dark fields sit above their card, never below the window.
+var fieldFill: Color { Color(isDark ? DS.Palette.elementRest : DS.Palette.bgSurface, dark: isDark) }
+
+/// §10.4 for a one-line field: its own surface and edge, and the accent ring while it has the keyboard.
+struct DSField: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View { Box { configuration } }
+    private struct Box<V: View>: View {
+        @ViewBuilder let field: () -> V
+        @FocusState private var on: Bool
+        var body: some View {
+            field().textFieldStyle(.plain).focused($on).padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightSm)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(fieldFill))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).strokeBorder(on ? Color(accentSet.ring, dark: isDark) : edge, lineWidth: on ? 2 : 1))
+        }
+    }
+}
+
 func kbd(_ k: String) -> some View {
     Text(k).font(sys(size: 10, weight: .medium)).foregroundColor(dim).padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge)).accessibilityHidden(true)
@@ -819,9 +836,9 @@ struct SettingsView: View {
                 if Self.wide.contains(c.settingsTab) { widePane } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.s24) { pane }
-                            .padding(.horizontal, DS.Space.s32).padding(.top, DS.Space.s48).padding(.bottom, DS.Space.s32)  // clear of the title bar
-                            .frame(maxWidth: 640, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, DS.Space.s32).padding(.top, DS.Space.s16).padding(.bottom, DS.Space.s32)  // the title is in the title bar's band
+                            .frame(maxWidth: 640 + 2 * DS.Space.s32, alignment: .leading)
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -832,7 +849,7 @@ struct SettingsView: View {
         .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
     }
 
-    /// The system sidebar: search, then the panes; the one you're on in accent.subtle with fg.default. No icon tiles.
+    /// The system sidebar: search, then the panes; the one you're on in element.active with fg.default. No icon tiles.
     var sidebar: some View {
         let q = rs.q.trimmingCharacters(in: .whitespaces).lowercased()
         let hit = { (t: (String, String, String)) in q.isEmpty || "\(t.0) \(t.2)".lowercased().contains(q) }
@@ -841,7 +858,12 @@ struct SettingsView: View {
             Text(t).font(ds(DS.TypeRole.label)).foregroundColor(dim).padding(.horizontal, DS.Space.s8).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s4)
         }
         return VStack(alignment: .leading, spacing: 0) {
-            TextField("Search settings", text: $rs.q).textFieldStyle(.roundedBorder)
+            HStack(spacing: DS.Space.s4) {  // §10.4 search: the glyph, then the field
+                Image(ds: "search").foregroundColor(Color(DS.Palette.fgFaint, dark: isDark)).accessibilityHidden(true)
+                TextField("Search settings", text: $rs.q).textFieldStyle(.plain).font(ds(DS.TypeRole.body))
+            }.padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightMd)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(fieldFill))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(edge))
                 .padding(.horizontal, DS.Space.s12).padding(.top, DS.Space.s48).padding(.bottom, DS.Space.s4)  // under the window's buttons
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.s2) {
@@ -860,9 +882,9 @@ struct SettingsView: View {
                 Image(ds: t.1, size: iconSize(DS.TypeRole.body.size), medium: on).foregroundColor(on ? fg : dim).frame(width: 18).accessibilityHidden(true)
                 Text(t.0).font(ds(DS.TypeRole.body)).foregroundColor(fg)
                 Spacer(minLength: 0)
-                if let n = count(t.0) { Text("\(n)").font(ds(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim) }
+                if let n = count(t.0), n > 0 { Text("\(n)").font(ds(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim) }
             }.padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightMd).contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(accentSet.subtle, dark: isDark) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(DS.Palette.elementActive, dark: isDark) : Color.clear))
         }.buttonStyle(.plain)
             .accessibilityLabel("\(t.0) settings").accessibilityAddTraits(on ? .isSelected : [])
     }
@@ -894,11 +916,11 @@ struct SettingsView: View {
 
     static func icon(_ t: String) -> String { (mac + gl).first { $0.0 == t }?.1 ?? "settings" }
 
-    /// A pane's title (`title`) and what it's for (`body`, fg.muted). No icon tile.
+    /// A pane's title (`title-sm`, the only 15 on the page) and what it's for (`body`, fg.muted). No icon tile.
     func heading(_ t: String, _ lede: String?, @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.s12) {
             VStack(alignment: .leading, spacing: DS.Space.s4) {
-                Text(t).font(ds(DS.TypeRole.title)).foregroundColor(fg)
+                Text(t).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
                 if let lede { Text(lede).font(ds(DS.TypeRole.body)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 560, alignment: .leading) }
             }
             Spacer(minLength: 0)
@@ -912,26 +934,26 @@ struct SettingsView: View {
     /// A small accent label: "new terminals", "yours".
     func chip(_ t: String) -> some View {
         Text(t).font(ds(DS.TypeRole.labelSm)).foregroundColor(Color(accentSet.fg, dark: isDark))
-            .padding(.horizontal, DS.Space.s8).frame(height: 20).background(Capsule().fill(Color(accentSet.subtle, dark: isDark)))
+            .padding(.horizontal, DS.Space.s8).frame(height: 20).background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(Color(accentSet.subtle, dark: isDark)))
     }
 
-    /// A section (§10.20): a `title-sm` header with an optional `caption`, then a group of rows on bg.surface, radius md.
+    /// A section (§10.20): a `strong` header with an optional `caption` under it, then a group of rows on bg.surface, radius md.
+    func sectionHeader(_ title: String, _ aside: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.s2) {
+            Text(title).font(ds(DS.TypeRole.strong)).foregroundColor(fg)
+            if let aside { note(aside).frame(maxWidth: 420, alignment: .leading) }
+        }
+    }
     func box<V: View>(_ title: String? = nil, aside: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.s8) {
-            if let title {
-                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
-                    Text(title).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
-                    Spacer(minLength: DS.Space.s12)
-                    if let aside { Text(aside).font(ds(DS.TypeRole.caption)).foregroundColor(dim).multilineTextAlignment(.trailing) }
-                }
-            }
+            if let title { sectionHeader(title, aside) }
             VStack(alignment: .leading, spacing: 0) { v() }.padding(.top, -1)  // the first row's hairline tucks under the card's border
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
+                .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).strokeBorder(line))
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
         }
     }
-    func ruled(_ v: some View) -> some View { v.overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1) } }
+    func ruled(_ v: some View) -> some View { v.overlay(alignment: .top) { Rectangle().fill(line).frame(height: 1).padding(.horizontal, DS.Space.s16) } }
 
     /// Label (`body`) and hint (`caption`) on the left, the control on the right.
     func row<V: View>(_ label: String, _ hint: String? = nil, @ViewBuilder _ v: () -> V) -> some View {
@@ -941,8 +963,9 @@ struct SettingsView: View {
         }
         // The label keeps at least 180pt beside the control; a control too wide for that (Effort, Accent, Scan every) moves under it.
         return ruled(ViewThatFits(in: .horizontal) {
-            HStack(spacing: DS.Space.s24) {
-                text.frame(minWidth: 180, idealWidth: 180, maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 0) {
+                text.frame(minWidth: 180, idealWidth: 180, maxWidth: 420, alignment: .leading)  // one measure for every hint
+                Spacer(minLength: DS.Space.s24)
                 HStack(spacing: DS.Space.s8) { v() }.layoutPriority(1)
             }
             VStack(alignment: .leading, spacing: DS.Space.s8) { text.frame(maxWidth: .infinity, alignment: .leading); HStack(spacing: DS.Space.s8) { v() } }
@@ -952,63 +975,78 @@ struct SettingsView: View {
     func toggleRow(_ title: String, _ help: String, _ on: Binding<Bool>) -> some View {
         row(title, help) { Toggle(title, isOn: on).labelsHidden().toggleStyle(.switch) }
     }
-    /// Rows that only matter while the row above is on: indented under an L, dimmed while it's off.
+    /// Rows that only matter while the row above is on: indented, dimmed while it's off.
     func dependent<V: View>(off: Bool, @ViewBuilder _ v: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 0) { v() }.padding(.leading, 22)
-            .overlay(alignment: .topLeading) {
-                Path { p in p.move(to: CGPoint(x: 0.5, y: 0)); p.addLine(to: CGPoint(x: 0.5, y: 24)); p.addLine(to: CGPoint(x: 12, y: 24)) }
-                    .stroke(edge, lineWidth: 1).frame(width: 12, height: 24).padding(.leading, DS.Space.s16 + 4).accessibilityHidden(true)
-            }
+        VStack(alignment: .leading, spacing: 0) { v() }.padding(.leading, DS.Space.s16)
             .disabled(off).opacity(off ? 0.45 : 1)
     }
 
     /// Projects, Repositories, Memory: a full-height list on the left (its add button at the bottom), the detail scrolling on the right.
-    func split<L: View, D: View>(_ t: String, _ lede: String, add: (String, () -> Void), @ViewBuilder list: () -> L, @ViewBuilder detail: () -> D) -> some View {
-        HStack(spacing: 0) {
+    /// `empty` (icon, title, hint) while there's nothing to list: the pane is its heading and one empty state.
+    @ViewBuilder func split<L: View, D: View>(_ t: String, _ lede: String, add: (String, () -> Void), empty: (String, String, String)? = nil,
+                                              @ViewBuilder list: () -> L, @ViewBuilder detail: () -> D) -> some View {
+        if let empty {
+            VStack(alignment: .leading, spacing: 0) {
+                heading(t, nil).padding(.horizontal, DS.Space.s32).padding(.top, DS.Space.s16)  // the empty state says what the lede would
+                    .frame(maxWidth: 640 + 2 * DS.Space.s32, alignment: .leading).frame(maxWidth: .infinity)
+                emptyDetail(empty.0, empty.1, empty.2, add: add)
+                Spacer(minLength: 0)
+            }
+        } else { HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(t).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
                         Text(lede).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
                     }
-                }.padding(14)
+                }.padding(.horizontal, 14).padding(.top, DS.Space.s16).padding(.bottom, 14)
                 ScrollView { VStack(spacing: 1) { list() }.padding(.horizontal, 8) }
-                Divider().overlay(line)
-                Button(action: add.1) { Label { Text(add.0) } icon: { Image(ds: "plus") }.font(sys(size: DS.TypeRole.body.size)) }.buttonStyle(.borderless)
-                    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                Button(action: add.1) { Label { Text(add.0) } icon: { Image(ds: "plus") }.font(ds(DS.TypeRole.body)).foregroundColor(sub) }.buttonStyle(.plain)  // quiet: not the accent
+                    .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             }.frame(width: 220)
             Divider().overlay(line)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) { detail() }
-                    .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 32)
+                    .padding(.horizontal, 24).padding(.top, DS.Space.s16).padding(.bottom, 32)
                     .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
+        } }
     }
 
-    func banner(_ icon: String, _ text: String, tinted: Bool = false, @ViewBuilder action: () -> some View = { EmptyView() }) -> some View {
-        HStack(spacing: 10) {
-            Image(ds: icon).foregroundColor(tinted ? accent : sub)
-            Text(text).font(sys(size: DS.TypeRole.label.size)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
+    /// §10.21: one inline notice. Neutral for info; `failed` is the crashed glyph and tint. The text stays `fg`.
+    func banner(_ icon: String, _ text: String, failed: Bool = false, @ViewBuilder action: () -> some View = { EmptyView() }) -> some View {
+        HStack(spacing: DS.Space.s8) {
+            Image(ds: failed ? "crashed" : icon).foregroundColor(failed ? StatusInk.crashedInk : sub).accessibilityLabel(failed ? "Failed" : "").accessibilityHidden(!failed)
+            Text(text).font(ds(DS.TypeRole.body)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: DS.Space.s8)
             action()
-        }.padding(.horizontal, 14).padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(tinted ? Color(accentSet.subtle, dark: isDark) : surface))
+        }.padding(DS.Space.s12)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(failed ? Color(DS.Palette.statusCrashedBg, dark: isDark) : surface))
     }
 
-    func listItem(_ title: String, _ meta: String, on: Bool, mono: Bool = false, icon: String? = nil, tag: String? = nil, _ pick: @escaping () -> Void) -> some View {
+    func listItem(_ title: String, _ meta: String, on: Bool, icon: String? = nil, tag: String? = nil, _ pick: @escaping () -> Void) -> some View {
         Button(action: pick) {
             HStack(spacing: 10) {
-                if let icon { Image(ds: icon).foregroundColor(on ? accent : sub).frame(width: 16) }
+                if let icon { Image(ds: icon).foregroundColor(on ? fg : sub).frame(width: 16) }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(sys(size: DS.TypeRole.body.size, weight: .semibold, design: mono ? .monospaced : .default)).foregroundColor(fg).lineLimit(1)
+                    Text(title).font(ds(DS.TypeRole.strong)).foregroundColor(fg).lineLimit(1).truncationMode(.middle)
                     Text(meta).font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let tag { chip(tag) }
             }.padding(.horizontal, 10).padding(.vertical, DS.Space.s8).contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(accentSet.subtle, dark: isDark) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(on ? Color(DS.Palette.elementActive, dark: isDark) : Color.clear))
         }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// §10.21: a detail with nothing picked: a faint icon, a line, what to do. Centred in the column.
+    func emptyDetail(_ icon: String, _ title: String, _ hint: String, add: (String, () -> Void)? = nil) -> some View {
+        VStack(spacing: DS.Space.s8) {
+            Image(ds: icon, size: 20).foregroundColor(Color(DS.Palette.fgFaint, dark: isDark)).accessibilityHidden(true)
+            Text(title).font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
+            Text(hint).font(ds(DS.TypeRole.body)).foregroundColor(sub).multilineTextAlignment(.center).frame(maxWidth: 320)
+            if let add { Button(add.0 + "…", action: add.1).padding(.top, DS.Space.s8) }
+        }.frame(maxWidth: .infinity).padding(.top, add == nil ? 200 : 140)
     }
 
     /// A path or name in a card, with its buttons on the right.
@@ -1024,11 +1062,20 @@ struct SettingsView: View {
         Button(action: act) { Image(ds: "close", size: iconSize(DS.TypeRole.label.size)) }.buttonStyle(.borderless).foregroundColor(sub).accessibilityLabel(label).help(label)
     }
 
-    /// A multi-line field.
-    func editor(_ t: Binding<String>, _ label: String, height: CGFloat = 120) -> some View {
-        TextEditor(text: t).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).scrollContentBackground(.hidden).padding(DS.Space.s8)
-            .frame(minHeight: height).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(edge)).accessibilityLabel(label)
+    /// A multi-line field: a §10.4 well under an optional section header, never a card.
+    func editor(_ t: Binding<String>, _ label: String, height: CGFloat = 120, title: String? = nil, aside: String? = nil, placeholder: String = "") -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
+            if let title { sectionHeader(title, aside) }
+            TextEditor(text: t).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).scrollContentBackground(.hidden).padding(DS.Space.s8)
+                .frame(minHeight: height).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(fieldFill))
+                .overlay(alignment: .topLeading) {
+                    if t.wrappedValue.isEmpty {
+                        Text(placeholder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).foregroundColor(Color(DS.Palette.fgFaint, dark: isDark))
+                            .padding(.horizontal, DS.Space.s12 + 1).padding(.vertical, DS.Space.s8).allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).strokeBorder(edge)).accessibilityLabel(label)
+        }
     }
 
     func saveRow(_ title: String = "Save", _ save: @escaping () -> Void, @ViewBuilder more: () -> some View = { EmptyView() }) -> some View {
@@ -1041,9 +1088,6 @@ struct SettingsView: View {
         }
     }
 
-    /// One width for every menu picker, so values line up down the form.
-    var menuWidth: CGFloat { 216 }
-
     // MARK: This Mac
 
     @ViewBuilder var general: some View {
@@ -1053,24 +1097,22 @@ struct SettingsView: View {
                 FloorSegments(at: c.termOpens, go: { c.termOpens = $0 }).fixedSize()
             }
             row("Name", "What the chat calls itself. ⌃⌥M shows or hides it from any app.") {
-                TextField("Greenlight", text: $c.name).textFieldStyle(.roundedBorder).frame(width: 220)
+                TextField("Greenlight", text: $c.name).textFieldStyle(DSField()).frame(width: 220)
             }
-        }
-        box("Dock icon", aside: "Debug is the same icon with a grey light. Dev copies start on it.") {
-            HStack(spacing: DS.Space.s12) { ForEach([("Default", "Default"), ("Debug", "Debug")], id: \.0) { dockTile($0.0, $0.1) } }
-                .padding(DS.Space.s12)
+            row("Dock icon", "Debug is the same icon with a grey light. Dev copies start on it.") {
+                HStack(spacing: DS.Space.s16) { ForEach(["Default", "Debug"], id: \.self) { dockTile($0, $0) } }
+            }
         }
     }
 
     func dockTile(_ id: String, _ name: String) -> some View {
         let on = c.dockIcon == id
         return Button { c.dockIcon = id } label: {
-            VStack(spacing: DS.Space.s8) {
-                Image(nsImage: Bundle.main.image(forResource: id == "Debug" ? "GreenlightDebug" : "Greenlight") ?? NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
-                Text(name).font(sys(size: DS.TypeRole.label.size, weight: on ? .semibold : .regular)).foregroundColor(on ? fg : sub).multilineTextAlignment(.center)
-            }.padding(DS.Space.s12).frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(bg))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(on ? accent : edge, lineWidth: on ? 2 : 1))
+            VStack(spacing: DS.Space.s4) {  // the ring is around the icon only, 2pt off it
+                Image(nsImage: Bundle.main.image(forResource: id == "Debug" ? "GreenlightDebug" : "Greenlight") ?? NSApp.applicationIconImage).resizable().frame(width: 48, height: 48)
+                    .padding(DS.Space.s4).overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(on ? Color(accentSet.ring, dark: isDark) : Color.clear, lineWidth: 2))
+                Text(name).font(ds(DS.TypeRole.caption)).foregroundColor(on ? fg : sub)
+            }.contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("\(name) Dock icon\(on ? ", selected" : "")")
     }
 
@@ -1122,7 +1164,7 @@ struct SettingsView: View {
             if custom {
                 dependent(off: false) {
                     row("Location", "A file on this Mac or an http(s) URL. Return reloads it.") {
-                        TextField("File on this Mac or http(s) URL", text: $c.fluidURL).textFieldStyle(.roundedBorder).onSubmit(c.reloadFluid).frame(width: 240)
+                        TextField("File on this Mac or http(s) URL", text: $c.fluidURL).textFieldStyle(DSField()).onSubmit(c.reloadFluid).frame(width: 240)
                         Button("Reload", action: c.reloadFluid)
                     }
                 }
@@ -1141,7 +1183,7 @@ struct SettingsView: View {
     /// A live preview: a chat turn, a status and the primary button, in the appearance, accent and text size you've picked.
     var previewCard: some View {
         VStack(alignment: .leading, spacing: DS.Space.s12) {
-            Text("Preview").font(ds(DS.TypeRole.titleSm)).foregroundColor(fg)
+            Text("Preview").font(ds(DS.TypeRole.strong)).foregroundColor(fg)
             VStack(alignment: .leading, spacing: DS.Space.s8) {
                 HStack { Spacer(minLength: DS.Space.s48)
                     Text("Which MRs need me?").font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(fg)
@@ -1166,14 +1208,14 @@ struct SettingsView: View {
                 .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(Color(nsColor: t.bg))).overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge)).accessibilityHidden(true)
             Picker(dark ? "Dark terminal theme" : "Light terminal theme", selection: Binding(get: { t.name }, set: { n in
                 c.restyle { if let t = themes.first(where: { $0.name == n }) { if dark { darkTheme = t } else { lightTheme = t } } }
-            })) { ForEach(themes.filter { $0.dark == dark }, id: \.name) { Text($0.name).tag($0.name) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+            })) { ForEach(themes.filter { $0.dark == dark }, id: \.name) { Text($0.name).tag($0.name) } }.labelsHidden().fixedSize()
         }
     }
 
     func fontPicker(_ label: String, _ current: String, _ set: @escaping (String) -> Void) -> some View {
         Picker(label, selection: Binding(get: { current }, set: { v in c.restyle { set(v) } })) {
             ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
-        }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+        }.labelsHidden().fixedSize()
     }
 
     @ViewBuilder var chat: some View {
@@ -1181,31 +1223,30 @@ struct SettingsView: View {
         box("Model") {
             ruled(ModelSelector(c: c, title: "Chat model", hint: "Changes apply from your next message.", model: $c.model, effort: $c.effort))
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
-            toggleRow("Verbose activity", "A live log above the message box (and under the live line in voice mode): \(c.name)'s every command in full with its output and thinking, what your workspaces' agents are doing, and each move Greenlight makes. Off keeps the concise view.", $c.verbose)
+            toggleRow("Verbose activity", "A live log above the message box: \(c.name)'s every command with its output, what your agents are doing, and each move Greenlight makes.", $c.verbose)
         }
-        let status = engineStatus, ready = !status.hasPrefix("Not ready")
+        let status = engineStatus  // "Ready · …" or "Not ready · …": the hint says it, no dot
         box("Dictation") {
             row("Engine", status) {
-                Circle().fill(ready ? StatusInk.done : StatusInk.needs).frame(width: 8, height: 8).accessibilityLabel(ready ? "Ready" : "Not ready")
-                Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+                Picker("Voice engine", selection: $c.engine) { ForEach(engines, id: \.0) { Text($0.1).tag($0.0) } }.labelsHidden().fixedSize()
             }
             if c.engine == "whisper" { dependent(off: false) { row("Whisper model") { Button("Choose model…") { delegate.pickModel() } } } }
             if c.engine == "openai" { dependent(off: false) { row("OpenAI key", openAIKeySource()) { Button("Set key…") { delegate.setKey() } } } }
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
         }
         box("Voice mode") {
-            row("Anthropic key", "For the stage: Claude Haiku 5.5 draws what \(c.name) says. Stored in your Keychain; without it the stage shows a plain list.") {
+            row("Anthropic key", "Draws what \(c.name) says on the voice stage. Stored in your Keychain; without it the stage shows a plain list.") {
                 Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
             }
-            row("Speaking voice", Speech.shared.status.isEmpty ? (Speech.shared.kind == "live" ? "OpenAI's GPT-Live 1.1 holds the conversation: it hears you, hands each request to \(c.name) and reads its answer. About $0.05 a minute while voice mode is on; if it fails, voice mode stops and says why (no Apple voice standing in)." : "How \(c.name) sounds. Kokoro runs on this Mac; ElevenLabs is paid and gets each line \(c.name) says. Either falls back to Apple's voice.") : Speech.shared.status) {
+            row("Speaking voice", Speech.shared.status.isEmpty ? (Speech.shared.kind == "live" ? "OpenAI's GPT-Live 1.1 holds the conversation: it hears you, hands each request to \(c.name) and reads its answer. About $0.05 a minute while voice mode is on; if it fails, voice mode stops and says why (no Apple voice standing in)." : "Kokoro runs on this Mac. ElevenLabs is paid and is sent each line. Either falls back to Apple's voice.") : Speech.shared.status) {
                 Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); preview.stop(); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {
                     ForEach(Speech.kinds, id: \.0) { Text($0.1).tag($0.0) }
-                }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+                }.labelsHidden().fixedSize()
             }
             if Speech.shared.kind == "kokoro" { dependent(off: false) { row("Kokoro voice", "a = American, b = British; f/m = female/male.") {
                 Picker("Kokoro voice", selection: Binding(get: { Speech.shared.kokoroVoice }, set: { ud.set($0, forKey: "kokoroVoice"); c.objectWillChange.send() })) {
                     ForEach(Speech.kokoroVoices, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+                }.labelsHidden().fixedSize()
             } } }
             if Speech.shared.kind == "live" { dependent(off: false) {
                 row("OpenAI key", openAIKeySource() + " The same key as the OpenAI Whisper engine.") { Button("Set key…") { delegate.setKey() } }
@@ -1220,13 +1261,13 @@ struct SettingsView: View {
                         preview.play($0, voiceOn: c.voice.on)
                     })) {
                         ForEach(LiveVoice.voices, id: \.self) { Text($0.capitalized).tag($0) }
-                    }.labelsHidden().frame(width: menuWidth, alignment: .trailing)
+                    }.labelsHidden().fixedSize()
                 }
             } }
             if Speech.shared.kind == "eleven" { dependent(off: false) {
                 row("ElevenLabs key", "Stored in your Keychain.") { Button("Set key…") { delegate.askKey("elevenlabs", "ElevenLabs API key", "voice mode's speaking voice") } }
                 row("ElevenLabs voice ID", "From elevenlabs.io → Voices. Empty: Sarah.") {
-                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice"); Speech.shared.warm() })).frame(width: menuWidth)
+                    TextField("EXAVITQu4vr4xnSDxMaL", text: Binding(get: { ud.string(forKey: "elevenVoice") ?? "" }, set: { ud.set($0.trimmingCharacters(in: .whitespaces), forKey: "elevenVoice"); Speech.shared.warm() })).frame(width: 216)
                 }
             } }
             if Speech.shared.kind != "apple" && Speech.shared.kind != "live" { dependent(off: false) {
@@ -1298,31 +1339,25 @@ struct SettingsView: View {
         shortcuts("In any app", [("Show or hide \(c.name)", "⌃⌥M"), ("Dictate to chat", c.shortcut)])
     }
 
-    /// Two columns of shortcuts.
+    /// One column: the label on the left, its keys on one right edge.
     func shortcuts(_ t: String, _ keys: [(String, String)]) -> some View {
-        box(t) {
-            let even = keys.count / 2 * 2
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
-                ForEach(keys[..<even], id: \.0) { a, k in shortcut(a, k) }
-            }
-            if even < keys.count { shortcut(keys[even].0, keys[even].1) }  // an odd one out takes the full row, no empty cell
-        }
+        box(t) { ForEach(keys, id: \.0) { a, k in shortcut(a, k) } }
     }
     func shortcut(_ a: String, _ k: String) -> some View {
         ruled(HStack(spacing: DS.Space.s8) {
-            Text(a).font(sys(size: DS.TypeRole.body.size)).foregroundColor(sub).fixedSize(horizontal: false, vertical: true)
+            Text(a).font(ds(DS.TypeRole.body)).foregroundColor(fg).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: DS.Space.s8)
             if a == "Dictate to chat" { shortcutEditor } else { keycaps(k) }  // the voice shortcut is edited where it's listed
-        }.padding(.horizontal, DS.Space.s16).frame(minHeight: 40))
+        }.padding(.horizontal, DS.Space.s16).frame(minHeight: DS.Layout.controlHeightLg))
     }
 
     /// "↑|↓" is either key, as separate caps; a chord is one cap with its modifiers spaced.
     func keycaps(_ k: String) -> some View {
         HStack(spacing: DS.Space.s4) {
             ForEach(Array(k.split(separator: "|").enumerated()), id: \.offset) { i, key in
-                if i > 0 { Text("or").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) }
-                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(sys(size: DS.TypeRole.label.size, weight: .medium).monospacedDigit()).foregroundColor(fg)
-                    .padding(.horizontal, DS.Space.s8).frame(minWidth: 26).frame(height: 22)
+                if i > 0 { Text("or").font(ds(DS.TypeRole.caption)).foregroundColor(Color(DS.Palette.fgFaint, dark: isDark)) }
+                Text(key.count > 4 ? String(key) : key.map(String.init).joined(separator: "\u{2009}")).font(ds(DS.TypeRole.labelSm)).foregroundColor(sub)
+                    .padding(.horizontal, DS.Space.s4 + 2).frame(minWidth: 22).frame(height: 20)
                     .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(surface)).overlay(RoundedRectangle(cornerRadius: DS.Radius.xs).stroke(edge))
             }
         }
@@ -1344,16 +1379,14 @@ struct SettingsView: View {
         }
     }
 
-    /// A duration: a slider for the usual 0–2s, a field for up to 5s, and whether it's on at all.
+    /// A duration: a slider for the usual 0–2s, a field for up to 5s. 0 is off, and each row's hint says so.
     func seconds(_ label: String, _ v: Binding<Double>) -> some View {
-        let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) }), on = v.wrappedValue > 0
+        let b = Binding(get: { v.wrappedValue }, set: { v.wrappedValue = min(max($0, 0), 5) })
         return HStack(spacing: DS.Space.s8) {
             Slider(value: Binding(get: { min(b.wrappedValue, 2) }, set: { b.wrappedValue = ($0 * 20).rounded() / 20 }), in: 0...2)
                 .frame(width: 130).accessibilityLabel(label)  // no `step:`, which draws 41 tick marks
-            TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
+            TextField(label, value: b, format: .number.precision(.fractionLength(0...2))).textFieldStyle(DSField()).multilineTextAlignment(.trailing).frame(width: 52)
             Text("s").foregroundColor(sub)
-            Text(on ? "On" : "Off").font(sys(size: DS.TypeRole.caption.size, weight: .medium)).foregroundColor(on ? accent : dim)
-                .frame(width: 34, height: 18).background(Capsule().fill(on ? accent.opacity(0.12) : surface))
         }
     }
 
@@ -1365,20 +1398,22 @@ struct SettingsView: View {
                 Picker("Host", selection: $c.runHost) {
                     Text("This Mac").tag("local")
                     ForEach(ssh + (c.runHost == "local" || ssh.contains(c.runHost) ? [] : [c.runHost]), id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: 180)
+                }.labelsHidden().frame(width: 180, alignment: .trailing)
                 Button("Test") { c.testHost() }.help("Test the connection")
             }
             dependent(off: false) {
-                row("State folder", "On that host.") { TextField("~/.greenlight", text: $c.runHome).textFieldStyle(.roundedBorder).frame(width: 240) }
-                row("Code folder", "Where greenlight.py lives on that host.") { TextField("~/.claude/skills/greenlight", text: $c.runCode).textFieldStyle(.roundedBorder).frame(width: 240) }
+                row("State folder", "On that host.") { TextField("~/.greenlight", text: $c.runHome).textFieldStyle(DSField()).frame(width: 240) }
+                row("Code folder", "Where greenlight.py lives on that host.") { TextField("~/.claude/skills/greenlight", text: $c.runCode).textFieldStyle(DSField()).frame(width: 240) }
             }
         }
-        if c.hostPending {
-            banner("refresh", "Greenlight reads the host at launch. Relaunch to apply.", tinted: true) { Button("Relaunch") { c.relaunch() }.buttonStyle(.borderedProminent) }
+        if c.hostPending || env != nil {  // one notice, under the card it's about
+            banner(env == nil ? "refresh" : "info", [env.map { "GREENLIGHT_HOST=\($0) is set, and it wins over this setting." },
+                                                       c.hostPending ? "Greenlight reads the host at launch. Relaunch to apply." : nil].compactMap { $0 }.joined(separator: " ")) {
+                if c.hostPending { Button("Relaunch") { c.relaunch() } }
+            }.padding(.top, -DS.Space.s16)
         }
-        if let env { banner("alert", "GREENLIGHT_HOST=\(env) is set, and it wins over this setting.") }
         box("The Basement's hosts", aside: "From ~/.ssh/config") {
-            row("This Mac's name", "Shown in the Basement's sidebar. Empty: its hostname.") { TextField(localDefault, text: $c.localName).textFieldStyle(.roundedBorder).frame(width: 240) }
+            row("This Mac's name", "Shown in the Basement's sidebar. Empty: its hostname.") { TextField(localDefault, text: $c.localName).textFieldStyle(DSField()).frame(width: 240) }
             pathRow("laptop", c.localShown) { Text("local").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) }
             ForEach(ssh, id: \.self) { h in pathRow("server", h) { if h == host { chip("runs Greenlight") } else { Text("ssh").font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim) } } }
             ruled(HStack {
@@ -1397,34 +1432,26 @@ struct SettingsView: View {
         box("Workspace scan") {
             row("Scan every", c.greenlightEveryLoading ? "Checking \(hostLabel)…" : c.greenlightEvery == 0 ? "Off: nothing scans or starts agents on a schedule."
                 : "Scans every workspace on \(hostLabel), starts agents when work is waiting, and refreshes the dashboard.") {
-                if c.greenlightEveryLoading { ProgressView().controlSize(.small) }
                 Picker("Scan interval", selection: Binding(get: { c.greenlightEvery }, set: c.setGreenlightEvery)) {
                     Text("Off").tag(0)
                     ForEach([10, 15, 30, 60], id: \.self) { Text($0 == 60 ? "1 hour" : "\($0) min").tag($0) }
-                }.labelsHidden().pickerStyle(.segmented).fixedSize().onAppear(perform: c.loadGreenlightEvery).disabled(c.greenlightEveryLoading)
+                }.labelsHidden().fixedSize().onAppear(perform: c.loadGreenlightEvery).disabled(c.greenlightEveryLoading)
             }
-            if failed {
-                ruled(HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
-                    Image(ds: "alert").foregroundColor(StatusInk.needs)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(c.greenlightEveryNote).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).foregroundColor(fg)
-                        note("The schedule shown is the last one this Mac read; it may be out of date.")
-                    }
-                    Spacer(minLength: DS.Space.s12)
-                    Button("Retry", action: c.loadGreenlightEvery)
-                }.padding(DS.Space.s16).background(StatusInk.needs.opacity(0.1)))
-            }
+        }
+        if failed {
+            banner("crashed", c.greenlightEveryNote + " The schedule shown may be out of date.", failed: true) { Button("Retry", action: c.loadGreenlightEvery) }
+                .padding(.top, -DS.Space.s16)
         }
         box("Background agents") {
             ruled(ModelSelector(c: c, title: "Workspace pages", hint: "Builds each workspace's page on the dashboard.", model: $c.designModel, effort: $c.designEffort, allowedHarnesses: writerHarnesses))
             dependent(off: false) {
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
-                    if c.designParallel > 0 {
-                        Stepper("\(c.designParallel) at once", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds")
-                    }
                     Picker("Rebuild pages", selection: Binding(get: { c.designParallel > 0 }, set: { c.designParallel = $0 ? max(c.designParallel, 3) : 0 })) {
                         Text("On demand").tag(false); Text("Background").tag(true)
                     }.labelsHidden().pickerStyle(.segmented).fixedSize()
+                }
+                if c.designParallel > 0 {
+                    row("Pages at once") { Stepper("\(c.designParallel)", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds") }
                 }
             }
             ruled(ModelSelector(c: c, title: "Next-step suggestions", hint: "Suggests the next action on each hex when its state moves.", model: $c.nextModel, effort: $c.nextEffort, allowedHarnesses: writerHarnesses))
@@ -1466,24 +1493,28 @@ struct SettingsView: View {
 
     static let kindTitle = ["delete-workspace": "Delete a finished workspace", "keep-draft": "Keep a PR as a draft", "merge-held": "Merge a held PR",
                             "milestone": "Set a milestone", "agent-stuck": "Unstick an agent", "signoff": "Sign off a step"]
-    func kindStats(_ k: AutonomyReport.Kind) -> String {
-        let past = k.n.map { n in "\(k.right ?? 0) of \(n) guesses matched your answer." } ?? "No guesses checked yet."
-        return k.eligible ? past : past + " A human gate: Greenlight never answers these for you, nor preselects merge or sign-off."
+    func kindStats(_ k: AutonomyReport.Kind) -> String? {
+        let past = k.n.map { n in "\(k.right ?? 0) of \(n) guesses matched your answer." }  // none checked yet: no hint, the section says it once
+        return k.eligible ? past : "A human gate: Greenlight never answers this for you, nor preselects it."
     }
     @ViewBuilder var autonomyPane: some View {
-        heading("Autonomy", "Greenlight guesses your answer from what you answered before. At 95% confidence, with the sort turned on here, it may answer an inactive choice such as keep draft. You can ask it to reconsider. At 65% or more, it preselects the answer in the bell. For actions or uncertain choices, it asks.")
+        heading("Autonomy", "Greenlight guesses your answer from what you answered before, and asks whenever it isn't sure.")
         Group {
             if let r = c.autonomy {
                 ForEach(r.candidates, id: \.kind) { cand in
-                    banner("graduation", "\(Self.kindTitle[cand.kind] ?? cand.kind): \(cand.right) of \(cand.n) sure guesses were right. Let Greenlight answer these itself?", tinted: true) {
-                        Button("Turn on") { c.setAutonomy(["--auto", cand.kind, "on"]) }.buttonStyle(.borderedProminent)
+                    banner("graduation", "\(Self.kindTitle[cand.kind] ?? cand.kind): \(cand.right) of \(cand.n) sure guesses were right. Let Greenlight answer these itself?") {
+                        Button("Turn on") { c.setAutonomy(["--auto", cand.kind, "on"]) }
                     }
                 }
-                box("Answered for you", aside: "Only when 95%+ sure, and only an inactive answer") {
+                box("Answered for you", aside: "At 95% sure, with the kind turned on here, it answers an inactive choice such as keep draft; you can ask it to reconsider. At 65% it preselects the answer in the bell.\(r.kinds.contains { $0.n != nil } ? "" : " No guesses checked yet.")") {
                     ForEach(r.kinds, id: \.kind) { k in
                         row(Self.kindTitle[k.kind] ?? k.kind, kindStats(k)) {
-                            Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy(["--auto", k.kind, $0 ? "on" : "off"]) }))
-                                .labelsHidden().toggleStyle(.switch).disabled(!k.eligible)
+                            if k.eligible {
+                                Toggle(Self.kindTitle[k.kind] ?? k.kind, isOn: Binding(get: { k.opted }, set: { c.setAutonomy(["--auto", k.kind, $0 ? "on" : "off"]) }))
+                                    .labelsHidden().toggleStyle(.switch)
+                            } else {
+                                Label { Text("Always asks") } icon: { Image(ds: "lock") }.font(ds(DS.TypeRole.body)).foregroundColor(sub)
+                            }
                         }
                     }
                 }
@@ -1491,7 +1522,7 @@ struct SettingsView: View {
                     row("Ping gate", "Idle check-ins and the watch go out only while you act on them more often than you dismiss them (✕, or left unanswered a day).") {
                         Picker("Ping gate", selection: Binding(get: { r.gate }, set: { c.setAutonomy(["--gate", "\($0)"]) })) {
                             Text("Off").tag(0.0); Text("Lenient").tag(0.25); Text("Balanced").tag(0.35); Text("Strict").tag(0.5)
-                        }.labelsHidden().pickerStyle(.segmented).fixedSize()
+                        }.labelsHidden().fixedSize()
                     }
                 }
                 if !r.recent.isEmpty {
@@ -1552,14 +1583,14 @@ struct SettingsView: View {
     }
 
     @ViewBuilder var projects: some View {
-        split("Projects", "Repositories and the folders they're checked out in. Each gets its own Basement window.", add: ("New project", { _ = addProject() })) {
+        split("Projects", "Repositories and the folders they're checked out in. Each gets its own Basement window.", add: ("New project", { _ = addProject() }),
+              empty: rs.projs.isEmpty ? ("folder", "No projects yet", "A project is a set of repositories and the folders they're checked out in.") : nil) {
             ForEach(rs.projs.indices, id: \.self) { i in
                 let p = rs.projs[i], n = pstrings(p, "repos").count, d = pstrings(p, "dirs").count
                 listItem(pname(p), "\(n) \(n == 1 ? "repo" : "repos") · \(d) \(d == 1 ? "folder" : "folders")", on: pid(p) == rs.proj, icon: "folder") { rs.proj = pid(p); rs.draftDir = ""; rs.projNote = "" }
             }
-            if rs.projs.isEmpty { note("No projects yet.").padding(DS.Space.s12) }
         } detail: {
-            if let i = rs.projs.firstIndex(where: { pid($0) == rs.proj }) { projectDetail(i) } else { note("Pick a project, or make a new one.") }
+            if let i = rs.projs.firstIndex(where: { pid($0) == rs.proj }) { projectDetail(i) } else { emptyDetail("folder", "No project selected", "Pick one from the list, or make a new one under it.") }
             if !rs.projNote.isEmpty { note(rs.projNote) }
         }.onAppear { if !rs.projs.contains(where: { pid($0) == rs.proj }) { rs.proj = rs.projs.first.map(pid) ?? "" } }
     }
@@ -1591,7 +1622,7 @@ struct SettingsView: View {
                 }
             }
             ruled(HStack(spacing: 10) {
-                TextField("~/src/another-repo", text: $rs.draftDir).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).onSubmit(addDir)
+                TextField("~/src/another-repo", text: $rs.draftDir).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).onSubmit(addDir)
                     .accessibilityLabel("New folder path")
                 Button("Add folder", action: addDir).disabled(rs.draftDir.trimmingCharacters(in: .whitespaces).isEmpty)
             }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10))
@@ -1617,15 +1648,16 @@ struct SettingsView: View {
 
     @ViewBuilder var repositories: some View {
         split("Repositories", "Each repo's project, its lifecycle, and the prompts behind the hover card's buttons.",
-              add: ("Add repository", { rs.adding = true; rs.draftRepo = ""; rs.draftProj = rs.projs.first.map(pid) ?? ""; rs.projNote = "" })) {
+              add: ("Add repository", { rs.adding = true; rs.draftRepo = ""; rs.draftProj = rs.projs.first.map(pid) ?? ""; rs.projNote = "" }),
+              empty: allRepos.isEmpty && !rs.adding && !rs.busy ? ("branch", "No repositories yet", "A repository gets its own lifecycle, rules and prompts here.") : nil) {
             ForEach(allRepos, id: \.self) { r in
                 let on = !rs.adding && rs.repo == r
                 let hostTag = lookupRepoHost(r, in: rs.repoHosts)?.target == "mac" ? " · Mac" : ""
-                listItem(r, (projectOf(r).map(pname) ?? "No project") + hostTag, on: on, mono: true, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
+                listItem(r, (projectOf(r).map(pname) ?? "No project") + hostTag, on: on, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
             }
-            if allRepos.isEmpty { note(rs.busy ? "Loading…" : "No repositories yet.").padding(DS.Space.s12) }
+            if allRepos.isEmpty && rs.busy { note("Loading…").padding(DS.Space.s12) }
         } detail: {
-            if rs.adding { addRepoForm } else if !rs.repo.isEmpty { repoDetail } else { note("Pick a repository.") }
+            if rs.adding { addRepoForm } else if !rs.repo.isEmpty { repoDetail } else { emptyDetail("branch", "No repository selected", "Pick one from the list, or add one under it.") }
         }.onAppear { takeRepo() }.onChange(of: c.settingsRepo) { takeRepo() }
     }
 
@@ -1638,7 +1670,7 @@ struct SettingsView: View {
     @ViewBuilder var addRepoForm: some View {
         box("Add a repository") {
             row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
-                TextField("repo", text: $rs.draftRepo).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
+                TextField("repo", text: $rs.draftRepo).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
             }
             row("Project") {
                 Picker("Project", selection: $rs.draftProj) { ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) } }.labelsHidden().frame(width: 180)
@@ -1665,20 +1697,21 @@ struct SettingsView: View {
     @ViewBuilder var repoDetail: some View {
         let proj = projectOf(rs.repo), own = rs.source == "yours"
         VStack(alignment: .leading, spacing: 3) {
-            Text(rs.repo).font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg)
+            Text(rs.repo).font(ds(DS.TypeRole.strong)).foregroundColor(fg)  // the pane's title is the only 15
             if let path = rs.repoPaths[rs.repo] { note(path) }
         }
-        HStack(spacing: DS.Space.s8) {  // under the name: the detail column can be ~300pt
-            Picker("Project", selection: Binding(get: { proj.map(pid) ?? "" }, set: { setProject(rs.repo, $0) })) {
-                Text("No project").tag("")
-                ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) }
-            }.labelsHidden().frame(maxWidth: 160).help("Opens with the project's folders in the Basement.")
-            Button("New project…") { setProject(rs.repo, addProject()); c.settingsTab = "Projects" }
-            Spacer(minLength: 0)
-            Button("Remove", role: .destructive) { setProject(rs.repo, "") }.disabled(proj == nil).help("Take it out of its project")
-        }
         if !rs.projNote.isEmpty { note(rs.projNote) }
-        box("Host") {
+        box {
+            row("Project", "Opens with the project's folders in the Basement. No project takes it out.") {
+                Picker("Project", selection: Binding(get: { proj.map(pid) ?? "" }, set: {
+                    if $0 == "+" { setProject(rs.repo, addProject()); c.settingsTab = "Projects" } else { setProject(rs.repo, $0) }
+                })) {
+                    Text("No project").tag("")
+                    ForEach(rs.projs.indices, id: \.self) { j in Text(pname(rs.projs[j])).tag(pid(rs.projs[j])) }
+                    Divider()
+                    Text("New project…").tag("+")  // "+" is no project's id
+                }.labelsHidden().fixedSize()
+            }
             row("Run Chief and agents on", repoHostHelp) {
                 Picker("Host", selection: Binding(get: { rs.repoHostMode }, set: { rs.setHost($0) })) {
                     Text("Server").tag("server")
@@ -1690,7 +1723,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: DS.Space.s8) {
             Picker("Repository settings", selection: $rs.rtab) {
                 Text("Lifecycle").tag("stages"); Text(rs.autoOn.isEmpty ? "Auto-run" : "Auto-run (\(rs.autoOn.count))").tag("auto"); Text("Rules").tag("rules"); Text("Prompts").tag("prompts")
-            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            }.pickerStyle(.segmented).labelsHidden().fixedSize().frame(maxWidth: .infinity)  // centred: tabs, not a setting
             if !rs.source.isEmpty { HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
                 Text(own ? "Your own lifecycle: \(greenlightHome)/lifecycles/\(rs.repo.replacingOccurrences(of: "/", with: "__")).md on \(hostLabel)." : "Using the \(rs.source) lifecycle. Saving makes it your own.")
                     .font(sys(size: DS.TypeRole.label.size)).foregroundColor(own ? accent : dim).fixedSize(horizontal: false, vertical: true)
@@ -1700,7 +1733,7 @@ struct SettingsView: View {
         switch rs.rtab {
         case "auto": autoRun
         case "rules":
-            box("Rules", aside: "Markdown · every agent on \(rs.repo) follows these") { editor($rs.rules, "Rules for \(rs.repo)", height: 260).padding(DS.Space.s12) }
+            editor($rs.rules, "Rules for \(rs.repo)", height: 260, title: "Rules", aside: "Markdown · every agent on \(rs.repo) follows these")
             saveRow("Save", rs.save)
         case "prompts": prompts
         default: lifecycle
@@ -1777,10 +1810,10 @@ struct SettingsView: View {
                 }.labelsHidden().frame(width: 140)
             }
             row("Review bot", "Overrides global review_bot for this repo. Set to none to disable.") {
-                TextField("Global default", text: optText("review_bot")).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
+                TextField("Global default", text: optText("review_bot")).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
             }
             row("Milestone prefix", "Active milestone prefix for the milestone step (default Release-).") {
-                TextField("Release-", text: optText("milestone")).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
+                TextField("Release-", text: optText("milestone")).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180)
             }
         }
         saveRow("Save", rs.save)
@@ -1801,14 +1834,22 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: DS.Space.s4) {
                 HStack(spacing: DS.Space.s8) {
                     if builtin { Text(cur.key).font(sys(size: DS.TypeRole.label.size, weight: .semibold, design: .monospaced)).foregroundColor(fg).padding(.top, 4) }
-                    else { TextField("key", text: keyBind).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
+                    else { TextField("key", text: keyBind).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 180).accessibilityLabel("Stage \(i + 1) key") }
                     Text(badge).font(sys(size: DS.TypeRole.caption.size, weight: .medium))
                         .foregroundColor(builtin ? sub : accent).padding(.horizontal, DS.Space.s8).frame(height: 20)
-                        .background(Capsule().fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.xs).fill(builtin ? surface : accent.opacity(0.12))).padding(.top, 2)
                 }
-                if builtin { note(cur.req) }
+                if builtin {  // `code` in the requirement reads as code; a long one opens on More
+                    let long = cur.req.count > 160, open = rs.openStages.contains(cur.key)
+                    Text((try? AttributedString(markdown: cur.req, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cur.req))
+                        .font(ds(DS.TypeRole.caption)).foregroundColor(dim).lineLimit(long && !open ? 2 : nil).fixedSize(horizontal: false, vertical: true)
+                    if long {
+                        Button(open ? "Less" : "More") { rs.openStages.formSymmetricDifference([cur.key]) }
+                            .buttonStyle(.plain).font(ds(DS.TypeRole.caption)).foregroundColor(Color(accentSet.fg, dark: isDark)).accessibilityLabel(open ? "Show less of stage \(i + 1)" : "Show all of stage \(i + 1)")
+                    }
+                }
                 else {
-                    TextField("Requirement", text: reqBind).textFieldStyle(.roundedBorder).accessibilityLabel("Stage \(i + 1) requirement")
+                    TextField("Requirement", text: reqBind).textFieldStyle(DSField()).accessibilityLabel("Stage \(i + 1) requirement")
                     HStack(spacing: DS.Space.s8) {
                         Picker("Done when", selection: Binding(
                             get: { doneBind.wrappedValue.hasPrefix("label=") ? "label" : doneBind.wrappedValue.hasPrefix("check=") ? "check" : "signoff" },
@@ -1817,12 +1858,12 @@ struct SettingsView: View {
                         }.labelsHidden().frame(width: 150)
                         if doneBind.wrappedValue.hasPrefix("label=") {
                             TextField("label", text: Binding(get: { String(doneBind.wrappedValue.dropFirst(6)) }, set: { doneBind.wrappedValue = "label=" + $0 }))
-                                .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
+                                .textFieldStyle(DSField()).frame(width: 160).accessibilityLabel("Stage \(i + 1) label")
                         } else if doneBind.wrappedValue.hasPrefix("check=") {
                             TextField("check name", text: Binding(get: { String(doneBind.wrappedValue.dropFirst(6)) }, set: { doneBind.wrappedValue = "check=" + $0 }))
-                                .textFieldStyle(.roundedBorder).frame(width: 160).accessibilityLabel("Stage \(i + 1) check")
+                                .textFieldStyle(DSField()).frame(width: 160).accessibilityLabel("Stage \(i + 1) check")
                         } else {
-                            TextField("Run command (optional)", text: runBind).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced))
+                            TextField("Run command (optional)", text: runBind).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced))
                                 .frame(width: 200).accessibilityLabel("Stage \(i + 1) run command")
                         }
                     }
@@ -1838,9 +1879,9 @@ struct SettingsView: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 0) {
-                Button { if i > 0 && i < rs.stages.count { rs.stages.swapAt(i, i - 1) } } label: { Image(ds: "chevron-up") }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
-                Button { if i + 1 < rs.stages.count { rs.stages.swapAt(i, i + 1) } } label: { Image(ds: "chevron-down") }.disabled(i >= rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
-                Button { if i < rs.stages.count && rs.stages.count > 1 { rs.stages.remove(at: i) } } label: { Image(ds: "close") }.disabled(rs.stages.count <= 1).accessibilityLabel("Remove stage \(i + 1)")
+                Button { if i > 0 && i < rs.stages.count { rs.stages.swapAt(i, i - 1) } } label: { Image(ds: "chevron-up").frame(width: 24, height: 24).contentShape(Rectangle()) }.disabled(i == 0).accessibilityLabel("Move stage \(i + 1) up")
+                Button { if i + 1 < rs.stages.count { rs.stages.swapAt(i, i + 1) } } label: { Image(ds: "chevron-down").frame(width: 24, height: 24).contentShape(Rectangle()) }.disabled(i >= rs.stages.count - 1).accessibilityLabel("Move stage \(i + 1) down")
+                Button { if i < rs.stages.count && rs.stages.count > 1 { rs.stages.remove(at: i) } } label: { Image(ds: "close").frame(width: 24, height: 24).contentShape(Rectangle()) }.disabled(rs.stages.count <= 1).padding(.leading, DS.Space.s8).accessibilityLabel("Remove stage \(i + 1)")
             }.buttonStyle(.borderless).foregroundColor(sub).frame(height: 24)
         }.padding(.leading, DS.Space.s12).padding(.trailing, DS.Space.s12).padding(.vertical, 10))
     }
@@ -1888,27 +1929,32 @@ struct SettingsView: View {
 
     @ViewBuilder var instructions: some View {
         heading("Instructions", "Standing instructions Greenlight reads in the chat and on every run: how to talk to you, what to never do, what to always check. A repo's own rules live in Repositories › Rules.")
-        box("Instructions.md", aside: "On \(hostLabel)") { editor($rs.instructions, "Instructions for Greenlight", height: 380).padding(DS.Space.s12) }
-        saveRow("Save instructions", rs.saveInstructions)
+        editor($rs.instructions, "Instructions for Greenlight", height: 380, placeholder: "Reply in short sentences.\nNever push to main without asking.")
+        saveRow("Save instructions", rs.saveInstructions) { note("Instructions.md on \(hostLabel)") }
     }
 
     @ViewBuilder var memory: some View {
         split("Memory", "What Greenlight has learned, one note each. It reads them before every run.",
-              add: ("New note", { rs.note = ""; rs.noteText = "---\nname: \ndescription: \nmetadata:\n  type: project\n---\n\n" })) {
+              add: ("New note", { rs.note = ""; rs.noteText = "---\nname: \ndescription: \nmetadata:\n  type: project\n---\n\n" }),
+              empty: rs.notes.isEmpty && rs.note.isEmpty && rs.noteText.isEmpty && !rs.busy ? ("bookmark", "No notes yet", "A note is one thing Greenlight has learned. It reads them before every run.") : nil) {
             ForEach(rs.notes, id: \.name) { n in
                 listItem(n.name, n.text.split(separator: "\n").first { $0.hasPrefix("description:") }.map { $0.dropFirst(12).trimmingCharacters(in: .whitespaces) } ?? "",
-                         on: rs.note == n.name, mono: true) { rs.note = n.name; rs.noteText = n.text }
+                         on: rs.note == n.name) { rs.note = n.name; rs.noteText = n.text }
             }
-            if rs.notes.isEmpty { note(rs.busy ? "Loading…" : "No notes yet.").padding(DS.Space.s12) }
+            if rs.notes.isEmpty && rs.busy { note("Loading…").padding(DS.Space.s12) }
         } detail: {
             let existing = rs.notes.contains { $0.name == rs.note }
-            if existing { Text(rs.note + ".md").font(sys(size: 20, weight: .bold, design: .monospaced)).foregroundColor(fg) }
-            else { TextField("my-decision", text: $rs.note).textFieldStyle(.roundedBorder).frame(width: 260).accessibilityLabel("New note name") }
-            box("Note", aside: "Keep the frontmatter: it's the index line.") { editor($rs.noteText, "Note text", height: 340).padding(DS.Space.s12) }
+            if rs.note.isEmpty && rs.noteText.isEmpty {
+                emptyDetail("bookmark", "No note selected", "Pick one from the list, or start a new one under it.")
+            } else {
+            if existing { Text(rs.note + ".md").font(ds(DS.TypeRole.titleSm)).foregroundColor(fg) }
+            else { TextField("my-decision", text: $rs.note).textFieldStyle(DSField()).frame(width: 260).accessibilityLabel("New note name") }
+            editor($rs.noteText, "Note text", height: 340, title: "Note", aside: "Keep the frontmatter: it's the index line.")
             saveRow("Save note", rs.saveNote) {
                 Button("Delete note", role: .destructive, action: rs.deleteNote).disabled(rs.busy || !existing)
             }.disabled(rs.note.isEmpty)
             note("Notes live in greenlight's memory folder on \(hostLabel). A note deleted here can come back from this Mac's copy on the next sync.sh.")
+            }
         }
     }
 }

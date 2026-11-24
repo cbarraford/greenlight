@@ -594,7 +594,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **Motion:** switching is instant. No sliding thumb, because it's frequent.
 
 ### 10.4 Inputs: text, search, textarea
-- **Base:** 28 tall (textarea min 3 lines, using `body-copy`), `bg.sunken` (light) or `element.rest` (dark), 1px `border.default`, radius `sm`.
+- **Base:** 28 tall (textarea min 3 lines, using `body-copy`), `bg.surface` (light: the text background, since grey reads as disabled) or `element.rest` (dark), 1px `border.default` drawn inside, radius `sm`. In a Settings form it is 24, the height of the controls beside it.
 - **States:**
   - H: `border.hover`.
   - F: border `accent.ring` plus the ring.
@@ -644,7 +644,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **States:**
   - H: `element.rest`.
   - P: `element.hover`.
-  - S: `element.active` (or `accent.subtle` in a nav sidebar), text `fg.default`.
+  - S: `element.active`, text `fg.default`. A nav sidebar is the same: the accent stays on the one primary action.
   - F: an inset ring.
   - D: `fg.faint`.
 - **Tree rows** get real keyboard support: `tabindex` with arrow-key handling, ←/→ to fold, Return to open. Row actions (+, close) show on hover, on focus and on the selected row.
@@ -803,10 +803,15 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Orb:** see §8.4. Draggable within its area; hover raises its elevation; pressed is .97; the ride animation is §7.
 
 ### 10.20 Settings
-- **Window:** `NavigationSplitView`. The sidebar (220) uses the system sidebar material, and its items are SF-matched icons from the set plus a `body` label. The selected item is `accent.subtle` with `fg.default`. There are no 22pt coloured icon tiles.
+- **Window:** `NavigationSplitView`. The sidebar (220) uses the system sidebar material, and its items are SF-matched icons from the set plus a `body` label. The selected item is `element.active` with `fg.default` and the heavier icon. There are no 22pt coloured icon tiles.
 - **Header:** the window title plus a search field (§10.4). The Settings-only sun/moon toggle goes away (appearance is a setting now).
-- **Panes:** a max 640-wide form column with grouped sections. Each section has a `title-sm` header with an optional `caption` description, then rows of label (left, `body`) and control (right).
-  - Controls are system SwiftUI controls tinted with the accent.
+- **Panes:** the pane's title is `title-sm` in the title bar's band, at one position on every pane, and the only 15 on the page. Under it, a 640-wide form column, centred, with grouped sections. Each section has a `strong` header with an optional `caption` description under it, then rows of label (left, `body`) and control (right).
+  - Controls are system SwiftUI controls tinted with the accent. Two or three options are a segmented control; four or more are a pop-up button, as wide as its longest option. Every control ends on the row's right edge, one control to a row, and a hint wraps at 420.
+  - A setting that can never be turned on shows its value in `fg.muted` with the lock icon, not a disabled switch.
+  - A row that depends on the one above is indented 16, with no connector. A row's divider runs from its label to its control's edge (16 in at both ends), no stronger than the card's ring.
+  - Text fields follow §10.4: `element.rest` in dark, never darker than the window. A multi-line field is a well under its section header, never inside a card.
+  - A list pane (Projects, Repositories, Memory) with nothing to list is its heading and one §10.21 empty state that carries the create button: no empty list column, and no zero count in the sidebar. With rows but nothing picked, the empty state sits in the detail column. The "+ New" footer is `fg.muted`, not the accent.
+  - A shortcut list is one column: the label left, the keycaps (§10.5) on the right edge.
   - Banners use the §10.21 recipe.
 - **Footer:** gone. Changes apply immediately, the Mac way. The Done button is removed (⌘W closes).
 - **Appearance pane:**
@@ -824,7 +829,8 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Loading:** skeletons match the final layout exactly, in `element.rest` with no shimmer (reduced-motion-safe by default). The spinner timing rules apply.
 - **Error:** what happened, plus the next action, in plain words. Show the code location or detail behind a "Details" disclosure in `code`.
 - **Banner** (inline notice):
-  - Radius `md`, 12 padding, `status.*.bg` with the glyph and `body` text in `status.*.fg` (neutral for info), plus one quiet action.
+  - Radius `md`, 12 padding, `status.*.bg` with the status glyph in `status.*.fg` (neutral for info), `body` text in `fg.default`, plus one quiet action. A failure is the crashed pair; needs keeps its diamond for "needs you".
+  - It sits 8 under the card it's about, never as a row inside one. One subject gets one banner.
   - Banners stack in this order: crashed, then needs, then info.
 
 ## 11. Voice and content
