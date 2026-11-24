@@ -1549,7 +1549,7 @@ function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "do
 function askState(p){
   const a = p.agent, st = ui.ask[p.name], key = [a.state, a.since, a.last].join("|");  // since: an agent can ask again with no text in between
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
-  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.err);  // its reply ends its turn: a "done" newer than your message (or its turn after a failed first one); never a turn you didn't start
+  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.failed);  // its reply ends its turn: a "done" newer than your message (or its turn after a failed first one); never a turn you didn't start
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
     const chat = !chatLive(st) ? null : reply ? {...st.chat, at: Date.now()} : st.chat;  // a reply in time carries the chat on, with its own CHAT_KEEP to read and answer it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
@@ -1567,7 +1567,7 @@ const CHAT_KEEP = 10 * 60000, CHAT_MAX = 12;  // ms a chat lasts after your last
 function sendAnswer(name, text, said){  // said: in a chat, the agent's messages this one replies to
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
-  st.sending = true; st.err = null; st.sentText = text; st.pend = said ? [...said, {who: "you", text}] : null;
+  st.sending = true; st.err = null; st.failed = false; st.sentText = text; st.pend = said ? [...said, {who: "you", text}] : null;
   if (said && st.chat) st.chat.tried = true;  // even if it fails, the picker may be gone: the chat stays to try again
   const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
   if (p && !said) act(p, "The answer didn't send");  // a chat keeps the sheet and its hex: the reply comes back here
@@ -2643,7 +2643,7 @@ window.mc = {
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;
     st.sending = false; acted(r.name, r.error, null, ui.answering === r.name || ui.page?.name === r.name);  // the sheet or page shows its own error
-    if (r.error) st.err = r.error;
+    if (r.error) { st.err = r.error; st.failed = !!st.pend && !(st.chat && st.chat.thread.length) }  // failed: a first chat message, whose picker may be gone
     else if (st.pend) {  // a chat: the thread grows, and the sheet stays open for the agent's reply
       st.sent = true; st.draft = ""; st.typed = r.since;  // the agent's state start when the text went in
       st.chat = {thread: arr(st.chat && st.chat.thread).concat(st.pend).slice(-CHAT_MAX), at: Date.now()};
