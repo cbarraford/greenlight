@@ -769,7 +769,8 @@ function icon(name, px = 16, cls = "ic"){ return dsIcon(name, px, {cls}) }
 // a status pill: the state's glyph, then its words (DESIGN.md §10.5); the class is its colour
 const PILL_GLYPH = {orange: "needs-fill", wait: "needs-fill", red: "crashed-fill", blue: "working", yellow: "your-move", green: "done", purple: "waiting", gray: "queued"};
 // a state's glyph in its readable colour, for legends, chips and headers (filled at this size: DESIGN.md §9.4)
-function stateGlyph(st){ return st.glyph ? h("span", {class:"sg", style:`color:${ink(st.color)}`}, icon(st.glyph + (["needs", "crashed", "done"].includes(st.glyph) ? "-fill" : ""), 12, "")) : null }
+const FILLED = {needs: "needs-fill", crashed: "crashed-fill", done: "done-fill"};  // a status glyph's filled variant, for 12px and under (§9.4)
+function stateGlyph(st){ return st.glyph ? h("span", {class:"sg", style:`color:${ink(st.color)}`}, icon(FILLED[st.glyph] || st.glyph, 12, "")) : null }
 function statusPill(kind, text, attrs = {}){ return h("span", {...attrs, class: "pill " + kind}, icon(PILL_GLYPH[kind] || "queued", 12, "pg"), text) }
 
 /* ---------- widgets: (props, small) -> element. Every prop is untrusted model output. ---------- */
@@ -934,7 +935,7 @@ function hexEl(p, R, opts = {}){
   const ly = named ? R * 1.02 : R * 1.04;  // under the bell and agent dot's band
   return h("div", {class:"hx st-" + p.state + (lb.num === "No MR" ? " nomr" : "") + (R < 40 ? " sm" : ""), style:`width:${2 * R}px;height:${2 * R}px;--hc:${col}`}, svg,
     h("div", {class:"hin", style:`width:${Math.max(nuc * 1.9, R * 1.5)}px;top:${ly}px`},
-      !compact && R >= 40 && STATE[p.state].glyph ? icon(STATE[p.state].glyph + (p.state === "needs" || p.state === "crashed" ? "-fill" : ""), R >= 60 ? 16 : 12, "hg") : null,  // the state's shape, so the hex never leans on colour alone
+      !compact && R >= 40 && STATE[p.state].glyph ? icon((p.state === "needs" || p.state === "crashed" ? FILLED[STATE[p.state].glyph] : null) || STATE[p.state].glyph, R >= 60 ? 16 : 12, "hg") : null,  // the state's shape, so the hex never leans on colour alone
       named ? h("b", {class:"hname"}, p.name.split("/").pop().replace(/-/g, " ")) : null,  // big enough: which task, then its MR
       lb.num === "No MR" && !opts.num ? h("b", {class:"hname", style: compact || R < 40 ? `font-size:var(--fs-1);-webkit-line-clamp:1;width:${Math.round(R * 1.75)}px;margin:0 auto;text-align:center` : null}, compact || R < 40 ? p.name.split("/").pop().split("-")[0] : p.name.split("/").pop().replace(/-/g, " ")) :  // no MR yet: its name says which one
       h("b", {style:`font-size:${compact ? Math.max(12, Math.round(R * .28)) : named ? 11 : R >= 60 ? 14 : R >= 46 ? 13 : 12}px` + (named ? ";font-weight:500" : "")}, lb.num),
