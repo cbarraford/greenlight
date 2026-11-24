@@ -346,7 +346,7 @@ func staged(_ s: String) -> Staged {
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
-    while let open = text.range(of: #"```[ \t]*stage\b"#, options: [.regularExpression, .caseInsensitive]) {  // every one, ```Stage too: never for the transcript
+    while let open = text.range(of: #"```[ \t]*stage(?![A-Za-z0-9])"#, options: [.regularExpression, .caseInsensitive]) {  // every one, ```Stage too: never for the transcript
         guard let close = text[open.upperBound...].range(of: "```") else { text = String(text[..<open.lowerBound]); break }
         if stage == nil { stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines) }  // the first is drawn
         text.removeSubrange(open.lowerBound..<close.upperBound)
@@ -525,11 +525,15 @@ func dwimSkipped(_ plan: [String: Any]) -> String {
     return skipped.isEmpty ? "" : " Skipped " + skipped.joined(separator: "; ") + "."
 }
 
-/// A stage block's JSON, past the fence's own label (```stage json, ```Stage JSON, ```stage-card). nil when it isn't JSON.
+/// A stage block's JSON, past the fence's own label (```stage json, ```Stage JSON, ```stage-card). nil when it isn't JSON:
+/// notes that open with a link or a checkbox ("[!12](…) green", "- [ ] rebase") aren't, though they start with a bracket.
 func stageJSON(_ s: String) -> String? {
     let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-    return t.range(of: #"^[A-Za-z_-]*\s*(?=[\[{])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
+    return t.range(of: #"^[A-Za-z_-]*\s*(?=\{\s*["}]|\[\s*["\[{\d-]|\[\])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
 }
+
+/// A markdown link whose target is a URL or a path, for its text: [!12](https://…). Not fns[0](x).
+let mdLink = #"\[([^\]]*)\]\((?:https?://|mailto:|/|#)[^)]*\)"#
 
 /// One line of a card as the stage shows it (text only): links to their text, code and emphasis marks off, one line;
 /// true/false as yes/no; a list's values joined. `unnumber` drops a leading "1." or "2)" (the steps card counts for itself).
@@ -537,7 +541,7 @@ func cardText(_ v: Any?, unnumber: Bool = false) -> String {
     var t: String
     if let n = v as? NSNumber { t = CFGetTypeID(n) == CFBooleanGetTypeID() ? (n.boolValue ? "yes" : "no") : "\(n)" }
     else if let s = v as? String { t = s } else { t = v.map { jsonLines($0).map { cardText($0) }.filter { !$0.isEmpty }.joined(separator: ", ") } ?? "" }
-    let marks: [(String, String)] = [(#"\[([^\]]*)\]\([^)]*\)"#, "$1"), ("`([^`]*)`", "$1"), (#"\*\*|__|~~"#, ""), (#"\s+"#, " ")]
+    let marks: [(String, String)] = [(mdLink, "$1"), ("`([^`]*)`", "$1"), (#"\*\*([^*]+)\*\*"#, "$1"), (#"~~([^~]+)~~"#, "$1"), (#"\s+"#, " ")]  // pairs only: **kwargs, __init__ stay
     for (p, w) in marks + (unnumber ? [(#"^\s*\d+[.)]\s+"#, "")] : []) {
         t = t.replacingOccurrences(of: p, with: w, options: .regularExpression)
     }
@@ -547,11 +551,12 @@ func cardText(_ v: Any?, unnumber: Bool = false) -> String {
 /// A card item from a line or an object: label, detail and tone by their usual names, any other values kept in the detail.
 func cardItem(_ v: Any, unnumber: Bool) -> [String: String]? {
     guard let d = v as? [String: Any] else { let l = cardText(v, unnumber: unnumber); return l.isEmpty ? nil : ["label": l, "detail": "", "tone": ""] }
-    let known = ["tone", "label", "title", "name", "detail", "value", "text"]
-    var rest = d.keys.filter { !known.contains($0) }.sorted().map { cardText(d[$0]) }.filter { !$0.isEmpty }
-    var label = cardText(d["label"] ?? d["title"] ?? d["name"])
+    let named = ["label", "title", "name", "mr", "ref", "id", "ws", "workspace", "path"].first { d[$0] != nil }  // else the first by key
+    let said = ["detail", "value", "text"].first { d[$0] != nil }
+    var rest = d.keys.filter { $0 != "tone" && $0 != named && $0 != said }.sorted().map { cardText(d[$0]) }.filter { !$0.isEmpty }
+    var label = cardText(named.flatMap { d[$0] })
     if label.isEmpty, !rest.isEmpty { label = rest.removeFirst() }
-    var detail = ([cardText(d["detail"] ?? d["value"] ?? d["text"])] + rest).filter { !$0.isEmpty }.joined(separator: " · ")
+    var detail = ([cardText(said.flatMap { d[$0] })] + rest).filter { !$0.isEmpty }.joined(separator: " · ")
     if label.isEmpty { (label, detail) = (detail, "") }
     let tone = d["tone"] as? String ?? ""
     return label.isEmpty ? nil : ["label": label, "detail": detail, "tone": ["needs", "bad", "now", "ok"].contains(tone) ? tone : ""]
@@ -569,9 +574,10 @@ func templateDraws(_ o: [String: Any]) -> Bool {
     }
 }
 
-/// A template's strings as the stage shows them: links to their text, all the way down.
+/// A template's strings as the stage shows them: links to their text, all the way down, and nothing else touched (code,
+/// paths and indentation stay as they are).
 func cardClean(_ v: Any) -> Any {
-    if v is String { return cardText(v) }
+    if let s = v as? String { return s.replacingOccurrences(of: mdLink, with: "$1", options: .regularExpression) }
     if let a = v as? [Any] { return a.map(cardClean) }
     if let d = v as? [String: Any] { return d.mapValues(cardClean) }
     return v
@@ -617,14 +623,16 @@ func jsonLines(_ v: Any) -> [String] {
 /// parse: never the raw JSON.
 func fallbackSpec(_ text: String) -> [String: Any] {
     if let c = stageCard(text) { return c }
-    let ss: [String]
+    var ss: [String]
     if let j = stageJSON(text) {
-        let quoted = { () -> [String] in  // malformed: the strings that aren't keys
-            let re = try! NSRegularExpression(pattern: #""((?:[^"\\]|\\.)*)"(?!\s*:)"#)
-            return re.matches(in: j, range: NSRange(j.startIndex..., in: j)).compactMap { Range($0.range(at: 1), in: j).map { j[$0].replacingOccurrences(of: #"\""#, with: "\"") } }
+        let quoted = { () -> [String] in  // malformed: every string in turn, left to right, then the keys (a colon after) out
+            let re = try! NSRegularExpression(pattern: #""((?:[^"\\]|\\.)*)"(\s*:)?"#)
+            return re.matches(in: j, range: NSRange(j.startIndex..., in: j)).filter { $0.range(at: 2).location == NSNotFound }
+                .compactMap { Range($0.range(at: 1), in: j).map { j[$0].replacingOccurrences(of: #"\""#, with: "\"") } }
         }
         ss = ((try? JSONSerialization.jsonObject(with: Data(j.utf8))).map(jsonLines) ?? quoted()).map { cardText($0) }.filter { !$0.isEmpty }
-    } else { ss = sentences(plain(text) + "\n", from: 0).said }
+    } else { ss = [] }
+    if ss.isEmpty { ss = sentences(plain(text) + "\n", from: 0).said }  // not JSON after all: its sentences
     return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 

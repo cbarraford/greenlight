@@ -57,7 +57,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           ["JSON\n{\"title\":\"x\"}", "-json {\"title\":\"x\"}", "card\n{\"title\":\"x\"}", "json{\"title\":\"x\"}"].allSatisfy { stageCard($0)?["title"] as? String == "x" })
     let raw = { (spec: [String: Any]) in ([spec["title"] as? String ?? ""] + ((spec["items"] as? [[String: String]]) ?? []).map { $0["label"]! }).contains { $0.hasPrefix("{") || $0.hasPrefix("[") || $0.contains("\":") } }
     let fb = fallbackSpec("{\"heading_x\":\"Held\",\"meta\":{\"a\":\"CI green\",\"b\":\"no conflicts\"}}")
-    let broken = fallbackSpec("JSON\n{\"title\":\"Work on first\",\"items\":[\"merge !5415\",\"say \\\"go\\\"\",]}")
+    let broken = fallbackSpec("JSON\n{\"title\": \"Work on first\", \"items\": [\"merge !5415\", \"say \\\"go\\\"\", 'x'")  // cut off, single quotes: won't parse
     check("voice: the fallback never puts raw JSON on the stage: a card, else its values (title first), else a broken block's quoted values",
           fallbackSpec(issued)["title"] as? String == "Issue filed" && !raw(fb) && fb["title"] as? String == "Held"
           && (fb["items"] as? [[String: String]])?.map { $0["label"]! } == ["CI green", "no conflicts"]
@@ -68,6 +68,24 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     check("voice: every ```stage block is cut out of the transcript, ```Stage too; the first is drawn (#153 review)",
           two.text == "A.\n\nB.\n\nC." && two.stage == "{\"title\":\"x\"}" && staged("Done.\n``` stage\n{}\n```").stage == "{}"
           && staged("Run:\n```stagehand\nx\n```").stage == nil && staged("```stage-json\n{}\n```").stage == "-json\n{}")
+    let diff = stageCard("{\"kind\":\"diff\",\"files\":[{\"path\":\"app/__init__.py\",\"add\":1}],\"lines\":[{\"t\":\"+\",\"s\":\"    f(**kw)\"}]}")
+    check("voice: a template keeps its code and paths as written; only links turn to text (#153 review 2)",
+          ((diff?["files"] as? [[String: Any]])?.first?["path"] as? String) == "app/__init__.py"
+          && ((diff?["lines"] as? [[String: Any]])?.first?["s"] as? String) == "    f(**kw)")
+    check("voice: an item's MR or ref is its label, whatever else it holds; a named one keeps them in the detail (#153 review 2)",
+          labels("{\"items\":[{\"mr\":\"!12\",\"author\":\"sam\"}]}") == ["!12=sam"] && labels("{\"items\":[{\"label\":\"CI\",\"mr\":\"!12\"}]}") == ["CI=!12"])
+    check("voice: notes that open with a link or a checkbox aren't JSON, and their fallback reads them (#153 review 2)",
+          ["[!12](https://x.test) green", "- [ ] rebase", "Blocked [waiting on CI]", "MRs\n[!12](https://x.test)"].allSatisfy { stageJSON($0) == nil }
+          && ["[\"a\"]", "[]", "{}", "[{\"a\":1}]", "json [1, 2]"].allSatisfy { stageJSON($0) != nil }
+          && fallbackSpec("- [!12](https://x.test) green\n- [!13](https://x.test) draft")["title"] as? String == "!12 green")
+    check("voice: ```stage_json is a stage fence too (#153 review 2)", staged("Ok.\n```stage_json\n{\"title\":\"x\"}\n```").text == "Ok."
+          && staged("Ok.\n```stage_json\n{\"title\":\"x\"}\n```").stage == "_json\n{\"title\":\"x\"}" && stageCard("_json\n{\"title\":\"x\"}")?["title"] as? String == "x")
+    check("voice: a card line keeps code and identifiers: __init__, **kwargs, fns[0](x); a link to a URL is its text (#153 review 2)",
+          labels("{\"items\":[\"fix scripts/__init__.py\",\"pass **kwargs\",\"fns[0](x)\",\"**bold** [!12](https://x.test/12)\"]}")
+          == ["fix scripts/__init__.py", "pass **kwargs", "fns[0](x)", "bold !12"])
+    check("voice: broken JSON's fallback has its strings, not the punctuation between them (#153 review 2)",
+          fallbackSpec("{\"title\": \"Work\", \"items\": [\"a\", \"b")["title"] as? String == "Work"
+          && (fallbackSpec("{\"title\": \"Work\", \"items\": [\"a\", \"b")["items"] as? [[String: String]])?.map { $0["label"]! } == ["a"])
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")
