@@ -1006,8 +1006,9 @@ final class Core: ObservableObject {
                      : "Not sent and no room beside the files you added: \(out.joined(separator: ", ")). Attach them again to send them.")
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
-        let (body, options) = splitOptions(st.shown.isEmpty ? "(no reply)" : st.shown)  // the transcript: the gist, then any [screen] detail
-        if !r.stopping && ok { voice.finished(st, splitOptions(st.text).0) } else if !r.watch && !r.checkIn { voice.failed(body) }
+        let parts = st.parts, body = st.shown.isEmpty ? "(no reply)" : parts.shown, options = parts.options  // the transcript: the gist, then any [screen] detail
+        if !r.stopping && ok { voice.finished(st, parts.spoken, detail: parts.detail) }
+        else if !r.watch && !r.checkIn { voice.failed(parts.detail == nil ? body : parts.spoken) }  // a failure says the gist, never the detail
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
@@ -1015,7 +1016,7 @@ final class Core: ObservableObject {
         m.failed = !ok
         msgs.append(m)
         if ok && !options.isEmpty { questions.append(Question(text: body, options: options, ping: false)) }
-        if ok && !r.stopping && !st.text.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
+        if ok && !r.stopping && !parts.shown.isEmpty {  // light up the hexes it's about, until the next reply (cleared now, so a failed call can't leave old ones lit)
             picks += 1
             let n = picks
             light([], false)

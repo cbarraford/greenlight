@@ -336,6 +336,13 @@ struct Staged: Equatable {
     var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil; var screen: String? = nil
     /// What the transcript shows: the gist, then the detail.
     var shown: String { [text, screen ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n") }
+    /// The finished reply's parts with its Options line off, whichever part Chief ended with it: what's shown, what's said
+    /// (the gist; a short pointer when there's only detail, so voice mode never goes silent), the detail alone, and the options.
+    var parts: (shown: String, spoken: String, detail: String?, options: [String]) {
+        let (gist, o1) = splitOptions(text), (more, o2) = splitOptions(screen ?? "")
+        let detail = more.isEmpty ? nil : more
+        return ([gist, more].filter { !$0.isEmpty }.joined(separator: "\n\n"), gist.isEmpty && detail != nil ? "It's on your screen." : gist, detail, o2.isEmpty ? o1 : o2)
+    }
 }
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, end = false, hexes: [String]?
@@ -364,7 +371,7 @@ func staged(_ s: String) -> Staged {
         text.removeSubrange(open.lowerBound..<close.upperBound)
     }
     var screen: String?
-    if let r = text.range(of: #"\[screen\]"#, options: [.regularExpression, .caseInsensitive]) {  // the gist is spoken; what follows is only shown
+    if let r = screenMark(text) {  // the gist is spoken; what follows is only shown
         screen = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         text = String(text[..<r.lowerBound])
     }
@@ -385,9 +392,22 @@ func forgeURL(_ s: String) -> URL? {
     return forgeHosts.contains(host) ? c.url : nil
 }
 
-/// Spoken text made easy to listen to: a commit hash isn't read out character by character (the screen keeps it).
+/// The first `[screen]` line: the marker alone on its line and outside a code fence, so a reply that mentions or quotes it isn't split.
+func screenMark(_ s: String) -> Range<String.Index>? {
+    var from = s.startIndex
+    while let r = s.range(of: #"(?m)^[ \t]*\[screen\][ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
+        if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
+        from = r.upperBound
+    }
+    return nil
+}
+
+/// A spoken sentence made easy to listen to: a commit hash isn't read out character by character (the screen keeps it).
+/// Only a whole word of 7 to 40 lowercase hex with a digit and a letter, and not a number like 1e10000; brackets around it go too.
 func forEar(_ s: String) -> String {
-    s.replacingOccurrences(of: #"\s*\(?\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b\)?"#, with: "", options: .regularExpression)
+    let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])"#
+    return s.replacingOccurrences(of: #"[ \t]*(?:\([ \t]*"# + hash + #"[ \t]*\)|"# + hash + ")", with: "", options: .regularExpression)
+        .trimmingCharacters(in: .whitespaces)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -1029,7 +1049,7 @@ let voiceNote = "(Voice mode: the user is talking to you out loud. Your reply ha
     + "never read out commit hashes, MR or PR numbers, IDs, branch names, file paths, URLs or symbols; say \"the latest commit\" or \"the three reviews on the API\" "
     + "or name them by what they do; short sentences, plain words. Then, when there's more to it (details, numbers, MR links, hashes, steps), "
     + "a line [screen] and the full explanation as text (markdown is fine): it's shown on their screen and in the transcript under the gist, never spoken, "
-    + "so the two needn't match. When the gist says it all, leave [screen] out. Their screen shows a stage beside your voice: "
+    + "so the two needn't match; put [screen] alone on its line, and an Options line last, after the text. When the gist says it all, leave [screen] out. Their screen shows a stage beside your voice: "
     + "the [screen] text, or else a card a fast model draws from what you said. "
     + "To draw it yourself instead, a chart or a picture, or when they ask you to draw or redraw something, add one ```stage fenced block (it outranks [screen] on the stage): "
     + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "

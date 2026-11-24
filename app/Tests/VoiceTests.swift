@@ -149,9 +149,20 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           split.text == "Two reviews need you." && split.screen == "- **!4834** at abc1234" && split.stage == "<b>x</b>"
           && split.shown == "Two reviews need you.\n\n- **!4834** at abc1234" && staged("All green.").screen == nil && staged("All green.").shown == "All green."
           && staged("Gist.\n[SCREEN]\n").screen == nil && streaming.screen == nil && sentences(plain(streaming.text), from: 0).said == ["Two reviews need you."])
-    check("voice: a commit hash isn't read out; words, numbers and refs are",
+    let quoted = "Add a line `[screen]` then the detail.\n```\n[screen]\n```\nDone.", twice = staged("Gist.\n [screen] \nOne.\n[screen]\nTwo.")
+    check("voice: only a [screen] alone on its line and outside a code fence splits; a second one stays in the detail",
+          staged(quoted).screen == nil && staged(quoted).text == quoted && twice.text == "Gist." && twice.screen == "One.\n[screen]\nTwo.")
+    let opts = staged("Merge it?\nOptions: merge | hold\n[screen]\n- CI green").parts, after = staged("Merge it?\n[screen]\n- CI green\nOptions: merge | hold").parts
+    let bare = staged("[screen]\n- CI green").parts, plainReply = staged("All green.\nOptions: a | b").parts
+    check("voice: the Options line comes off whichever part ends with it; detail alone is pointed at, never silent",
+          opts.options == ["merge", "hold"] && opts.shown == "Merge it?\n\n- CI green" && opts.spoken == "Merge it?" && opts.detail == "- CI green"
+          && after.options == ["merge", "hold"] && after.detail == "- CI green" && after.shown == "Merge it?\n\n- CI green"
+          && bare.spoken == "It's on your screen." && bare.shown == "- CI green"
+          && plainReply.shown == "All green." && plainReply.spoken == "All green." && plainReply.detail == nil && plainReply.options == ["a", "b"])
+    check("voice: a commit hash isn't read out; words, numbers, refs and look-alikes are",
           forEar("The latest commit (abc1234) fixed it.") == "The latest commit fixed it." && forEar("Commit 9f8e7d6c5b4a fails.") == "Commit fails."
-          && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too.")
+          && forEar("abc1234 broke it.") == "broke it." && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too."
+          && ["It costs 1e10000.", "Color #4f3e2d1 is set.", "Id 0f8fad5b-d9cb-469f is set.", "See a/abc1234def."].allSatisfy { forEar($0) == $0 })
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
     check("voice: emoji aren't spoken, numbers are", plain("😌🔍❤️\n#3 is 2 of 5.") == "\n#3 is 2 of 5.")

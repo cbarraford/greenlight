@@ -108,6 +108,12 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
   assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
   assert.match(await p.textContent(".doc"), /Latest commit abc1234\. <img src=x onerror=alert\(1\)>/);  // the screen keeps the hash
+  // a pipe table becomes the grid, its cells text; numbered steps split by code keep counting
+  await p.evaluate(() => stage.text({ md: "| MR | CI |\n|---|:--:|\n| **!1** | <b>ok</b> |\n| !2 | failed |\n\n1. build\n```\nmake\n```\n2. deploy" }));
+  assert.deepEqual(await p.locator(".doc table.grid th").allTextContents(), ["MR", "CI"]);
+  assert.deepEqual(await p.locator(".doc table.grid tbody td").allTextContents(), ["!1", "<b>ok</b>", "!2", "failed"]);
+  assert.equal(await p.locator(".doc table.grid td b").textContent(), "!1");
+  assert.deepEqual(await p.$$eval(".doc ol", ls => ls.map(l => l.start)), [1, 2]);
   await p.evaluate(() => stage.text({ md: "just text" }));
   assert.equal(await p.locator(".doc .lead").count(), 0);
   assert.equal(await p.textContent(".doc p"), "just text");
