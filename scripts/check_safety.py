@@ -245,7 +245,8 @@ DRIFT_HTML = {
     "colour": r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![\w-])|\b(?:rgba?|hsla?|oklch)\(",
     "font_size": r"font-size:\s*[\d.]+px|\bfont:\s*(?:\d{3}\s+)?[\d.]+px",
     "radius": r"border-radius:\s*[\d.]+(?:px|%)",
-    "shadow": r"box-shadow:\s*(?!none|var\()|drop-shadow\(",
+    # a shadow drawn only with tokens (a hairline, a leading edge, a ring) is fine; one with a literal colour is drift
+    "shadow": r"box-shadow:(?![^;}]*var\()\s*(?!none)[^;}]+|drop-shadow\((?![^)]*var\()",
 }
 DRIFT_SWIFT = {
     "colour": r'"#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"|\bColor\((?:red|white|hue):|NSColor\((?:srgbRed|red|white|calibrated\w*|device\w*):',

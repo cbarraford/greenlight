@@ -169,6 +169,14 @@ def test_aliases_point_at_real_tokens(spec):
             assert target in defined, (page, target)
 
 
+def test_every_referenced_token_is_defined(spec):
+    for page in tokens.PAGES:
+        block = tokens.css_block(spec, page)
+        defined = set(re.findall(r"(--ds-[\w-]+):", block))
+        missing = set(re.findall(r"var\((--ds-[\w-]+)\)", block)) - defined
+        assert not missing, (page, sorted(missing))
+
+
 def test_apply_block_inserts_then_replaces():
     html = "<head><style>a{}</style></head>"
     once = tokens.apply_block(html, tokens.OPEN + "x" + tokens.CLOSE)
