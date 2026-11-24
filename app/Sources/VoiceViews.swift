@@ -336,14 +336,14 @@ struct Staged: Equatable {
     var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil; var screen: String? = nil
     /// What the transcript shows: the gist, then the detail.
     var shown: String { [text, screen ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n") }
-    /// The finished reply's parts with its Options line off, whichever part Chief ended with it: what's shown, what's said
-    /// (the gist; a short pointer when there's only detail, so voice mode never goes silent), the detail alone, and the options.
-    var parts: (shown: String, spoken: String, detail: String?, options: [String]) {
+    /// The finished reply's parts with the Options lines off, whichever part Chief ended with one: what's shown, the gist,
+    /// the detail alone, and the options.
+    var parts: (shown: String, gist: String, detail: String?, options: [String]) {
         let (gist, o1) = splitOptions(text), (more, o2) = splitOptions(screen ?? "")
-        let detail = more.isEmpty ? nil : more
-        return ([gist, more].filter { !$0.isEmpty }.joined(separator: "\n\n"), gist.isEmpty && detail != nil ? "It's on your screen." : gist, detail, o2.isEmpty ? o1 : o2)
+        return ([gist, more].filter { !$0.isEmpty }.joined(separator: "\n\n"), gist, more.isEmpty ? nil : more, o1 + o2)
     }
 }
+/// Every reply splits, voice mode or not: a session that ends voice mode may keep writing the marker, and only the line goes.
 func staged(_ s: String) -> Staged {
     var text = s, stage: String?, end = false, hexes: [String]?
     if let r = text.range(of: #"\[hexe?s?:([^\]\n]*)(\]|$)"#, options: [.regularExpression, .caseInsensitive]) {  // Chief's own pick; unclosed while it streams
@@ -392,10 +392,11 @@ func forgeURL(_ s: String) -> URL? {
     return forgeHosts.contains(host) ? c.url : nil
 }
 
-/// The first `[screen]` line: the marker alone on its line and outside a code fence, so a reply that mentions or quotes it isn't split.
+/// The first `[screen]` marker: at the start of a line (bold or a colon around it allowed, the detail may follow on that line)
+/// and outside a code fence, so a reply that mentions or quotes it isn't split.
 func screenMark(_ s: String) -> Range<String.Index>? {
     var from = s.startIndex
-    while let r = s.range(of: #"(?m)^[ \t]*\[screen\][ \t]*$"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
+    while let r = s.range(of: #"(?m)^[ \t]*[*_]*\[screen\][*_]*:?[ \t]*"#, options: [.regularExpression, .caseInsensitive], range: from..<s.endIndex) {
         if s[..<r.lowerBound].components(separatedBy: "```").count % 2 == 1 { return r }  // an even number of fences before it: outside
         from = r.upperBound
     }
@@ -403,11 +404,20 @@ func screenMark(_ s: String) -> Range<String.Index>? {
 }
 
 /// A spoken sentence made easy to listen to: a commit hash isn't read out character by character (the screen keeps it).
-/// Only a whole word of 7 to 40 lowercase hex with a digit and a letter, and not a number like 1e10000; brackets around it go too.
+/// A hash is a whole word of 7 to 40 lowercase hex with a digit and a letter, not a number like 1e10000. In brackets it goes;
+/// after "commit" the word stays; anywhere else it's said as "a commit", so the sentence still reads.
 func forEar(_ s: String) -> String {
     let hash = #"(?<![\w#.\-/])(?!\d+e\d+(?![\w\-]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])"#
-    return s.replacingOccurrences(of: #"[ \t]*(?:\([ \t]*"# + hash + #"[ \t]*\)|"# + hash + ")", with: "", options: .regularExpression)
+    return s.replacingOccurrences(of: #"[ \t]*\([ \t]*"# + hash + #"[ \t]*\)"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"(?i)\b(commits?)[ \t]+"# + hash, with: "$1", options: .regularExpression)
+        .replacingOccurrences(of: hash, with: "a commit", options: .regularExpression)
         .trimmingCharacters(in: .whitespaces)
+}
+
+/// The gist as it streams, without an Options line (its buttons, never said). Removing it whole keeps `said` valid: the line
+/// is always removed, from its first characters on.
+func spokenSoFar(_ gist: String) -> String {
+    plain(gist).replacingOccurrences(of: #"(?im)^[ \t]*options:.*$"#, with: "", options: .regularExpression)
 }
 
 /// Markdown off, for speaking: code blocks and bare URLs out, links to their text, emphasis/heading/quote/bullet marks gone.
@@ -1050,7 +1060,7 @@ let voiceNote = "(Voice mode: the user is talking to you out loud. Your reply ha
     + "or name them by what they do; short sentences, plain words. Then a line [screen] and the full explanation as text: "
     + "whenever the answer names workspaces, MRs, numbers, steps or reasons, those go there, each MR as a markdown link with what it needs. "
     + "It's shown on their screen and in the transcript under the gist, never spoken, so the two needn't match, and it's exempt from the "
-    + "few-short-lines rule (lists, tables and headings are fine there). Put [screen] alone on its line, and an Options line last, after the text. "
+    + "few-short-lines rule (lists and bold are fine there; still no tables or headings). Put [screen] alone on its line, and an Options line last, after the text. "
     + "Leave [screen] out only when the gist says it all (a yes, a done, a single fact). Their screen shows a stage beside your voice: "
     + "the [screen] text, or else a card a fast model draws from what you said. "
     + "To draw it yourself instead, a chart or a picture, or when they ask you to draw or redraw something, add one ```stage fenced block (it outranks [screen] on the stage): "

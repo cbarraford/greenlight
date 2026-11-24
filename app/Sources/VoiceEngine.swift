@@ -344,18 +344,19 @@ final class Voice: NSObject, ObservableObject {
     func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
     func live(_ r: Run) {
         guard on else { return }
-        let st = staged(r.live), p = plain(st.text)  // the gist only: a [screen] part is shown at the end, never said
+        let st = staged(r.live), p = spokenSoFar(st.text)  // the gist only: a [screen] part is shown at the end, never said
         if let h = st.stage { stage(h) }
         let (ss, to) = sentences(p, from: said)
         said = to
         ss.forEach { say(forEar($0)) }  // per sentence, so `said` stays an offset into text that only grows
         if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
     }
-    /// The turn's end: say the rest of the gist (`spoken`, the reply before any [screen] line), and show the detail.
-    func finished(_ st: Staged, _ spoken: String, detail: String? = nil) {
+    /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
+    /// With only detail, a short pointer is said, so voice mode never goes silent.
+    func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
         guard on else { return }
         if let h = st.stage { stage(h) }
-        let p = plain(spoken) + "\n"
+        let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = plain(spoken) + "\n"
         sentences(p, from: min(said, p.count)).said.forEach { say(forEar($0)) }
         said = 0
         if st.end && isLive {  // its goodbye was only just handed over: stop once it has said it (or soon, if it never does)
@@ -363,7 +364,7 @@ final class Voice: NSObject, ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.on, self.ending { self.stopAll() } }
         } else if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
         guard !chiefDrew else { return }
-        if let detail { took(); js("stage.text", [["lead": plain(spoken), "md": detail]]) } else { draw(plain(spoken), last: true) }
+        if let detail { took(); js("stage.text", [["lead": plain(gist), "md": detail]]) } else { draw(plain(spoken), last: true) }
     }
     /// Chief's own drawing (a ```stage block or the [screen] text) takes the stage: Haiku's, even one on its way, doesn't land.
     func took() { chiefDrew = true; shown = true; drawSeq += 1 }
@@ -372,7 +373,7 @@ final class Voice: NSObject, ObservableObject {
         guard on else { return }
         said = 0
         wait("Listening", plain(text))
-        say(text)
+        say(forEar(text))
     }
     /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
     func stage(_ h: String) {

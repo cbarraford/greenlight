@@ -1007,8 +1007,10 @@ final class Core: ObservableObject {
         }
         let st = staged(text)  // a ```stage block is for the stage, never the transcript
         let parts = st.parts, body = st.shown.isEmpty ? "(no reply)" : parts.shown, options = parts.options  // the transcript: the gist, then any [screen] detail
-        if !r.stopping && ok { voice.finished(st, parts.spoken, detail: parts.detail) }
-        else if !r.watch && !r.checkIn { voice.failed(parts.detail == nil ? body : parts.spoken) }  // a failure says the gist, never the detail
+        if !r.stopping && ok { voice.finished(st, parts.gist, detail: parts.detail) }
+        else if !r.watch && !r.checkIn {  // a failure says the gist, never the detail
+            voice.failed(parts.detail == nil ? body : parts.gist.isEmpty ? "It stopped. What it wrote is in the transcript." : parts.gist)
+        }
         let m = Msg(.greenlight, body)
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)

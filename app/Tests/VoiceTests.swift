@@ -150,18 +150,26 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && split.shown == "Two reviews need you.\n\n- **!4834** at abc1234" && staged("All green.").screen == nil && staged("All green.").shown == "All green."
           && staged("Gist.\n[SCREEN]\n").screen == nil && streaming.screen == nil && sentences(plain(streaming.text), from: 0).said == ["Two reviews need you."])
     let quoted = "Add a line `[screen]` then the detail.\n```\n[screen]\n```\nDone.", twice = staged("Gist.\n [screen] \nOne.\n[screen]\nTwo.")
-    check("voice: only a [screen] alone on its line and outside a code fence splits; a second one stays in the detail",
+    check("voice: only a [screen] at a line's start and outside a code fence splits; a second one stays in the detail",
           staged(quoted).screen == nil && staged(quoted).text == quoted && twice.text == "Gist." && twice.screen == "One.\n[screen]\nTwo.")
+    let loose = ["Gist.\n**[screen]**\n- a", "Gist.\n[Screen]:\n- a", "Gist.\n[screen] - a"].map { staged($0) }
+    check("voice: a bold, colon or same-line [screen] still splits, so the detail is never read out",
+          loose.allSatisfy { $0.text == "Gist." && $0.screen == "- a" })
     let opts = staged("Merge it?\nOptions: merge | hold\n[screen]\n- CI green").parts, after = staged("Merge it?\n[screen]\n- CI green\nOptions: merge | hold").parts
     let bare = staged("[screen]\n- CI green").parts, plainReply = staged("All green.\nOptions: a | b").parts
-    check("voice: the Options line comes off whichever part ends with it; detail alone is pointed at, never silent",
-          opts.options == ["merge", "hold"] && opts.shown == "Merge it?\n\n- CI green" && opts.spoken == "Merge it?" && opts.detail == "- CI green"
+    check("voice: the Options line comes off whichever part ends with it",
+          opts.options == ["merge", "hold"] && opts.shown == "Merge it?\n\n- CI green" && opts.gist == "Merge it?" && opts.detail == "- CI green"
           && after.options == ["merge", "hold"] && after.detail == "- CI green" && after.shown == "Merge it?\n\n- CI green"
-          && bare.spoken == "It's on your screen." && bare.shown == "- CI green"
-          && plainReply.shown == "All green." && plainReply.spoken == "All green." && plainReply.detail == nil && plainReply.options == ["a", "b"])
-    check("voice: a commit hash isn't read out; words, numbers, refs and look-alikes are",
+          && bare.gist == "" && bare.shown == "- CI green" && bare.detail == "- CI green"
+          && plainReply.shown == "All green." && plainReply.gist == "All green." && plainReply.detail == nil && plainReply.options == ["a", "b"])
+    let streamed = spokenSoFar("Merge it?\nOptions: merge | hold\n"), early = spokenSoFar("Merge it?\nOpt")
+    check("voice: an Options line in the gist is never said while it streams, and the spoken offset holds",
+          sentences(streamed, from: 0).said == ["Merge it?"] && sentences(early, from: 0).said == ["Merge it?"]
+          && sentences(streamed, from: sentences(early, from: 0).to).said.isEmpty)
+    check("voice: a commit hash isn't read out, and the sentence still reads; words, numbers, refs and look-alikes stay",
           forEar("The latest commit (abc1234) fixed it.") == "The latest commit fixed it." && forEar("Commit 9f8e7d6c5b4a fails.") == "Commit fails."
-          && forEar("abc1234 broke it.") == "broke it." && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too."
+          && forEar("Merged in abc1234, then deployed.") == "Merged in a commit, then deployed." && forEar("abc1234 broke it.") == "a commit broke it."
+          && forEar("Facade 1234567 and !42 stay, deadbeef too.") == "Facade 1234567 and !42 stay, deadbeef too."
           && ["It costs 1e10000.", "Color #4f3e2d1 is set.", "Id 0f8fad5b-d9cb-469f is set.", "See a/abc1234def."].allSatisfy { forEar($0) == $0 })
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")

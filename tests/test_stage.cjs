@@ -107,7 +107,7 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.locator(".doc ol li").allTextContents(), ["merge", "deploy"]);
   assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
   assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
-  assert.match(await p.textContent(".doc"), /Latest commit abc1234\. <img src=x onerror=alert\(1\)>/);  // the screen keeps the hash
+  assert.match(await p.textContent(".doc"), /Latest commit abc1234\.<img src=x onerror=alert\(1\)>/);  // the screen keeps the hash (and the line break)
   // a pipe table becomes the grid, its cells text; numbered steps split by code keep counting
   await p.evaluate(() => stage.text({ md: "| MR | CI |\n|---|:--:|\n| **!1** | <b>ok</b> |\n| !2 | failed |\n\n1. build\n```\nmake\n```\n2. deploy" }));
   assert.deepEqual(await p.locator(".doc table.grid th").allTextContents(), ["MR", "CI"]);
@@ -117,6 +117,13 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => stage.text({ md: "1. **[!5355](https://x/5355): decode fix.** Review it, `now`." }));  // Chief bolds its links
   assert.equal(await p.textContent(".doc ol li"), "!5355: decode fix. Review it, now.");
   assert.equal(await p.textContent(".doc ol li b"), "!5355: decode fix.");
+  // lines keep their breaks; emphasis, a quote and a rule are drawn, not shown as marks; snake_case stays as written
+  await p.evaluate(() => stage.text({ md: "CI: green\nReview: *waiting* on _Sam_\n\n> held by its goal\n> until Friday\n\n---\nsee my_var_name" }));
+  assert.equal(await p.locator(".doc p").first().locator("br").count(), 1);
+  assert.deepEqual(await p.locator(".doc em").allTextContents(), ["waiting", "Sam"]);
+  assert.equal(await p.textContent(".doc p.quote"), "held by its goaluntil Friday");
+  assert.equal(await p.locator(".doc hr").count(), 1);
+  assert.equal(await p.textContent(".doc p:last-child"), "see my_var_name");
   await p.evaluate(() => stage.text({ md: "just text" }));
   assert.equal(await p.locator(".doc .lead").count(), 0);
   assert.equal(await p.textContent(".doc p"), "just text");
