@@ -246,6 +246,17 @@ func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .d
     if f == "SF Mono" { return .system(size: s, weight: weight, design: .monospaced) }
     return .custom(f, size: s).weight(weight)
 }
+extension DSType {
+    var fontWeight: Font.Weight { weight >= 700 ? .bold : weight >= 600 ? .semibold : weight >= 500 ? .medium : .regular }
+}
+/// A type role (brand/DESIGN.md §3) as a font at Settings › Text size; `mono` sets it in the code font, `face` in the chat font.
+func ds(_ t: DSType, mono: Bool = false, face: String = "System") -> Font { sys(size: t.size, weight: t.fontWeight, design: mono ? .monospaced : .default, face: face) }
+extension Color {
+    /// A colour token in the given appearance.
+    init(_ c: DSColor, dark: Bool) { self.init(nsColor: c.ns(dark: dark)) }
+}
+/// A colour token as "RRGGBB", for the places that still carry colours as hex strings (Look).
+func dsHex(_ c: DSColor, dark: Bool) -> String { String(format: "%06X", dark ? c.dark : c.light) }
 /// The chosen chat font: for the conversation's own text (messages, the composer, questions), not the chrome around it.
 func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font { sys(size: size, weight: weight, face: chatFont) }
 let models = [("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Haiku 5.5", "claude-haiku-5-5"),

@@ -25,9 +25,9 @@
   "radius": 0
  },
  "app/Sources/Views.swift": {
-  "colour": 25,
-  "font_size": 4,
-  "radius": 20
+  "colour": 9,
+  "font_size": 2,
+  "radius": 16
  },
  "app/Sources/Vim.swift": {
   "colour": 0,
@@ -40,9 +40,9 @@
   "radius": 0
  },
  "app/Sources/VoiceViews.swift": {
-  "colour": 106,
-  "font_size": 44,
-  "radius": 6
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0
  },
  "app/Sources/main.swift": {
   "colour": 0,
@@ -56,9 +56,9 @@
   "shadow": 1
  },
  "app/stage.html": {
-  "colour": 24,
-  "font_size": 68,
-  "radius": 15,
+  "colour": 0,
+  "font_size": 0,
+  "radius": 0,
   "shadow": 0
  },
  "app/terminal.html": {

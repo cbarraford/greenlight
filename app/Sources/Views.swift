@@ -19,27 +19,28 @@ struct DwimToastBar: View {
     var body: some View {
         if !c.toasts.isEmpty {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 4) { ForEach(c.toasts) { t in row(t) } }
+                VStack(spacing: DS.Space.s4) { ForEach(c.toasts) { t in row(t) } }
             }.frame(maxHeight: 160)
         }
     }
     private func row(_ t: DwimToast) -> some View {
-            HStack(spacing: 10) {
+        let r = l.id == "phosphor" ? 0 : DS.Radius.md
+        return HStack(spacing: DS.Space.s8) {
                 if t.pending { ProgressView().controlSize(.mini) }
-                else { Image(ds: t.failed ? "alert" : "done-fill", size: iconSize(12, scaled: false))
-                    .foregroundColor(t.failed ? hx(l.dark ? "FF9F0A" : "9A6700") : hx(l.accent)) }
-                Text(t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text).font(.system(size: 12, weight: .medium)).foregroundColor(hx(l.text))
+                else { Image(ds: t.failed ? "needs" : "done", size: iconSize(DS.TypeRole.label.size, scaled: false))
+                    .foregroundColor(Color(t.failed ? DS.Palette.statusNeedsFg : DS.Palette.statusDoneFg, dark: l.dark)) }
+                Text(t.pending ? "\(t.text) in \(Int(Core.launchGrace)) s" : t.text).font(ds(DS.TypeRole.label)).foregroundColor(hx(l.text))
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 if t.undoable { action(t) }
-            }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(hx(l.card))).overlay(RoundedRectangle(cornerRadius: 8).stroke(hx(l.line)))
+            }.padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: r).fill(hx(l.card))).overlay(RoundedRectangle(cornerRadius: r).stroke(hx(l.line)))
                 .accessibilityElement(children: .contain).accessibilityLabel(t.text)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     @ViewBuilder private func action(_ t: DwimToast) -> some View {
         let button = Button(t.undoing ? "Undoing…" : t.pending ? "Cancel" : "Undo") { c.undoToast(t.id) }.buttonStyle(.plain)
-            .font(.system(size: 12, weight: .semibold)).foregroundColor(hx(l.accent)).disabled(t.undoing)
+            .font(ds(DS.TypeRole.label)).foregroundColor(hx(l.link)).disabled(t.undoing)
             .help(t.pending ? "Don't start it" : "Put it back (⇧⌘Z)")
         if c.latestUndoableToast?.id == t.id { button.keyboardShortcut("z", modifiers: [.command, .shift]) }
         else { button }
@@ -48,48 +49,35 @@ struct DwimToastBar: View {
 
 // MARK: views
 
+/// One step of a run: its status glyph (§9.4: done, working, crashed), title, the command it ran, and its time.
+/// Phosphor prints the state in brackets instead.
 struct StepRow: View, Looked {
     let s: Step
     let now: Date
     let current: Bool
-    var n = 0  // 1-based, for HUD's 01… and Editorial's 1…; ponytail: 0 (MsgView's list doesn't pass it) falls back to a mark
+    var n = 0  // 1-based; unused by the two looks, kept for the callers
     var body: some View {
-        let (glyph, ink, face, w) = mark, live = s.ok == nil
-        HStack(alignment: .firstTextBaseline, spacing: Theme.sp3) {
-            Text(glyph).font(face).foregroundColor(ink).frame(minWidth: w, alignment: .leading)
-                .shadow(color: live && (lk.id == "orb" || lk.id == "hud") ? ink.opacity(0.7) : .clear, radius: 4).accessibilityLabel(s.ok == true ? "Done" : s.ok == false ? "Failed" : "Running")
-            VStack(alignment: .leading, spacing: 3) {
-                Text(s.title).font(lk.id == "editorial" ? sys(size: Theme.fs4, design: .serif) : ui(lk.id == "zen" ? 14 : Theme.fs3, mono && current ? .bold : .regular))
-                    .italic(lk.id == "editorial" && current).foregroundColor(current ? fg : lk.id == "zen" ? dim : sub)
-                if !s.detail.isEmpty {
-                    Text(s.detail).font(sys(size: Theme.fs1, design: .monospaced)).foregroundColor(sub)
-                        .lineLimit(2).padding(.horizontal, Theme.sp2).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: mono || lk.id == "hud" ? 0 : Theme.r1).fill(fg.opacity(0.06)))  // reads on the card or off it
-                }
-                if !s.out.isEmpty { Text(s.out).font(ui(Theme.fs1)).foregroundColor(dim).lineLimit(2) }
-            }
-            Spacer(minLength: 4)
-            if lk.id == "hud" { Text(s.ok == true ? "OK" : s.ok == false ? "ERR" : "RUN").font(sys(size: 10, design: .monospaced)).tracking(1.2).foregroundColor(ink) }
-            Text(fmt((s.end ?? now).timeIntervalSince(s.start))).font((lk.id == "hud" ? sys(size: Theme.fs1, design: .monospaced) : ui(Theme.fs1)).monospacedDigit()).foregroundColor(current ? fg : dim)
-        }
-        .padding(.horizontal, Theme.sp3).padding(.vertical, lk.id == "zen" ? 6 : Theme.sp1)
-        .textSelection(.enabled)
-    }
-    /// Chrome in the look's face: mono for Phosphor.
-    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: mono ? .monospaced : .default) }
-    /// The look's leading mark: glyph, ink, font, width. ponytail: steps arrive as they start, so the designs' pending row
-    /// (○, NEXT, [  ]) never happens here; an unfinished step is running, a failed one gets `crashed`.
-    var mark: (String, Color, Font, CGFloat) {
         let st = s.ok == true ? 0 : s.ok == nil ? 1 : 2  // done, running, failed
-        switch lk.id {
-        case "conversation": return (["✓", "●", "✕"][st], [done, accent, crashed][st], ui(Theme.fs3, .semibold), 14)
-        case "onair": return (["DONE", "LIVE", "FAIL"][st], [accent, hx("FF6B73"), crashed][st], sys(size: 10, weight: .heavy), 34)
-        case "phosphor": return (["[ok]", "[..]", "[!!]"][st], st == 2 ? crashed : fg, ui(Theme.fs3, st == 1 ? .bold : .regular), 32)
-        case "editorial": return (n > 0 ? "\(n)" : ["✓", "•", "✕"][st], st == 2 ? crashed : current ? accent : fg, sys(size: Theme.fs5, weight: .semibold, design: .serif), 18)
-        case "hud": return (n > 0 ? String(format: "%02d", n) : "▸", st == 2 ? crashed : accent, sys(size: Theme.fs1, design: .monospaced), 18)
-        case "zen": return ("●", [dim.opacity(0.45), accent, crashed][st], sys(size: 7), 6)
-        default: return ("●", st == 2 ? crashed : accent, sys(size: 10), 8)  // Orb: amber dots, the running one glowing
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+            Group {
+                if mono { Text(["[ok]", "[..]", "[!!]"][st]).font(ui(DS.TypeRole.body, st == 1 ? .bold : .regular)).foregroundColor(st == 2 ? crashedInk : fg) }
+                else { Image(ds: ["done", "working", "crashed"][st], size: iconSize(DS.TypeRole.body.size)).foregroundColor([dim, working, crashedInk][st]) }
+            }.frame(minWidth: mono ? 32 : DS.Space.s16, alignment: .leading)
+                .accessibilityLabel(s.ok == true ? "Done" : s.ok == false ? "Failed" : "Running")
+            VStack(alignment: .leading, spacing: DS.Space.s2) {
+                Text(s.title).font(ui(DS.TypeRole.body, mono && current ? .bold : nil)).foregroundColor(current ? fg : sub)
+                if !s.detail.isEmpty {
+                    Text(s.detail).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(sub)
+                        .lineLimit(2).padding(.horizontal, DS.Space.s4).padding(.vertical, DS.Space.s2)
+                        .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.xs).fill(card))
+                }
+                if !s.out.isEmpty { Text(s.out).font(ui(DS.TypeRole.caption)).foregroundColor(dim).lineLimit(2) }
+            }
+            Spacer(minLength: DS.Space.s4)
+            Text(fmt((s.end ?? now).timeIntervalSince(s.start))).font(ui(DS.TypeRole.caption).monospacedDigit()).foregroundColor(current ? fg : dim)
         }
+        .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s4)
+        .textSelection(.enabled)
     }
 }
 
@@ -119,61 +107,61 @@ struct FeedPanel: View, Looked {
     var body: some View {
         let lines = f.shown, live = c.run != nil || c.agents.contains { $0.state == "working" }
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.sp2) {
+            HStack(spacing: DS.Space.s8) {
                 Button { f.open.toggle() } label: {
-                    HStack(spacing: Theme.sp1) {
-                        Image(ds: f.open ? "chevron-down" : "chevron-right", size: iconSize(Theme.glyph), medium: true).frame(width: 10)
-                        Circle().fill(live ? accent : dim.opacity(0.5)).frame(width: 6, height: 6).accessibilityHidden(true)
-                        Text("Live log").font(sys(size: Theme.fs1, weight: .semibold))
+                    HStack(spacing: DS.Space.s4) {
+                        Image(ds: f.open ? "chevron-down" : "chevron-right", size: iconSize(9), medium: true).frame(width: 10)
+                        Image(ds: live ? "working" : "queued", size: iconSize(DS.TypeRole.caption.size)).foregroundColor(live ? working : faint).accessibilityHidden(true)
+                        Text("Live log").font(ui(DS.TypeRole.labelSm))
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundColor(sub).accessibilityLabel(f.open ? "Fold the live log" : "Open the live log")
                 if f.open {
                     ForEach([nil] + FeedLine.Src.allCases.map { Optional($0) }, id: \.self) { s in
                         Button { f.only = s } label: {
-                            Text(s?.rawValue ?? "All").font(sys(size: Theme.fs1, weight: f.only == s ? .semibold : .regular))
-                                .foregroundColor(f.only == s ? fg : dim).padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(RoundedRectangle(cornerRadius: Theme.r1).fill(f.only == s ? fg.opacity(0.08) : .clear))
+                            Text(s?.rawValue ?? "All").font(ui(DS.TypeRole.caption, f.only == s ? .semibold : .regular))
+                                .foregroundColor(f.only == s ? fg : dim).padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s2)
+                                .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.xs).fill(f.only == s ? card : .clear))
                         }.buttonStyle(.plain).help(s == nil ? "Everything" : s == .chief ? "\(c.name)'s own turn: calls, their output, thinking" : s == .agents ? "Your workspaces' agents" : "Greenlight's moves and the dashboard's buttons")
                     }
                     Spacer(minLength: 0)
-                    Button { f.paused.toggle() } label: { Image(ds: f.paused ? "play" : "pause", size: iconSize(Theme.glyph)) }
+                    Button { f.paused.toggle() } label: { Image(ds: f.paused ? "play" : "pause", size: iconSize(9)) }
                         .buttonStyle(.plain).foregroundColor(dim).help(f.paused ? "Follow the newest line" : "Stop following, to read").accessibilityLabel(f.paused ? "Follow" : "Pause following")
                 } else if let l = lines.last {
                     row(l, limit: 1).frame(maxWidth: .infinity, alignment: .leading)
                 } else { Spacer(minLength: 0) }
-                Button("Clear") { f.clear() }.buttonStyle(.plain).font(sys(size: Theme.fs1)).foregroundColor(dim).disabled(f.lines.isEmpty)
-            }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp1 + 2)
+                Button("Clear") { f.clear() }.buttonStyle(.plain).font(ui(DS.TypeRole.caption)).foregroundColor(dim).disabled(f.lines.isEmpty)
+            }.padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
             if f.open {
                 ScrollViewReader { sv in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 3) {
+                        LazyVStack(alignment: .leading, spacing: DS.Space.s4) {
                             if lines.isEmpty {
                                 Text(f.only == nil ? "Nothing yet. \(c.name)'s calls, your agents and Greenlight's moves show here as they happen." : "Nothing from \(f.only!.rawValue) yet.")
-                                    .font(sys(size: Theme.fs1)).foregroundColor(dim)
+                                    .font(ui(DS.TypeRole.caption)).foregroundColor(dim)
                             }
                             ForEach(lines) { l in
                                 row(l, limit: f.unfolded.contains(l.id) ? nil : l.kind == .think ? 3 : 6)
                                     .onTapGesture { if f.unfolded.contains(l.id) { f.unfolded.remove(l.id) } else { f.unfolded.insert(l.id) } }
                             }
                             Color.clear.frame(height: 1).id("end")
-                        }.padding(.horizontal, Theme.sp3).padding(.bottom, Theme.sp2)
+                        }.padding(.horizontal, DS.Space.s12).padding(.bottom, DS.Space.s8)
                     }.frame(height: 190)
                         .onAppear { sv.scrollTo("end", anchor: .bottom) }
                         .onChange(of: lines.last?.id) { if !f.paused { sv.scrollTo("end", anchor: .bottom) } }
                         .onChange(of: lines.last?.text.count) { if !f.paused { sv.scrollTo("end", anchor: .bottom) } }  // thinking grows in place
                 }
             }
-        }.background(fg.opacity(0.035)).textSelection(.enabled)
+        }.background(mono ? Color.clear : Color(DS.Palette.bgSunken, dark: lk.dark)).textSelection(.enabled)
     }
     func row(_ l: FeedLine, limit: Int?) -> some View {
-        let (m, ink) = feedMark(l.kind, accent: accent, dim: dim, failed: crashed, agent: working, move: done)
-        let who = l.src == .chief ? accent : l.src == .agents ? working : done
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(feedClock.string(from: l.ts)).foregroundColor(dim.opacity(0.8))
+        let (m, ink) = feedMark(l.kind, accent: link, dim: dim, failed: crashedInk, agent: working, move: sub)
+        let who = l.src == .chief ? fg : l.src == .agents ? working : sub
+        return HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+            Text(feedClock.string(from: l.ts)).foregroundColor(faint)
             Text(m).foregroundColor(ink).frame(width: 12, alignment: .center)
-            Text("\(Text(l.who).foregroundColor(who).bold()) \(Text(l.text).foregroundColor(l.kind == .think || l.kind == .status ? dim : l.kind == .failed ? crashed : fg).italic(l.kind == .think))")
+            Text("\(Text(l.who).foregroundColor(who).bold()) \(Text(l.text).foregroundColor(l.kind == .think || l.kind == .status ? dim : l.kind == .failed ? crashedInk : fg).italic(l.kind == .think))")
                 .lineLimit(limit).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
-        }.font(sys(size: Theme.fs1, design: .monospaced)).accessibilityElement(children: .combine)
+        }.font(ds(DS.TypeRole.caption, mono: true).monospacedDigit()).accessibilityElement(children: .combine)
     }
 }
 
@@ -182,10 +170,10 @@ struct FeedTail: View {
     @ObservedObject var f: Feed
     let n: Int, fg: Color, dim: Color, accent: Color, size: CGFloat
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: DS.Space.s2) {
             if f.lines.isEmpty { Text("Live log: waiting for activity").foregroundColor(dim) }
             ForEach(f.lines.suffix(n)) { l in
-                let (m, ink) = feedMark(l.kind, accent: accent, dim: dim, failed: hx("E5392F"), agent: accent, move: accent)
+                let (m, ink) = feedMark(l.kind, accent: accent, dim: dim, failed: Color(DS.Palette.statusCrashedFg, dark: isDark), agent: accent, move: accent)
                 Text("\(Text(m).foregroundColor(ink)) \(Text(l.who).foregroundColor(fg).bold()) \(Text(l.text.split(separator: "\n").first.map(String.init) ?? "").foregroundColor(l.kind == .think || l.kind == .status ? dim : fg))")
                     .lineLimit(1).truncationMode(.tail)
             }
@@ -193,13 +181,15 @@ struct FeedTail: View {
     }
 }
 
+/// The run in progress: who's working, a status line with Stop, the progress track, the steps so far, and the reply as it streams.
+/// Default (§10.17): a hairline card, quiet type, the working glyph and colour; Phosphor: a dashed box, brackets and a hash bar.
 struct RunCard: View, Looked {
     @ObservedObject var r: Run
     @ObservedObject var c: Core
     var body: some View {
-        VStack(alignment: .leading, spacing: lk.id == "onair" ? 0 : Theme.sp2) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             label
-            framed(VStack(alignment: .leading, spacing: Theme.sp3) {
+            framed(VStack(alignment: .leading, spacing: DS.Space.s12) {
                 head
                 bar
                 if !r.steps.isEmpty {
@@ -207,163 +197,80 @@ struct RunCard: View, Looked {
                         ForEach(Array(r.steps.enumerated()), id: \.element.id) { i, s in
                             StepRow(s: s, now: c.now, current: i == r.steps.count - 1 && s.ok == nil, n: i + 1)
                         }
-                    }.padding(.horizontal, -Theme.sp3)  // the rows carry their own inset (for MsgView's list); line them up with the head
-                        .padding(.top, mono ? Theme.sp2 : 0)
+                    }.padding(.horizontal, -DS.Space.s12)  // the rows carry their own inset (for MsgView's list); line them up with the head
+                        .padding(.top, mono ? DS.Space.s8 : 0)
                         .overlay(alignment: .top) { if mono { HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) } }
                 }
             })
-            if !r.live.isEmpty { liveText.padding(.top, lk.id == "onair" ? Theme.sp4 : 0) }
+            if !r.live.isEmpty { liveText }
             if c.liveLine { activity }
         }
     }
-    var activity: some View { Activity(c: c, r: r, fg: fg, dim: dim, accent: accent, size: Theme.fs2) }
+    var activity: some View { Activity(c: c, r: r, fg: fg, dim: dim, accent: mono ? fg : working, size: DS.TypeRole.label.size) }
     var state: String { r.stopping ? "stopping" : "working" }
-    /// Chrome in the look's face: mono for Phosphor.
-    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: mono ? .monospaced : .default) }
-    func code(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: .monospaced) }
-    func tag(_ s: String, _ fill: Color, _ ink: Color) -> some View {
-        Text(s).font(sys(size: 10, weight: .heavy).monospacedDigit()).tracking(1.6).foregroundColor(ink).padding(.horizontal, 10).padding(.vertical, 4).background(fill)
-    }
-    /// "NAME · working" above the card.
+    /// "Name · working" above the card, with the working glyph (Phosphor: a prompt and [working]).
     @ViewBuilder var label: some View {
-        switch lk.id {
-        case "onair": HStack(spacing: 0) { tag("\(c.name) · \(state)".uppercased(), accent, page); tag(stats, line, fg) }  // On Air's stats ride the tag
-        case "phosphor": Text("\(Text("\(c.name.lowercased())@greenlight ").foregroundColor(dim))[\(state.uppercased())]").font(ui(Theme.fs3, .bold)).foregroundColor(fg)
-        case "editorial": Text("\(c.name) · \(r.stopping ? "Stopping the press" : "Going to press")".uppercased()).font(sys(size: 10, weight: .semibold)).tracking(1.4).foregroundColor(accent)
-        case "hud":
-            HStack(spacing: Theme.sp3) { Text("\(c.name.uppercased())//RUN"); Text("▶ \(state.uppercased())").shadow(color: accent.opacity(0.55), radius: 5) }
-                .font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent)
-        case "zen": Text("\(Text(c.name.lowercased()).foregroundColor(fg)) \(Text("· \(state)").foregroundColor(accent))").font(sys(size: Theme.fs3))
-        case "conversation":
-            HStack(spacing: 6) { Circle().fill(accent).frame(width: 7, height: 7).accessibilityHidden(true); Text("\(Text(c.name).fontWeight(.semibold).foregroundColor(fg)) · \(state)") }
-                .font(sys(size: Theme.fs2)).foregroundColor(dim)
-        default: Text("\(Text(c.name.uppercased()).foregroundColor(fg)) \(Text("· \(state.uppercased())").foregroundColor(accent))").font(sys(size: Theme.fs2, weight: .semibold)).tracking(1.7)
+        if mono { Text("\(Text("\(c.name.lowercased())@greenlight ").foregroundColor(dim))[\(state)]").font(ui(DS.TypeRole.body, .bold)).foregroundColor(fg) }
+        else {
+            HStack(spacing: DS.Space.s4) {
+                Image(ds: "working", size: iconSize(DS.TypeRole.label.size)).foregroundColor(working).accessibilityHidden(true)
+                Text("\(Text(c.name).foregroundColor(fg)) · \(state.capitalized)")
+            }.font(ds(DS.TypeRole.label)).foregroundColor(dim)
         }
     }
-    /// The status line: a lead mark, the status and stats, Stop.
-    @ViewBuilder var head: some View {
-        if lk.id == "editorial" {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("IN PROGRESS").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
-                Text(stats).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim).lineLimit(2)
-                Spacer(minLength: 4)
-                stop
+    /// The status line: the status and stats, Stop.
+    var head: some View {
+        HStack(spacing: DS.Space.s12) {
+            VStack(alignment: .leading, spacing: DS.Space.s2) {
+                Text(mono ? "> \(r.status.lowercased())" : r.status).lineLimit(1).foregroundColor(fg).font(ui(DS.TypeRole.strong, mono ? .bold : nil))
+                Text(stats).font(ui(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim).lineLimit(2)
             }
-            Text("\(r.status)\(Text("…").foregroundColor(accent))").font(sys(size: 24, weight: .semibold, design: .serif)).foregroundColor(fg).lineLimit(2)
-        } else {
-            if lk.id == "hud" { HStack { Text("RUN"); Spacer(); Text("LIVE").foregroundColor(accent) }.font(code(Theme.fs1)).tracking(1.5).foregroundColor(dim) }
-            HStack(spacing: lk.id == "orb" ? 20 : Theme.sp3) {
-                switch lk.id {
-                case "orb": orbMark
-                case "conversation": ProgressView().controlSize(.small)
-                // ponytail: a still amber dot, not Breath: the chat shows in voice mode too (transcript), where Breath's live meter would swell it past the row
-                case "zen": Circle().fill(accent).frame(width: 6, height: 6).shadow(color: accent.opacity(0.5), radius: 4).accessibilityHidden(true)
-                default: EmptyView()
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(mono ? "> \(r.status.lowercased())" : r.status).lineLimit(1).foregroundColor(fg)
-                        .font(lk.id == "onair" ? sys(size: Theme.fs5, weight: .heavy) : lk.id == "zen" ? sys(size: 20, weight: .light) : ui(lk.id == "conversation" ? 14 : mono ? Theme.fs3 : Theme.fs4, mono ? .bold : .semibold))
-                    if lk.id != "onair" { Text(stats).font((lk.id == "hud" ? code(Theme.fs1) : ui(Theme.fs2)).monospacedDigit()).tracking(lk.id == "hud" ? 1 : 0).foregroundColor(dim).lineLimit(2) }
-                }
-                Spacer(minLength: 4)
-                stop
-            }
+            Spacer(minLength: DS.Space.s4)
+            stop
         }
     }
-    /// Orb's lead: the amber orb with two soft rings. ponytail: static; the live stage's orb is the one that moves.
-    var orbMark: some View {
-        ZStack {
-            Circle().fill(accent.opacity(0.07)).frame(width: 36, height: 36)  // the rings stay inside the card
-            Circle().fill(accent.opacity(0.16)).frame(width: 28, height: 28)
-            Circle().fill(RadialGradient(colors: [hx("FFD27A"), hx("F5A524"), hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 11)).frame(width: 20, height: 20)
-        }.frame(width: 36, height: 36).accessibilityHidden(true)
-    }
+    /// Stop: a secondary button (§10.2), or Phosphor's [ stop ].
     var stop: some View {
-        let (t, ink, fill, edge, r0): (String, Color, Color, Color, CGFloat) = switch lk.id {
-        case "conversation": ("Stop", crashedInk, bg, line, Theme.r1)
-        case "onair": ("STOP", .white, hx("D1242F"), .clear, 0)
-        case "phosphor": ("[ stop ]", fg, .clear, fg, 0)
-        case "editorial": ("Stop the press", accent, .clear, .clear, 0)
-        case "hud": ("[ STOP ]", fg, .clear, line, 0)
-        case "zen": ("Stop", sub, .clear, .clear, 0)
-        default: ("Stop", fg, .clear, line, 15)
-        }
-        let bare = lk.id == "editorial" || lk.id == "zen"
-        return Button(action: c.stop) {
-            Text(t).font(lk.id == "onair" ? sys(size: Theme.fs1, weight: .heavy) : lk.id == "hud" ? code(Theme.fs1, .bold) : lk.id == "editorial" ? sys(size: Theme.fs3, weight: .bold) : ui(Theme.fs2, lk.id == "conversation" ? .semibold : .regular))
-                .tracking(lk.id == "onair" || lk.id == "hud" ? 1.5 : 0).foregroundColor(ink)
-                .padding(.horizontal, bare ? 0 : mono ? Theme.sp2 : 14).padding(.vertical, bare ? 2 : 0).frame(minHeight: bare ? 24 : mono ? 26 : 30)
-                .background(RoundedRectangle(cornerRadius: r0).fill(fill)).overlay(RoundedRectangle(cornerRadius: r0).stroke(edge))
-                .overlay(alignment: .bottom) { if lk.id == "editorial" { Rectangle().fill(accent).frame(height: 1) } }
+        Button(action: c.stop) {
+            Text(mono ? "[ stop ]" : "Stop").font(ui(DS.TypeRole.label)).foregroundColor(fg)
+                .padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightSm)
+                .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm).fill(mono ? Color.clear : card))
+                .overlay(RoundedRectangle(cornerRadius: 0).stroke(mono ? fg : .clear))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(r.stopping).opacity(r.stopping ? 0.5 : 1).accessibilityLabel("Stop").help("Stop this run")
     }
-    /// ponytail: no percentage is known, so progress stays indeterminate: the native linear bar tinted to the look, or for the
-    /// block looks (On Air, Phosphor, HUD) a 3-cell window stepping along once a second off c.now (no extra timer).
-    /// The designs' 62% isn't shown.
+    /// ponytail: no percentage is known, so progress stays indeterminate: the native linear bar in the working colour, or for
+    /// Phosphor a 3-cell window stepping along once a second off c.now (no extra timer).
     func lit(_ i: Int) -> Bool { (i - Int(c.now.timeIntervalSince(r.start)) % 10 + 10) % 10 < 3 }
     @ViewBuilder var bar: some View {
-        switch lk.id {
-        case "onair": HStack(spacing: 3) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(lit(i) ? accent : line).frame(height: 10) } }.accessibilityHidden(true)
-        case "phosphor": Text("[" + String((0..<10).map { lit($0) ? "#" : "." }) + "]").font(ui(Theme.fs3)).foregroundColor(fg).accessibilityHidden(true)
-        case "hud":
-            HStack(spacing: 2) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(lit(i) ? accent : accent.opacity(0.08)).frame(height: 8) } }
-                .padding(2).overlay(Rectangle().stroke(line)).shadow(color: accent.opacity(0.35), radius: 4).accessibilityHidden(true)
-        default:
-            ProgressView().progressViewStyle(.linear).tint(lk.id == "zen" ? dim : accent).frame(height: lk.id == "zen" ? 2 : 4).clipped()
-                .overlay(alignment: .bottom) { if lk.id == "editorial" { Rectangle().fill(line).frame(height: 1).offset(y: 2) } }
-                .accessibilityLabel("Working")
-        }
+        if mono { Text("[" + String((0..<10).map { lit($0) ? "#" : "." }) + "]").font(ui(DS.TypeRole.body)).foregroundColor(fg).accessibilityHidden(true) }
+        else { ProgressView().progressViewStyle(.linear).tint(working).frame(height: DS.Space.s4).clipped().accessibilityLabel("Working") }
     }
-    /// The card around head, bar and steps. ponytail: Conversation's is one flat card (no grey header strip, the bar inset).
+    /// The card around head, bar and steps: a hairline card (radius md, 12 in), or Phosphor's dashed box.
     func framed<V: View>(_ v: V) -> some View {
-        let open = lk.id == "editorial" || lk.id == "zen", r0: CGFloat = lk.id == "orb" ? Theme.r4 : lk.id == "conversation" ? 12 : 0
-        let fill = open ? Color.clear : lk.id == "conversation" ? bg : card, edge = ["conversation", "phosphor", "hud"].contains(lk.id) ? line : .clear
-        return v.shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)  // Phosphor's glow, on the type not the box
-            .padding(open ? 0 : mono ? Theme.sp3 : Theme.sp4).padding(.top, lk.id == "editorial" ? Theme.sp3 : 0)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: r0).fill(fill)).overlay(RoundedRectangle(cornerRadius: r0).stroke(edge))
-            .overlay(alignment: .top) { if lk.id == "onair" || lk.id == "editorial" { Rectangle().fill(lk.id == "onair" ? accent : fg).frame(height: lk.id == "onair" ? 2 : 3) } }
-            .overlay(Brackets().stroke(lk.id == "hud" ? accent : .clear, lineWidth: 2).allowsHitTesting(false).accessibilityHidden(true))
+        v.padding(DS.Space.s12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md).fill(mono ? Color.clear : bg))
+            .overlay(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md).stroke(line, style: StrokeStyle(lineWidth: 1, dash: mono ? [4, 3] : [])))
     }
     /// The reply as it streams, with the look's cursor.
-    @ViewBuilder var liveText: some View {
-        let cur = Text(mono ? " █" : lk.id == "zen" ? "▏" : " ▍").foregroundColor(lk.id == "onair" ? hx("D1242F") : accent)
-        // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
-        let fs = ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1
+    var liveText: some View {
+        let cur = Text(mono ? " █" : " ▍").foregroundColor(mono ? fg : link)
         let rest = unmood(staged(r.live).text)
-        let t = Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
-            .font(chatFace(size: fs)).textSelection(.enabled)
-        Group {
-            switch lk.id {
-            case "conversation":
-                let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
-                t.foregroundColor(fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
-            case "onair":
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(c.name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
-                    t.foregroundColor(page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)
-                }
-            case "hud":
-                VStack(alignment: .leading, spacing: 6) { Text("\(c.name.uppercased()) ▸").font(code(Theme.fs1)).tracking(1.3).foregroundColor(accent); t.foregroundColor(fg) }
-                    .padding(.leading, Theme.sp3).overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 1) }
-            default: t.foregroundColor(fg).shadow(color: mono ? fg.opacity(0.45) : .clear, radius: 3)
-            }
-        }
+        // the size and frame MsgView's reply has, so the text doesn't jump when the run lands
+        return Text("\(mono ? Text("\(c.name.lowercased())> ").foregroundColor(dim) : Text(""))\(Text(md(rest)))\(cur)")
+            .font(chatFace(size: DS.TypeRole.bodyCopy.size)).lineSpacing(DS.TypeRole.bodyCopy.line - DS.TypeRole.bodyCopy.size - 3).textSelection(.enabled).foregroundColor(fg)
     }
     var stats: String {
         let n = r.steps.count, t = max(0, Int(c.now.timeIntervalSince(r.start))), tps = c.tps > 0 ? " · \(Int(c.tps)) tok/s" : ""
         let b = byline(r, now: c.now, lead: false), by = b.isEmpty ? "" : " · " + b  // the plan, time left, what just finished
-        // ponytail: HUD's step number isn't lit apart from the rest of the line
-        if lk.id == "hud" { return "STEP \(n == 0 ? "--" : String(format: "%02d", n)) · T+\(String(format: "%02d:%02d", t / 60, t % 60))\(by.uppercased())\(tps.uppercased())" }
-        // the byline before time and speed where the line may wrap (the card is narrow, and those two are on the live line under
-        // it too); last on On Air's one-line tag, so the clock isn't what's cut
-        let clock = " · \(fmt(TimeInterval(t)))\(lk.id == "conversation" ? " elapsed" : "")\(tps)", step = n == 0 ? "No steps yet" : "Step \(n)"
-        let s = lk.id == "onair" ? step + clock + by : step + by + clock
-        return lk.id == "onair" ? s.uppercased() : mono || lk.id == "zen" ? s.lowercased() : s
+        // the byline before time and speed where the line may wrap (the card is narrow, and those two are on the live line under it too)
+        let s = (n == 0 ? "No steps yet" : "Step \(n)") + by + " · \(fmt(TimeInterval(t)))\(tps)"
+        return mono ? s.lowercased() : s
     }
 }
 
+/// One message: yours in a bubble at the right; Greenlight's full width with no bubble, then how its run went and any choices
+/// it ends on (§10.17). Phosphor prints both as a shell session.
 struct MsgView: View, Looked {
     @ObservedObject var m: Msg
     let c: Core
@@ -373,190 +280,92 @@ struct MsgView: View, Looked {
         switch m.role {
         case .you: you
         case .note:
-            Text(m.text).font(ui(Theme.fs1)).foregroundColor(dim).textSelection(.enabled).frame(maxWidth: .infinity)
+            Text(m.text).font(ui(DS.TypeRole.caption)).foregroundColor(dim).textSelection(.enabled).frame(maxWidth: .infinity)
         case .greenlight:
             let open = !m.options.isEmpty && ask != nil && ask?.answer == nil
             let (said, q) = open ? asked : (m.text, nil)
-            VStack(alignment: .leading, spacing: Theme.sp4) {
-                turn(said)  // the reply, then how the run went: the designs put it above any choices the reply ends on
+            VStack(alignment: .leading, spacing: DS.Space.s12) {
+                turn(said)  // the reply, then how the run went: above any choices the reply ends on
                 if !m.options.isEmpty { choices(open, q) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    // Each look's hand (the designs in .claude/design/chatthemes): switch on lk.id.
-    // ponytail: left out of the designs: HUD's "Q-01", Phosphor's glow, On Air's bold lead paragraph, text2 on list bodies; Orb's dot is a "•" glyph.
-    /// Chrome type: mono for Phosphor and HUD.
-    func ui(_ size: CGFloat, _ w: Font.Weight = .regular) -> Font { sys(size: size, weight: w, design: lk.id == "phosphor" || lk.id == "hud" ? .monospaced : .default) }
-    /// Chrome words in the look's case. ponytail: chrome only (and On Air/HUD chips), never what was said.
-    func cased(_ s: String) -> String { ["onair", "hud"].contains(lk.id) ? s.uppercased() : ["phosphor", "zen"].contains(lk.id) ? s.lowercased() : s }
-    /// Only Orb and Conversation round their corners.
-    var round: Bool { lk.id == "orb" || lk.id == "conversation" }
-    /// The reply's size: 15 Orb and HUD, 16 Editorial and Zen, 13 Phosphor, else 14.
-    var fs: CGFloat { ["orb": Theme.fs4, "hud": Theme.fs4, "editorial": Theme.fs4 + 1, "zen": Theme.fs4 + 1, "phosphor": Theme.fs3][lk.id] ?? Theme.fs3 + 1 }
-    func rule(_ c: Color) -> some View { Rectangle().fill(c).frame(width: 1).frame(maxWidth: .infinity, alignment: .leading) }
+    /// Prose: body-copy (13/19) in the chat font, or Phosphor's mono.
+    var prose: Font { chatFace(size: DS.TypeRole.bodyCopy.size) }
+    var leading: CGFloat { DS.TypeRole.bodyCopy.line - DS.TypeRole.bodyCopy.size - 3 }  // SF's own line gap is about 3pt at 13
 
     @ViewBuilder var you: some View {
-        let t = Text(m.text), f = chatFace(size: Theme.fs3 + 1)
-        switch lk.id {
-        case "phosphor":
-            Text("\(Text("you> ").foregroundColor(dim))\(t.foregroundColor(youInk))").font(chatFace(size: fs)).foregroundColor(fg).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-        case "editorial":
-            VStack(alignment: .leading, spacing: Theme.sp1) {
-                Text("LETTERS · YOU ASKED").font(sys(size: 10, weight: .bold)).tracking(1.4).foregroundColor(dim)
-                Text("“\(m.text)”").font(chatFace(size: Theme.fs5 + 1).italic()).foregroundColor(youInk).textSelection(.enabled)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        case "hud":
-            VStack(alignment: .leading, spacing: Theme.sp1) {
-                Text("YOU ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(youInk)
-                t.font(f).foregroundColor(youInk).textSelection(.enabled)
-            }.padding(.leading, Theme.sp3).background(rule(line)).frame(maxWidth: .infinity, alignment: .leading)
-        default:
+        if mono {
+            Text("\(Text("you> ").foregroundColor(dim))\(Text(m.text).foregroundColor(youInk))").font(prose).lineSpacing(leading).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        } else {
             HStack {
-                Spacer(minLength: 60)
-                switch lk.id {
-                case "onair":
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text("YOU").font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(youInk)
-                        t.font(f).foregroundColor(youInk).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(card)
-                    }
-                case "zen": t.font(f).foregroundColor(youInk).multilineTextAlignment(.trailing).textSelection(.enabled)
-                case "conversation":
-                    t.font(f).foregroundColor(.white).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                        .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).fill(youInk))
-                default:
-                    t.font(f).foregroundColor(youInk).textSelection(.enabled).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-                        .background(RoundedRectangle(cornerRadius: 18).fill(card))
-                }
+                Spacer(minLength: DS.Space.s48)
+                Text(m.text).font(prose).lineSpacing(leading).foregroundColor(fg).textSelection(.enabled)
+                    .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(bubble))
             }
         }
     }
 
-    /// Who's talking, what was said, how the run went.
+    /// What was said and how the run went. Phosphor leads with the name's prompt.
     @ViewBuilder func turn(_ said: String) -> some View {
-        let col = VStack(alignment: .leading, spacing: lk.id == "onair" ? 0 : Theme.sp2) {
-            label
-            if !said.isEmpty { reply(said) }
+        let col = VStack(alignment: .leading, spacing: DS.Space.s8) {
+            if !said.isEmpty { MDText(text: unmood(said)).font(prose).lineSpacing(leading).textSelection(.enabled).foregroundColor(m.failed ? crashedInk : fg) }
             work
         }
-        switch lk.id {
-        case "zen" where said.isEmpty && m.steps.isEmpty && m.duration == 0: EmptyView()  // nothing to show: no gap above the question
-        case "conversation":
-            HStack(alignment: .top, spacing: 10) {
-                Text(String(name.prefix(1))).font(sys(size: Theme.fs2, weight: .semibold)).foregroundColor(accent).frame(width: 26, height: 26)
-                    .background(Circle().fill(accent.opacity(0.12))).accessibilityLabel(name)
-                col
-            }
-        case "phosphor": HStack(alignment: .firstTextBaseline, spacing: 0) { Text("\(name.lowercased())> ").font(chatFace(size: fs)).foregroundColor(dim); col }
-        case "hud": col.padding(.leading, Theme.sp3).background(rule(accent))
-        default: col
-        }
-    }
-    @ViewBuilder var label: some View {
-        switch lk.id {
-        case "orb": Text(name.uppercased()).font(sys(size: Theme.fs1, weight: .semibold)).tracking(1.5).foregroundColor(dim)
-        case "onair": Text(name.uppercased()).font(sys(size: 10, weight: .heavy)).tracking(1.6).foregroundColor(page).padding(.horizontal, Theme.sp2).padding(.vertical, 3).background(accent)
-        case "editorial": Text("FROM THE DESK").font(sys(size: Theme.fs1, weight: .bold)).tracking(1.5).foregroundColor(accent)
-        case "hud": Text("\(name.uppercased()) ▸").font(ui(Theme.fs1)).tracking(1.3).foregroundColor(accent)
-        default: EmptyView()  // Conversation's avatar, Phosphor's prompt, Zen says nothing
-        }
-    }
-    @ViewBuilder func reply(_ said: String) -> some View {
-        box(unmood(said))
-    }
-    @ViewBuilder func box(_ said: String) -> some View {
-        let t = MDText(text: said).font(chatFace(size: fs)).textSelection(.enabled)
-        switch lk.id {
-        case "onair":  // inverted: page ink on a text-colored card
-            t.foregroundColor(m.failed ? hx("C62828") : page).padding(.horizontal, Theme.sp4).padding(.vertical, Theme.sp3).background(fg)  // failed: crashedInk's light half, the card is light
-        case "conversation":
-            let s = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16)
-            t.foregroundColor(m.failed ? crashedInk : fg).padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2).background(s.fill(card)).overlay(s.stroke(line))
-        default: t.foregroundColor(m.failed ? crashedInk : fg)
-        }
+        if mono { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("\(name.lowercased())> ").font(prose).foregroundColor(dim); col } } else { col }
     }
 
-    /// The choices a reply ends on: in the look's "needs you" frame while open, a hairline once answered.
+    /// The choices a reply ends on. Open: a needs banner (§10.21: tint, glyph, the question) with the choices as buttons, the
+    /// first primary. Answered: a hairline box with the choice made.
     func choices(_ open: Bool, _ q: String?) -> some View {
-        let band = open && lk.id == "onair"  // ponytail: inset, not full-bleed as designed
         let chips = ForEach(m.options, id: \.self) { o in
             Button { c.choose(m, o) } label: { chip(o, open) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel(o)
         }
-        let gap = lk.id == "zen" ? Theme.sp5 : lk.id == "editorial" ? Theme.sp4 : Theme.sp2
-        let pad = lk.id == "zen" ? EdgeInsets(top: 2, leading: Theme.sp4, bottom: 2, trailing: 0)
-            : open ? EdgeInsets(top: Theme.sp3, leading: Theme.sp4, bottom: Theme.sp3, trailing: Theme.sp4) : EdgeInsets(top: Theme.sp2, leading: Theme.sp2, bottom: Theme.sp2, trailing: Theme.sp2)
-        return VStack(alignment: .leading, spacing: 0) {
-            if band { needsTag }
-            VStack(alignment: .leading, spacing: Theme.sp3) {
-                if open {
-                    if !band { needsTag }
-                    if let q { question(q) }  // the question sits with its answers
+        return VStack(alignment: .leading, spacing: DS.Space.s12) {
+            if open {
+                needsTag
+                if let q { question(q) }  // the question sits with its answers
+            }
+            if !open, let a = ask?.answer {  // answered: the choice made, the others folded away
+                HStack(spacing: DS.Space.s8) {
+                    Image(ds: a == "(dismissed)" ? "close" : "done", size: iconSize(DS.TypeRole.label.size)).foregroundColor(dim)
+                    Text(a == "(dismissed)" ? "Dismissed without an answer" : "You answered")
+                    if a != "(dismissed)" { Text(a).fontWeight(.semibold).foregroundColor(fg).lineLimit(2) }
+                }.font(ui(DS.TypeRole.label)).foregroundColor(dim)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: DS.Space.s8) { chips }
+                    VStack(alignment: .leading, spacing: DS.Space.s8) { chips }
                 }
-                if !open, let a = ask?.answer {  // answered: the choice made, the others folded away
-                    HStack(spacing: Theme.sp2) {
-                        Image(ds: a == "(dismissed)" ? "close" : "check", size: iconSize(Theme.glyph), medium: true).foregroundColor(a == "(dismissed)" ? dim : done)
-                        Text(cased(a == "(dismissed)" ? "Dismissed without an answer" : "You answered"))
-                        if a != "(dismissed)" { Text(a).fontWeight(.semibold).foregroundColor(fg).lineLimit(2) }
-                    }.font(ui(Theme.fs2)).foregroundColor(dim)
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: gap) { chips }
-                        VStack(alignment: .leading, spacing: Theme.sp2) { chips }
-                    }
-                }
-            }.padding(pad)
-        }.frame(maxWidth: .infinity, alignment: .leading).background(box(open)).padding(.leading, lk.id == "conversation" ? 36 : 0)
+            }
+        }.padding(open ? DS.Space.s12 : DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading).background(box(open))
     }
     @ViewBuilder func box(_ open: Bool) -> some View {
-        let r = RoundedRectangle(cornerRadius: lk.id == "orb" ? 18 : round ? 12 : 0)
-        switch (open, lk.id) {
-        case (_, "zen"): rule(open ? accent : line)
-        case (false, _): r.strokeBorder(line)
-        case (_, "onair"): Rectangle().fill(accent)
-        case (_, "phosphor"): Rectangle().fill(card).overlay(Rectangle().strokeBorder(fg, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-        case (_, "editorial"): Rectangle().fill(card).overlay(alignment: .top) { Rectangle().fill(fg).frame(height: 3) }
-        case (_, "hud"): Rectangle().fill(card).overlay(Rectangle().strokeBorder(line)).overlay(alignment: .top) { Rectangle().fill(accent).frame(height: 2) }
-        default: r.fill(accent.opacity(0.06)).overlay(r.strokeBorder(accent, lineWidth: 1.5))
-        }
+        let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md)
+        if mono { r.fill(open ? card : .clear).overlay(r.strokeBorder(open ? fg : line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))) }
+        else if open { r.fill(state(DS.Palette.statusNeedsBg)).overlay(r.strokeBorder(state(DS.Palette.statusNeedsBorder))) }
+        else { r.strokeBorder(line) }
     }
     @ViewBuilder var needsTag: some View {
-        let id = lk.id
-        let t = id == "hud" ? "▲ INPUT REQUIRED" : id == "phosphor" ? "-- needs your answer --" : id == "zen" ? "needs your answer" : id == "conversation" ? "Needs your answer" : "NEEDS YOUR ANSWER"
-        let f = id == "zen" ? sys(size: Theme.fs2) : id == "phosphor" ? chatFace(size: fs, weight: .bold) : id == "onair" ? sys(size: Theme.fs2, weight: .heavy)
-            : id == "conversation" ? sys(size: Theme.fs2, weight: .semibold) : ui(Theme.fs1, .bold)
-        HStack(spacing: Theme.sp2) {
-            if ["orb", "conversation", "onair"].contains(id) { Circle().fill(accent).frame(width: 7, height: 7) }
-            Text(t)
-        }.font(f).tracking(["orb", "editorial", "onair", "hud"].contains(id) ? 1.5 : 0).foregroundColor(id == "zen" ? dim : id == "phosphor" ? fg : accent)
-            .padding(.horizontal, id == "onair" ? Theme.sp3 : 0).padding(.vertical, id == "onair" ? Theme.sp2 : 0).background(id == "onair" ? page : .clear)
+        if mono { Text("-- needs your answer --").font(chatFace(size: DS.TypeRole.body.size, weight: .bold)).foregroundColor(fg) }
+        else {
+            Label { Text("Needs your answer") } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(needsInk)
+        }
     }
     @ViewBuilder func question(_ q: String) -> some View {
-        let f = lk.id == "onair" ? chatFace(size: Theme.fs5 - 1, weight: .bold) : lk.id == "editorial" ? chatFace(size: Theme.fs5 + 1, weight: .semibold)
-            : lk.id == "zen" ? chatFace(size: Theme.fs5, weight: .light) : chatFace(size: fs)
-        let t = MDText(text: q).font(f).textSelection(.enabled).foregroundColor(lk.id == "onair" ? page : fg)
-        if lk.id == "phosphor" { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("? ").font(f).foregroundColor(dim); t } } else { t }
+        let t = MDText(text: q).font(chatFace(size: DS.TypeRole.bodyCopy.size, weight: mono ? .regular : .semibold)).lineSpacing(leading).textSelection(.enabled).foregroundColor(fg)
+        if mono { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("? ").font(prose).foregroundColor(dim); t } } else { t }
     }
-    /// One choice; the first is the primary while the question's open.
+    /// One choice; the first is the primary while the question's open (§10.2: one primary per view), the rest secondary.
     func chip(_ o: String, _ open: Bool) -> some View {
-        let id = lk.id, p = open && o == m.options.first, bare = id == "editorial" || id == "zen"  // text-only choices
-        let st: (ink: Color, fill: Color, edge: Color)
-        switch id {
-        case "conversation": st = p ? (Color.white, accent, Color.clear) : (fg, bg, line)
-        case "onair": st = p ? (fg, page, Color.clear) : open ? (page, Color.clear, page) : (fg, Color.clear, line)
-        case "phosphor": st = p ? (page, fg, Color.clear) : (fg, Color.clear, dim)
-        case "hud": st = p ? (accent, accent.opacity(0.1), accent) : (sub, bg, line)
-        case "editorial": st = (accent, Color.clear, Color.clear)
-        case "zen": st = (p ? accent : sub, Color.clear, Color.clear)
-        default: st = p ? (page, accent, Color.clear) : (fg, card, line)
-        }
-        let n = (m.options.firstIndex(of: o) ?? 0) + 1
-        let t = id == "phosphor" ? "[\(n)] \(o)" : id == "hud" ? "[ \(o.uppercased()) ]" : id == "onair" ? o.uppercased() : o
-        let f = id == "zen" ? sys(size: Theme.fs3 + 1) : id == "onair" ? sys(size: Theme.fs2, weight: .heavy) : ui(id == "hud" ? Theme.fs2 : Theme.fs3, p ? .semibold : .regular)
-        let r = RoundedRectangle(cornerRadius: round ? 16 : 0)
-        return Text(t).font(f).tracking(id == "hud" || id == "onair" ? 1.2 : 0).foregroundColor(st.ink)
-            .padding(.horizontal, bare ? 0 : Theme.sp3).frame(minHeight: id == "hud" ? 34 : bare ? 26 : 32)
-            .background(r.fill(st.fill)).overlay(r.strokeBorder(st.edge, lineWidth: id == "onair" ? 2 : 1))
-            .overlay(alignment: .bottom) { if id == "editorial" { Rectangle().fill(accent).frame(height: p ? 2 : 1) } }
+        // while a run is going the choices wait (disabled, §10.2): element.rest and fg.faint, no accent
+        let off = c.run != nil, p = open && o == m.options.first && !off, n = (m.options.firstIndex(of: o) ?? 0) + 1
+        let ink = off ? faint : mono ? (p ? page : fg) : p ? onAccent : fg, fill = mono ? (p ? fg : Color.clear) : p ? accent : off ? card : open ? bg : card
+        let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm)
+        return Text(mono ? "[\(n)] \(o)" : o).font(ui(DS.TypeRole.label)).foregroundColor(ink)
+            .padding(.horizontal, DS.Space.s12).frame(minHeight: DS.Layout.controlHeightMd)
+            .background(r.fill(fill)).overlay(r.strokeBorder(mono && !p ? (off ? faint : dim) : .clear))
             .contentShape(r)
     }
     /// An open question's text split in two: what was said before it, and its last paragraph when that asks something.
@@ -567,35 +376,24 @@ struct MsgView: View, Looked {
         return last.contains("?") ? (String(t[..<r.lowerBound]), last) : (t, nil)
     }
     @ViewBuilder var work: some View {
-                if !m.steps.isEmpty || m.duration > 0 {
-                    Button { m.expanded.toggle() } label: { worked.contentShape(Rectangle()) }.buttonStyle(.plain).padding(.top, lk.id == "onair" ? Theme.sp2 : 0)
-                    if m.expanded && !m.steps.isEmpty {
-                        VStack(spacing: 0) { ForEach(Array(m.steps.enumerated()), id: \.element.id) { i, s in StepRow(s: s, now: Date(), current: false, n: i + 1) } }
-                            .padding(.vertical, Theme.sp2).background(RoundedRectangle(cornerRadius: round ? Theme.r2 : 0).fill(card)).padding(.top, lk.id == "onair" ? Theme.sp2 : 0)
-                    }
-                }
+        if !m.steps.isEmpty || m.duration > 0 {
+            Button { m.expanded.toggle() } label: { worked.contentShape(Rectangle()) }.buttonStyle(.plain)
+            if m.expanded && !m.steps.isEmpty {
+                VStack(spacing: 0) { ForEach(Array(m.steps.enumerated()), id: \.element.id) { i, s in StepRow(s: s, now: Date(), current: false, n: i + 1) } }
+                    .padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md).fill(card))
+            }
+        }
     }
-    /// "Worked 1m 2s · 6 steps": a capsule (Orb, Conversation), a box (On Air, HUD), a line of text (Phosphor, Editorial, Zen).
+    /// "Worked 1m 2s · 6 steps": a quiet line with the done or crashed glyph and a chevron; Phosphor's [ok] … [+].
     @ViewBuilder var worked: some View {
-        let id = lk.id, ok = m.failed ? crashed : id == "orb" || id == "hud" ? accent : done
-        switch id {
-        case "phosphor":
-            Text("[\(m.failed ? "err" : "ok")] \(cased(summary)) [\(m.expanded ? "-" : "+")]").font(ui(Theme.fs3)).foregroundColor(m.failed ? crashedInk : dim)
-        case "zen":
-            Text("\(cased(summary)) \(m.expanded ? "⌄" : "›")").font(sys(size: Theme.fs2)).foregroundColor(m.failed ? crashedInk : dim)
-        case "hud":
-            HStack(spacing: Theme.sp2) { Text(m.failed ? "✕ ERR" : "✓ OK").foregroundColor(ok); Text("\(cased(summary)) \(m.expanded ? "▾" : "▸")") }
-                .font(ui(Theme.fs1)).tracking(0.9).foregroundColor(dim).padding(.horizontal, 10).frame(minHeight: 28).background(card).overlay(Rectangle().strokeBorder(line))
-        default:
-            let boxed = id != "editorial", r = RoundedRectangle(cornerRadius: round ? 15 : 0)
-            HStack(spacing: Theme.sp2) {
-                if boxed || m.failed { Image(ds: m.failed ? "close" : "check", size: iconSize(Theme.glyph), medium: true).foregroundColor(ok) }
-                Text(cased(summary))
-                Image(ds: m.expanded ? "chevron-down" : "chevron-right", size: iconSize(Theme.glyph), medium: true)
-            }.font(id == "onair" ? sys(size: Theme.fs1, weight: .bold) : sys(size: Theme.fs2)).tracking(id == "onair" ? 1.1 : 0).foregroundColor(dim)
-                .padding(.horizontal, boxed ? Theme.sp3 : 0).frame(minHeight: id == "orb" ? 30 : boxed ? 26 : 22)
-                .background(r.fill(id == "conversation" ? bg : .clear)).overlay(r.strokeBorder(boxed ? line : .clear))
-                .overlay(alignment: .bottom) { if !boxed { Rectangle().fill(line).frame(height: 1) } }
+        if mono {
+            Text("[\(m.failed ? "err" : "ok")] \(summary.lowercased()) [\(m.expanded ? "-" : "+")]").font(ui(DS.TypeRole.body)).foregroundColor(m.failed ? crashedInk : dim)
+        } else {
+            HStack(spacing: DS.Space.s4) {
+                Image(ds: m.failed ? "crashed" : "done", size: iconSize(DS.TypeRole.caption.size)).foregroundColor(m.failed ? crashedInk : dim)
+                Text(summary).monospacedDigit()
+                Image(ds: m.expanded ? "chevron-down" : "chevron-right", size: iconSize(9), medium: true)
+            }.font(ds(DS.TypeRole.caption)).foregroundColor(dim).frame(minHeight: DS.Layout.hitTargetMin)
         }
     }
     var summary: String {
@@ -610,35 +408,24 @@ struct MsgView: View, Looked {
 struct MDText: View, Looked {
     let text: String
     var body: some View {
-        let bs = blocks, zen = lk.id == "zen"
-        VStack(alignment: .leading, spacing: Theme.sp2) {
+        let bs = blocks
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             ForEach(Array(bs.enumerated()), id: \.offset) { i, b in
                 if let mark = b.mark {
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.sp2) {
-                        if let t = bullet(mark, nth(bs, i)) { t.frame(minWidth: 12, alignment: .trailing) }
+                    HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                        bullet(mark, nth(bs, i)).monospacedDigit().frame(minWidth: 12, alignment: .trailing)
                         Text(md(b.text)).fixedSize(horizontal: false, vertical: true)
-                    }.padding(.vertical, zen ? Theme.sp1 + 2 : 0).frame(maxWidth: zen ? .infinity : nil, alignment: .leading).overlay(alignment: .top) { if zen { Rectangle().fill(line).frame(height: 1) } }  // Zen: hairlines, no marks
-                    .padding(.leading, CGFloat(b.indent) * Theme.sp4).padding(.top, b.gap ? 0 : -Theme.sp1)  // items 4pt apart, paragraphs 8
+                    }
+                    .padding(.leading, CGFloat(b.indent) * DS.Space.s16).padding(.top, b.gap ? 0 : -DS.Space.s4)  // items 4pt apart, paragraphs 8
                 } else {
                     Text(md(b.text)).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
-    /// The list mark in the look's hand: Orb's amber dot, Phosphor's `*`, Editorial's red i. ii., HUD's 01 02, On Air's square, Zen none.
-    func bullet(_ mark: String, _ n: Int) -> Text? {
-        let dot = mark == "•"
-        switch lk.id {
-        case "zen": return nil
-        case "orb": return Text(mark).foregroundColor(accent)
-        case "phosphor": return Text(dot ? "*" : mark).foregroundColor(dim)
-        case "editorial":  // ponytail: roman to xii, then digits
-            let r = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"]
-            return Text(dot ? (n <= r.count ? r[n - 1] : "\(n)") + "." : mark).bold().foregroundColor(accent)
-        case "hud": return Text(dot ? String(format: "%02d", n) : mark).font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(n == 1 ? accent : dim)
-        case "onair": return Text(dot ? "▪" : mark)  // in the inverted card's ink
-        default: return Text(mark).foregroundColor(sub)
-        }
+    /// The list mark: the item's own (a number, or a muted dot), Phosphor's `*`.
+    func bullet(_ mark: String, _ n: Int) -> Text {
+        Text(mono && mark == "•" ? "*" : mark).foregroundColor(dim)
     }
     /// Item i's place (from 1) in its list, counting back to the item that opened it.
     func nth(_ bs: [(mark: String?, indent: Int, text: String, gap: Bool)], _ i: Int) -> Int {
@@ -2180,32 +1967,31 @@ struct StageOr<A: View, B: View>: View {
     var body: some View { if v.on && !v.transcript { stage() } else { chat() } }
 }
 
+/// The chat pane (§10.17): a header (name, state, voice knobs), the conversation, the live log, and the composer.
+/// Default wears the system tokens; Phosphor the terminal's mono hand.
 struct ChatView: View, Looked {
     @ObservedObject var c: Core
     @FocusState private var typing: Bool
     @FocusState private var searching: Bool
     var body: some View {
         VStack(spacing: 0) {
-            if lk.id == "zen" {  // Zen's only rule: the context used, as a 2px hairline
-                GeometryReader { g in Rectangle().fill(c.ctxFull > 0.75 ? needs : accent).frame(width: g.size.width * c.ctxFull) }.frame(height: 2).background(card).accessibilityHidden(true)
-            }
             header
-            rule(top: true)
+            rule
             ZStack(alignment: .top) {
             Group {  // settings cover the dashboard pane: App.settingsHost
             StageOr(v: c.voice) { StageView(v: c.voice, c: c) } chat: {
             VStack(spacing: 0) {
             ScrollViewReader { sv in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.sp4) {
+                    VStack(alignment: .leading, spacing: DS.Space.s16) {
                         let started = c.msgs.contains { $0.role == .you }
                         ForEach(c.msgs.filter { !(started && $0.role == .note && $0.text.hasPrefix("Ask me anything")) }) { m in MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)) }
                         if let r = c.run { RunCard(r: r, c: c) }
                         ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in
-                            HStack { Spacer(minLength: 60); queued([q.display, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
+                            HStack { Spacer(minLength: DS.Space.s48); queued([q.display, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
                         }
                         Color.clear.frame(height: 1).id("bottom")
-                    }.padding(Theme.sp4)
+                    }.padding(DS.Space.s16)
                 }
                 .onAppear { DispatchQueue.main.async { sv.scrollTo("bottom", anchor: .bottom) } }  // after layout, or it lands short
                 .onChange(of: c.msgs.count) { sv.scrollTo("bottom") }
@@ -2213,8 +1999,8 @@ struct ChatView: View, Looked {
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
             }
-            if c.verbose { rule(top: false); FeedPanel(f: c.feed, c: c) }
-            rule(top: false)
+            if c.verbose { rule; FeedPanel(f: c.feed, c: c) }
+            rule
             footer
             }.id(c.look)
             .overlay { DropArea(c: c) }  // files dragged anywhere on the chat, the field too
@@ -2224,210 +2010,134 @@ struct ChatView: View, Looked {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay {  // HUD's corner brackets on the pane; its live stage draws its own
-            if lk.id == "hud" { StageOr(v: c.voice) { EmptyView() } chat: { Brackets().stroke(accent, lineWidth: 2).allowsHitTesting(false).accessibilityHidden(true) } }
-        }
         .background(bg)
         .foregroundColor(fg)
-        .environment(\.colorScheme, lk.dark ? .dark : .light)  // the look's, for this pane only (not the window)
-        .font(lk.font == monoCSS ? sys(size: Theme.fs3, design: .monospaced) : sys(size: Theme.fs3))
+        .environment(\.colorScheme, lk.dark ? .dark : .light)  // the look's: Default follows the app, Phosphor is always dark
+        .font(ui(DS.TypeRole.body))
+        .tint(accent)
     }
 
     // MARK: the look's chrome (header, rules, queued messages, composer)
 
     var busy: Bool { c.run != nil }
     var stateWord: String { c.connected ? (busy ? "working" : "idle") : "offline" }
-    var stateInk: Color { !c.connected ? crashed : busy ? accent : dim }
-    var inset: CGFloat { lk.id == "editorial" || lk.id == "zen" ? Theme.sp5 : Theme.sp4 }
-    /// A chrome label in the look's voice: caps and tracking (Orb, On Air, HUD, Editorial), lowercase (Zen), mono (Phosphor, HUD).
-    func tag(_ s: String, _ size: CGFloat = Theme.fs1, _ w: Font.Weight = .regular, caps: Bool? = nil) -> Text {
-        let up = caps ?? ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
-        return Text(up ? s.uppercased() : lk.id == "zen" ? s.lowercased() : s)
-            .font(sys(size: size, weight: w, design: code ? .monospaced : .default).monospacedDigit()).tracking(up ? 1.4 : 0)
+    var inset: CGFloat { DS.Space.s16 }
+    /// A chrome label in the look's face: mono for Phosphor, tabular figures, sentence case (§3).
+    func tag(_ s: String, _ t: DSType = DS.TypeRole.caption, _ w: Font.Weight? = nil) -> Text {
+        Text(s).font(ui(t, w).monospacedDigit())
     }
 
     var header: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Group {
-                if c.editingName {
+        Group {
+            if c.editingName {
+                headerRow(showMeta: false, showState: false, fixedTitle: false)
+            } else {
+                ViewThatFits(in: .horizontal) {  // narrow pane drops host, then state tag, before truncating the assistant name
+                    headerRow(showMeta: true, showState: true, fixedTitle: true)
+                    headerRow(showMeta: false, showState: true, fixedTitle: true)
+                    headerRow(showMeta: false, showState: false, fixedTitle: true)
                     headerRow(showMeta: false, showState: false, fixedTitle: false)
-                } else {
-                    ViewThatFits(in: .horizontal) {  // narrow pane drops host, then state tag, before truncating the assistant name
-                        headerRow(showMeta: true, showState: true, fixedTitle: true)
-                        headerRow(showMeta: false, showState: true, fixedTitle: true)
-                        headerRow(showMeta: false, showState: false, fixedTitle: true)
-                        headerRow(showMeta: false, showState: false, fixedTitle: false)
-                    }
                 }
-            }.padding(.leading, inset).padding(.trailing, lk.id == "editorial" ? inset : Theme.sp3)
-                .padding(.top, lk.id == "zen" ? Theme.sp4 : Theme.sp3).padding(.bottom, lk.id == "zen" ? Theme.sp1 : Theme.sp3)
-            if lk.id == "editorial" { masthead }
-        }
+            }
+        }.padding(.leading, inset).padding(.trailing, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(minHeight: DS.Layout.barHeight)
     }
 
     @ViewBuilder func headerRow(showMeta: Bool, showState: Bool, fixedTitle: Bool) -> some View {
-        HStack(spacing: Theme.sp2) {
-            HStack(spacing: Theme.sp2) { title(showState: showState) }.fixedSize(horizontal: fixedTitle, vertical: false)
-            Spacer(minLength: Theme.sp2)
-            if showMeta { HStack(spacing: Theme.sp2) { meta }.fixedSize() }
+        HStack(spacing: DS.Space.s8) {
+            HStack(spacing: DS.Space.s8) { title(showState: showState) }.fixedSize(horizontal: fixedTitle, vertical: false)
+            Spacer(minLength: DS.Space.s8)
+            if showMeta { HStack(spacing: DS.Space.s8) { meta }.fixedSize() }
             if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
         }
     }
 
     /// The name as the look prints it; double-click to rename (Return or click away saves). Only the display changes, never c.name.
-    @ViewBuilder func nameView(_ shown: String, _ f: Font, track: CGFloat = 0) -> some View {
+    @ViewBuilder func nameView(_ shown: String, _ f: Font) -> some View {
         if c.editingName {
             TextField("Name", text: $c.name, onEditingChanged: { if !$0 { c.doneNaming() } }).textFieldStyle(.plain).font(f).frame(width: 160).onSubmit(c.doneNaming)
         } else {
-            Text(shown).font(f).tracking(track).lineLimit(1).truncationMode(.tail).layoutPriority(1).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
+            Text(shown).font(f).lineLimit(1).truncationMode(.tail).layoutPriority(1).onTapGesture(count: 2) { c.editingName = true }.help("Double-click to rename")
         }
     }
 
-    /// Who and how it is: an avatar (Conversation), the orb (Orb), a tally (On Air), a prompt (Phosphor), a masthead (Editorial), a callsign (HUD), a whisper (Zen).
+    /// Who and how it is: the name (strong) and its state as glyph and word (working, offline; idle says nothing in colour).
+    /// Phosphor: a prompt, name@greenlight ~/chat.
     @ViewBuilder func title(showState: Bool = true) -> some View {
         let n = c.name
-        switch lk.id {
-        case "conversation":
-            Text(n.prefix(1).uppercased()).font(sys(size: Theme.fs4 - 1, weight: .semibold)).foregroundColor(busy ? .white : accent)
-                .frame(width: 30, height: 30).background(Circle().fill(busy ? accent : accent.opacity(0.14))).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                nameView(n, sys(size: Theme.fs4 - 1, weight: .semibold))
-                HStack(spacing: Theme.sp1) {
-                    Circle().fill(c.connected ? (busy ? accent : done) : crashed).frame(width: 7, height: 7)
-                    Text("\(host) · \(stateWord)\(tps)")
-                }.font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim)
-            }
-        case "onair":
-            let live = c.connected && busy
-            HStack(spacing: 7) {
-                Circle().fill(live ? .white : c.connected ? dim : crashed).frame(width: 7, height: 7)
-                tag(!c.connected ? "Off air" : live ? "On air" : "Standby", Theme.fs2, .heavy)
-            }.foregroundColor(live ? .white : fg).padding(.horizontal, Theme.sp3).frame(height: 24).background(Capsule().fill(live ? hx("D1242F") : hx("3A3A40")))
-            nameView((live ? "LIVE · " : "") + n.uppercased(), sys(size: Theme.fs1, weight: .heavy), track: 1.5)
-                .foregroundColor(page).padding(.horizontal, 10).frame(height: 24).background(accent)
-        case "phosphor":
-            nameView("\(n.lowercased())@greenlight", sys(size: Theme.fs3, design: .monospaced))
+        if mono {
+            nameView("\(n.lowercased())@greenlight", ds(DS.TypeRole.body, mono: true))
             Text("~/chat").foregroundColor(dim)
-        case "editorial":
-            nameView("The \(n)", sys(size: Theme.fs6 + 2, weight: .bold, design: .serif).italic())
-        case "hud":
-            nameView("\(n.uppercased())//CHAT", sys(size: Theme.fs1, design: .monospaced), track: 1.3).foregroundColor(accent)
-            if showState { tag(!c.connected ? "✕ Offline" : busy ? "▶ Working" : "◌ Idle").foregroundColor(stateInk).shadow(color: busy ? accent.opacity(0.55) : .clear, radius: 5) }
-        case "zen":
-            nameView(n.lowercased(), sys(size: Theme.fs3))
-            if showState { Text("· \(stateWord)").font(sys(size: Theme.fs3)).foregroundColor(stateInk) }
-        default:  // orb: an amber orb, a second ring while it works
-            Circle().fill(c.connected ? AnyShapeStyle(RadialGradient(colors: [hx("FFD27A"), accent, hx("B4740E")], center: UnitPoint(x: 0.35, y: 0.35), startRadius: 0, endRadius: 9)) : AnyShapeStyle(crashed))
-                .frame(width: 14, height: 14).background(Circle().fill(accent.opacity(c.connected ? 0.14 : 0)).padding(-4))
-                .background(Circle().fill(accent.opacity(busy ? 0.06 : 0)).padding(-9)).padding(.horizontal, 4).accessibilityHidden(true)
-            nameView(n.uppercased(), sys(size: Theme.fs2, weight: .semibold), track: 1.7)
-            if showState { tag("· \(stateWord)", Theme.fs2, .semibold).foregroundColor(stateInk).lineLimit(1).fixedSize() }
+        } else {
+            nameView(n, ds(DS.TypeRole.strong))
+            if showState {
+                Label { Text(stateWord.capitalized) } icon: { Image(ds: !c.connected ? "crashed" : busy ? "working" : "done", size: iconSize(DS.TypeRole.label.size)) }
+                    .font(ds(DS.TypeRole.label)).foregroundColor(!c.connected ? crashedInk : busy ? working : dim).lineLimit(1).fixedSize()
+                    .accessibilityLabel(stateWord)
+            }
         }
     }
 
-    /// Host and tok/s at the right (Conversation has them under the name, Editorial in its dateline).
+    /// Host and tok/s at the right; Phosphor adds its [state].
     @ViewBuilder var meta: some View {
-        switch lk.id {
-        case "conversation", "editorial": EmptyView()
-        case "phosphor":
+        if mono {
             Text("\(host)\(tps)").foregroundColor(dim).lineLimit(1)
-            Text("[\(stateWord.uppercased())]").fontWeight(busy ? .bold : .regular).foregroundColor(c.connected ? (busy ? fg : dim) : crashed)
-        default: tag("\(host)\(tps)", Theme.fs1, lk.id == "onair" ? .bold : .regular, caps: lk.id == "onair" || lk.id == "hud").foregroundColor(dim).lineLimit(1)
-        }
+            Text("[\(stateWord)]").fontWeight(busy ? .bold : .regular).foregroundColor(c.connected ? (busy ? fg : dim) : crashedInk)
+        } else { tag("\(host)\(tps)").foregroundColor(dim).lineLimit(1) }
     }
 
-    /// Editorial: a double rule, the dateline, a rule.
-    var masthead: some View {
-        let state = !c.connected ? "Offline" : busy ? "Going to press" : "Idle"
-        return VStack(spacing: 0) {
-            VStack(spacing: 2) { Rectangle().fill(fg).frame(height: 1); Rectangle().fill(fg).frame(height: 1) }
-            HStack {
-                tag("\(Date().formatted(.dateTime.weekday(.wide))) edition · \(state)", Theme.fs1 - 1, .semibold).foregroundColor(stateInk)
-                Spacer()
-                tag("\(host)\(tps)", Theme.fs1 - 1, .semibold).foregroundColor(dim)
-            }.padding(.vertical, 6)
-            Rectangle().fill(fg).frame(height: 1)
-        }.padding(.horizontal, inset)
+    /// The hairline between header, list and footer (§10.1: one side draws it); Phosphor dashes it.
+    @ViewBuilder var rule: some View {
+        if mono { HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) }
+        else { Rectangle().fill(line).frame(height: 1) }
     }
 
-    /// The rule between header, list and footer, in the look's hand (Editorial's masthead draws the top one; Zen has none).
-    @ViewBuilder func rule(top: Bool) -> some View {
-        switch lk.id {
-        case "onair": Rectangle().fill(top && busy ? hx("D1242F") : line).frame(height: 2)
-        case "phosphor": HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
-        case "editorial": if !top { Rectangle().fill(fg).frame(height: 1).padding(.horizontal, inset) }
-        case "zen": EmptyView()
-        case "conversation": if top { Rectangle().fill(line).frame(height: 1) }
-        default: Rectangle().fill(line).frame(height: 1)
-        }
-    }
-
-    /// A message waiting for the run to finish: dashed and labelled, in the look's hand.
+    /// A message waiting for the run to finish: your bubble, dashed, and labelled Queued.
     @ViewBuilder func queued(_ q: String, _ i: Int) -> some View {
-        let dash = StrokeStyle(lineWidth: 1, dash: [4, 3]), boxed = ["orb", "conversation", "onair", "hud"].contains(lk.id)
-        let text = lk.id == "phosphor" ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : lk.id == "editorial" ? Text("“\(q)”").italic() : lk.id == "zen" ? Text(q).italic() : Text(q)
-        VStack(alignment: .trailing, spacing: lk.id == "onair" ? 0 : Theme.sp1) {
-            if lk.id == "onair" { tag("You · queued", Theme.fs1 - 1, .heavy).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.vertical, 3).overlay(Rectangle().stroke(dim, style: dash)) }
-            text.font(chatFace(size: lk.id == "editorial" ? Theme.fs4 : Theme.fs3)).foregroundColor(youInk)  // your color at full strength (fading it fell under 4.5:1); the label, dashes or Zen's italic say queued
-                .multilineTextAlignment(.trailing).padding(.horizontal, boxed ? 14 : 0).padding(.vertical, boxed ? 10 : 0)
-                .background {
-                    switch lk.id {
-                    case "orb": RoundedRectangle(cornerRadius: 18).stroke(line, style: dash)
-                    case "conversation": UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16).stroke(accent, style: dash)
-                    case "onair": Rectangle().stroke(dim, style: dash)
-                    case "hud": Rectangle().stroke(line, style: dash)
-                    default: EmptyView()
-                    }
-                }
-            if lk.id != "onair" { queuedLabel(i) }
-        }.padding(.top, lk.id == "editorial" ? Theme.sp2 : 0)
-            .overlay(alignment: .top) { if lk.id == "editorial" { HLine().stroke(dim, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) } }
-    }
-    func queuedLabel(_ i: Int) -> some View {
-        let s = switch lk.id {
-        case "conversation": "Queued · sends after this run"
-        case "phosphor": "(queued)"
-        case "editorial": "Queued for the next edition"
-        case "hud": "Queued · " + String(format: "%02d", i + 1)
-        default: "Queued"
+        let dash = StrokeStyle(lineWidth: 1, dash: [4, 3])
+        let text = mono ? Text("\(Text("you> ").foregroundColor(dim))\(Text(q))") : Text(q)
+        VStack(alignment: .trailing, spacing: DS.Space.s4) {
+            text.font(chatFace(size: DS.TypeRole.bodyCopy.size)).foregroundColor(mono ? youInk : fg)  // full strength; the dashes and the label say queued
+                .multilineTextAlignment(.trailing).padding(.horizontal, mono ? 0 : DS.Space.s12).padding(.vertical, mono ? 0 : DS.Space.s8)
+                .background { if !mono { RoundedRectangle(cornerRadius: DS.Radius.md).stroke(edge, style: dash) } }
+            tag(mono ? "(queued)" : "Queued · sends after this run").foregroundColor(dim)
         }
-        return tag(s, ["editorial", "hud"].contains(lk.id) ? Theme.fs1 - 1 : lk.id == "orb" ? Theme.fs1 : Theme.fs2, lk.id == "editorial" ? .bold : .regular).foregroundColor(dim)
     }
 
     /// ⌃R: fuzzy search over the prompts you sent; with no query, the recent ones.
     var histPanel: some View {
         let ms = c.hmatches, q = (c.hq ?? "").trimmingCharacters(in: .whitespaces)
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.sp2) {
+            HStack(spacing: DS.Space.s8) {
                 Image(ds: "search").foregroundColor(dim).accessibilityHidden(true)
                 TextField("Search prompt history", text: Binding(get: { c.hq ?? "" }, set: { c.hq = $0; c.hsel = 0 }))
                     .textFieldStyle(.plain).focused($searching).onAppear { searching = true }
-                if !q.isEmpty { Text("\(ms.count) match\(ms.count == 1 ? "" : "es")").font(sys(size: Theme.fs1).monospacedDigit()).foregroundColor(dim) }
-            }.padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-            Divider().overlay(line)
+                if !q.isEmpty { Text("\(ms.count) match\(ms.count == 1 ? "" : "es")").font(ui(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim) }
+            }.padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
+            rule
             ScrollViewReader { sv in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        if q.isEmpty && !ms.isEmpty { Text("RECENT").font(sys(size: Theme.fs1, weight: .semibold)).foregroundColor(dim).padding(.horizontal, Theme.sp2).padding(.top, Theme.sp1) }
+                    VStack(alignment: .leading, spacing: DS.Space.s2) {
+                        if q.isEmpty && !ms.isEmpty { Text("Recent").font(ui(DS.TypeRole.label)).foregroundColor(dim).padding(.horizontal, DS.Space.s8).padding(.top, DS.Space.s4) }
                         ForEach(Array(ms.enumerated()), id: \.offset) { i, m in
                             Button { c.useHist(m.s.t) } label: {
-                                HStack(spacing: Theme.sp3) {
+                                HStack(spacing: DS.Space.s12) {
                                     Text(marked(m.s.t, m.pos)).lineLimit(1).truncationMode(.tail).foregroundColor(sub)
-                                    Spacer(minLength: 4)
-                                    Text(ago(m.s.at)).font(sys(size: Theme.fs1)).foregroundColor(dim)
-                                }.padding(.horizontal, Theme.sp2).padding(.vertical, Theme.sp2).contentShape(Rectangle())
-                                    .background(RoundedRectangle(cornerRadius: Theme.r1).fill(i == c.hsel ? accent.opacity(0.16) : .clear))
+                                    Spacer(minLength: DS.Space.s4)
+                                    Text(ago(m.s.at)).font(ui(DS.TypeRole.caption).monospacedDigit()).foregroundColor(dim)
+                                }.padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s8).contentShape(Rectangle())
+                                    .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm).fill(i == c.hsel ? (mono ? card : Color(DS.Palette.accentSubtle, dark: lk.dark)) : .clear))
                             }.buttonStyle(.plain).id(i)
                         }
-                        if ms.isEmpty { Text(c.sent.isEmpty ? "Nothing sent yet" : "No prompts match").foregroundColor(dim).padding(Theme.sp3) }
-                    }.padding(Theme.sp1)
+                        if ms.isEmpty { Text(c.sent.isEmpty ? "Nothing sent yet" : "No prompts match").foregroundColor(dim).padding(DS.Space.s12) }
+                    }.padding(DS.Space.s4)
                 }.frame(maxHeight: 220)
                     .onChange(of: c.hsel) { sv.scrollTo(c.hsel) }
             }
-            Divider().overlay(line)
-            Text("↑↓ move · ↵ put in prompt · ⌃R ⌃S older · newer · esc back to your draft").font(sys(size: Theme.fs1)).foregroundColor(dim)
-                .padding(.horizontal, Theme.sp3).padding(.vertical, Theme.sp2)
-        }.background(RoundedRectangle(cornerRadius: Theme.r2).fill(surface)).overlay(RoundedRectangle(cornerRadius: Theme.r2).stroke(edge))
+            rule
+            Text("↑↓ move · ↵ put in prompt · ⌃R ⌃S older · newer · esc back to your draft").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
+                .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
+        }.background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md).fill(mono ? page : Color(DS.Palette.bgRaised, dark: lk.dark)))
+            .overlay(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md).stroke(line))
     }
 
     func marked(_ t: String, _ pos: [Int]) -> AttributedString {
@@ -2435,7 +2145,7 @@ struct ChatView: View, Looked {
         var a = AttributedString()
         for (i, ch) in t.prefix(300).enumerated() {
             var s = AttributedString(ch.isNewline ? " " : String(ch))
-            if at.contains(i) { s.foregroundColor = accent; s.font = sys(size: Theme.fs3, weight: .semibold) }
+            if at.contains(i) { s.foregroundColor = fg; s.font = ui(DS.TypeRole.strong) }
             a += s
         }
         return a
@@ -2443,53 +2153,56 @@ struct ChatView: View, Looked {
 
     var tps: String { c.run != nil && c.tps > 0 ? " · \(Int(c.tps)) tok/s" : c.lastTps > 0 ? " · last \(Int(c.lastTps)) tok/s" : "" }
 
+    /// A file or MR waiting to go with your next message: a secondary chip (§10.5), radius sm.
+    func chipBox<V: View>(_ v: V) -> some View {
+        v.foregroundColor(mono ? fg : sub).padding(.leading, DS.Space.s8).padding(.trailing, DS.Space.s4).frame(height: DS.Layout.controlHeightSm)
+            .background(RoundedRectangle(cornerRadius: corner).fill(card))
+    }
+
     var footer: some View {
-        VStack(alignment: .leading, spacing: Theme.sp2) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             if !c.attached.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.sp2) {
+                    HStack(spacing: DS.Space.s8) {
                         ForEach(c.attached) { a in
-                            HStack(spacing: Theme.sp1) {
-                                Image(ds: "hex-fill", size: iconSize(Theme.glyph)).foregroundColor(a.color)  // ponytail: every look keeps the MR's colored hexagon
-                                tag(a.label, Theme.fs1, .semibold, caps: lk.id == "onair" || lk.id == "editorial").lineLimit(1)
+                            chipBox(HStack(spacing: DS.Space.s4) {
+                                Image(ds: "hex-fill", size: iconSize(9)).foregroundColor(a.color)  // the MR's state colour, as on the board
+                                tag(a.label, DS.TypeRole.labelSm).lineLimit(1)
                                 Button { c.attached.removeAll { $0.id == a.id }; c.unattach?(a.id) } label: {
-                                    Image(ds: "close", size: iconSize(Theme.glyph), medium: true).foregroundColor(dim).frame(width: 16, height: 16)
+                                    Image(ds: "close", size: iconSize(9), medium: true).foregroundColor(dim).frame(width: 16, height: 16)
                                 }.buttonStyle(.plain).accessibilityLabel("Remove \(a.label) from the chat")
-                            }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : Theme.sp2).padding(.trailing, 3).frame(height: 24)
-                                .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
-                                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
-                                .help(a.sent ? "Already sent to \(c.name)" : "Goes to \(c.name) with your next message")
+                            }).help(a.sent ? "Already sent to \(c.name)" : "Goes to \(c.name) with your next message")
                         }
                     }
                 }
             }
             if !c.files.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.sp2) { ForEach(c.files) { fileChip($0) } }
+                    HStack(spacing: DS.Space.s8) { ForEach(c.files) { fileChip($0) } }
                 }
             }
-            DwimToastBar(c: c, l: lk).animation(.easeOut(duration: 0.15), value: c.toast)
+            DwimToastBar(c: c, l: lk).animation(.easeOut(duration: DS.Duration.fast), value: c.toast)
             if !c.fileNote.isEmpty {
-                Label { Text(c.fileNote) } icon: { Image(ds: "info", size: 14) }.font(sys(size: Theme.fs1)).foregroundColor(Theme.needsInk)
+                Label { Text(c.fileNote) } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.caption.size)) }.font(ui(DS.TypeRole.caption)).foregroundColor(needsInk)
                     .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
             }
             if c.hq != nil { histPanel }
-            HStack(alignment: .bottom, spacing: Theme.sp2) {
+            HStack(alignment: .bottom, spacing: DS.Space.s4) {
                 if c.recording == nil { attachButton }
                 if let since = c.recording {
-                    HStack(spacing: 2) {
+                    HStack(spacing: DS.Space.s2) {
                         ForEach(c.levels.indices, id: \.self) { i in
-                            Capsule().fill(crashed).frame(width: 3, height: 3 + CGFloat(c.levels[i]) * 19)
+                            Capsule().fill(crashed).frame(width: 2, height: 3 + CGFloat(c.levels[i]) * 19)
                         }
                     }.frame(height: 30).accessibilityHidden(true)
-                    Text("Listening… " + fmt(Date().timeIntervalSince(since))).font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(dim)
+                    Text("Listening… " + fmt(Date().timeIntervalSince(since))).font(ui(DS.TypeRole.label).monospacedDigit()).foregroundColor(dim)
                     Spacer(minLength: 0)
                 } else {
                     TextField(c.transcribing ? "Transcribing…" : c.run != nil ? "Queue a follow-up…" : c.attached.isEmpty ? greeting
                               : "Ask about \(c.attached.count == 1 && c.attached[0].mrs == 1 ? c.attached[0].label : "these \(c.attached.reduce(0) { $0 + $1.mrs }) MRs")…", text: $c.input, axis: .vertical)
-                        .textFieldStyle(.plain).font(chatFace(size: bare ? Theme.fs4 : Theme.fs3, weight: lk.id == "zen" ? .light : .regular))
-                        .lineLimit(2...10).padding(.vertical, Theme.sp2).frame(minHeight: 50).focused($typing)  // two lines to write in, growing to ten
-                        .padding(.leading, ["phosphor", "hud", "zen"].contains(lk.id) ? 18 : 0).overlay(alignment: lk.id == "zen" ? .bottomLeading : .topLeading) { promptGlyph }
+                        .textFieldStyle(.plain).font(chatFace(size: DS.TypeRole.bodyCopy.size))
+                        .lineLimit(3...10).padding(.vertical, DS.Space.s8).focused($typing)  // three lines to write in (§10.4), growing to ten
+                        .padding(.leading, mono ? 18 : DS.Space.s4).overlay(alignment: .topLeading) { promptGlyph }
                         .onKeyPress(.return, phases: .down) { k in
                             if k.modifiers.contains(.shift) {  // newline at the cursor
                                 NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
@@ -2497,167 +2210,129 @@ struct ChatView: View, Looked {
                             return .handled
                         }
                     if c.vim && c.vimMode != "normal" {  // normal mode shows nothing
-                        Text(c.vimMode).font(sys(size: Theme.fs1).italic()).foregroundColor(dim).padding(.bottom, Theme.sp2)
+                        Text(c.vimMode).font(ui(DS.TypeRole.caption).italic()).foregroundColor(dim).padding(.bottom, DS.Space.s8)
                     }
                 }
-                let rec = c.recording != nil, pad = padSize, r = corner(pad)
+                let rec = c.recording != nil, pad = padSize
                 Button(action: c.toggleVoice) {
                     Group {
                         if c.transcribing { ProgressView().controlSize(.small).scaleEffect(0.7) }
-                        else if lk.id == "phosphor" { Text(rec ? "[stop]" : "[mic]").padding(.horizontal, 6) }
-                        else { Image(ds: rec ? "stop" : "mic", size: iconSize(Theme.fs3), medium: true) }
+                        else if mono { Text(rec ? "[stop]" : "[mic]").padding(.horizontal, DS.Space.s4) }
+                        else { Image(ds: rec ? "stop" : "mic", size: iconSize(DS.TypeRole.body.size)) }
                     }.frame(minWidth: pad).frame(height: pad)
-                        .background(RoundedRectangle(cornerRadius: r).fill(rec ? crashed : lk.id == "conversation" || lk.id == "onair" ? page : .clear))  // quiet until it records
-                        .overlay(RoundedRectangle(cornerRadius: r).stroke(rec || bare ? .clear : line))
-                        .foregroundColor(rec ? .white : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+                        .background(RoundedRectangle(cornerRadius: corner).fill(rec ? crashed : .clear))  // quiet until it records
+                        .foregroundColor(rec ? Color(DS.Palette.statusCrashedOnSolid, dark: lk.dark) : mono ? fg : dim)
                 }.buttonStyle(.plain).disabled(c.transcribing)
                     .modifier(Tip(c: c, text: c.recording != nil ? "Stop and transcribe (\(c.shortcut))" : "Speak to \(c.name) (\(c.shortcut))"))
                     .accessibilityLabel(c.recording != nil ? "Stop recording" : "Speak")
                 let empty = (c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && c.files.isEmpty) || c.reading > 0  // submit() ignores it anyway
                 Button(action: c.submit) {
-                    sendLabel(empty).frame(minWidth: pad).frame(height: pad)
-                        .background(RoundedRectangle(cornerRadius: r).fill(sendFill(empty)))
-                        .overlay(RoundedRectangle(cornerRadius: r).stroke(sendEdge(empty)))
-                        .foregroundColor(empty ? dim.opacity(0.6) : lk.id == "hud" || lk.id == "zen" ? accent : lk.dark ? page : .white)
+                    sendLabel.frame(minWidth: pad).frame(height: pad)
+                        .background(RoundedRectangle(cornerRadius: corner).fill(empty ? (mono ? Color.clear : card) : mono ? fg : accent))
+                        .overlay(RoundedRectangle(cornerRadius: corner).stroke(mono && empty ? line : .clear))
+                        .foregroundColor(empty ? faint : mono ? page : onAccent)
                 }.buttonStyle(.plain).disabled(empty).accessibilityLabel("Send")
             }
-            .padding(.leading, bare ? 0 : lk.id == "orb" ? Theme.sp4 : Theme.sp3).padding(.trailing, bare ? 0 : 6).padding(.vertical, bare ? 0 : 3).padding(.bottom, bare ? 6 : 0)
+            .padding(.leading, DS.Space.s4).padding(.trailing, DS.Space.s4).padding(.vertical, DS.Space.s4)
             .background { composerBox }
             .onChange(of: c.hq == nil) { if c.hq == nil { typing = true } }  // ⌃R closed: back to the field
             if c.hp >= 0 {
-                Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(sys(size: Theme.fs1)).foregroundColor(dim)
+                Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
             }
-            let onair = lk.id == "onair"
             ViewThatFits(in: .horizontal) {  // a narrow pane drops the hint, then the model; it never clips
                 footRow(hint: true, model: true)
                 footRow(hint: false, model: true)
                 footRow(hint: false, model: false)
-            }.font(sys(size: Theme.fs1).monospacedDigit()).controlSize(.small)
-                .padding(.trailing, onair ? inset : 0).background(onair ? accent : .clear).padding(.horizontal, onair ? -inset : 0)  // full-bleed, the model flush left
-        }.padding(.horizontal, inset).padding(.top, Theme.sp3).padding(.bottom, lk.id == "onair" ? 0 : Theme.sp4)
+            }.font(ui(DS.TypeRole.caption).monospacedDigit()).controlSize(.small)
+        }.padding(.horizontal, inset).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s12)
     }
 
     /// The composer's +: attach files (the open panel). Drops and ⌘V attach too.
     var attachButton: some View {
-        let pad = padSize, r = corner(pad)
+        let pad = padSize
         return Button { c.pickFiles(NSApp.keyWindow) } label: {
             Group {
-                if lk.id == "phosphor" { Text("[+]").padding(.horizontal, 4) }
-                else { Image(ds: "plus", size: iconSize(Theme.fs3), medium: true) }
-            }.frame(minWidth: pad).frame(height: pad)
-                .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "conversation" || lk.id == "onair" ? page : .clear))
-                .overlay(RoundedRectangle(cornerRadius: r).stroke(bare ? .clear : line))
-                .foregroundColor(lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
+                if mono { Text("[+]").padding(.horizontal, DS.Space.s4) }
+                else { Image(ds: "attach", size: iconSize(DS.TypeRole.body.size)) }
+            }.frame(minWidth: pad).frame(height: pad).foregroundColor(mono ? fg : dim).contentShape(Rectangle())
         }.buttonStyle(.plain)
             .modifier(Tip(c: c, text: "Attach files: \(ChatFile.supported). Or drop them here, or paste."))
             .accessibilityLabel("Attach files")
     }
     /// A file waiting to go with the next message: its thumbnail or icon, name and size, and × to take it off.
     func fileChip(_ f: ChatFile) -> some View {
-        HStack(spacing: Theme.sp1) {
-            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 3)) }
-            else { Image(ds: "file-text", size: iconSize(Theme.fs2)).foregroundColor(dim) }
-            tag(f.name, Theme.fs1, .semibold, caps: false).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
-            tag(byteSize(f.data.count), Theme.fs1, caps: false).foregroundColor(dim).lineLimit(1).fixedSize()
+        chipBox(HStack(spacing: DS.Space.s4) {
+            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: DS.Radius.xs)) }
+            else { Image(ds: "file-text", size: iconSize(DS.TypeRole.label.size)).foregroundColor(dim) }
+            tag(f.name, DS.TypeRole.labelSm).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
+            tag(byteSize(f.data.count)).foregroundColor(dim).lineLimit(1).fixedSize()
             Button { c.files.removeAll { $0.id == f.id } } label: {
-                Image(ds: "close", size: iconSize(Theme.glyph), medium: true).foregroundColor(dim).frame(width: 16, height: 16)
+                Image(ds: "close", size: iconSize(9), medium: true).foregroundColor(dim).frame(width: 16, height: 16)
             }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
-        }.foregroundColor(lk.id == "phosphor" ? fg : sub).padding(.leading, lk.id == "zen" ? 0 : 3).padding(.trailing, 3).frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: corner(24)).fill(["orb", "conversation", "onair", "hud"].contains(lk.id) ? card : .clear))
-            .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(lk.id == "orb" || lk.id == "zen" ? .clear : line))
+        })
             .help("\(f.kindName), goes to \(c.name) with your next message")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
     /// Files dragged over the chat: where they'll go.
     var dropHint: some View {
-        RoundedRectangle(cornerRadius: corner(40) > 0 ? Theme.r3 : 0).fill(bg.opacity(0.82))
-            .overlay(RoundedRectangle(cornerRadius: corner(40) > 0 ? Theme.r3 : 0).stroke(accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
-            .overlay(VStack(spacing: Theme.sp2) {
-                Image(ds: "attach", size: iconSize(Theme.fs6)).foregroundColor(accent)
-                Text("Drop to attach").font(sys(size: Theme.fs4, weight: .semibold))
-                Text(ChatFile.supported.prefix(1).uppercased() + ChatFile.supported.dropFirst()).font(sys(size: Theme.fs1)).foregroundColor(dim)
+        RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.lg).fill(bg.opacity(0.9))
+            .overlay(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.lg).stroke(accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+            .overlay(VStack(spacing: DS.Space.s8) {
+                Image(ds: "attach", size: iconSize(DS.TypeRole.title.size)).foregroundColor(link)
+                Text("Drop to attach").font(ui(DS.TypeRole.titleSm))
+                Text(ChatFile.supported.prefix(1).uppercased() + ChatFile.supported.dropFirst()).font(ui(DS.TypeRole.caption)).foregroundColor(dim)
             })
-            .padding(Theme.sp3).allowsHitTesting(false).accessibilityHidden(true)
+            .padding(DS.Space.s12).allowsHitTesting(false).accessibilityHidden(true)
     }
 
     func footRow(hint: Bool, model: Bool) -> some View {
-        let onair = lk.id == "onair"
-        return HStack(spacing: Theme.sp2) {
-            if onair && model { modelButton.fixedSize() }  // On Air: the model first, inverse, on the amber strip
+        HStack(spacing: DS.Space.s8) {
             if hint {
-                tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send", lk.id == "editorial" ? Theme.fs1 - 1 : Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .semibold : .regular)
-                    .foregroundColor(onair ? page : dim).lineLimit(1).fixedSize()
+                tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send").foregroundColor(dim).lineLimit(1).fixedSize()
             }
-            Spacer(minLength: 4)
-            if !onair && model { modelButton.fixedSize() }
+            Spacer(minLength: DS.Space.s4)
+            if model { modelButton.fixedSize() }
             ContextButton(c: c)
             newChat
         }
     }
 
-    var bare: Bool { lk.id == "editorial" || lk.id == "zen" }  // no boxes, just type and rules
-    /// Corners for the look's controls: round (Orb), 6pt (Conversation), square (the rest).
-    func corner(_ h: CGFloat) -> CGFloat { lk.id == "orb" ? h / 2 : lk.id == "conversation" ? Theme.r1 : 0 }
-    var padSize: CGFloat { switch lk.id { case "onair": 36; case "orb", "conversation": 34; case "hud", "editorial": 32; default: 30 } }
-    var greeting: String { lk.id == "editorial" ? "Write to the desk…" : lk.id == "phosphor" ? "talk to \(c.name.lowercased())_" : "Talk to \(c.name)…" }
+    /// Corners for the look's controls: radius sm (Default), square (Phosphor).
+    var corner: CGFloat { mono ? 0 : DS.Radius.sm }
+    var padSize: CGFloat { DS.Layout.controlHeightMd }
+    var greeting: String { mono ? "talk to \(c.name.lowercased())_" : "Talk to \(c.name)…" }
 
-    /// What leads the line you type: a shell prompt (Phosphor), a caret (HUD), a dot that lights while you type (Zen).
+    /// Phosphor leads the line you type with a shell prompt.
     @ViewBuilder var promptGlyph: some View {
-        switch lk.id {
-        case "phosphor": Text("$").foregroundColor(typing ? fg : dim).padding(.top, Theme.sp2).accessibilityHidden(true)
-        case "hud": Text(">").font(sys(size: Theme.fs2, design: .monospaced)).foregroundColor(accent).padding(.top, Theme.sp2).accessibilityHidden(true)
-        case "zen": Circle().fill(typing || c.hp >= 0 ? accent : hx("4A4A52")).frame(width: 6, height: 6).padding(.bottom, 15).accessibilityHidden(true)
-        default: EmptyView()
-        }
+        if mono { Text("$").foregroundColor(typing ? fg : dim).padding(.top, DS.Space.s8).accessibilityHidden(true) }
     }
-    /// The composer's frame: a capsule (Orb, Conversation), a square (On Air, HUD), a dashed box (Phosphor), a rule under it
-    /// (Editorial, Zen). Focus lights it in the look's accent; walking the history (↑↓) thickens it.
+    /// The composer's frame (§10.4): the input well with a 1px border, the accent ring on focus; walking the history (↑↓)
+    /// thickens it. Phosphor: a dashed box.
     @ViewBuilder var composerBox: some View {
         let hot = typing || c.hp >= 0, walk: CGFloat = c.hp >= 0 ? 1 : 0
-        switch lk.id {
-        case "editorial", "zen":
-            Rectangle().fill(hot ? accent : lk.id == "zen" ? line : fg).frame(height: (hot && lk.id == "editorial" ? 2 : 1) + walk).frame(maxHeight: .infinity, alignment: .bottom)
-        case "phosphor":
+        if mono {
             Rectangle().fill(hot ? card : .clear).overlay(Rectangle().stroke(hot ? fg : line, style: StrokeStyle(lineWidth: 1 + walk, dash: [4, 3])))
-        default:
-            let r: CGFloat = lk.id == "orb" ? 24 : lk.id == "conversation" ? 22 : 0
-            RoundedRectangle(cornerRadius: r).fill(lk.id == "conversation" || lk.id == "hud" ? page : card)
-                .overlay(RoundedRectangle(cornerRadius: r).stroke(hot ? accent : line, lineWidth: (lk.id == "onair" ? 2 : 1) + walk))
-                .background(RoundedRectangle(cornerRadius: r + 3).fill(accent.opacity(lk.id == "conversation" && hot ? 0.15 : 0)).padding(-3))  // Conversation's focus ring
+        } else {
+            let r = RoundedRectangle(cornerRadius: DS.Radius.md)
+            r.fill(Color(lk.dark ? DS.Palette.elementRest : DS.Palette.bgSunken, dark: lk.dark))
+                .overlay(r.stroke(hot ? Color(DS.Palette.accentRing, dark: lk.dark) : edge, lineWidth: 1 + walk))
         }
     }
-    @ViewBuilder func sendLabel(_ empty: Bool) -> some View {
-        switch lk.id {
-        case "phosphor": Text("[ send ]").padding(.horizontal, 6)
-        case "hud": tag("[ Send ]", Theme.fs2, .bold).padding(.horizontal, Theme.sp3)
-        case "editorial": Text("Send").font(sys(size: Theme.fs3, weight: .bold)).padding(.horizontal, empty ? 2 : 14)
-        default: Image(ds: "arrow-up", size: iconSize(Theme.fs3), medium: true)
-        }
+    @ViewBuilder var sendLabel: some View {
+        if mono { Text("[ send ]").padding(.horizontal, DS.Space.s4) }
+        else { Image(ds: "arrow-up", size: iconSize(DS.TypeRole.body.size), medium: true) }
     }
-    func sendFill(_ empty: Bool) -> Color {
-        if empty { return lk.id == "orb" || lk.id == "onair" ? line : lk.id == "conversation" ? card : .clear }
-        return lk.id == "hud" ? accent.opacity(0.1) : lk.id == "zen" ? .clear : accent
-    }
-    func sendEdge(_ empty: Bool) -> Color { lk.id == "hud" ? (empty ? line : accent) : lk.id == "phosphor" && empty ? line : .clear }
 
-    /// Model and effort, as the look would print it; opens Settings.
+    /// Model and effort, as a quiet button; opens Settings.
     var modelButton: some View {
-        let m = c.modelName, e = c.isClaude ? effortName(c.effort) : nil, onair = lk.id == "onair"
-        let label = switch lk.id {
-        case "phosphor": "--model \(m.lowercased().replacingOccurrences(of: " ", with: "-"))" + (e.map { " --effort \($0.lowercased())" } ?? "")
-        case "editorial": "Set in \(m)" + (e.map { " · \($0) effort" } ?? "")
-        case "hud": "Mdl \(m)" + (e.map { " · eff \($0)" } ?? "")
-        case "onair": m + (e.map { " · effort \($0)" } ?? "")
-        default: m + (e.map { " · \($0)" } ?? "")
-        }
+        let m = c.modelName, e = c.isClaude ? effortName(c.effort) : nil
+        let label = mono ? "--model \(m.lowercased().replacingOccurrences(of: " ", with: "-"))" + (e.map { " --effort \($0.lowercased())" } ?? "") : m + (e.map { " · \($0)" } ?? "")
         return Button { c.settingsOpen = true } label: {
-            HStack(spacing: Theme.sp1) {
-                tag(label, Theme.fs1, onair ? .heavy : lk.id == "editorial" ? .bold : .regular).lineLimit(1).truncationMode(.middle)  // after the hint, the model gives way
-                if lk.id == "conversation" || lk.id == "hud" { Image(ds: "chevron-up-down", size: iconSize(Theme.glyph), medium: true) }
-            }.foregroundColor(onair ? accent : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
-                .padding(.horizontal, bare ? 0 : onair ? Theme.sp3 : Theme.sp2).frame(height: onair ? 34 : 24)
-                .background(RoundedRectangle(cornerRadius: corner(24)).fill(onair ? page : lk.id == "conversation" ? card : .clear))
-                .overlay(RoundedRectangle(cornerRadius: corner(24)).stroke(bare || onair ? .clear : line)).contentShape(Rectangle())
+            HStack(spacing: DS.Space.s4) {
+                tag(label).lineLimit(1).truncationMode(.middle)  // after the hint, the model gives way
+                if !mono { Image(ds: "chevron-up-down", size: iconSize(9), medium: true) }
+            }.foregroundColor(mono ? fg : dim)
+                .padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightSm).contentShape(Rectangle())
         }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
     }
 
@@ -2666,33 +2341,31 @@ struct ChatView: View, Looked {
     var newChat: some View {
         let hot = c.hint == Self.newTip
         return Button(action: { c.clear() }) {
-            Image(ds: "compose", size: iconSize(Theme.fs2)).frame(width: 26, height: 26)
-                .foregroundColor(hot ? accent : lk.id == "phosphor" ? fg : sub)
-                .background(RoundedRectangle(cornerRadius: corner(26)).fill(lk.id == "onair" ? card : hot ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber: tile stays dark
-                .overlay(RoundedRectangle(cornerRadius: corner(26)).stroke(hot ? (lk.id == "onair" ? fg : accent) : bare ? .clear : line))
+            Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)).frame(width: DS.Layout.controlHeightSm, height: DS.Layout.controlHeightSm)
+                .foregroundColor(hot || mono ? fg : dim)
+                .background(RoundedRectangle(cornerRadius: corner).fill(hot ? card : .clear))
         }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")
     }
 }
 
-/// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then orange.
+/// One "Context N%" control; its popover has the token totals and Compact. Neutral until the window is nearly full, then
+/// status.needs with its glyph.
 struct ContextButton: View, Looked {
     @ObservedObject var c: Core
     var body: some View {
         let full = c.ctxFull, high = full > 0.75
-        // the footer's control shape: a capsule (Orb), 6pt (Conversation), a tile (On Air), a box (HUD, Phosphor), bare (Editorial, Zen)
-        let r: CGFloat = lk.id == "orb" ? 12 : lk.id == "conversation" ? Theme.r1 : 0, bare = lk.id == "editorial" || lk.id == "zen"
-        let up = ["orb", "onair", "hud", "editorial"].contains(lk.id), code = lk.id == "phosphor" || lk.id == "hud"
         return Button { c.ctxOpen.toggle() } label: {
-            HStack(spacing: Theme.sp1) {
-                ZStack {
-                    Circle().stroke(edge, lineWidth: 2)
-                    Circle().trim(from: 0, to: max(full, 0.02)).stroke(high ? needs : sub, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
-                }.frame(width: 12, height: 12)
-                Text(up ? "CONTEXT \(c.ctxShort)" : lk.id == "zen" ? "context \(c.ctxShort)" : "Context \(c.ctxShort)").tracking(up ? 1.2 : 0).lineLimit(1).fixedSize()
-                    .font(sys(size: Theme.fs1, weight: lk.id == "onair" ? .heavy : .regular, design: code ? .monospaced : .default).monospacedDigit())
-            }.foregroundColor(high ? needsInk : lk.id == "phosphor" ? fg : sub).padding(.horizontal, bare ? 0 : Theme.sp2).frame(height: 24)
-                .background(RoundedRectangle(cornerRadius: r).fill(lk.id == "onair" ? card : c.ctxOpen ? accent.opacity(0.18) : lk.id == "conversation" ? card : .clear))  // On Air sits on amber
-                .overlay(RoundedRectangle(cornerRadius: r).stroke(high ? needs.opacity(0.6) : c.ctxOpen && lk.id == "onair" ? fg : bare ? .clear : line)).contentShape(Rectangle())
+            HStack(spacing: DS.Space.s4) {
+                if high { Image(ds: "needs", size: iconSize(DS.TypeRole.caption.size)) }
+                else {
+                    ZStack {
+                        Circle().stroke(line, lineWidth: 2)
+                        Circle().trim(from: 0, to: max(full, 0.02)).stroke(dim, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
+                    }.frame(width: 12, height: 12)
+                }
+                Text(mono ? "ctx \(c.ctxShort)" : "Context \(c.ctxShort)").lineLimit(1).fixedSize().font(ui(DS.TypeRole.caption).monospacedDigit())
+            }.foregroundColor(high ? needsInk : mono ? fg : dim).padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightSm)
+                .background(RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm).fill(c.ctxOpen ? card : .clear)).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("Context, \(c.ctxSpoken)").modifier(CtxPop(c: c))
     }
 }
@@ -2703,18 +2376,18 @@ struct CtxPop: ViewModifier, Looked {
     func body(content: Content) -> some View {
         let can = c.run == nil && c.isClaude && c.context > 0, full = c.ctxFull, high = full > 0.75
         return content.popover(isPresented: $c.ctxOpen, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: Theme.sp2) {
-                    Text("Context").font(sys(size: Theme.fs3, weight: .semibold))
+                VStack(alignment: .leading, spacing: DS.Space.s8) {
+                    Text("Context").font(ui(DS.TypeRole.titleSm))
                     Text(c.window > 0 ? "\(kfmt(c.context)) of \(kfmt(c.window)) tokens used" : "\(kfmt(c.context)) tokens used")
-                        .font(sys(size: Theme.fs2).monospacedDigit()).foregroundColor(high ? needsInk : sub)
-                    if c.window > 0 { ProgressView(value: full).tint(high ? needs : sub) }
+                        .font(ui(DS.TypeRole.label).monospacedDigit()).foregroundColor(high ? needsInk : sub)
+                    if c.window > 0 { ProgressView(value: full).tint(high ? needs : dim) }
                     Button { c.compact(); c.ctxOpen = false } label: { Label { Text("Compact") } icon: { Image(ds: "collapse") } }.disabled(!can)
                     Text(!c.isClaude ? "Only Claude can compact." : c.run != nil ? "Wait for the reply to finish." : "Summarizes the chat to free context.")
-                        .font(sys(size: Theme.fs1)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
-                }.padding(Theme.sp3).frame(width: 240)
+                        .font(ui(DS.TypeRole.caption)).foregroundColor(dim).fixedSize(horizontal: false, vertical: true)
+                }.padding(DS.Space.s12).frame(width: 240)
                     // in the look, not the window's appearance: the look's ink on the look's stage (it opens from the live looks too)
-                    .font(lk.font == monoCSS ? sys(size: Theme.fs3, design: .monospaced) : sys(size: Theme.fs3)).foregroundColor(fg)
-                    .environment(\.colorScheme, lk.dark ? .dark : .light).presentationBackground(bg)
+                    .font(ui(DS.TypeRole.body)).foregroundColor(fg)
+                    .environment(\.colorScheme, lk.dark ? .dark : .light).presentationBackground(mono ? page : Color(DS.Palette.bgRaised, dark: lk.dark))
             }
     }
 
