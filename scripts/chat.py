@@ -2,7 +2,8 @@
 """Menubar chat backend: one greenlight session on the greenlight host, resumed per message.
 
 Every command streams JSON lines (events, see Norm) for the Greenlight app:
-  chat.py send [--model M] [--effort E] [--name N] [--verbose] < message
+  chat.py send [--model M] [--effort E] [--name N] [--verbose] [--done LINES] < message
+                                     # --done: the dashboard buttons pressed since the last turn, one per line (done_note)
   chat.py send --attach ... < {"text": message, "files": [{"name", "data" (base64)}]}   # files the user attached (attach.py)
                                      # --verbose: steps also carry the whole input and output, and thinking streams (Settings › Verbose activity)
                                      # M: any model id harness.route takes (claude-*, gpt-*, gemini-*, <harness>:<model>), or a harness name
@@ -40,6 +41,7 @@ PIDFILE = os.path.join(DIR, "pid")
 BGFILE = os.path.join(DIR, "bg.json")  # the running turn's background shells
 CODEX_SESSIONS = os.path.join(os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions")
 SCRIPTS = os.path.dirname(os.path.realpath(__file__))
+RESCAN = f"python3 {SCRIPTS}/greenlight.py scan >/dev/null; python3 {SCRIPTS}/dash.py board"  # Chief's refresh: PROMPT, done_note
 PROMPT = (
     "You are greenlight (the user also calls you greenlight), talking with the user through their Mac menubar app. "
     "For anything about workspaces, MRs, agents or automations, follow " + os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "SKILL.md") + " and its memory notes. "
@@ -70,7 +72,7 @@ PROMPT = (
     "when it matters. Asked what to work on (or checked in on), pick 1–3 from it: blocks on the user first (others wait on them), "
     "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
     "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
-    "`python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS + "/dash.py board` rescans every workspace, "
+    "`" + RESCAN + "` rescans every workspace, "
     "updates the user's dashboard and prints the fresh board. "
     "To see the user's GitHub and GitLab work beyond the workspaces (asked what to pick up, what's waiting on them, about an issue "
     "or MR, or when the board is thin): `python3 " + SCRIPTS + "/dash.py forge` lists the open MRs/PRs they're asked to review, "
@@ -321,6 +323,16 @@ def board_note(query="", key="", seen=None, snapshot=None):
     if own:
         seen_save(seen)
     return note
+
+
+def done_note(lines):
+    """The dashboard buttons the user pressed since Chief's last turn and how each ended (the app's Core.acted, #175).
+    Kept out of the message itself, so decisions.heard / turn_kind and GREENLIGHT_REQUEST still see only what was typed."""
+    lines = "\n".join(line for line in (lines or "").splitlines() if line.strip())[:8000]
+    return ("(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; "
+            "each line is how it ended. Don't ask about or redo what's done, and say so if they ask whether you saw it. "
+            "The BOARD you have may lag behind a button: run `" + RESCAN + "` before you say where these stand.)\n"
+            + lines + "\n\n") if lines else ""
 
 
 WRAP = "USER MESSAGE (reply to this): "
@@ -1472,7 +1484,7 @@ def asked_question(reply):
     return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False, files=None):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done=""):
     """Reserve this chat through answer handling, harness work, and pending-question commit."""
     global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
     path = os.path.join(DIR, ACTIVE_TURN)
@@ -1516,6 +1528,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         SCOPE_TURN_TOKEN = token
     terminal = None
     try:
+        TURN["done"] = done  # send --done: the buttons pressed since the last turn (done_note)
         terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
                                reservation=(token, reserved_gen))
     finally:
@@ -1726,7 +1739,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         req_val = question_context + ANSWER + text if question_context else text
         os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
         wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
-        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))
+        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
                                    images=attach.images(stored))
@@ -1762,7 +1775,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         key = f"{engine}:new"
         seen_forget()
         seen = seen_load(key)
-        text = wrap(stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
+        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
         norm.base = (0, 0)  # a new thread: its totals start at 0
         try:
             cmd, t = mk(None, text)
@@ -1993,7 +2006,7 @@ def send_turn(args, opt):
             text, files = str(j.get("text") or ""), j.get("files") or []
         except (ValueError, AttributeError):
             return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files)
+    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files, done=opt("--done") or "")
 
 
 def dispatch(args):

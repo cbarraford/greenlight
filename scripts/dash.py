@@ -323,7 +323,7 @@ def tree_merge(path, automatic=False):
         finally:
             tmp.unlink(missing_ok=True)
             marker.unlink(missing_ok=True)
-    return {"ok": True, "ref": r["mr"].get("ref"), "target": r["mr"].get("target_branch"), "how": m["how"]}
+    return {"ok": True, "ref": r["mr"].get("ref"), "sha": mr_identity[4], "target": r["mr"].get("target_branch"), "how": m["how"]}
 
 
 def tree_ready(path):
@@ -332,7 +332,7 @@ def tree_ready(path):
     if not r or not any(x["kind"] == "ready" for x in moves(r)):
         return {"op": "ready", "path": path, "error": "greenlight doesn't say this is waiting to come out of draft"}
     greenlight.run(r["next"]["cmd"], timeout=90)
-    return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref")}  # ponytail: the next scan shows it out of draft
+    return {"op": "ready", "path": path, "ok": True, "ref": r["mr"].get("ref"), "sha": r["mr"].get("sha")}  # ponytail: the next scan shows it out of draft
 
 
 def tree_signoff(path):
@@ -340,7 +340,8 @@ def tree_signoff(path):
     worktree, then signs the step off. No Run: just signs it off. A failed command signs nothing off; its output comes back."""
     r = {x["path"]: x for x in json.loads((greenlight.STATE / "last.json").read_text())["rows"]}.get(path) or {}
     m = next((x for x in moves(r) if x["kind"] == "signoff"), None) if r else None
-    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref") or r.get("name"), "step": m and m["step"]}
+    base = {"op": "signoff", "path": path, "ref": (r.get("mr") or {}).get("ref") or r.get("name"), "sha": (r.get("mr") or {}).get("sha"),
+            "step": m and m["step"]}
     if not m:
         return {**base, "error": "greenlight doesn't say a sign-off step waits on you"}
     if m["run"]:

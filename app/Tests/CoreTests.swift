@@ -503,6 +503,36 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.verbose = true
     mainC.acted("ws1", "merge", 0, "{}")
     mainC.acted("ws1", "merge", 1, #"{"error":"conflict"}"#)
+    // #175: each button that did something waits for Chief's next turn; a rescan, a confirm or a preflight question doesn't
+    mainC.acted("Greenlight", "rescan", 0, "", tell: false)
+    mainC.acted("ws1", "delete the workspace", 0, #"{"risks":["it's pinned"]}"#)
+    mainC.acted("ws1", "start a task", 0, #"{"paused":true}"#)
+    check("core: acted queues what each button did for Chief, not a rescan, a confirm or a preflight question",
+          mainC.doneSince == ["- merge on ws1: done", "- merge on ws1: failed: conflict"])
+    check("core: actedLine names the MR and head (dash.py's, else the board row's) and cuts a long error short",
+          actedLine("ws1", "merge", nil, ["ref": "#153", "sha": "0123456789abcdef"]) == "- merge on ws1 (#153, head 0123456789ab): done"
+          && actedLine("ws1", "merge", "drift", ["error": "drift"], ["ref": "#9", "sha": "feedbeef"]) == "- merge on ws1 (#9, head feedbeef): failed: drift"
+          && actedLine("ws2", "mark ready", "exit 1", nil) == "- mark ready on ws2: failed: exit 1"
+          && actedLine("w", "merge", String(repeating: "x\n", count: 400), nil) == "- merge on w: failed: " + String(repeating: "x ", count: 150)
+          && actedLine("w", "merge", nil, ["ref": "", "sha": ""]) == "- merge on w: done"
+          && actedLine("n", "new workspace", nil, ["ok": true, "warn": "Setup failed (x); no agent started"]) == "- new workspace on n: done, but: Setup failed (x); no agent started"
+          && mainC.made(#"{"ok":true,"name":"fix-it"}"#) == "fix-it" && mainC.made(#"{"ok":true,"path":"/srv/w/new"}"#) == "/srv/w/new"
+          && mainC.made(#"{"error":"no"}"#) == nil
+          && sidebarOps.filter { actedVerb[$0] == nil } == ["info", "diff"])  // a new sidebar op that changes something needs a verb
+    for i in 0..<20 { mainC.acted("ws\(i)", "park", 0, "{}") }
+    let capped = mainC.doneSince
+    var sent: [String] = []
+    responder = { r, _, _ in
+        if r.contains("chat.py send") { sent.append(r); return ([#"{"e":"done","ok":\#(sent.count > 1),"text":"ok"}"#], 0) }
+        return ([], 0)
+    }
+    mainC.send("hi")  // fails: the buttons come back for the next turn
+    let kept = mainC.doneSince
+    mainC.send("hi again")
+    check("core: a chat turn takes the buttons as --done, once, out of the message; a failed turn gives them back",
+          capped.count == Core.doneCap && capped.first == Core.doneMore && capped.last == "- park on ws19: done"
+          && sent.count == 2 && sent.allSatisfy { $0.contains(" --done ") && $0.contains("park on ws19") } && kept == capped
+          && mainC.doneSince.isEmpty && !mainC.msgs.contains { $0.text.contains("--done") || $0.text.contains("park on ws19") })
     mainC.fed([["name": "w1", "state": "working", "step": "ci", "owner": "agent"]])
     mainC.fed([["name": "w1", "state": "needs", "step": "review", "owner": "me"]])
     mainC.model = "codex"

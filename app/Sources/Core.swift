@@ -196,10 +196,30 @@ final class Core: ObservableObject {
     let feed = Feed()
     var fedFrom: [String: Watched]?  // the last snapshot the feed saw; nil: the next one is the baseline
     func log(_ src: FeedLine.Src, _ who: String, _ kind: FeedLine.Kind, _ text: String) { if verbose { feed.add(src, who, kind, text) } }
-    /// A dashboard button's command, and how it ended: its JSON's error, else the exit code.
-    func acted(_ who: String, _ what: String, _ code: Int32, _ out: String) {
-        let err = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) .flatMap { $0 as? [String: Any] }?["error"] as? String
-        log(.greenlight, who, code == 0 && err == nil ? .action : .failed, "\(what): " + (err ?? (code == 0 ? "done" : "exit \(code)")))
+    /// A dashboard button's command, and how it ended: its JSON's error, else the exit code. Into the feed, and (tell) queued
+    /// for Chief's next turn, so it doesn't ask about a merge you just did or miss one that failed (#175).
+    func acted(_ who: String, _ what: String, _ code: Int32, _ out: String, tell: Bool = true) {
+        let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any]
+        let why = o?["error"] as? String ?? (code == 0 ? nil : "exit \(code)")
+        log(.greenlight, who, why == nil ? .action : .failed, "\(what): " + (why ?? "done"))
+        // risks: a Delete that only asked to confirm; paused: a new task's preflight asking first. Neither did anything yet.
+        guard tell, o?["risks"] == nil, o?["paused"] == nil else { return }
+        let mr = pucks.first { $0["name"] as? String == who || $0["path"] as? String == who }?["mr"] as? [String: Any]  // a failure names no MR
+        keepDone(doneSince + [actedLine(who, what, why, o, mr)])
+    }
+    /// A worktree's board name (the path itself when the board doesn't have it).
+    func wsName(path: String) -> String { pucks.first { $0["path"] as? String == path }?["name"] as? String ?? path }
+    /// The workspace a button made (dash.py's answer: a new task's name, a new worktree's path), else nil.
+    func made(_ out: String) -> String? {
+        let o = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any]
+        guard o?["ok"] as? Bool == true else { return nil }
+        return o?["name"] as? String ?? (o?["path"] as? String).map { wsName(path: $0) }
+    }
+    /// Buttons pressed since Chief's last turn (acted), oldest first. The next turn takes them (start), and gives them back if it fails.
+    var doneSince: [String] = []
+    static let doneCap = 12, doneMore = "- (more buttons before these, not listed)"
+    private func keepDone(_ all: [String]) {
+        doneSince = all.count <= Core.doneCap ? all : [Core.doneMore] + all.filter { $0 != Core.doneMore }.suffix(Core.doneCap - 1)
     }
     /// A snapshot's agent and lifecycle changes, into the feed.
     func fed(_ pucks: [[String: Any]]) {
@@ -852,7 +872,7 @@ final class Core: ObservableObject {
 
     func compact() {
         guard run == nil, clearing == 0, isClaude else { return }
-        start(Run("Compact context", on: chatHost), "\(chief) compact --model \(shellQuote(model))", stdin: "")
+        start(Run("Compact context", on: chatHost), "\(chief) compact --model \(shellQuote(model))", tellDone: false, stdin: "")
     }
 
     private var clearingByHost = [String: Int]()  // per-host `chat.py new`s in flight: an offline old host never blocks the new one
@@ -866,7 +886,7 @@ final class Core: ObservableObject {
         launchWorks.removeAll()
         for t in toasts where t.pending { toastListeners.removeValue(forKey: t.id) }
         toasts.removeAll { $0.pending }
-        if run != nil { run?.files = []; stop(); run = nil }  // discard late events from the cleared conversation
+        if let r = run { r.files = []; keepDone(r.told + doneSince); r.told = []; stop(); run = nil }  // discard late events from the cleared conversation; the new one hears its buttons
         ud.removeObject(forKey: pendingKey); ud.removeObject(forKey: lostKey)
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
@@ -925,8 +945,15 @@ final class Core: ObservableObject {
         ssh("\(chief(on: r.runHost)) stop", on: r.runHost)
     }
 
-    private func start(_ r: Run, _ remote: String, stdin: String) {
+    /// tellDone: a chat turn (all but Compact) takes the buttons pressed since the last one (acted) as chat.py's --done, kept
+    /// out of the message so its reply header and the check-in/watch marker still lead it (decisions.heard, turn_kind).
+    private func start(_ r: Run, _ remote: String, tellDone: Bool = true, stdin: String) {
         run = r
+        var remote = remote
+        if tellDone && !doneSince.isEmpty {
+            r.told = doneSince; doneSince = []
+            remote += " --done " + shellQuote(r.told.joined(separator: "\n"))
+        }
         r.model = model
         tps = 0; outTok = 0
         log(.chief, name, .status, r.watch ? "watch: \(r.question)" : r.checkIn ? "check-in: \(r.question)" : "asked: \(r.question)")
@@ -1074,6 +1101,7 @@ final class Core: ObservableObject {
 
     private func finish(_ r: Run, ok: Bool, text: String) {
         ud.removeObject(forKey: pendingKey)
+        if !ok { keepDone(r.told + doneSince); r.told = [] }  // Chief may not have heard them: the next turn says them again
         log(.chief, name, ok ? .status : .failed, (ok ? "replied in \(fmt(Date().timeIntervalSince(r.start)))" : "ended: \(text)")
             + (outTok > 0 ? " · ↓ \(kfmt(outTok)) tokens" : "") + (ok && r.watch && text.lowercased().hasPrefix("(nothing)") ? " · nothing to ask" : ""))
         if r.watch && (text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("(nothing)") || !ok) {  // nothing to ask: no trace

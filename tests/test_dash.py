@@ -492,7 +492,7 @@ _ran.clear()
 _lj.write_text(json.dumps({"ts": 1, "rows": [mine]}))
 assert dash.tree_merge("/w/b")["error"] and not _ran  # conflicts/CI/threads outrank merge, so it isn't offered
 _lj.write_text(json.dumps({"ts": 1, "rows": [{**mine, "mr": {**mine["mr"], "conflicts": False, "pipeline": "success", "todo_threads": []}}]}))
-assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "target": "main", "how": "Squash"}
+assert dash.tree_merge("/w/b") == {"ok": True, "ref": "!58", "sha": "abc123", "target": "main", "how": "Squash"}  # the head it merged, for Chief
 assert _ran == [mine["next"]["cmd"] + ["--sha", "abc123"]], _ran
 assert dash.tree_merge("/w/b")["error"] and dash.tree_merge("/w/x")["error"] and len(_ran) == 1  # merged now; unknown path
 _auto_row = {**mine, "forge": "gitlab", "mr": {**mine["mr"], **_clean, "iid": 58},
@@ -510,7 +510,9 @@ with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Sq
     assert dash.tree_merge("/w/b")["ok"]
 assert _ran[-1] == mine["next"]["cmd"] + ["--sha", "abc123"], _ran[-1]  # a human click ignores the auto audit receipt
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dr]}))
-assert dash.tree_ready("/w/b")["ok"] and _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 4
+_res = dash.tree_ready("/w/b")
+assert _res["ok"] and _res["sha"] == "abc123"  # the head it marked ready, for Chief
+assert _ran[-1] == _dr["next"]["cmd"] and dash.tree_ready("/w/x")["error"] and len(_ran) == 4
 _same_pr = {**mine, "id": "peer-id", "path": "/w/peer", "name": "peer",
             "mr": {**mine["mr"], "sha": "stale-head", "conflicts": False, "pipeline": "success", "todo_threads": []}}
 _lj.write_text(json.dumps({"scan_id": "before", "scan_started_ns": 1,
@@ -535,7 +537,9 @@ _wt = tempfile.mkdtemp()
 _dep = {"path": _wt, "project": "acme/dep", "mr": {"state": "merged", "ref": "!9"}, "next": {"step": "deploy", "owner": "me", "cmd": ["python3", "greenlight.py", "signoff", "acme/dep", "9", "deploy"]}}
 assert dash.moves(_dep) == [{"kind": "signoff", "step": "deploy", "run": "echo hi > ran.txt"}]
 _lj.write_text(json.dumps({"ts": 1, "rows": [_dep]}))
-assert dash.tree_signoff(_wt)["ok"] and open(_wt + "/ran.txt").read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 5
+_res = dash.tree_signoff(_wt)
+with open(_wt + "/ran.txt") as _fh:
+    assert _res["ok"] and _res["sha"] is None and _fh.read() == "hi\n" and _ran[-1] == _dep["next"]["cmd"] and len(_ran) == 5
 (dash.greenlight.STATE / "lifecycles/dep.md").write_text(dash.greenlight.lifecycle_md("dep", {"stages": [{"key": "merge"}, {"key": "deploy", "done": "signoff", "run": "echo nope >&2; exit 3"}]}))
 assert "exited 3: nope" in dash.tree_signoff(_wt)["error"] and len(_ran) == 5 and dash.tree_signoff("/w/x")["error"]
 # a row scanned before greenlight.md dropped deploy: no Deploy button, and a click signs nothing off
@@ -689,7 +693,7 @@ _lj2 = dash.greenlight.STATE / "last.json"
 _prev_lj2 = _lj2.read_text() if _lj2.exists() else None
 _lj2.write_text(json.dumps({"ts": 1, "rows": [_pre_mr_so]}))
 with mock.patch.object(dash.greenlight, "run", return_value=""):
-    assert dash.tree_signoff("/w/pre") == {"op": "signoff", "path": "/w/pre", "ref": "pre-ws", "step": "rfc", "ok": True, "ran": ""}
+    assert dash.tree_signoff("/w/pre") == {"op": "signoff", "path": "/w/pre", "ref": "pre-ws", "sha": None, "step": "rfc", "ok": True, "ran": ""}
 _lj2.write_text(_prev_lj2) if _prev_lj2 is not None else _lj2.unlink()
 print("per-repo lifecycle ok")
 
