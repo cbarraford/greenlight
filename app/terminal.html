@@ -1241,7 +1241,8 @@ async function treeDone(o){
   else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
 }
 addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) { clearTimeout(hoverT); $("card").hidden = true } else cardHover = false }, true);
-// hover: resting on a workspace row opens its card (sooner when one is already up); leaving both row and card closes a card that hover opened.
+// hover: resting on a workspace row opens its card (sooner when one is already up). A card that hover opened stays while the pointer is on
+// the sidebar (its rows, its gaps, the resize edge) or the card and its menu, and closes once it's over the terminal side (issue 178).
 // Using the card (any click in it) or a right-click keeps it until Esc or a click outside.
 let hoverT = 0, hoverRow = null, pt = [0, 0], was = [0, 0];
 addEventListener("mousemove", e => { was = pt; pt = [e.clientX, e.clientY] }, {passive: true});
@@ -1254,14 +1255,14 @@ const aiming = () => {
 const unhover = () => { clearTimeout(hoverT); if (cardHover && !$("card").hidden) hoverT = setTimeout(() => { if (cardHover) $("card").hidden = true }, 250) };
 addEventListener("mouseover", e => {
   if (e.target.closest("#card, #menu")) return clearTimeout(hoverT);
-  const r = e.target.closest(".ws"); if (r === hoverRow) return;
+  if (!e.target.closest("#side, #sdv")) { hoverRow = null; return unhover() }  // the terminal, its tabs: not where the card belongs
+  const r = e.target.closest(".ws"); if (r === hoverRow) return r || clearTimeout(hoverT);  // back on the sidebar's gaps: a pending close is off
   hoverRow = r; clearTimeout(hoverT);
   if (r?._ws && r._ws === cardWs && !$("card").hidden) return;  // already showing (or the sidebar re-rendered under the pointer)
   const c = $("card"), quiet = !e.buttons && $("menu").hidden && $("dlg").hidden && $("pal").hidden && (c.hidden || cardHover);
   const go = () => hoverRow === r && r.isConnected && wsInfo(r._ws) && wsMenu({currentTarget: r, hover: true}, r._ws, wsInfo(r._ws));
   // ponytail: fixed delays (350ms to open, 0 to switch, 180ms when aiming); tune here if it feels off
   if (r?._ws && quiet) c.hidden ? hoverT = setTimeout(go, 350) : aiming() ? hoverT = setTimeout(go, 180) : go();
-  else unhover();
 });
 document.documentElement.addEventListener("mouseleave", () => { hoverRow = null; unhover() });
 // right side: split the focused pane
