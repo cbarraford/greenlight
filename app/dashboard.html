@@ -101,10 +101,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .seg button:hover{color:var(--text)}
 .seg button[aria-pressed=true]{background:var(--sheet);color:var(--text);box-shadow:var(--shadow-sm)}
 .search.proj{width:auto;max-width:160px;padding:0 var(--sp-2)}
-.search{height:28px;width:180px;border-radius:var(--r-1);border:1px solid var(--line);background:var(--fill);color:var(--text);padding:0 var(--sp-2);font:inherit;font-size:var(--fs-3)}
+.search{height:28px;width:180px;border-radius:var(--r-1);border:1px solid var(--line);background:light-dark(var(--ds-bg-surface),var(--ds-element-rest));color:var(--text);padding:0 var(--sp-2);font:inherit;font-size:var(--fs-3)}
 .search:hover{border-color:var(--line-hover)} .search:focus{border-color:var(--accent)} .search::placeholder{color:var(--faint)}
 .qwrap{position:relative;display:flex;flex:0 4 200px;min-width:110px}.qwrap .search{width:100%;min-width:0}.qwrap .ic{position:absolute;left:var(--sp-2);top:6px;color:var(--faint);pointer-events:none}.qwrap .search{padding-left:28px}
-.seg.wait{background:none;box-shadow:inset 0 0 0 1px var(--line)}
 .seg.wait button,.seg.wait button[aria-pressed=true]{background:none;box-shadow:none;color:var(--faint);cursor:default}
 @media (max-width:640px){.bar{gap:var(--sp-2)} .qwrap{min-width:32px}}
 .qwrap.wait .search{background:none;border-color:var(--hair);cursor:default} .qwrap.wait .search::placeholder{color:var(--faint);opacity:1}
@@ -121,7 +120,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .btn.ico{width:28px;padding:0;justify-content:center;position:relative;background:none;color:var(--text2)}
 .btn.ico:hover:not(:disabled){background:var(--fill);color:var(--text)}
 .btn.ico.on{color:var(--text);background:var(--ds-element-active)}  /* a toggle that is on: a neutral fill, as a macOS toolbar toggle; the accent stays for the one primary */
-.btn.ico .badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);
+.btn.ico .badge{position:absolute;inset:-6px -6px auto auto;transform:none;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);
   font-size:var(--fs-1);line-height:16px;font-weight:600;font-style:normal;text-align:center;box-shadow:0 0 0 2px var(--bar)}
 .btn.ico .badge.needs{background:var(--orange);color:var(--on-orange)}
 .back{background:none;color:var(--text2);padding:0 var(--sp-2) 0 var(--sp-1);font-size:var(--fs-3)} .back:hover:not(:disabled){color:var(--text)}
@@ -151,14 +150,14 @@ main.ov{background:var(--canvas)}
 .crash{display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;padding:0 var(--sp-2);border-radius:var(--r-full);border:0;background:var(--red-tint);color:var(--red-ink);font-size:var(--fs-1);font-weight:500}
 .crash:hover{box-shadow:inset 0 0 0 1px var(--red-edge)}
 /* cards keep about one size whatever the window: a wide window gets more columns, not wider cards */
-.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2)}
+.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2);max-height:240px;overflow-y:auto;padding:1px;margin:-1px}  /* capped: the board stays in view, the strip scrolls */
 .acard{border-radius:var(--ds-radius-md);background:var(--card);padding:var(--ds-space-12);min-width:0;
   --edge:var(--ds-elevation-1);box-shadow:var(--lead,0 0 transparent),var(--edge);
   display:flex;flex-direction:column;gap:var(--ds-space-8);container-type:inline-size;position:relative}
 .acard:hover{--edge:0 0 0 1px var(--ds-border-hover)} .acard.hl{--edge:0 0 0 1px var(--accent)}
 .acard.crashed{--lead:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
 .acard:hover,.acard:focus-within{z-index:2}  /* its stage list floats over the next card */
-.atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
+.atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0} .acard .av{width:20px;height:20px;background:none}
 .av{width:28px;height:28px;flex-shrink:0;border-radius:var(--r-1);display:flex;align-items:center;justify-content:center;background:var(--fill);color:var(--text)}
 .av.claude{color:var(--claude)} .av.codex{color:var(--codex)} .av.agy{color:var(--agy)}
 .at{display:flex;flex-direction:column;min-width:0;flex-grow:1}
@@ -244,7 +243,7 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .segs span{height:4px;border-radius:var(--r-full);background:var(--track);overflow:hidden}
 .segs i{display:block;height:100%;border-radius:var(--r-full);background:var(--text3)}
 .segs i.cur{background:var(--blue)} .acard.wait .segs i.cur{background:var(--orange)} .acard.crashed .segs i.cur{background:var(--red)}
-.acard .askrow{display:flex;align-items:flex-end;gap:var(--ds-space-8);padding-left:36px}  /* under the title, past the avatar */
+.acard .askrow{display:flex;align-items:flex-end;gap:var(--ds-space-8);padding-left:28px}  /* under the title, past the avatar */
 .acard .ask{flex:1;min-width:0;font:var(--ds-type-body);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .acard .el{min-width:40px;text-align:right}
 .acard .ask.full{display:block;white-space:pre-wrap;max-height:40vh;overflow:auto}
@@ -317,8 +316,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .fan.open .fp.dim{opacity:.35}
 .fan .hub{position:absolute;left:var(--hx);top:var(--hy);pointer-events:auto;z-index:1;transition:left var(--t-base) var(--ease),top var(--t-base) var(--ease),transform var(--t-base) var(--ease)}
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}
-.badge{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);min-width:28px;height:20px;padding:0 6px;border-radius:var(--r-full);background:var(--text);color:var(--canvas);
-  font-size:var(--fs-1);font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--canvas)}
+.badge{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);background:color-mix(in srgb,currentColor 14%,transparent);color:var(--hink);
+  font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center}  /* a count badge in the hex's own ink (§10.5) */
 @media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.hx .halo{transition:none}
   .hx .pulse,.stagepop,.spin,#hcard,#hcard .gl.working,.rescan.on,#hcard .mg .go i{animation:none}}
 
@@ -472,12 +471,12 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .lchip[aria-pressed=true]{background:var(--accent-subtle);color:var(--accent-fg)} .lchip b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums} .lchip[aria-pressed=true] b{color:inherit}
 .sg{display:inline-flex;flex-shrink:0}.lsec b{font-weight:600}
 .lsec{margin:var(--sp-4) var(--sp-3) var(--sp-1);display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-2);font-weight:500;color:var(--text3)}
-.lsec .rule{flex-grow:1;height:1px;background:var(--hair)}
+.lsec .rule{flex-grow:1}
 .lmore{border:0;background:none;color:var(--accent-fg);font:inherit;font-size:var(--fs-2);font-weight:500}
-.lrow{display:grid;grid-template-columns:44px minmax(0,1fr) 160px 196px 200px 40px;gap:var(--sp-4);align-items:center;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);border:1px solid transparent}
+.lrow{display:grid;grid-template-columns:20px minmax(0,1fr) 160px 196px 200px 40px;gap:var(--sp-4);align-items:center;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);border:1px solid transparent}
 .lrow:hover,.lrow.hl{background:var(--fill)}
-.lrow.lhead{padding-block:0;background:none;font-size:var(--fs-1);font-weight:500;color:var(--text3)}
-.lhex{color:var(--text)}
+.lrow.lhead{padding-block:0 var(--ds-space-4);border-radius:0;border-bottom-color:var(--ds-border-subtle);background:none;font-size:var(--fs-1);font-weight:500;color:var(--text3)}
+.lhex{width:20px;height:20px}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:2px}
 .lmain .t{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
 .lmain b{font-size:var(--fs-3);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -503,10 +502,10 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .lage{text-align:right;font-size:var(--fs-2);color:var(--text3);font-variant-numeric:tabular-nums}
 .list.narrow .lhead{display:none}
 .list.narrow .lrow{grid-template-columns:20px minmax(0,1fr) auto;grid-template-areas:"hex main ag" "hex sig ag";gap:2px var(--ds-space-8);padding:6px var(--ds-space-8)}  /* flat rows, not cards (§10.8) */
-.list.narrow .lhex{grid-area:hex;width:20px;height:20px;align-self:start}.list.narrow .lhex text,.list.narrow .lage,.list.narrow .lcyc,.list.narrow .lsig.nomr{display:none}
+.list.narrow .lhex{grid-area:hex;align-self:start}.list.narrow .lage,.list.narrow .lcyc,.list.narrow .lsig.nomr{display:none}
 .list.narrow .lmain{grid-area:main;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px var(--ds-space-8)}.list.narrow .lmain .t{grid-column:1/-1}  /* the title, then the name and what it says on one line */
 .list.narrow .lsig{grid-area:sig;display:flex;gap:var(--sp-1) var(--sp-3);flex-wrap:wrap}
-.list.narrow .lag{grid-area:ag;flex-direction:row-reverse;align-self:center}
+.list.narrow .lag{grid-area:ag;align-self:center}
 
 /* overview grid and cards */
 .grid{padding:var(--sp-4);display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp-3);align-content:start}
@@ -1167,10 +1166,10 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
   const fact = (k, v, col) => h("span", {}, k + " ", h("b", {style: col ? `color:${ink(col)}` : null}, v));
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
-    h("div", {class:"atop"}, agentAv(a.type, 14),
+    h("div", {class:"atop"}, agentAv(a.type, 20),
       h("div", {class:"at"}, h("b", {title: a.task || title}, short(title, 160)),
-        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && `goal: ${short(p.goal, 80)}`].filter(Boolean).join(" · "))),
-      statusPill(wait ? "wait" : crash ? "red" : "blue", wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || STEP_NAMES[p.step] || p.step),
+        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && `goal: ${short(p.goal, 80)}`].filter(Boolean).join(" · "))),  // not when the goal is the title
+      statusPill(wait ? "wait" : crash ? "red" : "blue", wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || (steps.length && STEP_NAMES[p.step]) || "Working"),
       h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
     steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? " steady" + (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
@@ -1373,13 +1372,13 @@ function listAgent(p){
   const a = p.agent, t0 = since(a.since), go = e => { e.stopPropagation(); openPage(p.name) };
   const av = () => a.type ? agentAv(a.type, 9, "av xs") : null;
   const sub = (...k) => h("span", {class:"lsub"}, ...k), el = () => h("span", {class:"el", "data-since": t0}, clock(t0));
-  if (asking(p)) return h("div", {class:"lag"}, h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"),
-    sub(av(), "waiting ", el()));
+  if (asking(p)) return h("div", {class:"lag"}, sub(av(), "waiting ", el()),
+    h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"));
   if (a.state === "working") { const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : DOING[p.step];  // nothing to add: "working" alone says it
-    return h("div", {class:"lag"}, act ? sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)) : null, sub(av(), "working ", el())) }
+    return h("div", {class:"lag"}, sub(av(), "working ", el()), act ? sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)) : null) }
   if (["needs", "raised", "crashed"].includes(p.state)) return h("div", {class:"lag"},
-    h("button", {class:"lbtn" + (p.state === "crashed" ? " bad" : p.state === "raised" ? " raised" : ""), onclick: go}, askLabel(p)),
-    a.type ? sub(av(), p.state === "crashed" ? "crashed" : `idle ${ago(a.idle_h)}`) : sub(p.mr && p.mr.role === "review" ? "no agent · review request" : "no agent"));
+    a.type ? sub(av(), p.state === "crashed" ? "crashed" : `idle ${ago(a.idle_h)}`) : sub(p.mr && p.mr.role === "review" ? "no agent · review request" : "no agent"),
+    h("button", {class:"lbtn" + (p.state === "crashed" ? " bad" : p.state === "raised" ? " raised" : ""), onclick: go}, askLabel(p)));
   const say = p.state === "queued" ? `Next: ${STEP_NAMES[p.step] || p.step}` : p.state === "done" ? "Done" : short(p.why || "Waiting on others", 60);
   return h("div", {class:"lag"}, sub(say));
 }
@@ -1390,8 +1389,7 @@ function listRow(p){
       role:"button", tabindex:"0", onclick: go, onkeydown: e => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()),
       onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     s("svg", {class:"lhex", width:44, height:44, viewBox:"-22 -22 44 44", role:"img", "aria-label": STATE[p.state].label},
-      s("polygon", {points: hpoly(20), fill: col, "fill-opacity": p.state === "quiet" || p.state === "done" ? .06 : .14, stroke: col, "stroke-width": 2.5}),
-      s("text", {y: 3.5, "text-anchor":"middle", "font-size": 9.5, "font-weight": 700, fill:"currentColor"}, mr.iid ? mrRef(mr) : "—")),
+      s("polygon", {points: hpoly(20), fill: col, "fill-opacity": p.state === "quiet" || p.state === "done" ? .06 : .14, stroke: col, "stroke-width": 2.5})),
     h("div", {class:"lmain"},
       h("div", {class:"t"}, h("b", {title: mrTitle(p)}, mrTitle(p)), mr.draft ? h("span", {class:"ltag"}, "Draft") : null,
         stepTag(p) ? h("span", {class:"ltag"}, stepTag(p)) : null),
@@ -1399,7 +1397,7 @@ function listRow(p){
       (w => w ? h("div", {class:"lwhy", title: w, style: mine ? `color:${c("--text")}` : null}, w) : null)(p.agent.state === "waiting" && p.agent.last ? short(p.agent.last, 200) : p.state === "quiet" ? null : sayOf(p))),  // waiting on others: the Agent column already says on whom; a waiting agent: its own question, as the overview says it
     h("div", {class:"lcyc"},
       steps.length ? h("div", {class:"lsegs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))) : null,
-      h("div", {}, h("span", {style:`color:${ink(STATE[p.state].color)};font-weight:600`}, STEP_NAMES[p.step] || p.step || ""), steps.length ? h("span", {class:"muted"}, `Step ${Math.min(i + 1, n)} of ${n}`) : null)),
+      h("div", {}, h("span", {}, STEP_NAMES[p.step] || p.step || ""), steps.length ? h("span", {class:"muted"}, `Step ${Math.min(i + 1, n)} of ${n}`) : null)),
     listSignals(p),
     listAgent(p),
     h("span", {class:"lage", style: mine ? `color:${ink("--orange")}` : null}, ago(p.agent.idle_h)));
