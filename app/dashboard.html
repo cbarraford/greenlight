@@ -631,6 +631,7 @@ body:has(>main.ov){background:var(--canvas)}
 .toast .tbadge{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:inherit} .toast.bad .tbadge{color:inherit}
 .toast .tmsg{display:flex;flex-direction:column;gap:1px;flex:1 1 160px;min-width:0;line-height:var(--lh-2)} .toast .tmsg b{font-weight:600} .toast .tmsg>span{opacity:.75;font-size:var(--fs-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .toast.bad .tmsg>span{white-space:normal;overflow-wrap:anywhere} .toast .tmsg .mono{font-size:var(--fs-2)}
 .toast .btn{flex-shrink:0;background:none;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--bg) 35%,transparent);color:inherit;font-size:var(--fs-2)} .toast .btn:hover:not(:disabled){background:color-mix(in srgb,var(--bg) 14%,transparent)}
+.toast.note .tmsg{flex-basis:auto} .toast.note code{font:var(--fs-1)/var(--lh-1) var(--mono);white-space:pre-wrap;word-break:break-word;max-height:12em;overflow:auto;opacity:.85} /* only a ×: a short line must not wrap it under */
 .toast .btn.x{width:28px;padding:0;justify-content:center;box-shadow:none;opacity:.75} .toast .btn.x:hover{opacity:1}
 @media (max-width:520px){.toast .btn.x{order:2;align-self:flex-start} .toast .btn:not(.x){order:3;margin-left:var(--sp-6)}}
 .sheet.plain{width:560px;max-width:calc(100% - 2 * var(--sp-5));padding:var(--sp-5)}
@@ -1180,7 +1181,7 @@ function footer(){
       title: "When greenlight last checked GitLab, GitHub and Orca for every workspace. It rescans when Greenlight opens and on the scan interval in Settings."},
       ui.rescan ? "Refreshing…" : !isFinite(hrs) ? "Not scanned yet" : hrs < 1 / 60 ? "Scanned just now" : `Scanned ${ago(hrs)} ago`),
       h("button", {class: "rescan" + (ui.rescan ? " on" : ""), title: "Refresh now (~40s)", "aria-label": "Refresh now", disabled: !!ui.rescan,
-        onclick: () => { ui.rescan = ui.snap.scanned; post({cmd: "rescan"}); footer() }}, icon("refresh", 13)));
+        onclick: () => { ui.rescanFail = 0; rescanFor(); footer() }}, icon("refresh", 13)));
   }
   const np = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)).length : 0;
   if (np && !ui.page) f.append(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
@@ -1490,7 +1491,8 @@ function sendAnswer(name, text){
   const st = ui.ask[name];
   if (!st || st.sending || !String(text).trim()) return;
   st.sending = true; st.err = null; st.sentText = text;
-  if (ui.answering === name && !ui.page) act(puckOf(name), "The answer didn't send");  // from the card's Answer: its hex leaves with it
+  const p = ui.answering === name && !ui.page && puckOf(name);  // the answer sheet (from a hex's card, a row or an agent card): its hex or row leaves with it
+  if (p) act(p, "The answer didn't send");
   post({cmd: "answer", name, text}); render();
 }
 function answerBox(p, onPage){
@@ -1731,8 +1733,10 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
 }
 function renderNone(main){  // no workspaces at all: start one; all hidden by the project or parked filter: clear them
-  const none = !ui.snap.pucks.length;
+  const none = !ui.snap.pucks.length, busy = !none && ui.snap.pucks.some(p => p.name in ui.acting && inView(p));
   main.classList.add("ov");
+  if (busy) return main.append(h("div", {class:"empty"}, icon("hex", 56, "ehx"), h("h2", {class:"eh"}, "Working on it"),
+    h("p", {class:"ep"}, "The workspace comes back here once a fresh scan shows where it stands.")));  // the last one in view is mid-action: no filter to clear
   main.append(h("div", {class:"empty"},
     icon("hex", 56, "ehx"),
     h("h2", {class:"eh"}, none ? "No workspaces yet" : "No workspaces in this view"),
@@ -1890,7 +1894,7 @@ const MTONE = {review: "or", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {r
 function movesEl(p, mv){
   const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y) && Object.hasOwn(MOVE, y.kind));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
-  const run = y => () => act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt});  // as a new agent in that workspace, like the Next step
+  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt}) : hideCard();  // the app ignores an empty prompt (no reply)  // as a new agent in that workspace, like the Next step
   let top = null;
   if (x) { const [l, sub] = MOVE[x.kind](p.mr, x);
     top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
@@ -1931,7 +1935,8 @@ function mergeEl(p, x){
 // dash.py tree merge / ready / signoff answered: the outcome in the toast (the hex left with the click)
 function merged(o){
   const name = Object.keys(ui.acting).find(n => ui.acting[n].path === o.path), t = stepTitle(o.step || "step");
-  if (!name) return console.log("dash: tree", o.op || "merge", o.error || "ok");
+  if (!name) return o.error ? note(o.op === "signoff" ? `${t} didn't finish` : o.op === "ready" ? "Didn't mark it ready" : "Didn't merge", o.error, true)  // a reply after ACT_LOST: still say so
+    : console.log("dash: tree", o.op || "merge", "ok");
   acted(name, o.error, o.op === "signoff" ? [`${t} signed off`, o.ran ? `Ran ${o.ran}` : o.ref || ""]
     : o.op === "ready" ? [`${o.ref} is ready for review`, "Out of draft"] : [`Merged ${o.ref} into ${o.target}`, o.how]);
 }
@@ -2168,9 +2173,11 @@ function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
    (its sig), a scan that began after the reply lands (it still needs you: it comes back) or ACT_SETTLE passes; gone from the snapshot: it stays gone */
 // ui.acting: name → {fail: the toast's title if it fails, path, sig: the puck's when clicked, at: ms clicked, done: host secs it answered (0: in flight)}
 ui.skew = 0;  // this Mac's clock minus the host's (the snapshot's ts), so a reply's time compares with the host's scan times
-const ACT_SETTLE = 180, ACT_LOST = 15 * 60e3;  // s after the reply; ms with no reply at all (a sign-off may run for 10 min)
+const ACT_SETTLE = 180, ACT_LOST = 30 * 60e3;  // s after the reply (the scans keep failing: show what we have); ms with no reply (a sign-off may run 10 min, plus ssh)
 const hostNow = () => Date.now() / 1000 - ui.skew;
 function act(p, fail, msg){
+  if (msg && msg.path != null && (!/^\/[\w./@+-]{1,300}$/.test(msg.path) || msg.path.includes("..")))  // the app refuses these paths without a reply (App.swift)
+    return note(fail, "Greenlight can't act on a workspace at this path (spaces or unusual characters).", true);
   hideCard(); ui.acting[p.name] = {fail, path: p.path, sig: p.sig, at: Date.now(), done: 0};
   if (msg) post(msg);
   render();
@@ -2178,12 +2185,14 @@ function act(p, fail, msg){
 function acted(name, error, ok, quiet){  // ok: [title, detail] for the toast; quiet: the error already shows where they are
   const a = ui.acting[name]; if (!a) return;
   if (error) { delete ui.acting[name]; if (!quiet) note(a.fail, String(error), true) }
-  else { a.done = hostNow(); if (ok) note(ok[0], ok[1] || ""); rescanFor() }
+  else { a.done = hostNow(); a.sig = puckOf(name, true)?.sig ?? a.sig; if (ok) note(ok[0], ok[1] || ""); rescanFor() }  // a move while it ran isn't its result
   render();
 }
-function rescanFor(){ if (!ui.rescan && ui.snap) { ui.rescan = ui.snap.scanned; post({cmd: "rescan"}) } }  // one at a time: the app drops a second
+function rescanFor(){  // one at a time (the app drops a second); none for a minute after one failed, or a failing host gets one every 5s
+  if (!ui.rescan && ui.snap && Date.now() - (ui.rescanFail || 0) > 60e3) { ui.rescan = ui.snap.scanned; post({cmd: "rescan"}) }
+}
 function settle(snap){  // after mc.update: the hexes whose fresh state has landed come back
-  const fresh = snap.scan_started ?? snap.scanned ?? 0, now = hostNow();
+  const fresh = snap.scan_started ?? -Infinity, now = hostNow();  // an older dash.py: only the finish time, which a scan begun before the reply also has
   for (const [n, a] of Object.entries(ui.acting)) {
     const p = snap.pucks.find(x => x.name === n);
     if (a.done ? !p || p.sig !== a.sig || fresh >= a.done || now - a.done > ACT_SETTLE : Date.now() - a.at > ACT_LOST) delete ui.acting[n];
@@ -2299,12 +2308,16 @@ function taskSheetEl(){
       : ["Creates ", h("span", {class:"mono"}, taskSlug(line())), ` in ${repo.name}`];
   }
 }
-function note(title, detail, bad){ ui.task.done = {title, detail, error: bad ? detail : null}; toastTimer(); render() }  // a card action's outcome, in the toast
+function note(title, detail, bad){  // a card action's outcome, in the toast; an error stays until dismissed
+  if (!bad && ui.task.done?.error) return;  // an error showing stays until it's dismissed: a success doesn't cover it
+  ui.task.done = {title, detail, error: bad ? detail : null}; clearTimeout(ui.task.t); if (!bad) toastTimer(); render();
+}
 function toastEl(){
   const d = ui.task.done; if (!d) return null;
-  if (d.title) return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer},
+  if (d.title) return h("div", {class:"toast note" + (d.error ? " bad" : ""), role:"status", onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: () => d.error || toastTimer()},
     h("span", {class:"tbadge"}, icon(d.error ? "alert" : "check", 14)),
-    h("span", {class:"tmsg"}, h("b", {}, d.title), d.detail ? h("span", {}, short(d.detail, 160)) : null),
+    h("span", {class:"tmsg"}, h("b", {}, d.title), d.error ? h("code", {}, d.error.length > 600 ? "…" + d.error.slice(-600) : d.error)  // the end of stderr is the cause
+      : d.detail ? h("span", {}, short(d.detail, 160)) : null),
     h("button", {class:"btn x", "aria-label":"Dismiss", title:"Dismiss", onclick: () => { clearTimeout(ui.task.t); ui.task.done = null; render() }}, icon("close")));
   const x = () => { clearTimeout(ui.task.t); ui.task.done = ui.task.fresh = null; render() };
   return h("div", {class:"toast" + (d.error ? " bad" : ""), role:"status", title: d.error ? null : `${d.name} · ${d.repo}`, onmouseenter: () => clearTimeout(ui.task.t), onmouseleave: toastTimer,  // read it at your pace: the clock waits
@@ -2420,7 +2433,7 @@ window.mc = {
     if (r.error) { delete ui.parking[r.name]; console.log("dash: park failed:", r.error); render() }
   },
   tasked(r){ tasked(r) },
-  rescanned(code){ if (code) { ui.rescan = 0; console.log("dash: rescan failed, exit " + code) } footer() },
+  rescanned(code){ if (code) { ui.rescan = 0; ui.rescanFail = Date.now(); console.log("dash: rescan failed, exit " + code) } footer() },
   update(snap){
     if (snap.error) { console.log("dash:", snap.error); return }
     clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.failed = CONN.refocus = false;

@@ -402,7 +402,9 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.deepEqual((await posts(page, "merge")).pop(), {cmd: "merge", path: "/w/plan-a"});
   await page.evaluate(() => window.mc.merged({path: "/w/plan-a", error: "405: Branch cannot be merged"}));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge !12");
-  assert.equal(await page.textContent(".toast.bad .tmsg span"), "405: Branch cannot be merged");
+  assert.equal(await page.textContent(".toast.bad .tmsg code"), "405: Branch cannot be merged");
+  await page.click(".toast .btn.x");  // an error stays up until dismissed
+  assert.equal(await page.$(".toast"), null);
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "review", prompt: "rv", own: true, repo: "widgets"}, {kind: "merge", how: "Squash", target: "main"}]; hideCard(); document.body.append(hoverCard(p)) });
   assert.match(await page.textContent("#hcard .mv .go"), /^Review/); assert.match(await page.textContent("#hcard .mg .go"), /^Merge !12/, "a review doesn't hide Merge");
   await page.evaluate(() => { const p = puckOf("plan-a"); p.moves = [{kind: "ready"}]; hideCard(); document.body.append(hoverCard(p)) });
@@ -414,9 +416,6 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.equal(await page.textContent("#hcard .mg .go b"), "Deploy !12", "a merged MR's step after the merge gets its button");
   await page.click("#hcard .mg .go");
   assert.deepEqual((await posts(page, "signoff")).pop(), {cmd: "signoff", path: "/w/plan-a"});
-  await page.evaluate(() => { delete ui.acting["plan-a"] });  // the ready above is still settling: it would hold the signoff's reply
-  await page.evaluate(() => { hideCard(); document.body.append(hoverCard(puckOf("plan-a"))) });
-  await page.click("#hcard .mg .go");
   await page.evaluate(() => window.mc.merged({op: "signoff", path: "/w/plan-a", ok: true, step: "deploy", ran: "git pull"}));
   assert.equal(await page.textContent(".toast:not(.bad) .tmsg b"), "Deploy signed off");
   assert.equal(await page.textContent(".toast .tmsg span"), "Ran git pull");
@@ -460,7 +459,7 @@ test("card actions: the hex leaves on the click, comes back when its state moves
   await page.evaluate(() => window.mc.ran({name: "plan-a", error: "the workspace is gone"}));
   assert.equal(await hex(), true, "a failed action left the hex hidden");
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "The agent didn't start");
-  assert.equal(await page.textContent(".toast.bad .tmsg span"), "the workspace is gone");
+  assert.equal(await page.textContent(".toast.bad .tmsg code"), "the workspace is gone");
   // it worked but nothing moved: a scan begun after the reply that still has it on you brings it back
   await card(); await page.click("#hcard .mv .go");
   await page.evaluate(() => window.mc.ran({name: "plan-a", ok: true}));
@@ -474,6 +473,59 @@ test("card actions: the hex leaves on the click, comes back when its state moves
   await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), pucks: s.pucks.slice(1)}), snap);
   assert.equal(await hex(), false);
   assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
+});
+
+test("card actions: errors keep their end and stay up; a late reply still says so; a failing scan isn't re-asked every 5s; an empty move hides nothing", async page => {
+  const snap = JSON.parse(JSON.stringify(SNAP));
+  Object.assign(snap.pucks[0], {agent: {...snap.pucks[0].agent, state: "idle"}, sig: "e1", mr: {iid: 12, ref: "!12", state: "merged", title: "x"},
+    moves: [{kind: "signoff", step: "deploy", run: "make deploy"}]});
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  await page.evaluate(() => document.body.append(hoverCard(puckOf("plan-a"))));
+  await page.click("#hcard .mg .go");
+  const err = "`make deploy` exited 2: " + "x".repeat(700) + "\nError: the real cause";
+  await page.evaluate(e => window.mc.merged({op: "signoff", path: "/w/plan-a", step: "deploy", error: e}), err);
+  const shown = await page.textContent(".toast.bad .tmsg code");
+  assert.ok(shown.endsWith("\nError: the real cause") && shown.startsWith("…"), "the error's tail (stderr's cause) was cut: " + shown.slice(-40));
+  await page.evaluate(() => { clearTimeout(ui.task.t); ui.task.t = 0; note("Didn't merge", "y", true) });
+  assert.equal(await page.evaluate(() => ui.task.t), 0, "an error toast is on a timer");
+  await page.evaluate(() => note("Merged", "Squash"));
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "a success covered the error");
+  // a reply after the action was given up on (ACT_LOST): the error still reaches the toast
+  await page.evaluate(() => { ui.task.done = null; window.mc.merged({path: "/w/plan-a", error: "409: already merged"}) });
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge");
+  // the rescan the action asks for fails: settle() waits a minute before asking again
+  await page.evaluate(() => { document.body.append(hoverCard(puckOf("plan-a"))) });
+  await page.click("#hcard .mg .go");
+  await page.evaluate(() => window.mc.merged({op: "signoff", path: "/w/plan-a", ok: true, step: "deploy", ran: "make deploy"}));
+  const asked = (await posts(page, "rescan")).length;
+  await page.evaluate(() => window.mc.rescanned(1));
+  for (let i = 0; i < 3; i++) await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  assert.equal((await posts(page, "rescan")).length, asked, "a failed rescan is re-asked on every stream update");
+  // a move whose prompt rendered empty: the app ignores it (no reply), so its hex mustn't wait on one
+  await page.evaluate(() => { delete ui.acting["plan-a"]; const p = puckOf("plan-a"); p.moves = [{kind: "ci", prompt: "", own: true, repo: "widgets"}]; document.body.append(hoverCard(p)) });
+  await page.click("#hcard .mv .go");
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
+  assert.equal((await posts(page, "run")).length, 0);
+  // its state moves while the action runs (the agent stopped): that isn't the result, so the reply's sig is the baseline
+  await page.evaluate(() => { ui.task.done = null; ui.rescanFail = 0; const p = puckOf("plan-a"); p.moves = [{kind: "signoff", step: "deploy", run: "make deploy"}]; document.body.append(hoverCard(p)) });
+  await page.click("#hcard .mg .go");
+  snap.pucks[0].sig = "e2";
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  await page.evaluate(() => window.mc.merged({op: "signoff", path: "/w/plan-a", ok: true, step: "deploy", ran: "make deploy"}));
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), ["plan-a"], "back with a stale Deploy button before any scan saw the sign-off");
+  // an older dash.py (no scan_started): a scan's finish time alone doesn't bring it back; nor does the map offer to clear filters meanwhile
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000), scanned: Math.floor(Date.now() / 1000) + 60, pucks: s.pucks.slice(0, 1)}), snap);
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), ["plan-a"], "a scan that may predate the reply brought it back");
+  assert.equal(await page.textContent("#main .empty h2"), "Working on it", "the last workspace mid-action reads as a filter hiding everything");
+  assert.equal(await page.$("#main .empty button"), null);
+  // a path the app refuses without a reply: nothing hides, the toast says why
+  await page.evaluate(s => { delete ui.acting["plan-a"]; s.pucks[0].path = "/w/My Projects/a"; window.mc.update({...s, ts: Math.floor(Date.now() / 1000)});
+    document.body.append(hoverCard(puckOf("plan-a"))) }, snap);
+  await page.click("#hcard .mg .go");
+  assert.deepEqual(await page.evaluate(() => Object.keys(ui.acting)), []);
+  assert.equal((await posts(page, "signoff")).filter(m => m.path.includes(" ")).length, 0);
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Deploy didn't finish");
 });
 
 test("hover card button: a step written ahead (the snapshot's suggestion) is ready the moment the card opens", async page => {
