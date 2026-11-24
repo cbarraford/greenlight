@@ -11,11 +11,17 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     check("voice: Chief ends voice mode with [voice: off]", staged("Bye for now.\n[voice: off]") == Staged(text: "Bye for now.", stage: nil, end: true))
     check("voice: contrast is WCAG's ratio", abs(contrast("FFFFFF", "000000") - 21) < 0.01 && abs(contrast("777777", "777777") - 1) < 0.01 && abs(contrast("0969DA", "FFFFFF") - 5.2) < 0.1)
-    check("voice: every look inks your words in a hue apart from Chief's, legible on its stage", looks.allSatisfy { l in
+    let bothLooks = [defaultLook(dark: false), defaultLook(dark: true), phosphorLook]
+    check("voice: every look inks your words apart from Chief's (a hue, or colour against neutral), legible on its stage", bothLooks.allSatisfy { l in
         let y = hueSat(l.you), t = hueSat(l.text), d = abs(y.hue - t.hue)
-        return y.sat >= 0.4 && (t.sat < 0.3 || min(d, 360 - d) >= 45) && contrast(l.you, l.stage) >= 4.5 && contrast(l.you, l.page) >= 4.5 && l.you != l.text
+        return max(y.sat, t.sat) >= 0.25 && (min(y.sat, t.sat) < 0.15 || min(d, 360 - d) >= 45) && contrast(l.you, l.stage) >= 4.5 && contrast(l.you, l.page) >= 4.5 && l.you != l.text
     })
-    check("voice: every look has its own id and themes the stage", Set(looks.map(\.id)).count == looks.count && looks.allSatisfy { $0.vars.contains("--mc-font") && $0.vars.contains("--mc-line") })
+    check("voice: two looks, Default and Phosphor; a parked look's stored id opens as Default; the stage gets only data-look",
+          looks.map(\.id) == ["default", "phosphor"] && ["orb", "zen", "hud", "conversation", nil].allSatisfy { lookNamed($0).id == "default" }
+          && lookNamed("phosphor").id == "phosphor" && looks.allSatisfy { $0.vars.contains("dataset.look") && !$0.vars.contains("--mc-") })
+    check("voice: Phosphor stays dark; Default follows the appearance", phosphorLook.dark && !defaultLook(dark: false).dark && defaultLook(dark: true).dark
+          && bothLooks.allSatisfy { contrast($0.text, $0.stage) >= 7 && contrast($0.dim, $0.stage) >= 4.5 })
+
     check("voice: stage block and size cut out, an unclosed one hides the rest", st == Staged(text: "Three MRs.\n\n\nDone.", stage: "<b>hi</b>") && open.text == "Here." && open.stage == nil)
     check("voice: \(waitWords.count) ways to say one minute, none twice", waitWords.count > 300 && Set(waitWords).count == waitWords.count && waitWords.allSatisfy { $0.first!.isUppercase && $0.hasSuffix("…") })
     check("chat: replies start with the text, an old mood line is dropped", unmood("😌🔍❤️\n\nAll green.") == "All green." && unmood("#3 is up.\nok") == "#3 is up.\nok" && unmood("👍 Done.") == "👍 Done." && unmood("All green.") == "All green.")
@@ -44,22 +50,21 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           voiceButtonText(on: false, starting: true).label == "Cancel starting voice mode" && voiceButtonText(on: false, starting: false).label == "Start voice mode"
           && voiceButtonText(on: true, starting: false).label == "End voice mode" && voiceButtonText(on: false, starting: true).help.contains("cancel"))
     do {  // the header's knobs say what a click does now
-        let off = HeaderTips(), live = HeaderTips(on: true, transcript: true, captions: true, out: true, name: "Ada", look: "Zen", next: "Orb")
+        let off = HeaderTips(), live = HeaderTips(on: true, transcript: true, captions: true, out: true, name: "Ada", look: "Phosphor", next: "Default")
         check("chat header: each top-right knob's hint and label follow its state",
               off.voice.label == "Start voice mode" && live.voice.label == "End voice mode"
               && off.view.label == "Show the transcript" && live.view.label == "Show the stage" && live.view.help.contains("Ada")
               && off.caption.label == "Turn captions on" && live.caption.label == "Turn captions off"
               && off.pop.label == "Move to its own window" && live.pop.label == "Put back in the main window"
-              && live.style.help == "Style: Zen. Click for Orb" && live.style.label.contains("Orb")
+              && live.style.help == "Style: Phosphor. Click for Default" && live.style.label.contains("Default")
               && [off.attach, off.view, off.caption, off.style, off.voice, off.pop, live.view, live.caption, live.pop].allSatisfy { !$0.help.isEmpty && $0.help.count <= 100 && !$0.label.isEmpty })
         let unmuted = HeaderTips(on: true, name: "Ada"), muted = HeaderTips(on: true, micMuted: true, name: "Ada")
         check("chat header: the mic knob says what a click does now: mute, or unmute",
               unmuted.mic.label == "Mute the microphone" && muted.mic.label == "Unmute the microphone" && muted.mic.help.contains("Ada")
               && [unmuted.mic, muted.mic].allSatisfy { $0.help.contains("⇧⌘M") && $0.help.count <= 100 })
-        let red = ["FF453A", "E5392F"], orange = ["FF9F0A", "F08A00"], byId = Dictionary(uniqueKeysWithValues: looks.map { ($0.id, mutedFill($0)) })
-        check("chat header: the muted mic is red where the look's accent is orange, orange elsewhere, never the accent",
-              ["orb", "onair", "zen"].allSatisfy { red.contains(byId[$0] ?? "") } && ["conversation", "editorial", "hud", "phosphor"].allSatisfy { orange.contains(byId[$0] ?? "") }
-              && looks.allSatisfy { mutedFill($0) != $0.accent })
+        check("chat header: the muted mic is status.needs in every look, never the accent",
+              looks.allSatisfy { mutedFill($0) == dsHex(DS.Palette.statusNeedsSolid, dark: $0.dark) && mutedFill($0) != $0.accent })
+
         let scr = NSRect(x: 0, y: 0, width: 1000, height: 800), sz = NSSize(width: 200, height: 24)
         let mid = hintFrame(sz, mouse: NSPoint(x: 500, y: 400), screen: scr), low = hintFrame(sz, mouse: NSPoint(x: 500, y: 20), screen: scr)
         let edge = hintFrame(sz, mouse: NSPoint(x: 990, y: 400), screen: scr)

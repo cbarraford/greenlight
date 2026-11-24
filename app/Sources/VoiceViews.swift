@@ -558,8 +558,9 @@ func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @esc
 
 /// Haiku draws what Chief is saying as a card for stage.spec.
 func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
-    let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"]],
-                               "required": ["label", "detail"], "additionalProperties": false]
+    let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"],
+                                                                "tone": ["type": "string", "enum": ["", "needs", "bad", "now", "ok"]]],
+                               "required": ["label", "detail", "tone"], "additionalProperties": false]
     let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["eyebrow", "title", "kind", "stat", "items"], "properties": [
         "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
         "eyebrow": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
@@ -568,6 +569,7 @@ func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?)
             + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
             + "eyebrow: 1–4 lowercase words of context above the title (a workspace name, \"needs you · 2\", \"this week\") or empty; no emoji. "
             + "items: at most 6, label a few words, detail one short line or empty (for stat, items are facts: label the name, detail the value). "
+            + "tone: needs (waits on the user), bad (failed or crashed), now (in progress), ok (done), else empty; the card shows it as a glyph. "
             + "Use names, numbers and MR refs from the reply; never invent any. stat is empty unless kind is stat.",
           "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
 }
@@ -813,26 +815,35 @@ final class Meter: ObservableObject {
     @Published var chief = [Float](repeating: 0, count: 48)
 }
 
-/// Voice mode's looks, switched by the header's style button: each frames the same parts (the stage, captions, who's talking,
-/// context and Clear) its own way, and the stage takes its colors and type. `you` inks what you said (the captions' heard line, your
-/// turns in the transcript): a hue apart from the look's text, which inks what Chief says, so the two read apart at a glance.
-struct Look { let id, name, page, stage, card, text, text2, dim, line, accent, you, font: String; let dark: Bool }
-let sansCSS = "-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif", monoCSS = "ui-monospace,'SF Mono',Menlo,monospace", serifCSS = "ui-serif,'New York',Georgia,serif"
-let looks = [
-    Look(id: "conversation", name: "Conversation", page: "FFFFFF", stage: "FFFFFF", card: "F6F8FA", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D1D9E0", accent: "0969DA", you: "0969DA", font: sansCSS, dark: false),
-    Look(id: "orb", name: "Orb", page: "111113", stage: "1C1C1F", card: "26262A", text: "ECECEE", text2: "C9C9CF", dim: "9A9AA1", line: "34343A", accent: "F5A524", you: "7AA2F7", font: sansCSS, dark: true),
-    Look(id: "onair", name: "On Air", page: "0B0B0C", stage: "0B0B0C", card: "1A1A1D", text: "F4F4F5", text2: "C9C9CF", dim: "A1A1AA", line: "26262A", accent: "F5A524", you: "2AC3DE", font: sansCSS, dark: true),
-    Look(id: "phosphor", name: "Phosphor", page: "000000", stage: "000000", card: "061A04", text: "28FE14", text2: "28FE14", dim: "1DA80F", line: "1DA80F", accent: "28FE14", you: "FFB000", font: monoCSS, dark: true),
-    Look(id: "editorial", name: "Editorial", page: "F7F5F0", stage: "F7F5F0", card: "EFEBE3", text: "1F2328", text2: "3D444D", dim: "59636E", line: "D5D1C7", accent: "B42318", you: "0969DA", font: serifCSS, dark: false),
-    Look(id: "hud", name: "HUD", page: "0A0F14", stage: "0D151C", card: "14212B", text: "D7E3EA", text2: "B4C4CE", dim: "7F95A3", line: "1B2C36", accent: "39C5CF", you: "BD93F9", font: sansCSS, dark: true),
-    Look(id: "zen", name: "Zen", page: "121214", stage: "121214", card: "1C1C1F", text: "ECECEE", text2: "C9C9CF", dim: "8E8E96", line: "26262A", accent: "F5A524", you: "7AA2F7", font: sansCSS, dark: true),
-]
+/// The chat's and voice mode's looks (brand/DESIGN.md §10.17): token sets on the same components, switched by the header's
+/// style button. Default wears the system tokens in the current appearance; Phosphor is a mono, green-on-near-black homage to
+/// the terminal, built from the neutral and Signal scales. `you` inks what you said (the captions' heard line, your turns in the
+/// transcript), apart from the look's text, which inks what Chief says. `link` is the accent as text; `accent` is its fill.
+struct Look { let id, name, page, stage, card, text, text2, dim, line, accent, link, you, font: String; let dark: Bool }
+let sansCSS = "-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif", monoCSS = "ui-monospace,'SF Mono',Menlo,monospace"
+/// Default: the chat pane is bg.surface on the canvas, bubbles element.rest, hairlines border.subtle (§2, §10.17).
+func defaultLook(dark d: Bool) -> Look {
+    let p = DS.Palette.self
+    return Look(id: "default", name: "Default", page: dsHex(p.bgCanvas, dark: d), stage: dsHex(p.bgSurface, dark: d), card: dsHex(p.elementRest, dark: d),
+                text: dsHex(p.fgDefault, dark: d), text2: dsHex(p.fgMuted, dark: d), dim: dsHex(p.fgMuted, dark: d), line: dsHex(p.borderSubtle, dark: d),
+                accent: dsHex(p.accentSolid, dark: d), link: dsHex(p.accentFg, dark: d), you: dsHex(p.accentFg, dark: d), font: sansCSS, dark: d)
+}
+/// Phosphor: always the dark scales. Signal's text step on the darkest neutral, its subtle step for wells, its solid for rules.
+let phosphorLook: Look = {
+    let p = DS.Palette.self
+    return Look(id: "phosphor", name: "Phosphor", page: dsHex(p.bgCanvas, dark: true), stage: dsHex(p.bgCanvas, dark: true), card: dsHex(p.accentSubtle, dark: true),
+                text: dsHex(p.accentFg, dark: true), text2: dsHex(p.accentFg, dark: true), dim: dsHex(p.accentHover, dark: true), line: dsHex(p.accentSolid, dark: true),
+                accent: dsHex(p.accentFg, dark: true), link: dsHex(p.accentFg, dark: true), you: dsHex(p.fgDefault, dark: true), font: monoCSS, dark: true)
+}()
+/// The looks the style button cycles through. The five parked looks (Orb, Conversation, On Air, Editorial, HUD, Zen) are gone
+/// from the pickers; a stored choice of one opens as Default.
+var looks: [Look] { [defaultLook(dark: isDark), phosphorLook] }
+/// A look by its stored id, in today's appearance: anything but Phosphor is Default.
+func lookNamed(_ id: String?) -> Look { id == "phosphor" ? phosphorLook : defaultLook(dark: isDark) }
 extension Look {
-    /// The stage page's CSS variables (stage.html reads --mc-*), set on document.documentElement.style as `s`.
-    var vars: String {
-        [("bg", "#" + stage), ("surface", "#" + card), ("text", "#" + text), ("text2", "#" + text2), ("dim", "#" + dim), ("line", "#" + line), ("accent", "#" + accent), ("font", font)]
-            .map { "s.setProperty('--mc-\($0.0)', \"\($0.1)\");" }.joined(separator: " ") + " document.documentElement.dataset.look = '\(id)';"
-    }
+    /// What the stage page needs to wear the look: its data-look (stage.html's token overrides). Colours come from the tokens
+    /// and the appearance, and a theme of your own from themeVars().
+    var vars: String { "document.documentElement.dataset.look = '\(id == "phosphor" ? "phosphor" : "default")';" }
 }
 func hx(_ h: String, _ o: Double = 1) -> Color { Color(nsColor: hex(h)).opacity(o) }
 /// WCAG contrast ratio of two hex colors (1…21): the captions keep your words at 4.5 or more on the look's stage.
@@ -846,39 +857,44 @@ func contrast(_ a: String, _ b: String) -> Double {
 }
 /// A hex color's hue in degrees and its saturation (0…1).
 func hueSat(_ h: String) -> (hue: Double, sat: Double) { let c = hex(h); return (Double(c.hueComponent) * 360, Double(c.saturationComponent)) }
+/// The chat look's id ("default" or "phosphor"); Voice.look sets it.
+var chatLookId = ud.string(forKey: "stageStyle") == "phosphor" ? "phosphor" : "default"
 /// The chat window (standard and live) wears the same look. Chat views adopt Looked: its members shadow the app-wide color
 /// globals (bg, fg, accent, card…, theme) and chatFace, so their bodies read the look's tokens unchanged.
-var chatLook = looks.first { $0.id == ud.string(forKey: "stageStyle") } ?? looks[1]
+var chatLook: Look { lookNamed(chatLookId) }
 protocol Looked {}
 extension Looked {
     var lk: Look { chatLook }
-    var theme: Theme { Theme(lk.name, lk.stage, lk.text, lk.accent, lk.card) }
     var bg: Color { hx(lk.stage) }
     var page: Color { hx(lk.page) }
     var fg: Color { hx(lk.text) }
     var accent: Color { hx(lk.accent) }
+    var link: Color { hx(lk.link) }
+    var onAccent: Color { mono ? page : Color(DS.Palette.accentOnSolid, dark: lk.dark) }
     var card: Color { hx(lk.card) }
     var surface: Color { hx(lk.card) }
     var line: Color { hx(lk.line) }
-    var edge: Color { hx(lk.line) }
+    var edge: Color { mono ? line : Color(DS.Palette.borderDefault, dark: lk.dark) }
     var dim: Color { hx(lk.dim) }
+    var faint: Color { mono ? dim : Color(DS.Palette.fgFaint, dark: lk.dark) }
     var sub: Color { hx(lk.text2) }
     var youInk: Color { hx(lk.you) }  // what you said, apart from Chief's words in fg
     var bubble: Color { hx(lk.card) }
     var mono: Bool { lk.id == "phosphor" }
-    /// State colors for the look's lightness (Theme.needs… follow the app theme, not the look).
-    func state(_ d: String, _ l: String) -> Color { hx(lk.dark ? d : l) }
-    var needs: Color { state("FF9F0A", "F08A00") }
-    var needsInk: Color { state("FF9F0A", "A85A00") }
-    var done: Color { state("30D158", "2BA84A") }
-    var crashed: Color { state("FF453A", "E5392F") }
-    var crashedInk: Color { state("FF6B61", "C62828") }
-    var working: Color { state("0A84FF", "0A7AFF") }
-    /// The conversation's text in the look's face: mono for Phosphor, serif for Editorial, else the chosen chat font.
+    /// Status colours (§2.4), one meaning each, in the look's appearance: never the accent.
+    func state(_ c: DSColor) -> Color { Color(c, dark: lk.dark) }
+    var needs: Color { state(DS.Palette.statusNeedsSolid) }
+    var needsInk: Color { state(DS.Palette.statusNeedsFg) }
+    var done: Color { state(DS.Palette.statusDoneFg) }
+    var crashed: Color { state(DS.Palette.statusCrashedSolid) }
+    var crashedInk: Color { state(DS.Palette.statusCrashedFg) }
+    var working: Color { state(DS.Palette.statusWorkingFg) }
+    /// The conversation's text in the look's face: mono for Phosphor, else the chosen chat font.
     func chatFace(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        lk.font == monoCSS ? sys(size: size, weight: weight, design: .monospaced) : lk.font == serifCSS ? sys(size: size, weight: weight, design: .serif)
-            : sys(size: size, weight: weight, face: chatFont)
+        mono ? sys(size: size, weight: weight, design: .monospaced) : sys(size: size, weight: weight, face: chatFont)
     }
+    /// A type role in the look's face for chrome: mono for Phosphor.
+    func ui(_ t: DSType, _ w: Font.Weight? = nil) -> Font { sys(size: t.size, weight: w ?? t.fontWeight, design: mono ? .monospaced : .default) }
 }
 
 /// Claude Code's live line, under the reply in the chat and in every voice look: the running call, then the spinner with time, tokens and speed.
@@ -932,7 +948,7 @@ struct Live {
     let v: Voice, c: Core
     var talk: Talk { voiceTalk(speaking: v.speaking > 0, thinking: c.run != nil, micMuted: v.micMuted) }
     var label: String { voiceTalkLabel(talk, micMuted: v.micMuted) }
-    var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "“that’s all” ends voice mode" }
+    var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "say “goodbye” to end voice mode" }
     var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
@@ -943,7 +959,7 @@ struct Live {
     var name: String { c.name }
     /// The live line, in the look's colors, while Chief works (off in Settings → Chat & voice).
     /// With verbose activity on, the live log's newest lines follow it.
-    @ViewBuilder func activity(_ l: Look, ink: Color? = nil, accent: Color? = nil, size: CGFloat = 12) -> some View {
+    @ViewBuilder func activity(_ l: Look, ink: Color? = nil, accent: Color? = nil, size: CGFloat = DS.TypeRole.label.size) -> some View {
         if c.verbose {
             VStack(alignment: .leading, spacing: 6) {
                 if c.liveLine, let r = c.run { Activity(c: c, r: r, fg: ink ?? hx(l.text), dim: hx(l.dim), accent: accent ?? hx(l.accent), size: size) }
@@ -953,7 +969,7 @@ struct Live {
     }
     func clear() { v.run(.reset) }
     /// The stage, inset in its card so the card's rounded corners show (the web view itself is square).
-    func stage(_ l: Look, r: CGFloat = 12, pad: CGFloat = 8, border: Color? = nil) -> some View {
+    func stage(_ l: Look, r: CGFloat = DS.Radius.md, pad: CGFloat = DS.Space.s8, border: Color? = nil) -> some View {
         StageWeb(web: v.stageWeb).padding(pad).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: r).fill(hx(l.stage)))
             .overlay(RoundedRectangle(cornerRadius: r).stroke(border ?? .clear))
@@ -967,26 +983,18 @@ struct Live {
     }
 }
 
-/// Voice mode's screen, in place of the chat, in the look the header's style button last picked.
+/// Voice mode's screen, in place of the chat, in the look the header's style button last picked (§10.18).
 struct StageView: View {
     @ObservedObject var v: Voice
     @ObservedObject var c: Core
     var body: some View {
-        let s = Live(v: v, c: c), l = v.look
+        let s = Live(v: v, c: c), l = lookNamed(v.look.id)  // Default follows today's appearance
         Group {
-            switch l.id {
-            case "conversation": ConversationLook(s: s, l: l)
-            case "onair": OnAirLook(s: s, l: l)
-            case "phosphor": PhosphorLook(s: s, l: l)
-            case "editorial": EditorialLook(s: s, l: l)
-            case "hud": HUDLook(s: s, l: l)
-            case "zen": ZenLook(s: s, l: l)
-            default: OrbLook(s: s, l: l)
-            }
+            if l.id == "phosphor" { PhosphorLook(s: s, l: l) } else { DefaultLook(s: s, l: l) }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) { DwimToastBar(c: c, l: l).padding(.horizontal, 12).padding(.bottom, 8); StageFiles(c: c, l: l) }
-                .animation(.easeOut(duration: 0.15), value: c.toast)
+            VStack(spacing: 0) { DwimToastBar(c: c, l: l).padding(.horizontal, DS.Space.s12).padding(.bottom, DS.Space.s8); StageFiles(c: c, l: l) }
+                .animation(.easeOut(duration: DS.Duration.fast), value: c.toast)
         }
         .background(hx(l.page))
         .overlay { DropArea(c: c) }  // files dragged anywhere on the stage go with what you say next, as on the chat
@@ -1002,36 +1010,37 @@ struct StageFiles: View {
     let l: Look
     var body: some View {
         if !c.files.isEmpty || !c.fileNote.isEmpty || c.reading > 0 {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
                 if !c.files.isEmpty || c.reading > 0 {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: DS.Space.s8) {
                             ForEach(c.files) { chip($0) }
-                            if c.reading > 0 { HStack(spacing: 5) { ProgressView().controlSize(.mini); Text("Reading…") }.font(.system(size: 11)).foregroundColor(hx(l.dim)) }
+                            if c.reading > 0 { HStack(spacing: DS.Space.s4) { ProgressView().controlSize(.mini); Text("Reading…") }.font(ds(DS.TypeRole.caption)).foregroundColor(hx(l.dim)) }
                         }
                     }
                     Text(c.reading > 0 && c.files.isEmpty ? "Checking the file…" : "\(c.files.count == 1 ? "Goes" : "These go") to \(c.name) with what you say next")
-                        .font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1)
+                        .font(ds(DS.TypeRole.caption)).foregroundColor(hx(l.dim)).lineLimit(1)
                 }
                 if !c.fileNote.isEmpty {
-                    Label { Text(c.fileNote) } icon: { Image(ds: "alert", size: 14) }.font(.system(size: 11, weight: .medium)).foregroundColor(hx(l.dark ? "FF9F0A" : "9A6700"))
+                    Label { Text(c.fileNote) } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.caption.size)) }.font(ds(DS.TypeRole.labelSm))
+                        .foregroundColor(Color(DS.Palette.statusNeedsFg, dark: l.dark))
                         .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
                 }
-            }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(hx(l.card)).overlay(alignment: .top) { Rectangle().fill(hx(l.line)).frame(height: 1) }
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(hx(l.stage)).overlay(alignment: .top) { Rectangle().fill(hx(l.line)).frame(height: 1) }
         }
     }
     func chip(_ f: ChatFile) -> some View {
-        HStack(spacing: 5) {
-            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 3)) }
-            else { Image(ds: "file-text", size: iconSize(11, scaled: false)).foregroundColor(hx(l.dim)) }
-            Text(f.name).font(.system(size: 11, weight: .semibold)).foregroundColor(hx(l.text)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
-            Text(byteSize(f.data.count)).font(.system(size: 11)).foregroundColor(hx(l.dim)).lineLimit(1).fixedSize()
+        HStack(spacing: DS.Space.s4) {
+            if let t = f.thumb { Image(nsImage: t).resizable().aspectRatio(contentMode: .fill).frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: DS.Radius.xs)) }
+            else { Image(ds: "file-text", size: iconSize(DS.TypeRole.caption.size, scaled: false)).foregroundColor(hx(l.dim)) }
+            Text(f.name).font(ds(DS.TypeRole.labelSm)).foregroundColor(hx(l.text)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 150, alignment: .leading)
+            Text(byteSize(f.data.count)).font(ds(DS.TypeRole.caption).monospacedDigit()).foregroundColor(hx(l.dim)).lineLimit(1).fixedSize()
             Button { c.files.removeAll { $0.id == f.id } } label: {
                 Image(ds: "close", size: iconSize(9, scaled: false), medium: true).foregroundColor(hx(l.dim)).frame(width: 16, height: 16)
             }.buttonStyle(.plain).accessibilityLabel("Remove \(f.name)")
-        }.padding(.leading, 4).padding(.trailing, 3).frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hx(l.stage))).overlay(RoundedRectangle(cornerRadius: 6).stroke(hx(l.line)))
+        }.padding(.leading, DS.Space.s4).padding(.trailing, DS.Space.s4).frame(height: DS.Layout.controlHeightSm)
+            .background(RoundedRectangle(cornerRadius: l.id == "phosphor" ? 0 : DS.Radius.sm).fill(hx(l.card)))
             .help("\(f.kindName), goes to \(c.name) with what you say next")
             .accessibilityElement(children: .contain).accessibilityLabel("Attached \(f.name), \(byteSize(f.data.count))")
     }
@@ -1040,204 +1049,113 @@ struct StageFiles: View {
 struct StageDropHint: View {
     let l: Look
     var body: some View {
-        RoundedRectangle(cornerRadius: 12).fill(hx(l.page).opacity(0.85))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(hx(l.accent), style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
-            .overlay(VStack(spacing: 8) {
-                Image(ds: "attach", size: iconSize(22, scaled: false)).foregroundColor(hx(l.accent))
-                Text("Drop to attach").font(.system(size: 15, weight: .semibold)).foregroundColor(hx(l.text))
-                Text("Goes with what you say next: \(ChatFile.supported)").font(.system(size: 11)).foregroundColor(hx(l.dim)).multilineTextAlignment(.center)
-            }.padding(.horizontal, 20))
-            .padding(10).allowsHitTesting(false).accessibilityHidden(true)
+        let r = l.id == "phosphor" ? 0 : DS.Radius.lg
+        RoundedRectangle(cornerRadius: r).fill(hx(l.page).opacity(0.9))
+            .overlay(RoundedRectangle(cornerRadius: r).stroke(hx(l.accent), style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+            .overlay(VStack(spacing: DS.Space.s8) {
+                Image(ds: "attach", size: iconSize(DS.TypeRole.title.size, scaled: false)).foregroundColor(hx(l.link))
+                Text("Drop to attach").font(ds(DS.TypeRole.titleSm)).foregroundColor(hx(l.text))
+                Text("Goes with what you say next: \(ChatFile.supported)").font(ds(DS.TypeRole.caption)).foregroundColor(hx(l.dim)).multilineTextAlignment(.center)
+            }.padding(.horizontal, DS.Space.s24))
+            .padding(DS.Space.s12).allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 
 /// The last n levels, Chief's where it's louder (it's speaking), yours otherwise.
 func levels(_ m: Meter, _ n: Int) -> [(Float, Bool)] { zip(m.chief, m.you).suffix(n).map { a, b in (max(a, b), a >= b && a > 0) } }
 
-/// Waveform bars: Chief's in `on`, yours in `off`; flipped for a reflection.
+/// Waveform bars: Chief's in `on`, yours in `off`.
 struct Bars: View {
     @ObservedObject var m: Meter
-    var n = 44, w: CGFloat = 3, gap: CGFloat = 2, h: CGFloat = 28, round = true, on: Color, off: Color
+    var n = 44, w: CGFloat = 2, gap: CGFloat = 2, h: CGFloat = 24, on: Color, off: Color
+    @Environment(\.accessibilityReduceMotion) private var still
     var body: some View {
-        HStack(alignment: .bottom, spacing: gap) {
+        HStack(alignment: .center, spacing: gap) {
             ForEach(Array(levels(m, n).enumerated()), id: \.offset) { _, x in
-                RoundedRectangle(cornerRadius: round ? w / 2 : 0).fill(x.1 ? on : off).frame(width: w, height: 2 + CGFloat(x.0) * (h - 2))
+                Capsule().fill(x.1 ? on : off).frame(width: w, height: 2 + CGFloat(x.0) * (h - 2))
             }
-        }.frame(height: h, alignment: .bottom).animation(.linear(duration: 0.06), value: m.you).accessibilityHidden(true)
+        }.frame(height: h).animation(still ? nil : .linear(duration: 0.06), value: m.you).accessibilityHidden(true)
     }
 }
 
 struct HLine: Shape { func path(in r: CGRect) -> Path { Path { $0.move(to: CGPoint(x: 0, y: r.midY)); $0.addLine(to: CGPoint(x: r.maxX, y: r.midY)) } } }
 
-// MARK: Conversation: GitHub Light, the turn as chat bubbles, a pill with the wave, context and Clear
+/// Who has the floor, as a glyph: the meter's wave while either of you speaks, the working ring while Chief thinks.
+func talkGlyph(_ t: Talk) -> String { t == .thinking ? "working" : t == .muted ? "mic-off" : t == .listening ? "mic" : "waveform" }
 
-struct ConversationLook: View {
+// MARK: Default: the system tokens. A header (name, who has the floor), the stage card, the captions, and a bar with the wave,
+// the context used and Start over.
+
+struct DefaultLook: View {
     let s: Live, l: Look
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Text(String(s.name.prefix(1))).font(.system(size: 14, weight: .bold)).foregroundColor(.white).frame(width: 32, height: 32).background(Circle().fill(hx(l.accent)))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(s.name).font(.system(size: 14, weight: .semibold)).foregroundColor(hx(l.text))
-                    Text("\(voiceTalkLabel(s.talk)) · \(s.hint)").font(.system(size: 12)).foregroundColor(hx(l.dim)).lineLimit(1)  // the hint says muted
-                }
-                Spacer()
+        let muted = hx(l.dim)
+        VStack(spacing: DS.Space.s12) {
+            HStack(spacing: DS.Space.s8) {
+                Text(s.name).font(ds(DS.TypeRole.strong)).foregroundColor(hx(l.text))
+                Label { Text(voiceTalkLabel(s.talk, micMuted: s.v.micMuted)) } icon: { Image(ds: talkGlyph(s.talk), size: iconSize(DS.TypeRole.label.size)) }
+                    .font(ds(DS.TypeRole.label)).foregroundColor(s.talk == .thinking ? Color(DS.Palette.statusWorkingFg, dark: l.dark) : muted)
+                Spacer(minLength: DS.Space.s8)
+                Text(s.hint).font(ds(DS.TypeRole.caption)).foregroundColor(muted).lineLimit(1)
             }
-            s.stage(l, border: hx(l.line))
-            VStack(spacing: 8) {
-                if !s.heard.isEmpty { HStack { Spacer(minLength: 40); bubble(s.heard, fill: hx(l.you), ink: .white) } }
-                if !s.said.isEmpty { HStack { bubble(s.said, fill: hx(l.card), ink: hx(l.text)); Spacer(minLength: 40) } }
-                s.activity(l).padding(.horizontal, 4)
-            }
-            HStack(spacing: 10) {
-                Bars(m: s.v.meter, n: 36, on: hx(l.accent), off: hx("8C959F"))
-                Spacer(minLength: 4)
-                s.ctx { Text("\(s.c.ctxShort) context").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundColor(s.high ? hx("9A6700") : hx(l.dim)) }
-                s.clearButton {
-                    Image(ds: "compose", size: iconSize(13, scaled: false), medium: true).foregroundColor(.white).frame(width: 34, height: 34).background(Circle().fill(hx(l.text)))
-                }
-            }.padding(.leading, 16).padding(.trailing, 5).padding(.vertical, 5)
-                .background(Capsule().fill(hx(l.card))).overlay(Capsule().stroke(hx(l.line)))
-            GeometryReader { g in
-                ZStack(alignment: .leading) { Capsule().fill(hx(l.line)); Capsule().fill(s.high ? hx("BF8700") : hx(l.accent)).frame(width: g.size.width * s.frac) }
-            }.frame(height: 3).accessibilityHidden(true)
-        }.padding(16)
-    }
-    func bubble(_ t: String, fill: Color, ink: Color) -> some View {
-        Text(t).font(.system(size: 14)).foregroundColor(ink).lineLimit(4).padding(.horizontal, 14).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 16).fill(fill))
-    }
-}
-
-// MARK: Orb: rings that swell with the voice, the outer one the context meter
-
-struct OrbLook: View {
-    let s: Live, l: Look
-    var body: some View {
-        VStack(spacing: 18) {
-            Text("\(s.name) · \(s.label)".uppercased()).font(.system(size: 12, weight: .semibold)).tracking(1.6).foregroundColor(hx(l.dim))
-            s.stage(l, r: 20, pad: 10, border: hx("FFFFFF", 0.08))
-            Orb(m: s.v.meter, s: s, l: l).frame(width: 200, height: 200)
+            s.stage(l, r: DS.Radius.md, pad: DS.Space.s8, border: hx(l.line))
             if !s.said.isEmpty || !s.heard.isEmpty {
-                VStack(spacing: 8) {
-                    if !s.said.isEmpty { Text(s.said).font(.system(size: 20, weight: .medium)).foregroundColor(hx(l.text)) }
-                    if !s.heard.isEmpty { Text("“\(s.heard)”").font(.system(size: 13)).foregroundColor(hx(l.you)) }
-                }.multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 20)
+                VStack(alignment: .leading, spacing: DS.Space.s8) {
+                    if !s.heard.isEmpty {
+                        HStack { Spacer(minLength: DS.Space.s48)
+                            Text(s.heard).font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(hx(l.text)).lineLimit(4)
+                                .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(hx(l.card))) }
+                    }
+                    if !s.said.isEmpty { Text(s.said).font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(hx(l.text)).lineLimit(4).frame(maxWidth: .infinity, alignment: .leading) }
+                }
             }
-            s.activity(l).padding(.horizontal, 20)
-            HStack(spacing: 12) {
-                s.ctx { Text(s.known ? "\(s.pct)% · \(s.tokens)" : "\(s.tokens) tokens").font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
+            s.activity(l)
+            HStack(spacing: DS.Space.s12) {
+                Bars(m: s.v.meter, n: 40, on: hx(l.accent), off: Color(DS.Palette.borderDefault, dark: l.dark))
+                Spacer(minLength: DS.Space.s4)
+                if s.c.context > 0 { s.ctx {
+                    Label { Text(s.known ? "\(s.pct)% context" : "\(s.tokens) tokens") } icon: { if s.high { Image(ds: "needs", size: iconSize(DS.TypeRole.label.size)) } }
+                        .font(ds(DS.TypeRole.label).monospacedDigit()).foregroundColor(s.high ? Color(DS.Palette.statusNeedsFg, dark: l.dark) : muted)
+                } }  // nothing to say until the conversation has used some
                 s.clearButton {
-                    Label { Text("Start over") } icon: { Image(ds: "undo") }.font(.system(size: 13, weight: .semibold)).foregroundColor(hx(l.text))
-                        .padding(.horizontal, 16).frame(height: 36).background(Capsule().fill(hx(l.stage))).overlay(Capsule().stroke(hx("FFFFFF", 0.14)))
+                    Label { Text("Start over") } icon: { Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(hx(l.text))
+                        .padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightMd).background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(hx(l.card)))
                 }
             }
-        }.padding(.horizontal, 20).padding(.vertical, 16)
-    }
-}
-struct Orb: View {
-    @ObservedObject var m: Meter
-    let s: Live, l: Look
-    var body: some View {
-        let lv = CGFloat(levels(m, 1).first?.0 ?? 0), k = (s.talk == .speaking ? 1 : s.talk == .listening ? 0.8 : 0.62) * (1 + lv * 0.18)
-        let core = s.talk == .speaking ? hx(l.accent) : s.talk == .listening ? hx(l.text) : hx("3A3A40")
-        ZStack {
-            Circle().stroke(hx("FFFFFF", 0.07), lineWidth: 3)
-            Circle().trim(from: 0, to: max(s.frac, 0.005)).stroke(s.high ? hx("FF9F0A") : hx(l.accent), style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
-            Circle().stroke(hx(l.accent, 0.18)).frame(width: 174 * k, height: 174 * k)
-            Circle().stroke(hx(l.accent, 0.32)).frame(width: 144 * k, height: 144 * k)
-            Circle().fill(hx(l.accent, 0.16)).frame(width: 113 * k, height: 113 * k)
-            Circle().fill(core).frame(width: 79 * k, height: 79 * k).shadow(color: s.talk == .thinking ? .clear : core.opacity(0.5), radius: 30)
-        }.animation(.easeOut(duration: 0.12), value: lv).accessibilityElement().accessibilityLabel("\(s.label), context \(s.c.ctxSpoken)")
+        }.padding(DS.Space.s16)
     }
 }
 
-// MARK: On Air: a broadcast, tally light and LED meter up top, an amber lower third, a ticker with Clear
-
-struct OnAirLook: View {
-    let s: Live, l: Look
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                HStack(spacing: 7) { Circle().fill(.white).frame(width: 8, height: 8); Text(s.talk == .speaking ? "ON AIR" : s.talk == .listening ? "LISTENING" : s.v.micMuted ? "MUTED" : "STANDBY") }
-                    .font(.system(size: 12, weight: .heavy)).tracking(1.4).foregroundColor(.white).padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(s.talk == .speaking ? hx("D1242F") : s.talk == .listening ? hx("1A7F37") : hx("3A3A40"))
-                Leds(m: s.v.meter)
-                Spacer()
-            }.padding(.horizontal, 16).padding(.vertical, 12)
-            Rectangle().fill(hx(l.line)).frame(height: 2)
-            VStack(alignment: .leading, spacing: 12) {
-                Text("LIVE · \(s.name.uppercased())").font(.system(size: 11, weight: .heavy)).tracking(1.5).foregroundColor(hx(l.page)).padding(.horizontal, 8).padding(.vertical, 4).background(hx(l.accent))
-                s.stage(l, r: 0, pad: 0)
-            }.padding(16)
-            VStack(spacing: 0) {
-                if !s.said.isEmpty { third("CHIEF", s.said, tag: hx(l.accent), tagInk: hx(l.page), fill: hx(l.text), ink: hx(l.page), size: 15) }
-                if !s.heard.isEmpty { third("YOU", s.heard, tag: hx(l.you), tagInk: hx(l.page), fill: hx(l.card), ink: hx(l.you), size: 13) }
-                s.activity(l).padding(.horizontal, 16).padding(.top, 8)
-            }.padding(.bottom, 12)
-            HStack(spacing: 12) {
-                s.ctx {
-                    HStack(spacing: 10) {
-                        Text("CONTEXT \(s.c.ctxShort)").font(.system(size: 11, weight: .heavy).monospacedDigit()).tracking(1.2)
-                        HStack(spacing: 2) { ForEach(0..<10, id: \.self) { i in Rectangle().fill(i < Int((s.frac * 10).rounded()) ? hx(l.page) : hx(l.page, 0.22)).frame(width: 8, height: 16) } }
-                        Text("· \(s.tokens.uppercased()) · SAY “RESET”").font(.system(size: 11, weight: .bold)).lineLimit(1)
-                    }.foregroundColor(hx(l.page))
-                }
-                Spacer(minLength: 0)
-                s.clearButton { Text("CLEAR").font(.system(size: 12, weight: .heavy)).tracking(1.6).foregroundColor(hx(l.accent)).padding(.horizontal, 18).frame(maxHeight: .infinity).background(hx(l.page)) }
-            }.padding(.leading, 16).frame(height: 48).background(s.high ? hx("FF9F0A") : hx(l.accent))
-        }
-    }
-    func third(_ who: String, _ t: String, tag: Color, tagInk: Color, fill: Color, ink: Color, size: CGFloat) -> some View {
-        HStack(spacing: 0) {
-            Text(who).font(.system(size: 12, weight: .heavy)).tracking(1).foregroundColor(tagInk).frame(width: 62).frame(maxHeight: .infinity).background(tag)
-            Text(t).font(.system(size: size, weight: who == "CHIEF" ? .semibold : .regular)).foregroundColor(ink).lineLimit(3)
-                .padding(.horizontal, 14).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading).background(fill)
-        }.fixedSize(horizontal: false, vertical: true)
-    }
-}
-struct Leds: View {
-    @ObservedObject var m: Meter
-    var body: some View {
-        let lit = Int(CGFloat(levels(m, 1).first?.0 ?? 0) * 16 + 0.5)
-        HStack(spacing: 2) {
-            ForEach(0..<16, id: \.self) { i in Rectangle().fill(i >= lit ? hx("26262A") : i >= 13 ? hx("F85149") : i >= 9 ? hx("F5A524") : hx("3FB950")).frame(width: 6, height: 14) }
-        }.accessibilityHidden(true)
-    }
-}
-
-// MARK: Phosphor: a green-screen terminal, scanlines and all
+// MARK: Phosphor: the terminal's spirit, mono and green on near-black. Shell prompts and brackets, dashed rules, no glow.
 
 struct PhosphorLook: View {
     let s: Live, l: Look
     var body: some View {
         let ink = hx(l.text), faint = hx(l.dim), f = Int((s.frac * 10).rounded())
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: DS.Space.s8) {
                 Text("\(s.name.lowercased())@greenlight"); Text("~/voice").foregroundColor(faint)
-                Spacer(); Text("[\((s.v.micMuted ? "Muted" : s.label).uppercased())]").foregroundColor(faint)  // short: the line is full; "wait" below says thinking
-            }.padding(.horizontal, 14).padding(.vertical, 11)
+                Spacer(); Text("[\((s.v.micMuted ? "Muted" : s.label).lowercased())]").foregroundColor(faint)  // short: the line is full; "wait" below says thinking
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s12)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
                 Text("$ stage --live").foregroundColor(faint)
                 s.stage(l, r: 0, pad: 0)
                 if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(Text(s.heard).foregroundColor(hx(l.you)))") }
                 if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
-                s.activity(l, accent: ink, size: 13)
-            }.lineLimit(4).padding(14)
-            HStack(spacing: 10) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : s.talk == .muted ? "muted" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
-                .padding(.horizontal, 14).padding(.bottom, 10)
+                s.activity(l, accent: ink, size: DS.TypeRole.code.size)
+            }.lineLimit(4).padding(DS.Space.s16)
+            HStack(spacing: DS.Space.s12) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : s.talk == .muted ? "muted" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }
+                .padding(.horizontal, DS.Space.s16).padding(.bottom, DS.Space.s12)
             HLine().stroke(faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1)
-            HStack(spacing: 10) {
-                s.ctx { Text("ctx [\(String(repeating: "#", count: f) + String(repeating: ".", count: 10 - f))] \(s.c.ctxShort)").foregroundColor(s.high ? hx("FFB000") : ink) }
+            HStack(spacing: DS.Space.s12) {
+                s.ctx { Text("ctx [\(String(repeating: "#", count: f) + String(repeating: ".", count: 10 - f))] \(s.c.ctxShort)\(s.high ? " !" : "")")
+                    .foregroundColor(s.high ? Color(DS.Palette.statusNeedsFg, dark: true) : ink) }
                 Text(s.tokens).foregroundColor(faint).lineLimit(1)
                 Spacer()
-                s.clearButton { Text("[ clear ]").fontWeight(.bold).foregroundColor(hx(l.page)).padding(.horizontal, 10).frame(height: 30).background(ink) }
-            }.padding(.horizontal, 14).padding(.vertical, 10)
-        }.font(.system(size: 13, design: .monospaced)).foregroundColor(ink).shadow(color: ink.opacity(0.45), radius: 3)
-            .overlay(Canvas { g, size in
-                for y in stride(from: 2.0, to: size.height, by: 3) { g.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(.black.opacity(0.28))) }
-            }.allowsHitTesting(false).accessibilityHidden(true))
+                s.clearButton { Text("[ clear ]").fontWeight(.semibold).foregroundColor(hx(l.page)).padding(.horizontal, DS.Space.s8).frame(height: DS.Layout.controlHeightMd).background(ink) }
+            }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s12)
+        }.font(ds(DS.TypeRole.code, mono: true)).foregroundColor(ink)
     }
 }
 struct Glyphs: View {
@@ -1249,154 +1167,14 @@ struct Glyphs: View {
     }
 }
 
-// MARK: Editorial: a front page, serif type, an ink-line wave
-
-struct EditorialLook: View {
-    let s: Live, l: Look
-    var body: some View {
-        let ink = hx(l.text), red = hx(l.accent)
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text("The \(s.name)").font(.system(size: 22, weight: .bold, design: .serif).italic())
-                Spacer()
-                Text(s.label.uppercased()).font(.system(size: 10, weight: .bold)).tracking(1.8).foregroundColor(hx(l.dim))
-            }.padding(.top, 16).padding(.bottom, 10)
-            VStack(spacing: 2) { Rectangle().fill(ink).frame(height: 1); Rectangle().fill(ink).frame(height: 1) }
-            HStack { Text("\(Date().formatted(.dateTime.weekday(.wide))) edition"); Spacer(); Text("voice") }
-                .font(.system(size: 10, weight: .semibold)).tracking(1.4).textCase(.uppercase).foregroundColor(hx(l.dim)).padding(.vertical, 6)
-            Rectangle().fill(ink).frame(height: 1)
-            Text("ON YOUR DESK").font(.system(size: 11, weight: .bold)).tracking(1.8).foregroundColor(red).padding(.top, 18).padding(.bottom, 6)
-            s.stage(l, r: 0, pad: 0)
-            if !s.said.isEmpty {
-                Text("“\(s.said)”").font(.system(size: 19, design: .serif).italic()).lineSpacing(3).lineLimit(4).padding(.top, 16)
-            }
-            if !s.heard.isEmpty { Text("In reply to “\(s.heard)”").font(.system(size: 12)).foregroundColor(hx(l.you)).lineLimit(2).padding(.top, 6) }
-            s.activity(l).padding(.top, 8)
-            Scope(m: s.v.meter, ink: s.talk == .speaking ? red : ink, rule: hx(l.line)).frame(height: 44).padding(.top, 12)
-            Rectangle().fill(ink).frame(height: 1)
-            HStack(spacing: 14) {
-                s.ctx { (s.known ? Text("Context \(Text("\(s.pct)").bold()) percent used · \(s.tokens)") : Text("Context \(Text(s.tokens).bold()) tokens used")).font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? red : hx(l.text2)) }
-                Spacer()
-                s.clearButton { Text("Clear the page").font(.system(size: 13, weight: .bold)).foregroundColor(red).padding(.bottom, 2).overlay(Rectangle().fill(red).frame(height: 2), alignment: .bottom) }
-            }.padding(.top, 12).padding(.bottom, 18)
-        }.foregroundColor(ink).padding(.horizontal, 28)
-    }
-}
-/// An oscilloscope line through the levels, tapered at both ends.
-struct Scope: View {
-    @ObservedObject var m: Meter
-    let ink: Color, rule: Color
-    var body: some View {
-        let lv = levels(m, 48).map { CGFloat($0.0) }
-        Canvas { g, size in
-            let mid = size.height / 2, n = max(lv.count - 1, 1)
-            g.stroke(Path { $0.move(to: CGPoint(x: 0, y: mid)); $0.addLine(to: CGPoint(x: size.width, y: mid)) }, with: .color(rule))
-            g.stroke(Path { p in
-                for (i, v) in lv.enumerated() {
-                    let x = size.width * CGFloat(i) / CGFloat(n), y = mid + sin(CGFloat(i) * 0.9) * v * mid * sin(.pi * CGFloat(i) / CGFloat(n))
-                    i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
-                }
-            }, with: .color(ink), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
-        }.accessibilityHidden(true)
-    }
-}
-
-// MARK: HUD: a heads-up display, corner brackets, mirrored bars, a dial for context
-
-struct HUDLook: View {
-    let s: Live, l: Look
-    var body: some View {
-        let cyan = hx(l.accent), faint = hx(l.dim), mono = Font.system(size: 11, design: .monospaced)
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Text("\(s.name.uppercased())//VOICE").foregroundColor(cyan)
-                Text(s.talk == .speaking ? "▶ TX" : s.talk == .listening ? "● RX" : s.talk == .muted ? "◌ MUTE" : "◌ PROC").foregroundColor(faint)
-                Spacer()
-                Text(s.hint.uppercased()).foregroundColor(faint).lineLimit(1)
-            }.font(mono).tracking(1.2)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack { Text("STAGE"); Spacer(); Text("LIVE").foregroundColor(cyan) }.font(mono).tracking(1.2).foregroundColor(faint)
-                s.stage(l, r: 0, pad: 0)
-            }.padding(14).background(hx(l.stage)).overlay(Rectangle().stroke(hx(l.line)))
-            if !s.said.isEmpty { Text("\(Text("\(s.name.uppercased()) ▸ ").font(mono).foregroundColor(cyan))\(Text(s.said).font(.system(size: 16)))").lineLimit(3) }
-            if !s.heard.isEmpty { Text("\(Text("YOU ▸ ").font(mono))\(Text(s.heard).font(.system(size: 13)))").foregroundColor(hx(l.you)).lineLimit(2) }
-            s.activity(l)
-            VStack(spacing: 1) {
-                Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573"))
-                Bars(m: s.v.meter, n: 40, w: 4, gap: 4, h: 30, round: false, on: cyan, off: hx("4A6573")).scaleEffect(x: 1, y: -1).opacity(0.35)
-            }.frame(maxWidth: .infinity)
-            HStack(spacing: 14) {
-                s.ctx {
-                    ZStack {
-                        Circle().trim(from: 0, to: 0.75).stroke(hx(l.line), lineWidth: 5).rotationEffect(.degrees(135))
-                        Circle().trim(from: 0, to: 0.75 * max(s.frac, 0.005)).stroke(s.high ? hx("FF9F0A") : cyan, lineWidth: 5).rotationEffect(.degrees(135))
-                        VStack(spacing: 0) { Text(s.c.ctxShort.replacingOccurrences(of: "%", with: "")).font(.system(size: 17, weight: .bold, design: .monospaced)); Text(s.known ? "CTX%" : "CTX").font(.system(size: 9, design: .monospaced)).foregroundColor(faint) }
-                    }.frame(width: 64, height: 64)
-                }
-                Text("\(s.tokens.uppercased()) TOKENS\nSAY “RESET” TO CLEAR").font(mono).tracking(0.8).foregroundColor(faint).lineSpacing(3)
-                Spacer()
-                s.clearButton { Text("[ CLEAR ]").font(.system(size: 12, weight: .bold, design: .monospaced)).tracking(1.6).foregroundColor(cyan).padding(.horizontal, 16).frame(height: 40).background(cyan.opacity(0.1)).overlay(Rectangle().stroke(cyan)) }
-            }
-        }.foregroundColor(hx(l.text)).padding(22).overlay(Brackets().stroke(cyan, lineWidth: 2).padding(8).allowsHitTesting(false))
-    }
-}
-struct Brackets: Shape {
-    func path(in r: CGRect) -> Path {
-        let a: CGFloat = 16
-        return Path { p in
-            for (x, y, dx, dy) in [(r.minX, r.minY, a, a), (r.maxX, r.minY, -a, a), (r.minX, r.maxY, a, -a), (r.maxX, r.maxY, -a, -a)] {
-                p.move(to: CGPoint(x: x, y: y + dy)); p.addLine(to: CGPoint(x: x, y: y)); p.addLine(to: CGPoint(x: x + dx, y: y))
-            }
-        }
-    }
-}
-
-// MARK: Zen: almost nothing, one breathing dot and a hairline of context
-
-struct ZenLook: View {
-    let s: Live, l: Look
-    var body: some View {
-        VStack(spacing: 0) {
-            GeometryReader { g in Rectangle().fill(s.high ? hx("FF9F0A") : hx(l.accent)).frame(width: g.size.width * s.frac) }.frame(height: 2).accessibilityHidden(true)
-            s.stage(l, r: 0, pad: 0).padding(.horizontal, 32).padding(.top, 24)
-            if !s.said.isEmpty { Text(s.said).font(.system(size: 24, weight: .light)).foregroundColor(hx(l.text)).multilineTextAlignment(.center).lineLimit(3).padding(.horizontal, 40).padding(.top, 20) }
-            if !s.heard.isEmpty { Text(s.heard).font(.system(size: 13)).foregroundColor(hx(l.you)).lineLimit(2).padding(.top, 8) }
-            s.activity(l).padding(.horizontal, 40).padding(.top, 10)
-            Breath(m: s.v.meter, talk: s.talk, l: l).frame(height: 40).padding(.top, 24)
-            Text(s.label.lowercased()).font(.system(size: 12)).foregroundColor(hx(l.dim)).padding(.top, 4)
-            HStack {
-                s.ctx { Text(s.c.ctxShort).font(.system(size: 12).monospacedDigit()).foregroundColor(s.high ? hx("FF9F0A") : hx(l.dim)) }
-                Spacer()
-                s.clearButton { Text("Clear").font(.system(size: 13)).foregroundColor(hx(l.text2)) }
-            }.padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 18)
-        }
-    }
-}
-struct Breath: View {
-    @ObservedObject var m: Meter
-    let talk: Talk, l: Look
-    var body: some View {
-        let lv = CGFloat(levels(m, 1).first?.0 ?? 0)
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: talk == .thinking)) { t in
-            let b = talk == .thinking ? 1 : 1.3 + 0.3 * sin(t.date.timeIntervalSinceReferenceDate * 2)
-            Circle().fill(talk == .speaking ? hx(l.accent) : talk == .listening ? hx(l.text) : hx("4A4A52")).frame(width: 10, height: 10).scaleEffect(b + lv * 1.4)
-        }.accessibilityHidden(true)
-    }
-}
-
 struct StageWeb: NSViewRepresentable {
     let web: WKWebView
     func makeNSView(context: Context) -> WKWebView { web }
     func updateNSView(_ v: WKWebView, context: Context) {}
 }
 
-/// The muted mic knob's fill: Theme.needs' orange (you have to unmute to be heard), or Theme.crashed's red in a look whose accent is
-/// already orange (Orb, On Air, Zen), so it never reads as the voice button lit beside it.
-func mutedFill(_ l: Look) -> String {
-    let c = hex(l.accent).usingColorSpace(.sRGB) ?? hex(l.accent), hue = c.hueComponent * 360
-    let orangeAccent = c.saturationComponent > 0.4 && hue >= 20 && hue <= 50
-    return orangeAccent ? (l.dark ? "FF453A" : "E5392F") : (l.dark ? "FF9F0A" : "F08A00")
-}
+/// The muted mic knob's fill: status.needs (you have to unmute to be heard), never the accent the voice button lights in.
+func mutedFill(_ l: Look) -> String { dsHex(DS.Palette.statusNeedsSolid, dark: l.dark) }
 
 /// The voice button's help and accessibility label. While a start is under way (its retries take up to ~3 s) a press cancels it, so it says so.
 func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) {
@@ -1408,7 +1186,7 @@ func voiceButtonText(on: Bool, starting: Bool) -> (help: String, label: String) 
 /// The chat header's knobs, top right, in the state they're in: what a click does now, for the hover hint (`help`) and VoiceOver (`label`).
 struct HeaderTips {
     var on = false, starting = false, transcript = false, captions = false, out = false, micMuted = false
-    var name = "Chief", look = "Orb", next = "Conversation"
+    var name = "Chief", look = "Default", next = "Phosphor"
     var attach: (help: String, label: String) { ("Attach \(ChatFile.supported) to what you say next", "Attach files") }
     var view: (help: String, label: String) {
         transcript ? ("Show the stage: what \(name) draws as it talks", "Show the stage") : ("Show the transcript: the conversation as text", "Show the transcript")
@@ -1440,7 +1218,7 @@ struct VoiceButtons: View, Looked {
     }
     var body: some View {
         let t = tips
-        HStack(spacing: lk.id == "zen" || lk.id == "editorial" ? Theme.sp1 : Theme.sp2) {
+        HStack(spacing: DS.Space.s4) {
             if v.on {
                 if !v.transcript {  // the stage has no composer: its +. Drops on the stage and ⌘V attach too
                     knob("attach", t.attach) { c.pickFiles(NSApp.keyWindow) }
@@ -1453,7 +1231,7 @@ struct VoiceButtons: View, Looked {
             }
             // one style for live and standard chat
             knob("palette", t.style) { v.look = nextLook }
-            Button(action: v.toggle) { shell(Image(ds: "waveform", size: iconSize(Theme.fs3), medium: true), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
+            Button(action: v.toggle) { shell(Image(ds: "waveform", size: iconSize(DS.TypeRole.body.size), medium: true), on: v.on || v.starting).opacity(v.starting ? 0.6 : 1) }
                 .buttonStyle(.plain).modifier(Tip(c: c, text: t.voice.help)).accessibilityLabel(t.voice.label)
             knob(out ? "panel" : "external", t.pop) { c.popChat(!out) }  // its own window, or back
         }
@@ -1461,13 +1239,12 @@ struct VoiceButtons: View, Looked {
     func knob(_ icon: String, _ t: (help: String, label: String), _ act: @escaping () -> Void) -> some View {
         Button(action: act) { shell(Image(ds: icon)) }.buttonStyle(.plain).modifier(Tip(c: c, text: t.help)).accessibilityLabel(t.label)
     }
-    /// The knob in the look: a ring (Orb), a 6pt tile (Conversation), a square (On Air, HUD), a green box (Phosphor), bare (Editorial, Zen).
+    /// The knob: a quiet icon button (§10.2), 28 square; lit, the accent's solid (or status.needs for the muted mic). Phosphor: square.
     func shell<V: View>(_ icon: V, on: Bool = false, fill: Color? = nil) -> some View {
-        let s: CGFloat = lk.id == "zen" ? 28 : lk.id == "phosphor" ? 26 : 30, r: CGFloat = lk.id == "orb" ? s / 2 : lk.id == "conversation" ? Theme.r1 : 0
-        let tile = lk.id == "conversation" || lk.id == "onair", bare = lk.id == "zen" || lk.id == "editorial"
-        return icon.font(sys(size: Theme.fs3)).frame(width: s, height: s).foregroundColor(on ? (fill == nil ? bg : hx("1C1C1E")) : lk.id == "phosphor" ? fg : lk.id == "zen" ? dim : sub)
-            .background(RoundedRectangle(cornerRadius: r).fill(on ? fill ?? accent : tile ? card : .clear))
-            .overlay(RoundedRectangle(cornerRadius: r).stroke(on || bare ? .clear : line)).contentShape(Rectangle())
+        let s = DS.Layout.controlHeightMd, r: CGFloat = mono ? 0 : DS.Radius.sm
+        let lit = fill == nil ? onAccent : Color(DS.Palette.statusNeedsOnSolid, dark: lk.dark)
+        return icon.font(ds(DS.TypeRole.body)).frame(width: s, height: s).foregroundColor(on ? lit : mono ? fg : dim)
+            .background(RoundedRectangle(cornerRadius: r).fill(on ? fill ?? accent : .clear))
+            .overlay(RoundedRectangle(cornerRadius: r).stroke(mono && !on ? line : .clear)).contentShape(Rectangle())
     }
 }
-
