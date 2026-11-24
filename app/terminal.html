@@ -61,8 +61,8 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 #shead{display:flex;align-items:center;gap:2px;height:44px;flex-shrink:0;padding:0 8px 0 12px}
 #shead .ttl{flex:0 1 auto;height:28px;border:0;padding:0 8px;margin-left:-8px;border-radius:var(--r-sm);background:none;color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;font:600 var(--fs-body)/16px var(--font);white-space:nowrap}
 #shead .ttl:hover{background:var(--fill)} #shead .sp{flex:1}
-#shead .host{display:flex;align-items:center;gap:4px;flex-shrink:0;height:20px;margin-right:4px;padding:0 8px 0 6px;border-radius:var(--r-full);background:var(--fill);color:var(--dim);font:500 var(--fs-cap)/14px var(--font)}
-#shead .ib{width:24px;height:24px} #shead .ttl{min-width:56px}
+#shead .host{display:block;flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px;box-sizing:border-box;height:20px;margin-right:4px;padding:0 8px 0 6px;border-radius:var(--r-full);background:var(--fill);color:var(--dim);font:500 var(--fs-cap)/14px var(--font)}
+#shead .ib{width:24px;height:24px} #shead .ttl{flex-shrink:1;min-width:80px} #shead .host{min-width:36px;line-height:20px}
 #jump{display:flex;align-items:center;gap:8px;flex-shrink:0;height:28px;margin:0 8px 8px;padding:0 4px 0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint);font:inherit;text-align:left}
 #jump:hover{box-shadow:inset 0 0 0 1px var(--line-h)} #jump span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--faint)}
 #jump kbd,#pal kbd,#card kbd,#drop kbd{display:inline-flex;align-items:center;height:16px;padding:0 4px;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1px var(--line);color:var(--dim)}
@@ -219,7 +219,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #pres .nil{display:flex;flex-direction:column;align-items:center;gap:4px;padding:48px 0;color:var(--dim);font-size:var(--fs-lbl)} #pres .nil div{color:var(--fg);font:600 var(--fs-tsm)/20px var(--font)}
 #pv{width:290px;flex-shrink:0;box-sizing:border-box;display:flex;flex-direction:column;gap:16px;padding:16px;overflow:hidden;background:var(--surface);box-shadow:inset 1px 0 0 var(--hair)}
 #pv .k{color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)} #pv h3{margin:4px 0 0;font:600 var(--fs-t)/22px var(--font);letter-spacing:var(--ds-type-title-track);overflow-wrap:anywhere}
-#pv dl{display:grid;grid-template-columns:76px minmax(0,1fr);row-gap:8px;margin:0;font-size:var(--fs-lbl)} #pv dt{color:var(--dim)} #pv dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pv dl{display:grid;grid-template-columns:76px minmax(0,1fr);row-gap:8px;margin:0;font-size:var(--fs-lbl)} #pv dt{color:var(--dim)} #pv dd{color:var(--fg);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #pv p{margin:0;font:400 var(--fs-body)/19px var(--font);white-space:pre-line} #pv .sc{margin-top:auto;display:flex;align-items:center;gap:8px;font-size:var(--fs-lbl);color:var(--dim)}
 #pv .tl{flex:1;min-height:0;display:flex;flex-direction:column;gap:8px} #pv pre{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:8px 12px;border-radius:var(--r-sm);background:var(--sunken);font:400 var(--fs-cap)/18px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 #pal .ft{height:32px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 16px;overflow:hidden;white-space:nowrap;font:400 var(--fs-cap)/14px var(--font);color:var(--dim);box-shadow:inset 0 1px 0 var(--hair)} #pal .ft span{display:flex;align-items:center;gap:4px} #pal .ft .end{margin-left:auto}
@@ -244,10 +244,10 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #card .meta{margin-top:-4px;color:var(--dim);font:400 var(--fs-cap)/14px var(--font)}
 #card .rec{display:grid;gap:2px;font:400 var(--fs-body)/19px var(--font)} #card .rec[hidden]{display:none} #card .rec.wait{color:var(--dim)}
 #card .sbar{display:grid;gap:4px;width:100%;padding:0;border:0;background:none;color:var(--dim);font:400 var(--fs-cap)/14px var(--font);text-align:left;cursor:default} #card .sbar:focus-visible{border-radius:var(--r-xs)}
-#card .sbar .trk{display:flex;align-items:center;gap:2px} #card .sbar .trk i{flex:1;height:4px;border-radius:var(--r-xs);background:var(--fill-a)} #card .sbar .trk i.ok{background:var(--dim)} #card .sbar .trk i.cur{background:var(--accent)} #card .sbar b{color:var(--fg);font-weight:500}
+#card .sbar .trk{display:flex;align-items:center;gap:2px} #card .sbar .trk i{flex:1;height:4px;border-radius:var(--r-xs);background:var(--fill-a)} #card .sbar .trk i.ok{background:var(--dim)} #card .sbar .trk i.cur{background:var(--fg)} #card .sbar b{color:var(--fg);font-weight:500}
 #card .sbar .sl{display:flex;flex-wrap:wrap;column-gap:4px} #card .sbar .lf{order:1;margin-left:auto} #card .sbar .sl::after{content:"▸"} #card .sbar[aria-expanded="true"] .sl::after{content:" ▾"}
 #card .chk{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px;color:var(--dim);font:400 var(--fs-lbl)/16px var(--font)} #card .chk[hidden]{display:none}
-#card .chk li{display:grid;grid-template-columns:12px minmax(0,1fr);gap:8px} #card .chk li.ok{color:var(--dim)} #card .chk li.cur{color:var(--fg);font-weight:500} #card .chk li.cur>span:first-child{color:var(--accent-fg)} #card .chk .ow{float:right;margin-left:8px;font-weight:400;color:var(--dim)}
+#card .chk li{display:grid;grid-template-columns:12px minmax(0,1fr);gap:8px} #card .chk li.ok{color:var(--dim)} #card .chk li.cur{color:var(--fg);font-weight:500} #card .chk li.cur>span:first-child{color:var(--fg)} #card .chk .ow{float:right;margin-left:8px;font-weight:400;color:var(--dim)}
 #card .chk li.sep{display:flex;align-items:center;gap:8px;margin-top:2px;color:var(--faint);font:500 var(--fs-cap)/14px var(--font)} #card .chk li.sep::after{content:"";flex:1;height:1px;background:var(--hair)}
 #card .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 #card .acts{display:flex;flex-wrap:wrap;gap:4px} #card .acts button{display:flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)}
@@ -355,7 +355,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .tiles label:first-child{grid-column:1/-1}
 #dlg label.tile{gap:12px;padding:12px;border-radius:var(--r-md);background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair);color:var(--fg)}
 #dlg label.tile:hover{box-shadow:inset 0 0 0 1px var(--line-h)}
-#dlg label.tile:has(input:checked){background:var(--accent-sub);box-shadow:inset 0 0 0 1px var(--focus)}
+#dlg label.tile:has(input:checked){box-shadow:inset 0 0 0 1px var(--line)}
 #dlg .tile input{appearance:none;flex:0 0 auto;width:16px;height:16px;margin:0;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1.5px var(--line-h)} #dlg .tile input:focus-visible{outline:0;box-shadow:inset 0 0 0 1.5px var(--line-h),var(--ring)}
 #dlg .tile input:checked{box-shadow:none;background:var(--accent)}
 #dlg .tile input:checked::after{content:"";display:block;width:9px;height:5px;margin:4px 0 0 3px;border:solid var(--on-accent);border-width:0 0 2px 2px;transform:rotate(-45deg)}
@@ -2101,7 +2101,7 @@ function newWsAsk(o){
   dlgForm(o.questions?.length > 1 ? "Two questions before Claude starts" : "One question before Claude starts", body, "Start with answers", () => {
     if (!(o.questions || []).every(q => (ans[q.id] || "").trim())) { err.textContent = "Pick an answer for each, or Start anyway"; return false }
     send({answers: ans}); return true;
-  }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `Nothing is made until you answer: ${pend.o.name}`, left: [anyway]});
+  }, null, {cls: "big nw", sub: `Nothing is made until you answer: ${pend.o.name}`, left: [anyway]});
   $("dlg").querySelector("button.pri").innerHTML = "Start with answers<kbd>↩</kbd>";
   body.querySelector(".opts button")?.focus();
 }
@@ -2145,7 +2145,7 @@ function newWsDialog(){
     newAsk = {path: sel.value, o: {name: n, base: b, goal: goal.value.trim(), agent: ag.checked, setup: !sl.hidden && su.checked ? sc.textContent : ""}, project: repo()?.project};
     post({cmd: "tree", op: "new", path: sel.value, text: JSON.stringify(newAsk.o)});
     toast(`Making ${n} in ${repo()?.project || "the repo"}…`); return true;
-  }, null, {cls: "big nw", icon: g16(G.branch, "", "", 16), sub: `A worktree on a new branch, on ${host}`, left: [foot]});
+  }, null, {cls: "big nw", sub: `A worktree on a new branch, on ${host}`, left: [foot]});
   $("dlg").querySelector("button.pri").innerHTML = "Create workspace<kbd>↩</kbd>";
   goal.focus();
 }
