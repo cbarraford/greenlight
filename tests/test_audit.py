@@ -296,14 +296,16 @@ try:
 except ValueError as e:
     assert "too large to audit" in str(e)
 # a many-part diff is asked in several bounded decide.batch calls, not one prompt the model can't take; every question answered
-sizes = []
+sizes, asked = [], []
 def sized_batch(state, qs):
     sizes.append(sum(len(q["context"]) for q in qs.values()))
+    asked.extend(qs)
     return _batch(state, qs)
 thirty = "".join(file_blk(i) for i in range(audit.MAXPARTS))
 with mock.patch.object(fake, "batch", side_effect=sized_batch):
     r = audit.contracts({}, ("diff_matches_goal", "tests_not_weakened"), diff=thirty)
 assert len(r["checks"]) == 2 * audit.MAXPARTS and len(sizes) > 1 and max(sizes) <= audit.BATCH_CHARS, (len(r["checks"]), sizes)
+assert sorted(asked) == sorted(r["checks"])  # every question went to a batch call exactly once (none left to the slow per-call path)
 assert [list(g) for g in audit.batches({"a": {"context": "x" * 5}, "b": {"context": "x" * 5}, "c": {"context": "x" * 20}}, 10)] == \
     [["a", "b"], ["c"]]  # in order, a full group closes, and a question bigger than the budget goes alone
 print("tests/threads ok")
