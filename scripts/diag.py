@@ -471,13 +471,22 @@ def usage(events):
     return out
 
 
+def ade_name():
+    """The workspace backend in use (ade.py), or "invalid" when GREENLIGHT_ADE names none."""
+    try:
+        import ade
+        return ade.name()
+    except Exception:  # noqa: BLE001 - a bad GREENLIGHT_ADE must not take the summary down
+        return "invalid"
+
+
 def summary(after, events=None):
     events = read(after) if events is None else events
     now = time.time()
     return {
         "version": version(),
         "env": {"os": platform.system(), "os_release": platform.release(), "python": platform.python_version(),
-                "ade": os.environ.get("GREENLIGHT_ADE") or "orca",
+                "ade": ade_name(),
                 "clis": {c: bool(shutil.which(c)) for c in ("glab", "gh", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
         "config": config_shape(),
         "events": len(events),

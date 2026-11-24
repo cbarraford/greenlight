@@ -1,4 +1,4 @@
-"""herdr backend: answers the `orca ...` calls greenlight makes, in Orca's JSON shape (GREENLIGHT_ADE=herdr).
+"""herdr backend (GREENLIGHT_ADE=herdr, a legacy live driver): ade.py's contract answered by herdr.
 
 herdr has workspaces, git worktrees, panes and agent detection of its own; goals live in ~/.greenlight/goals.json
 (herdr has no workspace description). GREENLIGHT_HERDR_SESSION targets a named session instead of the default.
@@ -8,12 +8,16 @@ import os
 import secrets
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from ade_common import default_agent, draft, flags, git_info, goals, plain, set_goal, repo_list
+import ade
+import ade_common
+from ade_common import draft, git_info, goals, plain, repo_list
 
 BRIEFS = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight") / "briefs"
+NAME = "herdr"
 STATES = {"working": "working", "blocked": "waiting", "idle": "done", "done": "done"}  # herdr -> Orca agent state
 
 
@@ -97,47 +101,34 @@ def launch(ws_id, agent, prompt, pane=None):
         return {"terminal": {"handle": pane}}
 
 
-def create(f):
-    src = next((w["path"] for w in worktrees() if w["isMainWorktree"] and f["repo"].removeprefix("id:") in (w["repoId"], w["repo"])), f["repo"].removeprefix("id:"))
-    base = f.get("base-branch") or f.get("base")  # Orca's flag is --base-branch
-    r = herdr("worktree", "create", "--cwd", src, "--branch", f["name"], "--label", f["name"], "--no-focus",
+def create(repo, name, base=None, comment="", agent=None, prompt=""):
+    src = next((w["path"] for w in worktrees() if w["isMainWorktree"] and repo in (w["repoId"], w["repo"])), repo)
+    r = herdr("worktree", "create", "--cwd", src, "--branch", name, "--label", name, "--no-focus",
               *(["--base", base] if base else []))
     ws, path = r["workspace"]["workspace_id"], r["worktree"]["path"]
-    if f.get("comment"):
-        set_goal(path, f["comment"])
-    if f.get("agent"):
-        launch(ws, f["agent"], f.get("prompt") or "", r["root_pane"]["pane_id"])
+    if comment:
+        ade_common.set_goal(path, comment)
+    if agent:
+        launch(ws, agent, prompt or "", r["root_pane"]["pane_id"])
     return {"worktree": {"id": ws, "path": path}}
 
 
+def set_goal(worktree_id, goal):
+    ade_common.set_goal(next(w["path"] for w in worktrees() if w["id"] == worktree_id), goal)
+
+
+def remove(worktree_id, force=False):
+    ws = next(w for w in worktrees() if w["id"] == worktree_id)
+    if ws["isMainWorktree"]:
+        herdr("workspace", "close", worktree_id)
+    else:  # never --force: herdr, like git, refuses a dirty tree
+        herdr("worktree", "remove", "--workspace", worktree_id)
+    ade_common.set_goal(ws["path"], "")
+
+
+def repos():
+    return repo_list(worktrees())
+
+
 def call(*args):
-    noun, verb, f = *args[:2], flags(args[2:])
-    wid = str(f.get("worktree", "")).removeprefix("id:")
-    if noun == "worktree" and verb in ("ps", "list"):
-        return {"worktrees": worktrees()}
-    if noun == "terminal" and verb == "list":
-        return {"terminals": terminals()}
-    if noun == "terminal" and verb == "read":
-        return read(f["terminal"], f.get("limit", 200))
-    if noun == "terminal" and verb == "send":
-        send(f["terminal"], f.get("text", ""), "enter" in f)
-        return {}
-    if noun == "agent" and verb == "launch":
-        return launch(wid, f.get("agent") or default_agent(), f.get("prompt", ""))
-    if noun == "worktree" and verb == "set":  # board status and MR links are Orca-only
-        if "comment" in f:
-            set_goal(next(w["path"] for w in worktrees() if w["id"] == wid), f["comment"] if isinstance(f["comment"], str) else "")
-        return {}
-    if noun == "worktree" and verb == "rm":
-        ws = next(w for w in worktrees() if w["id"] == wid)
-        if ws["isMainWorktree"]:
-            herdr("workspace", "close", wid)
-        else:  # never --force: herdr, like git, refuses a dirty tree
-            herdr("worktree", "remove", "--workspace", wid)
-        set_goal(ws["path"], "")
-        return {"removed": wid}
-    if noun == "worktree" and verb == "create":
-        return create(f)
-    if noun == "repo" and verb == "list":
-        return repo_list(worktrees())
-    raise RuntimeError(f"orca {noun} {verb} has no herdr equivalent")
+    return ade.dispatch(sys.modules[__name__], *args)

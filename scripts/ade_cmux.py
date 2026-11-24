@@ -1,4 +1,4 @@
-"""cmux backend: answers the `orca ...` calls greenlight makes, in Orca's JSON shape (GREENLIGHT_ADE=cmux).
+"""cmux backend (GREENLIGHT_ADE=cmux, a legacy live driver): ade.py's contract answered by cmux.
 
 cmux has workspaces and terminals but no worktrees, repos or agent records, so those come from git
 and from cmux's agent hook stores (~/.cmuxterm/*-hook-sessions.json). The goal lives in the
@@ -9,13 +9,16 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+import ade
 import harness
-from ade_common import default_agent, draft, flags, git_info, worktree_add, worktree_remove, repo_list
+from ade_common import draft, git_info, worktree_add, worktree_remove, repo_list
 
 HOOKS = Path.home() / ".cmuxterm"  # <agent>-hook-sessions.json, written by `cmux hooks setup <agent>`
+NAME = "cmux"
 STATES = {"running": "working", "needsInput": "waiting", "idle": "done"}  # cmux lifecycle -> Orca agent state
 
 
@@ -99,44 +102,31 @@ def launch(ws_id, agent, prompt):
     return {"terminal": {"handle": s}}
 
 
-def create(f):
-    repo = next((w["repoId"] for w in worktrees() if f["repo"].removeprefix("id:") in (w["repoId"], w["repo"])), f["repo"].removeprefix("id:"))
-    path = worktree_add(repo, f["name"], f.get("base-branch") or f.get("base"))
-    ws = cmux("workspace", "create", "--name", f["name"], "--cwd", path, "--focus", "false",
-              *(["--description", f["comment"]] if f.get("comment") else []))
+def create(repo, name, base=None, comment="", agent=None, prompt=""):
+    repo = next((w["repoId"] for w in worktrees() if repo in (w["repoId"], w["repo"])), repo)
+    path = worktree_add(repo, name, base)
+    ws = cmux("workspace", "create", "--name", name, "--cwd", path, "--focus", "false",
+              *(["--description", comment] if comment else []))
     ws_id = ws.get("workspace_id") or ws.get("id")
-    if f.get("agent"):
-        launch(ws_id, f["agent"], f.get("prompt") or "")
+    if agent:
+        launch(ws_id, agent, prompt or "")
     return {"worktree": {"id": ws_id, "path": path}}
 
 
+def set_goal(worktree_id, goal):  # the goal is the workspace description
+    cmux("workspace-action", "--workspace", worktree_id, "--action", "set-description" if goal else "clear-description",
+         *(["--description", goal] if goal else []), js=False)
+
+
+def remove(worktree_id, force=False):  # never --force: cmux has no undo for a dirty tree
+    ws = next(w for w in worktrees() if w["id"] == worktree_id)
+    worktree_remove(ws)
+    cmux("workspace", "close", ws["id"], js=False)
+
+
+def repos():
+    return repo_list(worktrees())
+
+
 def call(*args):
-    noun, verb, f = *args[:2], flags(args[2:])
-    wid = str(f.get("worktree", "")).removeprefix("id:")
-    if noun == "worktree" and verb in ("ps", "list"):
-        return {"worktrees": worktrees()}
-    if noun == "terminal" and verb == "list":
-        return {"terminals": terminals()}
-    if noun == "terminal" and verb == "read":
-        return read(f["terminal"], f.get("limit", 200))
-    if noun == "terminal" and verb == "send":
-        send(f["terminal"], f.get("text", ""), "enter" in f)
-        return {}
-    if noun == "agent" and verb == "launch":
-        return launch(wid, f.get("agent") or default_agent(), f.get("prompt", ""))
-    if noun == "worktree" and verb == "set":  # board status and MR links are Orca-only; the goal is the description
-        if "comment" in f:
-            c = f["comment"] if isinstance(f["comment"], str) else ""
-            cmux("workspace-action", "--workspace", wid, "--action", "set-description" if c else "clear-description",
-                 *(["--description", c] if c else []), js=False)
-        return {}
-    if noun == "worktree" and verb == "rm":
-        ws = next(w for w in worktrees() if w["id"] == wid)
-        worktree_remove(ws)
-        cmux("workspace", "close", ws["id"], js=False)
-        return {"removed": ws["id"]}
-    if noun == "worktree" and verb == "create":
-        return create(f)
-    if noun == "repo" and verb == "list":
-        return repo_list(worktrees())
-    raise RuntimeError(f"orca {noun} {verb} has no cmux equivalent")
+    return ade.dispatch(sys.modules[__name__], *args)

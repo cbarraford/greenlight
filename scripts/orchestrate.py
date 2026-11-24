@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
 import ws_state  # noqa: E402
@@ -813,7 +814,7 @@ def live_worktree(r, snapshot=None):
             return None  # the target disappeared after the tick snapshot
         detail = shown.get("worktree") or {}
     except Exception:
-        if os.environ.get("GREENLIGHT_ADE", "orca") == "orca":
+        if ade.is_orca():
             raise
         fresh = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
         row = next((w for w in fresh if w.get("worktreeId") == r["id"]), None)
@@ -1248,7 +1249,7 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             return [f"left {name}: goal changed since scan; backfill skipped"]
         try:
             old_comment = r.get("comment") or ""
-            if r.get("linked_mr") is None and r.get("forge") == "gitlab" and os.environ.get("GREENLIGHT_ADE", "orca") == "orca":
+            if r.get("linked_mr") is None and r.get("forge") == "gitlab" and ade.is_orca():
                 branch = (r.get("mr") or {}).get("source_branch") or r["branch"]
                 query = urllib.parse.urlencode({"source_branch": branch, "state": "opened", "per_page": 100})
                 opened = greenlight.gl(f"projects/{greenlight.pid(r['project'])}/merge_requests?{query}")

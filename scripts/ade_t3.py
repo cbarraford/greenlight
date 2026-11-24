@@ -1,4 +1,4 @@
-"""T3 Code backend: answers the `orca ...` calls greenlight makes, in Orca's JSON shape (GREENLIGHT_ADE=t3).
+"""T3 Code backend (GREENLIGHT_ADE=t3, a legacy live driver): ade.py's contract answered by T3 Code.
 
 A workspace is a T3 project (one git worktree each); its threads are both its agents and its "terminals", so a
 terminal handle is a thread id. Goals live in ~/.greenlight/goals.json (T3 has no project description). Needs the
@@ -9,14 +9,18 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from ade_common import default_agent, flags, git_info, goals, set_goal, worktree_add, worktree_remove, repo_list
+import ade
+import ade_common
+from ade_common import git_info, goals, worktree_add, worktree_remove, repo_list
 
 HOME = Path(os.environ.get("T3CODE_HOME") or Path.home() / ".t3")
 T3 = shutil.which("t3") or str(HOME / "bin" / "t3")
+NAME = "t3"
 PROVIDERS = {"claude": "claudeAgent"}  # greenlight's agent name -> T3 provider id, where they differ
 AGENTS = {v: k for k, v in PROVIDERS.items()}
 WORKING = {"running", "starting"}
@@ -91,44 +95,35 @@ def launch(pid, agent, prompt):
     return {"terminal": {"handle": r["threadId"]}}
 
 
-def create(f):
-    repo = next((w["repoId"] for w in worktrees() if f["repo"].removeprefix("id:") in (w["repoId"], w["repo"])), f["repo"].removeprefix("id:"))
-    path = worktree_add(repo, f["name"], f.get("base-branch") or f.get("base"))
-    pid = t3("project", "add", "--title", f["name"], path).split()[2]  # "Added project <id> (<title>) at <path>."
-    if f.get("comment"):
-        set_goal(path, f["comment"])
-    if f.get("agent"):
-        launch(pid, f["agent"], f.get("prompt") or "")
+def create(repo, name, base=None, comment="", agent=None, prompt=""):
+    repo = next((w["repoId"] for w in worktrees() if repo in (w["repoId"], w["repo"])), repo)
+    path = worktree_add(repo, name, base)
+    pid = t3("project", "add", "--title", name, path).split()[2]  # "Added project <id> (<title>) at <path>."
+    if comment:
+        ade_common.set_goal(path, comment)
+    if agent:
+        launch(pid, agent, prompt or "")
     return {"worktree": {"id": pid, "path": path}}
 
 
+def send(handle, text, enter):  # a thread takes whole messages; a busy one queues it as its next turn
+    t3("thread", "send", handle, "-", stdin=text)
+
+
+def set_goal(worktree_id, goal):  # T3 has no project description: goals.json, by the project's root
+    ade_common.set_goal(next(r for p, _, r in projects() if p == worktree_id), goal)
+
+
+def remove(worktree_id, force=False):
+    ws = next(w for w in worktrees() if w["id"] == worktree_id)
+    worktree_remove(ws)  # first: git refuses a dirty tree, and then the project stays
+    t3("project", "remove", "--force", worktree_id)  # --force: drop its threads too, as Orca drops terminals
+    ade_common.set_goal(ws["path"], "")
+
+
+def repos():
+    return repo_list(worktrees())
+
+
 def call(*args):
-    noun, verb, f = *args[:2], flags(args[2:])
-    wid = str(f.get("worktree", "")).removeprefix("id:")
-    if noun == "worktree" and verb in ("ps", "list"):
-        return {"worktrees": worktrees()}
-    if noun == "terminal" and verb == "list":
-        return {"terminals": terminals()}
-    if noun == "terminal" and verb == "read":
-        return read(f["terminal"], f.get("limit", 200))
-    if noun == "terminal" and verb == "send":  # a thread takes whole messages; a busy one queues it as its next turn
-        t3("thread", "send", f["terminal"], "-", stdin=f.get("text", ""))
-        return {}
-    if noun == "agent" and verb == "launch":
-        return launch(wid, f.get("agent") or default_agent(), f.get("prompt", ""))
-    if noun == "worktree" and verb == "set":  # board status and MR links are Orca-only
-        if "comment" in f:
-            root = next(r for p, _, r in projects() if p == wid)
-            set_goal(root, f["comment"] if isinstance(f["comment"], str) else "")
-        return {}
-    if noun == "worktree" and verb == "rm":
-        ws = next(w for w in worktrees() if w["id"] == wid)
-        worktree_remove(ws)  # first: git refuses a dirty tree, and then the project stays
-        t3("project", "remove", "--force", wid)  # --force: drop its threads too, as Orca drops terminals
-        set_goal(ws["path"], "")
-        return {"removed": wid}
-    if noun == "worktree" and verb == "create":
-        return create(f)
-    if noun == "repo" and verb == "list":
-        return repo_list(worktrees())
-    raise RuntimeError(f"orca {noun} {verb} has no t3 equivalent")
+    return ade.dispatch(sys.modules[__name__], *args)

@@ -49,6 +49,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import ade_common  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
@@ -745,7 +746,25 @@ def scan_error(scanned):
     return {k: str(e.get(k) or "") for k in ("msg", "fix", "class")} | {"ts": e["ts"]}
 
 
-ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in
+ADES = None  # a fixed list in place of ades() (tests)
+
+
+def ades():
+    """The backends dash.py lists worktrees from, first wins a shared path: the one in use first, then the other ADEs
+    installed here (native only when it's in use: it lists every repo's worktrees, any ADE's)."""
+    if ADES:
+        return tuple(ADES)
+    try:
+        cur = ade.name()
+    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: list the ones there are
+        cur = None
+    rest = [n for n in ("orca", "cmux", "herdr", "t3") if n != cur]
+    return tuple([cur] if cur else []) + tuple(rest)
+
+
+def ade_call(n):
+    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (no placement on a listing), else n's dispatch."""
+    return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
 def trees():
@@ -758,9 +777,9 @@ def trees():
         blk = blocking.cached()
     except (OSError, ValueError, KeyError, AttributeError):
         scan, blk = {}, None
-    for ade in ADES:
+    for name in ades():
         try:
-            call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
+            call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
@@ -769,7 +788,7 @@ def trees():
                 continue
             seen.add(w["path"])
             ag = greenlight.primary_agent(w.get("agents"))
-            out.append({"ade": ade, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
+            out.append({"ade": name, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
                         "goal": w.get("comment") or "", "pinned": bool(w.get("isPinned")), "active": w.get("lastOutputAt"),
@@ -849,9 +868,9 @@ def created(path):
 def tree(path, every=False):
     """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree. every: also every
     live row at that path (two hosts can share one)."""
-    for ade in ADES:
+    for name in ades():
         try:
-            call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
+            call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue

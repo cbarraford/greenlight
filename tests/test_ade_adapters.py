@@ -312,7 +312,7 @@ def test_basement_full_lifecycle(tmp_path):
         m_rm.assert_called_once()
 
         assert ade_basement.call("repo", "list")["repos"][0]["id"] == "/r/widgets"
-        with pytest.raises(RuntimeError, match="no Basement equivalent"):
+        with pytest.raises(RuntimeError, match="no native equivalent"):
             ade_basement.call("bad", "cmd")
 
 
