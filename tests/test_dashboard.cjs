@@ -490,6 +490,13 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   assert.notEqual(await page.evaluate(() => ui.task.t), 0, "an error toast has no timer (DESIGN.md §10.14: toasts are timed)");
   await page.evaluate(() => { const st = window.setTimeout; window.__ms = []; window.setTimeout = (f, ms) => { window.__ms.push(ms); return st(f, ms) }; note("Didn't merge", "z", true); window.setTimeout = st });
   assert.ok((await page.evaluate(() => window.__ms)).includes(5000), "a close-only toast isn't 5s (DESIGN.md §10.14)");
+  // due while hovered (or focused): it waits; render() rebuilding the toast mustn't strand it either
+  await page.evaluate(() => { ui.task.done = null; note("Didn't merge", "h", true) });
+  await page.hover(".toast .tmsg");
+  await page.evaluate(() => new Promise(r => { toastTimer(10); render(); setTimeout(r, 120) }));
+  assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "the toast went while it was being read");
+  await page.mouse.move(5, 5);
+  await page.waitForFunction(() => !document.querySelector(".toast"), null, {timeout: 3000});
   await page.evaluate(() => { ui.task.done = null; note("Didn't merge", "y", true) });
   await page.evaluate(() => note("Merged", "Squash"));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "a success covered the error");
@@ -518,8 +525,10 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   assert.equal((await posts(page, "run")).length, 0);
   assert.equal(await page.textContent(".toast.bad .tmsg code"), "This step has no prompt yet.", "a dead button: nothing says why");
   // a New task's success doesn't cover a card's error (the new workspace is ringed on the map anyway)
-  await page.evaluate(() => { ui.task.fresh = null; tasked({op: "new", name: "t1", repo: "widgets"}) });
+  await page.evaluate(() => { ui.task.fresh = null; const st = window.setTimeout; window.__ms = []; window.setTimeout = (f, ms) => { window.__ms.push(ms); return st(f, ms) };
+    tasked({op: "new", name: "t1", repo: "widgets"}); window.setTimeout = st });
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "The agent didn't start");
+  assert.ok((await page.evaluate(() => window.__ms)).includes(5000) && !(await page.evaluate(() => window.__ms)).includes(12000), "the kept card toast went to 12s");
   await page.click(".toast .btn.x");
   assert.equal(await page.evaluate(() => ui.task.fresh), null, "the task's ring outlives the toast it was under");
   // a New task error up: a card's outcome replaces it (as before), never joins it as "undefined: …"
