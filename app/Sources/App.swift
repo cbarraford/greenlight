@@ -459,7 +459,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] in
             if let w = $0.object as? NSWindow, w === self?.window { _ = self?.closeShare(w) }  // Center has no delegate: its close button, as a guest
         }
-        for n in [NSWindow.willEnterFullScreenNotification, NSWindow.willExitFullScreenNotification, NSWindow.didExitFullScreenNotification] {  // the main window has no delegate
+        for n in [NSWindow.willEnterFullScreenNotification, NSWindow.didEnterFullScreenNotification, NSWindow.willExitFullScreenNotification, NSWindow.didExitFullScreenNotification] {  // the main window has no delegate
             NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] in ($0.object as? NSWindow).map { w in self?.fullScreen(n, w) } }
         }
         for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {  // resign: the tab you were on as you went to the chat
@@ -1503,7 +1503,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         let pane = !greenlight.chatOut && !chatHidden
         window.minSize = centerMinSize; termWins[0]?.minSize = centerMinSize  // one size for every floor: the Basement's can't go below Center's
-        if pane { App.widen(window, to: App.paneMinWidth, display: window.isVisible) }
+        if pane { App.widen(window, to: App.paneMinWidth, display: window.isVisible); termWins[0].map { App.widen($0, to: App.paneMinWidth, display: $0.isVisible) } }
         if chatSlot.isHidden == pane {
             chatSlot.isHidden = !pane
             split.adjustSubviews(); split.layoutSubtreeIfNeeded()
@@ -1829,6 +1829,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let name = id == 0 ? "terminal" : "terminal-\(id)"
         if !w.setFrameUsingName(name) { w.center() }
         w.setFrameAutosaveName(name)
+        if id == 0, case let f = sharedFrame(w.frame, min: w.minSize, in: w.screen?.visibleFrame), f != w.frame { w.setFrame(f, display: false) }  // saved under the old 300×160 minimum
         termWins[id] = w
         let fs = FloorState(); floors[id] = fs
         let go: (String) -> Void = { [unowned self, weak web] f in
@@ -2355,7 +2356,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// The host leaves full screen under its guest: the guest's floor, which you were on, comes back as a window at the host's frame.
     func fullScreen(_ n: Notification.Name, _ w: NSWindow) {
-        if n == NSWindow.willEnterFullScreenNotification { preFullScreen[ObjectIdentifier(w)] = w.frame; return }
+        if n == NSWindow.willEnterFullScreenNotification { preFullScreen[ObjectIdentifier(w)] = w.frame; entering.insert(ObjectIdentifier(w)); return }
+        if n == NSWindow.didEnterFullScreenNotification { entering.remove(ObjectIdentifier(w)); return }
         if n == NSWindow.willExitFullScreenNotification {
             if let sh = fsShare, sh.host === w {  // out of the Space before it goes
                 stayOn = (sh.guest, fsClosing, w)
@@ -2374,12 +2376,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         syncOrbs()
     }
     var stayOn: (w: NSWindow, closing: Bool, host: NSWindow)?
+    var entering = Set<ObjectIdentifier>()  // mid-animation into full screen: a toggle then is ignored, and its willExit never comes
     /// The guest's close button. Over Center or the orb's terminal, that level goes too, out of full screen first so its
     /// Space goes with it; over an L1 or a New window, the guest just leaves (as it does off full screen).
     func closeShare(_ w: NSWindow) -> Bool {
         guard let sh = fsShare, sh.guest === w else { return false }
         hideFloaters()
-        if (sh.host === window || sh.host === termWindow) && sh.host.styleMask.contains(.fullScreen) { fsClosing = true; sh.host.toggleFullScreen(nil) }
+        if (sh.host === window || sh.host === termWindow) && sh.host.styleMask.contains(.fullScreen) && !entering.contains(ObjectIdentifier(sh.host)) { fsClosing = true; sh.host.toggleFullScreen(nil) }
         else { leaveShare(); stepAside(w) }
         return true
     }
