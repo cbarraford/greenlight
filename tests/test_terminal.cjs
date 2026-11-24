@@ -553,10 +553,114 @@ test("alerts: Claude's spinner line going away in a tab you're not on pings once
   await feed("\x1b]0;✳ Fix it\x07\r\n❯ Write a poem… (2 lines)\r\n"); await page.waitForTimeout(700);
   await feed("✶\x1b[CSkedaddling…\r\n"); await page.waitForTimeout(700);  // as tmux draws it: the space skipped, no timer in its first second
   assert.equal((await posts(page, "notify")).length, 0, "the prompt you typed isn't the spinner; working isn't done");
-  await feed("\x1b[1A\x1b[2K✻ Churned for 3s · done\r\n"); await page.waitForTimeout(700);
+  await page.evaluate(() => { TURN_QUIET = 300 });
+  await feed("\x1b[1A\x1b[2K✻ Churned for 3s · done\r\n"); await page.waitForTimeout(1100);
+  const [ask] = await posts(page, "turn");
+  assert.ok(ask && /^mc-/.test(ask.session), "a quiet spinner: greenlight is asked how the turn ended");
+  assert.ok(await page.$eval("#toast", t => t.hidden), "no ping until it answers");
+  await page.evaluate(s => term.turn({session: s, state: "finished", prob: 0.9}), ask.session); await page.waitForTimeout(100);
   assert.equal((await posts(page, "notify")).length, 0, "the window has focus: a toast, not a notification");
   assert.equal(await page.$eval("#toast", t => t.hidden ? "" : t.querySelector("b").textContent + "|" + t.querySelector("button").textContent), "Local finished|Show");
   assert.equal((await posts(page, "badge")).pop().n, 1);
+});
+
+test("alerts: a spinner that blinks out between tool calls isn't a turn's end", async page => {
+  const id = (await posts(page, "open"))[0].id, feed = s => page.evaluate(([id, s]) => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode(s)))), [id, s]);
+  await page.evaluate(() => { newTab(); TURN_QUIET = 1500 }); await page.waitForTimeout(200);
+  await feed("\x1b]0;✳ Fix it\x07\r\n✶ Skedaddling… (3s)\r\n"); await page.waitForTimeout(700);
+  await feed("\x1b[1A\x1b[2K⏺ Bash(make test)\r\n"); await page.waitForTimeout(700);  // idle for a moment
+  await feed("✶ Skedaddling… (9s)\r\n"); await page.waitForTimeout(1500);  // and back at work before TURN_QUIET
+  assert.equal((await posts(page, "turn")).length, 0, "nothing asked");
+  assert.ok(await page.$eval("#toast", t => t.hidden), "and nothing pinged");
+});
+
+test("alerts: greenlight's reading names how the turn ended; no answer falls back to Finished; back at work drops it", async page => {
+  const id = (await posts(page, "open"))[0].id, feed = s => page.evaluate(([id, s]) => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode(s)))), [id, s]);
+  await page.evaluate(() => { newTab(); TURN_QUIET = 200 }); await page.waitForTimeout(200);
+  const end = async () => { await feed("✶ Skedaddling… (3s)\r\n"); await page.waitForTimeout(700); await feed("\x1b[1A\x1b[2K❯ \r\n"); await page.waitForTimeout(1000);
+    return (await posts(page, "turn")).pop() };
+  const badge = () => page.evaluate(() => { const p = [...panes.values()][0]; return p.bell ? p.why : "" });
+  const reset = () => page.evaluate(() => { const p = [...panes.values()][0]; p.bell = false; pinged.clear(); render() });
+  await feed("\x1b]0;✳ Fix it\x07\r\n");
+  for (const [state, why] of [["waiting_for_user", "Asking"], ["rate_limited", "Rate limited"], ["stuck_looping", "Stuck"], ["logged_out", "Logged out"], ["finished", "Finished"]]) {
+    const ask = await end(); await page.evaluate(([s, st]) => term.turn({session: s, state: st, prob: 0.8}), [ask.session, state]);
+    assert.equal(await badge(), why, `${state} → ${why}`); await reset();
+  }
+  let ask = await end(); await page.evaluate(s => term.turn({session: s, state: "working", prob: 0.8}), ask.session);
+  assert.equal(await badge(), "", "still working on screen: no ping");
+  ask = await end(); await feed("✶ Skedaddling… (4s)\r\n"); await page.waitForTimeout(700);
+  await page.evaluate(s => term.turn({session: s, state: "finished", prob: 0.8}), ask.session);
+  assert.equal(await badge(), "", "an answer for a pane that went back to work is dropped");
+  await feed("\x1b[1A\x1b[2K❯ \r\n"); await page.waitForTimeout(1000);
+  await page.evaluate(s => term.turn({session: s, error: "exit 255"}), (await posts(page, "turn")).pop().session);
+  assert.equal(await badge(), "Finished", "an error answer: the plain reading");
+});
+
+test("alerts: restored background tabs fire finished and waiting alerts from backend pane states without duplicates", async page => {
+  const b = page.context().browser();
+  const saved = {
+    cur: 1,
+    tabs: [
+      {ws: "/w/fix-login", set: 1, name: "", manual: false, sig: "", tree: {s: "mc-bg-work", st: "work", title: "✳ Fix login"}},
+      {ws: "/w/sidebar", set: 2, name: "", manual: false, sig: "", tree: {s: "mc-fg"}},
+      {ws: "/w/review", set: 3, name: "", manual: false, sig: "", tree: {s: "mc-bg-other"}},
+    ],
+  };
+  page = await boot(b, saved, "", {trees: TREES.trees, panes: {
+    "mc-bg-work": {state: "done", title: "✳ Fix login"},
+    "mc-bg-other": {state: "working", title: "✳ Review PR"},
+  }});
+  // mc-bg-work was saved while working and backend reports it done at launch -> asks dash.py turn immediately
+  const asks1 = await posts(page, "turn");
+  assert.deepEqual(asks1.map(a => a.session), ["mc-bg-work"], "saved working pane that finished triggers turn check at restore");
+  await page.evaluate(() => term.turn({session: "mc-bg-work", state: "finished", prob: 0.9}));
+  assert.equal(await page.$eval("#toast", t => t.hidden ? "" : t.querySelector("b").textContent), "fix-login finished");
+  assert.equal((await posts(page, "badge")).pop().n, 1);
+  // repeated done polls do not re-trigger turn or ping
+  await page.evaluate(t => term.workspaces({trees: t, panes: {
+    "mc-bg-work": {state: "done", title: "✳ Fix login"},
+    "mc-bg-other": {state: "done", title: "✳ Review PR"},
+  }}), TREES.trees);
+  const asks2 = await posts(page, "turn");
+  assert.deepEqual(asks2.map(a => a.session), ["mc-bg-work", "mc-bg-other"], "working -> done on background tab triggers turn once; done -> done does not");
+  await page.evaluate(() => term.turn({session: "mc-bg-other", state: "finished", prob: 0.9}));
+  assert.equal((await posts(page, "badge")).pop().n, 2);
+  // waiting state pings once and does not repeat on subsequent polls
+  await page.evaluate(t => term.workspaces({trees: t, panes: {"mc-bg-other": {state: "waiting", title: "✳ Review PR"}}}), TREES.trees);
+  await page.evaluate(() => { const p = [...panes.values()].find(x => x.session === "mc-bg-other"); p.bell = false; pinged.clear(); render() });
+  await page.evaluate(t => term.workspaces({trees: t, panes: {"mc-bg-other": {state: "waiting", title: "✳ Review PR"}}}), TREES.trees);
+  assert.equal(await page.evaluate(() => [...panes.values()].find(x => x.session === "mc-bg-other").bell), false, "still waiting on next poll: no repeat ping");
+  await page.close();
+});
+
+test("alerts: split OSC title in a restored background tab still detects Claude; stale working poll after PTY finish doesn't double-ping", async page => {
+  const b = page.context().browser();
+  const saved = {
+    cur: 1,
+    tabs: [
+      {ws: "/w/fix-login", set: 1, name: "", manual: false, sig: "", tree: {s: "mc-split-osc"}},
+      {ws: "/w/sidebar", set: 2, name: "", manual: false, sig: "", tree: {s: "mc-fg2"}},
+    ],
+  };
+  page = await boot(b, saved);
+  await page.evaluate(() => { TURN_QUIET = 200 });
+  const bgId = (await posts(page, "open")).find(o => o.session === "mc-split-osc").id;
+  const feed = s => page.evaluate(([id, s]) => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode(s)))), [bgId, s]);
+  await feed("\x1b]0;✳ Split");  // OSC title split across two PTY reads
+  await feed(" title\x07\r\n✶ Skedaddling… (3s)\r\n");
+  await page.waitForTimeout(700);
+  assert.equal(await page.evaluate(id => panes.get(id).st, bgId), "work", "split OSC title recognized as Claude");
+  assert.equal((await lastSave(page)).tabs[0].tree.st, "work", "working state persisted in layout");
+  await feed("\x1b[1A\x1b[2K✻ Churned for 3s · done\r\n");
+  await page.waitForTimeout(1000);
+  const [ask] = await posts(page, "turn");
+  assert.equal(ask.session, "mc-split-osc");
+  await page.evaluate(() => term.turn({session: "mc-split-osc", state: "finished", prob: 0.9}));
+  // Stale backend poll captured before PTY saw finish reports working, then next poll reports done -> no second turn check
+  await page.evaluate(t => term.workspaces({trees: t, panes: {"mc-split-osc": {state: "working", title: "✳ Split title"}}}), TREES.trees);
+  await page.evaluate(t => term.workspaces({trees: t, panes: {"mc-split-osc": {state: "done", title: "✳ Split title"}}}), TREES.trees);
+  assert.equal((await posts(page, "turn")).length, 1, "stale working poll after live PTY finish never causes duplicate alert");
+  await page.close();
 });
 
 test("block elements are drawn to the cell, not by the font: ░▒▓ a seamless 2×2 device-pixel dither, █▌▄ their exact part", async page => {

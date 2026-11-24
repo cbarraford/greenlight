@@ -325,6 +325,38 @@ def test_basement_tmux_no_server_vs_error():
         ade_basement.tmux("list-panes")
 
 
+def test_basement_pane_states():
+    rows = "\n".join([
+        "\t".join(["%1", "mc-work", "/w/a", "⠋ Fixing tests", "1700001"]),
+        "\t".join(["%2", "mc-wait", "/w/b", "✳ Ask", "1700002"]),
+        "\t".join(["%3", "mc-done", "/w/c", "✳ Shipped", "1700003"]),
+        "\t".join(["%4", "mc-shell", "/w/d", "zsh", "1700004"]),
+        "\t".join(["%5", "mc-multi", "/w/e", "✳ Multi", "1700005"]),
+        "\t".join(["%6", "mc-multi", "/w/e", "⠋ Busy", "1700006"]),
+    ])
+    screens = {
+        "%2": "Which one?\n❯ 1. Yes\n  2. No\n",
+        "%3": "✻ Churned for 3s · done\n❯ \n",
+        "%5": "❯ \n",
+    }
+
+    def fake_tmux(*args):
+        if args[:2] == ("list-panes", "-a"):
+            return rows + "\n"
+        if args[0] == "capture-pane":
+            return screens[args[-1]]
+        return ""
+
+    with mock.patch.object(ade_basement, "tmux", side_effect=fake_tmux):
+        got = ade_basement.pane_states()
+    assert got == {
+        "mc-work": {"state": "working", "title": "⠋ Fixing tests"},
+        "mc-wait": {"state": "waiting", "title": "✳ Ask"},
+        "mc-done": {"state": "done", "title": "✳ Shipped"},
+        "mc-multi": {"state": "working", "title": "⠋ Busy"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # ade_t3
 # ---------------------------------------------------------------------------
