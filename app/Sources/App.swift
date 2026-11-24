@@ -1200,7 +1200,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             var out = ""
             let h = op == "new" ? resolveRepoTargetHost(arg, repoHosts: repoHosts, defaultHost: winHost) : winHost
             ssh("\(pyCmd(on: h))/dash.py task \(op) '\(arg)'", on: h, stdin: b["text"] as? String ?? "", onLine: { out += $0 }, onExit: { code in
-                if op == "new" { chief.acted(chief.made(out) ?? arg, "start a task in \(arg)", code, out) }
+                if op == "new" { let made = chief.made(out); chief.acted(made ?? arg, made == nil ? "start a task" : "start a task in \(arg)", code, out) }
                 let js = safeJSON(out, fallback: ["op": op, "arg": arg, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.tasked(\(js))")
             })

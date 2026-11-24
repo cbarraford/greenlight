@@ -517,7 +517,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && actedLine("w", "merge", nil, ["ref": "", "sha": ""]) == "- merge on w: done"
           && actedLine("n", "new workspace", nil, ["ok": true, "warn": "Setup failed (x); no agent started"]) == "- new workspace on n: done, but: Setup failed (x); no agent started"
           && mainC.made(#"{"ok":true,"name":"fix-it"}"#) == "fix-it" && mainC.made(#"{"ok":true,"path":"/srv/w/new"}"#) == "/srv/w/new"
-          && mainC.made(#"{"error":"no"}"#) == nil)
+          && mainC.made(#"{"error":"no"}"#) == nil
+          && ["merge", "ready", "signoff", "rm", "new", "goal", "cfg"].allSatisfy { actedVerb[$0] != nil } && actedVerb["info"] == nil && actedVerb["diff"] == nil)
     for i in 0..<20 { mainC.acted("ws\(i)", "park", 0, "{}") }
     let capped = mainC.doneSince
     var sent: [String] = []

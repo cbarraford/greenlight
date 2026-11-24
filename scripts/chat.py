@@ -324,14 +324,17 @@ def board_note(query="", key="", seen=None, snapshot=None):
     return note
 
 
-WRAP = "USER MESSAGE (reply to this): "
 def done_note(lines):
     """The dashboard buttons the user pressed since Chief's last turn and how each ended (the app's Core.acted, #175).
     Kept out of the message itself, so decisions.heard / turn_kind and GREENLIGHT_REQUEST still see only what was typed."""
     lines = "\n".join(line for line in (lines or "").splitlines() if line.strip())[:8000]
     return ("(Greenlight, not typed by the user: since your last turn they pressed these dashboard buttons themselves; "
             "each line is how it ended. Don't ask about or redo what's done, and say so if they ask whether you saw it. "
-            "The board may lag behind a button: refresh the workspaces before you say where these stand.)\n" + lines + "\n\n") if lines else ""
+            "The board below may lag behind a button: run `python3 " + SCRIPTS + "/greenlight.py scan >/dev/null; python3 " + SCRIPTS
+            + "/dash.py board` before you say where these stand.)\n" + lines + "\n\n") if lines else ""
+
+
+WRAP = "USER MESSAGE (reply to this): "
 ANSWER, ASKED = "\n(answer) ", "\n(asked) "  # greenlight's (not imported: its import reads config and may call the forge)
 RETRY_PREFIX = "Your previous reply ignored the user's message. Answer it now: "
 # What the status says while the model thinks: one picked per stretch of thinking, held until something else shows.
