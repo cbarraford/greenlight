@@ -209,6 +209,8 @@ final class Core: ObservableObject {
     }
     @Published var lastTps = 0.0
     @Published var connected = false
+    var serverConnected = false
+    func syncConnected() { connected = isLocalHost(chatHost) || serverConnected }
     @Published var unread = 0
     @Published var now = Date()
     @Published var name = ud.string(forKey: "name") ?? "Greenlight" { didSet { ud.set(name, forKey: "name") } }
@@ -853,8 +855,12 @@ final class Core: ObservableObject {
         start(Run("Compact context", on: chatHost), "\(chief) compact --model \(shellQuote(model))", stdin: "")
     }
 
-    var clearing = 0  // Clear's `chat.py new`s still running: a send waits for all of them
-    private func resetLocalState(keepQueue: Bool, note: String) {
+    private var clearingByHost = [String: Int]()  // per-host `chat.py new`s in flight: an offline old host never blocks the new one
+    var clearing: Int { clearingByHost[chatHost] ?? 0 }
+    private var chatEpoch = 0  // bumped on clear/switchProject so late DWIM replies don't land in the new chat
+
+    private func resetLocalState(keepQueue: Bool, clearAttached: Bool, note: String) {
+        chatEpoch += 1
         cancelPlans()
         for work in launchWorks.values { work.cancel() }
         launchWorks.removeAll()
@@ -864,7 +870,13 @@ final class Core: ObservableObject {
         ud.removeObject(forKey: pendingKey); ud.removeObject(forKey: lostKey)
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
-        for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
+        if clearAttached {
+            let old = attached
+            attached = []
+            for a in old { unattach?(a.id) }
+        } else {
+            for i in attached.indices { attached[i].sent = false }  // the new conversation hasn't seen them
+        }
         msgs = [Msg(.note, note)]
         focusSent = ""  // the new conversation hasn't heard where you are
         picks += 1; light([], false)  // nor lit anything
@@ -874,32 +886,33 @@ final class Core: ObservableObject {
     }
 
     private func sendNew(on targetHost: String) {
-        clearing += 1
+        clearingByHost[targetHost, default: 0] += 1
         ssh("\(chief(on: targetHost)) new", on: targetHost, onExit: { [weak self] _ in
             guard let self else { return }
-            self.clearing -= 1
-            guard self.clearing == 0 else { return }
+            let left = max(0, (self.clearingByHost[targetHost] ?? 1) - 1)
+            self.clearingByHost[targetHost] = left == 0 ? nil : left
+            guard targetHost == self.chatHost, self.clearing == 0 else { return }
             self.next()
         })
     }
 
     func clear(keepQueue: Bool = false) {
-        resetLocalState(keepQueue: keepQueue, note: "Context cleared. New conversation.")
+        resetLocalState(keepQueue: keepQueue, clearAttached: false, note: "Context cleared. New conversation.")
         sendNew(on: chatHost)
     }
 
     /// Startup host sync: updates which host Chief uses for the restored project without wiping its saved transcript.
     func syncChatHost(_ targetHost: String) {
         chatHost = targetHost
-        if isLocalHost(targetHost) { connected = true }
+        syncConnected()
     }
 
     /// Switching project in the project selector clears the chat context and starts a fresh chat on that project's host.
     func switchProject(to targetHost: String, label projectLabel: String) {
         let oldHost = run?.runHost ?? chatHost
-        resetLocalState(keepQueue: false, note: switchProjectNote(project: projectLabel, host: targetHost))
+        resetLocalState(keepQueue: false, clearAttached: true, note: switchProjectNote(project: projectLabel, host: targetHost))
         chatHost = targetHost
-        if isLocalHost(targetHost) { connected = true }
+        syncConnected()
         sendNew(on: oldHost)
         if targetHost != oldHost { sendNew(on: targetHost) }
     }
@@ -988,7 +1001,8 @@ final class Core: ObservableObject {
         guard run === r, let j = Core.turnLine(l) else { return }
         if j["e"] as? String != "turn" { r.applied += 1 }  // the turn's own lines, as `follow` sends them again (seen)
         guard let e = j["e"] as? String else { return }
-        connected = true
+        if !isLocalHost(r.runHost) { serverConnected = true }
+        syncConnected()
         switch e {
         case "turn":
             guard let id = j["id"] as? String else { break }
@@ -1096,8 +1110,14 @@ final class Core: ObservableObject {
             if let u = st.open ?? r.open { browse(u) }  // the reply's own [open: URL], else one from a block before it
         }
         if ok && st.reset {  // [chat: reset]: after this reply, which says so; what's queued goes to the new conversation, once it's clear
-            clearing += 1  // now, so nothing sent before the clear goes to the old conversation
-            DispatchQueue.main.async { [weak self] in self?.clearing -= 1; self?.clear(keepQueue: true) }
+            let h = chatHost
+            clearingByHost[h, default: 0] += 1  // now, so nothing sent before the clear goes to the old conversation
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let left = max(0, (self.clearingByHost[h] ?? 1) - 1)
+                self.clearingByHost[h] = left == 0 ? nil : left
+                self.clear(keepQueue: true)
+            }
         }
         if !popoverShown() && !r.stopping {
             let said = parts.detail == nil ? body : [parts.gist, parts.detail ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")  // gist first: the question it asks
@@ -1120,13 +1140,14 @@ final class Core: ObservableObject {
         outboxProc = ssh("f=\(shellPath(greenlightHome))/outbox.jsonl; touch \"$f\"; n=\(from); echo \"#start $n\"; tail -n +$((n+1)) -F \"$f\" 2>/dev/null",
             onLine: { [weak self] l in self?.ping(l) },
             onExit: { [weak self] _ in  // network drop, sleep, host reboot: reconnect
-                self?.connected = false
+                self?.serverConnected = false
+                self?.syncConnected()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) { self?.tailOutbox() }
             })
     }
 
     func ping(_ l: String) {
-        if l.hasPrefix("#start ") { seen = Int(l.dropFirst(7).trimmingCharacters(in: .whitespaces)) ?? 0; connected = true; return }
+        if l.hasPrefix("#start ") { seen = Int(l.dropFirst(7).trimmingCharacters(in: .whitespaces)) ?? 0; serverConnected = true; syncConnected(); return }
         seen += 1
         guard let d = l.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         if let k = j["resolve"] as? String {  // greenlight noticed the question no longer applies: close it quietly
@@ -1225,11 +1246,11 @@ final class Core: ObservableObject {
                 let verb = o["verb"] as? String ?? ""  // a board action it read but won't do alone: Chief hears why, and asks or confirms
                 return otherwise(verb.isEmpty ? "" : "(Greenlight's fast path read this as \(verb) but didn't do it: \(why). Confirm with the user, or ask which, before acting.)\n")
             }
-            self.direct(o, text: text, ms: ms, onToast: onToast)
+            self.direct(o, text: text, ms: ms, on: targetHost, onToast: onToast)
         })
     }
 
-    private func direct(_ o: [String: Any], text: String, ms: Int, onToast: ((DwimToast?) -> Void)?) {
+    private func direct(_ o: [String: Any], text: String, ms: Int, on targetHost: String, onToast: ((DwimToast?) -> Void)?) {
         let acts = o["actions"] as? [[String: Any]] ?? [], line = o["toast"] as? String ?? "", say = o["say"] as? String ?? line
         msgs.append(Msg(.you, text))  // the chat keeps the record: Chief reads the board, not this
         let pending = o["launch"] as? Bool == true
@@ -1240,48 +1261,51 @@ final class Core: ObservableObject {
             voice.say(notice)
             if acts.isEmpty && run == nil { voice.show(["kind": "list", "eyebrow": "nothing to do", "title": line, "stat": "", "items": []]) }
         }
-        if acts.isEmpty { return show(DwimToast(text: line), for: Core.toastFor, onToast: onToast) }
+        if acts.isEmpty { return show(DwimToast(text: line, runHost: targetHost), for: Core.toastFor, onToast: onToast) }
         if pending {  // an agent can't be un-started: it waits out the grace, and Undo cancels it
-            let t = DwimToast(text: line + dwimSkipped(o), pending: true)
+            let t = DwimToast(text: line + dwimSkipped(o), pending: true, runHost: targetHost)
             show(t, for: nil, onToast: onToast)
             let w = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.launchWorks.removeValue(forKey: t.id) != nil else { return }  // Undo may have cancelled its grace
                 var now = t; now.pending = false; self.show(now, for: nil)
-                self.apply(o, text: text, id: t.id)
+                self.apply(o, text: text, id: t.id, on: targetHost)
             }
             launchWorks[t.id] = w
             DispatchQueue.main.asyncAfter(deadline: .now() + Core.launchGrace, execute: w)
         } else {
-            let t = DwimToast(text: "Applying: \(text)", applying: true)
+            let t = DwimToast(text: "Applying: \(text)", applying: true, runHost: targetHost)
             show(t, for: nil, onToast: onToast)
-            apply(o, text: text, id: t.id)
+            apply(o, text: text, id: t.id, on: targetHost)
         }
     }
 
-    private func apply(_ o: [String: Any], text: String, id: UUID) {
+    private func apply(_ o: [String: Any], text: String, id: UUID, on targetHost: String) {
         var out = ""
         let acts = o["actions"] as? [[String: Any]] ?? []
         let recovery = acts.contains { ["park", "unpark", "hold", "release"].contains($0["verb"] as? String ?? "") }
             ? UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased() : nil
-        let targetHost = chatHost
+        let epoch = chatEpoch
         ssh("\(pyCmd(on: targetHost))/dwim.py apply", on: targetHost, stdin: dwimJSON(["text": text, "source": o["source"] ?? "chat", "actions": acts, "undo": recovery ?? ""]), onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
             let r = dwimApplyReply(out, failure: "\(hostDisplayName(targetHost)) didn't answer (exit \(code)); outcome unknown", recovery: recovery)
             let errs = r["errors"] as? [String] ?? [], done = r["done"] as? [String] ?? [], unchanged = r["unchanged"] as? [String] ?? [], undo = r["undo"] as? String
             let line = (done.isEmpty ? "Nothing changed" : errs.isEmpty && unchanged.isEmpty ? (o["toast"] as? String ?? "Done") : "Changed \(done.joined(separator: ", "))") + (done.isEmpty ? "" : dwimSkipped(o))
-            if !done.isEmpty {
-                self.msgs.append(Msg(.note, line))
-                if self.voice.on {
-                    self.voice.say(line)
-                    if self.run == nil { self.voice.show(["kind": "list", "eyebrow": "done", "title": line, "stat": "",
-                                                        "items": done.map { ["label": $0, "detail": ""] }]) }
+            let sameChat = self.chatEpoch == epoch
+            if sameChat {
+                if !done.isEmpty {
+                    self.msgs.append(Msg(.note, line))
+                    if self.voice.on {
+                        self.voice.say(line)
+                        if self.run == nil { self.voice.show(["kind": "list", "eyebrow": "done", "title": line, "stat": "",
+                                                            "items": done.map { ["label": $0, "detail": ""] }]) }
+                    }
                 }
-            }
-            if done.isEmpty && errs.isEmpty { self.msgs.append(Msg(.note, line)); if self.voice.on { self.voice.say(line) } }
-            if !errs.isEmpty {
-                self.msgs.append(Msg(.note, "Didn't finish: " + errs.joined(separator: "; ")))
-                if self.voice.on { self.voice.say("That didn't all work: \(errs.count == 1 ? errs[0] : "\(errs.count) failed").") }
+                if done.isEmpty && errs.isEmpty { self.msgs.append(Msg(.note, line)); if self.voice.on { self.voice.say(line) } }
+                if !errs.isEmpty {
+                    self.msgs.append(Msg(.note, "Didn't finish: " + errs.joined(separator: "; ")))
+                    if self.voice.on { self.voice.say("That didn't all work: \(errs.count == 1 ? errs[0] : "\(errs.count) failed").") }
+                }
             }
             self.log(.greenlight, "dwim", errs.isEmpty ? .action : .failed, "applied in \(r["ms"] ?? "?") ms" + (errs.isEmpty ? "" : ": " + errs.joined(separator: "; ")))
             guard var t = self.toasts.first(where: { $0.id == id }) else { return }
@@ -1314,35 +1338,40 @@ final class Core: ObservableObject {
             msgs.append(Msg(.note, "Cancelled: \(t.text)"))
             if voice.on { voice.say("Cancelled.") }
             removeToast(t.id)
-            return show(DwimToast(text: "Cancelled"), for: 3)
+            return show(DwimToast(text: "Cancelled", runHost: t.runHost), for: 3)
         }
         guard let u = t.undo else { if t.applying { t.undoing = true; show(t, for: nil) }; return }  // still applying: undone as soon as it's in
         t.undoing = true; show(t, for: nil)
         var out = ""
-        let targetHost = chatHost
+        let targetHost = t.runHost, epoch = chatEpoch
         ssh("\(pyCmd(on: targetHost))/dwim.py undo \(shellQuote(u))", on: targetHost, onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
+            let sameChat = self.chatEpoch == epoch
             guard let r = dwimUndoReply(out, Int(code)) else {
                 var retry = t; retry.undoing = false; retry.failed = true
                 self.show(retry, for: nil)
-                self.msgs.append(Msg(.note, "Undo didn't finish. Try Undo again."))
-                if self.voice.on { self.voice.say("Undo didn't finish. Try again.") }
+                if sameChat {
+                    self.msgs.append(Msg(.note, "Undo didn't finish. Try Undo again."))
+                    if self.voice.on { self.voice.say("Undo didn't finish. Try again.") }
+                }
                 self.log(.greenlight, "dwim", .failed, "undo failed (exit \(code))")
                 return
             }
             let back = r["undone"] as? [String] ?? [], kept = r["kept"] as? [String] ?? []
             let said = r["error"] as? String ?? (back.isEmpty ? "Nothing to undo" : "Undid \(t.text.prefix(1).lowercased() + t.text.dropFirst())")
                 + (kept.isEmpty ? "" : ". Left \(kept.joined(separator: ", ")): edited since")
-            self.msgs.append(Msg(.note, said))
-            if self.voice.on { self.voice.say(back.isEmpty ? said : "Undone.") }
+            if sameChat {
+                self.msgs.append(Msg(.note, said))
+                if self.voice.on { self.voice.say(back.isEmpty ? said : "Undone.") }
+            }
             self.log(.greenlight, "dwim", r["error"] == nil ? .action : .failed, said)
             if !kept.isEmpty {
                 var retry = t; retry.undoing = false; retry.failed = true
                 self.show(retry, for: nil)
-                self.msgs.append(Msg(.note, "Undo the newer edit, then try this Undo again."))
+                if sameChat { self.msgs.append(Msg(.note, "Undo the newer edit, then try this Undo again.")) }
             } else {
                 self.removeToast(t.id)
-                self.show(DwimToast(text: said), for: 4)
+                self.show(DwimToast(text: said, runHost: targetHost), for: 4)
             }
         })
     }

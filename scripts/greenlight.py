@@ -644,17 +644,27 @@ def _scan_mac_sources(root):
     return None
 
 
+_MAC_REASON_CACHE: dict[str, tuple[float, str | None]] = {}
+_MAC_REASON_TTL = 300.0
+
+
 def needs_mac_reason(path):
     """Why a repo checkout needs the Mac (Xcode, macOS/iOS app, GUI tests), or None when it runs fine on Linux."""
     if not path:
         return None
+    key = str(path)
+    now = time.monotonic()
+    if (hit := _MAC_REASON_CACHE.get(key)) and now - hit[0] < _MAC_REASON_TTL:
+        return hit[1]
     try:
         root = Path(path)
         if not root.is_dir():
             return None
-        return _scan_mac_tree(root) or _scan_mac_sources(root)
+        reason = _scan_mac_tree(root) or _scan_mac_sources(root)
     except OSError:
         return None
+    _MAC_REASON_CACHE[key] = (now, reason)
+    return reason
 
 
 def needs_mac(path):
@@ -668,10 +678,11 @@ def repo_host_mode(project, opts=None):
     return val if val in HOST_MODES else "server"
 
 
-def resolve_repo_host(project, path=None, opts=None):
-    """Resolved host preference for `project`: {mode, target ('server'|'mac'), needs_mac, reason}."""
+def resolve_repo_host(project, path=None, opts=None, check_mac=True):
+    """Resolved host preference for `project`: {mode, target ('server'|'mac'), needs_mac, reason}.
+    Pass `check_mac=False` on hot paths when `needs_mac` is only needed for `mode == 'auto'`."""
     mode = repo_host_mode(project, opts)
-    reason = needs_mac_reason(path) if path else None
+    reason = needs_mac_reason(path) if (path and (check_mac or mode == "auto")) else None
     mac = bool(reason)
     target = "mac" if (mode == "mac" or (mode == "auto" and mac)) else "server"
     return {"mode": mode, "target": target, "needs_mac": mac, "reason": reason or ""}

@@ -563,6 +563,7 @@ struct DwimToast: Identifiable, Equatable {
     var pending = false  // a launch that hasn't started: Undo cancels it
     var applying = false  // goal edits on their way: Undo waits for their undo id
     var undoing = false, failed = false
+    var runHost: String = host
     var undoable: Bool { pending || applying || undo != nil }
 }
 func keepingToast(_ toasts: [DwimToast], _ t: DwimToast) -> [DwimToast] {

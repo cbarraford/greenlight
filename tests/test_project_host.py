@@ -208,3 +208,53 @@ def test_placement_respects_mac_repo_target_on_linux(tmp_path, monkeypatch):
     assert rs["mac-ws-on-mac"]["misplaced"] is False
     assert rs["mac-ws-on-server"]["misplaced"] is True
     assert rs["srv-ws-on-server"]["misplaced"] is False
+
+
+def test_mac_detection_cache_and_fast_path(tmp_path, monkeypatch):
+    greenlight._MAC_REASON_CACHE.clear()
+    calls = 0
+    orig = greenlight._scan_mac_tree
+
+    def counted(root):
+        nonlocal calls
+        calls += 1
+        return orig(root)
+
+    monkeypatch.setattr(greenlight, "_scan_mac_tree", counted)
+    repo = tmp_path / "cached-repo"
+    (repo / "App.xcodeproj").mkdir(parents=True)
+
+    # check_mac=False skips filesystem scan for explicit server/mac modes
+    assert greenlight.resolve_repo_host("cached-repo", path=repo, opts={"host": "server"}, check_mac=False)["target"] == "server"
+    assert greenlight.resolve_repo_host("cached-repo", path=repo, opts={"host": "mac"}, check_mac=False)["target"] == "mac"
+    assert calls == 0
+
+    # auto mode scans once, then hits TTL cache
+    assert greenlight.resolve_repo_host("cached-repo", path=repo, opts={"host": "auto"}, check_mac=False)["target"] == "mac"
+    assert greenlight.resolve_repo_host("cached-repo", path=repo, opts={"host": "auto"}, check_mac=False)["target"] == "mac"
+    assert calls == 1
+
+
+def test_org_repo_lifecycle_aligns_short_alias_and_native_host_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(dash.greenlight, "STATE", tmp_path)
+    lc_dir = tmp_path / "lifecycles"
+    lc_dir.mkdir()
+    (lc_dir / "acme__ios-app.md").write_text("# acme/ios-app\n\nOptions: `host=mac`\n\n1. `mr_open` — Open.\n")
+    monkeypatch.setattr(dash, "_repo_main_paths", lambda tree_rows=None: {"ios-app": str(tmp_path), "acme/ios-app": str(tmp_path)})
+
+    hosts = dash.repo_hosts()
+    assert hosts["acme/ios-app"]["target"] == "mac"
+    assert hosts["ios-app"]["target"] == "mac"
+
+    fake_wts = [
+        {"worktreeId": "r::a", "displayName": "local-ws", "path": "/w/a", "repo": "ios-app", "branch": "refs/heads/a",
+         "isMainWorktree": False, "isArchived": False, "hostId": "local", "agents": []},
+        {"worktreeId": "r::b", "displayName": "remote-ws", "path": "/w/b", "repo": "api", "branch": "refs/heads/b",
+         "isMainWorktree": False, "isArchived": False, "hostId": "ssh:srv", "agents": []},
+    ]
+    monkeypatch.setattr(dash, "ADES", ("orca",))
+    monkeypatch.setattr(dash.greenlight, "orca_cli", lambda *a, **kw: {"worktrees": fake_wts})
+    rows = {t["name"]: t for t in dash.trees()}
+    assert rows["local-ws"].get("nativeHost", True) is True
+    assert rows["remote-ws"]["nativeHost"] is False
+

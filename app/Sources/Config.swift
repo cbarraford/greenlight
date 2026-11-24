@@ -138,16 +138,40 @@ func resolveRepoTargetHost(_ repo: String, repoHosts: [String: RepoHostInfo], de
     return lookupRepoHost(repo, in: repoHosts)?.target == "mac" ? "local" : defaultHost
 }
 
+/// Deterministically merges `incoming` repo host info into `base`: applies short names first, then qualified
+/// `org/repo` entries so an explicit `org/repo` setting isn't overwritten by a default `"server"` short alias.
+func mergeRepoHostMaps(_ base: [String: RepoHostInfo], _ incoming: [String: RepoHostInfo]) -> [String: RepoHostInfo] {
+    var out = base
+    let shorts = incoming.keys.filter { !$0.contains("/") }.sorted()
+    let qualified = incoming.keys.filter { $0.contains("/") }.sorted()
+    for k in shorts { out[k] = incoming[k] }
+    for k in qualified {
+        guard let v = incoming[k] else { continue }
+        out[k] = v
+        let b = String(k.split(separator: "/").last ?? "")
+        if !b.isEmpty && (out[b] == nil || out[b]?.mode == "server" || v.mode != "server" || v.needsMac) {
+            out[b] = v
+        }
+    }
+    return out
+}
+
 /// Resolves which host Chief runs on for a project selection (`only`: nil = All projects -> server default).
-/// A project targets the Mac when any of its repos targets "mac"; when every selected project targets the Mac, Chief runs locally.
-func resolveProjectHost(only: [String]?, projList: [[String: Any]], repoHosts: [String: RepoHostInfo], defaultHost: String = host) -> String {
+/// A project targets the Mac when any of its repos (from `projList` or `savedProjects`) targets "mac";
+/// when every selected project targets the Mac, Chief runs locally.
+func resolveProjectHost(only: [String]?, projList: [[String: Any]], savedProjects: [[String: Any]] = [], repoHosts: [String: RepoHostInfo], defaultHost: String = host) -> String {
     if isLocalHost(defaultHost) { return "local" }
     guard let only, !only.isEmpty else { return defaultHost }
-    let selected = only.compactMap { id in projList.first { $0["id"] as? String == id } }
+    let selected: [[String]] = only.compactMap { id in
+        let liveRepos = (projList.first { $0["id"] as? String == id }?["repos"] as? [String]) ?? []
+        let savedRepos = (savedProjects.first { $0["id"] as? String == id }?["repos"] as? [String]) ?? []
+        let union = Array(Set(liveRepos + savedRepos))
+        if !union.isEmpty { return union }
+        return projList.contains { $0["id"] as? String == id } || savedProjects.contains { $0["id"] as? String == id } ? [] : nil
+    }
     guard !selected.isEmpty else { return defaultHost }
-    let allMac = selected.allSatisfy { p in
-        let rs = p["repos"] as? [String] ?? []
-        return !rs.isEmpty && rs.contains { lookupRepoHost($0, in: repoHosts)?.target == "mac" }
+    let allMac = selected.allSatisfy { rs in
+        !rs.isEmpty && rs.contains { lookupRepoHost($0, in: repoHosts)?.target == "mac" }
     }
     return allMac ? "local" : defaultHost
 }
@@ -157,36 +181,41 @@ func switchProjectNote(project: String, host h: String) -> String {
     return project.isEmpty ? "Switched to \(whereText). New conversation." : "Switched to \(project) on \(whereText). New conversation."
 }
 
-/// Merges dashboard snapshots from server and local Mac hosts, tagging each puck and tree with its `_runHost`.
+/// Merges dashboard snapshots from server and local Mac hosts, preferring each host's native worktrees so paired
+/// Orca runtimes never let one host hijack the other's `_runHost` or overwrite its scan data.
 func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, primaryHost: String, secondaryHost: String) -> [String: Any]? {
     guard primary != nil || secondary != nil else { return nil }
     let tag: ([[String: Any]], String) -> [[String: Any]] = { items, h in items.map { var m = $0; m["_runHost"] = h; return m } }
-    let pPucks = tag(primary?["pucks"] as? [[String: Any]] ?? [], primaryHost)
-    let sPucks = tag(secondary?["pucks"] as? [[String: Any]] ?? [], secondaryHost)
-    var seenP = Set<String>(), pucks = [[String: Any]]()
-    for p in sPucks + pPucks {
-        let k = (p["path"] as? String) ?? (p["name"] as? String) ?? UUID().uuidString
-        if seenP.insert(k).inserted { pucks.append(p) }
+    let isNative: ([String: Any]) -> Bool = { $0["nativeHost"] as? Bool != false }
+    func dedupe(_ a: [[String: Any]], _ b: [[String: Any]]) -> [[String: Any]] {
+        let ordered = a.filter(isNative) + b.filter(isNative) + a.filter { !isNative($0) } + b.filter { !isNative($0) }
+        var seen = Set<String>(), out = [[String: Any]]()
+        for item in ordered {
+            let k = (item["path"] as? String) ?? (item["name"] as? String) ?? UUID().uuidString
+            if seen.insert(k).inserted { out.append(item) }
+        }
+        return out
     }
-    let pTrees = tag(primary?["trees"] as? [[String: Any]] ?? [], primaryHost)
-    let sTrees = tag(secondary?["trees"] as? [[String: Any]] ?? [], secondaryHost)
-    var seenT = Set<String>(), trees = [[String: Any]]()
-    for t in sTrees + pTrees {
-        let k = (t["path"] as? String) ?? (t["name"] as? String) ?? UUID().uuidString
-        if seenT.insert(k).inserted { trees.append(t) }
-    }
+    let pucks = dedupe(tag(primary?["pucks"] as? [[String: Any]] ?? [], primaryHost),
+                       tag(secondary?["pucks"] as? [[String: Any]] ?? [], secondaryHost))
+    let trees = dedupe(tag(primary?["trees"] as? [[String: Any]] ?? [], primaryHost),
+                       tag(secondary?["trees"] as? [[String: Any]] ?? [], secondaryHost))
     return ["ts": max(primary?["ts"] as? Int ?? 0, secondary?["ts"] as? Int ?? 0),
             "scanned": max(primary?["scanned"] as? Int ?? 0, secondary?["scanned"] as? Int ?? 0),
             "pucks": pucks, "trees": trees]
 }
 
-/// Merges `dash.py trees` payloads from server and local Mac, preserving each tree's `_runHost` and combining `repoHosts`.
+/// Merges `dash.py trees` payloads from server and local Mac, deduplicating by path (native host wins) and combining `repoHosts`.
 func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, primaryHost: String, secondaryHost: String) -> [String: Any]? {
     guard primary != nil || secondary != nil else { return nil }
     let tag: ([[String: Any]], String) -> [[String: Any]] = { items, h in items.map { var m = $0; m["_runHost"] = h; return m } }
+    let isNative: ([String: Any]) -> Bool = { $0["nativeHost"] as? Bool != false }
+    let pTrees = tag(primary?["trees"] as? [[String: Any]] ?? [], primaryHost)
+    let sTrees = tag(secondary?["trees"] as? [[String: Any]] ?? [], secondaryHost)
+    let ordered = pTrees.filter(isNative) + sTrees.filter(isNative) + pTrees.filter { !isNative($0) } + sTrees.filter { !isNative($0) }
     var seen = Set<String>(), merged = [[String: Any]]()
-    for t in tag(primary?["trees"] as? [[String: Any]] ?? [], primaryHost) + tag(secondary?["trees"] as? [[String: Any]] ?? [], secondaryHost) {
-        let k = "\(t["_runHost"] as? String ?? "")::\(t["path"] as? String ?? "")"
+    for t in ordered {
+        let k = (t["path"] as? String) ?? UUID().uuidString
         if seen.insert(k).inserted { merged.append(t) }
     }
     var hosts = (primary?["repoHosts"] as? [String: [String: Any]]) ?? [:]
@@ -572,51 +601,84 @@ final class RulesStore: ObservableObject {
     @Published var draftDir = ""
     var loaded = false
     private var pending = 0
+    private var hostSeq = 0
 
-    func call(_ op: String, _ arg: String, _ stdin: String = "", _ done: @escaping ([String: Any]) -> Void) {
+    func call(_ op: String, _ arg: String, _ stdin: String = "", onError: (() -> Void)? = nil, _ done: @escaping ([String: Any]) -> Void) {
         pending += 1; busy = true
         var out = ""
         ssh("\(py)/dash.py task \(shellQuote(op)) \(shellQuote(arg))", stdin: stdin, onLine: { out += $0 }, onExit: { [weak self] code in
             guard let self else { return }
             self.pending = max(0, self.pending - 1); self.busy = self.pending > 0
             let j = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? ["error": "\(host) didn't answer (exit \(code))"]
-            if let e = j["error"] as? String { self.status = e } else { done(j) }
+            if let e = j["error"] as? String { self.status = e; onError?() } else { done(j) }
         })
+    }
+    private func addRepos(_ list: [[String: Any]]) {
+        let paths = list.compactMap { $0["path"] as? String }
+        let names = paths.compactMap { $0.split(separator: "/").last.map(String.init) }
+        for (n, p) in zip(names, paths) where repoPaths[n] == nil { repoPaths[n] = p }
+        repos = Array(Set(repos + names + (repo.isEmpty ? [] : [repo]))).sorted()
+        if repo.isEmpty, let r = repos.first { pick(r) }
     }
     func load() {
         if loaded { return }
         loaded = true
         repoHosts = delegate.repoHosts
-        call("repos", "-") { j in
-            let paths = ((j["repos"] as? [[String: Any]]) ?? []).compactMap { $0["path"] as? String }
-            let names = paths.compactMap { $0.split(separator: "/").last.map(String.init) }
-            self.repoPaths = Dictionary(zip(names, paths), uniquingKeysWith: { a, _ in a })
-            self.repos = Array(Set(names + (self.repo.isEmpty ? [] : [self.repo]))).sorted()
-            if self.repo.isEmpty, let r = self.repos.first { self.pick(r) }
-        }
+        call("repos", "-") { self.addRepos(($0["repos"] as? [[String: Any]]) ?? []) }
         call("repo-hosts", "-") { j in
             let parsed = parseRepoHosts(j["hosts"])
             if !parsed.isEmpty {
-                for (k, v) in parsed { self.repoHosts[k] = v }
+                self.repoHosts = mergeRepoHostMaps(self.repoHosts, parsed)
                 delegate.mergeRepoHosts(parsed)
             }
+        }
+        if !isLocalHost(host) && !uitest && !selftest {
+            var rOut = "", hOut = ""
+            ssh("\(pyCmd(on: "local"))/dash.py task repos -", on: "local", onLine: { rOut += $0 }, onExit: { [weak self] code in
+                guard code == 0, let j = (try? JSONSerialization.jsonObject(with: Data(rOut.utf8))) as? [String: Any] else { return }
+                self?.addRepos((j["repos"] as? [[String: Any]]) ?? [])
+            })
+            ssh("\(pyCmd(on: "local"))/dash.py task repo-hosts -", on: "local", onLine: { hOut += $0 }, onExit: { [weak self] code in
+                guard code == 0, let self, let j = (try? JSONSerialization.jsonObject(with: Data(hOut.utf8))) as? [String: Any] else { return }
+                let parsed = parseRepoHosts(j["hosts"])
+                guard !parsed.isEmpty else { return }
+                // Keep server mode if already known; inherit local Mac-only repos and local needs_mac detection
+                var combined = self.repoHosts
+                for (k, v) in parsed {
+                    if let ex = combined[k] {
+                        let needs = ex.needsMac || v.needsMac
+                        let reason = !ex.reason.isEmpty ? ex.reason : v.reason
+                        let target = (ex.mode == "mac" || (ex.mode == "auto" && needs)) ? "mac" : "server"
+                        combined[k] = RepoHostInfo(mode: ex.mode, target: target, needsMac: needs, reason: reason)
+                    } else {
+                        combined[k] = v
+                    }
+                }
+                self.repoHosts = combined
+                delegate.mergeRepoHosts(combined)
+            })
         }
         call("instructions-get", "-") { self.instructions = $0["text"] as? String ?? "" }
         call("memory-list", "-") { self.gotNotes($0) }
     }
     func pick(_ r: String) {
         repo = r; status = ""; if !repos.contains(r) { repos = (repos + [r]).sorted() }
+        hostSeq += 1
+        let seq = hostSeq
         if let cached = lookupRepoHost(r, in: repoHosts) ?? lookupRepoHost(r, in: delegate.repoHosts) {
             repoHostMode = cached.mode; repoHostTarget = cached.target
             repoNeedsMac = cached.needsMac; repoNeedsMacReason = cached.reason
         } else {
             repoHostMode = "server"; repoHostTarget = "server"; repoNeedsMac = false; repoNeedsMacReason = ""
         }
-        call("lifecycle-get", r) { [weak self] j in if self?.repo == r { self?.got(j) } }
+        call("lifecycle-get", r) { [weak self] j in
+            guard let self, self.repo == r else { return }
+            self.got(j, clearOnChange: false, applyHost: self.hostSeq == seq)
+        }
         getPrompt()
         call("autorun-get", r) { [weak self] j in if self?.repo == r { self?.gotAuto(j) } }
     }
-    func applyHostInfo(_ raw: [String: Any]?, for r: String) {
+    func applyHostInfo(_ raw: [String: Any]?, for r: String, clearOnChange: Bool) {
         let localKnown = lookupRepoHost(r, in: delegate.repoHosts)
         let m = (raw?["mode"] as? String ?? options["host"] ?? "server").lowercased()
         let mode = ["server", "mac", "auto"].contains(m) ? m : "server"
@@ -629,23 +691,28 @@ final class RulesStore: ObservableObject {
             repoHostMode = info.mode; repoHostTarget = info.target
             repoNeedsMac = info.needsMac; repoNeedsMacReason = info.reason
         }
-        delegate.updateRepoHost(r, info)
+        delegate.updateRepoHost(r, info, clearOnChange: clearOnChange)
     }
     func setHost(_ mode: String) {
         guard ["server", "mac", "auto"].contains(mode), !repo.isEmpty else { return }
-        let r = repo
+        let r = repo, prevMode = repoHostMode, prevTarget = repoHostTarget, prevOpt = options["host"]
+        hostSeq += 1
+        let seq = hostSeq
         repoHostMode = mode
         let needs = repoNeedsMac || (lookupRepoHost(r, in: delegate.repoHosts)?.needsMac ?? false)
         repoHostTarget = (mode == "mac" || (mode == "auto" && needs)) ? "mac" : "server"
         if mode == "server" { options["host"] = nil } else { options["host"] = mode }
-        call("host-set", r, mode) { [weak self] j in
-            guard let self else { return }
+        call("host-set", r, mode, onError: { [weak self] in
+            guard let self, self.repo == r, self.hostSeq == seq else { return }
+            self.repoHostMode = prevMode; self.repoHostTarget = prevTarget; self.options["host"] = prevOpt
+        }) { [weak self] j in
+            guard let self, self.hostSeq == seq else { return }
             if let opts = j["options"] as? [String: String], self.repo == r { self.options = opts }
             if let src = j["source"] as? String, self.repo == r { self.source = src }
-            self.applyHostInfo(j, for: r)
-        }
-        if !isLocalHost(host) && !uitest && !selftest {
-            ssh("\(pyCmd(on: "local"))/dash.py task host-set \(shellQuote(r))", on: "local", stdin: mode)
+            self.applyHostInfo(j, for: r, clearOnChange: true)
+            if !isLocalHost(host) && !uitest && !selftest {
+                ssh("\(pyCmd(on: "local"))/dash.py task host-set \(shellQuote(r))", on: "local", stdin: mode)
+            }
         }
     }
     func gotAuto(_ j: [String: Any]) {
@@ -672,14 +739,14 @@ final class RulesStore: ObservableObject {
         let r = repo, own = reviewOwn && !review.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         call("prompt-set", "\(r)/\(kind)", own ? review : "") { [weak self] j in if self?.repo == r { self?.gotReview(j); self?.status = own ? "Saved the prompt." : "Using the default prompt." } }
     }
-    func got(_ j: [String: Any]) {
+    func got(_ j: [String: Any], clearOnChange: Bool = false, applyHost: Bool = true) {
         stages = ((j["stages"] as? [[String: String]]) ?? []).map {
             Stage(key: $0["key"] ?? "", req: $0["req"] ?? "", done: $0["done"] ?? "", run: $0["run"] ?? "", owner: $0["owner"] ?? "", phase: $0["phase"] ?? "")
         }
         options = j["options"] as? [String: String] ?? [:]
         rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
         builtins = j["builtins"] as? [String: String] ?? [:]
-        applyHostInfo(j["host_info"] as? [String: Any], for: repo)
+        if applyHost { applyHostInfo(j["host_info"] as? [String: Any], for: repo, clearOnChange: clearOnChange) }
     }
     func save() {
         for s in stages where builtins[s.key] == nil {
@@ -693,12 +760,34 @@ final class RulesStore: ObservableObject {
         for (k, v) in options where v.contains("`") || v.contains("\n") || v.contains("\r") {
             status = "Option \(k) can't contain backticks or newlines."; return
         }
+        let r = repo
         let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run, "owner": $0.owner, "phase": $0.phase] },
                                   "options": options, "rules": rules, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
-        call("lifecycle-set", repo, s) { self.got($0); self.status = "Saved." }
+        hostSeq += 1
+        let seq = hostSeq
+        call("lifecycle-set", r, s) { [weak self] j in
+            guard let self, self.repo == r else { return }
+            self.got(j, clearOnChange: true, applyHost: self.hostSeq == seq)
+            self.status = "Saved."
+            if !isLocalHost(host) && !uitest && !selftest {
+                ssh("\(pyCmd(on: "local"))/dash.py task lifecycle-set \(shellQuote(r))", on: "local", stdin: s)
+            }
+        }
     }
-    func reset() { call("lifecycle-reset", repo) { self.got($0); self.status = "Back to the \(self.source) lifecycle." } }
+    func reset() {
+        let r = repo
+        hostSeq += 1
+        let seq = hostSeq
+        call("lifecycle-reset", r) { [weak self] j in
+            guard let self, self.repo == r else { return }
+            self.got(j, clearOnChange: true, applyHost: self.hostSeq == seq)
+            self.status = "Back to the \(self.source) lifecycle."
+            if !isLocalHost(host) && !uitest && !selftest {
+                ssh("\(pyCmd(on: "local"))/dash.py task lifecycle-reset \(shellQuote(r))", on: "local")
+            }
+        }
+    }
     func saveInstructions() { call("instructions-set", "-", instructions) { self.instructions = $0["text"] as? String ?? ""; self.status = "Saved." } }
     func gotNotes(_ j: [String: Any]) {
         notes = ((j["notes"] as? [[String: String]]) ?? []).map { (name: $0["name"] ?? "", text: $0["text"] ?? "") }

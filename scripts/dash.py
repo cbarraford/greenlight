@@ -655,12 +655,15 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     ms = placement.machines()
     home = placement.expected(ms)  # where the agents belong: a workspace elsewhere is flagged `away` (#160)
     main_paths = {w.get("repo"): w.get("path") for w, _ in live.values() if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
+    repo_targets: dict[str, str] = {}
     for r in rows:
         w, ag = live[r["id"]]
         _normalize_row(r)
         card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r["name"])
-        repo = w.get("repo") or r.get("project") or ""
-        repo_target = greenlight.resolve_repo_host(repo, path=main_paths.get(w.get("repo") or ""))["target"] if repo else "server"
+        repo = r.get("project") or w.get("repo") or ""
+        if repo and repo not in repo_targets:
+            repo_targets[repo] = greenlight.resolve_repo_host(repo, path=main_paths.get(w.get("repo") or ""), check_mac=False)["target"]
+        repo_target = repo_targets.get(repo, "server")
         if ag:
             r["agent"].update(state=ag.get("state", r["agent"]["state"]), type=greenlight.canonical_agent(ag.get("agentType")) or r["agent"]["type"],
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
@@ -690,6 +693,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "steward": bool(card.get("steward")),
             **({"steward_drift": card["steward_drift"]} if card.get("steward_drift") else {}),
             "activity": ws_state.activity_of(card, limit=25),
+            **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {}),
             "puck": page.get("layout", {}).get("puck"),
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
             # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
@@ -710,7 +714,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     have = {p["path"] for p in pucks}
     trees = sorted(({"name": w["displayName"], "path": w["path"], "project": w.get("repo") or "", "main": bool(w.get("isMainWorktree")),
                      "branch": (w.get("branch") or "").removeprefix("refs/heads/"), "agent": (ag or {}).get("state") or "none",
-                     "host": placement.host_of(w, ms)}
+                     "host": placement.host_of(w, ms),
+                     **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})}
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
     return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees}
@@ -744,7 +749,8 @@ def trees():
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
                         "goal": w.get("comment") or "", "pinned": bool(w.get("isPinned")), "active": w.get("lastOutputAt"),
-                        "since": ag.get("stateStartedAt"), "created": None if w.get("isMainWorktree") else created(w["path"])})
+                        "since": ag.get("stateStartedAt"), "created": None if w.get("isMainWorktree") else created(w["path"]),
+                        **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})})
             if out[-1]["main"] and (c := repo_cfg(w["path"])):
                 out[-1]["cfg"] = c
             if r := scan.get(w["path"]):
@@ -1962,8 +1968,15 @@ def repo_hosts(tree_rows=None):
             if f.name == "default.md":
                 continue
             names.add(f.stem.replace("__", "/"))
-    return {n: greenlight.resolve_repo_host(n, path=paths.get(n) or paths.get(n.rsplit("/", 1)[-1]))
-            for n in sorted(names) if n}
+    out = {n: greenlight.resolve_repo_host(n, path=paths.get(n) or paths.get(n.rsplit("/", 1)[-1]))
+           for n in sorted(names) if n}
+    # If an org/repo lifecycle sets an explicit host while the bare repo name only resolved default "server", align the alias
+    for n, info in sorted(out.items()):
+        if "/" in n and info["mode"] != "server":
+            base = n.rsplit("/", 1)[-1]
+            if base in out and out[base]["mode"] == "server":
+                out[base] = info
+    return out
 
 
 def _set_repo_host(arg, mode):

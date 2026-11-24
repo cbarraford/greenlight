@@ -787,56 +787,69 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var dashSnapObj: [String: Any]?  // newest validated snapshot (merged across server + local Mac when needed)
     var serverSnapObj: [String: Any]?, localSnapObj: [String: Any]?
     var repoHosts = [String: RepoHostInfo]()  // per-repo host preference & resolved target ("server" | "mac")
-    var wsHostByName = [String: String](), wsHostByPath = [String: String]()  // workspace name/path -> owning host
-    var didInitialHostSync = false
+    var snapHostByName = [String: String](), snapHostByPath = [String: String]()
+    var treeHostByName = [String: String](), treeHostByPath = [String: String]()
+    var cachedWsHostByPath: [String: String] = (ud.dictionary(forKey: "wsHostByPathCache") as? [String: String]) ?? [:]
+    var wsHostByName = [String: String](), wsHostByPath = [String: String]()  // rebuilt from merged trees + snapshots
+    var localScanned = false
 
     var anyMacNeeded: Bool {
         !isLocalHost(host) && (repoHosts.values.contains { $0.target == "mac" }
             || isLocalHost(greenlight.chatHost) || l1s.values.contains { isLocalHost($0.c.chatHost) })
     }
 
+    private func rebuildWorkspaceHostIndex() {
+        var byPath = cachedWsHostByPath
+        if !treeHostByPath.isEmpty || !snapHostByPath.isEmpty {
+            byPath = treeHostByPath.merging(snapHostByPath) { _, s in s }
+            cachedWsHostByPath = byPath
+            ud.set(byPath, forKey: "wsHostByPathCache")
+        }
+        wsHostByPath = byPath
+        wsHostByName = treeHostByName.merging(snapHostByName) { _, s in s }
+    }
+
     func workspaceHost(name: String? = nil, path: String? = nil, fallback: String? = nil) -> String {
-        if let path, let h = wsHostByPath[path] { return h }
+        if let path, let h = wsHostByPath[path] ?? cachedWsHostByPath[path] { return h }
         if let name, let h = wsHostByName[name] { return h }
         return fallback ?? greenlight.chatHost
     }
 
     func paneTarget(_ ws: String) -> (host: String, cwd: String)? {
         guard let at = paneWhere(ws) else { return nil }
-        if !ws.hasPrefix("@"), !at.cwd.isEmpty, let h = wsHostByPath[at.cwd] { return (h, at.cwd) }
+        if !ws.hasPrefix("@"), !at.cwd.isEmpty, let h = wsHostByPath[at.cwd] ?? cachedWsHostByPath[at.cwd] { return (h, at.cwd) }
         return at
     }
 
     func mergeRepoHosts(_ incoming: [String: RepoHostInfo]) {
-        for (k, v) in incoming {
-            repoHosts[k] = v
-            let base = String(k.split(separator: "/").last ?? "")
-            if !base.isEmpty && base != k { repoHosts[base] = v }
-        }
+        repoHosts = mergeRepoHostMaps(repoHosts, incoming)
         syncHostForActiveWindows(clearOnChange: false)
         ensureLocalDashIfNeeded()
     }
 
-    func updateRepoHost(_ repo: String, _ info: RepoHostInfo) {
-        repoHosts[repo] = info
-        let base = String(repo.split(separator: "/").last ?? "")
-        if !base.isEmpty && base != repo { repoHosts[base] = info }
-        syncHostForActiveWindows(clearOnChange: true)
+    func updateRepoHost(_ repo: String, _ info: RepoHostInfo, clearOnChange: Bool = true) {
+        repoHosts = mergeRepoHostMaps(repoHosts, [repo: info])
+        syncHostForActiveWindows(clearOnChange: clearOnChange)
         ensureLocalDashIfNeeded()
     }
 
+    private func effectiveProjList() -> [[String: Any]] {
+        projList.isEmpty ? buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true) : projList
+    }
+
     private func syncHostForActiveWindows(clearOnChange: Bool) {
-        let mainTarget = resolveProjectHost(only: l1Only ?? sharedOnly, projList: projList, repoHosts: repoHosts)
+        let list = effectiveProjList(), saved = savedProjects
+        let mainTarget = resolveProjectHost(only: l1Only ?? sharedOnly, projList: list, savedProjects: saved, repoHosts: repoHosts)
         if clearOnChange && mainTarget != greenlight.chatHost {
-            let label = projectChip(only: sharedOnly, projList: projList, projectsLoaded: true).text
+            let label = projectChip(only: sharedOnly, projList: list, projectsLoaded: true).text
             greenlight.switchProject(to: mainTarget, label: label)
         } else if !clearOnChange {
             greenlight.syncChatHost(mainTarget)
         }
         for l in l1s.values {
-            let target = resolveProjectHost(only: live(l.only) ?? l.only, projList: projList, repoHosts: repoHosts)
+            let target = resolveProjectHost(only: live(l.only) ?? l.only, projList: list, savedProjects: saved, repoHosts: repoHosts)
             if clearOnChange && target != l.c.chatHost {
-                let label = projectChip(only: l.only, projList: projList, projectsLoaded: true).text
+                let label = projectChip(only: l.only, projList: list, projectsLoaded: true).text
                 l.c.switchProject(to: target, label: label)
             } else if !clearOnChange {
                 l.c.syncChatHost(target)
@@ -844,17 +857,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
 
-    private func indexWorkspaceHosts(_ obj: [String: Any], fallbackHost: String) {
+    private func indexSnapshotHosts(_ obj: [String: Any], fallbackHost: String) {
+        var byName = [String: String](), byPath = [String: String]()
         for p in obj["pucks"] as? [[String: Any]] ?? [] {
             let h = (p["_runHost"] as? String) ?? fallbackHost
-            if let n = p["name"] as? String, !n.isEmpty { wsHostByName[n] = h }
-            if let path = p["path"] as? String, !path.isEmpty { wsHostByPath[path] = h }
+            if let n = p["name"] as? String, !n.isEmpty { byName[n] = h }
+            if let path = p["path"] as? String, !path.isEmpty { byPath[path] = h }
         }
         for t in obj["trees"] as? [[String: Any]] ?? [] {
             let h = (t["_runHost"] as? String) ?? fallbackHost
-            if let n = t["name"] as? String, !n.isEmpty { wsHostByName[n] = h }
-            if let path = t["path"] as? String, !path.isEmpty { wsHostByPath[path] = h }
+            if let path = t["path"] as? String, !path.isEmpty { byPath[path] = h }
+            if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty, byName[n] == nil { byName[n] = h }
         }
+        snapHostByName = byName
+        snapHostByPath = byPath
+        rebuildWorkspaceHostIndex()
     }
 
     private func publishDashSnap() {
@@ -864,7 +881,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let obj, JSONSerialization.isValidJSONObject(obj),
               let clean = try? JSONSerialization.data(withJSONObject: obj),
               let js = String(data: clean, encoding: .utf8) else { return }
-        indexWorkspaceHosts(obj, fallbackHost: host)
+        indexSnapshotHosts(obj, fallbackHost: host)
         dashSnapObj = obj
         for w in webs where readyDash.contains(ObjectIdentifier(w)) {
             w.callJS("window.mc && mc.update", [obj])
@@ -882,6 +899,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
         })
         if anyMacNeeded && !uitest && !selftest {
+            localScanned = true
             ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")
         }
     }
@@ -892,6 +910,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self, l.hasPrefix("{"), let d = l.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   JSONSerialization.isValidJSONObject(obj) else { return }
+            if obj["error"] != nil {
+                if self.serverSnapObj == nil && self.localSnapObj == nil {
+                    for w in self.webs where self.readyDash.contains(ObjectIdentifier(w)) {
+                        w.callJS("window.mc && mc.update", [obj])
+                    }
+                }
+                return
+            }
             self.serverSnapObj = obj
             self.publishDashSnap()
         }, onExit: { [weak self] _ in DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.streamDash() } })
@@ -899,6 +925,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     func ensureLocalDashIfNeeded() {
         guard anyMacNeeded, localDashProc == nil, !uitest, !selftest else { return }
+        if !localScanned {
+            localScanned = true
+            ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")
+        }
         streamLocalDash()
     }
 
@@ -908,6 +938,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self, l.hasPrefix("{"), let d = l.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   JSONSerialization.isValidJSONObject(obj) else { return }
+            if obj["error"] != nil { return }  // keep existing snapshots; local scan will populate last.json
             self.localSnapObj = obj
             self.publishDashSnap()
         }, onExit: { [weak self] _ in
@@ -1036,8 +1067,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 let oldOnly = livePick(l.only, known: nil), newOnly = livePick(only, known: nil)
                 l.only = newOnly; saveL1s(); syncL1(); syncDashPaths()
                 if newOnly != oldOnly {
-                    let target = resolveProjectHost(only: live(newOnly) ?? newOnly, projList: projList, repoHosts: repoHosts)
-                    let label = projectChip(only: newOnly, projList: projList, projectsLoaded: true).text
+                    let list = effectiveProjList()
+                    let target = resolveProjectHost(only: live(newOnly) ?? newOnly, projList: list, savedProjects: savedProjects, repoHosts: repoHosts)
+                    let label = projectChip(only: newOnly, projList: list, projectsLoaded: true).text
                     l.c.switchProject(to: target, label: label)
                     ensureLocalDashIfNeeded()
                 }
@@ -1489,8 +1521,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let j = (only.flatMap { try? JSONSerialization.data(withJSONObject: $0) }).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
         for w in termWebs where w !== except { w.evaluateJavaScript("window.term && term.only(\(j))") }
         if only != oldOnly {
-            let target = resolveProjectHost(only: live(only) ?? only, projList: projList, repoHosts: repoHosts)
-            let label = projectChip(only: only, projList: projList, projectsLoaded: true).text
+            let list = effectiveProjList()
+            let target = resolveProjectHost(only: live(only) ?? only, projList: list, savedProjects: savedProjects, repoHosts: repoHosts)
+            let label = projectChip(only: only, projList: list, projectsLoaded: true).text
             greenlight.switchProject(to: target, label: label)
             ensureLocalDashIfNeeded()
         }
@@ -1540,23 +1573,23 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func refreshProjects() {
         let trees = (lastTreesObj?["trees"] as? [[String: Any]]) ?? []
         if let rawHosts = lastTreesObj?["repoHosts"] {
-            let parsed = parseRepoHosts(rawHosts)
-            for (k, v) in parsed { repoHosts[k] = v }
+            repoHosts = mergeRepoHostMaps(repoHosts, parseRepoHosts(rawHosts))
         }
+        var byPath = [String: String](), byName = [String: String]()
         for t in trees {
             if let path = t["path"] as? String, !path.isEmpty, let h = t["_runHost"] as? String {
-                wsHostByPath[path] = h
-                if let n = t["name"] as? String, !n.isEmpty { wsHostByName[n] = h }
+                byPath[path] = h
+                if t["main"] as? Bool != true, let n = t["name"] as? String, !n.isEmpty { byName[n] = h }
             }
         }
+        treeHostByPath = byPath
+        treeHostByName = byName
+        rebuildWorkspaceHostIndex()
         projList = buildProjectList(saved: savedProjects, trees: trees, dark: isDark, fallback: lastTreesObj == nil)
         projectsLoaded = true
         syncL1()
         syncDashPaths()
-        if !didInitialHostSync {
-            didInitialHostSync = true
-            syncHostForActiveWindows(clearOnChange: false)
-        }
+        syncHostForActiveWindows(clearOnChange: false)
         ensureLocalDashIfNeeded()
     }
     /// Chief's scope: the projects picked, which every window shows (a terminal's term.only, the dashboard's mc.paths), while one of
@@ -1605,7 +1638,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas); w.titleVisibility = .hidden; w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: App.paneMinWidth, height: 520); w.delegate = self
         let c = Core(session: id), l = L1(id, w, makeWeb(), c, only)
-        c.syncChatHost(resolveProjectHost(only: live(only) ?? only, projList: projList, repoHosts: repoHosts))
+        c.syncChatHost(resolveProjectHost(only: live(only) ?? only, projList: effectiveProjList(), savedProjects: savedProjects, repoHosts: repoHosts))
+        ensureLocalDashIfNeeded()
         c.follow(greenlight)
         c.$hint.receive(on: RunLoop.main).sink { [weak self, weak c] t in if let self, let c { self.hint(t, from: c) } }.store(in: &c.subs)  // its hover hints, by the cursor too
         c.scope = { [weak self, weak l] in l.flatMap { self?.scope($0) } }
@@ -2366,7 +2400,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if l.pushedChat.isEmpty { l.pushedChat = "true,0"; l.web.callJS("window.mc && mc.chat", [true, 0]) }
             if case let t = l1Title(l.floor.project), l.w.title != t { l.w.title = t }  // the Window menu tells them apart
             if l.c.run != nil { l.c.now = Date() }
-            let wantConnected = isLocalHost(l.c.chatHost) ? true : greenlight.connected
+            let wantConnected = isLocalHost(l.c.chatHost) ? true : greenlight.serverConnected
             if l.c.run == nil, l.c.connected != wantConnected { l.c.connected = wantConnected }
         }
         if pushedLocal != greenlight.localShown { pushedLocal = greenlight.localShown; let js = (try? JSONEncoder().encode(pushedLocal)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""

@@ -68,6 +68,7 @@ def is_misplaced(w, ms, expect, repo_target="server"):
 def rows(worktrees, ms, expect, every=False):
     """One row per workspace with an agent (every: or a goal), main checkouts and archived ones left out."""
     main_paths = {w.get("repo"): w.get("path") for w in worktrees if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
+    targets: dict[str, str] = {}
     out = []
     for w in worktrees:
         if w.get("isMainWorktree") or w.get("isArchived") or not (w.get("agents") or every and w.get("comment")):
@@ -75,7 +76,9 @@ def rows(worktrees, ms, expect, every=False):
         host = host_of(w, ms)
         ag = greenlight.primary_agent(w.get("agents"))
         repo = w.get("repo") or ""
-        target = greenlight.resolve_repo_host(repo, path=main_paths.get(repo))["target"] if repo else "server"
+        if repo and repo not in targets:
+            targets[repo] = greenlight.resolve_repo_host(repo, path=main_paths.get(repo), check_mac=False)["target"]
+        target = targets.get(repo, "server")
         out.append({"name": w.get("displayName") or w.get("path"), "id": w.get("worktreeId"), "host": host,
                     "agent": (ag or {}).get("state") or "none", "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                     "misplaced": is_misplaced(w, ms, expect, repo_target=target)})
