@@ -130,6 +130,21 @@ def test_guard_refuses_a_lower_stable_version_on_the_same_build(signed):
     assert release.guard(7, signed["out"], ver="main-7-abc1234")["ok"]  # main versions don't compare
 
 
+def test_guard_compares_a_version_only_with_that_builds_own(signed):
+    # no file (a failed upload deleted it): the title's build and version still refuse a lower tag on that build
+    with pytest.raises(release.ReleaseError, match="0.9.9 is lower than the feed's 1.0.0"):
+        release.guard(9, None, floor=9, ver="0.9.9", floor_ver="1.0.0")
+    assert release.guard(9, None, floor=9, ver="1.0.0", floor_ver="1.0.0")["ok"]  # the re-run that repairs it
+    # a stale file (build 7, 1.0.0) under a newer floor (build 9, 0.5.0): build 9's version is the title's, not the file's
+    assert release.guard(9, signed["out"], floor=9, ver="0.5.0", floor_ver="0.5.0")["current"] == 9
+    with pytest.raises(release.ReleaseError, match="0.4.0 is lower than the feed's 0.5.0"):
+        release.guard(9, signed["out"], floor=9, ver="0.4.0", floor_ver="0.5.0")
+    # a title with no version: the file's version counts only when the file is that same build
+    assert release.guard(9, signed["out"], floor=9, ver="0.9.9")["ok"]
+    with pytest.raises(release.ReleaseError, match="lower"):
+        release.guard(7, signed["out"], floor=7, ver="0.9.9")
+
+
 def test_verify_can_insist_on_the_build(signed, capsys):
     capsys.readouterr()
     base = ["verify", str(signed["out"]), "--pub", signed["pub"].hex()]
@@ -294,10 +309,22 @@ def test_release_workflow_guards_the_key_the_feed_and_reruns():
     # an older build than the channel's feed stops before anything is built
     order = [wf.index(f"- name: {n}") for n in ("Version", "Only forward", "Backend tarball", "Publish this build")]
     guard = _step(wf, "Only forward")
-    assert order == sorted(order) and "release.py guard" in guard and "--floor" in guard and "--version" in guard
-    # the floor: the feed release's title records the build before the upload, which deletes the old file first
+    assert order == sorted(order)
+    assert 'python3 scripts/release.py guard --build "$BUILD" --version "$VER" "${cur[@]}" "${floor[@]}"' in guard
+    assert 'floor=(--floor "$floor_build" --floor-version "$floor_ver")' in guard
+    # the floor: the feed release's title records the build and version before the upload, which deletes the old file first
     feed = _step(wf, "Point the channel's feed at it")
-    assert "(build $BUILD)" in feed and feed.index("--title") < feed.index("gh release upload")
+    title = re.search(r'title="([^"]+)"', feed)[1]
+    assert feed.index("--title") < feed.index("gh release upload")
+    # the guard's own sed patterns read back what the feed step writes
+    rendered = title.replace("$CHANNEL", "stable").replace("$BUILD", "412").replace("$VER", "1.3.0")
+    got = [subprocess.run(["sed", "-n", pat], input=f"{rendered}\nchannel-stable.json\n", capture_output=True, text=True,
+                          check=True).stdout.strip() for pat in re.findall(r"sed -n '([^']+)'", guard)]
+    assert got == ["412", "1.3.0"]
+    # a draft is deleted only when it holds nothing but this build's own files; a repair needs all three of them
+    assert 'grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}"' in guard and '[ -z "$assets" ]' in guard
+    assert guard.index("grep -qvxF") < guard.index('gh release delete "$TAG"')
+    assert '"$(grep -cxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets")" = 3' in guard
     # a published build is never rebuilt or re-uploaded (the live feed may point at its files): it only re-points the feed;
     # a draft left by a stopped run is deleted and built again
     assert "isDraft" in guard and 'gh release delete "$TAG"' in guard and "--cleanup-tag" not in guard

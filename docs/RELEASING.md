@@ -13,13 +13,17 @@ short version is the highest stable tag behind it (`0.0.0` before the first). A 
 
 A channel's feed only moves forward: a build older than the one the feed already offers (an old tag pushed late, an old run
 re-run) stops before it builds anything, and so does a lower stable tag on the same commit. The feed release's title records
-the build it holds (`Greenlight main channel (build 412)`), so this holds even while a failed upload has left it with no file.
+the build and version it holds (`Greenlight stable channel (build 412: 1.3.0)`), so both rules hold even while a failed
+upload has left it with no file.
 
 Re-running a build that's already published rebuilds nothing and leaves its files alone (the live feed may point at them): it
-checks that build's own signed feed and points the channel at it again. A draft left by a run that stopped partway is deleted
-and built again. For main, use *Run workflow* (main's current commit: built if it has no release yet, else re-pointed)
-rather than re-running an old run: a re-run never cancels the build that's running, but while waiting it can still replace a
-newer run that's pending.
+checks that build's own signed feed and points the channel at it again (a release missing any of its three files stops the
+run: delete it on GitHub to build it fresh). A draft holding only this build's files, left by a run that stopped partway, is
+deleted and built again; any other draft for the tag (say, one you started by hand) stops the run and is left alone.
+
+For main, use *Run workflow* (main's current commit: built if it has no release yet, else re-pointed) rather than re-running
+an old run: a re-run never cancels the build that's running, but while waiting it can still replace a newer run that's
+pending.
 
 Each release holds three files:
 - `Greenlight-<version>.zip`: the app. It's universal (Apple silicon and Intel), runs on macOS 14 or later, and carries the

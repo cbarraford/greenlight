@@ -73,8 +73,8 @@ jobs:
         run: |
           out="$RUNNER_TEMP/out" cur=() floor=() repair=false
           mkdir -p "$out"
-          # The channel's feed: its channel-<name>.json, and the build its title records (set before each upload, so a
-          # failed upload, which has already deleted the old file, can't make an older build look new). No guessing.
+          # The channel's feed: its channel-<name>.json, and the build and version its title records (set before each
+          # upload, so a failed upload, which has already deleted the old file, can't make an older build look new).
           if meta=$(gh release view "feed-$CHANNEL" --repo "$REPO" --json name,assets --jq '.name, .assets[].name' 2>&1); then :
           elif grep -q "release not found" <<<"$meta"; then meta=""  # the channel's first build
           else echo "::error::can't read the $CHANNEL feed: $meta"; exit 1; fi
@@ -82,22 +82,29 @@ jobs:
             gh release download "feed-$CHANNEL" --repo "$REPO" --pattern "channel-$CHANNEL.json" --output "$RUNNER_TEMP/current.json" --clobber
             cur=(--current "$RUNNER_TEMP/current.json")
           fi
-          n=$(sed -n 's/.*(build \([0-9][0-9]*\))$/\1/p' <<<"$meta" | head -n 1)
-          if [ -n "$n" ]; then floor=(--floor "$n"); fi
+          floor_build=$(sed -n 's/.*(build \([0-9][0-9]*\): [^)]*)$/\1/p' <<<"$meta" | head -n 1)
+          floor_ver=$(sed -n 's/.*(build [0-9][0-9]*: \([^)]*\))$/\1/p' <<<"$meta" | head -n 1)
+          if [ -n "$floor_build" ]; then floor=(--floor "$floor_build" --floor-version "$floor_ver"); fi
           python3 scripts/release.py guard --build "$BUILD" --version "$VER" "${cur[@]}" "${floor[@]}"
           # This build's own release. Published: keep its files (the live feed may point at them) and only point the feed
-          # at its own signed feed again. A draft (a run stopped mid-create) is deleted and built again.
+          # at its own signed feed again. A draft holding only this build's files (a run stopped mid-create) is deleted and
+          # built again; any other draft (one you made by hand) stops the build untouched.
+          ours=("Greenlight-$VER.zip" "greenlight-backend-$VER.tar.gz" "channel-$CHANNEL.json")
           if rel=$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets --jq '(.isDraft | tostring), .assets[].name' 2>&1); then
+            assets=$(tail -n +2 <<<"$rel")
             if [ "$(head -n 1 <<<"$rel")" = true ]; then
+              if [ -z "$assets" ] || grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets"; then
+                echo "::error::$TAG has a draft release that isn't a stopped run's: publish or delete it on GitHub, then re-run"; exit 1
+              fi
               echo "::warning::$TAG is a draft left by a run that stopped: deleting it to build it again"
               gh release delete "$TAG" --repo "$REPO" --yes
-            elif grep -qx "channel-$CHANNEL.json" <<<"$rel"; then
+            elif [ "$(grep -cxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets")" = 3 ]; then
               repair=true
               gh release download "$TAG" --repo "$REPO" --pattern "channel-$CHANNEL.json" --output "$out/channel-$CHANNEL.json" --clobber
               python3 scripts/release.py verify "$out/channel-$CHANNEL.json" --pub "$(cat app/feed-key.pub)" --build "$BUILD"
               echo "::notice::$TAG is already published: pointing the $CHANNEL feed at it again, nothing rebuilt"
             else
-              echo "::error::$TAG is published without channel-$CHANNEL.json: delete that release on GitHub, then re-run"; exit 1
+              echo "::error::$TAG is published without all of its files (${ours[*]}): delete that release on GitHub, then re-run"; exit 1
             fi
           elif ! grep -q "release not found" <<<"$rel"; then echo "::error::can't read release $TAG: $rel"; exit 1; fi
           echo "repair=$repair" >> "$GITHUB_OUTPUT"
@@ -191,8 +198,9 @@ jobs:
       - name: Point the channel's feed at it
         env:
           BUILD: ${{ steps.v.outputs.build }}
+          VER: ${{ steps.v.outputs.version }}
         run: |
-          feed="feed-$CHANNEL" title="Greenlight $CHANNEL channel (build $BUILD)"  # the guard's floor: set before the upload
+          feed="feed-$CHANNEL" title="Greenlight $CHANNEL channel (build $BUILD: $VER)"  # the guard's floor: set before the upload
           if gh release view "$feed" --repo "$REPO" >/dev/null 2>&1; then
             gh release edit "$feed" --repo "$REPO" --title "$title"
           else
