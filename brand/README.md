@@ -1,114 +1,84 @@
 # Greenlight brand
 
-What Greenlight looks and sounds like. The values here are copied from the code; when they disagree, the code wins, so fix this file. Each section names the file to check.
+What Greenlight looks and sounds like, in brief. The source of truth is [`DESIGN.md`](DESIGN.md): its YAML front matter holds the tokens, and its sections hold the rules, the component recipes and the acceptance gate. The evidence behind them is in [`RESEARCH.md`](RESEARCH.md). When this page and DESIGN.md disagree, DESIGN.md wins.
+
+## Character
+
+**Quiet precision.** Calm, exact, fast. The greys carry the interface, and colour appears only where something asks for you. The references are Linear, Raycast and Things. See DESIGN.md §1.
 
 ## Name and places
 
 | Name | What it is |
 |---|---|
-| **Greenlight** | The product: the skill (`SKILL.md`, `scripts/`) and the macOS menubar app (`app/`). "An agent manager for coding-agent workspaces". |
-| **Greenlight Center** · L1 | The dashboard and the chat. Always light. |
-| **the Basement** · B1 | The terminal window with its sidebar (Hosts, Workspaces, Waiting on others, Done). Always dark. |
-| **the Pipe** · B2 | The same window without its sidebar: just the terminal. Always dark. |
-| **the orb** | The green light at the bottom right. It rides up to Greenlight Center, and the terminal button rides back down. |
+| **Greenlight** | The product: the skill (`SKILL.md`, `scripts/`) and the macOS menubar app (`app/`). "An agent manager for coding-agent workspaces." |
+| **Center** (Greenlight Center) | The dashboard and the chat. The full name stays in the window title. |
+| **Basement** | The terminal window with its sidebar: Hosts, Needs you, Working, Workspaces, Waiting on others, Done. |
+| **Pipe** | The same window without its sidebar. |
+| **the orb** | The raised disc at the bottom right that rides between floors. Going up, it shows the mark; going down, the terminal glyph. |
 | **No Man's Land** | Repos that belong to no project. |
 | **Local Lights** | The look a repo checks in (`.greenlight.json`). |
 
-Floor badges (`Floors.levels`, `app/Greenlight.swift`):
+Every floor follows the system's light or dark appearance; Settings › Appearance can override it. Floors are told apart by name and glyph, never by colour.
 
-| Floor | Badge | Fill | Ink | Glow |
-|---|---|---|---|---|
-| L1 · GREENLIGHT | L1 | `#2E6F43` | `#FFFFFF` | `#56E08B` |
-| B1 · BASEMENT | B1 | `#FFB340` | `#1C1C1F` | `#FFB340` |
-| B2 · PIPE | B2 | `#A8661C` | `#FFF3E0` | `#E08A2E` |
+## Mark and app icon
 
-## App icon (`icon/`, built into `icons/`)
-
-**Aperture:** six deep-green blades open on a hexagon of light. The layers, the light-appearance variant, the 16-grid
-mark and the Icon Composer settings are in [`icon/README.md`](icon/README.md). `brand/icon/generate.py` draws them.
+**Aperture:** six deep-green blades open on a hexagon of light, the board's own cell. The agents step aside and the way clears.
 
 | File | Use |
 |---|---|
-| `icons/Greenlight.icns` | The bundle icon (`CFBundleIconFile`) and the Dock tile. Built by `scripts/build_icons.sh` on a Mac. |
-| `icons/GreenlightDebug.icns` | The same icon with a neutral-grey light: a dev copy's bundle icon, and Settings › General › Dock icon › Debug. |
+| `icon/layers/` | The icon's flat, numbered layers for Icon Composer. Settings are in [`icon/README.md`](icon/README.md). |
+| `icon/mark.svg`, `mark-idle.svg`, `mark-light.svg` | The 16-grid mark: lit, the blades alone, and the light alone. The menu bar uses it as a template (idle at rest, lit while agents work), and so do the orb and the floor control's Center. |
+| `icons/Greenlight.icns` | The bundle icon and the Dock tile. Built on a Mac by `scripts/build_icons.sh`. |
+| `icons/GreenlightDebug.icns` | The same icon with a grey light. Dev copies use it, and so does Settings › General › Dock icon › Debug. |
 
-`app/build.sh` copies both into the app. Orb, MergeLight and ThreeFloors are retired.
+The rules are in DESIGN.md §8.
 
-## Color
+## Colour
 
-### Brand
-- **Greenlight green** (Sage) `#2E6F43`: the light theme's accent, the L1 badge, and the dashboard's light `--accent`.
-- **Orb green** `#2FC36C` / glow `#56E08B`.
-- **Basement amber** `#FFB340`: the B1 badge, and the primary buttons, checks and focus in the Basement's big dialogs (`--amb`).
-- **Pipe copper** `#A8661C`.
-- **Accent swatches** (Settings › Appearance): `#F5A524` `#FF7A45` `#F7768E` `#FF79C6` `#BD93F9` `#7AA2F7` `#2AC3DE` `#9ECE6A`.
+Colour comes from generated OKLCH scales (DESIGN.md §2). Each scale has 12 steps, and each step has one job. A theme comes from four inputs: neutral hue, neutral chroma, accent and contrast.
 
-### State colors: one meaning each, and never the accent
-The dashboard (`dashboard.html :root`) and Swift's `Theme` share these.
+- **Signal green**, the brand accent: `#00823A` light, `#05893E` dark. It marks the one primary action per view, links, focus and selection, and covers under 3% of any screen.
+- **Accents:** Signal (the default), Teal or Graphite. A guard keeps any accent away from the status hues and from violet.
+- **Status colours:** one meaning each, never the accent, and always paired with a glyph.
 
-| State | Meaning | Dark | Light | Ink, dark / light |
-|---|---|---|---|---|
-| orange | needs you | `#FF9F0A` | `#F08A00` | `#FF9F0A` / `#A85A00` |
-| yellow | your move | `#FFD60A` | `#E6B800` | `#FFD60A` / `#8A6D00` |
-| blue | working | `#0A84FF` | `#0A7AFF` | `#6FB4FF` / `#0062CC` |
-| red | crashed / failed | `#FF453A` | `#E5392F` | `#FF6B61` / `#C62828` |
-| green | done / merged | `#30D158` | `#2BA84A` | `#30D158` / `#1E7A36` |
-| gray | queued | `#8E8E93` | `#8E8E93` | `#A8A8AD` / `#5E5E66` |
-| purple | — | `#BF5AF2` | `#AF52DE` | `#D08CF7` / `#7E2FBF` |
-| teal | — | `#64D2FF` | `#16A3CC` | `#64D2FF` / `#0A6F94` |
-
-Tints (pill backgrounds) are the fill at 14–18%. Ink is the color for text on a card, at 4.5:1 or better. For a solid primary button use `--blue-solid` `#0062CC`, because white on `#0A84FF` is only 3.7:1.
-
-### Surfaces
-| Token | Dark (Basement, default) | Light (Greenlight Center) |
+| State | Colour | Glyph |
 |---|---|---|
-| `--bg` | `#111113` | `#FFFFFF` |
-| `--bar` / `--strip` | `#19191C` | `#F5F8F4` |
-| `--card` | `#1C1C1F` | `#FFFFFF` |
-| `--card2` / `--sheet` | `#232327` | `#EAF0E9` |
-| `--text` / `--text2` / `--text3` | `#F5F5F7` / `#C9C9CF` / `#9A9AA1` | `#18281C` / `#3D5243` / `#4E6352` |
-| `--line` / `--hair` | white 12% / 8% | `#DCE5DA` / `#ECF1EB` |
+| needs you | amber | diamond with ! |
+| your move | yellow | arrow in a circle |
+| working | blue | open ring |
+| crashed / failed | red | octagon with × |
+| queued | neutral | dotted circle |
+| waiting on others | neutral | hourglass |
+| done / merged | neutral | check in a circle |
 
-The light theme is tinted green and the dark theme is neutral.
+- **Agents:** the Claude mark in clay; Codex (the OpenAI mark) in the text colour. Both sit on a neutral tile.
+- **Terminal canvas:** the terminal keeps its Ghostty theme. Named terminal themes colour the canvas only.
 
-### Basement sidebar sections (`app/terminal.html paint()`)
-| Key | Section | Dark | Light |
-|---|---|---|---|
-| `t` | Hosts | `#66D4CF` | `#0E7C77` |
-| `b` | Workspaces | `#4DA3FF` | `#0969DA` |
-| `y` | Waiting on others | `#FFD60A` | `#8A6A00` |
-| `g` | Done | `#30D158` | `#1A7F37` |
-| `o` `r` `p` | needs you, failed, other | `#FF9F0A` `#FF6259` `#C597FF` | `#B25000` `#C9372C` `#8250DF` |
+## Type, shape, space, motion
 
-A repo's `.greenlight.json` `look` can override these keys, and it changes the chrome only, never the terminals.
+- **Type:** SF Pro, plus SF Mono for code, branches and logs, using ten roles (DESIGN.md §3). Body is 13/16 and nothing goes under 11. Weights are 400, 500, 600 and 700. Sentence case everywhere, with no tracked capitals. Every changing number uses tabular figures.
+- **Radius:** 4 (tags), 6 (controls), 8 (cards, menus), 12 (sheets, popovers), and full (pills, dots). Corners nest concentrically.
+- **Space:** 2, 4, 8, 12, 16, 24, 32, 48 and 64.
+- **Elevation:** four layered levels by role. Liquid Glass appears only in native chrome.
+- **Motion:** anything frequent or keyboard-driven is instant. Otherwise motion eases out under 300ms. Theme switches never animate, and Reduce Motion turns every movement into a fade (DESIGN.md §7).
 
-### Agents
-- Claude `#D97757`: the asterisk mark.
-- Codex `#3A3A3E` with a white glyph. The hexagon is our stand-in, not Codex's logo.
+## Icons
 
-## Type
-- UI: `-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif`.
-- Code and terminal: `ui-monospace, "SF Mono", Menlo, monospace` (Settings › Fonts; Ghostty's font wins when it is set).
-- Scale (`--fs-1…6`): 11 · 12 · 13 · 15 · 18 · 22 px, with line heights 14 · 16 · 18 · 20 · 22 · 26.
-- Floor badges and section headers are uppercase, 700 weight, letter-spacing .04em.
+There is one set, in `icons/ui/`: a 16 grid, a 1.5 stroke, round joins, `currentColor`, and `-fill` variants for selected states. The agent marks are in `icons/marks/`. The pages draw them with `dsIcon` and the native views with `Image(ds:)`. Drawing rules are in DESIGN.md §9.
 
-## Shape and space
-- Radius (`--r-1…4`): 6 · 10 · 14 · 20. In order: controls, cards, sheets, big surfaces.
-- Spacing (`--sp-1…6`), on a 4px grid: 4 · 8 · 12 · 16 · 24 · 32.
-- Elevation: `0 12px 32px` at 50% black (dark) or `rgba(25,50,30,.12)` (light).
-- Focus ring: `0 0 0 2px bg, 0 0 0 4px accent`.
+## How the values reach the code
 
-## UI glyphs
-These are inline SVGs on a 24px or 16px grid, 1.5–2px round strokes, `currentColor`. They live as code:
-- `app/terminal.html`: `I` (claude, codex, shell, bell, split right/down, plus, x, chevron, sidebar, brush, window, edit, refresh, merge, check, spinner, spark), `IC` (card actions, goal target), and `G` (sidebar badges, branch).
-- `app/dashboard.html`: its own inline set.
-- The forges (GitLab, GitHub) show people by their avatars, with the username on hover.
+| Source | Generator | Output |
+|---|---|---|
+| DESIGN.md front matter | `scripts/tokens.py generate` | a `<style id="ds-tokens">` block in each page (`--ds-*`) and `app/Sources/Tokens.swift` (`DS`) |
+| `brand/icons/{ui,marks}/*.svg` | `scripts/icons.py generate` | a `<script id="ds-icons">` block (`dsIcon`) and `app/Sources/Icons.swift` (`Image(ds:)`) |
+| `brand/icon/` | `scripts/build_icons.sh` (on a Mac) | `brand/icons/Greenlight*.icns` |
 
-## Motion
-- Pipe → Basement: the sidebar slides in, ease-out `cubic-bezier(.2,.8,.2,1)`. Basement → Pipe: it slides out, ease-in `cubic-bezier(.4,0,.8,.2)`. The default is 0.25 s; Settings › General › Sidebar slide changes it, and 0 or Reduce Motion turns the slide into a cut.
-- Between floors the orb flips (Settings › Terminal › Ride animation; 0 is off).
+`make lint` runs `tokens.py check` and `icons.py check`. It also runs `check_safety.py`, whose drift baseline (`scripts/drift_baseline.json`) counts literal colours, sizes, radii and shadows, and may only go down.
 
 ## Voice
-- Plain and short, in second person: "needs you", "your move", "Agent working", "Agent done".
-- Orange always means *needs you* and red always means *crashed*. A state color is never decoration.
-- Ask once before anything that can't be undone ("Confirm merge !N · can't be undone").
+
+- Plain and short, in second person: "Needs you", "Your move", "Agent working", "Agent done".
+- Buttons are a verb plus an object. A label that opens another step ends in "…" (the single character).
+- Ask once before anything that can't be undone ("Merge !123 into main? This can't be undone.").
+- The banned words and AI-slop tells are listed in DESIGN.md §11 and §12.
