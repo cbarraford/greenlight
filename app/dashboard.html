@@ -1543,13 +1543,13 @@ function renderPage(main){
 
 /* ---------- answering a waiting agent: its question, the answers to offer, a free reply ---------- */
 function grow(t){ t.style.height = ""; if (t.scrollHeight > t.clientHeight) t.style.height = t.scrollHeight + 2 + "px" }  // a textarea grows with its text, up to its CSS max-height
-function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), within CHAT_KEEP of your last word or its reply
+function chatLive(st){ return !!(st && st.chat && (st.chat.thread.length || st.chat.tried) && Date.now() - st.chat.at < CHAT_KEEP) }  // a message went in (or was tried: its picker may be gone), within CHAT_KEEP of your last word or a reply that ended its turn
 function chatOn(p){ return chatLive(ui.ask[p.name]) && ["working", "done"].includes(p.agent.state) }  // a chat goes on past "waiting": the agent replies, or ends its turn with its reply
 function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "done" && chatOn(p)) }  // waits on you: a question, or a chat's reply
 function askState(p){
   const a = p.agent, st = ui.ask[p.name], key = [a.state, a.since, a.last].join("|");  // since: an agent can ask again with no text in between
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
-  const reply = a.state === "done" && chatOn(p) && (!st.sent || st.typed == null || since(a.since) > since(st.typed));  // its reply ends its turn: a "done" newer than the message
+  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.err);  // its reply ends its turn: a "done" newer than your message (or its turn after a failed first one); never a turn you didn't start
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
     const chat = !chatLive(st) ? null : reply ? {...st.chat, at: Date.now()} : st.chat;  // a reply in time carries the chat on, with its own CHAT_KEEP to read and answer it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};

@@ -756,6 +756,9 @@ test("answer: in a chat, only a 'done' newer than your message is the agent's re
   assert.match(await page.textContent(".sheet"), /Waiting for the agent to pick it up/);
   await done(t0 + 5000, "Because of the release.");
   assert.equal((await posts(page, "ask")).length, asks + 1, "its reply");
+  await page.evaluate(() => window.mc.asked({name: "plan-a", question: "Because of the release.", kind: "prompt", options: []}));
+  await done(t0 + 9000, "Background task finished.");  // a turn you didn't start (a background task woke it)
+  assert.equal((await posts(page, "ask")).length, asks + 1, "not a reply: you sent nothing since");
   assert.deepEqual(page._errs, []);
 });
 
