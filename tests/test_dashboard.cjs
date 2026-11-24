@@ -495,10 +495,7 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   await page.hover(".toast .tmsg");
   await page.evaluate(() => new Promise(r => { toastTimer(10); render(); setTimeout(r, 120) }));
   assert.equal(await page.textContent(".toast.bad .tmsg b"), "Didn't merge", "the toast went while it was being read");
-  await page.evaluate(() => new Promise(r => setTimeout(r, 1100)));  // it has seen the hover once more
-  await page.mouse.move(5, 5);
-  await page.evaluate(() => new Promise(r => setTimeout(r, 50)));
-  assert.ok(await page.$(".toast"), "let go after reading, the toast went at once: it should get its time again");
+  await page.mouse.move(5, 5);  // its whole time again once let go: the fake-clock toast test checks that
   await page.waitForFunction(() => !document.querySelector(".toast"), null, {timeout: 3000});
   await page.evaluate(() => { ui.task.done = null; note("Didn't merge", "y", true) });
   await page.evaluate(() => note("Merged", "Squash"));
@@ -534,6 +531,12 @@ test("card actions: errors keep their end, join, and time out at 5s; a late repl
   assert.ok((await page.evaluate(() => window.__ms)).includes(5000) && !(await page.evaluate(() => window.__ms)).includes(12000), "the kept card toast went to 12s");
   await page.click(".toast .btn.x");
   assert.equal(await page.evaluate(() => ui.task.fresh), null, "the task's ring outlives the toast it was under");
+  await page.evaluate(() => { ui.task.done = {name: "t2", repo: "widgets"}; toastTimer(300); render() });
+  await page.click(".toast .btn.pri");  // Open in Basement: the toast's timer goes with it, so it can't clear a later task's ring
+  await page.mouse.move(5, 5);
+  await page.evaluate(() => { ui.task.fresh = "t3" });
+  await page.evaluate(() => new Promise(r => setTimeout(r, 1500)));
+  assert.equal(await page.evaluate(() => ui.task.fresh), "t3", "a dismissed toast's timer cleared a later task's ring");
   // a New task error up: a card's outcome replaces it (as before), never joins it as "undefined: …"
   await page.evaluate(() => { ui.task.done = {error: "repo gone"}; note("Merged !12 into main", "Squash") });
   assert.equal(await page.textContent(".toast .tmsg b"), "Merged !12 into main", "a New task error swallowed a card's success");
@@ -830,7 +833,9 @@ test("toast: hovering it holds the 12s timer, leaving restarts it", async page =
   await page.clock.fastForward(20000);
   assert.ok(await page.$(".toast"), "the toast left while hovered");
   await page.mouse.move(5, 300);
-  await page.clock.runFor(14000);  // the 1s re-check, then its whole 12s again (runFor fires timers set meanwhile)
+  await page.clock.runFor(2000);  // the 1s re-check sees it let go: it gets its whole 12s again, not dismissal
+  assert.ok(await page.$(".toast"), "let go after reading, the toast went at the next re-check");
+  await page.clock.runFor(12000);
   assert.equal(await page.$(".toast"), null);
 });
 
