@@ -434,7 +434,7 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         check("config: buildModelCatalog groups by manufacturer, collapses baked-effort variants, and preserves current selection",
               fullCat.map(\.manufacturer) == [.anthropic, .openai, .google, .other]
               && writerCat.map(\.manufacturer) == [.anthropic, .openai, .google]
-              && anthropic?.choices.map(\.name) == ["Opus 5.5", "Haiku 5.5", "Opus 5.5 · agy"]
+              && anthropic?.choices.map(\.name) == ["Opus 5.5", "Opus 5.5 · agy", "Haiku 5.5"]  // most expensive first
               && agyOpus?.supportedEfforts == ["low", "high"]
               && neon?.supportedEfforts == ["low", "medium", "high", "xhigh"]
               && neon?.supportsEffortSlider == true
@@ -447,7 +447,48 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               && neon.map { currentModelEffort(for: $0, modelId: "gemini-4-neon-high", storedEffort: "low") } == "high"
               && customCat.first { $0.manufacturer == .other }?.choices.contains { $0.id == "mystery-custom" } == true)
 
+        // Cost order: Claude by list price, other providers by codename tier, a harness's own default last.
+        let costRaw: [(String, String)] = [
+            ("Haiku 5.5", "claude-haiku-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Opus 5.5", "claude-opus-5-5"),
+            ("Fable 5.2", "claude-fable-5-2"), ("Fable 5.1", "claude-fable-5-1"),
+            ("Codex default", "codex"), ("GPT-6-Luna", "gpt-6-luna"), ("GPT-6.2-Astra", "gpt-6.2-astra"),
+            ("GPT-6.2-Sol", "gpt-6.2-sol"), ("GPT-6.1-Sol", "gpt-6.1-sol"), ("GPT-OSS 120B (Medium) · agy", "gpt-oss-120b-medium"),
+            ("Gemini 3.8 Flash (Medium)", "gemini-3.8-flash-medium"), ("Gemini 4 Argon (Medium)", "gemini-4-argon-medium"),
+            ("Antigravity default", "agy"), ("Gemini 4 Neon (High)", "gemini-4-neon-high"),
+        ]
+        let costCat = buildModelCatalog(from: costRaw, current: "claude-opus-5-5")
+        let ids = { (m: ModelManufacturer) in costCat.first { $0.manufacturer == m }?.choices.map(\.id) ?? [] }
+        check("config: ModelSelector lists each provider's models most expensive first",
+              ids(.anthropic) == ["claude-fable-5-1", "claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+              && ids(.openai) == ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6-luna", "gpt-oss-120b", "codex"]
+              && ids(.google) == ["gemini-4-neon", "gemini-4-argon", "gemini-3.8-flash", "agy"]
+              && modelCostRank("agy:claude-opus-5-5") == modelCostRank("claude-opus-5-5")
+              && modelCostRank("claude-mystery-9") > modelCostRank("claude-haiku-5-5"))
+
+        // Favorites: a model and its effort, toggled by the star, saved to ud, labelled with the effort.
+        let favNeon = neon.map { modelFavorite(for: $0, desiredEffort: "max") }
+        let favCli = gemCli.map { modelFavorite(for: $0, desiredEffort: "high") }
+        let favOpus = ModelFavorite(model: "claude-opus-5-5", effort: "high")
+        let once = togglingFavorite(favOpus, in: [])
+        if let d = try? JSONEncoder().encode([favOpus, favNeon].compactMap { $0 }) { ud.set(d, forKey: "testModelFavorites") }
+        ud.set(Data("not json".utf8), forKey: "testBadFavorites")
+        check("config: favorites remember model and effort, toggle, persist, and label with the effort",
+              favNeon == ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh")
+              && favCli == ModelFavorite(model: "gemini", effort: "")
+              && once == [favOpus] && togglingFavorite(favOpus, in: once).isEmpty
+              && togglingFavorite(ModelFavorite(model: "claude-opus-5-5", effort: "low"), in: once).count == 2
+              && savedModelFavorites("testModelFavorites") == [favOpus, ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh")]
+              && savedModelFavorites("testBadFavorites").isEmpty && savedModelFavorites("testUnsetFavorites").isEmpty
+              && modelFavoriteLabel(favOpus, in: fullCat) == "Opus 5.5 · High"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh"), in: fullCat) == "Gemini 4 Neon · Extra high"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini", effort: ""), in: fullCat) == "Gemini CLI"
+              && modelFavoriteLabel(ModelFavorite(model: "gemini-4-neon-xhigh", effort: "xhigh"), in: []) == "Gemini 4 Neon · Extra high")
+
         let selCore = Core()
+        selCore.modelFavorites = [favOpus]
+        let favPersisted = savedModelFavorites() == [favOpus]
+        selCore.modelFavorites = []
+        check("config: Core.modelFavorites persists to ud", favPersisted && savedModelFavorites().isEmpty)
         selCore.termNameEffort = "high"
         let selView = ModelSelector(c: selCore, title: "Test model", hint: "Hint", model: Binding(get: { selCore.model }, set: { selCore.model = $0 }), effort: Binding(get: { selCore.effort }, set: { selCore.effort = $0 }))
         _ = selView

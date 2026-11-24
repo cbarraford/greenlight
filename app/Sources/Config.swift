@@ -712,6 +712,61 @@ func modelIcon(for baseID: String, harness: String) -> String {
     }
 }
 
+/// Anthropic list prices (input $ per 1M tokens), used only to order the Claude models in `ModelSelector`.
+let claudeInputPrice: [String: Double] = [
+    "fable-5-1": 10, "fable-5": 10, "fable-5-2": 8, "opus-5": 5, "opus-4-8": 5, "opus-4-7": 5, "opus-4-6": 5,
+    "opus-5-5": 4, "sonnet-4-6": 3, "sonnet-5-5": 2, "sonnet-5": 2, "haiku-4-5": 1, "haiku-5-5": 0.1,
+]
+
+/// Where a model sorts inside its provider in `ModelSelector`: lower first, so the most capable (most expensive) leads.
+/// Claude models go by list price; other providers publish none here, so their codenames give a tier; a harness's
+/// own default (`codex`, `agy`, `opencode`…) goes last. Equal ranks keep `harness.py models`' order (newest first).
+func modelCostRank(_ id: String) -> Double {
+    if knownHarnesses.contains(id) { return 1_000 }
+    let low = (routeModel(id).id ?? id).lowercased()
+    if low.hasPrefix("claude-"), let price = claudeInputPrice[String(low.dropFirst(7))] { return -price }
+    if low.contains("gpt-oss") { return 40 }
+    let tokens = Set(low.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+    let tiers: [(Double, Set<String>)] = [
+        (10, ["fable", "opus", "sol", "neon", "daybreak", "ultra", "orchestrator", "pro"]),
+        (30, ["haiku", "luna", "flash", "mini", "nano", "lite"]),
+        (20, ["sonnet", "astra", "terra", "carbon", "argon", "hydrogen"]),
+    ]
+    return tiers.first { !$0.1.isDisjoint(with: tokens) }?.0 ?? 25
+}
+
+/// A starred model and the effort it runs at, shared by every `ModelSelector` (Core.modelFavorites).
+/// `effort` is "" for a model that takes none; a baked-effort id (`gemini-4-neon-high`) carries its own as well.
+struct ModelFavorite: Codable, Equatable, Hashable, Sendable {
+    let model: String
+    let effort: String
+}
+
+/// The favorite starring `choice` at `desiredEffort` would save: the concrete id and the effort it resolves to.
+func modelFavorite(for choice: ModelChoice, desiredEffort: String) -> ModelFavorite {
+    let r = choice.resolve(desiredEffort: desiredEffort)
+    return ModelFavorite(model: r.modelId, effort: choice.supportedEfforts.isEmpty ? "" : r.effort)
+}
+
+/// `favs` with `f` removed if it's there, else appended (favorites keep the order you starred them in).
+func togglingFavorite(_ f: ModelFavorite, in favs: [ModelFavorite]) -> [ModelFavorite] {
+    favs.contains(f) ? favs.filter { $0 != f } : favs + [f]
+}
+
+/// Favorites as saved under `key` in `ud`: a JSON array of {model, effort}; [] when unset or unreadable.
+func savedModelFavorites(_ key: String = "modelFavorites") -> [ModelFavorite] {
+    guard let data = ud.data(forKey: key), let favs = try? JSONDecoder().decode([ModelFavorite].self, from: data) else { return [] }
+    return favs.filter { !$0.model.isEmpty }
+}
+
+/// A favorite's chip label: the model's name from `catalog` (else the id) and its effort ("Opus 5.5 · High").
+func modelFavoriteLabel(_ f: ModelFavorite, in catalog: [ModelGroup]) -> String {
+    let known = models.first { $0.1 == f.model }?.0 ?? f.model  // not offered now: the built-in name, its effort dropped
+    let name = catalog.lazy.flatMap(\.choices).first { $0.matches(modelId: f.model) }?.name
+        ?? splitBakedEffort(id: f.model, name: known).baseName
+    return f.effort.isEmpty ? name : "\(name) · \(effortName(f.effort))"
+}
+
 /// Picks `desired` when supported; otherwise the closest lower level in `efforts`, else the lowest supported level.
 func nearestEffort(_ desired: String, in supported: [String]) -> String {
     if supported.contains(desired) { return desired }
@@ -805,7 +860,11 @@ func buildModelCatalog(from rawOptions: [(String, String)], current: String, whe
     }
     return ModelManufacturer.allCases.compactMap { mfg in
         guard let choices = byMfg[mfg], !choices.isEmpty else { return nil }
-        return ModelGroup(manufacturer: mfg, choices: choices)
+        let ranked = choices.enumerated().sorted { a, b in
+            let (ra, rb) = (modelCostRank(a.element.id), modelCostRank(b.element.id))
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+        return ModelGroup(manufacturer: mfg, choices: ranked)
     }
 }
 
