@@ -36,8 +36,10 @@ final class Core: ObservableObject {
     static var refollowDelay = 2.0  // seconds before following a dropped turn again (tests: 0)
     /// This chat's running turn in UserDefaults, {id, question, watch, checkIn}: kept until its reply, so a relaunch follows it.
     var pendingKey: String { session == 0 ? "pendingTurn" : "pendingTurn-\(session)" }
-    private func savePending(_ r: Run, _ id: String) {
-        ud.set(["id": id, "question": r.question, "watch": r.watch, "checkIn": r.checkIn], forKey: pendingKey)
+    /// A turn the app gave up on while it still ran on the host: apart from pendingKey, which the next send takes over.
+    var lostKey: String { session == 0 ? "lostTurn" : "lostTurn-\(session)" }
+    private func savePending(_ r: Run, _ id: String, as key: String? = nil) {
+        ud.set(["id": id, "question": r.question, "watch": r.watch, "checkIn": r.checkIn], forKey: key ?? pendingKey)
     }
     /// This chat's context meter in UserDefaults: the main chat keeps the old keys, a second window's chat has its own.
     var meterKeys: (context: String, window: String) { session == 0 ? ("context", "window") : ("context-\(session)", "window-\(session)") }
@@ -825,7 +827,7 @@ final class Core: ObservableObject {
         for t in toasts where t.pending { toastListeners.removeValue(forKey: t.id) }
         toasts.removeAll { $0.pending }
         if run != nil { run?.files = []; stop(); run = nil }  // discard late events from the cleared conversation
-        ud.removeObject(forKey: pendingKey)
+        ud.removeObject(forKey: pendingKey); ud.removeObject(forKey: lostKey)
         if !keepQueue { queue = [] }
         refused = []  // about the old conversation's files
         clearing += 1
@@ -866,14 +868,14 @@ final class Core: ObservableObject {
 
     /// The turn saved when the app last quit mid-reply: followed from its first event, so its steps and reply come back.
     func resumeTurn() {
-        guard run == nil, let p = ud.dictionary(forKey: pendingKey) else { return }
-        guard let id = p["id"] as? String, id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else {
-            ud.removeObject(forKey: pendingKey)  // not one chat.py made: nothing to follow, now or at the next launch
-            return
-        }
+        guard run == nil, let key = [pendingKey, lostKey].first(where: { ud.dictionary(forKey: $0) != nil }),
+              let p = ud.dictionary(forKey: key) else { return }
+        ud.removeObject(forKey: key)
+        guard let id = p["id"] as? String, id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }  // not one chat.py made
         let r = Run(p["question"] as? String ?? "The reply in progress")
         r.watch = p["watch"] as? Bool ?? false; r.checkIn = p["checkIn"] as? Bool ?? false
         r.turnId = id; r.model = model; r.resumed = true
+        savePending(r, id)  // until its reply, as for any turn
         run = r
         log(.chief, name, .status, "picking up the reply that was running when Greenlight quit")
         followTurn(r, id)
@@ -913,15 +915,15 @@ final class Core: ObservableObject {
             }
             return
         }
+        if !r.stopping, let id = r.turnId { savePending(r, id, as: lostKey) }  // still running there: the next launch follows it
         finish(r, ok: false, text: r.stopping ? "Stopped." : "Lost the connection to \(host) (exit \(code)).")
-        if !r.stopping, let id = r.turnId { savePending(r, id) }  // still running there: the next launch follows it
     }
 
     private func event(_ l: String, _ r: Run) {
-        guard run === r, let d = l.data(using: .utf8),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
-        if j["e"] as? String != "turn" { r.applied += 1 }  // the turn's own lines (any JSON object), as `follow` sends them again
-        guard let e = j["e"] as? String else { return }
+        guard run === r else { return }
+        let j = l.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        if j?["e"] as? String != "turn" { r.applied += 1 }  // every line but send's own "turn", as `follow` sends them again (seen)
+        guard let j, let e = j["e"] as? String else { return }
         connected = true
         switch e {
         case "turn":

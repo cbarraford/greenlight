@@ -776,6 +776,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         sshLog.append((remote, h, stdin))
         if remote.contains("chat.py send") {
             onLine(#"{"e":"turn","id":"\#(tid)"}"#)
+            onLine("not json")  // a line the app can't read still counts: follow sends it again
             onLine(#"{"e":"step","id":"s1","title":"Looking","detail":"","call":""}"#)
             pendingMidTurn = (ud.dictionary(forKey: mainC.pendingKey)?["id"] as? String) == tid
             onExit(255)  // the connection drops before the reply
@@ -786,7 +787,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         } else { onExit(0) }
         return Process()
     }
-    followReply = ([#"{"e":"step","id":"s1","title":"Looking","detail":"","call":""}"#, #"{"e":"done","ok":true,"text":"Back."}"#], 0)
+    followReply = (["not json", #"{"e":"step","id":"s1","title":"Looking","detail":"","call":""}"#, #"{"e":"done","ok":true,"text":"Back."}"#], 0)
     let wasVerbose = mainC.verbose
     mainC.verbose = true; mainC.feed.clear()
     mainC.send("A long one")
@@ -797,6 +798,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.verbose = wasVerbose
     let clearedAfterReply = ud.dictionary(forKey: mainC.pendingKey) == nil && mainC.run == nil
     // a long turn through more drops than the tries: each follow brings something new, so the tries start over
+    let followOverride = sshOverride
     var drops = 0
     sshOverride = { remote, h, stdin, onLine, onExit in
         sshLog.append((remote, h, stdin))
@@ -813,24 +815,32 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.send("Very long")
     RunLoop.main.run(until: Date() + 0.2)
     let triesReset = drops == 7 && mainC.msgs.last?.text == "Made it."
-    sshOverride = { remote, h, stdin, onLine, onExit in
-        sshLog.append((remote, h, stdin))
-        if remote.contains("chat.py send") {
-            onLine(#"{"e":"turn","id":"\#(tid)"}"#)
-            onExit(255)
-        } else if remote.contains("chat.py follow") {
-            follows += 1
-            for l in followReply.lines { onLine(l) }
-            onExit(followReply.code)
-        } else { onExit(0) }
-        return Process()
-    }
+    sshOverride = followOverride
     followReply = ([], 255)  // the host stays away: five tries, then lost, but the id stays for the next launch
     follows = 0
     mainC.send("Another")
     RunLoop.main.run(until: Date() + 0.2)
     let gaveUp = follows == 5 && mainC.msgs.last?.text.contains("Lost the connection") == true && mainC.run == nil
-        && (ud.dictionary(forKey: mainC.pendingKey)?["id"] as? String) == tid
+        && (ud.dictionary(forKey: mainC.lostKey)?["id"] as? String) == tid
+    // the next sends take over pendingKey: one fails before its "turn" (the host still away), one is refused there
+    sshOverride = { _, _, _, _, onExit in onExit(255); return Process() }
+    mainC.send("While away")
+    RunLoop.main.run(until: Date() + 0.05)
+    sshOverride = { _, _, _, onLine, onExit in
+        onLine(#"{"e":"turn","id":"\#(String(repeating: "cd", count: 16))"}"#)
+        onLine(#"{"e":"done","ok":false,"text":"Another message is still running in this chat."}"#)
+        onExit(0)
+        return Process()
+    }
+    mainC.send("Back again")
+    RunLoop.main.run(until: Date() + 0.05)
+    let lostKept = (ud.dictionary(forKey: mainC.lostKey)?["id"] as? String) == tid && mainC.run == nil
+    sshOverride = followOverride
+    followReply = ([#"{"e":"done","ok":true,"text":"The lost one."}"#], 0)
+    mainC.resumeTurn()  // the next launch
+    RunLoop.main.run(until: Date() + 0.05)
+    let lostResumed = mainC.msgs.last?.text == "The lost one." && ud.dictionary(forKey: mainC.lostKey) == nil
+        && ud.dictionary(forKey: mainC.pendingKey) == nil
     ud.set(["id": tid, "question": "From before", "watch": false, "checkIn": false], forKey: mainC.pendingKey)
     followReply = ([#"{"e":"done","ok":true,"text":"Resumed."}"#], 0)
     mainC.resumeTurn()
@@ -849,11 +859,12 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.send("Quitting")
     let keptForRelaunch = mainC.run != nil && (ud.dictionary(forKey: mainC.pendingKey)?["id"] as? String) == tid
     Core.quitting = false
+    ud.set(["id": tid], forKey: mainC.lostKey)
     mainC.clear()
-    let clearForgets = ud.dictionary(forKey: mainC.pendingKey) == nil
+    let clearForgets = ud.dictionary(forKey: mainC.pendingKey) == nil && ud.dictionary(forKey: mainC.lostKey) == nil
     Core.refollowDelay = 2.0
     check("core: turns keep their id until the reply, follow again after a drop, resume after a relaunch, and survive quitting",
-          pendingMidTurn && refollowed && clearedAfterReply && triesReset && gaveUp && resumed && goneNoted && badIdIgnored && keptForRelaunch && clearForgets)
+          pendingMidTurn && refollowed && clearedAfterReply && triesReset && gaveUp && lostKept && lostResumed && resumed && goneNoted && badIdIgnored && keptForRelaunch && clearForgets)
 
     // 10. Additional Core branches: error notes, inbox R/1/Up keys, question(for:) fallback, tailOutbox, voice-on DWIM, checkInTurn
     sshOverride = { remote, h, stdin, onLine, onExit in

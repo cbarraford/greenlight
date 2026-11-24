@@ -89,7 +89,7 @@ def test_runner_alive_by_identity_and_a_grace_period_before_it(turns):
 def test_start_turn_detaches_the_runner_and_keeps_the_message_private(turns):
     with mock.patch.object(chat.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen, \
          mock.patch.object(chat.auto, "process_start", return_value="b1"):
-        tid = chat.start_turn(["send", "--model", "claude"], "the message")
+        tid, _ = chat.start_turn(["send", "--model", "claude"], "the message")
     argv, kw = popen.call_args.args[0], popen.call_args.kwargs
     assert argv[1:] == [os.path.realpath(chat.__file__), "_run", tid, "send", "--model", "claude"]
     assert kw["start_new_session"] is True and kw["stdin"] is subprocess.DEVNULL and kw["stderr"] is subprocess.DEVNULL
@@ -140,10 +140,10 @@ def test_quick_commands_answer_inline(gl_home, monkeypatch, cmd):
 def test_turns_start_detached_print_their_id_then_follow(gl_home, monkeypatch, capsys, argv, stdin):
     monkeypatch.setattr(sys, "argv", ["chat.py", *argv])
     monkeypatch.setattr(sys, "stdin", io.StringIO("msg"))
-    with mock.patch.object(chat, "start_turn", return_value=TID) as st, mock.patch.object(chat, "follow", return_value=0) as fo, \
+    with mock.patch.object(chat, "start_turn", return_value=(TID, "proc")) as st, mock.patch.object(chat, "follow", return_value=0) as fo, \
          pytest.raises(SystemExit) as e:
         chat.main()
-    assert st.call_args.args == (argv, stdin) and fo.call_args.args == (TID,) and e.value.code == 0
+    assert st.call_args.args == (argv, stdin) and fo.call_args == mock.call(TID, child="proc") and e.value.code == 0
     assert json.loads(capsys.readouterr().out) == {"e": "turn", "id": TID}
 
 
@@ -181,14 +181,14 @@ def test_a_runner_killed_while_its_own_send_follows_is_reaped_and_gets_a_reply(t
     stub = tmp_path / "runner.py"
     stub.write_text("import json, time\nprint(json.dumps({'e': 'start'}), flush=True)\ntime.sleep(60)\n")
     with mock.patch.object(chat, "__file__", str(stub)):
-        tid = chat.start_turn([], "hi")
+        tid, child = chat.start_turn([], "hi")
     pid = json.loads(Path(chat.turn_paths(tid)[1]).read_text())["pid"]
     deadline = time.time() + 10
     while not Path(chat.turn_paths(tid)[0]).read_text() and time.time() < deadline:
         time.sleep(0.02)
     os.kill(pid, signal.SIGKILL)
     got = {}
-    t = threading.Thread(target=lambda: got.update(rc=chat.follow(tid, poll=0.01)), daemon=True)
+    t = threading.Thread(target=lambda: got.update(rc=chat.follow(tid, poll=0.01, child=child)), daemon=True)
     t.start()
     t.join(10)
     assert not t.is_alive(), "follow kept waiting on its dead runner's zombie"
@@ -205,28 +205,23 @@ def test_a_runner_without_a_start_time_is_judged_by_its_pid(turns):
     assert not chat.runner_alive(TID)
 
 
-def test_a_turn_cleared_before_its_runner_starts_never_runs(gl_home, turns, capsys, monkeypatch):
+@pytest.mark.parametrize("cleared", [True, False])
+def test_a_turn_cleared_after_send_started_it_never_runs(gl_home, turns, capsys, monkeypatch, cleared):
+    """The check is inside turn()'s reservation lock: no Clear can land between it and the reservation."""
     monkeypatch.setenv(chat.TURN_GEN, chat.generation_unlocked())
-    with chat.scope_lock():
-        chat.rotate_generation_unlocked()  # Clear, between send starting the runner and the runner getting going
-    Path(chat.turn_paths(TID)[2]).write_text("old request")
-    with mock.patch.object(chat, "dispatch") as d, mock.patch.object(chat.signal, "signal"):
-        chat.run_turn(TID, ["send"])
+    if cleared:
+        with chat.scope_lock():
+            chat.rotate_generation_unlocked()  # Clear, after send started the runner
+    with mock.patch.object(chat, "_turn_owned", return_value=None) as owned:
+        chat.turn("old request", "claude", None)
     out = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    assert not d.called and out[0]["e"] == "done" and out[0]["text"] == "Cleared before it started." and out[-1] == chat.END
-    assert chat.TURN_GEN not in os.environ  # the harness it would start doesn't inherit it
-
-
-def test_a_turn_in_the_same_conversation_runs(gl_home, turns, capsys, monkeypatch):
-    monkeypatch.setenv(chat.TURN_GEN, chat.generation_unlocked())
-    Path(chat.turn_paths(TID)[2]).write_text("msg")
-    with mock.patch.object(chat, "dispatch") as d, mock.patch.object(chat.signal, "signal"):
-        chat.run_turn(TID, ["send"])
-    assert d.called
+    assert owned.called is not cleared and chat.TURN_GEN not in os.environ  # the harness it starts doesn't inherit it
+    assert (out[:1] == [{"e": "done", "ok": False, "text": "Cleared before it started.", "context": 0, "window": None, "ms": None}]) is cleared
 
 
 def test_start_turn_passes_the_conversation_generation_to_its_runner(turns):
-    with mock.patch.object(chat.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen, \
+    proc = mock.Mock(pid=4242)
+    with mock.patch.object(chat.subprocess, "Popen", return_value=proc) as popen, \
          mock.patch.object(chat.auto, "process_start", return_value="b1"):
-        tid = chat.start_turn(["send"], "m")
-    assert popen.call_args.kwargs["env"][chat.TURN_GEN] == chat.generation_unlocked() and chat.SPAWNED[tid].pid == 4242
+        _, child = chat.start_turn(["send"], "m")
+    assert popen.call_args.kwargs["env"][chat.TURN_GEN] == chat.generation_unlocked() and child is proc

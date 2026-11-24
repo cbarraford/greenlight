@@ -1453,6 +1453,8 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         if os.path.exists(os.path.join(DIR, RESETTING)):
             return emit(e="done", ok=False, text="This chat's Clear was interrupted; clear it again before sending.",
                         context=0, window=None, ms=None)
+        if (sent_in := os.environ.pop(TURN_GEN, "")) and sent_in != generation_unlocked():  # a Clear came after send started it
+            return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
         delivery = os.path.join(DIR, QUESTION_DELIVERY + scope_suffix())
         try:
             active = json.load(open(path))
@@ -1779,7 +1781,6 @@ TURN_GRACE = 10  # seconds a turn may run before its runner's identity is on fil
 END = {"e": "end"}  # the runner's last line: nothing more will come
 QUICK = {"new", "stop", "bg", "bgstop"}  # answered here and now, not turns
 TURN_GEN = "GREENLIGHT_TURN_GEN"  # the runner's environment: the conversation generation its turn was sent in
-SPAWNED: dict[str, subprocess.Popen] = {}  # turn id -> the Popen of a runner this process started: polled so a killed one is reaped, not left a zombie
 
 
 def turn_paths(tid):
@@ -1838,17 +1839,17 @@ def start_turn(args, data):
                              env=os.environ | {TURN_GEN: gen})
     finally:
         os.close(out)
-    SPAWNED[tid] = p
     tmp = f"{meta}.{os.getpid()}.tmp"
     with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
         fh.write(json.dumps({"pid": p.pid, "birth": auto.process_start(p.pid)}))
     os.replace(tmp, meta)
-    return tid
+    return tid, p
 
 
-def follow(tid, poll=0.1):
+def follow(tid, poll=0.1, child=None):
     """Stream a turn's events from its first, until its end. A turn that ended without a `done` (its runner killed or
-    crashed) gets one, so the app never waits forever. 3: no such turn (pruned, or cleared)."""
+    crashed) gets one, so the app never waits forever. 3: no such turn (pruned, or cleared). child: the runner's Popen,
+    when this process started it (send): polled so a killed runner is reaped, not left a zombie that still looks alive."""
     if not TURN_ID.fullmatch(tid or "") or not os.path.exists(turn_paths(tid)[0]):
         return 3
     done, pos, last_look = False, 0, False
@@ -1874,8 +1875,8 @@ def follow(tid, poll=0.1):
                 continue
             if last_look:
                 return 0 if done else _ended()
-            if (p := SPAWNED.get(tid)) is not None:
-                p.poll()  # our own child (send): reap it if it died, or its zombie would still look alive
+            if child is not None:
+                child.poll()
             if not runner_alive(tid):
                 last_look = True  # one more read: it may have written its last lines as it went
                 continue
@@ -1887,13 +1888,6 @@ def _ended():
     return 0
 
 
-def cleared_before_start():
-    """True when a Clear came between `send` starting this turn and its runner getting going: it's for a gone conversation."""
-    gen = os.environ.pop(TURN_GEN, "")
-    with scope_lock():
-        return bool(gen) and generation_unlocked() != gen
-
-
 def run_turn(tid, args):
     """The runner: the turn itself, with its message from the private file (then deleted), and END as its last line."""
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -1902,8 +1896,6 @@ def run_turn(tid, args):
         with open(inp) as fh:
             data = fh.read()
         os.remove(inp)
-        if cleared_before_start():  # its conversation was cleared while this process started: don't run it in the new one
-            return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
         sys.stdin = io.StringIO(data)
         dispatch(args)
     finally:
@@ -1920,9 +1912,9 @@ def main():
         sys.exit(follow(args[1] if len(args) > 1 else ""))
     if cmd in QUICK:
         return dispatch(args)
-    tid = start_turn(args, "" if cmd == "compact" else sys.stdin.read())  # send (the default) and compact are turns
+    tid, child = start_turn(args, "" if cmd == "compact" else sys.stdin.read())  # send (the default) and compact are turns
     print(json.dumps({"e": "turn", "id": tid}), flush=True)  # the app keeps it until the reply: `follow` after a restart
-    sys.exit(follow(tid))
+    sys.exit(follow(tid, child=child))
 
 
 def clear_chat():
