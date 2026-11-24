@@ -1107,5 +1107,12 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     rs.setHost("mac")
     check("project host: RulesStore.setHost persists mode and updates repoHostTarget",
           rs.repoHostMode == "mac" && rs.repoHostTarget == "mac" && rs.repoHosts["widgets"]?.target == "mac")
+    // A Mac-side turn that died because greenlight's scripts aren't on the Mac says so; a server drop is still a drop.
+    let missing = Core.lostText("local", localBackendMissing, server: "srv")
+    let gone = Core.lostText("srv", 2, server: "srv"), allLocal = Core.lostText("local", 2, server: "local")
+    check("project host: a Mac without greenlight's scripts gets the fix, not \"Lost the connection to this Mac\"",
+          missing.contains("aren't on this Mac") && missing.contains("srv") && !missing.contains("Lost the connection")
+          && gone == "Lost the connection to srv (exit 2)." && allLocal == "Lost the connection to this Mac (exit 2).")
+    check("project host: tests never prefix Mac-side commands with a backend copy", localBackendPrefix(server: "srv").isEmpty)
     mainC.clear()
 }
