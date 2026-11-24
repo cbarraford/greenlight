@@ -567,7 +567,8 @@ final class PipeReader {
         let g = done
         src.setEventHandler { [weak self] in
             guard let self, !self.src.isCancelled else { return }
-            var chunk = [UInt8](repeating: 0, count: 65536)
+            let want = max(Int(min(self.src.data, 65536)), 4096)
+            var chunk = [UInt8](repeating: 0, count: want)
             let n = Darwin.read(fd, &chunk, chunk.count)
             if n > 0 { onData(Data(chunk[0..<n])); return }
             if n < 0 && (errno == EINTR || errno == EAGAIN) { return }
@@ -633,10 +634,9 @@ func ssh(_ remote: String, on h: String = host, stdin: String = "", onLine: @esc
                                     "msg_class": Diag.classify(String(decoding: tail.s, as: UTF8.self))])
             outReader.finish(until: deadline)
         } else {
-            errReader.cancel()
             Diag.event("ssh_exit", ["verb": Diag.verb(remote), "rc": 0, "secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
-            outReader.finish(within: 0.3)
             errReader.finish(within: 0)
+            outReader.finish(within: 0.3)
         }
         let leftover = buf.s; buf.s.removeAll()
         DispatchQueue.main.async {

@@ -347,15 +347,34 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
               lines == ["hello", "world"] && exitCode == 0 && failCode == 7)
         func isClosed(_ h: FileHandle?) -> Bool {
             guard let h else { return false }
-            do { _ = try h.readToEnd(); return false } catch { return true }
+            do { _ = try h.read(upToCount: 1); return false } catch {
+                var cur: NSError? = error as NSError
+                while let e = cur {
+                    if e.domain == NSPOSIXErrorDomain && (e.code == Int(EAGAIN) || e.code == Int(EINTR)) { return false }
+                    cur = e.userInfo[NSUnderlyingErrorKey] as? NSError
+                }
+                return true
+            }
         }
-        // a daemon keeps both pipes: finish() times out and closes both read handles even while Process is retained
+        let probe = Pipe()
+        let pfd = probe.fileHandleForReading.fileDescriptor
+        let pfl = fcntl(pfd, F_GETFL)
+        if pfl >= 0 { _ = fcntl(pfd, F_SETFL, pfl | O_NONBLOCK) }
+        let openNotClosed = !isClosed(probe.fileHandleForReading)
+        try? probe.fileHandleForReading.close()
+        let closedIsClosed = isClosed(probe.fileHandleForReading)
+        try? probe.fileHandleForWriting.close()
+        check("config: isClosed distinguishes an open O_NONBLOCK pipe from a closed handle",
+              openNotClosed && closedIsClosed)
+        // a daemon keeps both pipes: finish() times out promptly and closes both read handles even while Process is retained
         var heldCode: Int32?
-        let heldProc = ssh("sleep 2 & exit 3", on: "local", onExit: { heldCode = $0 })
+        let heldT0 = Date()
+        let heldProc = ssh("sleep 3 & exit 3", on: "local", onExit: { heldCode = $0 })
         let until3 = Date() + 5
         while heldCode == nil && Date() < until3 { RunLoop.main.run(until: Date() + 0.02) }
-        check("config: ssh() survives a held pipe and closes read handles even while Process is retained",
-              heldCode == 3
+        let heldElapsed = Date().timeIntervalSince(heldT0)
+        check("config: ssh() survives a held pipe, times out promptly, and closes read handles even while Process is retained",
+              heldCode == 3 && heldElapsed < 2.2
               && isClosed((heldProc.standardOutput as? Pipe)?.fileHandleForReading)
               && isClosed((heldProc.standardError as? Pipe)?.fileHandleForReading))
         var rc0ErrDone = 0
@@ -378,9 +397,9 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         let heldQ = DispatchQueue(label: "greenlight.test.pipe.held")
         let heldReader = PipeReader(heldPipe.fileHandleForReading, on: heldQ) { _ in }
         heldReader.finish(within: 0.05)
+        try? heldPipe.fileHandleForWriting.close()
         check("config: PipeReader.finish() times out and closes a held pipe without waiting for the writer",
               isClosed(heldPipe.fileHandleForReading))
-        try? heldPipe.fileHandleForWriting.close()
     }
 }
 
