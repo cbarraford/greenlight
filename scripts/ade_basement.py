@@ -11,6 +11,7 @@ import os
 import secrets
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -190,7 +191,19 @@ def launch(path, agent, prompt):
         prompt = f"Your brief is in {brief}. Read it and follow it."
     s = f"mc-{secrets.token_hex(4)}"
     # -i: the agent's PATH (~/.local/bin for claude) is set in .zshrc/.bashrc, which a bare `sh -c` from tmux never reads
-    tmux("new-session", "-d", "-s", s, "-c", path, "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l")
+    shell_cmd = "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l"
+    tmux_args = ["new-session", "-d", "-s", s, "-c", path, shell_cmd]
+    try:
+        import pane_log
+
+        pipe_cmd = pane_log.pipe_command(
+            str(Path(__file__).resolve().parent.parent), str(HOME), TMUX_SOCKET,
+            session=s, cwd=path, agent=agent, python=sys.executable,
+        )
+        tmux_args.extend([";", "if", "-F", "#{pane_pipe}", "", f"pipe-pane -O -t ={s}: " + pane_log.tmux_quote(pipe_cmd)])
+    except Exception:
+        pass
+    tmux(*tmux_args)
     with contextlib.suppress(OSError):  # the workspace page's Basement button attaches to it (last_agent.py); panes can't tell codex apart
         last_agent.note({path: (agent, s, int(time.time() * 1000))})
     return {"terminal": {"handle": tmux("display-message", "-p", "-t", s, "#{pane_id}").strip(), "session": s}}

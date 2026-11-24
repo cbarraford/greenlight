@@ -51,7 +51,7 @@ without the user's yes, and never attach anything but a bundle.
   `diag.event()` drops non-token strings and counts them in `dropped`; don't work around it.
 - A new string field needs its key in `diag.KEYS` and must hold an enum-like token. Identifiers go in `<x>_h` via `diag.h()`.
 - Never copy `~/.greenlight/diag/salt` anywhere, and never put the private journals (`log.jsonl`, `outbox.jsonl`,
-  `decisions.jsonl`, `history/`, `auto/*.log`, `report.html`) into a bug report, an issue or a commit.
+  `decisions.jsonl`, `history/`, `pane-logs/`, `auto/*.log`, `report.html`) into a bug report, an issue or a commit.
 - `~/.greenlight/leak.re` lists the user's private terms: nothing in the repo may match it (`tests/test_release.py`).
 
 ## Required Verification Gates (Before Commit / PR)

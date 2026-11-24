@@ -1554,6 +1554,153 @@ test("agent avatars, hover cards, and All output support Claude, Codex, and Anti
   assert.match(await page.textContent("#aout-sub"), /Antigravity is working/);
 });
 
+test("Agent log view phase 1: status strip, per-line relative-time gutter, and 'Since you last looked' divider", async page => {
+  const now = Date.now();
+  const rich = {
+    ...puck("log-ws", "Agent log view", "working"),
+    state: "working",
+    steps: ["mr_open", "ci_green", "approved", "merge"],
+    step_index: 1,
+    step: "ci_green",
+    agent: {state: "working", type: "claude", since: now - 300_000, tool: "Bash", input: "pytest -q", last: "Running tests", last_output_at: now - 180_000},
+    mr: {iid: 42, ref: "#42", forge: "github", web_url: "https://github.com/o/r/pull/42", title: "Agent log view", draft: true, state: "opened", pipeline: "running"},
+  };
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [rich]});
+  await page.evaluate(() => { localStorage.removeItem("gl_last_looked"); ui.agentsFolded = false; render() });
+
+  // Open from the agent card
+  await page.click(".acard[data-name='log-ws'] button.aline");
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: "mc-s1.g0:0", source: "pane", session: "mc-s1", last_output_ts: now - 180_000,
+    tool: "Read", tool_input: "scripts/pane_log.py",
+    entries: [
+      {id: "mc-s1.g0:1", role: "line", text: "Starting pytest", ts: now - 600_000, kind: "pane"},
+      {id: "mc-s1.g0:2", role: "line", text: "2 passed", ts: now - 180_000, kind: "pane"},
+    ],
+  });
+
+  // Status strip shows working state, time since last output, current tool, PR + Draft, CI, and lifecycle step
+  const strip = await page.textContent("#aout-strip");
+  assert.match(strip, /Working/, "status pill");
+  assert.match(strip, /Last output 3m ago/, "time since last output");
+  assert.match(strip, /Bash: pytest -q/, "current tool from agent");
+  assert.match(strip, /#42/, "PR ref");
+  assert.match(strip, /Draft/, "PR draft tag");
+  assert.match(strip, /CI running/, "CI status");
+  assert.match(strip, /Step 2 of 4 · CI green/, "lifecycle step");
+  assert.equal(await page.getAttribute("#aout-strip a.aos-pr", "href"), "https://github.com/o/r/pull/42");
+
+  // Pane log styling and per-line relative-time gutter
+  assert.equal(await page.evaluate(() => document.getElementById("aout-log").classList.contains("pane")), true);
+  assert.deepEqual(await page.$$eval("#aout-list .aoe.line .aots", es => es.map(e => e.textContent)), ["10m ago", "3m ago"]);
+  assert.equal(await page.$eval("#aout-list .aoe.line .aots", e => getComputedStyle(e).userSelect), "none", "gutter is non-selectable so copy grabs only log lines");
+  assert.equal(await page.$("#aout-looked"), null, "first visit has no 'Since you last looked' divider");
+
+  // Basement shortcut posts {cmd: "basement", path}
+  await page.click("#aout-basement");
+  assert.equal((await posts(page, "basement")).pop().path, rich.path);
+
+  // Close saves lastLooked = 180s ago; reopen with newer lines shows 'Since you last looked' divider in exact spot
+  await page.click("#aout-back");
+  assert.equal(await page.evaluate(() => getLastLooked("log-ws")), now - 180_000);
+
+  await page.click(".acard[data-name='log-ws'] button.aline");
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 5_000,
+    tool: "Edit", tool_input: "app/dashboard.html",
+    entries: [
+      {id: "mc-s1.g0:1", role: "line", text: "Starting pytest", ts: now - 600_000, kind: "pane"},
+      {id: "mc-s1.g0:2", role: "line", text: "2 passed", ts: now - 180_000, kind: "pane"},
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+    ],
+  });
+  assert.equal(await page.locator("#aout-looked").count(), 1, "divider appears once");
+  assert.match(await page.textContent("#aout-looked"), /Since you last looked/);
+  const order = await page.$$eval("#aout-list > *", es => es.map(e => e.id || e.dataset.id));
+  assert.deepEqual(order, ["mc-s1.g0:1", "mc-s1.g0:2", "aout-looked", "mc-s1.g0:3"], "divider sits right before first unseen line");
+
+  // Live relative-time gutter update: backdating data-ts ticks within 1.5s without re-rendering list
+  await page.$eval("#aout-list .aoe.line[data-id='mc-s1.g0:3'] .aots", e => { e.dataset.ts = String(Date.now() - 120_000) });
+  await page.waitForFunction(() => document.querySelector("#aout-list .aoe.line[data-id='mc-s1.g0:3'] .aots").textContent === "2m ago", null, {timeout: 3000});
+
+  // Status strip updates when agent switches to waiting/idle and falls back to pane-detected tool when agent.tool is empty
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [{
+    ...rich,
+    agent: {...rich.agent, state: "waiting", tool: "", input: ""},
+    mr: {...rich.mr, pipeline: "failed"},
+  }]});
+  const strip2 = await page.textContent("#aout-strip");
+  assert.match(strip2, /Waiting/);
+  assert.match(strip2, /Edit: app\/dashboard\.html/, "falls back to tool detected from recorded pane log");
+  assert.match(strip2, /CI failed/);
+
+  // Close & reopen with no new lines: divider does not appear, and live lines arriving while watching never spawn a stale divider
+  await page.click("#aout-back");
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [{...rich, agent: {...rich.agent, state: "idle"}, mr: {...rich.mr, pipeline: null}}]});
+  await page.evaluate(() => openPage("log-ws"));
+  await page.click("button:has-text('View log')");
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 5_000,
+    entries: [{id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"}],
+  });
+  const stripNoPipe = await page.textContent("#aout-strip");
+  assert.match(stripNoPipe, /Idle/);
+  assert.doesNotMatch(stripNoPipe, /no pipeline/i, "MR without pipeline does not render 'CI no pipeline'");
+  assert.equal(await page.$("#aout-looked"), null, "no divider when nothing arrived since last looked");
+
+  // Live partial tail arrives while watching: appears cleanly without spawning a stale divider, then transitions to committed line
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 2_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:tail", role: "line", text: "Half written", ts: now - 2_000, kind: "pane", partial: true},
+    ],
+  });
+  assert.equal(await page.textContent("#aout-list [data-tail='1'] .aotx"), "Half written");
+  assert.equal(await page.$("#aout-looked"), null, "live tail while watching never spawns a stale divider");
+
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now - 1_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+    ],
+  });
+  assert.equal(await page.$("#aout-list [data-tail='1']"), null, "committed line replaces partial tail");
+  assert.equal(await page.textContent("#aout-list [data-id='mc-s1.g0:4'] .aotx"), "Half written completed");
+  assert.equal(await page.$("#aout-looked"), null, "live output while watching never spawns a stale 'Since you last looked' divider");
+
+  // Closing while scrolled up (follow=false) preserves seenTs so unseen lines show 'Since you last looked' on reopen
+  await page.evaluate(() => { ui.out.follow = false; ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now + 5_000,
+    entries: [
+      {id: "mc-s1.g0:3", role: "line", text: "All green", ts: now - 5_000, kind: "pane"},
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+      {id: "mc-s1.g0:5", role: "line", text: "Unseen while scrolled up", ts: now + 5_000, kind: "pane"},
+    ],
+  });
+  await page.click("#aout-back");
+  assert.equal(await page.evaluate(() => getLastLooked("log-ws")), now - 1_000, "scrolled-up close keeps seenTs, not unseen ts");
+
+  // Narrow viewport & light appearance sanity
+  await page.setViewportSize({width: 480, height: 640});
+  await page.evaluate(() => { document.documentElement.dataset.appearance = "light"; openOut("log-ws") });
+  await page.evaluate(r => mc.transcript(r), {
+    name: "log-ws", before: null, more: null, source: "pane", session: "mc-s1", last_output_ts: now + 5_000,
+    entries: [
+      {id: "mc-s1.g0:4", role: "line", text: "Half written completed", ts: now - 1_000, kind: "pane"},
+      {id: "mc-s1.g0:5", role: "line", text: "Unseen while scrolled up", ts: now + 5_000, kind: "pane"},
+    ],
+  });
+  assert.equal(await page.locator("#aout-looked").count(), 1, "reopening shows divider before line that arrived while scrolled up");
+  const overflow = await page.evaluate(() => document.getElementById("aout-strip").scrollWidth > window.innerWidth + 2);
+  assert.equal(overflow, false, "status strip wraps cleanly at 480px width");
+  await page.click("#aout-back");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

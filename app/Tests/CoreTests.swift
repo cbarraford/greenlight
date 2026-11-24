@@ -1137,6 +1137,17 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     rs.setHost("mac")
     check("project host: RulesStore.setHost persists mode and updates repoHostTarget",
           rs.repoHostMode == "mac" && rs.repoHostTarget == "mac" && rs.repoHosts["widgets"]?.target == "mac")
+
+    // 13. Pane recorder tmux hooks & quoting
+    let hooks = App.paneRecorderHooks()
+    check("app: paneRecorderHooks emits idempotent after-new-session and client-attached pipe-pane hooks",
+          hooks.count == 2
+          && hooks[0].contains("after-new-session[1]")
+          && hooks[1].contains("client-attached[1]")
+          && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
+          && App.tmuxQuote(#"a"b\c$HOME"#) == #""a\"b\\c\$HOME""#
+          && App.tmuxFormatEscape("dir#1/file#2") == "dir##1/file##2")
+
     // A Mac-side turn that died because greenlight's scripts aren't on the Mac says so; a server drop is still a drop.
     let missing = Core.lostText("local", localBackendMissing, server: "srv")
     let gone = Core.lostText("srv", 2, server: "srv"), allLocal = Core.lostText("local", 2, server: "local")

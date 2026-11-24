@@ -1999,13 +1999,38 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         "bind -n WheelDownPane if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send -M' 'if -F \"#{alternate_on}\" \"send Down\"'"]
     // ponytail: the two lists are set at a fixed index, as an append (-as) grew them on every attach
     static var tmux: String { "tmux -L \(shellQuote(tmuxSocketName)) -f /dev/null" }
+    /// Escape a string as a tmux double-quoted argument (`\`, `"`, and `$`).
+    static func tmuxQuote(_ s: String) -> String {
+        "\"" + s
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$") + "\""
+    }
+    /// Escape literal `#` as `##` for tmux commands that run status-left format expansion (`pipe-pane`).
+    static func tmuxFormatEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "#", with: "##")
+    }
+    /// Idempotent tmux hooks (`after-new-session[1]`, `client-attached[1]`) that attach `pane_log.py record`
+    /// via `pipe-pane -O` when `#{pane_pipe}` is 0. Safe on remote hosts: no-ops cleanly if `pane_log.py` is absent.
+    static func paneRecorderHooks() -> [String] {
+        let script = tmuxFormatEscape("\(shellPath(greenlightCode))/scripts/pane_log.py")
+        let home = tmuxFormatEscape(shellPath(greenlightHome))
+        let sock = tmuxFormatEscape(shellQuote(tmuxSocketName))
+        let pipeShell = "[ -f \(script) ] && GREENLIGHT_HOME=\(home) exec python3 \(script) record --pane #{pane_id} --socket \(sock)"
+        let innerPipe = "pipe-pane -O " + tmuxQuote(pipeShell)
+        let hookVal = "if -F \"#{pane_pipe}\" \"\" " + tmuxQuote(innerPipe)
+        return [
+            "set-hook -g 'after-new-session[1]' \(shellQuote(hookVal))",
+            "set-hook -g 'client-attached[1]' \(shellQuote(hookVal))"
+        ]
+    }
     /// What a pane prints just before it runs tmux: the page sends tmux's wheel events (terminal.html `wheel()`) only after it.
     static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
     func paneCmd(session: String, cwd: String, on host: String) -> String {
         let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || exec $SHELL -l; "
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
-            + App.tmuxOpts.joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
+            + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts

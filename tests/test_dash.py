@@ -863,3 +863,64 @@ assert dash.menu(["1. Foo", "2. Bar", ">"]) == []
 # --model accepts <harness>:<model> ids
 assert dash._model_opts(["page", "ws", "--model", "agy:claude-opus-5-5-high", "--effort", "low"]) == {"model": "agy:claude-opus-5-5-high", "effort": "low"}
 print("agy transcripts, menus & trees agents ok")
+
+# `dash.transcript` prefers recorded tmux pane logs when present, and extracts ISO timestamps on JSONL fallback
+import pane_log  # noqa: E402
+_pl_dir = Path(tempfile.mkdtemp())
+_pl_home = _pl_dir / "pane-logs"
+_pl_home.mkdir(mode=0o700)
+(_pl_home / "mc-log1.jsonl").write_text(
+    json.dumps({"ts": 1_700_000_000_000, "meta": {"session": "mc-log1", "cwd": "/w/plog", "gen": 0}}) + "\n"
+    + json.dumps({"ts": 1_700_000_010_000, "d": "● Bash(pytest -q)\r\n2 passed\r\n"}) + "\n"
+    + json.dumps({"ts": 1_700_000_070_000, "d": "done\r\n"}) + "\n"
+)
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "plog", "path": "/w/plog"}, {})}), \
+     mock.patch.object(pane_log, "default_log_dir", return_value=_pl_home), \
+     mock.patch.object(ade_basement, "panes", return_value=[]):
+    _pr = dash.transcript("plog")
+    assert _pr["source"] == "pane" and _pr["session"] == "mc-log1"
+    assert _pr["tool"] == "Bash" and _pr["tool_input"] == "pytest -q"
+    assert _pr["last_output_ts"] == 1_700_000_070_000
+    assert [(e["role"], e["text"], e["ts"]) for e in _pr["entries"]] == [
+        ("line", "● Bash(pytest -q)", 1_700_000_010_000),
+        ("line", "2 passed", 1_700_000_010_000),
+        ("line", "done", 1_700_000_070_000),
+    ]
+
+# JSONL fallback parses ISO-8601 timestamps onto entries
+_ts_dir = Path(tempfile.mkdtemp())
+(_ts_dir / "t1.jsonl").write_text(
+    json.dumps({"type": "assistant", "timestamp": "2026-11-24T12:00:00Z", "message": {"content": [{"type": "text", "text": "hello"}]}}) + "\n"
+)
+with mock.patch.object(dash, "live_agents", return_value={"w1": ({"displayName": "tsws", "path": "/w/tsws"}, {})}), \
+     mock.patch.object(pane_log, "default_log_dir", return_value=_pl_home), \
+     mock.patch.object(ade_basement, "panes", return_value=[]), \
+     mock.patch.object(dash, "transcript_files", return_value=[(_ts_dir / "t1.jsonl", "claude")]):
+    _tr = dash.transcript("tsws")
+    assert _tr["source"] == "transcript"
+    _msg = next(e for e in _tr["entries"] if e["role"] == "assistant")
+    assert isinstance(_msg["ts"], int) and _msg["ts"] > 1_700_000_000_000 and _tr["last_output_ts"] == _msg["ts"]
+
+# Empty pane log and plain shell pane log do NOT hijack Claude/Codex JSONL transcripts; agent pane chains `more` to JSONL history
+(_pl_home / "mc-shell1.jsonl").write_text(
+    json.dumps({"ts": 1_700_000_000_000, "meta": {"session": "mc-shell1", "cwd": "/w/tsws", "gen": 0}}) + "\n"
+    + json.dumps({"ts": 1_700_000_010_000, "d": "$ ls\r\nREADME.md\r\n"}) + "\n"
+)
+(_pl_home / "mc-empty1.jsonl").write_text(
+    json.dumps({"ts": 1_700_000_000_000, "meta": {"session": "mc-empty1", "cwd": "/w/emptyws", "gen": 0, "agent": "claude"}}) + "\n"
+)
+with mock.patch.object(dash, "live_agents", return_value={
+        "w1": ({"displayName": "tsws", "path": "/w/tsws"}, {}),
+        "w2": ({"displayName": "emptyws", "path": "/w/emptyws"}, {}),
+        "w3": ({"displayName": "plog", "path": "/w/plog"}, {}),
+     }), \
+     mock.patch.object(pane_log, "default_log_dir", return_value=_pl_home), \
+     mock.patch.object(ade_basement, "panes", return_value=[]), \
+     mock.patch.object(dash, "transcript_files", return_value=[(_ts_dir / "t1.jsonl", "claude")]):
+    assert dash.transcript("tsws")["source"] == "transcript", "plain shell must not hijack JSONL transcript"
+    assert dash.transcript("emptyws")["source"] == "transcript", "empty pane log must fall back to JSONL transcript"
+    _chained = dash.transcript("plog")
+    assert _chained["source"] == "pane" and _chained["more"] == "t1:999999999"
+    _older = dash.transcript("plog", before=_chained["more"])
+    assert _older["source"] == "transcript" and any(e["text"] == "hello" for e in _older["entries"])
+print("pane log transcript ok")
