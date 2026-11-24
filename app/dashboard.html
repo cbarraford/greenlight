@@ -1549,7 +1549,7 @@ function asking(p){ return p.agent.state === "waiting" || (p.agent.state === "do
 function askState(p){
   const a = p.agent, st = ui.ask[p.name], key = [a.state, a.since, a.last].join("|");  // since: an agent can ask again with no text in between
   if (st && st.chat && !["waiting", "working", "done"].includes(a.state)) st.chat = null;  // it crashed or went away: the chat is over
-  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.failed);  // its reply ends its turn: a "done" newer than your message (or its turn after a failed first one); never a turn you didn't start
+  const reply = a.state === "done" && chatOn(p) && (st.sent ? st.typed == null || since(a.since) > since(st.typed) : !!st.failed);  // its reply ends its turn: a "done" newer than your message (or its turn after one failed over a picker); never a turn you didn't start
   if ((a.state === "waiting" || reply) && (!st || (st.key !== key && !st.loading && !st.sending))) {  // never mid-send: the reply keeps its place in the chat
     const chat = !chatLive(st) ? null : reply ? {...st.chat, at: Date.now()} : st.chat;  // a reply in time carries the chat on, with its own CHAT_KEEP to read and answer it
     ui.ask[p.name] = {key, loading: true, resp: null, draft: st ? st.draft : "", chat};
@@ -2643,7 +2643,7 @@ window.mc = {
   answered(r){
     const st = ui.ask[r.name]; if (!st) return;
     st.sending = false; acted(r.name, r.error, null, ui.answering === r.name || ui.page?.name === r.name);  // the sheet or page shows its own error
-    if (r.error) { st.err = r.error; st.failed = !!st.pend && !(st.chat && st.chat.thread.length) }  // failed: a first chat message, whose picker may be gone
+    if (r.error) { st.err = r.error; st.failed = !!st.pend && !!st.resp && st.resp.kind === "menu" }  // failed: a chat message over a picker, which may be gone now
     else if (st.pend) {  // a chat: the thread grows, and the sheet stays open for the agent's reply
       st.sent = true; st.draft = ""; st.typed = r.since;  // the agent's state start when the text went in
       st.chat = {thread: arr(st.chat && st.chat.thread).concat(st.pend).slice(-CHAT_MAX), at: Date.now()};
