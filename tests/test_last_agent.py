@@ -171,6 +171,7 @@ def test_resume():
     assert last_agent.resume(b, [], created=100) == {"harness": "codex"}
     assert last_agent.resume(b, [], created=101) == {}  # used before the worktree was made: a deleted workspace's at that path
     assert last_agent.resume({"harness": "pi", "used": 0}, [], created=101) == {"harness": "pi"}  # no time known: it stands
+    assert last_agent.resume(a, running, created=101) == {"harness": "claude", "session": "mc-a"}  # live: .git's mtime can't hide it
 
 
 def test_basement_launch_records_its_session(home):

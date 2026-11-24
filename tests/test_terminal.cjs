@@ -1181,6 +1181,19 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   assert.deepEqual(await typed((await opens()).pop().id), ["pi --continue\r"]);
 });
 
+test("a codex tab's ⌬ title is saved, so after a relaunch the Basement button shows it rather than start a second codex (issue 157)", async page => {
+  await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));
+  const o = (await posts(page, "open")).filter(x => x.ws === "/w/review").pop();
+  await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;⌬ review\x07")))), o.id);
+  const st = await lastSave(page);
+  const again = await boot(page.context().browser(), st);
+  const before = (await posts(again, "open")).length;
+  await again.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // before any output: the saved title says codex runs there
+  assert.equal((await posts(again, "open")).length, before, "no new tab");
+  assert.equal(await again.evaluate(() => cur.focus.session), o.session);
+  assert.deepEqual(again._errs, []); await again.close();
+});
+
 test("a rejected promise posts {cmd: error} with its name, for the app's diag trail", async page => {
   await page.evaluate(() => { Promise.reject(new TypeError("boom")) });
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "error" && m.name === "TypeError"));

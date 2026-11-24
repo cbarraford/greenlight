@@ -168,10 +168,12 @@ def resume(rec, panes, busy=False, created=None, binary=None):
     {} is a plain shell. busy: its agent is working, or waiting on you, somewhere we can't attach to: a second copy would fight it.
     created (ms): the worktree's birth; a record used before it is a deleted workspace's at the same path. ponytail: a used
     of 0 (an ADE that gives no times, herdr) can't be told apart, so it stands."""
-    if not rec or (created and rec["used"] and rec["used"] < created):
+    if not rec:
         return {}
-    if runs(rec, panes):
+    if runs(rec, panes):  # first: a session still running its harness is live whatever .git's mtime says (git worktree repair)
         return {"harness": rec["harness"], "session": rec["session"]}
+    if created and rec["used"] and rec["used"] < created:
+        return {}
     if busy:
         return {}
     return {"harness": rec["harness"], **({"bin": binary} if binary else {})}

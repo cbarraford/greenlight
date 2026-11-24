@@ -1797,7 +1797,7 @@ $("sdv").onmousedown = e => {
 
 // the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
 const ser = n => n.classList.contains("pane")
-  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && isClaude(n._p) ? {title: n._p.title} : {})}
+  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && (isClaude(n._p) || RUNS.codex(n._p)) ? {title: n._p.title} : {})}
   : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
 let saveT, lastSaved = "";
 const snap = () => JSON.stringify({cur: tabs.indexOf(cur), side: sideW, shut: [...shut], noAskDel, uses, lights, skin, skinLight, skinHist, acct: acctCfg,
