@@ -325,6 +325,8 @@ def test_release_workflow_guards_the_key_the_feed_and_reruns():
     assert 'grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}"' in guard
     assert guard.index('[ -z "$assets" ]') < guard.index("an empty draft release") < guard.index('gh release delete "$TAG"')
     assert "publish or delete" not in guard  # publishing a draft without this build's files only fails the next run
+    drafts = [ln for ln in guard.splitlines() if "draft release" in ln and "::error::" in ln]
+    assert len(drafts) == 2 and all("save what you need from it, delete it on GitHub" in ln for ln in drafts)
     assert guard.index("grep -qvxF") < guard.index('gh release delete "$TAG"')
     assert '"$(grep -cxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets")" = 3' in guard
     # a published build is never rebuilt or re-uploaded (the live feed may point at its files): it only re-points the feed;

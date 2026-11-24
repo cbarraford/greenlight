@@ -95,7 +95,7 @@ jobs:
             assets=$(tail -n +2 <<<"$rel")
             if [ "$(head -n 1 <<<"$rel")" = true ]; then
               if [ -z "$assets" ]; then
-                echo "::error::$TAG has an empty draft release (a run stopped before uploading, or one made by hand): delete it on GitHub, then re-run"; exit 1
+                echo "::error::$TAG has an empty draft release (a run stopped before uploading, or one made by hand): save what you need from it, delete it on GitHub, then re-run"; exit 1
               elif grep -qvxF -e "${ours[0]}" -e "${ours[1]}" -e "${ours[2]}" <<<"$assets"; then
                 echo "::error::$TAG has a draft release with other files (not a stopped run's): save what you need from it, delete it on GitHub, then re-run"; exit 1
               fi
