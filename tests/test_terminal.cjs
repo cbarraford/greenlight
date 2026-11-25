@@ -299,30 +299,20 @@ test("new window: the picker posts All, or the projects you tick", async page =>
   assert.deepEqual((await posts(page, "window")).pop().only, ["p2", ""]);
 });
 
-test("edit projects: a new project, a repo moved into it, folders checked", async page => {
+test("edit projects: both buttons open Settings › Projects (the app's one editor); its saves regroup the sidebar", async page => {
   await page.evaluate(p => term.projects(p), PROJ);
   await page.click("#shead .ttl"); assert.equal(await page.textContent("#dlg .seg [aria-pressed=true]"), "This window", "the window's title picks its projects");
   await page.fill("#dlg [aria-label='Filter projects']", "plat"); assert.deepEqual(await page.$$eval("#dlg .tile:not([hidden]) b", b => b.map(x => x.textContent)), ["Platform"], "filtered");
-  await page.click("#dlg button:has-text('Edit projects…')"); assert.match(await page.textContent("#dlg h3"), /project/i, "…and edits them");
-  await page.keyboard.press("Escape");
+  await page.click("#dlg button:has-text('Edit projects…')");
+  assert.deepEqual((await posts(page, "settings")).pop(), {cmd: "settings", tab: "Projects"});
+  assert.equal(await page.$eval("#dlg", d => d.hidden), true, "the picker closes: its tiles would be stale");
   await page.click("#shead [aria-label='Edit projects']");
-  await page.click("#dlg button:has-text('New project')");
-  await page.fill("#dlg [aria-label='Project name']", "Ops");
-  const dir = async d => { await page.fill("#dlg [aria-label='Add a folder']", d); await page.press("#dlg [aria-label='Add a folder']", "Enter") };
-  await dir("relative/path"); assert.match(await page.textContent("#dlg .err"), /isn't a full path/);
-  await dir("/srv/ops/"); await dir("/srv/ops");
-  assert.deepEqual(await page.$$eval("#dlg .fl code", c => c.map(x => x.textContent)), ["/srv/ops"], "one folder, no trailing slash");
-  await page.click("#dlg .pn button:has-text(\"No Man's Land\")");
-  await page.selectOption("#dlg select[aria-label='Project for octo/greenlight']", {label: "Ops"});
-  assert.ok(!(await page.$("#dlg select[aria-label='Project for octo/greenlight']")), "it moved out of No Man's Land");
-  await page.click("#dlg .pn button:has-text('Ops')");
-  await page.fill("#dlg [aria-label='Default folder']", "rel"); await page.click("#dlg button.pri");
-  assert.match(await page.textContent("#dlg .err"), /isn't a full path/, "a default folder is checked like a folder");
-  await page.fill("#dlg [aria-label='Default folder']", "/srv/ops/app/");
-  await page.click("#dlg button.pri");
-  const saved = (await posts(page, "projects")).pop().projects;
-  assert.equal(saved.length, 3); assert.deepEqual({...saved[2], id: 0}, {id: 0, name: "Ops", repos: ["octo/greenlight"], dirs: ["/srv/ops"], dir: "/srv/ops/app"});
+  assert.equal((await posts(page, "settings")).length, 2); assert.equal(await page.$eval("#dlg", d => d.hidden), true, "no dialog in the page");
+  assert.deepEqual(await posts(page, "projects"), [], "the page never writes projects.json");
+  await page.evaluate(p => term.projects([...p, {id: "pops", name: "Ops", repos: ["octo/greenlight"], dirs: ["/srv/ops"], dir: "/srv/ops/app"}]), PROJ);  // Settings saved
   assert.ok((await groups(page)).includes("Ops"), "the sidebar regroups at once");
+  assert.equal(await page.evaluate(() => typeof window.term.picked), "undefined", "the page's folder picker is gone with its dialog");
+  assert.deepEqual(page._errs, []);
 });
 
 test("a project window's new tabs open in its default folder", async page => {

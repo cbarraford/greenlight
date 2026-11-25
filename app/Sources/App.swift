@@ -1121,10 +1121,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             newL1(only, from: from.window)
         }
         if cmd == "pickNew" { l1Pick(here: false, in: l, on: from) }  // ⌘⇧N on L1 (a detached view: there)
-        if cmd == "editProjects" {  // L1's Edit projects…: down to the Basement, where the editor lives
-            wantFloor = "basement"; let tw = termWindow.contentView as? WKWebView
-            tw?.callJS("window.term && term.opens", ["basement", !termWindow.isVisible]); tw?.evaluateJavaScript("window.editProjects && editProjects()"); ride(up: false)  // safety-ok: a constant
-        }
+        if cmd == "editProjects" { greenlight.settingsTab = "Projects"; appSettings() }  // L1's Edit projects…: Settings › Projects
         // A click in one window that belongs to a view in another: forward it there and bring that window up.
         if cmd == "openPage", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
             fluid.callJS("window.mc && mc.openPage", [name]); show()  // the hive lives in the main window
@@ -1856,9 +1853,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func termState(_ wid: Int) -> URL { support.appendingPathComponent(wid == 0 ? "terminals.json" : "terminals-\(wid).json") }
     var projectsFile: URL { support.appendingPathComponent("projects.json") }
     var savedProjects: [[String: Any]] { (try? Data(contentsOf: projectsFile)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? [] }
-    /// The projects ([{id, name, repos, dirs, dir?}]) from the Basement's editor or Settings → Terminal: checked, saved, sent to every terminal window.
+    /// The projects ([{id, name, repos, dirs, dir?}]) from Settings › Projects: checked, saved, sent to every terminal window.
     @discardableResult
-    func saveProjects(_ any: Any?, from web: WKWebView? = nil) -> Bool {
+    func saveProjects(_ any: Any?) -> Bool {
         let dir = #"^/[\w./@+-]{1,300}$"#
         guard let list = any as? [[String: Any]], list.count <= 100, list.allSatisfy({ p in
             (p["id"] as? String)?.range(of: #"^p\w{1,40}$"#, options: .regularExpression) != nil && (p["name"] as? String)?.count ?? 0 <= 80
@@ -1867,8 +1864,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }), JSONSerialization.isValidJSONObject(list), let d = try? JSONSerialization.data(withJSONObject: list) else { return false }
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try? d.write(to: projectsFile, options: .atomic)
-        let s = String(decoding: d, as: UTF8.self)
-        termWebs.filter { $0 !== web }.forEach { $0.evaluateJavaScript("term.projects(\(s))") }
+        termWebs.forEach { $0.callJS("term.projects", [list]) }
         if projectsLoaded { refreshProjects() }
         return true
     }
@@ -2246,11 +2242,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "title": floors[wid]?.project = String((b["text"] as? String ?? "").prefix(80)); floors[wid]?.colors = b["colors"] as? [String] ?? []
             if let l = b["list"] as? [[String: Any]] { projList = l; projectsLoaded = true; syncL1(); syncDashPaths() }
         case "side": floors[wid]?.at = b["open"] as? Bool ?? false ? "basement" : "pipe"; if wid == 0 { termSide = b["open"] as? Bool ?? false; syncOrbs() }  // the green light shows only while the Basement's sidebar is open
-        case "projects": saveProjects(b["projects"], from: web)
-        case "pickdir":  // Projects' Choose folder…: the path goes back to the page, which checks it like a pasted one
-            guard let win = web?.window else { return }
-            let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false
-            p.beginSheetModal(for: win) { r in if r == .OK, let u = p.url { web?.evaluateJavaScript("term.picked(\(js(u.path)))") } }
         case "only":  // the title's Show projects: this window's set, changed in place (its shells stay)
             let only = b["only"] as? [String]
             if b["only"] != nil, !(b["only"] is NSNull), only == nil || only!.count > 100 { return }
@@ -2311,7 +2302,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if let r = b["repo"] as? String, r.range(of: #"^[\w.-]{1,100}$"#, options: .regularExpression) != nil, !r.hasPrefix(".") {
                 let k = b["kind"] as? String ?? "", kind = RulesStore.kinds.contains { $0.0 == k } ? "/" + k : ""
                 greenlight.settingsTab = "Repositories"; greenlight.settingsRepo = r + kind; appSettings()
-            } else { appSettings() }  // Jump › Settings
+            } else { if b["tab"] as? String == "Projects" { greenlight.settingsTab = "Projects" }; appSettings() }  // Jump › Settings; Edit projects… (Settings › Projects)
         case "up": appGoUp()  // Jump › Greenlight Center
         case "localName":  // the sidebar's Rename on this Mac
             let n = String((b["name"] as? String ?? "").trimmingCharacters(in: .whitespaces).prefix(60)); greenlight.localName = n == localDefault ? "" : n
