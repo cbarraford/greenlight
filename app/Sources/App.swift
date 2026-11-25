@@ -595,9 +595,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     lazy var inboxHost: NSHostingView<InboxOverlay> = { let h = NSHostingView(rootView: InboxOverlay(c: greenlight)); h.sizingOptions = []; return h }()
     var settingsSub: AnyCancellable?, inboxSub: AnyCancellable?
     lazy var fluid: WKWebView = makeWeb()
-    /// Web views whose page has drawn once (it said "ready"). §10.1: a window shows only after its web view first renders, so it
-    /// never flashes white or black: until then it's ordered in at alpha 0, and comes up on the page's ready (or after 2 s).
+    /// Web views whose page has drawn once (the dashboard's "ready", the terminal's "painted": its restored layout is up). §10.1: a
+    /// window shows only after its web view first renders, so it never flashes white or black: until then it's ordered in at alpha 0,
+    /// and comes up when the page says so (or after 2 s).
     var paintedWebs = Set<ObjectIdentifier>()
+    var paintWaits = [ObjectIdentifier: [() -> Void]]()  // whenPainted's callers, by web view
     func revealOnPaint(_ w: NSWindow, _ web: WKWebView) {
         guard !uitest, !w.isVisible, !paintedWebs.contains(ObjectIdentifier(web)) else { return }
         w.alphaValue = 0
@@ -605,9 +607,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func painted(_ web: WKWebView) {
         paintedWebs.insert(ObjectIdentifier(web))
+        DispatchQueue.main.async { [weak self] in self?.flushPaintWaits(ObjectIdentifier(web)) }
         guard let w = web.window, w.alphaValue < 1 else { return }
         DispatchQueue.main.async { [weak w] in w?.alphaValue = 1 }  // the next turn of the run loop: the page's first frame is up
     }
+    /// `f` once `web` has drawn (now, if it has), or after `within` seconds: a ride's picture of a cold Basement waits for it.
+    func whenPainted(_ web: WKWebView?, within: Double, _ f: @escaping () -> Void) {
+        guard let web, !uitest, !paintedWebs.contains(ObjectIdentifier(web)) else { return f() }
+        let id = ObjectIdentifier(web)
+        paintWaits[id, default: []].append(f)
+        DispatchQueue.main.asyncAfter(deadline: .now() + within) { [weak self] in self?.flushPaintWaits(id) }
+    }
+    func flushPaintWaits(_ id: ObjectIdentifier) { (paintWaits.removeValue(forKey: id) ?? []).forEach { $0() } }
     func makeWeb() -> WKWebView {
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "mc")  // dashboard.html → app: ready, page
@@ -1048,7 +1059,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
         guard m.frameInfo.isMainFrame, trustedOrigin(m.webView, for: m.name) else { return }
         if m.name == "term" {
-            if let b = m.body as? [String: Any] { if b["cmd"] as? String == "ready", let w = m.webView { painted(w) }; termMessage(b, from: m.webView) }
+            if let b = m.body as? [String: Any] { if b["cmd"] as? String == "painted", let w = m.webView { painted(w) }; termMessage(b, from: m.webView) }
             return
         }
         guard let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let from = m.webView else { return }
@@ -1731,12 +1742,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         ud.set(id + 1, forKey: "l1Next")
         let l = makeL1(id, only: only, from: from)
         saveL1s()
+        revealOnPaint(l.w, l.web)
         l.w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func reopenL1s() {
         guard !selftest else { return }  // not your windows and their chat-<n>
         let saved = ud.array(forKey: "l1Windows") as? [[String: Any]] ?? []
-        for d in saved { if let id = d["id"] as? Int, id > 0 { makeL1(id, only: livePick(d["only"] as? [String], known: nil)).w.orderFront(nil) } }
+        for d in saved { if let id = d["id"] as? Int, id > 0 { let l = makeL1(id, only: livePick(d["only"] as? [String], known: nil)); revealOnPaint(l.w, l.web); l.w.orderFront(nil) } }
     }
     /// The close button: its conversation goes, with its transcript and its open questions in the decision record (chat.py new).
     func closeL1(_ l: L1) {
@@ -1851,13 +1863,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         saved.append(["id": nid]); ud.set(saved, forKey: "termWindows"); setPick(only)  // its projects become everyone's
         let w = makeTermWindow(nid, only: only)
         if let f = from?.frame { w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)) }
+        if let web = w.contentView as? WKWebView { revealOnPaint(w, web) }
         w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     /// The windows New window made, as they were at quit.
     func reopenTermWindows() {
         for d in ud.array(forKey: "termWindows") as? [[String: Any]] ?? [] {
             guard let id = d["id"] as? Int, id > 0 else { continue }
-            makeTermWindow(id, only: sharedOnly).orderFront(nil)
+            let w = makeTermWindow(id, only: sharedOnly)
+            if let web = w.contentView as? WKWebView { revealOnPaint(w, web) }
+            w.orderFront(nil)
         }
     }
     /// Red button on a window New window made: its shells' tmux sessions go, and so does the window.
@@ -1923,14 +1938,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func loadTerm(_ web: WKWebView, only: [String]?) {
         guard let u = page("terminal") else { return }
         var q = URLComponents(url: u, resolvingAgainstBaseURL: false)!
-        let look = termLook()
+        let look = termLook(), main = termWins[0]?.contentView === web
+        if let b = look["background"], b.count == 7 { web.underPageBackgroundColor = hex(String(b.dropFirst())) }  // the terminal screen's, not white, under a resize (§10.1)
         if let b = isDark ? look["background"] : look["lightBg"], b.count == 7 { web.window?.backgroundColor = hex(String(b.dropFirst())).blended(withFraction: isDark ? 0.22 : 0.05, of: .black) }  // the page's band follows  // the tab strip's color, so the title band is part of it
         let json = String(data: (try? JSONSerialization.data(withJSONObject: look)) ?? Data(), encoding: .utf8) ?? "{}"
-        q.queryItems = [.init(name: "main", value: termWins[0]?.contentView === web ? "1" : "0"), .init(name: "dev", value: devName ?? ""), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""),
+        q.queryItems = [.init(name: "main", value: main ? "1" : "0"), .init(name: "dev", value: devName ?? ""), .init(name: "look", value: json), .init(name: "home", value: host.isEmpty || host == "local" ? NSHomeDirectory() : ""), .init(name: "host", value: host), .init(name: "localname", value: greenlight.localShown), .init(name: "editor", value: editorApp()?.name ?? ""), .init(name: "side", value: main && opensBasement ? "1" : "0"),
                         .init(name: "hosts", value: String(data: (try? JSONSerialization.data(withJSONObject: sshHosts())) ?? Data(), encoding: .utf8))]
         if let only { q.queryItems?.append(.init(name: "only", value: String(data: (try? JSONSerialization.data(withJSONObject: only)) ?? Data(), encoding: .utf8))) }
         web.loadFileURL(q.url!, allowingReadAccessTo: u.deletingLastPathComponent())
     }
+    /// Whether the orb's window opens on the Basement (the sidebar out) rather than the Pipe; New windows always open on the Pipe.
+    var opensBasement: Bool { (wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")) == "basement" }
     /// ⌘⇧T: down to the Basement from Greenlight; in the Basement, hides or shows the terminal.
     func toggleTerm() {
         if upstairs { return ride(up: false) }
@@ -2126,7 +2144,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
         let session = (b["session"] as? String).flatMap { $0.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil }
-        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "error", "localName", "trees", "turn"].contains(c) {
+        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "painted", "error", "localName", "trees", "turn"].contains(c) {
             Diag.event("action", ["cmd": c, "page": "terminal"])  // the command, never its payload; keystrokes and resizes aren't actions
         }
         switch b["cmd"] as? String {
@@ -2135,14 +2153,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             // ponytail: a reattach shows tmux's current screen only (older scrollback stays in tmux), and sessions a crash
             // orphaned before a save stay on the socket; reap ones not in the saved layout here if they pile up
             termLoaded = true
-            func file(_ u: URL) -> String { (try? Data(contentsOf: u)).flatMap { try? JSONSerialization.jsonObject(with: $0) } != nil ? (try? String(contentsOf: u, encoding: .utf8)) ?? "null" : "null" }
+            func file(_ u: URL) -> String {  // read once; only valid JSON reaches the page
+                (try? Data(contentsOf: u)).flatMap { d in (try? JSONSerialization.jsonObject(with: d)).map { _ in String(decoding: d, as: UTF8.self) } } ?? "null"
+            }
+            // the floor and the trees before the layout (issue 196): the sidebar is out before the first frame, and a one-project window
+            // has its host and folder at restore, so its first shell doesn't wait on dash.py trees
             web?.evaluateJavaScript("term.projects(\(file(projectsFile)))")
             web?.evaluateJavaScript("term.slide(\(greenlight.sidebarSlide))")
-            web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
-            web?.callJS("window.term && term.opens", [wid != 0 ? "pipe" : wantFloor ?? (greenlight.termOpens == "basement" ? "basement" : "pipe")])  // New windows: always the Pipe
-            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
+            web?.callJS("window.term && term.opens", [wid != 0 || !opensBasement ? "pipe" : "basement"])  // New windows: always the Pipe
             if let obj = paneReplay.replay(lastTreesObj) { web?.callJS("window.term && term.workspaces", [obj]) }
+            web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
+            if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
+        case "painted": break  // its restored layout has drawn: userContentController reveals the window
         case "open":
             guard let session, let at = paneTarget(b["ws"] as? String ?? "") else { return }
             let p = Pty()
@@ -2470,7 +2493,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if reduce { at(0.23, 0) { s.faceUp = !up } }
             at(0, 0.3) { s.tone = up ? 1 : 0 }  // the backdrop is the new level's color before that level grows
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0.3 * k, 0.1)) { [self] in  // ponytail: a 0.1s floor so a very short ride doesn't snap the level before it's drawn
-                snap(to) { [self] img in
+                whenPainted(to.contentView as? WKWebView, within: 1.5) { [self] in snap(to) { [self] img in
                     s.toShot = shot(to, img)
                     if reduce { s.to = Squash(a: 0); at(0, 0.2) { s.to.a = 1; s.veil = 0 } } else {
                         at(0, 0.3, Animation.easeOut) { s.to = Squash() }
@@ -2481,7 +2504,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                         rideWin?.orderOut(nil); rideWin = nil; riding = false
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
                     }
-                }
+                } }
             }
         }
     }
