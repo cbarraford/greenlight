@@ -1305,6 +1305,32 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
   page._errs.splice(0);  // the rejection is the point
 });
 
+test("a command that fits the TTY's line is typed; a longer one the pane's session runs, again on a reconnect until paneCmd has it", async page => {
+  // macOS keeps 1024 bytes of a line typed before the shell reads it and drops the rest, Enter too: a 1.3 KB brief sat unsent
+  const b64 = s => Buffer.from(s, "utf8").toString("base64");
+  const launch = async prompt => {
+    await page.evaluate(prompt => term.workspaces({agents: ["agy"], trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
+      mr: {ref: "!99", state: "opened", sha: "s1", conflicts: true}, moves: [{kind: "conflicts", prompt}]}]}), prompt);
+    await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"}); await page.click("#card .rv .go");
+    const o = (await posts(page, "open")).pop();
+    return {o, cmd: await page.evaluate(p => agentCmd("agy", p), prompt), typed: (await posts(page, "in")).filter(m => m.id === o.id).map(m => m.d)};
+  };
+  const fit = "x".repeat(1000 - "agy -i $''".length);  // exactly 1000 bytes: typed
+  let r = await launch(fit); assert.equal(Buffer.byteLength(r.cmd), 1000);
+  assert.equal(r.o.run, undefined); assert.deepEqual(r.typed, [r.cmd + "\r"]);
+  r = await launch(fit.slice(2) + "→");  // 999 characters, 1001 bytes: UTF-8 bytes are what the TTY counts
+  assert.equal(Buffer.byteLength(r.cmd), 1001); assert.equal(r.o.run, r.cmd); assert.deepEqual(r.typed, [], "nothing typed into the new pane");
+  const long = "Fix the merge conflicts on #189 → main. Don't push.\n\n" + "Keep both intents; if they can't both hold, stop and ask me.\n".repeat(30);
+  r = await launch(long); const {o} = r; assert.equal(o.run, r.cmd); assert.deepEqual(r.typed, []);
+  const reconnect = async () => { await page.evaluate(id => term.exited(id, 255), o.id); await page.evaluate(() => cur.focus.t.input("x", true)) };
+  const opens = async () => (await posts(page, "open")).filter(x => x.id === o.id);
+  await reconnect(); assert.equal((await opens()).pop().run, o.run, "ssh never connected: the reconnect starts it");
+  await page.evaluate(([id, d]) => term.feed(id, d), [o.id, b64("\x1b]6973;greenlight-run\x07")]);  // paneCmd's runMark
+  await reconnect(); assert.equal((await opens()).pop().run, undefined, "paneCmd has it: a reconnect only reattaches");
+  assert.equal((await opens()).length, 3);
+  assert.deepEqual((await posts(page, "in")).filter(m => m.id === o.id && m.d !== "x"), [], "never typed either");
+});
+
 test("Basement supports Codex and agy: tab icons, configured default agent launch, and diff notes", async page => {
   const b64 = s => Buffer.from(s, "utf8").toString("base64");
   const id = await page.evaluate(() => cur.focus.id);
@@ -1329,20 +1355,6 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   assert.ok(await page.$("#card button:text-is('Codex')"), "primary agent button switches to Codex");
   await page.click("#card .rv .go");
   assert.equal((await posts(page, "in")).pop().d, "codex $'Fix CI now'\r", "codex launches with positional prompt");
-  // a short command is typed; past the TTY's line (macOS keeps 1024 bytes of a line typed before the shell reads it and drops the rest,
-  // Enter too) the pane's session runs it instead, and a reconnect before tmux started sends it again
-  const long = "Fix the merge conflicts on #189 → main. Don't push.\n\n" + "Keep both intents; if they can't both hold, stop and ask me.\n".repeat(30);
-  await page.evaluate(long => term.workspaces({agents: ["agy"], trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
-    mr: {ref: "!99", state: "opened", sha: "s1", conflicts: true}, moves: [{kind: "conflicts", prompt: long}]}]}), long);
-  await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"}); await page.click("#card .rv .go");
-  const lo = (await posts(page, "open")).pop();
-  assert.equal(lo.run, await page.evaluate(long => agentCmd("agy", long), long)); assert.ok(lo.run.length > 2000, "past the TTY's line");
-  assert.deepEqual((await posts(page, "in")).filter(m => m.id === lo.id), [], "nothing typed into the new pane");
-  await page.evaluate(id => term.exited(id, 255), lo.id); await page.evaluate(() => cur.focus.t.input("x", true));
-  assert.equal((await posts(page, "open")).filter(o => o.id === lo.id).pop().run, lo.run, "ssh never connected: the reconnect starts it");
-  await page.evaluate(([id, d]) => term.feed(id, d), [lo.id, b64("\x1b]6973;greenlight-run\x07")]);  // paneCmd's runMark
-  await page.evaluate(id => term.exited(id, 255), lo.id); await page.evaluate(() => cur.focus.t.input("x", true));
-  assert.equal((await posts(page, "open")).filter(o => o.id === lo.id).pop().run, undefined, "paneCmd has it: a reconnect only reattaches");
   // Diff note pastes directly into an open Codex or agy pane, not only Claude
   const codexId = await page.evaluate(() => cur.focus.id);
   await page.evaluate(([id, data]) => term.feed(id, data), [codexId, b64("\x1b]0;⌬ Codex session\x07")]);

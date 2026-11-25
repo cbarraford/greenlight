@@ -2081,12 +2081,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// `run`: a command too long to type (terminal.html `newPane`). One interactive login shell evals it, then becomes a login shell:
     /// `trap : INT` keeps a ^C (or a stray quote) from ending the pane, and nothing is left to hand the terminal back to. tmux gets it
     /// through a temp file, as it refuses a command over 16 KB. `runMark`, printed first, tells the page not to send it again.
+    /// Known gap: zsh sets the trap after its rc files, so a ^C while `.zshrc` loads ends the pane (click the move again).
     static let runMark = "\\033]6973;greenlight-run\\007"
     func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
         let go = { (arg: String) in "exec $SHELL -lic " + shellQuote("trap : INT; eval \"\(arg)\"; exec $SHELL -l") + " greenlight " }
         let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || "
             + (run.isEmpty ? "exec $SHELL -l; " : "{ printf '\(App.runMark)'; \(go("$1"))\(shellQuote(run)); }; "
-                + "f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \(shellQuote(run)) > \"$f\" || f=; printf '\(App.runMark)'; ")
+                // a live session (a reconnect that raced the mark) ignores it: no file. Not saved: no mark, so the page keeps it
+                + "if \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=; printf '\(App.runMark)'; "
+                + "elif f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \(shellQuote(run)) > \"$f\"; then printf '\(App.runMark)'; else f=; fi; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
             + (run.isEmpty ? "" : " " + shellQuote(go("$(cat \"$1\"; rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
@@ -2185,7 +2188,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
-            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host, run: b["run"] as? String ?? ""))
+            let run = b["run"] as? String ?? ""; if !run.isEmpty { greenlight.active() }  // as a typed command ("in") counts
+            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host, run: run))
         case "in":
             ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
