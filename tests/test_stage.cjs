@@ -219,7 +219,12 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.locator(".doc li").allTextContents(), ["one", "two", "three"]);  // the unclosed ** waits
   assert.equal(await p.locator(".doc li.fresh").count(), 1);
   for (const [md, want] of [["see `scr", "see"], ["open [!12](https://x/1", "open"], ["open [!12", "open"], ["a [!12](u) b", "a !12 b"],
-                            ["**done** and `x`", "done and x"], ["```\nmake **", "make **"]]) {
+                            ["**done** and `x`", "done and x"], ["```\nmake **", "make **"],
+                            // the reviewers' repros: a marker at an item's or heading's start, ** in code, single emphasis, bare markers
+                            ["Intro.\n\n- one\n- **two", "Intro.one"], ["1. **merge", ""], ["## **Bold", ""], ["hello\n-", "hello"],
+                            ["Para\n``", "Para"], ["use `**` for bold", "use ** for bold"], ["`arr[`", "arr["], ["a *em", "a"],
+                            ["a *em* b", "a em b"], ["x ***both**", "x"], ["see _Sam", "see"], ["a b _", "a b"], ["my_var_name", "my_var_name"],
+                            ["- [ ] task", "[ ] task"], ["```\nmake\n``", "make"], ["* a bullet", "a bullet"], ["```x``` inline", "x inline"]]) {
     await p.evaluate(m => stage.text({ md: "", live: false }) || stage.text({ md: m, live: true }), md);
     assert.equal((await p.textContent("#s")).trim(), want, md);
   }

@@ -69,7 +69,8 @@ final class Voice: NSObject, ObservableObject {
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     /// The [screen] text streaming to the stage (#208): this turn's stream began, the newest text not yet sent, a send on its way.
-    var streamed = false, streamNext: [String: Any]?, streamDue = false
+    /// streamGen moves on when a stream ends, so a send scheduled for it never lands on a later one.
+    var streamed = false, streamNext: [String: Any]?, streamDue = false, streamLast: [String: Any]?, streamGen = 0
     /// The trail's turn (#208): its number, when it began (nil between turns), and how many draws it has had.
     var turnNo = 0, turnAt: Date?, turnDraws = 0
     static var turnSeq = 0
@@ -433,13 +434,14 @@ final class Voice: NSObject, ObservableObject {
     /// The [screen] text to the stage as it's written (#208), under the gist as its lead. The first part goes at once and takes
     /// the stage (Haiku's card doesn't land); later ones are sent at most every `streamEvery` seconds, the newest only.
     func stream(_ gist: String, _ md: String) {
-        streamNext = ["lead": plain(splitOptions(gist).0), "md": md, "live": true]
-        guard !streamDue else { return }
+        streamNext = ["lead": plain(splitOptions(gist).0), "md": md, "live": true]; streamLast = streamNext
         let first = !streamed
         if first { took(); streamed = true }
+        guard !streamDue else { return }
         streamDue = true
+        let g = streamGen
         DispatchQueue.main.asyncAfter(deadline: .now() + (first ? 0 : streamEvery)) { [weak self] in
-            guard let self else { return }
+            guard let self, g == self.streamGen else { return }  // its stream ended meanwhile
             self.streamDue = false
             guard self.on, self.streamed, let o = self.streamNext else { return }
             self.streamNext = nil
@@ -447,7 +449,14 @@ final class Voice: NSObject, ObservableObject {
         }
     }
     /// The stream is over (its turn ended, failed or a new one began): a send still on its way doesn't land.
-    func endStream() { streamed = false; streamNext = nil }
+    func endStream() { streamed = false; streamNext = nil; streamLast = nil; streamDue = false; streamGen += 1 }
+    /// The text block streaming was replaced by a later one (Codex's progress note): its stream ends where it got to, caret gone,
+    /// and the turn's own reply draws the stage again at its end, as if it had never streamed.
+    func textReset() {
+        guard streamed else { return }
+        if var o = streamLast { o["live"] = false; js("stage.text", [o]) }
+        endStream(); chiefDrew = false
+    }
     /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
     /// With only detail, a short pointer is said, so voice mode never goes silent.
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
@@ -483,8 +492,8 @@ final class Voice: NSObject, ObservableObject {
     }
     /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
     func stage(_ h: String) {
-        guard !chiefDrew else { return }
-        took()
+        guard !chiefDrew || streamed else { return }  // a block that closes after the [screen] text began still outranks it
+        endStream(); took()
         let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
         if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
         else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
@@ -682,7 +691,7 @@ final class Voice: NSObject, ObservableObject {
     var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
-        hush(); clearStatus()
+        hush(); clearStatus(); endStream()  // a send still on its way doesn't land on the next voice mode's stage
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil

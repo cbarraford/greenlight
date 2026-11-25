@@ -915,7 +915,29 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         let sf = Run("fail?"); c.run = sf; v.began(sf); sf.live = "Hi.\n[screen]\n- a"; v.live(sf)
         v.live(sf); v.failed("Stopped."); let stopped = !v.streamed && v.streamNext == nil
         c.run = nil; v.hush()
-        check("voice: a stage block outranks the streamed text, and a failed turn ends its stream (issue 208)", blockWins && stopped)
+        // a ```stage block that closes after the [screen] text began streaming still takes the stage, and finished() leaves it
+        let sl = Run("late block?"); c.run = sl; v.began(sl)
+        sl.live = "Here.\n[screen]\n- a"; v.live(sl); let lateStreamed = v.streamed
+        sl.live = "Here.\n[screen]\n- a\n```stage\n{\"title\":\"x\",\"items\":[\"a\"]}\n```"; v.live(sl)
+        let lateBlockWins = lateStreamed && !v.streamed && v.chiefDrew
+        let seqAfterBlock = v.drawSeq
+        v.finished(staged(sl.live), "Here.", detail: "- a"); let blockKept = v.drawSeq == seqAfterBlock
+        // a streamed block replaced by a later one (text_reset) ends its stream, so the turn's end draws as if it never streamed
+        let sr2 = Run("reset?"); c.run = sr2; v.began(sr2); sr2.live = "Note.\n[screen]\n- x"; v.live(sr2)
+        v.textReset(); let resetEnds = !v.streamed && !v.chiefDrew && v.streamLast == nil
+        c.run = nil; v.hush()
+        check("voice: a stage block outranks the streamed text, even one closing after it, and a failed turn ends its stream (issue 208)",
+              blockWins && stopped && lateBlockWins && blockKept)
+        // a turn that ends with a send pending doesn't hold up the next turn's first part, and its own send never lands
+        let s1 = Run("one?"); c.run = s1; v.began(s1); s1.live = "A.\n[screen]\n- a"; v.live(s1); s1.live += "\n- b"; v.live(s1)
+        v.finished(staged(s1.live), "A.", detail: "- a\n- b")
+        let s2 = Run("two?"); c.run = s2; v.began(s2); s2.live = "B.\n[screen]\n- c"; v.live(s2)
+        let nextTurnOut = v.streamed && v.streamDue && v.streamNext?["md"] as? String == "- c"
+        RunLoop.main.run(until: Date() + 0.05)
+        let firstSent = v.streamNext == nil && v.streamed
+        c.run = nil; v.hush(); v.endStream()
+        check("voice: a replaced text block's stream ends, its turn drawing again at the end (issue 208)", resetEnds)
+        check("voice: a turn ending with a stream send pending doesn't hold up the next turn's first part (issue 208)", nextTurnOut && firstSent)
         check("voice: a streaming [screen] text holds back its Options line and a line that may yet become one (issue 208)",
               streamable("- a\nOptions: x | y") == "- a" && streamable("- a\nOp") == "- a" && streamable("- a\n`options:") == "- a"
               && streamable("- a\nOpen it") == "- a\nOpen it" && streamable("Options:") == "" && streamable("- a\n\n") == "- a")
