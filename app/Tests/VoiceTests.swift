@@ -1136,6 +1136,13 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         let tick = cc.canvasTick; cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"])
         let freshWhileFolded = cc.canvas.fresh && cc.canvasTick > tick; cc.canvas.collapsed = false; let seen = !cc.canvas.fresh
         check("voice: a canvas drawn while folded says so until it's opened, and the transcript is told to keep its newest reply in view (issue 208)", freshWhileFolded && seen)
+        let gr = Run("g?"), gs = Run("s?"), gw = Run("w?"), gc = Run("c?"); gs.stopping = true; gw.watch = true; gc.checkIn = true
+        check("voice: only a typed reply that finished draws the canvas: not a stopped turn, a watch or check-in turn, a failure, or in voice mode (issue 208)",
+              drawsCanvas(gr, ok: true, voiceOn: false) && !drawsCanvas(gs, ok: true, voiceOn: false) && !drawsCanvas(gw, ok: true, voiceOn: false)
+              && !drawsCanvas(gc, ok: true, voiceOn: false) && !drawsCanvas(gr, ok: false, voiceOn: false) && !drawsCanvas(gr, ok: true, voiceOn: true))
+        cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"]); cc.canvas.collapsed = true; cc.canvas.draw("stage.text", ["md": "x"]); cc.canvas.reset()
+        check("voice: a new conversation clears the canvas: hidden, not marked updated, nothing waiting to draw (issue 208)", !cc.canvas.has && !cc.canvas.fresh && cc.canvas.queued == 0)
+        cc.canvas.collapsed = false
         cc.canvas.collapsed = false; if let before { ud.set(before, forKey: "canvasCollapsed") } else { ud.removeObject(forKey: "canvasCollapsed") }
         check("voice: a typed reply with a table draws the canvas and is marked for it; prose isn't; collapsing is kept (issue 208)", marked && prose && saved && kept)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too

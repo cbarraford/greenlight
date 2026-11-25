@@ -1010,6 +1010,9 @@ func markdownTables(_ s: String) -> [String] {
     }
     return out
 }
+/// Whether a finished turn may draw the chat's canvas (#208): a typed reply that finished, not a stopped one, a watch or
+/// check-in turn's (the canvas is what you asked for), nor anything while voice mode has its own stage.
+func drawsCanvas(_ r: Run, ok: Bool, voiceOn: Bool) -> Bool { ok && !r.stopping && !r.watch && !r.checkIn && !voiceOn }
 /// What a typed reply puts on the chat's canvas (#208): its ```stage block, else its tables; nil for prose alone.
 func canvasCall(_ st: Staged) -> (f: String, arg: Any)? {
     if let h = st.stage { let c = stageCall(h, lead: st.text); return (c.f, c.arg) }

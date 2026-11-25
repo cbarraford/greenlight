@@ -1142,7 +1142,7 @@ final class Core: ObservableObject {
         m.duration = Date().timeIntervalSince(r.start)
         m.options = options
         m.failed = !ok
-        if ok && !r.stopping && !r.watch && !r.checkIn && !voice.on, let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // a typed reply's canvas (#208); voice mode has its stage
+        if drawsCanvas(r, ok: ok, voiceOn: voice.on), let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // a typed reply's canvas (#208); voice mode has its stage
         msgs.append(m)
         var chatQ: Question?
         if ok && !options.isEmpty { let q = Question(text: body, options: options, ping: false); questions.append(q); chatQ = q }

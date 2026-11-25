@@ -2678,6 +2678,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let stack = #""\#(codeFont)", "Symbols Nerd Font", "Hack Nerd Font", "MesloLGS Nerd Font", "MesloLGS NF", ui-monospace, Menlo, monospace"#
             let js = String(data: (try? JSONSerialization.data(withJSONObject: [stack])) ?? Data(), encoding: .utf8) ?? "[]"
             broadcast("(s => { s.setProperty('--mono', \(js)[0]); \(colors) })(document.documentElement.style)")
+            ([greenlight] + l1s.values.map(\.c)).forEach { $0.canvas.retheme() }  // the chat canvases wear the theme too (#208)
         }
         if chatWindow.title != greenlight.name { chatWindow.title = greenlight.name }
         guard let b = item?.button else { return }

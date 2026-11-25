@@ -1482,7 +1482,7 @@ final class LivePreview: ObservableObject {
 final class Canvas: ObservableObject {
     @Published var has = false
     @Published var collapsed = ud.bool(forKey: "canvasCollapsed") {
-        didSet { ud.set(collapsed, forKey: "canvasCollapsed"); if !collapsed { fresh = false }; core?.canvasTick += 1 }
+        didSet { ud.set(collapsed, forKey: "canvasCollapsed"); if !collapsed { fresh = false } }  // your place in the transcript stays
     }
     @Published var fresh = false  // drawn while collapsed: its header says so
     @Published var height: CGFloat = Canvas.tallest  // the panel's body: its content's height, up to `tallest`
@@ -1516,7 +1516,7 @@ final class Canvas: ObservableObject {
     /// A new conversation: nothing of the last one stays, its cards (the page's history) included, nor a draw still waiting.
     func reset() {
         has = false; fresh = false; pending = []
-        if nav?.ready == true, let u = page("stage") { web.loadFileURL(u, allowingReadAccessTo: u) }
+        if nav?.ready == true, let u = page("stage") { nav?.ready = false; web.loadFileURL(u, allowingReadAccessTo: u) }  // a draw meanwhile waits for the new page
     }
     private func flush() {
         guard let c = core, nav?.ready == true else { return }
