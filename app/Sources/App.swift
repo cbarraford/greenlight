@@ -2078,14 +2078,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// What a pane prints just before it runs tmux: the page sends tmux's wheel events (terminal.html `wheel()`) only after it.
     static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
-    /// `run` (an agent and its prompt) is the new session's first command, in an interactive login shell, then a shell when it ends.
-    /// It isn't typed: a line typed before the shell reads it sits in the TTY's line buffer, 1024 bytes on macOS, the rest (Enter too) dropped.
+    /// `run`: a command too long to type (terminal.html `newPane`). The new session runs it in an interactive login shell, then a
+    /// login shell, outside its `-c` so a ^C in it doesn't end the pane. It goes by a temp file: tmux refuses a command over 16 KB.
     func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
-        let first = run.isEmpty ? "exec $SHELL -l" : "exec $SHELL -lic " + shellQuote(run + "\nexec $SHELL -l")
-        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || \(first); "
+        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ")
+            + "command -v tmux >/dev/null || " + (run.isEmpty ? "exec $SHELL -l; " : "{ $SHELL -lic \(shellQuote(run)); exec $SHELL -l; }; ")
+            + (run.isEmpty ? "" : "f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \(shellQuote(run)) > \"$f\" || f=; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
-            + (run.isEmpty ? "" : " " + shellQuote(first))  // -A onto a session that's still there: tmux ignores it
+            + (run.isEmpty ? "" : " \"$SHELL -lic \\\"\\$(cat '$f'; rm -f '$f')\\\"; exec $SHELL -l\"")  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
