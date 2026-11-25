@@ -1340,9 +1340,9 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   assert.deepEqual((await posts(page, "in")).filter(m => m.id === lo.id), [], "nothing typed into the new pane");
   await page.evaluate(id => term.exited(id, 255), lo.id); await page.evaluate(() => cur.focus.t.input("x", true));
   assert.equal((await posts(page, "open")).filter(o => o.id === lo.id).pop().run, lo.run, "ssh never connected: the reconnect starts it");
-  await page.evaluate(([id, d]) => term.feed(id, d), [lo.id, b64("\x1b]6973;greenlight-tmux\x07")]);
+  await page.evaluate(([id, d]) => term.feed(id, d), [lo.id, b64("\x1b]6973;greenlight-run\x07")]);  // paneCmd's runMark
   await page.evaluate(id => term.exited(id, 255), lo.id); await page.evaluate(() => cur.focus.t.input("x", true));
-  assert.equal((await posts(page, "open")).filter(o => o.id === lo.id).pop().run, undefined, "tmux has it: a reconnect only reattaches");
+  assert.equal((await posts(page, "open")).filter(o => o.id === lo.id).pop().run, undefined, "paneCmd has it: a reconnect only reattaches");
   // Diff note pastes directly into an open Codex or agy pane, not only Claude
   const codexId = await page.evaluate(() => cur.focus.id);
   await page.evaluate(([id, data]) => term.feed(id, data), [codexId, b64("\x1b]0;⌬ Codex session\x07")]);
