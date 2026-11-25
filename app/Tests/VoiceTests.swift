@@ -1058,6 +1058,28 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.refs(snap2); let sentPatch = (v.stageQueued ?? "").contains("stage.patch(") && v.stageQueued?.components(separatedBy: "stage.patch(").last?.contains("\"!3\"") == false
         v.on = false; v.refs(snap1); let offForgets = v.refsSent == nil; v.on = true
         check("voice: the stage gets the whole map first, then patches; voice mode off forgets what it sent (issue 208)", sentWhole && sentPatch && offForgets)
+        // issue 208 phase 5: what the stage does with a navigation, and an option button's index sending that option
+        let sp = "/srv/app/stage.html", web = URL(string: "https://gitlab.com/g/p/-/merge_requests/12")!
+        check("voice: the stage opens a web link you clicked in its own frame in the browser, sends an option by index, and cancels the rest (issue 208)",
+              stageNavDecision(URL(fileURLWithPath: sp), stagePath: sp, clicked: false, mainFrame: true) == .allow
+              && stageNavDecision(URL(string: "about:srcdoc"), stagePath: sp, clicked: false, mainFrame: false) == .allow
+              && stageNavDecision(web, stagePath: sp, clicked: true, mainFrame: true) == .open(web)
+              && stageNavDecision(web, stagePath: sp, clicked: true, mainFrame: false) == .cancel  // Chief's sandboxed page: nothing opens
+              && stageNavDecision(web, stagePath: sp, clicked: false, mainFrame: true) == .cancel  // not a click: a script, a redirect
+              && stageNavDecision(URL(string: "greenlight-option:2"), stagePath: sp, clicked: true, mainFrame: true) == .option(2)
+              && stageNavDecision(URL(string: "greenlight-option:2"), stagePath: sp, clicked: true, mainFrame: false) == .cancel
+              && stageNavDecision(URL(string: "greenlight-option:9"), stagePath: sp, clicked: true, mainFrame: true) == .cancel
+              && stageNavDecision(URL(string: "greenlight-option:x"), stagePath: sp, clicked: true, mainFrame: true) == .cancel
+              && ["javascript:alert(1)", "file:///etc/passwd", "mailto:a@b.c", "https://"].allSatisfy {
+                  stageNavDecision(URL(string: $0), stagePath: sp, clicked: true, mainFrame: true) == .cancel }
+              && stageNavDecision(nil, stagePath: sp, clicked: true, mainFrame: true) == .cancel)
+        let om = Msg(.greenlight, "Merge now?"); om.options = ["Merge it", "Wait"]; c.msgs.append(om)
+        v.on = true; v.stageOptions = ["Merge it", "Wait"]; let sentBefore = c.queue.count + (c.run == nil ? 0 : 1)
+        v.pickOption(5); let badIndex = v.stageOptions.count == 2
+        v.pickOption(1); let picked = v.stageOptions.isEmpty && c.msgs.contains { $0.text == "Wait" }
+        v.pickOption(0); let once = !c.msgs.contains { $0.text == "Merge it" }
+        _ = sentBefore; c.stop(); c.run = nil; c.queue.removeAll(); v.hush()
+        check("voice: an option button sends that option once; an index the reply didn't offer does nothing (issue 208)", badIndex && picked && once)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

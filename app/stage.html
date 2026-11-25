@@ -163,6 +163,20 @@ table.grid td .chip{max-width:calc(100% - var(--ds-space-12));white-space:normal
 table.grid:has(tr > :nth-child(3)) td .chip{display:flex;margin:var(--ds-space-2) 0 0;max-width:100%}  /* dense tables stack the chip flush-left under its ref */
 table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .chip.bad{color:var(--bad)} .chip.now{color:var(--now)} .chip.ok{color:var(--ok)} .chip.needs{color:var(--needs)}
+/* Links and the reply's options (issue 208). A link opens in the browser; an option is a secondary button whose click
+   carries only its index to the app, which knows the text. No pointer cursor on a button (§10.2); links keep theirs. */
+#s a{color:var(--accent-fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
+#s a:hover{text-decoration-color:currentColor}
+.options{display:flex;flex-wrap:wrap;gap:var(--ds-space-8);margin-top:var(--ds-space-16)}
+.options a.option{display:inline-flex;align-items:center;height:var(--ds-layout-control-height-md);padding:0 var(--ds-space-12);border-radius:var(--ds-radius-sm);
+  background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);font-family:var(--font);text-decoration:none;cursor:default;
+  transition:transform var(--ds-duration-press) var(--ds-easing-out)}
+.options a.option:hover{background:var(--ds-element-hover)}
+.options a.option:active{background:var(--ds-element-active);transform:scale(.97)}
+.options a.option:focus-visible{outline:none;box-shadow:var(--ds-ring)}
+#s.held .options{display:none}
+[data-look=phosphor] .options a.option{border:1px dashed var(--line);background:none}
+@media (prefers-reduced-motion: reduce){ .options a.option{transition:none} .options a.option:active{transform:none} }
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -278,7 +292,9 @@ const inline = t => str(t).split(INLINE_RE).flatMap((x, i) => {
   if (x.startsWith("***") && x.endsWith("***") && x.length > 6) { const e = $("b"); e.append(wrap("em", x.slice(3, -3))); return [e]; }
   if (x.startsWith("**")) return [wrap("b", x.slice(2, -2))];
   if (x[0] === "*" || x[0] === "_") return [wrap("em", x.slice(1, -1))];
-  return inline(x.slice(1, x.indexOf("](")));
+  const text = x.slice(1, x.indexOf("](")), url = x.slice(x.indexOf("](") + 2, -1).trim();
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) return inline(text);  // only a web link is a link (issue 208): the rest stay their words
+  const a = $("a"); a.href = url; a.append(...inline(text)); return [a];  // a click opens it in the browser (the app's StageNav), never here
 });
 // A pipe table's rows as cells (its |---| rule dropped; pipes in `code` or \| stay inside their cell), drawn as the table template's grid.
 function splitRow(r){
@@ -517,7 +533,10 @@ function chipify(nodes, seen = new Set()){
       for (let m; (REF_RE.lastIndex = 0, m = REF_RE.exec(t.nodeValue));) {
         const ref = m[2], end = m.index + m[0].length;
         if (!Object.hasOwn(REFS, ref) || seen.has(ref)) { if (end >= t.nodeValue.length) break; t = t.splitText(end); continue; }
-        seen.add(ref); const rest = t.splitText(end); rest.before(chipFor(ref, REFS[ref])); t = rest;
+        seen.add(ref);
+        const a = t.parentElement.closest("a");
+        if (a) { a.after(chipFor(ref, REFS[ref])); break; }  // a linked ref: its chip after the link, not inside it
+        const rest = t.splitText(end); rest.before(chipFor(ref, REFS[ref])); t = rest;
       }
     }
   }
@@ -563,6 +582,7 @@ window.stage = {
   // A turn began (issue 208): a card already up stays, stepped down to muted, as the last answer; with none (or only the
   // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
   hold(line){
+    document.querySelectorAll("#s > .options").forEach(o => o.remove());  // a new turn: the last reply's options are stale
     const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton)\b/.test(s.className);
     if (card) { s.classList.remove("streaming"); caret(s, false); s.classList.add("held"); }
     else if (!s.classList.contains("skeleton")) {
@@ -665,6 +685,16 @@ window.stage = {
       s.querySelectorAll(".chip").forEach(c => { if (c.dataset.ref === ref) Object.hasOwn(REFS, ref) ? c.replaceWith(chipFor(ref, REFS[ref])) : c.remove(); });
     }
     chipify([...s.children]);  // a ref the snapshot only now knows gets its chip
+  },
+  // The reply's options as buttons under the card (issue 208): each is a link to greenlight-option:N, the index only; the app
+  // looks the text up in the list it holds and sends it as if you'd said it. [] takes them away.
+  options(list){
+    const s = document.getElementById("s"); s.querySelectorAll(":scope > .options").forEach(o => o.remove());
+    const os = arr(list).slice(0, 6).map(str).filter(Boolean);
+    if (!os.length) return;
+    const row = $("div", "options"); row.setAttribute("role", "group"); row.setAttribute("aria-label", "Options");
+    os.forEach((t, i) => { const a = $("a", "option", t); a.href = "greenlight-option:" + i; row.append(a); });
+    s.append(row);
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){
