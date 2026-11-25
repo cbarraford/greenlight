@@ -898,11 +898,12 @@ func statusLine(_ raw: String, shown: [String]) -> String? {
 /// How often a streaming [screen] text is sent to the stage at most (#208): the page isn't called per token.
 let streamEvery = 0.1
 /// The [screen] text as far as it can be shown while it streams: its Options line (the buttons, never on the stage) and a last
-/// line that may yet become one ("Opt…") held back; the page holds back half-written markdown itself.
+/// line that may yet become one ("Opt…") held back, as is a fence that may yet open a ```stage block (never on the page as code);
+/// the page holds back half-written markdown itself.
 func streamable(_ md: String) -> String {
     var lines = md.components(separatedBy: "\n")
-    if let l = lines.last?.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "`")).lowercased(),
-       !l.isEmpty, l.hasPrefix("options:") || "options:".hasPrefix(l) { lines.removeLast() }
+    let raw = lines.last?.trimmingCharacters(in: .whitespaces).lowercased() ?? "", l = raw.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+    if (!l.isEmpty && (l.hasPrefix("options:") || "options:".hasPrefix(l))) || (raw.hasPrefix("```") && "```stage".hasPrefix(raw)) { lines.removeLast() }  // or a fence that may open a ```stage block
     return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
 }
 func screenStreaming(_ r: Run) -> Bool {

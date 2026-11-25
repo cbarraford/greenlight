@@ -940,7 +940,8 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: a turn ending with a stream send pending doesn't hold up the next turn's first part (issue 208)", nextTurnOut && firstSent)
         check("voice: a streaming [screen] text holds back its Options line and a line that may yet become one (issue 208)",
               streamable("- a\nOptions: x | y") == "- a" && streamable("- a\nOp") == "- a" && streamable("- a\n`options:") == "- a"
-              && streamable("- a\nOpen it") == "- a\nOpen it" && streamable("Options:") == "" && streamable("- a\n\n") == "- a")
+              && streamable("- a\nOpen it") == "- a\nOpen it" && streamable("Options:") == "" && streamable("- a\n\n") == "- a"
+              && streamable("- a\n```") == "- a" && streamable("- a\n```sta") == "- a" && streamable("- a\n```js") == "- a\n```js")
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

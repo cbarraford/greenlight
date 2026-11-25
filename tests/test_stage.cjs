@@ -223,7 +223,7 @@ const { launchBrowser } = require("./js_harness.cjs");
                             // the reviewers' repros: a marker at an item's or heading's start, ** in code, single emphasis, bare markers
                             ["Intro.\n\n- one\n- **two", "Intro.one"], ["1. **merge", ""], ["## **Bold", ""], ["hello\n-", "hello"],
                             ["Para\n``", "Para"], ["use `**` for bold", "use ** for bold"], ["`arr[`", "arr["], ["a *em", "a"],
-                            ["a *em* b", "a em b"], ["x ***both**", "x"], ["see _Sam", "see"], ["a b _", "a b"], ["my_var_name", "my_var_name"],
+                            ["a *em* b", "a em b"], ["x ***both**", "x"], ["see _Sam", "see"], ["a b _", "a b"], ["see ``foo", "see"], ["see ``ab`` ok", "see ab ok"], ["Totals: 3 * 4 = 12 and *don", "Totals: 3 * 4 = 12 and"], ["x\n\n1", "x"], ["my_var_name", "my_var_name"],
                             ["- [ ] task", "[ ] task"], ["```\nmake\n``", "make"], ["* a bullet", "a bullet"], ["```x``` inline", "x inline"]]) {
     await p.evaluate(m => stage.text({ md: "", live: false }) || stage.text({ md: m, live: true }), md);
     assert.equal((await p.textContent("#s")).trim(), want, md);
@@ -242,6 +242,12 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(m => { stage.wait("One minute", ""); stage.text({ lead: "Gist.", md: m }); }, md);
   const oneShot = await p.$eval("#s", e => [e.className, e.innerHTML]);
   assert.deepEqual(streamed, oneShot, "a finished stream leaves the card a one-shot draw does");
+  // a table whose header row gains an empty cell: same text, another column, which the finished card has too
+  const tmd = "| one |\n|---|\n| 1 |";
+  await p.evaluate(m => { stage.wait("x", ""); stage.text({ md: "| one |", live: true }); stage.text({ md: "| one ||", live: true }); stage.text({ md: m.replace("| one |", "| one ||") }); }, tmd);
+  const tStreamed = await p.$eval("#s", e => e.innerHTML.replace(/ class="fresh"| fresh/g, ""));
+  await p.evaluate(m => { stage.wait("x", ""); stage.text({ md: m.replace("| one |", "| one ||") }); }, tmd);
+  assert.equal(tStreamed, await p.$eval("#s", e => e.innerHTML), "a table that gains a column ends as a one-shot draw");
   assert.equal(await p.locator(".caret").count(), 0);
   // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
   assert.equal(await p.$eval("#s", e => getComputedStyle(e).justifyContent), "flex-start");
