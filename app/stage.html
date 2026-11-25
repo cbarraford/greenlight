@@ -42,7 +42,7 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:var(--ds-type-body-copy);font-family:var(--font);letter-spacing:var(--ds-type-body-copy-track);-webkit-font-smoothing:antialiased;overflow:auto}
-#s{min-height:100%;padding:var(--ds-space-24);display:flex;flex-direction:column;justify-content:center;gap:var(--ds-space-8);
+#s{min-height:100%;padding:var(--ds-space-24);display:flex;flex-direction:column;justify-content:flex-start;gap:var(--ds-space-8);  /* top-aligned (issue 208): text grows down, never jumps */
   animation:in var(--ds-duration-base) var(--ds-easing-out)}
 @keyframes in{from{opacity:0;transform:translateY(4px)}}
 .eyebrow{font:var(--ds-type-label);font-family:var(--font);color:var(--dim)}
@@ -135,6 +135,23 @@ ol.life li span{color:var(--dim)}
 .doc b{font-weight:600}
 .doc p.quote{border-left:2px solid var(--line);padding-left:var(--ds-space-12);color:var(--dim)}
 .doc hr{width:100%;border:0;border-top:1px solid var(--line);margin:var(--ds-space-4) 0}
+/* Streaming (issue 208): a block or list item that just arrived rises in once; the caret sits on the one being written. */
+.doc .fresh{animation:rise var(--ds-duration-fast) var(--ds-easing-out)}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}}
+.caret{display:inline-block;width:2px;height:13px;margin-left:var(--ds-space-2);vertical-align:-2px;background:var(--accent)}
+.doc code+.caret{margin-left:0}  /* the chip's own padding is the gap */
+/* While Chief thinks (issue 208): the last card stays, stepped down to muted; with none, a still skeleton of the answer. */
+#s.held{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
+#s.held .caret{display:none}
+#s.held::before{content:"Last answer";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}  /* the second cue: it's the last answer */
+[data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
+#s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
+#s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
+#s.held iframe{filter:grayscale(1);opacity:.6}
+#s.frame.held::before{padding:var(--ds-space-8) var(--ds-space-24) 0}  /* a frame has no padding: the label keeps the gutter */  /* Chief's own page can't take the muted colour: it's dimmed instead */
+.skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
+.skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--track)}  /* a step above element.rest, to read on the stage */
+.skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-4)}  /* 16 to the first line, as the lead to the body */
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -148,6 +165,7 @@ ol.life li span{color:var(--dim)}
 }
 @media (prefers-reduced-motion: reduce){
   #s{animation:fade var(--ds-duration-fast) linear}
+  .doc .fresh{animation:none}
   .listening .cursor{animation:none}
 }
 @keyframes fade{from{opacity:0}}
@@ -156,6 +174,7 @@ ol.life li span{color:var(--dim)}
   background:var(--bg);border-top:1px solid var(--line);font:var(--ds-type-label);font-family:var(--font);color:var(--dim);
   animation:in var(--ds-duration-base) var(--ds-easing-out)}
 #status[hidden]{display:none}
+#status span{color:var(--now)}  /* what Chief is doing, in the working colour after its glyph (issue 208) */
 #status span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #status svg.tone{flex:none;margin:0;color:var(--now);animation:spin .9s linear infinite}  /* the spinner period: the one thing in progress here */
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -164,6 +183,7 @@ body.status #s.frame,[data-look] body.status #s.frame{height:calc(100% - var(--d
 [data-look=phosphor] #status{border-top-style:dashed}
 [data-look=phosphor] #status svg.tone{display:none}
 [data-look=phosphor] #status span::before{content:"$ ";color:var(--faint)}
+[data-look=phosphor] #status span{color:inherit}
 @media (prefers-reduced-motion: reduce){ #status{animation:fade var(--ds-duration-fast) linear} #status svg.tone{animation:none} }
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
@@ -299,6 +319,71 @@ function blocks(md){
   flush();
   return out;
 }
+// The stream's markdown with a trailing unclosed marker held back (issue 208): a lone ** or * or _, a backtick, or a link still
+// being written waits for its close, and a last line that's only a block marker ("- ", "1.", "##") waits for its text, so raw
+// markdown never flashes. Code spans are masked first (their * and [ are text). Inside an open fence, code shows as it comes.
+// A line with its code spans masked (a run of backticks closes at the next run as long), and where an unclosed run opens, or -1.
+function spans(l){
+  const runs = [...l.matchAll(/`+/g)], m = l.split("");
+  for (let k = 0; k < runs.length; k++) {
+    const j = runs.findIndex((r, q) => q > k && r[0] === runs[k][0]);
+    if (j < 0) return [m.join(""), runs[k].index];
+    for (let i = runs[k].index; i < runs[j].index + runs[j][0].length; i++) m[i] = "\0";
+    k = j;
+  }
+  return [m.join(""), -1];
+}
+function settled(md){
+  const lines = str(md).split("\n"), fence = x => /^\s*`{3,}[^`]*$/.test(x);
+  if (lines.filter(fence).length % 2) { if (/^\s*`{1,2}$/.test(lines[lines.length - 1])) lines.pop(); return lines.join("\n"); }
+  let l = lines.pop(), was;
+  do {
+    was = l;
+    const [m, tick] = spans(l), cut = i => { if (i >= 0) l = l.slice(0, i); };
+    const single = m.replace(/\*\*/g, "\0\0").replace(/^(\s*)\*(?=\s)/, "$1\0").replace(/(?<=\s)\*(?=\s)/g, "\0");  // a "* " bullet or 3 * 4 isn't emphasis
+    const us = [...m.matchAll(/(^|[^\w])_(?=\S|$)/g)].map(x => x.index + x[1].length), usClose = (m.match(/(?<=\S)_(?!\w)/g) || []).length;
+    const open = m.lastIndexOf("["), link = open < 0 ? "" : m.slice(open);
+    if (tick >= 0) cut(tick);
+    else if ((m.match(/\*\*/g) || []).length % 2) cut(m.lastIndexOf("**"));
+    else if ((single.match(/\*/g) || []).length % 2) cut(single.lastIndexOf("*"));
+    else if (us.length > usClose) cut(us[us.length - 1]);
+    else if (link && !/^\[[^\]]*\]\([^)]*\)/.test(link) && !/^\[[^\]]*\][^(]/.test(link)) cut(open);  // [x, [x], [x](u
+  } while (l !== was);
+  if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";  // "1" may be a list's number before its dot
+  return lines.concat(l.trimEnd() ? [l] : []).join("\n");
+}
+const bare = e => e.className.replace(/\bfresh\b/, "").trim();
+// One block of the page brought up to date in place: the same element keeps its place, so nothing above it moves; a list keeps
+// its items and adds the new ones (which rise in). Another kind of block takes its place.
+function patch(old, nw){
+  if (old.tagName !== nw.tagName || bare(old) !== bare(nw)) { nw.classList.add("fresh"); old.replaceWith(nw); return; }
+  if (old.tagName === "UL" || old.tagName === "OL") {
+    const a = [...old.children], b = [...nw.children];
+    b.forEach((li, j) => { if (!a[j]) { li.classList.add("fresh"); old.append(li); } else if (a[j].textContent !== li.textContent) a[j].replaceChildren(...li.childNodes); });
+    a.slice(b.length).forEach(li => li.remove());
+    if (nw.start > 1) old.start = nw.start;
+    return;
+  }
+  if (old.innerHTML.replace('<span class="caret"></span>', "") !== nw.innerHTML) old.replaceChildren(...nw.childNodes);  // the same structure: untouched
+}
+// The page's blocks (the lead aside) set to `nodes`: settled ones kept, the last patched, new ones appended.
+function patchDoc(s, lead, nodes){
+  let le = s.querySelector(":scope > .lead");
+  if (lead && !le) { le = $("p", "lead fresh"); s.prepend(le); }
+  if (le && !lead) le.remove(); else if (le && le.textContent !== lead) le.textContent = lead;
+  const kids = [...s.children].filter(e => !e.classList.contains("lead"));
+  nodes.forEach((n, i) => { if (!kids[i]) { n.classList.add("fresh"); s.append(n); } else patch(kids[i], n); });
+  kids.slice(nodes.length).forEach(e => e.remove());
+}
+// The caret on the block being written: the last one, down to its last item or cell. None once the stream ends.
+function caret(s, on){
+  s.querySelectorAll(".caret").forEach(c => c.remove());
+  if (!on) return;
+  let t = s.lastElementChild;
+  if (!t) return;
+  while (t.lastElementChild && !["CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
+  t.append($("span", "caret"));
+}
 // The thinking field (brand/DESIGN.md §10.18). A grid of needles, each an oscillator pulled toward its four neighbours' phase
 // (Kuramoto: dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)), drifts in and out of step while Chief works. When a card arrives they lock, lie
 // flat and slide onto the card's lines, and the card fades in over them. Never under reduced motion, nor with
@@ -392,6 +477,19 @@ const fx = (() => {
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
+  // A turn began (issue 208): a card already up stays, stepped down to muted, as the last answer; with none (or only the
+  // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
+  hold(line){
+    const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton)\b/.test(s.className);
+    if (card) s.classList.add("held");
+    else if (!s.classList.contains("skeleton")) {
+      const k = $("div", "skel"); k.setAttribute("aria-hidden", "true");
+      [["lead", 58], [null, 92], [null, 84], [null, 88], [null, 46]].forEach(([c, w]) => { const i = $("i", c); i.style.width = w + "%"; k.append(i); });
+      show(k, "skeleton");
+    }
+    fx.think();
+    if (line != null) stage.status(line);
+  },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   spec(o){
     o = o && typeof o === "object" ? o : {};
@@ -451,11 +549,20 @@ window.stage = {
     const lg = $("div", "legend"); if (ser.length > 1 || kind === "pie") legend.forEach(([c, t]) => { const d = $("span", null, t), i = $("i"); i.style.background = c; d.prepend(i); lg.append(d) });
     show((o.sub ? [$("div", "eyebrow", str(o.sub))] : []).concat([$("h1", null, str(o.title)), g], lg.children.length ? [lg] : [], o.note ? [$("div", "foot", str(o.note))] : []));
   },
-  // Chief's [screen] text under the spoken gist: {lead, md}. Markdown is read for its structure; everything lands as text.
+  // Chief's [screen] text under the spoken gist: {lead, md, live}. Markdown is read for its structure; everything lands as text.
+  // live (issue 208): the reply is still being written. The first such call draws the page; each later one keeps the settled
+  // blocks, patches the last in place and appends new ones, with no reset of the scroll. A call without live ends the stream.
   text(o){
     o = o && typeof o === "object" ? o : {};
-    const lead = str(o.lead).trim(), body = blocks(o.md);
-    show((lead ? [$("p", "lead", lead)] : []).concat(body), "doc");
+    const lead = str(o.lead).trim(), live = o.live === true, md = live ? settled(o.md) : o.md, s = document.getElementById("s");
+    if (s.classList.contains("streaming")) patchDoc(s, lead, blocks(md));
+    else {
+      if (live) fx.stop();
+      show((lead ? [$("p", "lead", lead)] : []).concat(blocks(md)), "doc");
+    }
+    const now = document.getElementById("s");
+    now.classList.toggle("streaming", live);
+    caret(now, live);
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){

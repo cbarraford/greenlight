@@ -184,9 +184,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.isVisible("#status svg.tone"), false);  // Phosphor: a $ prompt instead of the glyph
   assert.equal(await p.$eval("#status span", e => getComputedStyle(e, "::before").content), '"$ "');
   await p.evaluate(() => { stage.html("<p>page</p>"); });  // Chief's own page ends above the strip, in every look
-  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  assert.ok(await p.evaluate(() => (s => s.offsetTop + s.offsetHeight)(document.getElementById("s")) <= document.getElementById("status").offsetTop + 0.5));
   await p.evaluate(() => { delete document.documentElement.dataset.look; });
-  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  assert.ok(await p.evaluate(() => (s => s.offsetTop + s.offsetHeight)(document.getElementById("s")) <= document.getElementById("status").offsetTop + 0.5));
   await p.evaluate(() => stage.status(""));
   assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom >= innerHeight - 0.5));  // and fills it again without one
   // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
@@ -198,11 +198,126 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
   await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
   assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
+  // streaming (issue 208): the [screen] text drawn as it's written. Settled blocks keep their nodes, the last is patched in
+  // place, new ones are appended and rise in; the scroll stays; a caret on the block being written; half-written markdown waits.
+  await p.setViewportSize({ width: 640, height: 720 });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First para", live: true }));
+  assert.equal(await p.locator("#s.doc.streaming").count(), 1);
+  assert.equal(await p.locator(".doc .caret").count(), 1);
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
+  await p.evaluate(() => { document.querySelector(".doc .lead").dataset.mark = "lead"; document.querySelector(".doc p:not(.lead)").dataset.mark = "p1"; });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First paragraph.\n\n- one\n- tw", live: true }));
+  assert.equal(await p.getAttribute(".doc .lead", "data-mark"), "lead");
+  assert.equal(await p.getAttribute(".doc p:not(.lead)", "data-mark"), "p1");  // patched in place, not redrawn
+  assert.equal(await p.textContent(".doc p:not(.lead)"), "First paragraph.");
+  assert.equal(await p.locator(".doc p.fresh:not(.lead)").count(), 0);  // the patched block doesn't rise again
+  assert.equal(await p.locator(".doc ul.fresh").count(), 1);  // the new list rises in
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.textContent), "tw");  // on the item being written
+  await p.evaluate(() => { document.querySelector(".doc li").dataset.mark = "li1"; });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First paragraph.\n\n- one\n- two\n- three **bo", live: true }));
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "li1");  // earlier items keep their nodes
+  assert.deepEqual(await p.locator(".doc li").allTextContents(), ["one", "two", "three"]);  // the unclosed ** waits
+  assert.equal(await p.locator(".doc li.fresh").count(), 1);
+  for (const [md, want] of [["see `scr", "see"], ["open [!12](https://x/1", "open"], ["open [!12", "open"], ["a [!12](u) b", "a !12 b"],
+                            ["**done** and `x`", "done and x"], ["```\nmake **", "make **"],
+                            // the reviewers' repros: a marker at an item's or heading's start, ** in code, single emphasis, bare markers
+                            ["Intro.\n\n- one\n- **two", "Intro.one"], ["1. **merge", ""], ["## **Bold", ""], ["hello\n-", "hello"],
+                            ["Para\n``", "Para"], ["use `**` for bold", "use ** for bold"], ["`arr[`", "arr["], ["a *em", "a"],
+                            ["a *em* b", "a em b"], ["x ***both**", "x"], ["see _Sam", "see"], ["a b _", "a b"], ["see ``foo", "see"], ["see ``ab`` ok", "see ab ok"], ["Totals: 3 * 4 = 12 and *don", "Totals: 3 * 4 = 12 and"], ["x\n\n1", "x"], ["my_var_name", "my_var_name"],
+                            ["- [ ] task", "[ ] task"], ["```\nmake\n``", "make"], ["* a bullet", "a bullet"], ["```x``` inline", "x inline"]]) {
+    await p.evaluate(m => stage.text({ md: "", live: false }) || stage.text({ md: m, live: true }), md);
+    assert.equal((await p.textContent("#s")).trim(), want, md);
+  }
+  // a long stream keeps its scroll: no jump back to the top while it grows
+  await p.evaluate(() => stage.text({ lead: "Long.", md: Array.from({ length: 40 }, (_, i) => `- item ${i}`).join("\n"), live: true }));
+  await p.evaluate(() => { document.body.scrollTop = 200; window.scrollTo(0, 200); });
+  const before = await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop));
+  await p.evaluate(() => stage.text({ lead: "Long.", md: Array.from({ length: 44 }, (_, i) => `- item ${i}`).join("\n"), live: true }));
+  assert.ok(before > 0 && await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop)) === before, "streaming keeps the scroll");
+  // the end: same page as a one-shot draw of the whole text, the caret gone, the stream closed
+  const md = "Intro.\n\n## Next\n\n1. **merge** !12\n2. rebase `main`\n\n| a | b |\n|---|---|\n| 1 | 2 |";
+  await p.evaluate(m => { stage.wait("One minute", ""); for (let i = 1; i <= m.length; i += 7) stage.text({ lead: "Gist.", md: m.slice(0, i), live: true });
+                          stage.text({ lead: "Gist.", md: m }); }, md);
+  const streamed = await p.$eval("#s", e => [e.className, e.innerHTML.replace(/ class="fresh"| fresh/g, "")]);
+  await p.evaluate(m => { stage.wait("One minute", ""); stage.text({ lead: "Gist.", md: m }); }, md);
+  const oneShot = await p.$eval("#s", e => [e.className, e.innerHTML]);
+  assert.deepEqual(streamed, oneShot, "a finished stream leaves the card a one-shot draw does");
+  // a table whose header row gains an empty cell: same text, another column, which the finished card has too
+  const tmd = "| one |\n|---|\n| 1 |";
+  await p.evaluate(m => { stage.wait("x", ""); stage.text({ md: "| one |", live: true }); stage.text({ md: "| one ||", live: true }); stage.text({ md: m.replace("| one |", "| one ||") }); }, tmd);
+  const tStreamed = await p.$eval("#s", e => e.innerHTML.replace(/ class="fresh"| fresh/g, ""));
+  await p.evaluate(m => { stage.wait("x", ""); stage.text({ md: m.replace("| one |", "| one ||") }); }, tmd);
+  assert.equal(tStreamed, await p.$eval("#s", e => e.innerHTML), "a table that gains a column ends as a one-shot draw");
+  assert.equal(await p.locator(".caret").count(), 0);
+  // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
+  await p.evaluate(() => stage.spec({ title: "short", kind: "list", items: [] }));  // a short card sits at the top, not centred
+  assert.ok(await p.$eval("#s h1", e => e.getBoundingClientRect().top) < 40, "top-aligned");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "a", live: true }); stage.text({ md: "a\n\nb", live: true }); });
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationName), "rise");
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationIterationCount), "1");
+  await p.emulateMedia({ reducedMotion: "reduce" });
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationName), "none");
+  await p.emulateMedia({ reducedMotion: "no-preference" });
+  // markup in a streamed reply is text, as in a one-shot draw
+  await p.evaluate(() => stage.text({ md: "<img src=x onerror=alert(1)> and **<b>x</b>**", live: true }));
+  assert.equal(await p.locator(".doc img, .doc p > b > b").count(), 0);
+  // thinking (issue 208 phase 2): a card already up stays, muted, its nodes untouched; with none, a still skeleton; the status
+  // strip says what the turn is doing, in the working colour after its glyph; the next drawing replaces either
+  await p.evaluate(() => { stage.status(""); stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
+  assert.equal(await p.locator("#s.doc.held").count(), 1);
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
+  const muted = await p.evaluate(() => { const c = getComputedStyle(document.documentElement).getPropertyValue("--ds-fg-muted").trim(), t = document.createElement("i");
+    t.style.color = c; document.body.append(t); const want = getComputedStyle(t).color; t.remove(); return [getComputedStyle(document.querySelector(".doc .lead")).color, want]; });
+  assert.equal(muted[0], muted[1], "the held card is muted");
+  assert.equal(await p.$eval("#s.held", e => getComputedStyle(e, "::before").content), '"Last answer"');  // labelled, not colour alone
+  assert.equal(await p.textContent("#status span"), "Looking up !12");
+  assert.equal(await p.getAttribute("#status svg.tone", "aria-label"), "Now");  // the glyph with the colour
+  const nowCol = await p.evaluate(() => { const t = document.createElement("i"); t.style.color = "var(--now)"; document.body.append(t); const c = getComputedStyle(t).color; t.remove(); return c; });
+  assert.equal(await p.$eval("#status span", e => getComputedStyle(e).color), nowCol);
+  await p.evaluate(() => { stage.chart({ chart: "bar", title: "t", labels: ["a", "b"], series: [{ name: "n", values: [1, 3] }] }); stage.hold("x"); });
+  assert.equal(await p.$eval(".track i.peak", e => getComputedStyle(e).backgroundColor), await p.$eval(".track i:not(.peak)", e => getComputedStyle(e).backgroundColor));
+  await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
+  await p.evaluate(() => { stage.html("<p style='color:red'>page</p>"); stage.hold("x"); });  // Chief's own page can't take the colour: dimmed
+  assert.equal(await p.$eval("#s.held iframe", e => getComputedStyle(e).opacity), "0.6");
+  assert.ok(await p.evaluate(() => document.body.scrollHeight <= document.body.clientHeight && document.scrollingElement.scrollHeight <= innerHeight), "a held page doesn't overflow the stage");
+  assert.ok(await p.$eval("#s.held", e => parseFloat(getComputedStyle(e, "::before").paddingLeft)) >= 24, "its label keeps the gutter");
+  await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
+  await p.evaluate(() => stage.hold("Still looking"));  // a second hold keeps the same held card
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
+  await p.evaluate(() => stage.spec({ kind: "table", title: "Board", columns: ["MR"], rows: [["!12"]] }));  // the instant card wins
+  assert.equal(await p.locator("#s.held").count(), 0);
+  assert.ok(await p.isVisible("#status"));  // the strip stays until Chief speaks
+  for (const before of [() => stage.wait("Listening", "Say something."), () => stage.status("")]) {
+    await p.evaluate(before); await p.evaluate(() => { stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
+    assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
+    assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
+    assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
+    assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
+    assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
+    assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
+  }
+  await p.evaluate(() => stage.hold(null));
+  assert.equal(await p.locator("#s.skeleton").count(), 1);
+  await p.evaluate(() => stage.text({ lead: "Gist.", md: "- a", live: true }));  // the stream replaces the skeleton
+  assert.equal(await p.locator("#s.skeleton, .skel").count(), 0);
+  for (const scheme of ["light", "dark"]) {  // the skeleton's bars show on the stage in both themes
+    await p.emulateMedia({ colorScheme: scheme }); await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("x"); });
+    assert.notEqual(await p.$eval(".skel i", e => getComputedStyle(e).backgroundColor), await p.$eval("body", e => getComputedStyle(e).backgroundColor), scheme);
+  }
+  await p.emulateMedia({ colorScheme: "light" }); await p.evaluate(() => stage.status(""));
   // The thinking field (DESIGN.md §10.18): needles while Chief works, clear of the wait card's words; the card that follows waits
   // for them to land, then enters as ever. Your turn, Reduce Motion and Settings ▸ Thinking motion off all leave the stage still.
   await p.setViewportSize({ width: 800, height: 500 });
   const fxNow = () => p.evaluate(() => document.body.dataset.fx), born = () => p.$eval("#s", e => e.classList.contains("born"));
   const settled = () => p.waitForFunction(() => !document.body.dataset.fx && !document.getElementById("s").classList.contains("born"));
+  await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("Working"); });
+  assert.equal(await fxNow(), "think", "a held skeleton starts the thinking field");
+  await p.waitForTimeout(450);
+  await p.evaluate(() => stage.text({ lead: "Answer", md: "First line", live: true }));
+  assert.equal(await born(), false, "the first streamed text is not delayed by the thinking field");
+  assert.equal(await p.textContent("#s p:not(.lead)"), "First line");
+  await p.evaluate(() => stage.hold("Working again"));
+  assert.equal(await fxNow(), "think", "a held answer starts the thinking field");
   const ink = title => p.evaluate(title => {  // how many pixels the field has inked: over the stage, or just over the wait card's title
     const c = document.getElementById("fx"), d = c.width / innerWidth; let box = { left: 0, top: 0, width: innerWidth, height: innerHeight };
     if (title) { const r = document.createRange(); r.selectNodeContents(document.querySelector("h1").firstChild); box = r.getBoundingClientRect(); }
