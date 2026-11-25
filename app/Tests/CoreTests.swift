@@ -22,6 +22,12 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
                                  alive: { $0 == 333 })
     check("test defaults sweep: dead pids' suites and day-old binary and kept domains go; live, fresh, app and dev-copy ones stay: \(swept)",
           swept == ["dev.greenlight.uitest.111", "dev.greenlight.unittest.222", "dev.greenlight.uitest.s0dfd05a6", "Greenlight-00c56d0114dede37"])
+    let oldSave = #"{"role":"greenlight","text":"hi","steps":[],"duration":1,"options":[],"failed":false}"#
+    let loaded = (try? JSONDecoder().decode(Msg.Saved.self, from: Data(oldSave.utf8))).map(Msg.init)
+    let am = Msg(.greenlight, "denied"); am.approvals = [Approval(id: "0123456789ab", tool: "Bash", what: "orca host list")]
+    let back = (try? JSONEncoder().encode(am.saved)).flatMap { try? JSONDecoder().decode(Msg.Saved.self, from: $0) }.map(Msg.init)
+    check("approvals: a transcript saved before them loads; a saved pending one comes back expired, never approvable after a relaunch",
+          loaded?.approvals.isEmpty == true && loaded?.decided == nil && back?.approvals == am.approvals && back?.decided == "expired")
     let fz = fuzzy("evm test", "run the evm unit tests")
     check("!! and !$ expand as whole words only", expandBang("cat !$ again: !!", "open x/y.go") == "cat x/y.go again: open x/y.go" && expandBang("now!! !4521", "z") == "now!! !4521")
     check("fuzzy: in-order letters match, best start wins: \(fz?.pos ?? [])", fz?.pos.first == 8 && fuzzy("evm test", "open an MR") == nil && fuzzy("ETS", "unit tests") != nil)

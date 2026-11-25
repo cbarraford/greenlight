@@ -14,6 +14,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bgstop <task_id>           # kill one background shell
 """
 import contextlib, fcntl, glob, hashlib, io, json, os, random, re, signal, subprocess, sys, threading, time, uuid
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import attach  # noqa: E402
@@ -42,6 +43,69 @@ def asked_path():
     return os.path.join(DIR, "asked" + scope_suffix())
 
 
+APPROVALS = "approvals"  # + scope_suffix() + .json: the calls the last turn was denied, by id, for `send --approve`
+APPROVAL_TTL = 3600  # an approval the user doesn't give within the hour is gone: ask again
+
+
+def approvals_path():
+    return os.path.join(DIR, APPROVALS + scope_suffix() + ".json")
+
+
+def denial_rule(tool, inp):
+    """The --allowedTools rule that allows exactly this call: a Bash command as it was typed, else the tool itself."""
+    cmd = inp.get("command") if isinstance(inp, dict) else None
+    if tool == "Bash":
+        return f"Bash({cmd})" if isinstance(cmd, str) and cmd.strip() else None
+    return tool if re.fullmatch(r"[A-Za-z][\w.-]{0,99}", tool or "") else None
+
+
+def _write_approvals(store):
+    tmp = f"{approvals_path()}.{os.getpid()}.tmp"
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+        json.dump(store, fh)
+    os.replace(tmp, approvals_path())
+
+
+def save_denials(denials):
+    """The turn's permission denials (claude's result.permission_denials) kept as approvals the user can give, replacing
+    the last turn's, and returned as the app's `approval` items: id, tool, and what (the command, or the call's input)."""
+    store: dict[str, dict] = {}
+    items: list[dict] = []
+    for d in denials if isinstance(denials, list) else []:
+        if not isinstance(d, dict):
+            continue
+        tool, raw = str(d.get("tool_name") or ""), d.get("tool_input")
+        inp: dict = raw if isinstance(raw, dict) else {}
+        rule = denial_rule(tool, inp)
+        if not rule or any(v["rule"] == rule for v in store.values()):
+            continue
+        aid = uuid.uuid4().hex[:12]
+        store[aid] = {"rule": rule, "at": time.time()}
+        items.append({"id": aid, "tool": tool, "what": inp["command"] if tool == "Bash" else json.dumps(inp)[:400]})
+    with contextlib.suppress(OSError):
+        _write_approvals(store)
+    return items
+
+
+def take_approvals(ids):
+    """The rules the user approved (ids from the last turn's `approval` event, unexpired), each usable once."""
+    try:
+        with open(approvals_path()) as fh:
+            store = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(store, dict):
+        return []
+    now, rules = time.time(), []
+    for aid in ids:
+        rec = store.pop(aid, None)
+        if isinstance(rec, dict) and isinstance(rec.get("rule"), str) and now - float(rec.get("at") or 0) < APPROVAL_TTL:
+            rules.append(rec["rule"])
+    with contextlib.suppress(OSError):
+        _write_approvals(store)
+    return rules
+
+
 def chat_identity():
     return (CHAT or "main") + scope_suffix() if scope_suffix() else CHAT
 PIDFILE = os.path.join(DIR, "pid")
@@ -59,6 +123,9 @@ PROMPT = (
     "A request that changes something (code, docs, settings, an external system) goes to an agent in the appropriate "
     "Orca workspace, creating one with a goal if none fits; then report back what you dispatched and where. "
     "AskUserQuestion is unavailable here: ask in plain text, one question at a time. "
+    "A tool call denied for lack of permission shows the user that exact call with an Approve button in the app, and approving "
+    "it runs your next turn with that call allowed: say in one line what you tried and why, and that they can approve it. Never "
+    "retry a denied call in another form (an env prefix, other flags, another tool) to get around the denial. "
     "Files the user attaches come after their message under ATTACHED FILES: they're part of the message, so read them "
     "and answer with them in mind; when you dispatch work about one, give the agent its path. "
     "Answer concisely: the answer first, only what was asked, no preamble, no restating the question, no closing offers. "
@@ -360,7 +427,7 @@ THINK_STATUS = {"Thinking", "Reasoning"}  # claude/pi/opencode thinking, codex's
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
 
 
-TURN = {}  # this process's turn, for its diag event: {harness, model, t, norm}
+TURN: dict[str, Any] = {}  # this process's turn, for its diag event: {harness, model, t, norm}
 
 
 def emit(**e):
@@ -580,6 +647,7 @@ class Norm:
         self.plan_k = self.plan_base = self.plan_obs = 0  # items done now, done when first seen (untimed), updates that finished some
         self.plan_keys = None  # its items, so a replaced list starts its pace over
         self.gem_open = False  # gemini: an assistant reply block is streaming (its deltas append to self.text)
+        self.approvals = False  # a chat turn: its permission denials become approvals the app offers (automations have no one to ask)
 
     def more(self, e, **kw):
         """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
@@ -723,6 +791,8 @@ class Norm:
             self.tin, self.tout = self.tin + self.usage(u), self.tout + ((u.get("output_tokens") or 0) if isinstance(u, dict) else 0)  # +=: a retry's run adds to the first's
             if isinstance(d.get("total_cost_usd"), int | float) and not isinstance(d.get("total_cost_usd"), bool):
                 self.cost = (self.cost or 0) + d["total_cost_usd"]
+            if self.approvals and (items := save_denials(d.get("permission_denials"))):  # the app shows each with Approve (send --approve)
+                out.append({"e": "approval", "items": items})
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
                         "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
         return out
@@ -1516,7 +1586,7 @@ def asked_question(reply):
     return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done=""):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done="", allow=()):
     """Reserve this chat through answer handling, harness work, and pending-question commit."""
     global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
     path = os.path.join(DIR, ACTIVE_TURN)
@@ -1562,6 +1632,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     terminal = None
     try:
         TURN["done"] = done  # send --done: the buttons pressed since the last turn (done_note)
+        TURN["allow"] = tuple(allow)  # send --approve: the calls the user approved, allowed for this turn only
         terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
                                reservation=(token, reserved_gen))
     finally:
@@ -1775,9 +1846,10 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))
     # a harness without a system-prompt flag gets the prompt in its first message
     mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
-                                   images=attach.images(stored))
+                                   images=attach.images(stored), allow=TURN.get("allow", ()))
     emit(e="start", engine=engine, model=model or "default")
     norm, guard = Norm(verbose), watch_for_attachments()
+    norm.approvals = not compact
     TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
     try:
         cmd, t = mk(sid, text)
@@ -2007,7 +2079,8 @@ def clear_chat():
             os.remove(os.path.join(DIR, ACTIVE_TURN))
         for f in [SEEN, "board"] + [os.path.basename(p) for p in glob.glob(os.path.join(DIR, "session*")) +
                                                         glob.glob(os.path.join(DIR, "asked*")) + glob.glob(os.path.join(DIR, "members_scope-*")) +
-                                                        glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*"))]:
+                                                        glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "*")) +
+                                                        glob.glob(os.path.join(DIR, APPROVALS + "*"))]:
             if os.path.exists(os.path.join(DIR, f)):
                 os.remove(os.path.join(DIR, f))
         attach.clear(DIR)
@@ -2043,7 +2116,14 @@ def send_turn(args, opt):
             text, files = str(j.get("text") or ""), j.get("files") or []
         except (ValueError, AttributeError):
             return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files, done=opt("--done") or "")
+    allow = ()
+    if opt("--approve"):  # the user approved calls the last turn was denied: this turn may make exactly those
+        allow = tuple(take_approvals(opt("--approve").split(",")))
+        if not allow:
+            return emit(e="done", ok=False, text="That approval expired or was already used. Ask again and approve the new one.",
+                        context=0, window=None, ms=None)
+    turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files,
+         done=opt("--done") or "", allow=allow)
 
 
 def dispatch(args):

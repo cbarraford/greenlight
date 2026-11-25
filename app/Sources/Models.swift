@@ -56,15 +56,30 @@ final class Msg: ObservableObject, Identifiable {
     var options: [String] = []
     var failed = false
     var canvas = false  // this reply drew the chat's canvas (#208): "Updated the canvas" under it
+    var approvals: [Approval] = []  // calls the turn was denied: each with Approve & run (Core.approve)
+    @Published var decided: String?  // "approved" or "denied" once you answered them
     @Published var expanded = false
     init(_ role: Role, _ text: String) { self.role = role; self.text = text }
 
-    struct Saved: Codable { let role: Role, text: String, steps: [Step], duration: TimeInterval, options: [String], failed: Bool; var canvas: Bool? = nil }
-    var saved: Saved { Saved(role: role, text: text, steps: steps, duration: duration, options: options, failed: failed, canvas: canvas ? true : nil) }
+    struct Saved: Codable {
+        let role: Role, text: String, steps: [Step], duration: TimeInterval, options: [String], failed: Bool; var canvas: Bool? = nil
+        var approvals: [Approval]? = nil, decided: String? = nil  // optional: transcripts saved before them still load
+    }
+    var saved: Saved { Saved(role: role, text: text, steps: steps, duration: duration, options: options, failed: failed, canvas: canvas ? true : nil,
+                             approvals: approvals.isEmpty ? nil : approvals, decided: decided) }
     convenience init(_ s: Saved) {
         self.init(s.role, s.text)
         steps = s.steps; duration = s.duration; options = s.options; failed = s.failed; canvas = s.canvas ?? false
+        approvals = s.approvals ?? []; decided = s.decided ?? (approvals.isEmpty ? nil : "expired")  // chat.py's approvals don't outlive a relaunch's hour reliably
     }
+}
+
+/// A tool call Chief's harness denied for permission (chat.py's `approval` event): approving it runs the next turn with
+/// exactly that call allowed (chat.py send --approve <id>), once.
+struct Approval: Codable, Hashable, Identifiable {
+    let id: String
+    let tool: String
+    let what: String  // the command, or the call's input
 }
 
 /// Something greenlight asked that waits in the bell inbox: every ping, and chat replies that end with an Options line.
@@ -197,6 +212,7 @@ final class Run: ObservableObject {
     @Published var call = ""  // the latest tool call, Claude Code style: Bash(git status)
     @Published var thinking = false  // the status is a thinking phrase (Mulling…), not something the agent did
     @Published var plan: Plan?  // the agent's own task list, when it keeps one (TodoWrite, codex's todo list)
+    var approvals: [Approval] = []  // calls it was denied (chat.py's approval event), shown under its reply
     var gotDone = false, checkIn = false, watch = false
     var told: [String] = []  // the buttons this turn told Chief about (Core.acted, chat.py --done): back in the queue if it fails
     var meterStale = false  // Clear or a harness change mid-turn: its usage is the old conversation's, not the meter's

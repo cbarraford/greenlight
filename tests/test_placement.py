@@ -458,3 +458,14 @@ def test_tree_every_returns_all_rows_at_a_path(monkeypatch):
     monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: {"worktrees": ws})
     assert dash.tree("/src/w")[1]["repoId"] == "a"  # the first row, as the page shows it (delete acts on the same one)
     assert [r["repoId"] for r in dash.tree("/src/w", every=True)[2]] == ["a", "b"]
+
+
+def test_place_here_drops_host_local_beside_a_repo(monkeypatch):
+    calls = cli_with(monkeypatch, paired=True)  # Orca refuses --repo with --host ("choose either"): --repo creates here anyway
+    assert greenlight.place_here(["worktree", "create", "--repo", "id:r-here", "--host", "local", "--name", "x"]) == (
+        ["worktree", "create", "--repo", "id:r-here", "--name", "x"], None)
+    args, why = greenlight.place_here(["worktree", "create", "--repo", "id:r-there", "--host=local"])
+    assert args is None and "--repo id:r-here" in why  # still checked: a checkout elsewhere names the one here
+    assert ["project", "setups"] in calls
+    assert greenlight.place_here(["worktree", "create", "--repo", "id:r-there", "--host", "ssh:t1"]) == (
+        ["worktree", "create", "--repo", "id:r-there", "--host", "ssh:t1"], None)  # another host stays the user's choice

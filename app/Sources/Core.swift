@@ -618,6 +618,24 @@ final class Core: ObservableObject {
         })
     }
 
+    /// Approve & run: the next turn runs with exactly the calls this reply was denied allowed (chat.py send --approve), once.
+    func approve(_ m: Msg) {
+        guard run == nil, clearing == 0, m.decided == nil, !m.approvals.isEmpty else { return }
+        m.decided = "approved"
+        let list = m.approvals.map { "`\($0.what)`" }.joined(separator: ", ")
+        let shown = "Approved: " + m.approvals.map(\.what).joined(separator: ", ")
+        msgs.append(Msg(.you, shown))
+        start(Run(shown, on: chatHost), chatSend + " --approve " + shellQuote(m.approvals.map(\.id).joined(separator: ",")), stdin:
+            "(Greenlight, not typed by the user: they approved what your last turn was denied: \(list). It's allowed for this turn only: run it now as it was, then carry on with what they asked.)")
+    }
+
+    /// Deny: the calls stay denied; Chief hears it with the next message.
+    func deny(_ m: Msg) {
+        guard m.decided == nil else { return }
+        m.decided = "denied"
+        keepDone(doneSince + ["Denied: " + m.approvals.map(\.what).joined(separator: ", ")])
+    }
+
     /// An answer chip under a message in the chat.
     func choose(_ m: Msg, _ option: String) {
         if let q = question(for: m), q.answer == nil { answer(q, option) } else { send(option) }
@@ -1088,6 +1106,12 @@ final class Core: ObservableObject {
             r.plan = n > 0 ? Plan(done: k, total: n, title: t, eta: j["eta"] as? Double, at: Date()) : nil
             if !r.stopping { voice.status(byline(r, now: Date(), lead: true)) }
             if n > 0 { log(.chief, name, .status, "plan: \(k) of \(n) done" + (t.isEmpty ? "" : " · \(t)")) }
+        case "approval":
+            for i in j["items"] as? [[String: Any]] ?? [] {
+                guard let id = i["id"] as? String, id.range(of: "^[0-9a-f]{12}$", options: .regularExpression) != nil else { continue }  // one chat.py made: it reaches a shell
+                r.approvals.append(Approval(id: id, tool: i["tool"] as? String ?? "tool", what: i["what"] as? String ?? ""))
+            }
+            log(.chief, name, .status, "denied, waiting for your approval: " + r.approvals.map { "\($0.tool)(\($0.what))" }.joined(separator: ", "))
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
         case "text_reset": r.open = r.open ?? staged(r.live).open; r.live = ""; voice.said = 0; voice.textReset()  // an [open: …] in a block the next one replaces still counts
         case "text":  // a whole message (codex, opencode) shows but isn't spoken yet: it may be a progress note the reply restates;
@@ -1141,6 +1165,8 @@ final class Core: ObservableObject {
         m.steps = r.steps.map { var s = $0; if s.end == nil { s.end = Date() }; return s }
         m.duration = Date().timeIntervalSince(r.start)
         m.options = options
+        m.approvals = r.stopping ? [] : r.approvals
+        for o in msgs where o.decided == nil && !o.approvals.isEmpty { o.decided = "expired" }  // chat.py keeps the last turn's only
         m.failed = !ok
         if drawsCanvas(r, ok: ok, voiceOn: voice.on), let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // a typed reply's canvas (#208); voice mode has its stage
         msgs.append(m)

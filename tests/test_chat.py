@@ -2413,3 +2413,86 @@ def test_claude_streamed_text_is_still_spoken_as_it_comes():
     n = Norm()
     delta = {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Three MRs. "}}}
     assert spoken_live(n.claude(delta)) == "Three MRs. "
+
+
+def test_denied_calls_become_one_use_approvals(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    denials = [{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},
+               {"tool_name": "Bash", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},  # the same call twice: one
+               {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}},
+               {"tool_name": "Bash", "tool_input": {"command": "  "}}, {"tool_name": "bad name()"}, "junk"]
+    result = {"type": "result", "result": "Denied.", "is_error": False, "permission_denials": denials}
+    assert [e["e"] for e in Norm().claude(result)] == ["done"]  # an automation (auto.py's Norm) has no one to ask
+    n = Norm()
+    n.approvals = True
+    ev = n.claude(result)
+    assert [e["e"] for e in ev] == ["approval", "done"], ev
+    items = ev[0]["items"]
+    assert [(i["tool"], i["what"]) for i in items] == [("Bash", "ORCA_ENVIRONMENT=local orca host list"),
+                                                     ("WebFetch", '{"url": "https://example.com"}')]
+    assert stat.S_IMODE(os.stat(chat.approvals_path()).st_mode) == 0o600
+    assert chat.take_approvals([items[0]["id"], "nope"]) == ["Bash(ORCA_ENVIRONMENT=local orca host list)"]
+    assert chat.take_approvals([items[0]["id"]]) == []  # once only
+    with open(chat.approvals_path()) as fh:
+        store = json.load(fh)
+    store[items[1]["id"]]["at"] -= chat.APPROVAL_TTL + 1
+    with open(chat.approvals_path(), "w") as fh:
+        json.dump(store, fh)
+    assert chat.take_approvals([items[1]["id"]]) == []  # expired
+    n.claude({"type": "result", "result": "ok", "is_error": False})  # the next turn's result replaces what's left
+    with open(chat.approvals_path()) as fh:
+        assert json.load(fh) == {}
+
+
+def test_send_approve_runs_the_turn_with_the_call_allowed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    n = Norm()
+    n.approvals = True
+    aid = n.claude({"type": "result", "result": "x", "is_error": False,
+                    "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]})[0]["items"][0]["id"]
+    seen = {}
+    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: seen.update(text=text, allow=k.get("allow")))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
+    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
+    assert seen == {"text": "Approved", "allow": ("Bash(orca host list)",)}
+    seen.clear()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
+    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)  # used: no turn, a failed done
+    assert seen == {} and '"ok": false' in capsys.readouterr().out
+
+
+# A fake `claude -p` that is denied its first call and, run with that call allowed, makes it: the approval round trip.
+FAKE_DENIED = """#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+cmd = "ORCA_ENVIRONMENT=local orca host list"
+allowed = sys.argv[sys.argv.index("--allowedTools") + 1:] if "--allowedTools" in sys.argv else []
+ok = "Bash(" + cmd + ")" in allowed
+reply = "Ran it." if ok else "Denied: approve it in the app."
+print(json.dumps({"type": "result", "session_id": "s1", "result": reply, "is_error": False, "duration_ms": 1,
+                  "permission_denials": [] if ok else [{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": cmd}}]}))
+"""
+
+
+def test_a_denied_call_runs_once_approved(tmp_path, monkeypatch):
+    fake = tmp_path / "claude"
+    fake.write_text(FAKE_DENIED)
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    events = []
+    monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    monkeypatch.setenv("GREENLIGHT_REQUEST", "")
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    chat.turn("Create the workspace on this machine", "claude-haiku-5-5", None)
+    approval = [e for e in events if e["e"] == "approval"]
+    assert len(approval) == 1 and approval[0]["items"][0]["what"] == "ORCA_ENVIRONMENT=local orca host list", events
+    events.clear()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
+    aid = approval[0]["items"][0]["id"]
+    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
+    assert [e["text"] for e in events if e["e"] == "done"] == ["Ran it."], events
+    assert not [e for e in events if e["e"] == "approval"]

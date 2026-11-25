@@ -2,6 +2,7 @@
 
   argv(name, text, model=, effort=, sid=, system=, stream=, images=) -> (cmd, stdin text)
   images: files codex gets as images (--image); the others read them from the paths the message names
+  allow: permission rules the user approved for this one turn (claude's --allowedTools, e.g. "Bash(orca host list)")
   route(model, default) -> (harness, model or None): which harness runs a model id
 
 Safe by default: claude only accepts edits, codex runs in its workspace-write sandbox, opencode
@@ -98,7 +99,7 @@ def binary(name):
         (p for p in (os.path.expanduser(f"~/.local/bin/{name}"), os.path.expanduser(f"~/.{name}/bin/{name}")) if os.path.exists(p)), name)
 
 
-def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=(), tools=True):
+def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=(), tools=True, allow=()):
     if name not in H:
         raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
     h = H[name]
@@ -125,7 +126,8 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     b = binary(name)
     if name == "claude":
         cmd = [b, "-p", *perms, *(["--output-format", "stream-json", "--verbose", "--include-partial-messages"] if stream else []),
-               *opt("--append-system-prompt", system), *opt("--model", model), *opt("--effort", effort), *opt("--resume", sid)]
+               *opt("--append-system-prompt", system), *opt("--model", model), *opt("--effort", effort), *opt("--resume", sid),
+               *(["--allowedTools", *allow] if allow and tools else [])]  # last: it takes every argument after it
     elif name == "codex":
         eff = codex_effort(model, effort)
         cmd = [b, "exec", *(["resume", sid] if sid else []), "--skip-git-repo-check", *perms, *(["--json"] if stream else []),

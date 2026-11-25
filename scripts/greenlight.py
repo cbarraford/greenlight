@@ -401,6 +401,8 @@ def place_here(args, picked=False):
     unless the user picked that checkout themselves (picked: the sidebar's New workspace on its row); and --project
     gets --host local (#160)."""
     a = [x for x in args if not x.startswith("-")][:2]
+    if a == ["worktree", "create"] and flag(args, "repo") is not None and flag(args, "host") == "local":
+        args = drop_flag(args, "host")  # Orca refuses --repo with --host ("choose either"); --repo creates here anyway
     if a != ["worktree", "create"] or os.environ.get("ORCA_ENVIRONMENT") or flag(args, "host") is not None:
         return list(args), None
     try:
@@ -415,6 +417,19 @@ def place_here(args, picked=False):
         if why:
             return None, why
     return list(args) + (["--host", "local"] if flag(args, "project") is not None else []), None
+
+
+def drop_flag(args, name):
+    """args minus --name v and --name=v."""
+    out, skip = [], False
+    for x in args:
+        if skip:
+            skip = False
+        elif x == f"--{name}":
+            skip = True
+        elif not x.startswith(f"--{name}="):
+            out.append(x)
+    return out
 
 
 def without_change(args):
