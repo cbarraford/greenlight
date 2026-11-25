@@ -34,7 +34,7 @@ enum DS {
         static let fgFaint = DSColor(light: 0x8C8C8C, dark: 0x7A7A7A)
         static let fgOnSolid = DSColor(light: 0xFFFFFF, dark: 0xFFFFFF)
         static let accentSolid = DSColor(light: 0x00823A, dark: 0x05893E)
-        static let accentHover = DSColor(light: 0x007433, dark: 0x21954A)
+        static let accentHover = DSColor(light: 0x007433, dark: 0x289A4E)
         static let accentFg = DSColor(light: 0x177739, dark: 0x8BD19A)
         static let accentSubtle = DSColor(light: 0xE2FAE6, dark: 0x1F3724)
         static let accentRing = DSColor(light: 0x00823A, dark: 0x05893E)
@@ -84,7 +84,7 @@ enum DS {
     }
     enum AccentTeal {
         static let solid = DSColor(light: 0x037C77, dark: 0x00837E)
-        static let hover = DSColor(light: 0x036F6B, dark: 0x05908B)
+        static let hover = DSColor(light: 0x036F6B, dark: 0x03958F)
         static let fg = DSColor(light: 0x02736E, dark: 0x60D3CD)
         static let subtle = DSColor(light: 0xD7FBF8, dark: 0x0E3835)
         static let ring = DSColor(light: 0x037C77, dark: 0x00837E)
