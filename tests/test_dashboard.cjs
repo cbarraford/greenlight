@@ -2197,6 +2197,67 @@ test("log view: Share log… sends nothing until the host has taken private deta
   assert.equal(v.text.split("\n").length, 2, "only the two errors");
 });
 
+test("Hover card: a hex answers at its outline, the next card swaps in fast, a refresh leaves it be, and the way to it is kept", async page => {
+  const pucks = ["freeform", "ci_green", "review", "threads", "merge", "milestone", "ready", "verify", "mr_open"].map((step, i) => ({...puck("hx-" + i, "Goal " + i, "idle"), step}));  // each its own step: no stacks
+  await page.setViewportSize({width: 1300, height: 900});
+  await page.evaluate(s => { window.mc.update(s); ui.agentsFolded = true; render() }, {...SNAP, pucks});
+  const geo = () => page.$$eval("#main .cell", cs => cs.map(c => { const r = c.querySelector(".hx").getBoundingClientRect(); return {n: c.dataset.name, x: r.left + r.width / 2, y: r.top + r.height / 2, R: r.width / 2} }));
+  const cells = await geo();
+  assert.ok(cells.length >= 7, "the hive draws the hexes");
+  const owner = (x, y) => page.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y), c = e && e.closest(".cell"); return c ? c.dataset.name : null }, [x, y]);
+  for (const c of cells) {
+    assert.equal(await owner(c.x, c.y), c.n, `${c.n}: its centre is its own`);
+    assert.notEqual(await owner(c.x - c.R + 2, c.y - c.R + 2), c.n, `${c.n}: its square box's corner is not`);  // outside a pointy-top hexagon
+  }
+  const swaps = () => page.evaluate(() => window.__sw);
+  await page.evaluate(() => { window.__sw = []; new MutationObserver(() => { const c = document.getElementById("hcard"); const n = c && c.dataset.name; if (window.__sw[window.__sw.length - 1]?.n !== n) window.__sw.push({n, t: performance.now()}) }).observe(document.body, {childList: true}) });
+  const [a, b] = cells, far = cells.reduce((m, c) => Math.hypot(c.x - a.x, c.y - a.y) > Math.hypot(m.x - a.x, m.y - a.y) ? c : m);
+  await page.mouse.move(a.x, a.y); const t0 = await page.evaluate(() => performance.now());
+  await page.waitForTimeout(120);
+  assert.equal(await page.$("#hcard"), null, "a hex crossed in passing doesn't open a card");
+  await page.waitForSelector(`#hcard[data-name='${a.n}']`);
+  assert.ok((await swaps())[0].t - t0 >= 200, "the first card waits for the pointer to settle");
+  // warm: the next hex's card replaces it at once (a hex nowhere near the way to the card)
+  const t1 = await page.evaluate(() => performance.now());
+  await page.mouse.move(far.x, far.y, {steps: 4});
+  await page.waitForSelector(`#hcard[data-name='${far.n}']`, {timeout: 1000});
+  const sw = (await swaps()).filter(s => s.t > t1);
+  assert.deepEqual(sw.map(s => s.n), [far.n], "one card changing, never none between");
+  assert.ok(sw[0].t - t1 < 200, `the next card comes quicker than the first (${Math.round(sw[0].t - t1)}ms)`);
+  assert.equal(await page.locator("#hcard").count(), 1);
+  // a refresh redraws the hive under a still pointer: the card stays the same card
+  await page.evaluate(() => { window.__card = document.getElementById("hcard") });
+  await page.evaluate(s => window.mc.update({...s, ts: 2}), {...SNAP, pucks});
+  await page.mouse.move(far.x + 1, far.y);
+  await page.waitForTimeout(350);
+  assert.equal(await page.evaluate(() => document.getElementById("hcard") === window.__card), true, "not rebuilt, so no flicker");
+  // on the way to the card, the hexes it crosses don't take it over
+  await page.mouse.move(1, 1); await page.waitForSelector("#hcard", {state: "hidden"});
+  await page.waitForTimeout(500);  // cold again
+  let route = null;
+  for (const c of await geo()) {
+    await page.mouse.move(c.x, c.y); await page.waitForSelector(`#hcard[data-name='${c.n}']`);
+    const r = await page.$eval("#hcard", e => { const b = e.getBoundingClientRect(); return {l: b.left, r: b.right, t: b.top, b: b.bottom} });
+    for (const ty of [r.t + 12, r.b - 12]) {  // a corner of its near edge: a diagonal that may cross a neighbour
+      const tx = r.l > c.x ? r.l + 12 : r.r - 12, pts = Array.from({length: 24}, (_, k) => [c.x + (tx - c.x) * (k + 1) / 24, c.y + (ty - c.y) * (k + 1) / 24]);
+      const by = []; for (const [x, y] of pts) { const o = await owner(x, y); if (o && o !== c.n) by.push(o) }
+      if (by.length) { route = {c, pts, by}; break }
+    }
+    if (route) break;
+    await page.mouse.move(1, 1); await page.waitForSelector("#hcard", {state: "hidden"}); await page.waitForTimeout(500);
+  }
+  assert.ok(route, "some hex's way to its card crosses another hex");
+  const t2 = await page.evaluate(() => performance.now());
+  for (const [x, y] of route.pts) { await page.mouse.move(x, y); await page.waitForTimeout(12) }
+  await page.waitForTimeout(300);
+  assert.deepEqual((await swaps()).filter(s => s.t > t2).map(s => s.n), [], `crossing ${route.by[0]} on the way kept ${route.c.n}'s card`);
+  assert.equal(await page.getAttribute("#hcard", "data-name"), route.c.n);
+  // resting on a crossed hex, off the way, does swap
+  const o = (await geo()).find(c => c.n === route.by[0]);
+  await page.mouse.move(o.x, o.y, {steps: 3});
+  if (await owner(o.x, o.y) === o.n) await page.waitForSelector(`#hcard[data-name='${o.n}']`, {timeout: 1000});
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
