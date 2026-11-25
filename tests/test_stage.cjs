@@ -485,17 +485,18 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark)), ["r0", "r1"]);  // a mark that isn't an attribute: the same nodes
   assert.equal(await p.textContent("table.grid tbody tr:nth-child(1) td:nth-child(2)"), "passed");
   assert.equal(await p.locator("table.grid .chip").count(), 2);
-  const cols = () => p.$$eval("table.grid th", ths => ths.map(t => Math.round(t.getBoundingClientRect().left)));
+  const cols = () => p.$$eval("table.grid th", ths => ths.map(t => t.getBoundingClientRect().left));
+  const still = (a, b, msg) => assert.ok(a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) <= 1), `${msg}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);  // sub-pixel rounding aside
   // the first chip a table gets, and its last one going, don't move its columns either
   await p.setViewportSize({ width: 800, height: 720 });
   await p.evaluate(() => { stage.refs({}); stage.spec({ kind: "table", title: "B", columns: ["Workspace", "MR", "Next step to take"], rows: [["a-very-long-workspace-name-here", "!12", "x"]] }); });
   const free = await cols(); await p.evaluate(() => stage.patch({ "!12": { tone: "bad", label: "CI failed" } }));
-  assert.deepEqual(await cols(), free, "a table's first chip doesn't move its columns");
-  await p.evaluate(() => stage.patch({ "!12": null })); assert.deepEqual(await cols(), free, "nor does its last one going");
+  still(await cols(), free, "a table's first chip doesn't move its columns");
+  await p.evaluate(() => stage.patch({ "!12": null })); still(await cols(), free, "nor does its last one going");
   await p.setViewportSize({ width: 640, height: 720 });
   await p.evaluate(t => { stage.refs({ "!12": { tone: "ok", label: "CI passed" }, "!99": { tone: "needs", label: "Needs you" } }); stage.spec(t); }, tbl([["!12", "passed"], ["!99", "passed"]]));
   const colsBefore = await cols(); await p.evaluate(() => stage.patch({ "!12": { tone: "ok", label: "CI passed, 1 of 2 approvals" } }));
-  assert.deepEqual(await cols(), colsBefore, "a chip that grows doesn't move the table's columns");
+  still(await cols(), colsBefore, "a chip that grows doesn't move the table's columns");
   // a long chip in a tight 4-column table wraps inside its cell instead of bleeding into the next column
   await p.setViewportSize({ width: 640, height: 500 });
   await p.evaluate(() => stage.spec({ kind: "table", title: "Board4", columns: ["Workspace", "MR", "CI", "Next"],
