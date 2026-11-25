@@ -1866,7 +1866,7 @@ function outKeys(e){
     else closeOut(true);
     return;
   }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); const q = document.getElementById("aout-q"); q.focus(); q.select(); return }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); if (o && o.share) return; const q = document.getElementById("aout-q"); q.focus(); q.select(); return }
   if (o && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !o.share) {  // the log's own keys (Jump to lists them)
     const k = OUT_KEYS[e.key];
     if (k) { e.preventDefault(); k(); return }
@@ -2186,7 +2186,8 @@ function outVisible(o, id, f){
 }
 function outHits(o){  // the loaded entries that match, oldest first; the current match stays current as output comes and goes
   const cur = o.hits[o.hit];
-  o.hits = o.q ? outAll(o).filter(e => e.role !== "sep" && String(e.text || "").toLowerCase().includes(o.q)).map(e => e.id) : [];
+  const kind = id => (o.info.get(id) || {}).k;  // a filtered view searches what it shows
+  o.hits = o.q ? outAll(o).filter(e => e.role !== "sep" && (o.filter === "all" || kind(e.id) === o.filter) && String(e.text || "").toLowerCase().includes(o.q)).map(e => e.id) : [];
   o.hitSet = o.q ? new Set(o.hits) : null;
   const k = cur == null ? -1 : o.hits.indexOf(cur);
   o.hit = k >= 0 ? k : o.hits.length ? o.hits.length - 1 : -1;
@@ -2195,8 +2196,8 @@ function outRefine(){
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   const {info, heads} = outSections(o); o.info = info; o.heads = heads;
   if (o.q) { outHits(o); outSearchUI(o) }
-  const calls = [...heads].filter(([, x]) => x.k === "tool"), newest = calls.length ? calls[calls.length - 1][0] : null;
-  if (o.follow) for (const [id, x] of calls) if (x.n > OUT_FOLD && id !== newest && !o.unfolds.has(id)) o.folds.add(id);  // a long call folds once the next one starts (never under you)
+  const calls = [...heads].filter(([, x]) => x.k === "tool"), newest = new Set(new Map(calls.map(([id]) => [String(id).replace(/:[^:]*$/, ""), id])).values());  // each session's running call
+  if (o.follow) for (const [id, x] of calls) if (x.n > OUT_FOLD && !newest.has(id) && !o.unfolds.has(id)) o.folds.add(id);  // a long call folds once the next one starts (never under you)
   let shown = 0;
   for (const el of list.querySelectorAll(":scope > [data-id]")) {
     const id = el.dataset.id, f = info.get(id); if (!f) continue;
@@ -2286,6 +2287,7 @@ function outFilter(k){
 /* search: every loaded line, case-insensitive; matches show even inside a folded section */
 function outSearch(q, keepFocus){
   const o = ui.out; if (!o) return;
+  clearTimeout(outSearch.t);  // a typed query still waiting would come back after this one
   q = String(q || ""); o.q = q.trim().toLowerCase();
   const input = document.getElementById("aout-q"); if (input && input.value !== q && !keepFocus) input.value = q;
   o.hits = []; o.hit = -1; outHits(o);  // a new query starts at the newest match: a log is read from the bottom
@@ -2313,7 +2315,8 @@ function outMarkEl(el, e){
   const o = ui.out, tx = el && (el.querySelector(".aotx") || (el.classList.contains("tool") ? el.querySelector(".aotool") || el : null)); if (!o || !tx) return;
   const text = (e.role === "tool" ? e.text : (e.text || " ")) + (el.dataset.sfx || "");  // "(another session)" is the row's, not the entry's
   const q = o.q, cur = o.hits[o.hit] === e.id;
-  if (!q || !o.hitSet || !o.hitSet.has(e.id)) { if (tx.querySelector("mark")) tx.textContent = text; return }
+  if (!q || !o.hitSet || !o.hitSet.has(e.id)) { if (tx.querySelector("mark")) tx.textContent = text; delete el.dataset.mk; return }
+  const mk = `${q}\u0000${cur}\u0000${text}`; if (el.dataset.mk === mk && tx.querySelector("mark")) return; el.dataset.mk = mk;  // unchanged: a selection in it survives the poll
   const parts = [], low = text.toLowerCase(); let i = 0, first = true;
   for (let j; (j = low.indexOf(q, i)) >= 0; i = j + q.length) {
     if (j > i) parts.push(text.slice(i, j));
@@ -2349,13 +2352,18 @@ function outJump(kind, dir = 1){  // from the last jump while it's in view, else
   let target = null;
   if (kind === "looked") target = document.getElementById("aout-looked");
   else {
-    if (o.filter !== "all" && o.filter !== kind) outFilter("all");
-    const order = new Map([...o.info.keys()].map((id, i) => [id, i])), lr = log.getBoundingClientRect();
-    const at = list.querySelector(":scope > .aoat:not([hidden])"), ar = at && at.getBoundingClientRect();
+    const lr = log.getBoundingClientRect(), inView = el => { const r = el.getBoundingClientRect(); return r.bottom > lr.top + 8 && r.top < lr.bottom - 8 };
+    let keep = null;  // a filtered view: what you were looking at, found again once it's cleared
+    if (o.filter !== "all" && o.filter !== kind) { const rows = [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].filter(inView);
+      keep = (dir > 0 ? rows[0] : rows[rows.length - 1]); keep = keep && keep.dataset.id;
+      o.filter = "all"; outRefine(); const k = keep && row(keep); if (k) k.scrollIntoView({block: dir > 0 ? "start" : "end"}) }
+    const order = new Map([...o.info.keys()].map((id, i) => [id, i]));
+    const at = list.querySelector(":scope > [data-id].aoat:not([hidden])"), ar = at && at.getBoundingClientRect();
     let ref;
-    if (ar && ar.bottom > lr.top && ar.top < lr.bottom) ref = order.get(at.dataset.id);
+    if (keep && order.has(keep)) ref = order.get(keep) + (dir > 0 ? -0.5 : 0.5);
+    else if (ar && ar.bottom > lr.top && ar.top < lr.bottom) ref = order.get(at.dataset.id);
     else {  // next: from the first row in view; previous: from the last one
-      const rows = [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > lr.top + 8 && r.top < lr.bottom - 8 });
+      const rows = [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].filter(inView);
       const edge = dir > 0 ? rows[0] : rows[rows.length - 1];
       ref = edge ? order.get(edge.dataset.id) + (dir > 0 ? -0.5 : 0.5) : dir > 0 ? -0.5 : order.size }
     const ids = [...o.info].filter(([, f]) => f.k === kind).map(([id]) => id).filter(id => dir > 0 ? order.get(id) > ref : order.get(id) < ref);
@@ -2394,7 +2402,10 @@ function outWarn(){
   else if (o.loaded) { const L = outLoop(o);
     if (L) w = {id: "loop:" + L.first, lead: `The same ${L.k === 1 ? "line" : L.k + " lines"} came back ${L.r} times`,
       rest: `${L.ms >= 60e3 ? " in " + ago(L.ms / 3.6e6) : ""}. The agent may be looping.`, act: ["Show the repeat", () => {
-        const t = document.querySelector(`#aout-list > [data-id="${CSS.escape(L.first)}"]`); if (t) { const f = o.info.get(L.first); if (t.hidden && f && f.sec) outFold(f.sec, false); t.scrollIntoView({block: "start"}); outScrolled({currentTarget: document.getElementById("aout-log")}) } }]} }
+        const t = document.querySelector(`#aout-list > [data-id="${CSS.escape(L.first)}"]`); if (t) { const f = o.info.get(L.first);
+          if (t.hidden && o.filter !== "all") { o.filter = "all"; outRefine() }
+          if (t.hidden && f && f.turn && o.folds.has(f.turn)) outFold(f.turn, false);
+          if (t.hidden && f && f.sec) outFold(f.sec, false); t.scrollIntoView({block: "start"}); outScrolled({currentTarget: document.getElementById("aout-log")}) } }]} }
   if (w && o.dismissed === w.id) w = null;
   const key = w ? w.id + w.lead : "";
   if (key === o.warnKey) return; o.warnKey = key;
@@ -2482,7 +2493,7 @@ function outShareText(o, range){
   if (range === "looked" && o.lastLooked != null) es = es.filter(e => typeof e.ts === "number" && e.ts > o.lastLooked);
   if (range === "view") es = es.filter(e => { const f = o.info.get(e.id); return f && outVisible(o, e.id, f) && (!o.hitSet || o.hitSet.has(e.id)) });
   const stamp = ts => typeof ts === "number" && isFinite(ts) ? new Date(ts).toLocaleTimeString([], {hour12: false}) : "".padEnd(8);
-  const tag = e => e.role === "user" ? "Prompt: " : e.role === "said" ? `${agentMeta(e.kind || dflt).name}: ` : e.role === "tool" ? "› " : e.role === "sep" ? "── " : "";
+  const tag = e => e.role === "user" ? "Prompt: " : e.role === "tool" ? "› " : e.role === "sep" ? "── " : e.role === "line" ? "" : `${agentMeta(e.kind || dflt).name}: `;  // a transcript's agent says "assistant"
   const lines = es.map(e => `${stamp(e.ts)}  ${tag(e)}${e.text || ""}`);
   let size = 0, from = lines.length;  // too much for one answer: the newest lines, whole, and it says so
   while (from > 0 && size + lines[from - 1].length + 1 <= OUT_SHARE_MAX) size += lines[--from].length + 1;

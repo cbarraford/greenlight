@@ -1072,7 +1072,8 @@ def tree_diff(path, mode):
                 patch += f"diff --git a/{f} b/{f}\nnew file\n(file exceeds diff size limit)\n"
             else:
                 patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", f).stdout
-    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f, "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
+    renamed = lambda f: re.sub(r"\{[^{}]* => ([^{}]*)\}", r"\1", f).split(" => ")[-1].replace("//", "/")  # numstat's dir/{old => new}  # noqa: E731
+    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f) or kind.get(renamed(f), "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
 def listeners(lsof):
@@ -2419,7 +2420,7 @@ def main():
 
         req = int(a[3]) if len(a) == 4 else None  # echoed: the page drops an answer to an ask it no longer has
         try:
-            out = log_extras(a[1]) if a[0] == "logextras" else dict(zip(("text", "removed"), log_view.redact(sys.stdin.read(4 << 20))))
+            out = log_extras(a[1]) if a[0] == "logextras" else dict(zip(("text", "removed"), log_view.redact(sys.stdin.read(4 << 20), (a[1], _ws_path(a[1]) or ""))))
         except Exception as e:
             oops(a, e)
             out = {"error": str(e)[:200]}

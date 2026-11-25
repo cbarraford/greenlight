@@ -41,7 +41,7 @@ PRICES = (  # the first prefix that matches a model id wins: keep the longer ids
     ("claude-haiku-4", (1.0, 5.0, 0.10)),
 )
 CACHE_WRITE = 1.25
-TAIL = 8 << 20  # bytes read from the end of a huge transcript: usage is summed over what fits
+TAIL = 512 << 20  # bytes read from the end of a transcript past this size (the cache makes the whole read a one-time cost)
 
 
 def price(model: str) -> tuple[float, float, float] | None:
@@ -197,8 +197,9 @@ HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.ne
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 PATH_RE = re.compile(r"(?<![\w.])(?:~(?=/)|/(?:home|Users|root|tmp|private|var|opt|srv|mnt|Volumes))(?:/[^\s'\"`:,;)\]]*)?")
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
-ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH)"
-                       r"[A-Z0-9_.-]*)(\s*[=:]\s*)(?![\s\[])([\"']?)[^\s\"']+\3")
+ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?![\s\[])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
+BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
 
@@ -217,7 +218,7 @@ def _hosts() -> list[str]:
     return sorted({full, full.split(".")[0]} - {"", "localhost"}, key=len, reverse=True)
 
 
-def redact(text: str) -> tuple[str, int]:
+def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
     """(text, how many things were replaced). Order matters: secrets before URLs, URLs before paths and hosts."""
     n = 0
 
@@ -231,7 +232,7 @@ def redact(text: str) -> tuple[str, int]:
     text = audit.redact_secrets(text)
     n += sum(1 for rx, _ in audit.SECRET_RES for _ in rx.finditer(before))
     text = sub(TOKENISH_RE, "[token]", text)
-    text = sub(ASSIGN_RE, r"\1\2[secret]", text)
+    text = sub(BEARER_RE, r"\1 [secret]", text)
     text = sub(URL_RE, "[url]", text)
     text = sub(SCP_RE, "[repo]", text)
     text = sub(audit.EMAIL_RE, "[email]", text)
@@ -241,6 +242,9 @@ def redact(text: str) -> tuple[str, int]:
     text = sub(IP_RE, "[ip]", text)
     text = sub(HOST_RE, "[host]", text)
     text = sub(audit.PHONE_RE, "[phone]", text)
+    text = sub(ASSIGN_RE, r"\1\2\1\3[secret]", text)  # after URLs: a query's token= is the URL's
+    for term in sorted({t for t in terms if t and len(t) >= 3}, key=len, reverse=True):  # the workspace's own name and path
+        text = sub(re.compile(re.escape(term), re.I), "[workspace]", text)
     for name, mark in ((_user(), "[user]"), *((h, "[host]") for h in _hosts())):
         if len(name) >= 3:  # this account's and this machine's names outside a path too: a branch, a prompt, a ssh line
             text = sub(re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])", re.I), mark, text)

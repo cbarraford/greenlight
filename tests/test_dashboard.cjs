@@ -1879,6 +1879,9 @@ test("log view: search marks every match, steps through them, finds them inside 
   await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", last_output_ts: Date.now(), entries: more});
   assert.equal(await page.textContent("#aout-qn"), "35 of 37", "a refresh's matches are counted, the current one kept");
   assert.equal(await page.locator("#aout-list mark").count(), 37);
+  await page.click("#aout-filter [data-f=err]");
+  assert.equal(await page.textContent("#aout-qn"), "1 of 1", "under the Errors filter, only the error that matches");
+  await page.click("#aout-filter [data-f=all]");
   await page.fill("#aout-q", "nothing like it"); await page.waitForFunction(() => /No matches/.test(document.getElementById("aout-qn").textContent));
   await page.focus("#aout-q");
   await page.keyboard.press("Escape");
@@ -1927,6 +1930,13 @@ test("log view: the kind filter counts and shows only that kind, with an empty s
   assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/, "⇧E goes back");
   await page.keyboard.press("[");
   assert.match(await page.textContent("#aout-list > .aoat"), /Bash\(pytest -q tests/, "[ the call before");
+  // from a filtered view, a jump starts where you were, not at the bottom
+  await page.$eval("#aout-log", e => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")) });
+  await page.evaluate(() => document.querySelectorAll(".aoat").forEach(x => x.classList.remove("aoat")));
+  await page.click("#aout-filter [data-f=prompt]"); await page.$eval("#aout-log", e => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")) });
+  await page.focus("#aout-log"); await page.keyboard.press("e");
+  assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/, "E from the Prompts filter finds the first error");
+  assert.equal(await page.getAttribute("#aout-filter [data-f=all]", "aria-pressed"), "true");
   await page.click("#aout-jumpbtn"); await page.keyboard.press("Escape");
   assert.equal(await page.$("#aout-jump"), null, "Esc closes the menu, not the view");
   assert.ok(await page.isVisible("#aout"));
@@ -1958,6 +1968,33 @@ test("log view: a working agent quiet for 10 min gets a stuck banner; a repeatin
   await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, state: "idle"}}))}), SNAP);
   await openLog(page, quiet);
   assert.equal(await page.isVisible("#aout-warn"), false);
+});
+
+test("log view: after L, E still finds the next error; Show the repeat opens a folded turn; ⌘F stays out of the share sheet", async page => {
+  await page.evaluate(lk => localStorage.setItem("gl_last_looked", JSON.stringify({"plan-b": lk})), Date.now() - 10 * 60e3);
+  const loop = paneLog(); let n = 300;
+  for (let r = 0; r < 9; r++) loop.push({id: `mc-s1.g0:${n++}`, role: "line", text: "⏺ Bash(curl localhost:8080)", ts: Date.now() - (9 - r) * 40e3, kind: "pane"},
+    {id: `mc-s1.g0:${n++}`, role: "line", text: "  ⎿  connection refused", ts: Date.now() - (9 - r) * 40e3 + 1000, kind: "pane"});
+  await openLog(page, loop, {last_output_ts: Date.now()});
+  assert.ok(await page.$("#aout-looked"), "a divider to jump to");
+  await page.focus("#aout-log"); await page.keyboard.press("l");
+  await page.keyboard.press("e");
+  assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/, "the divider isn't a row to count from");
+  await page.click("#aout-foldall");
+  await page.click("#aout-warn button:has-text('Show the repeat')");
+  assert.equal(await page.$eval("#aout-list > [data-id='mc-s1.g0:300']", e => e.hidden), false, "its turn unfolds");
+  await page.click("#aout-share-btn");
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+f" : "Control+f");
+  assert.notEqual(await page.evaluate(() => document.activeElement.id), "aout-q", "the search behind the sheet stays put");
+  assert.match((await posts(page, "logshare")).pop().text, /^\S+ {2}⏺ Bash/m);
+});
+
+test("log view: a transcript's shared text labels the agent's replies", async page => {
+  await page.evaluate(() => openOut("plan-b"));
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, entries: [E(1, "user", "go"), E(2, "assistant", "done it")], recent: []});
+  await page.click("#aout-share-btn");
+  const t = (await posts(page, "logshare")).pop().text;
+  assert.match(t, /Prompt: go/); assert.match(t, /Claude: done it/);
 });
 
 test("log view: parametrized tests aren't a loop; Previous jumps skip folded rows; a session's sections survive another one's lines in between", async page => {

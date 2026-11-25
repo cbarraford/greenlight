@@ -119,6 +119,16 @@ def test_redact_takes_out_credential_assignments_whatever_the_value():
     assert pw not in out and n == 3
     assert "DATABASE_PASSWORD=[secret]" in out and "GH_TOKEN=[secret]" in out and "api_key: [secret]" in out
     assert out.endswith("tokens used: 40"), "a word that merely contains one isn't a credential"
+    out, _ = log_view.redact('{"password": "correct horse battery staple", "user": "x"}\nDB_PASSWORD=correct horse battery staple')
+    assert "horse" not in out and "battery" not in out, out
+    assert out.startswith('{"password": [secret], "user": "x"}')
+    out, _ = log_view.redact("curl -H 'Authorization: Bearer q9Zx7LmP2vR8wq' x")
+    assert "q9Zx7" not in out
+
+
+def test_redact_takes_out_the_workspaces_own_name_and_path():
+    out, n = log_view.redact("On branch secret-proj-fix in /srv/w/secret-proj-fix", ("secret-proj-fix", "/srv/w/secret-proj-fix"))
+    assert "secret-proj" not in out and n == 2, out
 
 
 def test_redact_catches_prompts_env_paths_file_urls_and_windows_homes(monkeypatch):
@@ -193,6 +203,7 @@ def test_dash_logextras_and_logshare(tmp_path, monkeypatch, capsys):
     out = dash.log_extras("ws1")
     assert out["usage"]["sessions"] == 1 and out["files"] == {"mode": "head", "files": []} and calls == ["branch", "head"]
     assert dash.log_extras("nope") == {"error": "no workspace nope"}
+    monkeypatch.setattr(dash, "_ws_path", lambda n: str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["dash.py", "logshare", "ws1", "--req", "7"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"cat {HOME}/dave/notes"))
     dash.main()
