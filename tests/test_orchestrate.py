@@ -995,6 +995,14 @@ assert any(d.get("pending") for d in ws_state.load("eof-launch")["dispatches"])
 import dash
 with mock.patch.object(dash, "moves", return_value=[{"kind": "ci", "prompt": "ordinary fix", "auto": "Stop before push; get review"}]):
     assert "Stop before push; get review" in orchestrate.brief(row("gated", step="ci_green"), ws_state.blank("gated"))
+# the verified step: a fresh verifier gets the Verify prompt; in the fix phase, the builder gets the recorded defects and evidence
+with mock.patch.object(dash, "moves", return_value=[{"kind": "verify", "prompt": "VERIFY PROMPT greenlight.py verify"}]):
+    assert orchestrate.brief(row("ver", step="verified", action="Verify changes end to end (fresh verifier)"), ws_state.blank("ver")).startswith("VERIFY PROMPT")
+_fix = row("verfix", step="verified", action="Fix verification defects (round 1/3): dirty dialog",
+           mrx={"verify": {"verdict": "fail", "phase": "fix", "round": 1, "defects": ["Cancel leaves the dialog dirty"], "unproven": ["Safari"], "evidence": "/srv/gl/verify/x.html"}})
+with mock.patch.object(dash, "moves", return_value=[]):
+    _fb = orchestrate.brief(_fix, ws_state.blank("verfix"))
+assert "Verification defect: Cancel leaves the dialog dirty" in _fb and "Could not prove: Safari" in _fb and "/srv/gl/verify/x.html" in _fb and "Don't record a verdict" in _fb, _fb
 hold_title = row("title-hold", goal="Merge !1: Hold\nHold until #67 merges", mrx={"title": "Hold"})
 assert "goal says hold: no merge" in ws_state.risks(hold_title)
 with mock.patch.object(greenlight, "orca", return_value={"terminals": []}), mock.patch.object(greenlight, "screen", return_value={"state": "working", "prob": 0.99}):

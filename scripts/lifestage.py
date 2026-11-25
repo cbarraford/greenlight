@@ -73,7 +73,7 @@ PILES = ("yours", "working", "waiting", "done", "parked")
 PILE_NAMES = {"yours": "Yours", "working": "Working", "waiting": "Waiting for others", "done": "Done", "parked": "Parked"}
 HOLDER = {"you": "you", "agent": "your agent", "greenlight": "Greenlight", "automation": "an automation"}
 OTHERS = {"author": "the author", "reviewers": "reviewers", "ci": "CI", "dependency": "another MR"}
-BUILTIN = ("mr_open", "ci_green", "no_conflicts", "review_bot", "milestone", "ready", "threads", "approved", "merge")
+BUILTIN = ("mr_open", "ci_green", "no_conflicts", "verified", "review_bot", "milestone", "ready", "threads", "approved", "merge")
 
 
 def at(stage, sub):
@@ -322,6 +322,16 @@ def _place(r, nxt, ck):
                     f"The pipeline failed on {ref}{f' ({jobs})' if jobs else ''}. Start an agent to find the first real error and fix it.", why)
     if step == "no_conflicts":
         return spot("verify", "mergeable", "author", "agent", "Fix conflicts", f"{Ref} conflicts with {into}. Start an agent to rebase it.", why)
+    if step == "verified":  # the built-in verified step: a fresh verifier's pass on the head commit (greenlight.py verify)
+        if owner == "me":
+            return spot("verify", "author-check", "author", "you", "Look at the verification",
+                        f"The verifier couldn't pass {ref}. {sentence(why)} Read its evidence, then fix it and record a verdict yourself, "
+                        "or start the rounds over with greenlight.py verify … reset.", why)
+        if why.startswith("Fix verification defects"):
+            return spot("verify", "author-check", "author", "agent", "Fix the defects",
+                        f"A fresh verifier found defects on {ref}. Start an agent to fix them and push.", why)
+        return spot("verify", "author-check", "author", "agent", f"Verify {ref}",
+                    f"{Ref} needs a fresh verifier to try it end to end at the real surface. Start one in a new session.", why)
     if step == "review_bot":
         return spot("review", "open-for-review", "author", "greenlight", "Assign the review bot",
                     f"{Ref} has no review bot yet. Greenlight adds it on its next run.", why)

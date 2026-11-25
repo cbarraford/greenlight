@@ -112,8 +112,9 @@ def block_of(r, blk):
 
 
 PROMPTS = greenlight.ROOT / "prompts"  # the defaults everyone starts from: <kind>.md
-COMMON = ("mr", "url", "title", "branch", "target", "sha")
-KINDS = {"review": ("last_review_sha",), "threads": ("threads",), "ci": ("failed_jobs", "pipeline_url"), "conflicts": ()}  # card order is MOVES
+COMMON = ("mr", "url", "title", "branch", "target", "sha", "rules", "checklist")  # rules, checklist: the lifecycle's ## Rules and ## Checklist
+KINDS = {"review": ("last_review_sha",), "threads": ("threads",), "ci": ("failed_jobs", "pipeline_url"), "conflicts": (),
+         "verify": ("goal", "project", "iid")}  # card order is MOVES
 
 
 def own_prompt(repo, kind):
@@ -135,6 +136,8 @@ AUTO = {
     "threads": ("Your MR has unresolved threads", [("Stop before push", "Stop before pushing and wait for me."),
                                                    ("Push, draft replies", "Push the fixes, but don't post or resolve anything; leave the replies here."),
                                                    ("Push, post & resolve", "Push, post your replies, and resolve only the threads you fixed.")]),
+    "verify": ("Your MR needs end-to-end verification", [("Report only", "Run the verification and report what you found; don't push or record a verdict."),
+                                                         ("Record verdict", "Run the verification, save its evidence, and record the verdict with greenlight.py verify.")]),
     "review": ("Your review is the next move", [("Draft only", "Don't post anything; leave the findings here."),
                                                 ("Post comments", "Post the findings as review comments; never approve.")]),
     "merge": ("greenlight says it can merge now", []),
@@ -210,24 +213,30 @@ def moves(r, blk=None):
     mine = mr.get("role") == "author"
     sm = _signoff_move(r)
     review = nxt.get("owner") == "me" and not sm and (nxt.get("step") == "review" or "review it" in nxt.get("action", ""))
+    v, base = mr.get("verify") or {}, r.get("_base_next") or nxt  # the verified step: a fresh verifier's turn (not while the builder fixes its defects);
+    # base: the step's own owner, before the scan's agent overlay says "working" (the card disables the button while one works)
     on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
+          "verify": mine and base.get("step") == "verified" and base.get("owner") == "agent" and v.get("phase") != "fix",
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]
     goal = r.get("goal") or ""
     on_auto = {} if greenlight.HOLD_RE.search(goal) or greenlight.PARKED_RE.search(goal) or greenlight.AUTOMATION_RE.search(goal) else autorun().get(repo, {})
     lines = lambda xs: "\n".join(f"- {x}" for x in xs) or None
-    vals = dict(zip(COMMON, (mr.get("ref"), mr.get("web_url"), mr.get("title"), mr.get("source_branch") or r.get("branch"), mr.get("target_branch"), mr.get("sha"))),
+    doc = greenlight.lifecycle_doc(r["project"])
+    vals = dict(zip(COMMON, (mr.get("ref"), mr.get("web_url"), mr.get("title"), mr.get("source_branch") or r.get("branch"), mr.get("target_branch"), mr.get("sha"),
+                             doc["rules"] or None, doc["checklist"] or None)),
                 last_review_sha=mr.get("reviewed_sha"), threads=lines(mr.get("todo_threads") or []), pipeline_url=mr.get("pipeline_url"),
-                failed_jobs=lines(f"{j['name']} ({j['stage']}): {j['url']}" for j in mr.get("failed_jobs") or []))
-    for kind in ("conflicts", "ci", "threads", "review"):
+                failed_jobs=lines(f"{j['name']} ({j['stage']}): {j['url']}" for j in mr.get("failed_jobs") or []),
+                goal=goal or None, project=r["project"], iid=mr.get("iid"))
+    for kind in ("conflicts", "ci", "threads", "verify", "review"):
         if on[kind]:
             text, own = prompt_of(repo, kind)
             ok = set(COMMON + KINDS[kind])
             text = re.sub(r"\{(\w+)\}", lambda m, ok=ok: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             text = _strip_ctrl(text)
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
-    fix = any(m["kind"] != "review" for m in out)  # conflicts, CI or threads: fix those first
+    fix = any(m["kind"] not in ("review", "verify") for m in out)  # conflicts, CI or threads: fix those first
     if not fix and nxt.get("step") == "merge" and (cmd[:1] in (["gh"], ["glab"]) or cmd[2:3] == ["checked-merge"]):
         out.append({"kind": "merge", "how": merge_how(cmd), "target": mr.get("target_branch")})
     if not fix and nxt.get("step") == "ready" and nxt.get("owner") == "me" and cmd[:1] in (["gh"], ["glab"]):
@@ -711,7 +720,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "agent": r["agent"], "mr": mr and {k: mr.get(k) for k in ("iid", "ref", "forge", "web_url", "title", "role", "draft", "author", "state",
                                                      "pipeline", "conflicts", "threads", "approvals", "approvals_required", "mergeable",
                                                      "source_branch", "target_branch", "labels", "milestone", "approved_by",
-                                                     "pipeline_url", "threads_total")},
+                                                     "pipeline_url", "threads_total", "sha", "verify")},
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
             "host": placement.host_of(w, ms), "away": placement.is_misplaced(w, ms, home, repo_target=repo_target),
             "steward": bool(card.get("steward")),
@@ -775,6 +784,18 @@ def usage_now(since=0):
     except Exception as e:
         oops(["usage"], e)
         return []
+
+
+def scan_facts():
+    """The Basement footer's scan facts, as the snapshot gives Greenlight Center: now (for the clock skew), when greenlight
+    last scanned, and why its newest scan died when that's newer."""
+    try:
+        last = json.loads((greenlight.STATE / "last.json").read_text())
+        scanned, started = int(last.get("ts") or 0), last.get("started")
+    except (OSError, ValueError, AttributeError, TypeError):
+        scanned, started = 0, None
+    err = scan_error(scanned, started)
+    return {"ts": int(time.time()), "scanned": scanned, **({"scan_error": err} if err else {})}
 
 
 ADES = None  # a fixed list in place of ades() (tests)
@@ -850,7 +871,7 @@ def trees():
                 if mr := r.get("mr"):
                     out[-1]["mr"] = {k: mr.get(k) for k in ("ref", "web_url", "title", "state", "draft", "pipeline", "conflicts",
                                                              "rebase", "threads", "mergeable", "by", "assignees",
-                                                             "target_branch", "labels", "milestone", "description", "sha")}
+                                                             "target_branch", "labels", "milestone", "description", "sha", "verify")}
     mark_external(out)
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
 
@@ -1330,6 +1351,8 @@ def facts(name):
     f = {"puck": p, "history": history(name), "git": git_facts(p["path"])}
     if p["mr"] and p["mr"].get("iid") and p["mr"].get("state") == "opened":
         f["mr_live"] = mr_facts(p["project"], p["mr"]["iid"], p["mr"].get("forge") or "gitlab")
+    if p["mr"] and p["mr"].get("iid"):  # the verify step's receipt, live (the snapshot's is as of the last scan)
+        f["verify"] = greenlight.verify_status(p["project"], p["mr"]["iid"], p["mr"].get("sha"))
     return f
 
 
@@ -1711,7 +1734,9 @@ def validate(layout):
 
 
 def sig(p):
-    return hashlib.sha1(json.dumps([p["state"], p["step"], p["owner"], p["agent"]["state"], (p["mr"] or {}).get("state")]).encode()).hexdigest()[:12]
+    v = (p.get("mr") or {}).get("verify") or {}  # a new verdict redraws the page
+    return hashlib.sha1(json.dumps([p["state"], p["step"], p["owner"], p["agent"]["state"], (p["mr"] or {}).get("state"),
+                                    v.get("verdict"), v.get("stale"), v.get("round")]).encode()).hexdigest()[:12]
 
 
 def cached_page(name):
@@ -2203,14 +2228,22 @@ def task_new(repo_name, payload):
         with os.fdopen(fd, "wb") as ff:
             ff.write(raw)
     quoted = request if len(request) <= REQUEST_CAP else request[:REQUEST_CAP] + f"\n[… cut here: the rest is in {d}/request.md]"
+    doc, vp = greenlight.lifecycle_doc(repo["path"]), own_prompt(repo["path"].rsplit("/", 1)[-1], "verify")  # as moves() names it
+    verify_path = vp if vp.exists() else PROMPTS / "verify.md"
+    standing = (f"\n\nRepo standing rules:\n{doc['rules']}" if doc["rules"] else "") + \
+        (f"\n\nDiff-triggered reliability checklist (run every item whose trigger matches your diff):\n{doc['checklist']}" if doc["checklist"] else "")
     brief = (f"Your task in {repo['path']}: {title}. My whole request is below (verbatim in {d}/request.md)."
              + (f" I attached {len(files)} file{'s' * (len(files) > 1)}, in {d}/files: {', '.join(fn for fn, _ in files)}. Read them first."
                 if files else "")
              + " Follow my request and clarifying answers. If they ask for a plan or investigation first, stop at that deliverable. "
                "Otherwise implement it in this workspace with tests, then commit, push and open a draft MR (a draft PR on GitHub). If something is unclear, ask me with the "
                f"AskUserQuestion tool (2-4 options, your recommendation first) rather than guess. Before you open the MR, run its tests with "
-               f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record."
-              + f"\n\nMy request:\n\n{quoted}{gate['brief']}" + PUSH_RULE)
+               f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record. "
+               f"Then run a fresh-eyes verification pass (follow {verify_path}: Setup, Drive, Check; exercise the change at the real user surface "
+               "with no JS-eval or mock shortcuts, and run every matching checklist item), and give the draft MR a Verification section: the flows "
+               "you ran at the real surface, concrete evidence, any side-effect defects, and anything you could not prove. "
+               "Don't record a verdict with greenlight.py verify yourself: that's for a fresh verifier."
+              + standing + f"\n\nMy request:\n\n{quoted}{gate['brief']}" + PUSH_RULE)
     for a in agents:
         try:
             res = greenlight.orca("worktree", "create", "--repo", f"id:{repo['id']}", "--name", name, "--setup", "skip",
@@ -2409,7 +2442,10 @@ def settings(op, arg, stdin):
             return {"error": "bad repo"}
         f = greenlight.STATE / "lifecycles" / f"{stem}.md"
         if op == "lifecycle-set":
-            md = greenlight.lifecycle_md(arg, json.loads(stdin))
+            data = json.loads(stdin)
+            if "checklist" not in data:  # an older app that doesn't know the checklist keeps it, rather than clearing it
+                data["checklist"] = greenlight.lifecycle_doc(arg)["checklist"]
+            md = greenlight.lifecycle_md(arg, data)
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(md)
         elif op == "lifecycle-reset":
@@ -2578,7 +2614,7 @@ def main():
     elif a[:1] == ["trees"]:
         ts = trees()
         print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
-                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now()}))
+                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now(), **scan_facts()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
             out = turn(a[1])

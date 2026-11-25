@@ -397,6 +397,24 @@ test("hover card footer: one glyph for the agent (a live one outranks a crash), 
   assert.deepEqual(await foot({}, "needs", null), [null, null, "No agent"]);
 });
 
+test("verify: the hover card's Verify move runs its prompt; the page's facts and steps show the verdict and its evidence", async page => {
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle"; p.steps = ["mr_open", "ci_green", "verified", "ready", "merge"]; p.step_index = 2; p.step = "verified";
+    p.mr = {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12",
+            verify: {verdict: "fail", phase: "fix", round: 1, max_rounds: 3, summary: "cancel kept state", defects: ["dirty dialog"], unproven: ["Safari"], evidence: "/srv/gl/verify/x-12.html"}};
+    p.moves = [{kind: "verify", prompt: "verify prompt", own: false, repo: "widgets"}];
+    hideCard(); document.body.append(hoverCard(p)) });
+  assert.match(await page.textContent("#hcard .mv.bl .go"), /^Verify !12/);
+  assert.ok(await page.$("#hcard .mv .go svg"), "the move has its icon");
+  await page.click("#hcard .mv .go");
+  assert.deepEqual((await posts(page, "run")).map(m => [m.name, m.prompt]), [["plan-a", "verify prompt"]]);
+  await page.evaluate(() => openPage("plan-a"));
+  assert.match(await page.textContent(".facts"), /Verification\s*failed · round 1\/3 · 1 defect · 1 unproven — cancel kept state · evidence \/srv\/gl\/verify\/x-12\.html/);
+  assert.equal(await page.$(".facts a:has-text('Evidence')"), null, "a file on the host isn't a link the app would cancel");
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.mr.verify = {verdict: "pass", phase: "pass", round: 0, evidence: "https://ci.example/run/7"}; openPage("plan-a") });
+  assert.equal(await page.getAttribute(".facts a:has-text('Evidence')", "href"), "https://ci.example/run/7");
+  assert.match(await page.textContent(".facts"), /Verification\s*passed/);
+});
+
 test("hover card: the smart button on top replaces the next step; Also runs the rest; Merge asks twice", async page => {
   await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle";
     p.mr = {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12"};

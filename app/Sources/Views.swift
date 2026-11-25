@@ -814,7 +814,7 @@ struct SettingsView: View {
                       ("Hosts", "server", "ssh host state code relaunch connection")]
     static let gl = [("Automation", "bolt", "scan interval background agents pages suggestions model effort system one jev haiku typesafe decisions"),
                      ("Autonomy", "wand", "confidence auto answer preselect likely calibration graduate ping gate check-in watch dismiss undo"),
-                     ("Projects", "folder", "folders default folder new terminals open"),
+                     ("Projects", "folder", "folders default folder new terminals open edit projects choose"),
                      ("Repositories", "branch", "repo lifecycle stages rules prompts auto-run project solo merge host mac server auto"),
                      ("Instructions", "file-text", "standing rules"),
                      ("Import", "download", "import orca t3 cmux herdr rex ade repos goals folders onboarding migrate"),
@@ -841,7 +841,7 @@ struct SettingsView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg).ignoresSafeArea()  // the header is the title bar
         .tint(accent)
         .onAppear { rs.load(); rs.projs = delegate.savedProjects }
-        .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
+        .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // re-read on each pane switch (a project a new window made, say)
         .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
     }
 
@@ -1486,7 +1486,7 @@ struct SettingsView: View {
             if !c.s1Note.isEmpty { ruled(note(c.s1Note).padding(DS.Space.s16)) }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
-        banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
+        banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Verify, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
     }
 
     // MARK: Autonomy (autonomy.py on the host)
@@ -1541,7 +1541,8 @@ struct SettingsView: View {
         }.onAppear(perform: c.loadAutonomy)
     }
 
-    // Projects: the Basement's projects.json on this Mac ([{id, name, repos, dirs, dir?}]), saved as you change them.
+    // Projects: the Basement's projects.json on this Mac ([{id, name, repos, dirs, dir?}]), saved as you change them. The one editor for them
+    // (the Basement's Edit projects… and Greenlight Center's open it).
     func pid(_ p: [String: Any]) -> String { p["id"] as? String ?? "" }
     func pname(_ p: [String: Any]) -> String { p["name"] as? String ?? "Project" }
     func pstrings(_ p: [String: Any], _ k: String) -> [String] { p[k] as? [String] ?? [] }
@@ -1569,6 +1570,12 @@ struct SettingsView: View {
         guard a.runModal() == .alertFirstButtonReturn else { return }
         commitProjects { $0.removeAll { pid($0) == id } }
         rs.proj = rs.projs.first.map(pid) ?? ""
+    }
+    /// Choose folder…: the system's picker, for folders on this Mac (a remote host's: type the path).
+    func chooseDir() {
+        let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false; p.prompt = "Add folder"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        rs.draftDir = u.path; addDir()
     }
     func addDir() {
         var d = rs.draftDir.trimmingCharacters(in: .whitespaces)
@@ -1625,6 +1632,7 @@ struct SettingsView: View {
                 TextField("~/src/another-repo", text: $rs.draftDir).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).onSubmit(addDir)
                     .accessibilityLabel("New folder path")
                 Button("Add folder", action: addDir).disabled(rs.draftDir.trimmingCharacters(in: .whitespaces).isEmpty)
+                if host.isEmpty || host == "local" { Button("Choose folder…", action: chooseDir) }
             }.padding(.horizontal, DS.Space.s16).padding(.vertical, 10))
         }
         box("Repositories", aside: "\(repos.count) \(repos.count == 1 ? "repo" : "repos")") {
@@ -1733,7 +1741,9 @@ struct SettingsView: View {
         switch rs.rtab {
         case "auto": autoRun
         case "rules":
-            editor($rs.rules, "Rules for \(rs.repo)", height: 260, title: "Rules", aside: "Markdown · every agent on \(rs.repo) follows these")
+            editor($rs.rules, "Rules for \(rs.repo)", height: 220, title: "Rules", aside: "Markdown · every agent on \(rs.repo) follows these")
+            editor($rs.checklist, "Checklist for \(rs.repo)", height: 180, title: "Reliability checklist", aside: "Diff-triggered checks · run only when matching files change",
+                   placeholder: "- `app/*.html`: drive the changed dialogs with real clicks")
             saveRow("Save", rs.save)
         case "prompts": prompts
         default: lifecycle

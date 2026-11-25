@@ -20,7 +20,7 @@ const TREES = {trees: [
    state: "done", mr: {ref: "!40", state: "merged", pipeline: "failed", threads: 3}},
   {ade: "cmux", project: "octo/greenlight", name: "review", path: "/w/review", branch: "review", main: false, agent: "none", state: "quiet", why: "waiting on bob"}]};
 
-async function boot(browser, saved = null, query = "", trees = TREES){
+async function boot(browser, saved = null, query = "", trees = TREES){  // window.__T: the trees it booted with
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await page.addInitScript(() => {
     window.__posts = [];
@@ -30,7 +30,7 @@ async function boot(browser, saved = null, query = "", trees = TREES){
   await page.goto(PAGE + query);
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
   await page.evaluate(s => term.restore(s), saved);
-  await page.evaluate(t => term.workspaces(t), trees);
+  await page.evaluate(t => { window.__T = t; term.workspaces(t) }, trees);
   if (await page.evaluate(() => document.body.classList.contains("noside"))) await page.evaluate(() => toggleSide());  // it starts hidden (the Pipe)
   return page;
 }
@@ -40,6 +40,32 @@ const lastSave = async page => { await page.waitForTimeout(650); return (await p
 
 const tests = [];
 const test = (name, fn, query) => tests.push({name, fn, query});
+
+test("footer: live, the last scan with ↻ (a click asks the app, then spins until it's done), why a scan died, the window's workspaces by state; not in the Pipe", async page => {
+  const now = Math.floor(Date.now() / 1000);
+  page = await boot(page.context().browser(), null, "", {...TREES, ts: now, scanned: now - 3 * 60});
+  const f = () => page.textContent("#bfoot");
+  assert.match(await f(), /^Live\s*Scanned 3m ago/);
+  assert.match(await f(), /1 needs you.*1 waiting on others.*1 done/, await f());  // the trees' states; the main checkouts have none
+  assert.equal(await page.$$eval("#bfoot .fst.ask", e => e.length), 1, "only Needs you is a count that asks for you");
+  await page.click("#bfoot .rescan");
+  assert.equal((await posts(page, "rescan")).length, 1);
+  assert.match(await f(), /Refreshing…/); assert.ok(await page.$eval("#bfoot .rescan", b => b.disabled && b.classList.contains("on")), "one scan at a time");
+  await page.evaluate(() => term.rescanned(0));
+  assert.match(await f(), /Scanned 3m ago/); assert.equal(await page.$eval("#bfoot .rescan", b => b.disabled), false);
+  await page.evaluate(n => term.workspaces({...window.__T, ts: n, scanned: n - 3 * 3600, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: n - 60}}), now);
+  assert.match(await f(), /Scanned 3h ago\s*Scan failed: GitLab login expired · run glab auth login, then ↻/);
+  assert.equal(await page.$eval("#bfoot .scan", e => e.className), "scan bad", "red past 2h");
+  await page.click("#bfoot .rescan"); await page.evaluate(() => term.rescanned(255));  // ssh itself failed: no scan_error.json to say so
+  assert.match(await f(), /Scan failed: host unreachable/);
+  await page.setViewportSize({width: 560, height: 800});  // narrow: short words, then only the counts that need you
+  await page.waitForTimeout(100);  // the resize handler refits it
+  assert.ok(await page.$eval("#bfoot", e => e.scrollWidth <= e.clientWidth), "never past its width");
+  assert.equal((await page.innerText("#bfoot .fst.ask")).replace(/\s+/g, " "), "1 need you", "the count that needs you stays, in its short words");
+  await page.evaluate(() => toggleSide()); await page.waitForTimeout(400);
+  assert.equal(await page.$eval("#bfoot", e => getComputedStyle(e).display), "none", "the Pipe has no footer");
+  assert.deepEqual(page._errs, []);
+});
 
 test("⌘W, ⌘Q, ⌘M… reach the app's menu: the terminal doesn't swallow them", async page => {
   page = await boot(page.context().browser()); await page.evaluate(() => newTab()); await page.waitForTimeout(200);
@@ -61,13 +87,14 @@ test("a workspace's + starts its own set of tabs; ⌘T adds to the set you're in
   await again.close(); await page.close();
 });
 
-test("the Basement's footer: the usage meters and their popover; the Pipe has none, and no agent reporting hides it", async page => {
+test("the Basement's footer: the usage meters and their popover; the Pipe has none, and with no agent reporting only the status shows", async page => {
   page = await boot(page.context().browser());
   const now = Math.floor(Date.now() / 1000);
   const usage = [{id: "claude", name: "Claude", state: "ok", at: now, windows: [{label: "5h", pct: 81, resets: now + 3600}, {label: "Week", pct: 40, resets: now + 86400 * 2}]},
     {id: "codex", name: "Codex", state: "ok", at: now, windows: [{label: "Week", pct: 100, resets: now + 86400}]},
     {id: "opencode", name: "OpenCode", state: "na", note: "no usage API"}, {id: "pi", name: "Pi", state: "failed", note: "signed out or the token expired"}];
-  assert.equal(await page.$eval("#bfoot", f => f.hidden), true, "nothing reported yet: no footer");
+  assert.equal(await page.$$eval("#bfoot .um", m => m.length), 0, "nothing reported yet: no meters");
+  assert.match(await page.textContent("#bfoot"), /^Live/, "the footer's status shows without them");
   await page.evaluate(t => term.workspaces(t), {...TREES, usage});
   const m = () => page.$$eval("#bfoot .um", bs => bs.map(b => [b.dataset.id, b.textContent, b.querySelector(".ubar")?.dataset.tone || ""]));
   assert.deepEqual(await m(), [["claude", "81%1h 0m", "near"], ["codex", "100%1d 0h", "full"], ["opencode", "n/a", ""], ["pi", "Refresh failed", ""]]);
@@ -101,7 +128,8 @@ test("the Basement's footer: the usage meters and their popover; the Pipe has no
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "codex", "Basement footer rebuild keeps focus on meter");
   await page.setViewportSize({width: 1200, height: 800});
   await page.evaluate(t => term.workspaces(t), TREES);
-  assert.equal(await page.$eval("#bfoot", f => f.hidden), true);
+  assert.equal(await page.$$eval("#bfoot .um", m => m.length), 0, "no agent reports any more: the meters go, the status stays");
+  assert.match(await page.textContent("#bfoot"), /^Live/);
   assert.deepEqual(page._errs, []); await page.close();
 });
 
@@ -273,30 +301,20 @@ test("new window: the picker posts All, or the projects you tick", async page =>
   assert.deepEqual((await posts(page, "window")).pop().only, ["p2", ""]);
 });
 
-test("edit projects: a new project, a repo moved into it, folders checked", async page => {
+test("edit projects: both buttons open Settings › Projects (the app's one editor); its saves regroup the sidebar", async page => {
   await page.evaluate(p => term.projects(p), PROJ);
   await page.click("#shead .ttl"); assert.equal(await page.textContent("#dlg .seg [aria-pressed=true]"), "This window", "the window's title picks its projects");
   await page.fill("#dlg [aria-label='Filter projects']", "plat"); assert.deepEqual(await page.$$eval("#dlg .tile:not([hidden]) b", b => b.map(x => x.textContent)), ["Platform"], "filtered");
-  await page.click("#dlg button:has-text('Edit projects…')"); assert.match(await page.textContent("#dlg h3"), /project/i, "…and edits them");
-  await page.keyboard.press("Escape");
+  await page.click("#dlg button:has-text('Edit projects…')");
+  assert.deepEqual((await posts(page, "settings")).pop(), {cmd: "settings", tab: "Projects"});
+  assert.equal(await page.$eval("#dlg", d => d.hidden), true, "the picker closes: its tiles would be stale");
   await page.click("#shead [aria-label='Edit projects']");
-  await page.click("#dlg button:has-text('New project')");
-  await page.fill("#dlg [aria-label='Project name']", "Ops");
-  const dir = async d => { await page.fill("#dlg [aria-label='Add a folder']", d); await page.press("#dlg [aria-label='Add a folder']", "Enter") };
-  await dir("relative/path"); assert.match(await page.textContent("#dlg .err"), /isn't a full path/);
-  await dir("/srv/ops/"); await dir("/srv/ops");
-  assert.deepEqual(await page.$$eval("#dlg .fl code", c => c.map(x => x.textContent)), ["/srv/ops"], "one folder, no trailing slash");
-  await page.click("#dlg .pn button:has-text(\"No Man's Land\")");
-  await page.selectOption("#dlg select[aria-label='Project for octo/greenlight']", {label: "Ops"});
-  assert.ok(!(await page.$("#dlg select[aria-label='Project for octo/greenlight']")), "it moved out of No Man's Land");
-  await page.click("#dlg .pn button:has-text('Ops')");
-  await page.fill("#dlg [aria-label='Default folder']", "rel"); await page.click("#dlg button.pri");
-  assert.match(await page.textContent("#dlg .err"), /isn't a full path/, "a default folder is checked like a folder");
-  await page.fill("#dlg [aria-label='Default folder']", "/srv/ops/app/");
-  await page.click("#dlg button.pri");
-  const saved = (await posts(page, "projects")).pop().projects;
-  assert.equal(saved.length, 3); assert.deepEqual({...saved[2], id: 0}, {id: 0, name: "Ops", repos: ["octo/greenlight"], dirs: ["/srv/ops"], dir: "/srv/ops/app"});
+  assert.equal((await posts(page, "settings")).length, 2); assert.equal(await page.$eval("#dlg", d => d.hidden), true, "no dialog in the page");
+  assert.deepEqual(await posts(page, "projects"), [], "the page never writes projects.json");
+  await page.evaluate(p => term.projects([...p, {id: "pops", name: "Ops", repos: ["octo/greenlight"], dirs: ["/srv/ops"], dir: "/srv/ops/app"}]), PROJ);  // Settings saved
   assert.ok((await groups(page)).includes("Ops"), "the sidebar regroups at once");
+  assert.equal(await page.evaluate(() => typeof window.term.picked), "undefined", "the page's folder picker is gone with its dialog");
+  assert.deepEqual(page._errs, []);
 });
 
 test("a project window's new tabs open in its default folder", async page => {
