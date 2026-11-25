@@ -81,8 +81,11 @@ def test_scan_finds_only_outside_agents():
     nested = external.scan(procs=ours, roots={11: "/w/mine"}, cwd_of={12: "/w/mine", 14: "/w/mine/.wt/b"}.get)
     owned = external.by_worktree(["/w/mine", "/w/mine/.wt/b"], nested)  # a worktree nested in the pane's folder
     assert {k: [a["pid"] for a in v] for k, v in owned.items()} == {"/w/mine/.wt/b": [14]}
-    # asked about one path, it's still decided against every worktree (cleanup passes them all: ALL_PATHS)
-    assert external.by_worktree(["/w/mine/.wt/b", "/w/mine"], nested).get("/w/mine") is None
+    # the reverse: our pane is in the nested worktree, its agent works in the parent. Asked about the parent alone, the
+    # pane looks like the parent's (wrongly ours); only the whole list shows the agent is outside there
+    rev = external.scan(procs=ours, roots={11: "/w/mine/.wt/b"}, cwd_of={12: "/w/mine/.wt/b", 14: "/w/mine"}.get)
+    assert external.by_worktree(["/w/mine"], rev) == {}
+    assert [a["pid"] for a in external.by_worktree(["/w/mine", "/w/mine/.wt/b"], rev)["/w/mine"]] == [14]
     launched = {11: {"ppid": 1, "argv": ["zsh"]}, 15: {"ppid": 11, "argv": ["opencode"]}}  # Greenlight launches opencode too
     assert external.by_worktree(["/w/b"], external.scan(procs=launched, roots={11: "/w/b"}, cwd_of={15: "/w/b"}.get)) == {}
     kid = {11: {"ppid": 1, "argv": ["zsh"]}, 12: {"ppid": 11, "argv": ["claude"]}, 13: {"ppid": 12, "argv": ["bash"]},
@@ -206,6 +209,14 @@ def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
         raise external.Unknown("TimeoutExpired")
     monkeypatch.setattr(external, "agents", unknown)  # the process check failed: never a candidate
     assert cleanup.evaluate(w, repo, set())[0] == "skip"
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 8, "agent": "claude", "cwd": str(wt / ".wt" / "b")}])
+    assert cleanup.outside_agent(str(wt), paths=[str(wt), str(wt / ".wt" / "b")]) == "claude"  # nested: removing wt removes it too
+    rev = [{"pid": 14, "agent": "codex", "cwd": str(wt), "pane": str(wt / ".wt" / "b")}]  # our nested pane's codex in wt
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: rev)
+    monkeypatch.setattr(cleanup, "ALL_PATHS", [str(wt), str(wt / ".wt" / "b")])  # scan() fills it with every worktree
+    assert cleanup.outside_agent(str(wt)) == "codex"
+    monkeypatch.setattr(cleanup, "ALL_PATHS", [])
+    assert cleanup.outside_agent(str(wt)) is None  # (what asking about wt alone would have said)
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # Orca lists its own agents' terminals: the busy check covers them
     assert cleanup.outside_agent(str(wt)) is None
     assert cleanup.evaluate(w, repo, set()) == ("candidate", "MR !4 merged")
@@ -220,10 +231,22 @@ def test_orchestrate_rechecks_afresh():
 def test_basement_delete_warns(monkeypatch):
     import cleanup
     import dash
-    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: "codex" if fresh else None)
+    monkeypatch.setattr(dash, "outside_agent", lambda path: "codex")
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
     monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0})
     assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")
+    monkeypatch.undo()
+    assert cleanup  # dash.outside_agent goes through cleanup.outside_agent: exercised for real below
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    ab = dash.importlib.import_module("ade_basement")
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 14, "agent": "codex", "cwd": "/srv/w/x", "pane": "/srv/w/x/.wt/b"}])
+    monkeypatch.setattr(ab, "worktrees", lambda: [{"path": "/srv/w/x"}, {"path": "/srv/w/x/.wt/b"}])
+    assert dash.outside_agent("/srv/w/x") == "codex"  # the Delete check passes the whole worktree list
+    monkeypatch.setattr(ab, "worktrees", lambda: 1 / 0)
+    assert "can't be ruled out" in dash.outside_agent("/srv/w/x")  # no worktree list: Delete asks rather than guess
+    listed = []
+    monkeypatch.setattr(ab, "worktrees", lambda: listed.append(1) or [])
+    assert dash.outside_agent("/srv/w/quiet") is None and listed == []  # nothing near it: no costly listing
 
 
 def test_dash_marks_rows_any_ade_listed(monkeypatch):

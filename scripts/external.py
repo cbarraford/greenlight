@@ -11,6 +11,7 @@ Linux reads /proc; macOS asks `ps` and `lsof`. Read-only, stdlib only, cached fo
 A scan that fails fails closed (cleanup: strict; native rows: by_worktree_safe). Known gap: an app that runs its
 agents inside one server process whose cwd isn't the worktree (the Codex desktop app's app-server) isn't seen.
 """
+import functools
 import json
 import os
 import platform
@@ -228,9 +229,7 @@ def scan(procs=None, roots=None, cwd_of=None):
     out = []
     for pid in sorted(found):
         c, parent = cwd_of(pid), procs[pid]["ppid"]
-        # a child in its parent's folder is the parent's own process, unless the parent is ours and the child isn't
-        # (our claude running opencode there: by_worktree drops the claude, so the opencode must stand on its own)
-        if c and not (parent in every and cwd_of(parent) == c and (parent not in pane or pid in pane)):
+        if c and not (parent in every and cwd_of(parent) == c):  # a child in its parent's folder is the parent's own
             out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start"),
                         **({"pane": pane[pid]} if pid in pane else {})})
 
@@ -282,16 +281,21 @@ def by_worktree_safe(paths):
         return {p.rstrip("/"): [{"pid": None, "agent": None, "cwd": p, "start": None}] for p in paths if p}
 
 
+@functools.lru_cache(maxsize=4096)
+def _real(p):
+    return os.path.realpath(p)  # cleanup asks once per candidate, over every worktree: resolve each path once
+
+
 def by_worktree(paths, found=None):
     """{worktree path: [agent]} for the agents whose cwd is inside one of paths (the deepest one wins: a nested
     worktree owns its own agents)."""
-    real = {os.path.realpath(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
+    real = {_real(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
     deep = sorted(real, key=len, reverse=True)
     out: dict = {}
     owner_of = lambda c: next((w for w in deep if c == w or c.startswith(w + "/")), None)  # noqa: E731
     for a in agents() if found is None else found:
-        owner = owner_of(os.path.realpath(a["cwd"]))
-        if owner and not (a.get("pane") and owner_of(os.path.realpath(a["pane"])) == owner):  # ours, in its own pane's worktree
+        owner = owner_of(_real(a["cwd"]))
+        if owner and not (a.get("pane") and owner_of(_real(a["pane"])) == owner):  # ours, in its own pane's worktree
             out.setdefault(real[owner], []).append(a)
     return out
 
@@ -300,7 +304,9 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import diag
     diag.install("external")
-    rows = [r for r in agents(fresh=True) if "--all" in sys.argv or "pane" not in r]  # --all: Greenlight's own pane agents too
+    def own(r):  # in its pane's folder: Greenlight's own (by_worktree decides it exactly, against the worktree list)
+        return "pane" in r and (r["cwd"] == r["pane"] or r["cwd"].startswith(r["pane"].rstrip("/") + "/"))
+    rows = [r for r in agents(fresh=True) if "--all" in sys.argv or not own(r)]  # --all: Greenlight's own pane agents too
     if "--json" in sys.argv:
         print(json.dumps(rows, indent=1))
     else:

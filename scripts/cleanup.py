@@ -272,8 +272,10 @@ def outside_agent(path, fresh=False, paths=None):
     if not ade.is_native():
         return None
     try:  # against every worktree: whether one of our agents is in its own pane's worktree depends on the nested ones
-        every = [*(ALL_PATHS if paths is None else paths), path]
-        found = external.by_worktree(every, external.agents(fresh=fresh, strict=True)).get(path.rstrip("/"))
+        every, p = [*(ALL_PATHS if paths is None else paths), path], path.rstrip("/")
+        owned = external.by_worktree(every, external.agents(fresh=fresh, strict=True))
+        # at or under it: removing it removes the worktrees nested inside it too
+        found = [a for w, v in owned.items() if w == p or w.startswith(p + "/") for a in v]
     except external.Unknown:
         return "an agent (the process check failed, so it can't be ruled out)"
     return found[0]["agent"] if found else None

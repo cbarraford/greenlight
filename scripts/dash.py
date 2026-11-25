@@ -975,9 +975,21 @@ def outside_agent(path):
     """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
     import cleanup
     paths = []
+    if not ade.is_native():
+        return None
+    p = path.rstrip("/")
+    try:  # nothing in or under it, of anyone's: no need for the worktree list (it costs git calls per worktree)
+        near = [a for a in external.agents(fresh=True, strict=True)
+                if any(x == p or x.startswith(p + "/") for x in (a["cwd"], a.get("pane") or ""))]
+    except external.Unknown:
+        return "an agent (the process check failed, so it can't be ruled out)"
+    if not near:
+        return None
     if ade.is_native():
-        with contextlib.suppress(Exception):  # every worktree: our agents' ownership depends on the nested ones
+        try:  # every worktree: our agents' ownership depends on the nested ones
             paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
+        except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
+            return "an agent (the worktree list failed, so it can't be ruled out)"
     return cleanup.outside_agent(path, fresh=True, paths=paths)
 
 
