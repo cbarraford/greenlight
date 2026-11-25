@@ -1380,14 +1380,18 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     // paneCmd's long run, for real: a login shell, then tmux where it's on PATH (else that shell), evals it byte for byte past tmux's
     // 16 KB command line, prints runMark and leaves no temp file; onto the live session again it saves nothing. Its own tmux socket,
     // no pane recorder (its hooks name the real socket and home), killed after through a login shell as the pane found tmux.
+    // paneCmd puts its file in $TMPDIR, or /tmp.
     do {
-        let tmp = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp", dir = NSTemporaryDirectory() + "gl-unit-run-\(getpid())", out = dir + "/got"
+        let tmp = ProcessInfo.processInfo.environment["TMPDIR"].map { $0.isEmpty ? "/tmp" : $0 } ?? "/tmp", dir = NSTemporaryDirectory() + "gl-unit-run-\(getpid())", out = dir + "/got"
         let sock = "tmux -L \(shellQuote("gl-unit-run-\(getpid())")) -f /dev/null"
         let login = { (cmd: String) -> Int32 in
             let p = Process(); p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
-            p.arguments = ["-lc", cmd]; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            p.arguments = ["-lc", cmd]; p.standardInput = FileHandle.nullDevice; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
             do { try p.run() } catch { return -1 }
-            p.waitUntilExit(); return p.terminationStatus
+            let until = Date() + 10
+            while p.isRunning && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+            if p.isRunning { p.terminate(); return -1 }  // a wedged tmux or rc: fail the check, don't hang the suite
+            return p.terminationStatus
         }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let prompt = String(repeating: "it's \"q\" $HOME `x` \\ #S #{session_name} → ;\n\t", count: 400)
@@ -1396,6 +1400,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         let before = leftovers(), hasTmux = login("command -v tmux") == 0
         let full = delegate.paneCmd(session: "gl-unit-run", cwd: dir, on: "local", run: run)
         let cmd = full.replacingOccurrences(of: " \\; " + App.paneRecorderHooks().joined(separator: " \\; "), with: "").replacingOccurrences(of: App.tmux, with: sock)
+        let hermetic = !cmd.contains("pane_log.py") && !cmd.contains(App.tmux) && cmd.count < full.count  // else it runs nothing
+        check("pane: the long-run check's command has its own tmux socket and no pane recorder", hermetic)
         func launch(until done: @escaping (String) -> Bool) -> String {
             let p = Pty(); var shown = Data()
             p.onOutput = { shown.append($0) }
@@ -1405,18 +1411,20 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
             RunLoop.main.run(until: Date() + 0.5)
             p.stop(); return String(decoding: shown, as: UTF8.self)
         }
-        let first = launch { _ in FileManager.default.fileExists(atPath: out) }, got = try? String(contentsOfFile: out, encoding: .utf8)
-        let viaTmux = first.contains("\u{1b}]6973;greenlight-tmux\u{07}")
+        let tmuxMark = "\u{1b}]6973;greenlight-tmux\u{07}"
+        let first = hermetic ? launch { _ in FileManager.default.fileExists(atPath: out) } : "", got = try? String(contentsOfFile: out, encoding: .utf8)
+        let viaTmux = first.contains(tmuxMark)
         check("pane: a long run reaches its shell whole (\(prompt.utf8.count) bytes, \(viaTmux ? "via tmux" : "no tmux")), runMark printed, no temp file left",
-              !cmd.contains("pane_log.py") && cmd.count < full.count && viaTmux == hasTmux && got == prompt && first.contains(mark) && leftovers() == before)
+              hermetic && viaTmux == hasTmux && got == prompt && first.contains(mark) && leftovers() == before)
         if viaTmux {
             try? FileManager.default.removeItem(atPath: out)
-            let again = launch { $0.contains(mark) }
+            let again = launch { $0.contains(tmuxMark) }  // tmux, not this shell, has it: a broken live branch would exec the brief here
             check("pane: a run onto its live session (a reconnect that raced the mark) is marked, not run again, and saves no file",
-                  again.contains(mark) && !FileManager.default.fileExists(atPath: out) && leftovers() == before)
+                  again.contains(mark) && again.contains(tmuxMark) && !FileManager.default.fileExists(atPath: out) && leftovers() == before)
         }
-        _ = login("\(sock) kill-server 2>/dev/null; rm -f \"${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/gl-unit-run-\(getpid())\"")  // macOS's tmux leaves its socket
+        _ = login("\(sock) kill-server 2>/dev/null")
         check("pane: the long-run check's tmux server is gone", login("\(sock) has-session 2>/dev/null") != 0)
+        _ = login("rm -f \"${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/gl-unit-run-\(getpid())\"")  // then its socket, which tmux leaves
         try? FileManager.default.removeItem(atPath: dir)
     }
 

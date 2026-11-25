@@ -695,7 +695,7 @@ $("lnkCopy").onclick = () => { post({cmd: "copy", text: $("lnk")._url}); $("lnkC
 // a pane whose ssh dropped (exit 255): the tmux session lives on remotely, so open it again
 function reconnect(p){ p.dead = p.tmux = p.hist = false; p.t.write("\r\n");  // the new connection may have no tmux: no history mode until it prints the mark
   post(openMsg(p)) }
-const openMsg = p => ({cmd: "open", id: p.id, session: p.session, ws: p.tab.ws, cols: p.t.cols, rows: p.t.rows, ...p.run ? {run: p.run} : {}});
+function openMsg(p){ return {cmd: "open", id: p.id, session: p.session, ws: p.tab.ws, cols: p.t.cols, rows: p.t.rows, ...p.run ? {run: p.run} : {}} }
 function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // session: attach to one already running (a Basement-made agent)  // a project window's home tab: its default folder. fresh: its own set of tabs (the sidebar's +)
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
