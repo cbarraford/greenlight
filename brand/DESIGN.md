@@ -586,7 +586,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **Gone:** `.go`, `.ans`, `.nact`, `.pri`, `.lbtn.raised` and the hcard tones `.or`/`.pu`/`.rd`/`.bl`. Everything maps to the five variants above.
 
 ### 10.3 Segmented control and tabs-as-filter
-- **Track and segments:** the track is `bg.sunken`, 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
+- **Track and segments:** the track is `bg.sunken` (dark: `element.rest`, since `bg.sunken` is the bar's own colour there), 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
 - **States:**
   - Hover on an unselected segment: `fg.default`.
   - Focus: a ring on the track.
@@ -631,9 +631,9 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
   - **Rows:**
     1. Avatar (agent mark, 20), title `strong`, elapsed time `caption` tabular figures, right-aligned.
     2. Meta in `label` `fg.muted`: ref · project · goal.
-    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most.
-    4. The lifecycle bar (§10.10).
-  - **Actions:** one action button (primary only when the card is needs-you).
+    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it. The strip is at most 240 tall and scrolls, so the board stays in view.
+    4. The lifecycle bar (§10.10) and the MR's facts, only when there are any.
+  - **Actions:** one action button. Only the first needs-you card's is primary: one primary per view. The others are secondary.
   - **Status:** shown by the status pill, never by tinting the whole card. A crashed card gets a 2px `status.crashed.solid` leading edge as the only tint.
   - **Empty / loading:** while scanning there's one skeleton card per expected agent, the same shape as a real card. With no agents the strip collapses to a single `caption` line, "No agents running".
   - **Error:** a card for an agent that can't be reached keeps its last state, dimmed to 60%, with a `caption` "Lost contact 2m ago".
@@ -641,6 +641,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 
 ### 10.8 Rows: list, tree, menu
 - **Row:** 28 (tree, menu) or 32 (list), radius `sm`, inset 4 from the container edge, 8 horizontal padding.
+- **Workspace list row:** flat, never a card. A mini hex, the title in `strong` with a neutral tag, then one `label` line of name · project and what it says; the agent and a secondary `sm` action on the right. The state shows as the hex's colour plus the step word, never colour alone.
 - **States:**
   - H: `element.rest`.
   - P: `element.hover`.
@@ -667,6 +668,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   | queued, waiting, done | `bg.surface` | 1.5px `border.subtle` | `fg.muted` |
   | no MR | `bg.surface` | dashed 4 3 | `fg.muted` |
   | needs, crashed with no MR | `status.solid` | dashed 4 3 `border.default` | `on_solid` |
+  | working with no MR | `status.working.bg` | dashed 4 3 `status.working.border` | `status.working.fg` |
 - **Labels inside:** the ref in `strong` tabular figures, the task name in `label` (only when R ≥ 50), and the sub-label in `caption`.
 - **Status glyph:** 12, top centre, so the hex never depends on colour alone.
 - **Progress:** a 2px track around the inside edge in `border.subtle`, with completed segments in `status.fg` (or `fg.muted` when neutral).
@@ -713,6 +715,10 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Sections and rows:** §10.8. A workspace row has two lines:
   1. agent glyph · name `strong` · status pill or "waiting on …" in `fg.muted`;
   2. branch (mono `caption`) · MR ref, CI, threads and conflict glyphs.
+
+  A status shows once: when the pill says what the agent glyph would, the glyph is the quiet ring. A project's workspaces sit 16 in from its header, and only the open terminal's row is selected.
+  A workspace row is one height with a pill or without, and its MR ref ends the line, so the refs make one column. CI that hasn't started is the queued glyph, never the working one.
+- **Hosts:** a host with shells open is a tree row with its shells under it. The idle ones are chips wrapped under those rows, so hosts with nothing running don't take a row each: a small secondary button (§10.2: 24 tall, `element.rest`, radius `sm`, `label`) with the host's dot and name.
 - **Empty, loading, error:**
   - Loading is a skeleton of 3 rows per section.
   - With no workspaces: "No workspaces yet", plus a secondary "New workspace…" button.
@@ -740,7 +746,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   5. Stat tiles in a 4-up grid of `label` and value.
   6. Footer with quiet links.
 - **Sizing:** it never scrolls inside itself. If content overflows, drop the tiles first.
-- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph. Empty state: "Nothing needs you". Escape or clicking outside closes it.
+- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph, never cards; an open item's answers are secondary buttons (§10.2) one step up, on `element.hover`, since `bg.raised` is `element.rest` in dark. Empty state: "No questions waiting" (the bar may still count workspaces that need you). Escape or clicking outside closes it.
 
 ### 10.14 Toast and tooltip
 - **Toast:**
@@ -763,8 +769,9 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - Labels are `label` above the field, help text `caption` `fg.muted`, errors inline (§10.4).
   - Submit stays enabled until the submit starts, then goes to loading.
 - **Palette (⌘K):**
-  - 640 wide (with the preview: 880; the preview drops below 640), at 20% of the window height, `bg.raised`, radius `lg`, elevation 3, light scrim.
-  - The input is 44 tall in `title-sm`. Results are rows (§10.8, 32 tall) with the fuzzy match in `fg.default`, the rest in `fg.muted`, and group headers in `label` `fg.faint`.
+  - 640 wide (with the preview: 880; the preview drops below 640), at 20% of the window height, `bg.raised`, radius `lg`, elevation 3, no scrim: it floats on its shadow, like Spotlight.
+  - The input is 44 tall in `title-sm`. Results are rows (§10.8, 32 tall): titles in `body` `fg.default` with the fuzzy match in weight 600, meta and group headers in `label` `fg.muted`, the selected row `element.active`. The search glyph, row icons and footer share one left edge, and the input and titles another.
+  - A status shows once per row: under "Needs you" there is no pill. The preview sits on the results' plane behind a hairline and shows only what the row lacks: its kind, a few facts (a value wraps to two lines), then the last lines in a `bg.sunken` well that hugs them.
   - **No animation on open:** it's frequent and keyboard-driven, so it appears instantly.
   - Empty state: "No matches for "…"", plus one suggestion.
 - **Ask, New workspace, Projects, Colours, Diff, Delete** are all this recipe.
@@ -780,7 +787,14 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Messages:**
   - The chat pane uses the system tokens. You: right-aligned bubble in `element.rest`, radius `md`, `body-copy`. Greenlight: no bubble, full width, `body-copy`.
   - Tool and status lines are `caption` `fg.muted` with a glyph.
-- **Composer:** a §10.4 textarea with attach (quiet icon), mic, and send. Send is primary only when there's text; otherwise it's disabled.
+  - A turn holds together: 12 between your bubble, the reply and its status line, 24 before the next bubble.
+- **Header:** a bar like the top bar (§10.11): 44 on `bg.chrome` with its hairline, so the band and the line continue across the window.
+  - The name is `title-sm`; where it runs follows in `caption` `fg.muted`. A state shows only while working or offline; idle says nothing.
+  - Its actions are 28 icon buttons on the right: New chat, look, voice, pop-out.
+- **Surface:** the conversation is `bg.surface` in light and `bg.canvas` in dark, where the reading surface is the window's darkest plane and the bubbles and the composer sit on it.
+- **Empty:** the §10.21 empty state, centred in the conversation. Its line names the first action. Once there are sent prompts, a `caption` line under it shows ⌃R as a Kbd; the pane has no key hints elsewhere.
+- **Composer:** a §10.4 textarea with radius `md`, like the bubbles, and no rule over it: the text runs the full width, two lines growing to ten, over a row of controls: attach (quiet icon) on the left, mic and send on the right. The placeholder is `fg.faint`. Send is primary only when there's text; otherwise it's a bare `fg.faint` arrow.
+- **Footer:** a §10.11 footer on the dashboard footer's line: the model on the left margin, the context on the right.
 - **Looks:** the 7 chat looks become token-override sets on the same components, not separate palettes and fonts. Phase one ships **Default** (this spec) and **Phosphor** (a mono, green-on-near-black homage that keeps the terminal's spirit). The other five are parked until someone asks for them back. See §14.
 
 ### 10.18 Voice stage (`stage.html`)
@@ -826,6 +840,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Empty state:**
   - Centred in its container: a 20 icon in `fg.faint`, a `title-sm` line, a `body` line in `fg.muted`, and at most one secondary button.
   - The copy says what will appear and how to make it happen ("No workspaces yet. Start one with New workspace…").
+  - In the sidebar it's compact: one `label` line in `fg.muted` at the rows' text edge and a 24 secondary button under it, left-aligned. No icon and no title.
 - **Loading:** skeletons match the final layout exactly, in `element.rest` with no shimmer (reduced-motion-safe by default). The spinner timing rules apply.
 - **Error:** what happened, plus the next action, in plain words. Show the code location or detail behind a "Details" disclosure in `code`.
 - **Banner** (inline notice):

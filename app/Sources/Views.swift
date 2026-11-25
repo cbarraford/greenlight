@@ -484,26 +484,22 @@ struct Inbox: View {
         let w = c.waiting, open = c.inboxFocus?.id
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DS.Space.s8) {
-                Text("Inbox").fontWeight(.semibold)
+                Text("Inbox").font(sys(size: DS.TypeRole.label.size, weight: .medium)).foregroundColor(dim)
                 if !w.isEmpty {
                     Text("\(w.count)").font(sys(size: DS.TypeRole.caption.size, weight: .bold)).foregroundColor(.black.opacity(0.8))
                         .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16).background(Capsule().fill(StatusInk.needs))
                         .accessibilityLabel("\(w.count) waiting")
                 }
-                Spacer()
-                Button { c.inboxOpen = false } label: {
-                    Image(ds: "close", size: iconSize(glyphSize), medium: true).foregroundColor(dim).frame(width: 28, height: 28).contentShape(Rectangle())
-                }.buttonStyle(.plain).help("Close (Esc)").accessibilityLabel("Close inbox")
-            }.padding(.leading, DS.Space.s16).padding(.trailing, DS.Space.s8).padding(.vertical, DS.Space.s4).background(card)
-            Divider().overlay(line)
+                Spacer()  // no close button: Esc, the bell or a click outside closes it, as a popover
+            }.padding(.horizontal, DS.Space.s16).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s4)
             if w.isEmpty {
                 HStack(alignment: .top, spacing: DS.Space.s12) {
-                    Image(ds: "done-fill", size: iconSize(DS.TypeRole.title.size)).foregroundColor(StatusInk.done)
+                    Image(ds: "done", size: iconSize(DS.TypeRole.title.size)).foregroundColor(dim)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Nothing waiting on you").fontWeight(.semibold)
+                        Text("No questions waiting").fontWeight(.semibold)
                         Text("The bell lights up when \(c.name) needs a decision.").font(sys(size: DS.TypeRole.label.size)).foregroundColor(dim)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.s16)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, DS.Space.s16).padding(.top, DS.Space.s8).padding(.bottom, DS.Space.s16)
             } else {
                 let rows = VStack(spacing: 0) {
                     ForEach(w) { q in if q.id == open { QuestionRow(c: c, q: q) } else { InboxLine(c: c, q: q) } }
@@ -549,10 +545,10 @@ struct Inbox: View {
                         Button { c.inboxConfirm = true } label: { HStack(spacing: 6) { Text("Clear all"); kbd("⇧⌫") } }.buttonStyle(.plain).foregroundColor(sub)
                             .help("Dismiss every waiting question without answering. Nothing is sent.")
                     }
-                }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38).background(card)
+                }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38)
             }
         }
-        .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(bg))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(Color(DS.Palette.bgRaised, dark: isDark)))  // bg.raised: the lightest surface in dark (§10.13)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(edge))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
         .shadow(color: .black.opacity(isDark ? 0.45 : 0.10), radius: 12, y: 6)  // elevation 2: an overlay, no scrim (§10.13)
@@ -591,7 +587,7 @@ struct InboxLine: View {
     var body: some View {
         Button { c.inboxPick = q.id } label: {
             HStack(spacing: DS.Space.s8) {
-                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)
+                Image(ds: "needs-fill", size: 12).foregroundColor(StatusInk.needs)
                 Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1).frame(width: 92, alignment: .leading)
                 Text(q.label.1).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub).lineLimit(1)
                 Spacer(minLength: DS.Space.s4)
@@ -610,7 +606,7 @@ struct QuestionRow: View {
         let (mr, said) = q.label
         VStack(alignment: .leading, spacing: DS.Space.s8) {
             HStack(spacing: DS.Space.s8) {
-                Circle().fill(StatusInk.needs).frame(width: 6, height: 6)  // ping or chat, it waits on you
+                Image(ds: "needs-fill", size: 12).foregroundColor(StatusInk.needs)  // ping or chat, it waits on you
                 Text(q.title(c.name)).font(sys(size: DS.TypeRole.label.size, weight: .semibold)).lineLimit(1)
                 if let mr { Text(mr).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub) }
                 Spacer(minLength: 0)
@@ -623,8 +619,9 @@ struct QuestionRow: View {
                 }
                 if c.replyingTo != q.id {
                     Button { c.replyText = ""; c.replyingTo = q.id } label: { HStack(spacing: 6) { kbd("R"); Text(q.options.isEmpty ? "Reply" : "Other…") } }
-                        .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size)).foregroundColor(sub)
-                        .padding(.horizontal, DS.Space.s12).frame(minHeight: 30).overlay(Capsule().stroke(edge)).contentShape(Capsule())
+                        .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size))
+                        .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(DS.Palette.elementHover, dark: isDark))).contentShape(Rectangle())
                 }
             }
             ViewThatFits(in: .horizontal) {
@@ -656,9 +653,7 @@ struct QuestionRow: View {
                 Button("Dismiss") { c.dismiss(q) }.buttonStyle(.plain).foregroundColor(sub).padding(.leading, DS.Space.s8)
                     .help("Dismiss without answering (⌫)")
             }.font(sys(size: DS.TypeRole.caption.size)).foregroundColor(dim)
-        }.padding(DS.Space.s12)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(card)).overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(line))
-            .padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)
+        }.padding(.horizontal, DS.Space.s16).padding(.vertical, DS.Space.s8)  // a row in the popover, not a card inside it (§10.13)
     }
     func send() {
         let t = c.replyText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -719,9 +714,9 @@ struct AnswerChip: View {
                 Text(title)
             }
         }.buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size, weight: likely ? .semibold : .regular))
-            .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(minHeight: 30)
-            .background(Capsule().fill(StatusInk.needs.opacity(likely ? (hover.on ? 0.32 : 0.22) : hover.on ? 0.14 : 0)).background(Capsule().fill(surface)))
-            .overlay(Capsule().stroke(StatusInk.needs.opacity(hover.on || likely ? 0.85 : 0.5))).contentShape(Capsule()).onHover { hover.on = $0 }
+            .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)  // a secondary button (§10.2): the suggested one says so with a check and weight
+            .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(hover.on ? DS.Palette.elementActive : DS.Palette.elementHover, dark: isDark)))  // one step up: the popover is bg.raised, which is element.rest in dark
+            .contentShape(Rectangle()).onHover { hover.on = $0 }
             .accessibilityLabel(likely ? "\(title), suggested" : title)
     }
 }
@@ -761,7 +756,7 @@ struct InboxOverlay: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.clear.contentShape(Rectangle()).onTapGesture { c.inboxOpen = false }  // no scrim: the dashboard stays readable
-            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 420).padding(.top, 50).padding(.trailing, DS.Space.s12).padding(.bottom, DS.Space.s16)
+            VStack(spacing: 0) { Inbox(c: c); Spacer(minLength: 0) }.frame(width: 400).padding(.top, DS.Layout.barHeight + DS.Space.s8).padding(.trailing, DS.Space.s16).padding(.bottom, DS.Space.s16)
             Button("") { c.inboxOpen = false }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1983,9 +1978,10 @@ struct ChatView: View, Looked {
             VStack(spacing: 0) {
             ScrollViewReader { sv in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: DS.Space.s16) {
-                        let started = c.msgs.contains { $0.role == .you }
-                        ForEach(c.msgs.filter { !(started && $0.role == .note && $0.text.hasPrefix("Ask me anything")) }) { m in MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)) }
+                    VStack(alignment: .leading, spacing: DS.Space.s12) {  // 12 inside a turn, 24 between turns
+                        ForEach(shown) { m in
+                            MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)).padding(.top, m.role == .you && m.id != shown.first?.id ? DS.Space.s12 : 0)
+                        }
                         if let r = c.run { RunCard(r: r, c: c) }
                         ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in
                             HStack { Spacer(minLength: DS.Space.s48); queued([q.display, q.files.map { "📎 \($0.name)" }.joined(separator: "  ")].filter { !$0.isEmpty }.joined(separator: "\n"), i) }
@@ -1998,10 +1994,11 @@ struct ChatView: View, Looked {
                 .onChange(of: c.run?.steps.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
-            }
+            }.overlay { if !shown.contains(where: { $0.role != .note }) && c.run == nil && c.queue.isEmpty { emptyState } }  // a note alone (New chat's) is still empty
             if c.verbose { rule; FeedPanel(f: c.feed, c: c) }
+            footer  // the composer's own border is its edge: no rule over it
             rule
-            footer
+            footBar
             }.id(c.look)
             .overlay { DropArea(c: c) }  // files dragged anywhere on the chat, the field too
             .overlay { if c.dropping { dropHint } }
@@ -2010,7 +2007,7 @@ struct ChatView: View, Looked {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(bg)
+        .background(lk.dark ? chrome : bg)  // dark: the reading surface is the window's darkest plane, so bubbles and the composer sit on it
         .foregroundColor(fg)
         .environment(\.colorScheme, lk.dark ? .dark : .light)  // the look's: Default follows the app, Phosphor is always dark
         .font(ui(DS.TypeRole.body))
@@ -2020,6 +2017,20 @@ struct ChatView: View, Looked {
     // MARK: the look's chrome (header, rules, queued messages, composer)
 
     var busy: Bool { c.run != nil }
+    /// The conversation without the transcript's greeting note: the empty state says it.
+    var shown: [Msg] { c.msgs.filter { !($0.role == .note && $0.text.hasPrefix("Ask me anything")) } }
+    /// §10.21: centred, a 20 icon, a title-sm line and a body line that names the first action; ⌃R once there's history.
+    var emptyState: some View {
+        VStack(spacing: DS.Space.s8) {
+            Image(ds: "chat-text", size: 20).foregroundColor(faint).accessibilityHidden(true)
+            Text("Ask about your workspaces").font(ui(DS.TypeRole.titleSm))
+            Text("Ask a question, or drag a workspace to Context.").foregroundColor(dim).multilineTextAlignment(.center)
+            if !c.sent.isEmpty {
+                HStack(spacing: DS.Space.s4) { kbd("⌃R"); Text("searches the prompts you've sent") }.font(ui(DS.TypeRole.caption)).foregroundColor(faint)
+            }
+        }.padding(DS.Space.s24)
+    }
+    var chrome: Color { mono ? bg : Color(DS.Palette.bgChrome, dark: lk.dark) }
     var stateWord: String { c.connected ? (busy ? "working" : "idle") : "offline" }
     var inset: CGFloat { DS.Space.s16 }
     /// A chrome label in the look's face: mono for Phosphor, tabular figures, sentence case (§3).
@@ -2039,15 +2050,19 @@ struct ChatView: View, Looked {
                     headerRow(showMeta: false, showState: false, fixedTitle: false)
                 }
             }
-        }.padding(.leading, inset).padding(.trailing, DS.Space.s12).padding(.vertical, DS.Space.s8).frame(minHeight: DS.Layout.barHeight)
+        }.padding(.leading, inset).padding(.trailing, DS.Space.s12).frame(height: DS.Layout.barHeight - 1)  // with its rule, the bar's 44: one hairline across the window
+            .background(chrome)
     }
 
     @ViewBuilder func headerRow(showMeta: Bool, showState: Bool, fixedTitle: Bool) -> some View {
         HStack(spacing: DS.Space.s8) {
             HStack(spacing: DS.Space.s8) { title(showState: showState) }.fixedSize(horizontal: fixedTitle, vertical: false)
+            if showMeta { HStack(spacing: DS.Space.s8) { meta }.fixedSize() }  // beside the name: where it runs
             Spacer(minLength: DS.Space.s8)
-            if showMeta { HStack(spacing: DS.Space.s8) { meta }.fixedSize() }
-            if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
+            HStack(spacing: DS.Space.s4) {
+                newChat
+                if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
+            }
         }
     }
 
@@ -2068,10 +2083,10 @@ struct ChatView: View, Looked {
             nameView("\(n.lowercased())@greenlight", ds(DS.TypeRole.body, mono: true))
             Text("~/chat").foregroundColor(dim)
         } else {
-            nameView(n, ds(DS.TypeRole.strong))
-            if showState {
-                Label { Text(stateWord.capitalized) } icon: { Image(ds: !c.connected ? "crashed" : busy ? "working" : "done", size: iconSize(DS.TypeRole.label.size)) }
-                    .font(ds(DS.TypeRole.label)).foregroundColor(!c.connected ? crashedInk : busy ? working : dim).lineLimit(1).fixedSize()
+            nameView(n, ds(DS.TypeRole.titleSm))
+            if showState && (busy || !c.connected) {  // idle says nothing
+                Label { Text(stateWord.capitalized) } icon: { Image(ds: c.connected ? "working" : "crashed", size: iconSize(DS.TypeRole.label.size)) }
+                    .font(ds(DS.TypeRole.label)).foregroundColor(c.connected ? working : crashedInk).lineLimit(1).fixedSize()
                     .accessibilityLabel(stateWord)
             }
         }
@@ -2188,21 +2203,22 @@ struct ChatView: View, Looked {
                     .fixedSize(horizontal: false, vertical: true).accessibilityLabel("Not attached: \(c.fileNote)")
             }
             if c.hq != nil { histPanel }
+            VStack(spacing: 0) {  // §10.17: the text full width, its controls in a row under it
             HStack(alignment: .bottom, spacing: DS.Space.s4) {
-                if c.recording == nil { attachButton }
                 if let since = c.recording {
                     HStack(spacing: DS.Space.s2) {
                         ForEach(c.levels.indices, id: \.self) { i in
                             Capsule().fill(crashed).frame(width: 2, height: 3 + CGFloat(c.levels[i]) * 19)
                         }
-                    }.frame(height: 30).accessibilityHidden(true)
+                    }.frame(height: 38).accessibilityHidden(true)  // two lines of text: the box keeps its height
                     Text("Listening… " + fmt(Date().timeIntervalSince(since))).font(ui(DS.TypeRole.label).monospacedDigit()).foregroundColor(dim)
                     Spacer(minLength: 0)
                 } else {
-                    TextField(c.transcribing ? "Transcribing…" : c.run != nil ? "Queue a follow-up…" : c.attached.isEmpty ? greeting
-                              : "Ask about \(c.attached.count == 1 && c.attached[0].mrs == 1 ? c.attached[0].label : "these \(c.attached.reduce(0) { $0 + $1.mrs }) MRs")…", text: $c.input, axis: .vertical)
+                    let ph = c.transcribing ? "Transcribing…" : c.run != nil ? "Queue a follow-up…" : c.attached.isEmpty ? greeting
+                        : "Ask about \(c.attached.count == 1 && c.attached[0].mrs == 1 ? c.attached[0].label : "these \(c.attached.reduce(0) { $0 + $1.mrs }) MRs")…"
+                    TextField("Message", text: $c.input, prompt: Text(ph).foregroundColor(mono ? dim : faint), axis: .vertical)
                         .textFieldStyle(.plain).font(chatFace(size: DS.TypeRole.bodyCopy.size))
-                        .lineLimit(3...10).padding(.vertical, DS.Space.s8).focused($typing)  // three lines to write in (§10.4), growing to ten
+                        .lineLimit(2...10).padding(.vertical, DS.Space.s8).focused($typing)  // two lines to write in over the controls' row, growing to ten
                         .padding(.leading, mono ? 18 : DS.Space.s4).overlay(alignment: .topLeading) { promptGlyph }
                         .onKeyPress(.return, phases: .down) { k in
                             if k.modifiers.contains(.shift) {  // newline at the cursor
@@ -2214,6 +2230,10 @@ struct ChatView: View, Looked {
                         Text(c.vimMode).font(ui(DS.TypeRole.caption).italic()).foregroundColor(dim).padding(.bottom, DS.Space.s8)
                     }
                 }
+            }.padding(.horizontal, DS.Space.s4)
+            HStack(spacing: DS.Space.s4) {
+                if c.recording == nil { attachButton }
+                Spacer(minLength: 0)
                 let rec = c.recording != nil, pad = padSize
                 Button(action: c.toggleVoice) {
                     Group {
@@ -2229,23 +2249,30 @@ struct ChatView: View, Looked {
                 let empty = (c.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && c.files.isEmpty) || c.reading > 0  // submit() ignores it anyway
                 Button(action: c.submit) {
                     sendLabel.frame(minWidth: pad).frame(height: pad)
-                        .background(RoundedRectangle(cornerRadius: corner).fill(empty ? (mono ? Color.clear : card) : mono ? fg : accent))
+                        .background(RoundedRectangle(cornerRadius: corner).fill(empty ? .clear : mono ? fg : accent))
                         .overlay(RoundedRectangle(cornerRadius: corner).stroke(mono && empty ? line : .clear))
                         .foregroundColor(empty ? faint : mono ? page : onAccent)
                 }.buttonStyle(.plain).disabled(empty).accessibilityLabel("Send")
             }
-            .padding(.leading, DS.Space.s4).padding(.trailing, DS.Space.s4).padding(.vertical, DS.Space.s4)
+            }
+            .padding(DS.Space.s4)
             .background { composerBox }
             .onChange(of: c.hq == nil) { if c.hq == nil { typing = true } }  // ⌃R closed: back to the field
             if c.hp >= 0 {
                 Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
             }
-            ViewThatFits(in: .horizontal) {  // a narrow pane drops the hint, then the model; it never clips
-                footRow(hint: true, model: true)
-                footRow(hint: false, model: true)
-                footRow(hint: false, model: false)
-            }.font(ui(DS.TypeRole.caption).monospacedDigit()).controlSize(.small)
-        }.padding(.horizontal, inset).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s12)
+        }.padding(.horizontal, inset).padding(.top, DS.Space.s12).padding(.bottom, inset)  // the box sits as far from the footer as from the sides
+    }
+
+    /// The pane's footer (§10.11): the model on the left margin, the context on the right, on the dashboard footer's line.
+    var footBar: some View {
+        HStack(spacing: DS.Space.s8) {
+            modelButton
+            Spacer(minLength: DS.Space.s4)
+            ContextButton(c: c).fixedSize()
+        }.font(ui(DS.TypeRole.caption).monospacedDigit()).controlSize(.small)
+            .padding(.horizontal, inset - DS.Space.s8)  // the buttons' own 8: their text sits on the pane's margins
+            .frame(height: DS.Layout.footerHeight - 1).background(chrome)
     }
 
     /// The composer's +: attach files (the open panel). Drops and ⌘V attach too.
@@ -2286,18 +2313,6 @@ struct ChatView: View, Looked {
             .padding(DS.Space.s12).allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    func footRow(hint: Bool, model: Bool) -> some View {
-        HStack(spacing: DS.Space.s8) {
-            if hint {
-                tag((c.run != nil ? "Sends after this run" : "⌃R history") + " · ↩ send").foregroundColor(dim).lineLimit(1).fixedSize()
-            }
-            Spacer(minLength: DS.Space.s4)
-            if model { modelButton.fixedSize() }
-            ContextButton(c: c)
-            newChat
-        }
-    }
-
     /// Corners for the look's controls: radius sm (Default), square (Phosphor).
     var corner: CGFloat { mono ? 0 : DS.Radius.sm }
     var padSize: CGFloat { DS.Layout.controlHeightMd }
@@ -2315,7 +2330,7 @@ struct ChatView: View, Looked {
             Rectangle().fill(hot ? card : .clear).overlay(Rectangle().stroke(hot ? fg : line, style: StrokeStyle(lineWidth: 1 + walk, dash: [4, 3])))
         } else {
             let r = RoundedRectangle(cornerRadius: DS.Radius.md)
-            r.fill(Color(lk.dark ? DS.Palette.elementRest : DS.Palette.bgSunken, dark: lk.dark))
+            r.fill(Color(lk.dark ? DS.Palette.elementRest : DS.Palette.bgSurface, dark: lk.dark))  // light: the text background, grey reads as disabled
                 .overlay(r.stroke(hot ? Color(DS.Palette.accentRing, dark: lk.dark) : edge, lineWidth: 1 + walk))
         }
     }
@@ -2342,7 +2357,7 @@ struct ChatView: View, Looked {
     var newChat: some View {
         let hot = c.hint == Self.newTip
         return Button(action: { c.clear() }) {
-            Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)).frame(width: DS.Layout.controlHeightSm, height: DS.Layout.controlHeightSm)
+            Image(ds: "compose", size: iconSize(DS.TypeRole.body.size)).frame(width: padSize, height: padSize)
                 .foregroundColor(hot || mono ? fg : dim)
                 .background(RoundedRectangle(cornerRadius: corner).fill(hot ? card : .clear))
         }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")

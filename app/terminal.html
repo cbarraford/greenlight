@@ -30,6 +30,7 @@
   --bg:var(--ds-bg-canvas); --surface:var(--ds-bg-surface); --raised:var(--ds-bg-raised); --sunken:var(--ds-bg-sunken);
   --fill:var(--ds-element-rest); --fill-h:var(--ds-element-hover); --fill-a:var(--ds-element-active);
   --line:var(--ds-border-default); --line-h:var(--ds-border-hover); --faint:var(--ds-fg-faint);
+  --field:var(--ds-element-rest); --dfield:var(--sunken); --seg-on:var(--ds-element-active); --seg-e:none;  /* §10.4, §10.3: the dark halves */
   --accent-h:var(--ds-accent-hover); --accent-fg:var(--ds-accent-fg); --accent-sub:var(--ds-accent-subtle); --on-accent:var(--ds-accent-on-solid);
   /* depth */
   --e1:var(--ds-elevation-1); --e2:var(--ds-elevation-2); --e3:var(--ds-elevation-3); --scrim:var(--ds-elevation-scrim); --ring:var(--ds-ring);
@@ -41,8 +42,8 @@
   --r-xs:var(--ds-radius-xs); --r-sm:var(--ds-radius-sm); --r-md:var(--ds-radius-md); --r-lg:var(--ds-radius-lg); --r-full:var(--ds-radius-full);
   --t-fast:var(--ds-duration-fast); --t-base:var(--ds-duration-base); --t-slow:var(--ds-duration-slow); --ease:var(--ds-easing-out);
 }
-@media (prefers-color-scheme: light){:root{color-scheme:light}}
-:root[data-appearance="light"]{color-scheme:light} :root[data-appearance="dark"]{color-scheme:dark}
+@media (prefers-color-scheme: light){:root{color-scheme:light;--field:var(--ds-bg-surface);--dfield:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)}}
+:root[data-appearance="light"]{color-scheme:light;--field:var(--ds-bg-surface);--dfield:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)} :root[data-appearance="dark"]{color-scheme:dark;--field:var(--ds-element-rest);--dfield:var(--sunken);--seg-on:var(--ds-element-active);--seg-e:none}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:400 var(--fs-body)/16px var(--font);letter-spacing:var(--ds-type-body-track)}
 body{display:flex}
 #main{display:flex;flex-direction:column;flex:1;min-width:0}
@@ -57,13 +58,13 @@ kbd{font:400 var(--fs-cap)/14px var(--font)}
 /* ---- the sidebar (§10.12): projects → workspaces (two lines: name + what needs you; branch + MR, CI, threads, rebase) → their terminals ---- */
 #side{display:flex;flex-direction:column;flex-shrink:0;width:264px;min-width:200px;max-width:480px;background:var(--strip);box-shadow:inset -1px 0 0 var(--hair);-webkit-user-select:none;user-select:none}
 body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /* .sliding: still showing while it slides out */
-#sdv{flex:0 0 4px;margin-left:-2px;cursor:col-resize;z-index:1}  /* a 4px hit area, no visible line */
+#sdv{flex:0 0 4px;margin:0 -2px;cursor:col-resize;z-index:1}  /* a 4px hit area, no visible line */
 #shead{display:flex;align-items:center;gap:2px;height:44px;flex-shrink:0;padding:0 8px 0 12px}
 #shead .ttl{flex:0 1 auto;height:28px;border:0;padding:0 8px;margin-left:-8px;border-radius:var(--r-sm);background:none;color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;font:600 var(--fs-body)/16px var(--font);white-space:nowrap}
 #shead .ttl:hover{background:var(--fill)} #shead .sp{flex:1}
 #shead .host{display:block;flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px;box-sizing:border-box;height:20px;margin-right:4px;padding:0 8px 0 6px;border-radius:var(--r-full);background:var(--fill);color:var(--dim);font:500 var(--fs-cap)/14px var(--font)}
 #shead .ib{width:24px;height:24px} #shead .ttl{flex-shrink:1;min-width:80px} #shead .host{min-width:36px;line-height:20px}
-#jump{display:flex;align-items:center;gap:8px;flex-shrink:0;height:28px;margin:0 8px 8px;padding:0 4px 0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint);font:inherit;text-align:left}
+#jump{display:flex;align-items:center;gap:8px;flex-shrink:0;height:28px;margin:4px 8px 8px;padding:0 4px 0 8px;border:0;border-radius:var(--r-sm);background:var(--field);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint);font:inherit;text-align:left}
 #jump:hover{box-shadow:inset 0 0 0 1px var(--line-h)} #jump span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--faint)}
 #jump kbd,#pal kbd,#card kbd,#drop kbd{display:inline-flex;align-items:center;height:16px;padding:0 4px;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1px var(--line);color:var(--dim)}
 #tree{flex:1;overflow-y:auto;padding:0 4px 12px;scrollbar-width:thin}
@@ -74,19 +75,20 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .grp:hover{color:var(--fg);background:var(--fill)}
 .grp .cv{transition:transform var(--t-fast) var(--ease)} .grp.shut .cv{transform:rotate(-90deg)}
 .grp .gn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .grp .ct{color:var(--faint);font-variant-numeric:tabular-nums}
-.grp.prj{padding-left:12px;color:var(--faint)} .grp.prj:hover{color:var(--fg)}
+.grp.prj{padding-left:12px} .grp.prj:hover{color:var(--fg)}
 /* rows (§10.8): 28 tall (a workspace has a second line), inset 4, hover element.rest, selected element.active */
 .ws{position:relative;display:flex;flex-direction:column;justify-content:center;gap:2px;min-height:28px;padding:4px 8px;box-sizing:border-box;border-radius:var(--r-sm)}
 .ws:hover,.tm:hover{background:var(--fill)} .ws:active,.tm:active{background:var(--fill-h)}
-.ws.on{background:var(--fill)} .tm.on{background:var(--fill-a)}  /* the open terminal is the selection; its workspace a step quieter */
-.l1,.l2{display:flex;align-items:center;gap:8px;min-width:0}
+.tm.on{background:var(--fill-a)}  /* the open terminal is the one selection (§10.8) */
+:is(.s-ws,.s-quiet,.s-done) .ws{padding-left:24px} :is(.s-ws,.s-quiet,.s-done) .tm{padding-left:44px}  /* a project's rows sit 16 in from its header */
+.l1,.l2{display:flex;align-items:center;gap:8px;min-width:0} .l1{min-height:20px}  /* a pill or not, the row is one height */
 .l2{padding-left:20px;color:var(--dim);font:400 var(--fs-cap)/14px var(--font)}
 .wn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ws .wn{font-weight:600} .ws.main .wn{color:var(--dim);font-weight:500}
 .ws .wy{flex-shrink:0;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:var(--fs-lbl)}
 .br{display:flex;align-items:center;gap:4px;flex:1;min-width:0;font:400 var(--fs-cap)/14px var(--mono)}
 .br span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chips{display:flex;align-items:center;gap:8px;flex-shrink:0;font-variant-numeric:tabular-nums} .chip{display:flex;align-items:center;gap:2px;color:var(--dim)} .chip.k-r{color:var(--r)}
+.chips{display:flex;align-items:center;gap:8px;flex-shrink:0;font-variant-numeric:tabular-nums} .chip{display:flex;align-items:center;gap:2px;color:var(--dim)} .chip.k-r{color:var(--r)} .chip:first-child{order:1}  /* the MR ref ends every row: one column */
 /* the status pill (§10.5): tint, glyph, label; neutral states are element.rest */
 .badge{display:flex;align-items:center;gap:4px;flex-shrink:0;height:20px;padding:0 6px;box-sizing:border-box;border-radius:var(--r-full);background:var(--tn-bg,var(--fill));color:var(--tn,var(--dim));font:500 var(--fs-cap)/14px var(--font);white-space:nowrap}
 @keyframes spin{to{transform:rotate(360deg)}} .spin{animation:spin .9s linear infinite}
@@ -102,23 +104,22 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .ws .ib,.grp .ib{width:24px;height:24px;display:none} .ws .ib{margin:-4px -4px -4px 0}
 .ws:hover .ib,.ws:focus-within .ib,.ws:focus .ib,.ws.on .ib,.grp:hover .ib,.grp:focus .ib{display:flex}
 .tm .ib{width:24px;height:24px;margin-left:auto;display:none} .tm:hover .ib,.tm:focus .ib,.tm:focus-within .ib,.tm.on .ib{display:flex}
-/* Hosts: a host with shells open is a group (its shells, Close all, +); the idle ones are chips; most used first */
-.hc{margin:0;padding:0}
-.hc .tm{padding-left:28px}
+/* Hosts: a host with shells open is a group (its shells, Close all, +); the idle ones are chips under them; most used first */
+.hc{margin:0;padding:0} .hc .ws .wn{font-weight:400}
+.hc .tm{padding-left:24px}
 .ca{display:none;height:24px;margin:-4px 0;padding:0 8px;border:0;border-radius:var(--r-sm);background:none;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
 .ws:hover .ca,.ws:focus-within .ca,.ws:focus .ca{display:block} .ca:hover{background:var(--fill-h);color:var(--fg)}
 .hchips{display:flex;flex-wrap:wrap;gap:4px;padding:4px 4px 0}
 .hchip{display:flex;align-items:center;gap:4px;height:24px;padding:0 8px 0 6px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
-.hchip:hover{background:var(--fill-h);color:var(--fg)} .hchip.on{background:var(--accent-sub);color:var(--accent-fg)}
+.hchip:hover{background:var(--fill-h);color:var(--fg)} .hchip.on{background:var(--fill-a);color:var(--fg)}
 /* a host that can't be reached: a crashed caption and Retry on its row (§10.12) */
 .lost{display:flex;align-items:center;gap:4px;padding-left:20px;color:var(--r);font:400 var(--fs-cap)/14px var(--font)} .lost span{flex:1}
 .lost button{height:24px;padding:0 8px;border:0;border-radius:var(--r-sm);background:none;color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} .lost button:hover{background:var(--fill-h)}
 /* loading: a skeleton of 3 rows per section, element.rest, no shimmer; empty: what will appear, and how */
 .skel{display:grid;padding:8px 0 0} .skel i,.skel b{display:block;height:12px;margin:8px 8px 8px 28px;border-radius:var(--r-xs);background:var(--fill)} .skel b{width:88px;margin:16px 8px 8px 8px}
 .skel i:nth-of-type(3n+1){width:62%} .skel i:nth-of-type(3n+2){width:48%} .skel i:nth-of-type(3n){width:56%}
-.nows{display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:32px;padding:0 16px;text-align:center;color:var(--dim)}
-.nows svg{color:var(--faint);margin-bottom:4px} .nows b{color:var(--fg);font:600 var(--fs-tsm)/20px var(--font)} .nows p{margin:0 0 8px;max-width:28ch}
-.nows button{height:28px;padding:0 12px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} .nows button:hover{background:var(--fill-h)}
+.nows{display:flex;flex-direction:column;align-items:flex-start;margin-top:16px;padding:0 8px 0 28px;color:var(--dim);font:400 var(--fs-lbl)/28px var(--font)}
+.nows button{height:24px;margin-top:4px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} .nows button:hover{background:var(--fill-h)}
 /* the head's refresh: busy while the trees are on their way */
 #shead .ib[aria-busy=true]{color:var(--faint)} #shead .ib[aria-busy=true] svg{animation:spin .9s linear infinite}
 
@@ -135,7 +136,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .tab .x{width:20px;height:20px;border-radius:var(--r-xs);visibility:hidden} .tab.on .x,.tab:hover .x,.tab:focus-within .x,.tab:focus .x{visibility:visible}
 .tab .x:hover{background:var(--fill-h)}
 #newtab{flex:0 0 28px;height:28px;display:flex;align-items:center;justify-content:center;border:0;border-radius:var(--r-sm);background:none;color:var(--dim)} #newtab:hover{color:var(--fg);background:var(--fill)}
-.tools{display:flex;align-items:center;gap:2px;padding:0 8px}
+.tools{display:flex;align-items:center;padding:0 8px}
 .tools button{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:var(--r-sm);background:none;color:var(--dim)} .tools button:hover{background:var(--fill);color:var(--fg)}
 .tab .dot{width:12px;height:12px}
 /* ---- panes (§10.12): each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal.
@@ -193,36 +194,36 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #lnk button:hover{background:var(--fill)}
 
 /* ---- ⌘J (§10.15 palette): raised, radius lg, elevation 3, a light scrim; frequent, so it opens instantly ---- */
-#pal{position:fixed;inset:0;z-index:10;display:flex;justify-content:center;align-items:flex-start;padding-top:12vh;background:var(--scrim)} #pal[hidden]{display:none}
-#pal .pbox{width:min(880px,94vw);height:min(560px,80vh);display:flex;flex-direction:column;border-radius:var(--r-lg);overflow:hidden;background:var(--raised);color:var(--fg);box-shadow:var(--e3)}
-#pal .hd{height:44px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 8px 0 16px;color:var(--faint);box-shadow:inset 0 -1px 0 var(--hair)}
+#pal{position:fixed;inset:0;z-index:10;display:flex;justify-content:center;align-items:flex-start;padding-top:20vh;padding-top:round(down,20vh,1px)} #pal[hidden]{display:none}
+#pal .pbox{width:min(880px,94vw);height:min(560px,72vh);display:flex;flex-direction:column;border-radius:var(--r-lg);overflow:hidden;background:var(--raised);color:var(--fg);box-shadow:var(--e3)}
+#pal .hd{height:44px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px 0 12px;color:var(--faint);box-shadow:inset 0 -1px 0 var(--hair)}
 #pal input{flex:1;min-width:0;height:32px;border:0;outline:0;background:none;color:var(--fg);font:400 var(--fs-tsm)/20px var(--font)}
 #pal input::placeholder{color:var(--faint)}
 #pal .mode{height:20px;display:flex;align-items:center;padding:0 6px;border-radius:var(--r-xs);background:var(--fill);color:var(--dim);font:500 var(--fs-cap)/14px var(--font)} #pal [hidden]{display:none}
-#pal .scope{display:flex;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--sunken)} #pal .scope button{height:24px;padding:0 8px;border:0;border-radius:var(--r-xs);background:none;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)} #pal .scope button:hover{color:var(--fg)} #pal .scope button[aria-selected=true]{background:var(--fill-a);color:var(--fg)}
+#pal .scope{display:flex;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--sunken)} #pal .scope button{height:24px;padding:0 8px;border:0;border-radius:var(--r-xs);background:none;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)} #pal .scope button:hover{color:var(--fg)} #pal .scope button[aria-selected=true]{background:var(--seg-on);box-shadow:var(--seg-e);color:var(--fg)}
 #pal .hint{font-size:var(--fs-lbl);color:var(--dim);white-space:nowrap}
-#pal kbd{flex-shrink:0;background:none} #pal kbd.amb{color:var(--fg);box-shadow:inset 0 0 0 1px var(--line-h)}
+#pal kbd{flex-shrink:0;background:none}
 #pal .bd{flex:1;min-height:0;display:flex}
 #pres{flex:1;min-width:0;overflow-y:auto;padding:4px}
-#pres .gh{height:28px;display:flex;align-items:flex-end;gap:8px;padding:0 8px 4px;color:var(--faint);font:500 var(--fs-lbl)/16px var(--font)} #pres .gh span{font-variant-numeric:tabular-nums}
+#pres .gh{height:28px;display:flex;align-items:flex-end;gap:8px;padding:0 8px 4px;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)} #pres .gh span{margin-left:auto;font-variant-numeric:tabular-nums}
 #pres .r{height:32px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:var(--r-sm)}
-#pres .r.sel,#pres .hit.sel{background:var(--fill-a)}
+#pres .r.sel,#pres .hit.sel{background:var(--ds-element-active)}
 #pres .ic{width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
-#pres .m{flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 var(--fs-body)/16px var(--font);color:var(--dim)}
-#pres .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-lbl);color:var(--faint)}
-#pres b{font-weight:600;color:var(--fg)}
+#pres .m{flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-body)/16px var(--font);color:var(--fg)}
+#pres .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-lbl);color:var(--dim)}
+#pres b{font-weight:600}
 #pal .pl{flex-shrink:0;height:20px;display:inline-flex;align-items:center;gap:4px;align-self:flex-start;padding:0 6px;box-sizing:border-box;border-radius:var(--r-full);font:500 var(--fs-cap)/14px var(--font);background:var(--tn-bg,var(--fill));color:var(--tn,var(--dim))} #pres .pl{align-self:center}
 #pres .hit{display:flex;flex-direction:column;gap:12px;margin:0 0 4px;padding:12px;border-radius:var(--r-md);background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair)}
 #pres .hit .l{display:flex;align-items:center;gap:8px;min-width:0} #pres .hit .m{font:600 var(--fs-tsm)/20px var(--font);color:var(--fg)} #pres .hit .pl{margin-left:auto}
 #pres .hit .bt{display:flex;flex-wrap:wrap;gap:8px} #pres .hit button{height:28px;display:flex;align-items:center;gap:8px;padding:0 12px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)}
 #pres .hit button:hover{background:var(--fill-h)} #pres .hit button span{color:var(--dim)} #pres .hit button.pri{background:var(--accent);color:var(--on-accent)} #pres .hit button.pri:hover{background:var(--accent-h)} #pres .hit button.pri span{color:inherit;opacity:.8}
 #pres .nil{display:flex;flex-direction:column;align-items:center;gap:4px;padding:48px 0;color:var(--dim);font-size:var(--fs-lbl)} #pres .nil div{color:var(--fg);font:600 var(--fs-tsm)/20px var(--font)}
-#pv{width:290px;flex-shrink:0;box-sizing:border-box;display:flex;flex-direction:column;gap:16px;padding:16px;overflow:hidden;background:var(--surface);box-shadow:inset 1px 0 0 var(--hair)}
-#pv .k{color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)} #pv h3{margin:4px 0 0;font:600 var(--fs-t)/22px var(--font);letter-spacing:var(--ds-type-title-track);overflow-wrap:anywhere}
-#pv dl{display:grid;grid-template-columns:76px minmax(0,1fr);row-gap:8px;margin:0;font-size:var(--fs-lbl)} #pv dt{color:var(--dim)} #pv dd{color:var(--fg);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pv{width:290px;flex-shrink:0;box-sizing:border-box;display:flex;flex-direction:column;gap:16px;padding:16px;overflow:hidden;box-shadow:inset 1px 0 0 var(--hair)}
+#pv .k{color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
+#pv dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;margin:0} #pv dt{color:var(--dim);font-size:var(--fs-lbl)} #pv dd{color:var(--fg);margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 #pv p{margin:0;font:400 var(--fs-body)/19px var(--font);white-space:pre-line} #pv .sc{margin-top:auto;display:flex;align-items:center;gap:8px;font-size:var(--fs-lbl);color:var(--dim)}
-#pv .tl{flex:1;min-height:0;display:flex;flex-direction:column;gap:8px} #pv pre{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:8px 12px;border-radius:var(--r-sm);background:var(--sunken);font:400 var(--fs-cap)/18px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
-#pal .ft{height:32px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 16px;overflow:hidden;white-space:nowrap;font:400 var(--fs-cap)/14px var(--font);color:var(--dim);box-shadow:inset 0 1px 0 var(--hair)} #pal .ft span{display:flex;align-items:center;gap:4px} #pal .ft .end{margin-left:auto}
+#pv .tl{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:8px} #pv pre{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:8px;border-radius:var(--r-md);background:var(--sunken);font:400 var(--fs-cap)/18px var(--mono);white-space:pre}
+#pal .ft{height:32px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 12px;overflow:hidden;white-space:nowrap;font:400 var(--fs-cap)/14px var(--font);color:var(--dim);box-shadow:inset 0 1px 0 var(--hair)} #pal .ft span{display:flex;align-items:center;gap:4px} #pal .ft .end{margin-left:auto}
 #pres .sd{flex-shrink:0;color:var(--dim);font-size:var(--fs-cap)}
 @media (max-width:640px){#pv{display:none}}
 
@@ -284,7 +285,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #card .ports .pr button,#card .ports>button{height:24px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-cap)/14px var(--font)} #card .ports .pr button:hover{background:var(--fill-h)}
 
 /* ---- dialogs (§10.15): raised, radius lg, elevation 3, on the scrim; 480 (ask), 640 (forms), 880 (Colours, Diff, Projects) ---- */
-#dlg{position:fixed;inset:0;z-index:11;display:flex;justify-content:center;align-items:flex-start;padding-top:16vh;background:var(--scrim)} #dlg[hidden]{display:none} #dlg:has(form.big){align-items:center;padding-top:0}
+#dlg{position:fixed;inset:0;z-index:11;display:flex;justify-content:center;align-items:flex-start;padding-top:16vh;padding-top:round(down,16vh,1px);background:var(--scrim)} #dlg[hidden]{display:none} #dlg:has(form.big){align-items:center;padding-top:0}
 #dlg form{width:min(480px,90vw);box-sizing:border-box;padding:16px;border-radius:var(--r-lg);background:var(--raised);color:var(--fg);box-shadow:var(--e3);display:grid;gap:12px;animation:pop var(--t-slow) var(--ease)}
 #dlg .ic{display:flex;align-items:center;justify-content:center;width:32px;height:32px}
 #dlg h3{margin:0 0 4px;font:600 var(--fs-t)/22px var(--font);letter-spacing:var(--ds-type-title-track)} #dlg p{margin:0;color:var(--dim);font:400 var(--fs-body)/19px var(--font)} #dlg code{color:var(--fg);font:400 var(--fs-cap)/14px var(--mono)}
@@ -306,8 +307,8 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .dz{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .dz button{height:auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:var(--r-md);text-align:left}
 #dlg .dz button[aria-pressed=true]{box-shadow:0 0 0 2px var(--raised),0 0 0 4px var(--focus)} #dlg .dz .dots{display:flex;gap:4px} #dlg .dz i{width:12px;height:12px;border-radius:var(--r-full)}
 #dlg form.wide{width:min(640px,92vw);max-height:72vh;overflow-y:auto} #dlg h4{margin:4px 0 0;color:var(--fg);font:600 var(--fs-body)/16px var(--font)}
-/* inputs (§10.4): 28 tall, sunken, a default border; focus is the accent */
-#dlg input[type=text],#dlg select,#dlg textarea{box-sizing:border-box;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);color:var(--fg);font:400 var(--fs-body)/16px var(--font);outline:0;box-shadow:inset 0 0 0 1px var(--line)}
+/* inputs (§10.4): 28 tall, the text background in light and sunken in dark (the dialog is already element.rest's grey), a default border; focus is the accent */
+#dlg input[type=text],#dlg select,#dlg textarea{box-sizing:border-box;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--dfield);color:var(--fg);font:400 var(--fs-body)/16px var(--font);outline:0;box-shadow:inset 0 0 0 1px var(--line)}
 #dlg input[type=text]:hover,#dlg select:hover,#dlg textarea:hover{box-shadow:inset 0 0 0 1px var(--line-h)}
 #dlg input[type=text]:focus,#dlg select:focus,#dlg textarea:focus{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)} #dlg textarea{padding:8px;resize:vertical;font:400 var(--fs-body)/19px var(--font)}
 #dlg input::placeholder,#dlg textarea::placeholder{color:var(--faint)}
@@ -332,10 +333,10 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .big ul{flex-shrink:0} #dlg .big li{gap:8px;padding:8px 12px}
 /* a segmented control (§10.3): sunken track, the selected segment raised; switching is instant */
 #dlg .seg{display:flex;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--sunken)} #dlg .big .seg button{display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:var(--r-xs);background:none;color:var(--dim)}
-#dlg .big .seg button:hover:not(:disabled){background:none;color:var(--fg)} #dlg .big .seg [aria-pressed=true],#dlg .big .seg [aria-checked=true]{background:var(--surface);color:var(--fg);box-shadow:var(--e1)} #dlg .seg kbd{color:var(--faint)}
+#dlg .big .seg button:hover:not(:disabled){background:none;color:var(--fg)} #dlg .big .seg [aria-pressed=true],#dlg .big .seg [aria-checked=true]{background:var(--seg-on);color:var(--fg);box-shadow:var(--seg-e)} #dlg .seg kbd{color:var(--faint)}
 /* open projects: a filter, then a tile per project */
 #dlg .nwb{display:grid;align-content:start;gap:12px;padding:0 16px 16px;overflow-y:auto}
-#dlg label.find{gap:8px;height:28px;padding:0 8px;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
+#dlg label.find{gap:8px;height:28px;padding:0 8px;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
 #dlg .big .find input[type=text]{flex:1;height:26px;padding:0;background:none;box-shadow:none}
 #dlg .nws .fld{display:grid;gap:4px} #dlg .nws .fld>span{color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} #dlg .nws .chk{display:flex;align-items:center;gap:8px} #dlg .nws [hidden]{display:none} #dlg .nws code{font:400 var(--fs-cap)/14px var(--mono);color:var(--dim)}
 /* Diff: files on the left, the patch on the right; a click on a line opens a note to Claude under it (§10.16) */
@@ -393,7 +394,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .big .dz.sm button[aria-pressed=true]{box-shadow:0 0 0 2px var(--raised),0 0 0 4px var(--focus)}
 #dlg .dz.sm .th{display:flex;gap:4px;height:32px;box-sizing:border-box;padding:8px 8px 0} #dlg .dz.sm .th i{width:24px;height:auto;border-radius:var(--r-xs) var(--r-xs) 0 0} #dlg .dz.sm .th i+i{flex:1;background:var(--term-bg)}
 #dlg .dz.sm .nm{display:flex;align-items:center;gap:4px;padding:8px;font:600 var(--fs-cap)/14px var(--font)} #dlg .dz.sm .nm i{width:8px;height:8px}
-#dlg .ask{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 8px;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line)} #dlg .ask:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
+#dlg .ask{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 8px;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line)} #dlg .ask:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
 #dlg .big .ask input[type=text]{flex:1;height:24px;padding:0;background:none;box-shadow:none} #dlg .big .ask button{height:24px;padding:0 8px}
 #dlg details{flex-shrink:0;border-radius:var(--r-md);background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair)} #dlg summary{padding:8px 12px;color:var(--fg);font:600 var(--fs-body)/16px var(--font);border-radius:var(--r-md)}
 #dlg .ev{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:2px 16px;padding:0 12px 8px} #dlg .ev label{min-width:0;gap:8px;padding:4px 0;color:var(--dim);font-size:var(--fs-lbl)} #dlg .ev input[type=color]{flex:0 0 auto;width:24px;height:20px;padding:0;border:0;border-radius:var(--r-xs);background:none}
@@ -403,7 +404,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .nwq .q{display:grid;gap:4px;margin-bottom:12px} #dlg .nwq .q>span{font-weight:600} #dlg .nwq .opts{display:flex;flex-wrap:wrap;gap:4px}
 #dlg .nwq .opts button{height:24px;padding:0 8px;border-radius:var(--r-sm);background:var(--fill);color:var(--dim)}
 #dlg .nwq .opts button[aria-pressed=true]{background:var(--accent-sub);color:var(--accent-fg)}
-#dlg .nwq input{height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:inherit;font:inherit}
+#dlg .nwq input{height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line);color:inherit;font:inherit}
 #dlg .nws .two{display:grid;grid-template-columns:1fr 1fr;gap:12px} #dlg .nws .tiles label:first-child{grid-column:auto} #dlg .nws .tile small{white-space:normal}
 #dlg .nws .tile code{display:block;margin:4px 0;padding:2px 6px;border-radius:var(--r-xs);background:var(--sunken);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dlg .nws .tile.none code{display:inline;margin:0;padding:0 4px} #dlg .tile.none{display:flex;gap:12px;padding:12px;border-radius:var(--r-md);box-shadow:inset 0 0 0 1px var(--hair);color:var(--dim)} #dlg .tile.none[hidden],#dlg .nws [hidden]{display:none} #dlg .dh .stk .sub{white-space:normal} #dlg .tile.none b{color:var(--fg)}
@@ -449,7 +450,7 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 <script src="ghostty-web.js" defer></script>
 </head><body class="noside">
 <nav id="side" aria-label="Workspaces"><div id="shead"><button type="button" class="ttl">Workspaces</button><span class="sp"></span></div>
-<button id="jump" type="button"><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
+<button id="jump" type="button"><span>Jump to…</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
 <div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
 <div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
@@ -512,7 +513,7 @@ window.onerror = (msg, src, line, col, e) => post({cmd: "error", text: `${msg} @
 addEventListener("unhandledrejection", ev => post({cmd: "error", text: `unhandled rejection: ${ev.reason}`, name: ev.reason?.name || "Rejection", line: 0, col: 0}));
 const $ = id => document.getElementById(id), el = (tag, cls, html) => Object.assign(document.createElement(tag), {className: cls || "", innerHTML: html || ""});
 const ico = (name, w = 14, cls = "") => dsIconHTML(name, w, {cls});  // an icon from brand/icons (the generated ds-icons block)
-$("jump").prepend(dsIcon("search", 13)); $("pq").before(Object.assign(dsIcon("search", 16), {id: "pico"}));  // the jump field and the palette's search icons
+$("jump").prepend(dsIcon("search", 16)); $("pq").before(Object.assign(dsIcon("search", 16), {id: "pico"}));  // the jump field and the palette's search icons
 const I = {
   claude: w => ico("claude", w, "ic-claude"), codex: w => ico("openai", w), agy: w => ico("agy", w, "ic-agy"),
   shell: w => ico("terminal", w),
@@ -1172,7 +1173,7 @@ const facts = new Map();  // path → dash.py tree info, so the next open starts
 const dfn = o => o && (o.added || o.removed) ? `+${o.added | 0} −${o.removed | 0}` : "";  // the card's Diff button: branch plus uncommitted, in lines
 const EDITOR = q.get("editor") || "Editor";  // the app's pick: Zed, Cursor or VS Code
 // a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
-function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, cancel = "Cancel", safe}){
+function ask({icon, title, text, note, rows = [], check, ok = "Close", danger, cancel = "Cancel", safe}){
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
   f.innerHTML = (icon ? `<span class="ic ${icon === "trash" ? "k-r" : "k-o"}">${icon === "trash" ? IC.trash(17) : IC.warn}</span>` : "")
     + `<div><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}</div>` + (note ? `<div class="note k-g">${g16(G.ok)}${note}</div>` : "")
@@ -1366,7 +1367,8 @@ const G = {branch: "branch", mr: "mr", ok: "done", bad: "crashed", run: "working
 const AGENT_G = {working: ["working", "Agent working"], waiting: ["needs", "Agent waiting on you"], needs: ["needs", "Needs you"], done: ["done", "Agent done"], crashed: ["crashed", "Agent crashed"], error: ["crashed", "Agent error"]};
 const dotEl = st => { const d = el("span", "dot " + (st || "")), g = AGENT_G[st]; if (g) d.innerHTML = g16(g[0], "", g[1]); return d };
 // a status pill: tint, glyph, label (§10.5)
-const pillHTML = (b, cls = "badge") => `<span class="${cls} k-${b[1]}">${g16(b[2])}${esc(b[0])}</span>`;
+const FILLED = {needs: "needs-fill", crashed: "crashed-fill", done: "done-fill"};
+const pillHTML = (b, cls = "badge") => `<span class="${cls} k-${b[1]}">${g16(FILLED[b[2]] || b[2])}${esc(b[0])}</span>`;
 // the one most urgent thing about a workspace: [label, colour, glyph]
 function badge(w){
   const m = w.mr?.state === "opened" ? w.mr : {};
@@ -1379,7 +1381,7 @@ function badge(w){
   if (w.agent === "working") return ["Working", "b", G.run];
   if (m.mergeable && !m.draft) return ["Ready", "g", G.ok];
 }
-const CI = {success: ["g", G.ok, "CI passed"], failed: ["r", G.bad, "CI failed"], running: ["b", G.run, "CI running"], pending: ["b", G.run, "CI pending"], created: ["b", G.run, "CI queued"]};
+const CI = {success: ["g", G.ok, "CI passed"], failed: ["r", G.bad, "CI failed"], running: ["b", G.run, "CI running"], pending: ["b", "queued", "CI pending"], created: ["b", "queued", "CI queued"]};
 function chips(m){
   const c = [], chip = (k, glyph, text, label) => c.push(`<span class="chip k-${k}" title="${label}">${g16(glyph, "", text ? "" : label)}${text}</span>`);
   chip({opened: m.draft ? "dim" : "g", merged: "p"}[m.state] || "dim", G.mr, esc(m.ref || ""), `${m.draft ? "Draft " : ""}${esc(m.state || "")}: ${esc(m.title || "")}`);
@@ -1433,7 +1435,7 @@ function renderSide(){
     const r = el("div", "ws" + (ws === curWs ? " on" : "") + (w?.main ? " main" : "")); r.setAttribute("role", "treeitem"); r.dataset.k = "w" + ws; r.setAttribute("aria-selected", ws === curWs);
     const bd = w && badge(w), l1 = el("span", "l1");
     if (!w?.ade) r.title = !ws || ws[0] === "@" ? `Shells on ${wsName(ws)}` : ws;  // a workspace row has its card instead (a tooltip would cover it)
-    l1.append(dotEl(w?.agent));
+    l1.append(dotEl(bd && AGENT_G[w.agent]?.[0] === bd[2] ? "" : w?.agent));  // the pill already says it: status once (§10.12)
     const n = el("span", "wn"); n.textContent = wsName(ws); l1.append(n);
     if (!bd && w?.state === "quiet" && w.why) { const y = el("span", "wy"); y.textContent = w.why.replace(/^waiting on /, ""); l1.append(y) }
     if (bd) { l1.insertAdjacentHTML("beforeend", pillHTML(bd)); l1.lastChild.title = w.why || bd[0] }
@@ -1503,7 +1505,7 @@ function renderSide(){
     const b = el("div", `box s-${sk}` + (isShut("§" + sk) ? " shut" : "")); b.setAttribute("role", "group"); b.append(...rows); out.push(b);
   }
   if (treesIn && out.length === 1 && !visTrees().length) {
-    const e = el("div", "nows", ico("folder", 20) + "<b>No workspaces yet</b><p>Workspaces you start appear here.</p>"), b = Object.assign(el("button", "", "New workspace…"), {type: "button"});
+    const e = el("div", "nows", "No workspaces yet"), b = Object.assign(el("button", "", "New workspace…"), {type: "button"});
     b.onclick = newWsDialog; e.append(b); out.push(e);
   }
   const back = $("tree").contains(document.activeElement);  // a re-render keeps the keyboard where it was
@@ -1558,7 +1560,7 @@ if (q.get("side") === "1") { document.body.classList.remove("noside"); post({cmd
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
 const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});
 // Refresh: busy (after 200ms, for 400ms at least: DESIGN.md §7 spinners) until the trees come back, 15s at most
-const refreshB = iconBtn("ib", I.refresh(14), "Refresh workspaces", () => { post({cmd: "trees"}); refreshing(true) });
+const refreshB = iconBtn("ib", I.refresh(16), "Refresh workspaces", () => { post({cmd: "trees"}); refreshing(true) });
 let refT = 0, refAt = 0;
 function refreshing(on){
   clearTimeout(refT);
@@ -1567,7 +1569,7 @@ function refreshing(on){
   refT = setTimeout(() => refreshB.removeAttribute("aria-busy"), Math.max(0, 400 - (Date.now() - refAt)));
 }
 waitB.onclick = () => { const p = [...panes.values()].find(p => p.bell && isAgent(p)); if (p) focusPane(p) };
-$("shead").append(waitB, iconBtn("ib acc", I.plus(14), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.edit(14), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(14), "Customize this window's look…", lookDialog, "Customize look"),
+$("shead").append(waitB, iconBtn("ib acc", I.plus(16), "New workspace…", newWsDialog, "New workspace"), iconBtn("ib", I.edit(16), "Edit projects…", editProjects, "Edit projects"), iconBtn("ib", I.brush(16), "Customize this window's look…", lookDialog, "Customize look"),
   refreshB);
 const setTitle = () => { const t = $("shead").querySelector(".ttl");
   const only = activeOnly();
@@ -1922,7 +1924,7 @@ function palAll(){
     ...[...tabs].sort((a, b) => b.used - a.used).map(x => { const n = strip.indexOf(x);
       return {kind: "tab", group: "tab", main: shown(tabName(x)), sub: wsName(x.ws), icon: paneIcon(x.focus, 15), key: n >= 0 && n < 9 ? "⌘" + (n + 1) : "", ws: x.ws, tab: x, w: wsInfo(x.ws), go: () => show(x)} }),
     ...ws.filter(x => x.group === "ws"),
-    ...homes().map(h => ({kind: "host", group: "host", main: wsName(h), sub: hostOf(h) === "local" ? "this Mac" : "host", icon: I.host(15), ws: h, go: () => openWs(h)}))];
+    ...homes().map(h => ({kind: "host", group: "host", main: wsName(h), sub: hostOf(h) === "local" ? "this Mac" : "", icon: I.host(16), ws: h, go: () => openWs(h)}))];
 }
 function palActs(){
   const up = ico("arrow-up", 16), gear = ico("settings", 16), side = document.body.classList.contains("noside");
@@ -1973,7 +1975,7 @@ const palMoves = it => { const m = it.w?.mr, ci = it.w?.moves?.find(x => x.kind 
 const palRun = fn => { palette(false); fn() };
 const palSplit = it => { const had = it.tab || wsTabs(it.ws).length; it.go(); if (had && cur) split(cur.focus) };  // ⌥↵: there, then a shell beside it (a pane lives in its tab's workspace)
 function palDraw(){
-  const out = [], pill = it => it.pill ? pillHTML(it.pill, "pl") : "";
+  const out = [], pill = it => it.pill && (it.top || it.group !== "needs") ? pillHTML(it.pill, "pl") : "";  // under "Needs you" the header and the glyph already say it
   let last = null; const cnt = {}; pal.items.forEach(x => { if (!x.top) cnt[x.group] = (cnt[x.group] || 0) + 1 });
   pal.items.forEach((it, i) => {
     const on = i === pal.sel, g = pal.act ? it.where : it.group, name = `<span class="m">${mark(it.main, it.hit || [])}</span>`;
@@ -1982,7 +1984,7 @@ function palDraw(){
     last = it.top ? null : g;
     const sub = `<span class="sub">${esc(it.via || (it.top ? [{tab: "terminal", ws: "workspace", host: "host", act: "action"}[it.kind], it.sub].filter(Boolean).join(" · ") : it.sub))}</span>`;
     const r = it.top ? el("div", "hit" + (on ? " sel" : ""), `<div class="l"><span class="ic">${it.icon}</span>${name}${sub}${pill(it)}</div><div class="bt"></div>`)
-      : el("div", `r r-${it.kind}${on ? " sel" : ""}`, `<span class="ic">${it.icon}</span>${name}${sub}${pill(it)}${it.side ? `<span class="sd">${esc(it.side)}</span>` : ""}${on ? kbd("↵", "amb") : kbd(it.key)}`);  // r-/g- prefixes: bare .ws/.tab/.box are the sidebar's and tab strip's classes
+      : el("div", `r r-${it.kind}${on ? " sel" : ""}`, `<span class="ic">${it.icon}</span>${name}${sub}${pill(it)}${it.side ? `<span class="sd">${esc(it.side)}</span>` : ""}${kbd(it.key)}`);  // r-/g- prefixes: bare .ws/.tab/.box are the sidebar's and tab strip's classes
     if (it.top) r.querySelector(".bt").append(...palMoves(it).map(([label, key, fn, pri]) => {
       const b = el("button", pri ? "pri" : "", `${esc(label)} <span>${key}</span>`); b.type = "button"; b.tabIndex = -1;
       b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.stopPropagation(); palRun(fn) }; return b }));
@@ -2021,21 +2023,20 @@ function palPv(it){
     const ts = wsTabs(it.ws).sort((a, b) => b.used - a.used), sets = [...new Set(ts.map(x => x.set))], jobs = (w?.moves || []).flatMap(x => x.jobs || []);
     const home = it.kind === "host", hh = hostOf(it.ws);
     if (it.tab) f("Workspace", wsName(it.ws));
-    if (w) { f("Project", projOf(w)?.name || w.project); f("Branch", w.branch); AGENT[w.agent] && f("Agent", AGENT[w.agent][1].slice(6));
+    if (w) { if (it.tab) { f("Project", projOf(w)?.name || w.project); f("Branch", w.branch) }  // a workspace's row already says both
       if (m) { f("MR", `${m.ref} · ${m.draft ? "draft" : m.state}`); f("Title", m.title); m.state === "opened" && CI[m.pipeline] && f("CI", CI[m.pipeline][2] + (jobs.length ? ": " + jobs.join(", ") : ""), "k-" + CI[m.pipeline][0]) } }
     if (home) { f("Workspaces", String(visTrees().filter(x => hostOf(x.path) === hh).length)); f("Tabs", `${tabs.filter(x => hostOf(x.ws) === hh).length} open`); hh === "local" && f("Rename", "> Rename this Mac") }
     else f("Host", hh === "local" ? LOCALNAME : hh);
     if (home) ;
     else if (it.tab) { const st = setTabs(it.tab); f("Tabs", `set ${sets.indexOf(it.tab.set) + 1} · tab ${st.indexOf(it.tab) + 1} of ${st.length}`) }
-    else f("Tabs", ts.length ? `${sets.length} set${sets.length > 1 ? "s" : ""} · ${ts.length} tab${ts.length > 1 ? "s" : ""}` : "none open");
+    else if (ts.length) f("Tabs", `${sets.length} set${sets.length > 1 ? "s" : ""} · ${ts.length} tab${ts.length > 1 ? "s" : ""}`);
     const src = it.tab || ts[0];
     if (src) { const b = src.focus.t.buffer.active, l = []; for (let y = Math.max(0, b.length - 80); y < b.length; y++) { const s = b.getLine(y)?.translateToString(true); if (s?.trim()) l.push(s) } text = l.slice(-12).join("\n") }
     if (w?.agent === "waiting") tt = "Asking you";
     else if (!text) [tt, prose] = w?.why ? ["Latest", w.why] : w?.goal ? ["Goal", w.goal] : home ? ["Here", `↵ opens a shell ${hh === "local" ? "here" : "on " + hh}.\n⌘↵ opens it as its own set.`] : ["", ""];  // prose, not a terminal box
   }
-  const pl = it.pill || (w && badge(w));
-  pv.innerHTML = `<div><div class="k">${it.kind === "act" ? "Action · " + esc(it.where.toLowerCase()) : {tab: "Terminal", ws: "Workspace", host: hostOf(it.ws) === "local" ? "Host · this Mac" : "Host · ssh"}[it.kind]}</div><h3>${esc(it.main)}</h3></div>`
-    + (pl ? pillHTML(pl, "pl") : "") + (rows.length ? `<dl>${rows.join("")}</dl>` : "") + body
+  pv.innerHTML = `<div><div class="k">${it.kind === "act" ? "Action · " + esc(it.where.toLowerCase()) : {tab: "Terminal", ws: "Workspace", host: hostOf(it.ws) === "local" ? "Host · this Mac" : "Host · ssh"}[it.kind]}</div></div>`
+    + (rows.length ? `<dl>${rows.join("")}</dl>` : "") + body
     + (text || prose ? `<div class="tl"><div class="k">${tt}</div>${text ? "<pre></pre>" : "<p></p>"}</div>` : "");
   if (text || prose) pv.querySelector(".tl pre, .tl p").textContent = text || prose;
 }
@@ -2226,7 +2227,7 @@ function newWsAsk(o){
 }
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
-  if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
+  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
   const sel = fld("Repo", el("select"), two);
