@@ -1058,8 +1058,8 @@ def tree_goal(path, goal):
     call, w, twins = tree(path, every=True)
     goal = " ".join(goal.split())[:500]
     call("worktree", "set", "--worktree", f"id:{w.get('worktreeId') or w['id']}", "--comment", goal)
-    if native_in_use() and call is not ade_call("native") and any(map(greenlight.is_local, twins)):  # an Orca-listed
-        ade_common.set_goal(path, goal)  # row here: the native scan reads goals.json (only another host's isn't ours)
+    if native_in_use() and call is not ade_call("native") and greenlight.is_local(local_twin(w, twins)):  # this machine's
+        ade_common.set_goal(path, goal)  # checkout of the same project: the native scan reads goals.json
     return {"ok": True}
 
 

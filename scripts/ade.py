@@ -50,14 +50,6 @@ def _config_raw_ade():
     return cfg.get("ade") if isinstance(cfg, dict) else None
 
 
-def _config_ade():
-    try:
-        v = json.loads((_home() / "config.json").read_text()).get("ade")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return v if isinstance(v, str) else None
-
-
 def canonical(n):
     """A backend name as written (any case, an alias) → its name in NAMES, else None."""
     n = (n or "").strip().lower()
@@ -66,17 +58,29 @@ def canonical(n):
 
 
 def name():
-    """The backend in use. An unknown GREENLIGHT_ADE is an error (it names a backend that isn't there), an unknown
-    config value falls through to the default."""
+    """The backend in use. An unknown GREENLIGHT_ADE is an error (it names a backend that isn't there); an unknown
+    config value is left alone and answered from the install's history (Orca if it ran before, else the default)."""
     env = os.environ.get("GREENLIGHT_ADE")
     if env:
         if not (n := canonical(env)):
             raise RuntimeError(f"GREENLIGHT_ADE={env!r}: not one of {', '.join(NAMES)}")
         return n
     raw = _config_raw_ade()
-    if raw not in (None, ""):  # set: a backend, or a typo left for the user to fix (diag doctor shows it), answered stably
-        return canonical(raw if isinstance(raw, str) else None) or DEFAULT
+    if raw not in (None, ""):  # set: a backend, or a typo left for the user to fix (diag doctor flags it, ade_config)
+        return canonical(raw if isinstance(raw, str) else None) or ("orca" if ran_before() else DEFAULT)
     return settle()
+
+
+def ran_before():
+    """This install already ran greenlight (on Orca, the old default): what only a past scan or run leaves. Not me.json
+    (importing greenlight writes it), state/ (update.py), auto/ (the timer's first tick) or diag/."""
+    return any((_home() / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
+
+
+def config_ok():
+    """False when config.json sets an "ade" that names no backend (doctor says so)."""
+    raw = _config_raw_ade()
+    return raw in (None, "") or bool(canonical(raw if isinstance(raw, str) else None))
 
 
 def settle():
@@ -84,10 +88,7 @@ def settle():
     flips later. A new install gets DEFAULT (native). One that already ran greenlight (a scan's last.json, log.jsonl,
     decisions.jsonl or history/) ran on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
     home = _home()
-    # what only a past scan or run leaves: not me.json (importing greenlight writes it), state/ (update.py), auto/ (the
-    # timer's first tick) or diag/: a brand-new install has those before this is first asked
-    ran = any((home / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
-    n = "orca" if ran else DEFAULT
+    n = "orca" if ran_before() else DEFAULT
     f = home / "config.json"
     why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
     try:

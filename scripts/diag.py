@@ -460,6 +460,8 @@ def doctor(quick=False):
         n = ade.name()
         add("ade", n not in ade.LEGACY, state="deprecated" if n in ade.LEGACY else n,
             imported=(home() / "imported.json").exists() if n == "native" else None)
+        if not ade.config_ok():  # config.json's "ade" names no backend: ignored, the user's to fix
+            add("ade_config", False, state="invalid")
         if n == "native":  # its agents run in tmux, its workspaces are git's
             add("tmux", bool(shutil.which("tmux")), state=None if shutil.which("tmux") else "missing")
             add("git", bool(shutil.which("git")), state=None if shutil.which("git") else "missing")
