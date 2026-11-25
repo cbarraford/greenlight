@@ -147,3 +147,6 @@ def test_the_page_and_the_app_agree_on_the_run_mark():
     page = re.search(r'const RUN_MARK = "(.*?)";', (ROOT / "app/terminal.html").read_text()).group(1)
     printed = swift.replace("\\\\", "\\").replace("\\033", "\x1b").replace("\\007", "\x07")  # printf's escapes
     assert printed == page.replace("\\x1b", "\x1b").replace("\\x07", "\x07")
+    src = (ROOT / "app/Sources/App.swift").read_text()
+    saved, mark, direct = src.find('>| \\"$f\\"'), src.find("printf '\\(App.runMark)'"), src.find('[ -n \\"$f\\" ] ||')
+    assert 0 < saved < mark < direct, "the mark after the brief is saved, before this shell would run it"
