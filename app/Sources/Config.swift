@@ -329,6 +329,7 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     for (k, v) in (secondary?["panes"] as? [String: Any]) ?? [:] { panes[k] = v }
     var out: [String: Any] = ["trees": merged, "panes": panes, "repoHosts": hosts]
     out["usage"] = usageOf(primary, secondary)
+    for k in ["ts", "scanned", "scan_error"] { out[k] = primary?[k] ?? secondary?[k] }  // the Basement footer's scan facts: greenlight's host's, else the Mac's
     return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on

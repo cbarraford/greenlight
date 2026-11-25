@@ -1270,10 +1270,11 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let mergedSnapTrees = (mergedSnap?["trees"] as? [[String: Any]]) ?? []
     let mergedTrees = mergeTreesPayload(
         ["trees": [["path": "/srv/a", "project": "greenlight", "nativeHost": true]], "panes": ["mc-srv": ["state": "done"]],
-         "repoHosts": ["greenlight": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""]]],
+         "repoHosts": ["greenlight": ["mode": "auto", "target": "server", "needs_mac": false, "reason": ""]], "ts": 200, "scanned": 190],
         ["trees": [["path": "/srv/a", "project": "greenlight", "nativeHost": false],
                    ["path": "/mac/a", "project": "greenlight", "nativeHost": true]], "panes": ["mc-mac": ["state": "working"]],
-         "repoHosts": ["greenlight": ["mode": "server", "target": "server", "needs_mac": true, "reason": "macOS/iOS app"]]],
+         "repoHosts": ["greenlight": ["mode": "server", "target": "server", "needs_mac": true, "reason": "macOS/iOS app"]],
+         "ts": 210, "scanned": 150, "scan_error": ["msg": "Orca unreachable", "fix": "", "ts": 205]],
         primaryHost: "devbox", secondaryHost: "local"
     )
     let combinedHost = parseRepoHosts(mergedTrees?["repoHosts"])["greenlight"]
@@ -1318,6 +1319,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && mergedPucks.first { $0["name"] as? String == "mac-1" }?["_runHost"] as? String == "local"
           && mergedPucks.first { $0["name"] as? String == "srv-1" }?["_runHost"] as? String == "devbox"
           && mergedTreeList.count == 2
+          && mergedTrees?["scanned"] as? Int == 190 && mergedTrees?["ts"] as? Int == 200  // the Basement footer's scan facts: greenlight's host's first
+          && (mergedTrees?["scan_error"] as? [String: Any])?["msg"] as? String == "Orca unreachable"  // else the Mac's
           && mergedTreeList.first { $0["path"] as? String == "/srv/a" }?["_runHost"] as? String == "devbox"
           && mergedPanes["mc-srv"] != nil && mergedPanes["mc-mac"] != nil
           && combinedHost?.mode == "auto" && combinedHost?.target == "mac" && combinedHost?.needsMac == true

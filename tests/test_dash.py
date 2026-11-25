@@ -307,6 +307,17 @@ assert dash.scan_error(100, 90) == {"msg": "GitHub rate limited", "fix": "wait a
 assert dash.scan_error(130, 90) == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 100}, "newer fast failure stays visible even when older slow scan finishes later"
 assert dash.scan_error(100, 96) is None, "older scan failing late after a newer scan succeeded is suppressed"
 assert dash.scan_error(100, None) is None, "legacy last.json without scan_started falls back to ts <= scanned"
+# the Basement footer's scan facts (dash.py trees): the last scan's time, and the newer failure riding with it
+_lastj = json.loads((dash.greenlight.STATE / "last.json").read_text())
+_sf = dash.scan_facts()
+assert _sf["scanned"] == _lastj["ts"] and abs(_sf["ts"] - time.time()) < 5 and ("scan_error" in _sf) == bool(dash.scan_error(_lastj["ts"], _lastj.get("started"))), _sf
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 2000000000, "msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻"}))
+assert dash.scan_facts()["scan_error"] == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 2000000000}
+_lj_keep = (dash.greenlight.STATE / "last.json").read_text()
+(dash.greenlight.STATE / "last.json").write_text("{torn")
+assert dash.scan_facts()["scanned"] == 0 and dash.scan_facts()["scan_error"]["ts"] == 2000000000  # no scan on record: the failure still shows
+(dash.greenlight.STATE / "last.json").write_text(_lj_keep)
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 100, "started": 95, "msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻"}))
 # snapshot() carries scan_error when newer than last.json, and even when last.json is absent (first-scan failure)
 (dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 2000000000, "started": 1999999990, "msg": "GitLab login expired", "fix": "run glab auth login --hostname gitlab.com, then ↻"}))
 with mock.patch.object(dash, "live_agents", return_value={}):

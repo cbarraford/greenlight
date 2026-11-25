@@ -20,7 +20,7 @@ const TREES = {trees: [
    state: "done", mr: {ref: "!40", state: "merged", pipeline: "failed", threads: 3}},
   {ade: "cmux", project: "octo/greenlight", name: "review", path: "/w/review", branch: "review", main: false, agent: "none", state: "quiet", why: "waiting on bob"}]};
 
-async function boot(browser, saved = null, query = "", trees = TREES){
+async function boot(browser, saved = null, query = "", trees = TREES){  // window.__T: the trees it booted with
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await page.addInitScript(() => {
     window.__posts = [];
@@ -30,7 +30,7 @@ async function boot(browser, saved = null, query = "", trees = TREES){
   await page.goto(PAGE + query);
   await page.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
   await page.evaluate(s => term.restore(s), saved);
-  await page.evaluate(t => term.workspaces(t), trees);
+  await page.evaluate(t => { window.__T = t; term.workspaces(t) }, trees);
   if (await page.evaluate(() => document.body.classList.contains("noside"))) await page.evaluate(() => toggleSide());  // it starts hidden (the Pipe)
   return page;
 }
@@ -40,6 +40,32 @@ const lastSave = async page => { await page.waitForTimeout(650); return (await p
 
 const tests = [];
 const test = (name, fn, query) => tests.push({name, fn, query});
+
+test("footer: live, the last scan with ↻ (a click asks the app, then spins until it's done), why a scan died, the window's workspaces by state; not in the Pipe", async page => {
+  const now = Math.floor(Date.now() / 1000);
+  page = await boot(page.context().browser(), null, "", {...TREES, ts: now, scanned: now - 3 * 60});
+  const f = () => page.textContent("#bfoot");
+  assert.match(await f(), /^Live\s*Scanned 3m ago/);
+  assert.match(await f(), /1 needs you.*1 waiting on others.*1 done/, await f());  // the trees' states; the main checkouts have none
+  assert.equal(await page.$$eval("#bfoot .fst.ask", e => e.length), 1, "only Needs you is a count that asks for you");
+  await page.click("#bfoot .rescan");
+  assert.equal((await posts(page, "rescan")).length, 1);
+  assert.match(await f(), /Refreshing…/); assert.ok(await page.$eval("#bfoot .rescan", b => b.disabled && b.classList.contains("on")), "one scan at a time");
+  await page.evaluate(() => term.rescanned(0));
+  assert.match(await f(), /Scanned 3m ago/); assert.equal(await page.$eval("#bfoot .rescan", b => b.disabled), false);
+  await page.evaluate(n => term.workspaces({...window.__T, ts: n, scanned: n - 3 * 3600, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: n - 60}}), now);
+  assert.match(await f(), /Scanned 3h ago\s*Scan failed: GitLab login expired · run glab auth login, then ↻/);
+  assert.equal(await page.$eval("#bfoot .scan", e => e.className), "scan bad", "red past 2h");
+  await page.click("#bfoot .rescan"); await page.evaluate(() => term.rescanned(255));  // ssh itself failed: no scan_error.json to say so
+  assert.match(await f(), /Scan failed: host unreachable/);
+  await page.setViewportSize({width: 560, height: 800});  // narrow: short words, then only the counts that need you
+  await page.waitForTimeout(100);  // the resize handler refits it
+  assert.ok(await page.$eval("#bfoot", e => e.scrollWidth <= e.clientWidth), "never past its width");
+  assert.equal((await page.innerText("#bfoot .fst.ask")).replace(/\s+/g, " "), "1 need you", "the count that needs you stays, in its short words");
+  await page.evaluate(() => toggleSide()); await page.waitForTimeout(400);
+  assert.equal(await page.$eval("#bfoot", e => getComputedStyle(e).display), "none", "the Pipe has no footer");
+  assert.deepEqual(page._errs, []);
+});
 
 test("⌘W, ⌘Q, ⌘M… reach the app's menu: the terminal doesn't swallow them", async page => {
   page = await boot(page.context().browser()); await page.evaluate(() => newTab()); await page.waitForTimeout(200);

@@ -929,7 +929,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         greenlight.log(.greenlight, "Greenlight", .action, "rescanning every workspace")
         ssh("\(py)/greenlight.py scan >/dev/null", onExit: { [weak self] code in
             self?.greenlight.acted("Greenlight", "rescan", code, "", tell: false)  // the board, not a workspace: nothing for Chief
-            DispatchQueue.main.async { self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))") }
+            DispatchQueue.main.async {
+                self?.rescanning = false; self?.broadcast("window.mc && mc.rescanned(\(code))")
+                self?.termWebs.forEach { $0.callJS("window.term && term.rescanned", [code]) }; self?.pushTrees()  // the Basement's footer: its ↻ stops, the new scan time follows
+            }
         })
         if anyMacNeeded && !uitest && !selftest {
             localScanned = true
@@ -2265,6 +2268,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let n = c.split(whereSeparator: { !"0123456789.".contains($0) }).compactMap { Double($0) }
             if n.count == 3 || (n.count == 4 && n[3] >= 0.99) { web?.window?.backgroundColor = NSColor(srgbRed: n[0] / k, green: n[1] / k, blue: n[2] / k, alpha: 1) }
         case "trees": pushTrees()
+        case "rescan": rescan()  // the Basement footer's ↻, as Greenlight Center's
         case "turn":  // a Claude pane's spinner stayed gone: dash.py turn reads its screen (greenlight's agent_state), answered with term.turn
             guard let session, let ws = b["ws"] as? String, runsScripts(ws), let at = paneTarget(ws) else { return }  // @host shells: no scripts there; @local: this Mac's own
             var out = ""
@@ -2597,7 +2601,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The dashboard pane (left of the chat) on screen, less the page's context rail (--dock-w 64) and footer (--foot-h 32)
     /// so the orb never covers them, and a small margin.
     var orbArea: NSRect {
-        if !upstairs { return termWindow.convertToScreen(termWindow.contentLayoutRect).insetBy(dx: 8, dy: 8) }
+        if !upstairs {  // the terminal window, less the Basement's footer (28, while the sidebar shows, which is when the orb does)
+            let r = termWindow.convertToScreen(termWindow.contentLayoutRect)
+            return NSRect(x: r.minX, y: r.minY + 28, width: r.width, height: r.height - 28).insetBy(dx: 8, dy: 8)
+        }
         let d = split.arrangedSubviews[0], r = window.convertToScreen(d.convert(d.bounds, to: nil))
         return NSRect(x: r.minX, y: r.minY + 32, width: r.width - 64, height: r.height - 32).insetBy(dx: 8, dy: 8)
     }

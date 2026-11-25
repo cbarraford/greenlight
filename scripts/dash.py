@@ -785,6 +785,18 @@ def usage_now(since=0):
         return []
 
 
+def scan_facts():
+    """The Basement footer's scan facts, as the snapshot gives Greenlight Center: now (for the clock skew), when greenlight
+    last scanned, and why its newest scan died when that's newer."""
+    try:
+        last = json.loads((greenlight.STATE / "last.json").read_text())
+        scanned, started = int(last.get("ts") or 0), last.get("started")
+    except (OSError, ValueError, AttributeError, TypeError):
+        scanned, started = 0, None
+    err = scan_error(scanned, started)
+    return {"ts": int(time.time()), "scanned": scanned, **({"scan_error": err} if err else {})}
+
+
 ADES = None  # a fixed list in place of ades() (tests)
 
 
@@ -2600,7 +2612,7 @@ def main():
     elif a[:1] == ["trees"]:
         ts = trees()
         print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
-                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now()}))
+                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now(), **scan_facts()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
             out = turn(a[1])

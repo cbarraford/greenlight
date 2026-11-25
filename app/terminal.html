@@ -142,8 +142,9 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 /* ---- panes (§10.12): each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal.
    Split: every pane gets a 24-tall header; the focused one is framed by a 1px accent ring, the rest dim ---- */
 #stage{position:relative;flex:1;min-height:0;background:var(--term-bg)}
-/* the Basement's footer (not the Pipe's): the usage meters, as Greenlight Center's footer has them (DESIGN.md §10.11) */
-#bfoot{box-sizing:border-box;flex-shrink:0;display:flex;align-items:center;gap:var(--ds-space-12);height:var(--ds-layout-footer-height);padding:0 var(--ds-space-12);background:var(--ds-bg-chrome);border-top:1px solid var(--ds-border-subtle);overflow:hidden;white-space:nowrap} #bfoot[hidden],body.noside #bfoot{display:none}
+/* the Basement's footer (§10.11), as Greenlight Center's: live, greenlight's last scan (↻ runs one) and why it failed, this window's workspaces by state, after each agent's plan usage (#203). Not in the Pipe */
+#bfoot{box-sizing:border-box;flex-shrink:0;display:flex;align-items:center;gap:var(--ds-space-12);height:var(--ds-layout-footer-height);padding:0 var(--ds-space-12);background:var(--ds-bg-chrome);border-top:1px solid var(--ds-border-subtle);
+  color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;-webkit-user-select:none;user-select:none} body.noside:not(.sliding) #bfoot{display:none}
 /* usage-meters:start */
 /* usage meters (issue 193): one per configured agent at the footer's left, and their popover (DESIGN.md §10.11, §10.13) */
 .ums{display:inline-flex;align-items:center;gap:var(--ds-space-8);flex-shrink:0}
@@ -181,6 +182,13 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .urow.c .uw{grid-column:3 / span 3;text-align:right;color:var(--ds-fg-faint)} .urow.c[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)}
 .umpop .ufoot{color:var(--ds-fg-faint);font:var(--ds-type-caption)}
 /* usage-meters:end */
+#bfoot .live{display:inline-flex;align-items:center;gap:6px} #bfoot .live::before{content:"";width:6px;height:6px;border-radius:var(--r-full);background:var(--ds-accent-solid)}
+#bfoot .live.off::before{background:var(--ds-status-queued-solid)} #bfoot .live.connecting::before{background:var(--ds-status-working-solid)}
+#bfoot .rescan{display:flex;margin-left:calc(-1 * var(--ds-space-8));padding:2px;border:0;border-radius:var(--r-xs);background:none;color:inherit;cursor:pointer} #bfoot .rescan:hover:not(:disabled){background:var(--ds-element-hover);color:var(--fg)}
+#bfoot .rescan:disabled{cursor:default} #bfoot .rescan.on svg{animation:spin .9s linear infinite} #bfoot .scan.warn{color:var(--o)} #bfoot .scan.bad,#bfoot .scanerr{color:var(--r)}
+#bfoot .scanerr{flex-shrink:0} #bfoot .gap{flex:1} #bfoot .fst{display:inline-flex;align-items:center;gap:var(--ds-space-4);white-space:pre} #bfoot .fst svg{color:var(--tn)}
+#bfoot .fst .sh,#bfoot.tight .fst .lbl{display:none} #bfoot.tight .fst .sh{display:inline} #bfoot.tighter .fst:not(.ask),#bfoot.tightest .scan,#bfoot.tightest .scanerr .scanfix{display:none}
+#bfoot.tightest .scanerr{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .root{position:absolute;inset:0;display:flex} .root[hidden]{display:none}
 .root.zoom .pane:not(.on),.root.zoom .dv,.root.zoom .split:not(:has(.pane.on)){display:none}  /* ⌘⇧↵: the focused pane fills the tab */
 #find{position:absolute;top:8px;right:16px;z-index:6;display:flex;align-items:center;gap:2px;padding:4px;border-radius:var(--r-md);background:var(--raised);color:var(--fg);box-shadow:var(--e2);font:400 var(--fs-lbl)/16px var(--font)}
@@ -492,7 +500,7 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 <button id="jump" type="button"><span>Jump to…</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
 <div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
-<div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div><div id="bfoot" role="contentinfo" aria-label="Plan usage" hidden></div></div>
+<div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div><div id="bfoot" role="contentinfo" aria-label="Status"></div></div>
 <div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span class="tx"><b></b><small></small></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
 <div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
 <script>
@@ -500,8 +508,8 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 // The T orb's terminal: Ghostty's VT core (ghostty-web, wasm) drawing login shells the app runs on ptys, one per pane; tabs hold split panes.
 // The sidebar groups tabs by workspace (a worktree path; "" is Local, your home): the strip shows the current workspace's tabs.
 // Each pane is a tmux session the app keeps alive across restarts; the layout is saved through the app (terminals.json).
-// app → page: term.restore(state), term.workspaces({trees}), term.turn(dash.py turn answer), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
-// page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), turn (a pane's session: how its agent's turn ended), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
+// app → page: term.restore(state), term.workspaces({trees, ts, scanned, scan_error}), term.rescanned(exit code), term.turn(dash.py turn answer), term.tree(dash.py tree info|rm|goal|cfg answer), term.feed(id, b64), term.exited(id), term.closeTab(), term.named(tab, name), term.palette(open), term.ws(path), term.projects(list), term.closeAll() → [{session, ws}], term.slide(seconds), term.localName(name)
+// page → app: open/in/size/close (by pane id; open carries the tmux session and workspace), turn (a pane's session: how its agent's turn ended), name (a tab's recent output → a short name), save, trees, tree (op, path; cfg writes a repo's .greenlight.json), hide, rescan (a greenlight scan, the footer's ↻), projects (save the list), window (open one: {only: project ids | null}), only (this window's projects, changed in place), look (prompt → term.looked(claude's reply)), band (the strip's color for the title band), side (the sidebar opened or closed: the app shows the orb up to Greenlight Center only while it's open)
 const q = new URLSearchParams(location.search), post = m => webkit.messageHandlers.term.postMessage(m);
 // look: the app's theme with your Ghostty config's theme + colors + font over it (ghostty-web ITheme keys, plus font/size)
 const look = JSON.parse(q.get("look") || "{}"), {font, size, mode: mode0, lightBg: _lb, lightFg: _lf, optAlt, ...colors} = look, root = document.documentElement.style;
@@ -960,7 +968,7 @@ function render(){
     p.head.append(iconBtn("ib", I.splitR(16), "Split right  ⌘D", () => split(p, false), "Split right"), iconBtn("ib", I.splitD(16), "Split down  ⌘⇧D", () => split(p, true), "Split down"), iconBtn("ib", I.x(16), "Close pane", () => closePane(p)));
   });
   tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
-  renderSide(); save(); badgeSync();
+  renderSide(); foot(); save(); badgeSync();
   $("tabs").replaceChildren(...setTabs(cur).map((x, i) => {
     const b = el("div", "tab" + (x === cur ? " on" : "")), name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell);
     b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x === cur); b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
@@ -1725,19 +1733,12 @@ addEventListener("keydown", e => {
   (umFind(at) || document.querySelector(".um"))?.focus();
 }, true);
 // usage-meters:end
-function basementFit(){
+function basementFit(){  // past the width: short words (and the meters' reset times), then only the counts that need you (and bare meters), then the scan age
   const f = $("bfoot");
-  f.classList.remove("tight", "tighter");
-  if (!f.hidden && f.scrollWidth > f.clientWidth) f.classList.add("tight");
-  if (!f.hidden && f.scrollWidth > f.clientWidth) f.classList.add("tighter");
+  f.classList.remove("tight", "tighter", "tightest");
+  for (const c of ["tight", "tighter", "tightest"]) if (f.scrollWidth > f.clientWidth) f.classList.add(c);
 }
-function basementFoot(list){  // the Basement's footer: shown once an agent reports, and the terminals refit to the room left
-  const f = $("bfoot"), fid = umFocusId(f), um = umMeters(list), was = f.hidden;
-  f.replaceChildren(...(um ? [um] : [])); f.hidden = !um; basementFit(); umRestoreFocus(f, fid); umPlace();
-  if (was !== f.hidden) setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 60);  // past the fit addon's 50 ms debounce
-}
-addEventListener("resize", () => { if (UM.list.length) { basementFit(); umPlace() } });
-setInterval(() => { if (!document.hidden && UM.list.length) basementFoot(UM.list) }, 30000);  // the reset countdowns
+const basementFoot = list => foot(list);  // the trees' usage: each agent's meter, at the footer's left (foot, below, draws the rest)
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
 let slide = .32, sliding, slideTimer;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut. DESIGN.md §7: drawer, 320ms
@@ -2575,6 +2576,35 @@ $("stage").addEventListener("dragover", e => { if (!e.dataTransfer?.types.includ
 $("stage").addEventListener("drop", e => { const fs = [...e.dataTransfer?.files || []]; if (!fs.length) return; e.preventDefault(); $("stage").classList.remove("drop");
   const p = e.target.closest?.(".pane")?._p || cur?.focus; if (p) fs.slice(0, 10).forEach(f => sendFile(p, f)) });
 let picked;  // Choose folder…'s answer, from the app
+// the footer: as Greenlight Center's. Live: the app refreshes the workspaces every 30 s while a window shows. Scanned: greenlight's last scan
+// (the MR, CI and "needs you" facts are only as fresh as it; amber past 45 min, red past 2 h), ↻ runs one now, and why the newest one died.
+// Right: this window's workspaces by state, the words dropped first and then the counts that don't need you as the window narrows
+const FOOT = [["needs", "o", "Needs you", "need you"], ["crashed", "r", "Crashed"], ["raised", "y", "Your move"], ["working", "b", "Working"], ["queued", "dim", "Queued"],
+  ["quiet", "p", "Waiting on others", "waiting"], ["done", "g", "Done"]];  // state, its tone, its label, the short one for a narrow window
+const scanFoot = {at: 0, scanned: 0, skew: 0, err: null, rescanning: false, rescanErr: null};  // at: when trees last came; skew: this Mac's clock less greenlight's host's
+function foot(list = UM.list){
+  const f = $("bfoot"), fid = umFocusId(f), um = umMeters(list), S = scanFoot, live = S.at && Date.now() - S.at < 90e3, now = Date.now() / 1000 - S.skew, n = {};
+  for (const w of trees) if (w.state && inView(w)) n[w.state] = (n[w.state] || 0) + 1;
+  const st = el("span", "live" + (live ? "" : S.at ? " off" : " connecting")); st.textContent = live ? "Live" : S.at ? `Last update ${ago(S.at)}` : "Connecting…";
+  const hrs = S.scanned ? (now - S.scanned) / 3600 : NaN, sc = el("span", "scan" + (hrs > 2 ? " bad" : hrs > .75 ? " warn" : ""));
+  sc.textContent = S.rescanning ? "Refreshing…" : !S.scanned ? "Not scanned yet" : `Scanned ${ago((S.scanned + S.skew) * 1000)}`;
+  sc.title = "When greenlight last checked GitLab, GitHub and your workspaces. It rescans when Greenlight opens and on the scan interval in Settings.";
+  const rb = iconBtn("rescan" + (S.rescanning ? " on" : ""), I.refresh(13), "Refresh now (~40s)", () => { S.rescanning = true; S.rescanErr = null; post({cmd: "rescan"}); foot() }, "Refresh now");
+  rb.disabled = S.rescanning;
+  const out = [st, sc, rb], se = S.err && S.rescanErr ? (S.rescanErr.ts > S.err.ts ? S.rescanErr : S.err) : S.err || S.rescanErr;  // whichever died last
+  if (se && !S.rescanning) {
+    const sa = dur((se.ts + S.skew) * 1000), when = sa === "now" ? "just now" : `${sa} ago`, e = el("span", "scanerr");
+    e.title = (S.scanned ? `The last scan stopped ${when}, so these facts are from the one before.` : `The scan stopped ${when}, so no workspaces have been scanned yet.`) + (se.fix ? `\nFix: ${se.fix}.` : "");
+    e.textContent = `Scan failed: ${se.msg || "unknown error"}`;
+    if (se.fix) { const x = el("span", "scanfix"); x.textContent = ` · ${se.fix}`; e.append(x) }
+    out.push(e);
+  }
+  f.replaceChildren(...um ? [um] : [], ...out, el("span", "gap"), ...FOOT.filter(([k]) => n[k]).map(([k, tone, label, short]) => {
+    const s = el("span", `fst k-${tone}` + (["needs", "raised", "crashed"].includes(k) ? " ask" : ""), `${g16("hex")}${n[k]}<span class="lbl"> ${label.toLowerCase()}</span><span class="sh"> ${short || label.toLowerCase()}</span>`);
+    s.title = label; return s }));
+  basementFit(); umRestoreFocus(f, fid); umPlace();
+}
+setInterval(() => { if (!document.hidden) foot() }, 5000); addEventListener("resize", () => foot());  // the ages and the meters' reset countdowns
 window.term = {
   focusInfo: () => ({...cur?.ws ? {name: wsName(cur.ws), path: cur.ws, mr: wsInfo(cur.ws)?.mr?.ref || ""} : {}, paths: activeOnly() ? trees.filter(inView).map(w => w.path) : null,
     repos: activeOnly() ? [...new Set(trees.filter(inView).map(w => w.project).filter(Boolean))] : null}),  // for Chief: the tab you're on, the window's workspaces and their repos (one made since the trees came is in them). Not `focus`: that's below, the keyboard's
@@ -2582,6 +2612,8 @@ window.term = {
   only(o){ ONLY = Array.isArray(o) && o.length ? o : null; merge(); paint(); setTitle(); render(); save() },  // L1 picked: the main window shows the same projects
   picked: d => picked?.(d),
   slide: v => { slide = +v || 0 },
+  rescanned: code => { scanFoot.rescanning = false;  // the footer's ↻ is done; the trees that follow carry the new scan time (or scan_error.json's why)
+    scanFoot.rescanErr = code === 255 ? {msg: "host unreachable", fix: "check SSH connection, then ↻", ts: Math.floor(Date.now() / 1000 - scanFoot.skew)} : null; foot() },
   localName: v => { LOCALNAME = v || "Local"; render() },
   opens: (v, cut) => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide(cut === true || !onScreen) },  // Settings → Terminal → App opens to; a cut before the window shows (cut: the app has it out of sight)
   ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
@@ -2619,7 +2651,8 @@ window.term = {
   closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; return out },
-  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false); const was = JSON.stringify(acctCfg); merge(); firstShell();
+  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);
+    Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     syncPanes(o?.panes);
