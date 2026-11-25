@@ -174,7 +174,7 @@ can't run, nothing is exported. `diag.py bundle` writes the same data to a file 
 | `scripts/ws_state.py` | per-workspace state cards (`~/.greenlight/state/<ws>.json`) carried into every dispatch and failover, and the top-K retrieval the chat uses instead of the whole board |
 | `scripts/blocking.py` | opt-in: what you're blocking under a team's GitLab review rules |
 | `scripts/harness.py` | the agent CLIs |
-| `scripts/usage.py` | each agent's plan usage (Claude, Codex, pi through its Claude or ChatGPT sign-in; OpenCode n/a) for the footer meters, read with the CLIs' own sign-ins and cached a minute |
+| `scripts/usage.py` | each agent's plan usage (Claude, Codex, pi through its Claude or ChatGPT sign-in, Antigravity and Gemini CLI through their Google sign-ins; OpenCode n/a) for the footer meters, read with the CLIs' own sign-ins and cached a minute |
 | `scripts/diag.py` | the diagnostic trail: structured, hashed events and the `summary`/`errors`/`tail` queries (see `AGENTS.md`) |
 | `scripts/update.py` | versioned backend installs for over-the-air updates: `install`, a locked `swap` with a smoke test, `rollback`, `adopt` (see `docs/UPDATES.md`) |
 | `scripts/release.py` | builds and signs releases for the `stable` and `main` channels: version, backend tarball, notes, the signed feed (see `docs/RELEASING.md`) |

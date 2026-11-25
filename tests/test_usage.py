@@ -78,14 +78,39 @@ def _answers(by_url):
     """usage._get with recorded answers by URL (an exception instance is raised), and the calls it got."""
     calls = []
 
-    def get(url, headers):
-        calls.append((url, headers))
+    def get(url, headers, body=None):
+        calls.append((url, headers, body))
         a = by_url[url]
         if isinstance(a, Exception):
             raise a
         return a
 
     return get, calls
+
+
+AGY_SUMMARY = {"groups": [{
+    "displayName": "Claude and GPT models",
+    "description": "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+    "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly", "resetTime": "2026-12-01T05:08:18Z", "remainingFraction": 0.75},
+        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1},
+    ],
+}]}
+AGY_QUOTA = {"buckets": [
+    {"resetTime": "2026-11-25T20:51:25Z", "tokenType": "WTUS", "modelId": "claude-opus-5-5-high", "remainingFraction": 1},
+    {"resetTime": "2026-11-25T20:51:25Z", "tokenType": "WTUS", "modelId": "gpt-oss-120b-medium", "remainingFraction": 1},
+    {"resetTime": "2026-11-25T18:40:40Z", "tokenType": "WTUS", "modelId": "gemini-3-flash", "remainingFraction": 0.875},
+    {"resetTime": "2026-11-25T18:40:40Z", "tokenType": "WTUS", "modelId": "gemini-4-hydrogen-sonar", "remainingFraction": 0.875},
+    {"tokenType": "WTUS", "modelId": "tab_flash_lite_preview", "remainingFraction": 1},
+]}
+GOOGLE_LCA = {"currentTier": {"id": "free-tier", "name": "Antigravity"}, "paidTier": {"id": "g1-ultra-lite-tier", "name": "Google AI Ultra"},
+              "cloudaicompanionProject": "proj-1"}
+GEMINI_QUOTA = {"buckets": [
+    {"modelId": "gemini-2.5-pro", "tokenType": "REQUESTS", "remainingFraction": 0.4, "resetTime": "2026-11-26T00:00:00Z"},
+    {"modelId": "gemini-2.5-pro_vertex", "tokenType": "REQUESTS", "remainingFraction": 0.4, "resetTime": "2026-11-26T00:00:00Z"},
+    {"modelId": "gemini-3-pro-preview", "tokenType": "REQUESTS", "remainingFraction": 0.9, "resetTime": "2026-11-26T00:00:00Z"},
+    {"modelId": "gemini-2.5-flash", "tokenType": "REQUESTS", "remainingFraction": 1, "resetTime": "2026-11-26T00:00:00Z"},
+]}
 
 
 @pytest.fixture
@@ -126,7 +151,8 @@ def test_providers_happy_near_and_failures(provider_home, monkeypatch):
 
     o = usage.fetch("opencode")
     assert o["state"] == "na" and o["plan"] == "OpenCode Go" and "no usage API" in o["note"]
-    assert usage.fetch("agy")["state"] == "na"
+    assert usage.fetch("agy")["state"] == "out" and usage.fetch("gemini")["state"] == "out"
+    assert usage.fetch("cursor")["state"] == "na"
     assert usage.fetch("pi")["state"] == "out"
 
     monkeypatch.setattr(usage, "_get", _answers({usage.CLAUDE_URL: CLAUDE_NEAR, usage.CODEX_URL: CODEX_5H})[0])
@@ -147,6 +173,114 @@ def test_providers_happy_near_and_failures(provider_home, monkeypatch):
     monkeypatch.setattr(usage, "_get", get)
     e = usage.fetch("claude")
     assert e["state"] == "failed" and "expired" in e["note"] and not calls
+
+
+def _agy_token(home, expiry="2099-01-01T00:00:00.123456789-05:00"):
+    d = home / ".gemini" / "antigravity-cli"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "antigravity-oauth-token").write_text(json.dumps(
+        {"token": {"access_token": "tok-g", "token_type": "Bearer", "refresh_token": "r", "expiry": expiry}, "auth_method": "consumer"}))
+
+
+def test_agy_summary_pools_plan_and_failures(provider_home, monkeypatch):
+    _agy_token(provider_home)
+    q, s, lca = (usage.AGY_URL + m for m in ("retrieveUserQuota", "retrieveUserQuotaSummary", "loadCodeAssist"))
+    get, calls = _answers({s: AGY_SUMMARY, q: AGY_QUOTA, lca: GOOGLE_LCA})
+    monkeypatch.setattr(usage, "_get", get)
+    a = usage.fetch("agy")
+    assert a["state"] == "ok" and a["plan"] == "Google AI Ultra" and a["src"] == "api"
+    # 5h before Week; the Claude and GPT buckets are the summary's group, not a pool of their own; the tab models are left out
+    assert [(w["label"], w["pct"]) for w in a["windows"]] == [("5h", 0.0), ("Week", 25.0), ("Gemini", 12.5)]
+    assert a["windows"][0]["resets"] is None and a["windows"][2]["resets"] == int(datetime(2026, 11, 25, 18, 40, 40, tzinfo=UTC).timestamp())
+    assert a["note"] == "5h and Week: Claude and GPT models"
+    assert all(c[2] is not None and c[1]["Authorization"] == "Bearer tok-g" and "antigravity" in c[1]["User-Agent"] for c in calls)
+
+    # the summary fails: every pool from the per-model buckets; the plan's call failing only drops the plan
+    get, _ = _answers({s: usage.Failed("x", "http"), q: AGY_QUOTA, lca: usage.Failed("x", "network")})
+    monkeypatch.setattr(usage, "_get", get)
+    a = usage.fetch("agy")
+    assert a["state"] == "ok" and "plan" not in a and "note" not in a
+    assert [(w["label"], w["pct"]) for w in a["windows"]] == [("Claude", 0.0), ("Gemini", 12.5)]
+
+    # both fail: the first failure, with its backoff
+    get, _ = _answers({s: usage.Failed("rate limited", "rate_limit", usage.RATE_WAIT), q: usage.Failed("y", "http"), lca: GOOGLE_LCA})
+    monkeypatch.setattr(usage, "_get", get)
+    f = usage.fetch("agy")
+    assert f["state"] == "failed" and f["note"] == "rate limited" and f["next"] - f["tried"] == usage.RATE_WAIT
+
+    # an expired token makes no call; a token file without one is signed out
+    _agy_token(provider_home, "2020-01-01T00:00:00Z")
+    get, calls = _answers({})
+    monkeypatch.setattr(usage, "_get", get)
+    e = usage.fetch("agy")
+    assert e["state"] == "failed" and "expired" in e["note"] and not calls
+    (provider_home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token").write_text(json.dumps({"token": {}}))
+    assert usage.fetch("agy")["state"] == "out"
+
+
+def test_gemini_cli_pools_project_and_api_key(provider_home, monkeypatch):
+    g = provider_home / ".gemini"
+    g.mkdir()
+    (g / "oauth_creds.json").write_text(json.dumps({"access_token": "tok-m", "expiry_date": int((time.time() + 3600) * 1000)}))
+    lca, q = usage.GEMINI_URL + "loadCodeAssist", usage.GEMINI_URL + "retrieveUserQuota"
+    get, calls = _answers({lca: {**GOOGLE_LCA, "paidTier": None}, q: GEMINI_QUOTA})
+    monkeypatch.setattr(usage, "_get", get)
+    m = usage.fetch("gemini")
+    assert m["state"] == "ok" and m["plan"] == "Antigravity"
+    # two Pro pools are named by their model; the _vertex twin is left out
+    assert [(w["label"], w["pct"]) for w in m["windows"]] == [("2.5-pro", 60.0), ("3-pro-prev", 10.0), ("Flash", 0.0)]
+    assert calls[-1][2] == {"project": "proj-1"} and calls[-1][1]["User-Agent"].startswith("GeminiCLI/")
+
+    get, calls = _answers({lca: {"cloudaicompanionProject": {"id": "proj-2"}}, q: {"buckets": "junk"}})
+    monkeypatch.setattr(usage, "_get", get)
+    m = usage.fetch("gemini")
+    assert m["state"] == "ok" and m["windows"] == [] and "plan" not in m and calls[-1][2] == {"project": "proj-2"}
+
+    (g / "oauth_creds.json").write_text(json.dumps({"access_token": "tok-m", "expiry_date": 1000}))
+    assert "expired" in usage.fetch("gemini")["note"]
+    (g / "settings.json").write_text(json.dumps({"security": {"auth": {"selectedType": "gemini-api-key"}}}))
+    n = usage.fetch("gemini")
+    assert n["state"] == "na" and "API key" in n["note"]
+    (g / "settings.json").write_text(json.dumps({"security": "junk"}))
+    (g / "oauth_creds.json").unlink()
+    assert usage.fetch("gemini")["state"] == "out"
+
+
+def test_google_summary_with_several_groups():
+    d = {"groups": [
+        {"displayName": "Claude and GPT models", "buckets": [{"window": "weekly", "remainingFraction": 0.5}]},
+        {"displayName": "Gemini models", "buckets": [{"window": "daily", "remainingFraction": 0.2}, {"window": "odd", "remainingFraction": 1}, "junk"]},
+        "junk",
+    ]}
+    wins, covered, note = usage.google_summary(d)
+    assert [(w["label"], w["pct"]) for w in wins] == [("Claude Week", 50.0), ("Gemini Day", 80.0), ("Gemini Limit", 0.0)]
+    assert covered == {"Claude", "GPT", "Gemini"} and note is None
+    assert usage.google_pools(AGY_QUOTA["buckets"], covered) == []
+    assert usage.google_summary({"groups": None}) == ([], set(), None)
+
+
+def test_get_posts_json_bodies(monkeypatch):
+    seen = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": 1}'
+
+    def fake_open(req, timeout):
+        seen.update(method=req.get_method(), data=req.data, ctype=req.get_header("Content-type"), ua=req.get_header("User-agent"))
+        return Resp()
+
+    monkeypatch.setattr(usage._OPENER, "open", fake_open)
+    assert usage._get(usage.AGY_URL + "retrieveUserQuota", {"User-Agent": "antigravity"}, {}) == {"ok": 1}
+    assert seen == {"method": "POST", "data": b"{}", "ctype": "application/json", "ua": "antigravity"}
+    usage._get(usage.CLAUDE_URL, {})
+    assert seen["method"] == "GET" and seen["data"] is None and seen["ctype"] is None and seen["ua"] == "greenlight-usage"
 
 
 def test_claude_keychain_fallback_even_with_other_credentials_json(provider_home, monkeypatch):
