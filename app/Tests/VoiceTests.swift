@@ -1041,14 +1041,15 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
                      pk("!4", ["pipeline": "success", "approvals": 0, "approvals_required": 1], "quiet"), pk("!5", ["state": "merged"], "done"), pk("!6", ["conflicts": true, "pipeline": "success"], "needs"),
                      pk("#7", ["draft": true], "working"), pk("!8", [:], "working"), ["name": "no-mr", "state": "quiet"],
                      pk("!9", ["pipeline": "canceled"], "working"), pk("!10", ["pipeline": "failed"], "working"), pk("!10", ["pipeline": "success"], "quiet"),
-                     pk("!11", ["pipeline": "success"], "quiet"), pk("!11", ["pipeline": "success"], "quiet")]
+                     pk("!11", ["pipeline": "success"], "quiet"), pk("!11", ["pipeline": "success"], "quiet"),
+                     pk("!13", ["pipeline": "failed"], "working"), pk("!13", [:], "working")]
         let st1 = refStatus(snap1)
         check("voice: the snapshot's MRs become status chips: failed, running, approved, approvals to go, merged, conflicts, draft, canceled; a ref two projects disagree on gets none (issue 208)",
               st1["!1"] == ["tone": "bad", "label": "CI failed"] && st1["!2"] == ["tone": "now", "label": "CI running"]
               && st1["!3"] == ["tone": "ok", "label": "Approved"] && st1["!4"] == ["tone": "ok", "label": "CI passed, 0 of 1 approvals"]
               && st1["!5"] == ["tone": "ok", "label": "Merged"] && st1["!6"] == ["tone": "bad", "label": "Conflicts"]
               && st1["#7"] == ["tone": "", "label": "Draft"] && st1["!8"] == nil && st1["!9"] == ["tone": "", "label": "CI canceled"]
-              && st1["!10"] == nil && st1["!11"] == ["tone": "ok", "label": "CI passed"] && st1.count == 9)  // !10: two projects disagree
+              && st1["!10"] == nil && st1["!11"] == ["tone": "ok", "label": "CI passed"] && st1["!13"] == nil && st1.count == 9)  // !10, !13: two projects
         var snap2 = snap1; snap2[1] = pk("!2", ["pipeline": "success"], "working"); snap2.remove(at: 0)
         let d = refPatch(st1, refStatus(snap2))
         check("voice: a snapshot change patches only what changed, and a ref that's gone is dropped (issue 208)",

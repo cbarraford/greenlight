@@ -986,7 +986,7 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
 /// short label. The tone reads as dwim.py's tables do: failed CI, conflicts or a crash are bad, CI on its way is now, merged or
 /// approved with CI passing is ok. Facts only, from the snapshot: no model call.
 func refStatus(_ pucks: [[String: Any]]) -> [String: [String: String]] {
-    var out = [String: [String: String]](), torn = Set<String>()
+    var out = [String: [String: String]](), torn = Set<String>(), quiet = Set<String>()
     for p in pucks {
         guard let mr = p["mr"] as? [String: Any], let ref = mr["ref"] as? String, !ref.isEmpty else { continue }
         let ci = mr["pipeline"] as? String ?? "", state = mr["state"] as? String ?? ""
@@ -1001,12 +1001,12 @@ func refStatus(_ pucks: [[String: Any]]) -> [String: [String: String]] {
         else if ci == "success" { chip = ("ok", need > 0 ? "CI passed, \(got) of \(need) approvals" : "CI passed") }
         else if ["canceled", "cancelled", "skipped", "manual"].contains(ci) { chip = ("", "CI " + (ci == "cancelled" ? "canceled" : ci)) }
         else if mr["draft"] as? Bool == true { chip = ("", "Draft") }
-        else { continue }  // no pipeline yet: nothing to say
+        else { quiet.insert(ref); continue }  // no pipeline yet: nothing to say (and no guess from another project's !12)
         let v = ["tone": chip.0, "label": chip.1]
         if let was = out[ref], was != v { torn.insert(ref) }  // !12 in two projects, saying different things: no chip, not a guess
         out[ref] = v
     }
-    torn.forEach { out[$0] = nil }
+    torn.union(quiet).forEach { out[$0] = nil }
     return out
 }
 /// What changed between two maps of chips: the new or different ones, and a removed ref as NSNull (its chip goes).

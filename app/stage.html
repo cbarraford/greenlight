@@ -158,7 +158,7 @@ ol.life li span{color:var(--dim)}
 .chip{display:inline-flex;align-items:baseline;gap:var(--ds-space-4);margin-left:var(--ds-space-8);font:var(--ds-type-label-sm);font-family:var(--font);
   color:var(--dim);white-space:nowrap;vertical-align:baseline;font-variant-numeric:tabular-nums;margin-right:var(--ds-space-4)}  /* with the space after it, 8 to the next word */
 .chip svg.tone{margin:0;align-self:center}  /* the label sits on the text's baseline; only the glyph is centred */
-table.grid:has(.chip){table-layout:fixed}  /* a chip that changes can't resize its column: nothing else on the card moves */
+table.grid:has(> colgroup){table-layout:fixed}  /* freeze()'s columns: a chip that comes, changes or goes moves nothing else */
 table.grid td .chip{max-width:calc(100% - var(--ds-space-12));white-space:normal;align-items:flex-start;overflow-wrap:break-word}  /* a long chip wraps inside its cell instead of bleeding into the next column */
 table.grid:has(tr > :nth-child(3)) td .chip{display:flex;margin:var(--ds-space-2) 0 0;max-width:100%}  /* dense tables stack the chip flush-left under its ref */
 table.grid td .chip svg.tone{flex:none;margin-top:1px}
@@ -368,8 +368,8 @@ function settled(md){
     else if (us.length > usClose) cut(us[us.length - 1]);
     else if (link && !/^\[[^\]]*\]\([^)]*\)/.test(link) && !/^\[[^\]]*\][^(]/.test(link)) cut(open);  // [x, [x], [x](u
   } while (l !== was);
-  if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";
-  l = l.replace(/(^|[^\w!#\/-])[!#]\d*$/, "$1");  // a ref still being written (!1 of !12) waits: no other MR's chip flashes  // "1" may be a list's number before its dot
+  if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";  // "1" may be a list's number before its dot
+  l = l.replace(/(^|[^\w!#\/-])[!#]\d*$/, "$1");  // a ref still being written (!1 of !12) waits: no other MR's chip flashes
   return lines.concat(l.trimEnd() ? [l] : []).join("\n");
 }
 const bare = e => e.className.replace(/\bfresh\b/, "").trim();
@@ -523,6 +523,18 @@ function chipify(nodes, seen = new Set()){
   }
   return nodes;
 }
+// A table's columns held where they are (issue 208): before a chip is added, changed or dropped, each column keeps its share
+// of the width, so a status change moves nothing else. Not while text streams: its last table is still growing.
+function freeze(s){
+  if (s.classList.contains("streaming")) return;
+  s.querySelectorAll("table.grid").forEach(t => {
+    if (t.querySelector(":scope > colgroup")) return;
+    const w = t.getBoundingClientRect().width, ths = [...(t.tHead?.rows[0]?.cells || [])];
+    if (!w || !ths.length) return;
+    const cg = $("colgroup"); ths.forEach(th => { const c = $("col"); c.style.width = (th.getBoundingClientRect().width / w * 100).toFixed(3) + "%"; cg.append(c); });
+    t.prepend(cg);  // the table's own attributes stay as drawn: morph() still knows it
+  });
+}
 // A card brought up to date in place (issue 208): the same element keeps its place and only what differs changes, so a card
 // that comes again with the same kind and title doesn't redraw or move.
 const sameNode = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || (a.tagName === b.tagName && a.attributes.length === b.attributes.length
@@ -567,7 +579,9 @@ window.stage = {
     o = o && typeof o === "object" ? o : {};
     const key = str(o.kind) + "\u0000" + str(o.title), s = document.getElementById("s"), nodes = chipify(specNodes(o));
     if (s.dataset.card === key && !s.classList.contains("skeleton")) {
+      freeze(s); const cg = [...s.querySelectorAll("table.grid > colgroup")].map(c => [c.parentElement, c]); cg.forEach(([, c]) => c.remove());
       morph(s, nodes); s.classList.remove("held");
+      cg.forEach(([t, c]) => { if (t.isConnected) t.prepend(c); });  // the new rows, the same columns
       if (document.body.dataset.fx === "think") fx.reveal(s);  // it was held while Chief thought: the field lands on it as on any card
       return;
     }
@@ -641,11 +655,11 @@ window.stage = {
   // A chip on the card that's up changes in place: no redraw, and nothing else on the card moves.
   refs(map){
     REFS = map && typeof map === "object" ? map : {};
-    const s = document.getElementById("s"); s.querySelectorAll(".chip").forEach(c => c.remove()); s.normalize(); chipify([...s.children]);
+    const s = document.getElementById("s"); freeze(s); s.querySelectorAll(".chip").forEach(c => c.remove()); s.normalize(); chipify([...s.children]);
   },
   patch(changed){
     if (!changed || typeof changed !== "object") return;
-    const s = document.getElementById("s");
+    const s = document.getElementById("s"); freeze(s);
     for (const [ref, v] of Object.entries(changed)) {
       if (v && typeof v === "object") REFS[ref] = v; else delete REFS[ref];
       s.querySelectorAll(".chip").forEach(c => { if (c.dataset.ref === ref) Object.hasOwn(REFS, ref) ? c.replaceWith(chipFor(ref, REFS[ref])) : c.remove(); });
