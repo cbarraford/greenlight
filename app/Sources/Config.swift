@@ -269,11 +269,13 @@ func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, prim
     return out
 }
 
-/// The footer's plan meters (dash.py `usage`) from a merged pair: greenlight's host's, else the Mac's. The agents' sign-ins live
-/// where they run, so the two aren't summed.
+/// The footer's plan meters (dash.py `usage`) from a merged pair, one per agent: greenlight's host's reading of an agent wins,
+/// and an agent only the Mac reports (signed in there alone) is added after them. nil when neither host sent any.
 func usageOf(_ primary: [String: Any]?, _ secondary: [String: Any]?) -> [[String: Any]]? {
     let p = primary?["usage"] as? [[String: Any]], s = secondary?["usage"] as? [[String: Any]]
-    return p?.isEmpty == false ? p : s ?? p
+    guard p != nil || s != nil else { return nil }
+    let have = Set((p ?? []).compactMap { $0["id"] as? String })
+    return (p ?? []) + (s ?? []).filter { ($0["id"] as? String).map { !have.contains($0) } ?? false }
 }
 
 /// Merges `dash.py trees` payloads from server and local Mac, deduplicating by path (native host wins) and combining `repoHosts`.

@@ -1279,8 +1279,11 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let uBoth = mergeSnapshots(["usage": srvUsage], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uMac = mergeTreesPayload(["usage": [[String: Any]]()], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uNone = mergeTreesPayload(["trees": [[String: Any]]()], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"]
-    check("usage meters: merged snapshots and trees carry greenlight's host's usage, else the Mac's",
-          uBoth?.first?["id"] as? String == "claude" && uMac?.first?["id"] as? String == "codex" && uNone == nil)
+    let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
+                              primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
+    check("usage meters: merged snapshots and trees carry each agent once, greenlight's host's first, then agents only the Mac reports",
+          uBoth?.compactMap { $0["id"] as? String } == ["claude", "codex"] && uMac?.compactMap { $0["id"] as? String } == ["codex"]
+          && uNone == nil && uDup?.count == 1 && uDup?.first?["state"] as? String == "ok")
     check("project host: nativeHost wins on paired Orca dedupe, org/repo fold is deterministic, and savedProjects resolves empty-tree projects",
           mergedPucks.count == 2
           && mergedSnapTrees.count == 1 && mergedSnapTrees[0]["path"] as? String == "/srv/tree"

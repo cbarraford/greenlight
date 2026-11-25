@@ -152,7 +152,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .ubar{position:relative;display:inline-block;flex-shrink:0;width:28px;height:4px;border-radius:var(--ds-radius-full);background:var(--ds-element-active);overflow:hidden}
 .ubar i{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--ds-fg-muted)}
 .ubar[data-tone="near"] i{background:var(--ds-status-needs-solid)} .ubar[data-tone="full"] i{background:var(--ds-status-crashed-solid)}
-.um .ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .um .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
+.ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
 .um .uleft{color:var(--ds-fg-faint)}
 .tight .um .uleft,.tighter .um .ubar{display:none}
 .umpop{box-sizing:border-box;position:fixed;z-index:60;width:320px;max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
@@ -170,10 +170,9 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .urow .urh{display:flex;align-items:center;gap:var(--ds-space-8);min-width:0} .urow .urh b{font:var(--ds-type-strong)}
 .urow .uplan{color:var(--ds-fg-muted);font:var(--ds-type-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow .sp{flex:1}
 .urow .urr,.urow .ur{color:var(--ds-fg-muted);font:var(--ds-type-caption);white-space:nowrap}
-.urow .uwin{display:grid;grid-template-columns:56px 1fr 36px 64px;align-items:center;gap:var(--ds-space-8);padding-left:24px;font:var(--ds-type-caption)}
-.urow .uwin .ubar{width:100%} .urow .uwin .upct{text-align:right;color:var(--ds-fg-default)} .urow .uwin .ur{text-align:right}
-.urow .uwin .ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .urow .uwin .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
-.urow .unote{display:flex;gap:var(--ds-space-4);align-items:flex-start;padding-left:24px;color:var(--ds-fg-muted);font:var(--ds-type-caption)}
+.urow .uwin{display:grid;grid-template-columns:56px 1fr 36px 64px;align-items:center;gap:var(--ds-space-8);padding-left:var(--ds-space-24);font:var(--ds-type-caption)}
+.urow .uwin .ubar{width:100%} .urow .uwin .upct{text-align:right} .urow .uwin .ur{text-align:right}
+.urow .unote{display:flex;gap:var(--ds-space-4);align-items:flex-start;padding-left:var(--ds-space-24);color:var(--ds-fg-muted);font:var(--ds-type-caption)}
 .urow .unote.bad{color:var(--ds-status-crashed-fg)} .urow .unote .dsi{flex-shrink:0;margin-top:1px}
 .urow.c{display:grid;grid-template-columns:16px 1fr 40px 36px 56px;align-items:center;gap:var(--ds-space-8);font:var(--ds-type-caption)}
 .urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{text-align:right}
@@ -1579,11 +1578,12 @@ const UM_STALE = 600;  // seconds: older windows say how old they are
 function umEl(tag, cls, ...kids){ const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids) if (k != null && k !== false) e.append(k); return e }
 const umMark = id => ({claude: "claude", codex: "openai", agy: "agy", gemini: "agy"}[id] || "terminal");
 const umTone = pct => pct >= 100 ? "full" : pct >= 80 ? "near" : "";  // amber near the limit, red at it
-const umTight = p => (Array.isArray(p.windows) ? p.windows : []).reduce((a, w) => !a || w.pct > a.pct ? w : a, null);
+const umPct = w => w.resets > 0 && w.resets <= Date.now() / 1000 ? 0 : w.pct;  // a window that has reset since it was read is back to 0
+const umTight = p => (Array.isArray(p.windows) ? p.windows : []).reduce((a, w) => !a || umPct(w) > umPct(a) ? w : a, null);
 const umStale = p => p.at > 0 && Date.now() / 1000 - p.at > UM_STALE;
 function umIn(t){  // the time until an epoch, short: 45m, 3h 10m, 2d 4h
   if (!(t > 0)) return "";
-  const s = t - Date.now() / 1000; if (s <= 60) return "now";
+  const s = t - Date.now() / 1000; if (s <= 0) return ""; if (s <= 60) return "now";
   const m = Math.ceil(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
   return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
 }
@@ -1593,7 +1593,7 @@ function umSays(p){  // a meter's words: its tooltip and accessible label
   const w = umTight(p), name = p.name + (p.plan ? ` (${p.plan})` : "");
   if (p.state === "na" || (p.state !== "failed" && !w)) return `${name}: usage n/a` + (p.note ? `\n${p.note}` : "");
   if (p.state === "failed" && !w) return `${name}: refresh failed` + (p.note ? `\n${p.note}` : "");
-  const lines = [name, ...p.windows.map(x => `${x.label}: ${Math.round(x.pct)}% used` + (x.resets ? `, resets in ${umIn(x.resets)}` : ""))];
+  const lines = [name, ...p.windows.map(x => `${x.label}: ${Math.round(umPct(x))}% used` + (umIn(x.resets) ? `, resets in ${umIn(x.resets)}` : ""))];
   if (p.state === "failed") lines.push(`Refresh failed: ${p.note || "no answer"}. These are from ${umAgo(p.at)}.`);
   else if (umStale(p)) lines.push(`As of ${umAgo(p.at)}` + (p.note ? ` (${p.note})` : ""));
   return lines.join("\n");
@@ -1606,15 +1606,16 @@ function umMeter(p){
   if (p.state === "failed" && !w) b.append(umEl("span", "uw", "Refresh failed"));
   else if (!w || p.state === "na") b.append(umEl("span", "uw", "n/a"));
   else {
-    b.append(umBar(w.pct), umEl("span", "upct", `${Math.round(w.pct)}%`)); if (w.resets) b.append(umEl("span", "uleft", umIn(w.resets)));
+    b.append(umBar(umPct(w)), umEl("span", "upct", `${Math.round(umPct(w))}%`)); if (umIn(w.resets)) b.append(umEl("span", "uleft", umIn(w.resets)));
     if (p.state === "failed") b.append(dsIcon("alert", 12, {cls: "uerr"})); else if (umStale(p)) b.classList.add("stale");
   }
   b.addEventListener("click", e => { e.stopPropagation(); umToggle(b) });
   return b;
 }
 function umMeters(list){  // the footer's meters, or null when no agent reports
+  const was = JSON.stringify(UM.list);
   UM.list = Array.isArray(list) ? list.filter(p => p && p.id && ["ok", "failed", "na"].includes(p.state)) : [];
-  if (UM.pop) umFill(UM.pop);
+  if (UM.pop && JSON.stringify(UM.list) !== was) umFill(UM.pop);  // only when it changed: a redraw would drop the focus inside it
   if (!UM.list.length) { if (UM.pop) umClose(); return null }
   const s = umEl("span", "ums"); s.setAttribute("role", "group"); s.setAttribute("aria-label", "Plan usage");
   s.append(...UM.list.map(umMeter)); return s;
@@ -1631,18 +1632,19 @@ function umRow(p){
   if (UM.view === "compact") {
     r.classList.add("c"); r.title = umSays(p);
     r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
-    if (w && p.state !== "na") r.append(umBar(w.pct), umEl("span", "upct", `${Math.round(w.pct)}%`), umEl("span", "ur", w.resets ? umIn(w.resets) : ""));
+    if (w && p.state !== "na") r.append(umBar(umPct(w)), umEl("span", "upct", `${Math.round(umPct(w))}%`), umEl("span", "ur", umIn(w.resets)));
     else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
     return r;
   }
   r.append(umEl("div", "urh", dsIcon(umMark(p.id), 16, {cls: "umk"}), umEl("b", "", p.name), p.plan ? umEl("span", "uplan", p.plan) : null, umEl("span", "sp"),
-    w && w.resets && p.state !== "na" ? umEl("span", "urr", `Resets in ${umIn(w.resets)}`) : null));
+    w && umIn(w.resets) && p.state !== "na" ? umEl("span", "urr", `Resets in ${umIn(w.resets)}`) : null));
   if (p.state !== "na") for (const x of p.windows || [])
-    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(x.pct), umEl("span", "upct", `${Math.round(x.pct)}%`), umEl("span", "ur", x.resets ? `in ${umIn(x.resets)}` : "")));
+    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(umPct(x)), umEl("span", "upct", `${Math.round(umPct(x))}%`), umEl("span", "ur", umIn(x.resets) ? `in ${umIn(x.resets)}` : "")));
   const n = umNote(p); if (n) r.append(n);
   return r;
 }
 function umFill(pop){
+  const had = pop.contains(document.activeElement);  // focus inside it stays inside it across the rebuild
   pop.classList.toggle("compact", UM.view === "compact"); pop.replaceChildren();
   const seg = umEl("div", "useg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Detail");
   for (const [k, label] of [["detailed", "Detailed"], ["compact", "Compact"]]) {
@@ -1652,6 +1654,7 @@ function umFill(pop){
   }
   pop.append(umEl("div", "uh", umEl("span", "ut", "Plan usage"), seg), umEl("div", "urows", ...UM.list.map(umRow)),
     umEl("div", "ufoot", "Every configured agent, in dispatch order. Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
+  if (had) pop.querySelector(".useg [aria-selected=true]")?.focus({preventScroll: true});
 }
 function umSync(){ document.querySelectorAll(".um").forEach(b => b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === b.dataset.id))) }
 function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; umSync() }
@@ -1666,11 +1669,12 @@ function umToggle(anchor){
   umSync(); pop.querySelector(".useg [aria-selected=true]")?.focus({preventScroll: true});
 }
 addEventListener("click", () => umClose());
-addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
+// Esc closes it only from inside it or its meter: a terminal or find bar elsewhere keeps its own Esc
+addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop && (UM.pop.contains(document.activeElement) || document.activeElement?.classList.contains("um"))) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
 function basementFoot(list){  // the Basement's footer: shown once an agent reports, and the terminals refit to the room left
   const f = $("bfoot"), um = umMeters(list), was = f.hidden;
   f.replaceChildren(...(um ? [um] : [])); f.hidden = !um;
-  if (was !== f.hidden) setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0);
+  if (was !== f.hidden) setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 60);  // past the fit addon's 50 ms debounce
 }
 setInterval(() => { if (!document.hidden && UM.list.length) basementFoot(UM.list) }, 30000);  // the reset countdowns
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)

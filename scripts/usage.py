@@ -1,6 +1,6 @@
 """Plan usage per agent provider: the footer's meters in Greenlight Center and the Basement (#193).
 
-  current(agents=None, refresh=True, since=0) -> [provider], in config `agents` order (installed and signed-in ones only)
+  current(agents=None, refresh_ok=True, since=0, force=False) -> [provider], in config `agents` order (installed and signed-in ones only)
   provider: {id, name, state: ok|failed|na, windows: [{label, pct, resets}], plan?, note?, at?, src?}
     pct: 0-100 used; resets: epoch seconds or None; at: when the windows were read (a failed refresh keeps the last ones)
   `usage.py [--force]` prints it as JSON.
@@ -18,6 +18,7 @@ fetch (the footer's ↻) fetches again. Credentials stay where each CLI keeps th
 """
 import contextlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -95,7 +96,7 @@ def _epoch(v):
     if isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return int(v / 1000 if v > 1e12 else v)
+        return int(v / 1000 if v > 1e12 else v) if math.isfinite(v) else None
     if isinstance(v, str) and v:
         with contextlib.suppress(ValueError):
             return int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp())
@@ -103,7 +104,7 @@ def _epoch(v):
 
 
 def _win(label, pct, resets):
-    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not math.isfinite(pct):
         return None
     return {"label": label, "pct": round(max(0.0, min(100.0, float(pct))), 1), "resets": _epoch(resets)}
 
@@ -169,18 +170,19 @@ def claude():
 
 # codex ----------------------------------------------------------------------------------------------------------------
 
-def codex_windows(rl, secs_key="limit_window_seconds", reset_key="reset_at"):
+def codex_windows(rl, at=None):
     """A rate-limit object -> windows. The API names them primary_window/secondary_window (window in seconds); a rollout's
-    rate_limits names them primary/secondary (window_minutes, resets_at or the older resets_in_seconds)."""
+    rate_limits names them primary/secondary (window_minutes, resets_at or the older resets_in_seconds, counted from `at`,
+    the record's time)."""
     out = []
     for k in ("primary_window", "secondary_window", "primary", "secondary"):
         w = rl.get(k)
         if not isinstance(w, dict):
             continue
-        secs = w.get(secs_key) if secs_key in w else (w.get("window_minutes") or 0) * 60
-        resets = w.get(reset_key) or w.get("resets_at")
+        secs = w.get("limit_window_seconds") or (w.get("window_minutes") or 0) * 60
+        resets = w.get("reset_at") or w.get("resets_at")
         if resets is None and isinstance(w.get("resets_in_seconds"), (int, float)):
-            resets = time.time() + w["resets_in_seconds"]
+            resets = (at or time.time()) + w["resets_in_seconds"]
         out.append(_win(_span_label(secs), w.get("used_percent"), resets))
     return [w for w in out if w]
 
@@ -195,18 +197,18 @@ def _codex_api(token, account):
     return {"windows": codex_windows(rl), "src": "api", **_plan(d.get("plan_type"))}
 
 
+def _mtime(f):
+    try:
+        return f.stat().st_mtime
+    except OSError:  # gone since the glob
+        return 0
+
+
 def _rollouts(root, n=12):
-    """The newest few session rollouts, newest first: walks sessions/YYYY/MM/DD from the latest day back."""
-    days = []
-    for y in sorted((root / "sessions").glob("[0-9]" * 4), reverse=True)[:2]:
-        for m in sorted(y.glob("[0-9][0-9]"), reverse=True):
-            days += sorted(m.glob("[0-9][0-9]"), reverse=True)
-            if len(days) >= 3:
-                break
-        if len(days) >= 3:
-            break
-    files = [f for d in days[:3] for f in d.glob("rollout-*.jsonl")]
-    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:n]
+    """The most recently written session rollouts, newest first. Codex files a session under the day it started, so a long one
+    lives in an older folder: the last week's folders, by when each file was last written."""
+    days = sorted((root / "sessions").glob("[0-9]" * 4 + "/[0-9][0-9]/[0-9][0-9]"), reverse=True)[:7]  # zero-padded: a sort is by date
+    return sorted((f for d in days for f in d.glob("rollout-*.jsonl")), key=_mtime, reverse=True)[:n]
 
 
 def _rate_limits_in(f):
@@ -232,14 +234,19 @@ def codex_rollout(root):
         with contextlib.suppress(OSError):
             if hit := _rate_limits_in(f):
                 rl, at = hit
-                return {"windows": codex_windows(rl, "window_seconds", "resets_at"), "src": "rollout", "at": at,
-                        **_plan(rl.get("plan_type"))}
+                wins = codex_windows(rl, at)
+                if not any(w["resets"] and w["resets"] > time.time() for w in wins):
+                    return None  # every window it saw has reset since: nothing it says still holds
+                return {"windows": wins, "src": "rollout", "at": at, **_plan(rl.get("plan_type"))}
     return None
 
 
 def codex():
     root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    tok = ((_json(root / "auth.json") or {}).get("tokens") or {})
+    try:
+        tok = ((_json(root / "auth.json") or {}).get("tokens") or {})
+    except Failed:  # torn mid-write: the rollouts still say
+        tok = {}
     if isinstance(tok, dict) and tok.get("access_token"):
         try:
             return _codex_api(tok["access_token"], tok.get("account_id"))
@@ -266,13 +273,15 @@ def opencode():
 def pi():
     root = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path.home() / ".pi" / "agent")
     auth = _json(root / "auth.json") or {}
+    if not auth:
+        raise SignedOut()  # signed in to nothing: left out; signed in to a provider with no plan usage: n/a
     prov = (_json(root / "settings.json") or {}).get("defaultProvider")
-    for p in [prov] if isinstance(prov, str) and prov else ["anthropic", "openai-codex"]:
-        a = auth.get(p)
-        if not (isinstance(a, dict) and a.get("type") == "oauth" and a.get("access")):
-            continue
-        if _expired(a.get("expires")):
-            raise Failed("token expired: pi renews it on its next run", "expired")
+    plans = [(p, a) for p in ([prov] if isinstance(prov, str) and prov else ["anthropic", "openai-codex"])
+             if isinstance(a := auth.get(p), dict) and a.get("type") == "oauth" and a.get("access")]
+    live = [(p, a) for p, a in plans if not _expired(a.get("expires"))]
+    if plans and not live:
+        raise Failed("token expired: pi renews it on its next run", "expired")
+    for p, a in live[:1]:
         if p == "anthropic":
             return {"windows": _claude_api(a["access"]), "src": "api", "plan": "Claude plan"}
         if p == "openai-codex":
@@ -305,6 +314,9 @@ def fetch(name):
         except Failed as e:
             sp.update(state="failed", reason=e.code)
             return {**base, "state": "failed", "note": e.note, "next": now + e.wait, "wait": e.wait}
+        except Exception as e:  # an answer shaped like nothing we know: this provider fails, the others keep their meters
+            sp.update(state="failed", reason="unexpected", **{k: v for k, v in diag.failure(e).items() if k != "ok"})
+            return {**base, "state": "failed", "note": "unexpected answer from the usage source", "next": now + TTL}
         sp["state"] = "ok"
     return {**base, "state": "ok", "at": out.pop("at", now), **out, "next": now + TTL}
 

@@ -980,6 +980,7 @@ with mock.patch.object(dash, "live_agents", return_value={
 print("pane log transcript ok")
 
 # usage.py: the footer's plan meters (#193), from recorded answers (trimmed, ids removed); never the network or your sign-ins
+import shutil  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
@@ -1042,8 +1043,7 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
         o = usage.fetch("opencode")
         assert o["state"] == "na" and o["plan"] == "OpenCode Go" and "no usage API" in o["note"], o
         assert usage.fetch("agy")["state"] == "na"  # no source yet: shown n/a, not hidden
-        p = usage.fetch("pi")
-        assert p["state"] == "na" and "isn't signed in" in p["note"]  # pi without a plan sign-in: n/a, not hidden
+        assert usage.fetch("pi")["state"] == "out"  # pi signed in to nothing: left out, like the others
     # near the limit: 5h first, values clamped; the codex API's 5h + weekly windows
     with mock.patch.object(usage, "_get", _answers({usage.CLAUDE_URL: CLAUDE_NEAR, usage.CODEX_URL: CODEX_5H})[0]):
         assert [(w["label"], w["pct"]) for w in usage.fetch("claude")["windows"]] == [("5h", 92.0), ("Week", 100.0)]
@@ -1068,8 +1068,31 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
         r = usage.fetch("codex")
         assert r["state"] == "ok" and r["src"] == "rollout" and r["windows"][0]["label"] == "Week" and r["windows"][0]["pct"] == 46.0
         assert r["at"] == int(datetime(2026, 11, 24, 20, tzinfo=UTC).timestamp()) and "last session" in r["note"]
+    (_uh / ".codex" / "auth.json").write_text('{"tokens": {"access_')  # torn mid-write
+    assert usage.fetch("codex")["src"] == "rollout", "a torn auth.json still falls back to the rollouts"
     (_uh / ".codex" / "auth.json").unlink()
     assert usage.fetch("codex")["src"] == "rollout"  # signed in through an API key: the rollouts still say
+    # a long session lives under the day it started: found by when it was last written, past newer days without limits
+    _sess = _uh / ".codex" / "sessions" / "2026" / "11"
+    for d in ("18", "22", "23", "24"):
+        (_sess / d).mkdir(parents=True, exist_ok=True)
+    (_sess / "18" / "rollout-long.jsonl").write_text(json.dumps(ROLLOUT_LINE) + "\n")
+    for i, d in enumerate(("22", "23", "24")):
+        (_sess / d / f"rollout-{d}.jsonl").write_text(json.dumps({"type": "x"}) + "\n")
+        os.utime(_sess / d / f"rollout-{d}.jsonl", (time.time() - 3600 * (3 - i), time.time() - 3600 * (3 - i)))
+    (day / "rollout-a.jsonl").unlink()
+    assert usage.fetch("codex")["windows"][0]["pct"] == 46.0
+    for d in ("18", "22", "23"):
+        shutil.rmtree(_sess / d)
+    (_sess / "24" / "rollout-24.jsonl").unlink()
+    (day / "rollout-a.jsonl").write_text(json.dumps(ROLLOUT_LINE) + "\n")
+    # an older rollout's resets_in_seconds counts from the record's time, and one whose windows have all reset says nothing
+    _old = {**ROLLOUT_LINE, "timestamp": "2026-11-20T08:00:00.000Z",
+            "payload": {"rate_limits": {"primary": {"used_percent": 99.0, "window_minutes": 300, "resets_in_seconds": 300}}}}
+    _t = int(datetime(2026, 11, 20, 8, tzinfo=UTC).timestamp())
+    assert usage.codex_windows(_old["payload"]["rate_limits"], _t)[0]["resets"] == _t + 300
+    (day / "rollout-a.jsonl").write_text(json.dumps(_old) + "\n")
+    assert usage.codex_rollout(_uh / ".codex") is None and usage.fetch("codex")["state"] == "out", "signed out, and its last limits long reset"
     (day / "rollout-a.jsonl").unlink()
     assert usage.fetch("codex")["state"] == "out"
     (_uh / "share" / "opencode" / "auth.json").unlink()
@@ -1082,12 +1105,26 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
         assert p["state"] == "ok" and p["windows"][0]["pct"] == 64.0 and _calls[-1][1]["Authorization"] == "Bearer tok-p"
     (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "openrouter"}))
     p = usage.fetch("pi")
-    assert p["state"] == "na" and "openrouter" in p["note"]
+    assert p["state"] == "na" and "openrouter" in p["note"]  # signed in, but to a provider with no plan usage: n/a, not hidden
+    (_uh / "pi" / "settings.json").unlink()
+    (_uh / "pi" / "auth.json").write_text(json.dumps({"anthropic": {"type": "oauth", "access": "old", "expires": 1000},
+                                                       "openai-codex": {"type": "oauth", "access": "tok-r", "expires": _FUTURE_MS}}))
+    _get, _calls = _answers({usage.CODEX_URL: CODEX_REC})
+    with mock.patch.object(usage, "_get", _get):
+        assert usage.fetch("pi")["state"] == "ok" and _calls[-1][1]["Authorization"] == "Bearer tok-r", "an expired plan doesn't hide a live one"
+    (_uh / "pi" / "auth.json").write_text(json.dumps({"anthropic": {"type": "oauth", "access": "old", "expires": 1000}}))
+    assert "expired" in usage.fetch("pi")["note"]
     (_uh / "pi" / "auth.json").write_text(json.dumps({"openai-codex": {"type": "oauth", "access": "tok-q", "accountId": "acct-2", "expires": _FUTURE_MS}}))
     (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "openai-codex"}))
     _get, _calls = _answers({usage.CODEX_URL: CODEX_REC})
     with mock.patch.object(usage, "_get", _get):
         assert usage.fetch("pi")["windows"][0]["pct"] == 46.0 and _calls[-1][1]["ChatGPT-Account-Id"] == "acct-2"
+
+# an answer shaped like nothing we know fails that provider alone, with a backoff; non-finite numbers aren't times or percents
+with mock.patch.dict(usage.SOURCES, {"claude": mock.Mock(side_effect=TypeError("x"))}):
+    _u = usage.fetch("claude")
+    assert _u["state"] == "failed" and _u["next"] > _u["tried"] and "unexpected" in _u["note"]
+assert usage._epoch(float("inf")) is None and usage._win("5h", float("nan"), 0) is None
 
 # _get maps HTTP failures to a reason the footer shows on hover
 for code, want in ((429, "rate_limit"), (401, "auth"), (500, "http")):

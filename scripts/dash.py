@@ -10,7 +10,6 @@
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
                                                     (and `usage`, the footer's plan meters: usage.py)
-    dash.py usage [--force]                         one JSON line: {usage: [provider]}, each configured agent's plan usage (usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
@@ -749,11 +748,11 @@ def scan_error(scanned):
     return {k: str(e.get(k) or "") for k in ("msg", "fix", "class")} | {"ts": e["ts"]}
 
 
-def usage_now(since=0, force=False):
+def usage_now(since=0):
     """The footer's plan meters (usage.py); a failure there never costs the snapshot. since: a scan that started after the
     last fetch (the footer's ↻) fetches again."""
     try:
-        return usage.current(since=since if isinstance(since, (int, float)) else 0, force=force)
+        return usage.current(since=since if isinstance(since, (int, float)) else 0)
     except Exception as e:
         oops(["usage"], e)
         return []
@@ -2423,8 +2422,6 @@ def main():
         ts = trees()
         print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
                           "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now()}))
-    elif a[:1] == ["usage"]:
-        print(json.dumps({"usage": usage_now(force="--force" in a[1:])}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
             out = turn(a[1])
