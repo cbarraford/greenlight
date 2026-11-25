@@ -81,7 +81,7 @@ h1{margin:0 0 var(--ds-space-8);font:var(--ds-type-title-lg);font-family:var(--f
 .track i.peak{background:var(--c1)}
 .bar b{font:var(--ds-type-strong);font-family:var(--font);text-align:right;font-variant-numeric:tabular-nums}
 .foot{margin-top:var(--ds-space-16);padding-top:var(--ds-space-8);border-top:1px solid var(--line);font:var(--ds-type-caption);font-family:var(--font);color:var(--dim);font-variant-numeric:tabular-nums}
-iframe{border:0;width:100%;height:100%;display:block;background:var(--bg)}
+iframe{border:0;width:100%;height:100%;flex:1;min-height:0;display:block;background:var(--bg)}
 #s.frame{padding:0;height:100%}
 svg.chart{width:100%;height:auto;max-height:62vh;overflow:visible;font:var(--ds-type-caption);font-family:var(--font);font-variant-numeric:tabular-nums}
 svg.chart text{fill:var(--dim)}
@@ -141,7 +141,7 @@ ol.life li span{color:var(--dim)}
 .caret{display:inline-block;width:2px;height:13px;margin-left:var(--ds-space-2);vertical-align:-2px;background:var(--accent)}
 .doc code+.caret{margin-left:0}  /* the chip's own padding is the gap */
 /* While Chief thinks (issue 208): the last card stays, stepped down to muted; with none, a still skeleton of the answer. */
-#s.held{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
+#s.held{--text:var(--dim);--accent:var(--dim);--accent-fg:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
 #s.held .caret{display:none}
 #s.held::before{content:"Last answer";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}  /* the second cue: it's the last answer */
 [data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
@@ -168,7 +168,8 @@ table.grid td .chip svg.tone{flex:none;margin-top:1px}
 #s a:not(.option){color:var(--accent-fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
 #s a:not(.option):hover{text-decoration-color:currentColor}
 .options{display:flex;flex-wrap:wrap;gap:var(--ds-space-8);margin-top:var(--ds-space-16)}
-.options a.option{display:inline-flex;align-items:center;height:var(--ds-layout-control-height-md);padding:0 var(--ds-space-12);border-radius:var(--ds-radius-sm);
+#s.frame > .options{flex:none;margin-top:0;padding:var(--ds-space-12) var(--ds-space-24) var(--ds-space-24)}
+.options a.option{display:inline-flex;align-items:center;min-height:var(--ds-layout-control-height-md);padding:var(--ds-space-4) var(--ds-space-12);border-radius:var(--ds-radius-sm);
   background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);font-family:var(--font);text-decoration:none;cursor:default;
   transition:transform var(--ds-duration-press) var(--ds-easing-out)}
 .options a.option:hover{background:var(--ds-element-hover)}
@@ -176,6 +177,8 @@ table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .options a.option:focus-visible{outline:none;box-shadow:var(--ds-ring)}
 #s.held .options{display:none}
 [data-look=phosphor] .options a.option{border:1px dashed var(--line);background:none}
+[data-look=phosphor] .options a.option:hover{background:var(--well);border-color:var(--text)}
+[data-look=phosphor] .options a.option:active{background:var(--card)}
 @media (prefers-reduced-motion: reduce){ .options a.option{transition:none} .options a.option:active{transform:none} }
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
@@ -420,7 +423,7 @@ function caret(s, on){
   if (!t) return;
   if (t.tagName === "HR") { s.append($("span", "caret")); return; }  // void element: keep the caret outside it
   if (t.tagName === "TABLE" && !t.tBodies[0]?.rows.length) t = t.tHead?.lastElementChild?.lastElementChild || t;
-  while (t.lastElementChild && !["CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
+  while (t.lastElementChild && !["A", "CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
   t.append($("span", "caret"));
 }
 // The thinking field (brand/DESIGN.md §10.18). A grid of needles, each an oscillator pulled toward its four neighbours' phase
