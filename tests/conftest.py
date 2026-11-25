@@ -32,6 +32,7 @@ os.environ["GREENLIGHT_DEV_HOME"] = str(_BOOT_DEV_HOME)
 os.environ.setdefault("GREENLIGHT_ME", "octo")
 os.environ["GREENLIGHT_TMUX_SOCKET"] = f"gl-pytest-{os.getpid()}"  # dash.snapshot lists the app's tmux panes: never the real Basement's
 os.environ.pop("GREENLIGHT_RUN", None)
+os.environ["GREENLIGHT_USAGE"] = "off"  # usage.py: never the agents' usage APIs with your real sign-ins
 
 
 def _patch_loaded_modules(monkeypatch, home: Path) -> None:
@@ -62,11 +63,13 @@ def _patch_loaded_modules(monkeypatch, home: Path) -> None:
         "dwim": {"STATE": home, "DWIM": home / "dwim"},
         "last_agent": {"HOME": home, "FILE": home / "last_agent.json"},
         "lifestage": {"STATE": home, "CHECKS": home / "checks"},
+        "usage": {"STATE": home},
         "ws_state": {"STATE": home, "DIR": home / "state", "MEMORY": home / "memory"},
     }
     if cfg is not None:
         bindings["auto"]["CONFIG"] = cfg
         bindings["harness"] = {"CONFIG": cfg}
+        bindings["usage"]["CONFIG"] = cfg
 
     for mod_name, attrs in bindings.items():
         mod = sys.modules.get(mod_name)

@@ -12,6 +12,7 @@
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
     dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+                                                    (and `usage`, the footer's plan meters: usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
                                                     the worktree (refuses a dirty, unpushed or pinned one without --force; stdin: the
@@ -63,6 +64,7 @@ import last_agent  # noqa: E402
 import harness  # noqa: E402
 import lifestage  # noqa: E402
 import placement  # noqa: E402
+import usage  # noqa: E402
 import ws_state  # noqa: E402
 
 DASH = greenlight.STATE / "dash"
@@ -660,7 +662,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         snap = json.loads((greenlight.STATE / "last.json").read_text())
     except FileNotFoundError:
         if err := scan_error(0):
-            return {"ts": int(time.time()), "scanned": 0, "scan_started": None, "pucks": [], "trees": [], "scan_error": err}
+            return {"ts": int(time.time()), "scanned": 0, "scan_started": None, "pucks": [], "trees": [], "usage": usage_now(), "scan_error": err}
         raise
     live = live_agents()
     now = time.time() * 1000
@@ -743,6 +745,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
     return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees,
+            "usage": usage_now(since=snap.get("started") or snap.get("ts") or 0),
             **({"scan_error": err} if (err := scan_error(snap["ts"], snap.get("started"))) else {})}
 
 
@@ -762,6 +765,16 @@ def scan_error(scanned, scan_started=None):
     elif ts <= (scanned or 0):
         return None
     return {k: str(e.get(k) or "") for k in ("msg", "fix")} | {"ts": ts}
+
+
+def usage_now(since=0):
+    """The footer's plan meters (usage.py); a failure there never costs the snapshot. since: a scan that started after the
+    last fetch (the footer's ↻) fetches again."""
+    try:
+        return usage.current(since=since if isinstance(since, (int, float)) else 0)
+    except Exception as e:
+        oops(["usage"], e)
+        return []
 
 
 ADES = None  # a fixed list in place of ades() (tests)
@@ -2536,7 +2549,7 @@ def main():
     elif a[:1] == ["trees"]:
         ts = trees()
         print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
-                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"]}))
+                          "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
             out = turn(a[1])

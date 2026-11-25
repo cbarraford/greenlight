@@ -1862,6 +1862,161 @@ test("Agent log view phase 1: status strip, per-line relative-time gutter, and '
   await page.click("#aout-back");
 });
 
+// the footer's usage meters (issue 193): one per configured agent in config order, its popover with every window
+const NOW_S = () => Math.floor(Date.now() / 1000);
+const USAGE = () => [
+  {id: "claude", name: "Claude", state: "ok", plan: "Claude Max", src: "api", at: NOW_S(),
+   windows: [{label: "Week", pct: 64, resets: NOW_S() + 3 * 86400 + 7 * 3600 + 30}, {label: "Fable", pct: 15, resets: NOW_S() + 3 * 86400}]},
+  {id: "codex", name: "Codex", state: "ok", plan: "ChatGPT Pro", src: "api", at: NOW_S(),
+   windows: [{label: "5h", pct: 92, resets: NOW_S() + 2 * 3600 + 600}, {label: "Week", pct: 30, resets: NOW_S() + 5 * 86400}]},
+  {id: "opencode", name: "OpenCode", state: "na", plan: "OpenCode Go", note: "OpenCode publishes no usage API: its web console shows the plan's usage"},
+  {id: "pi", name: "Pi", state: "failed", note: "can't reach the usage API"}];
+const meters = page => page.$$eval("#foot .um", bs => bs.map(b => ({id: b.dataset.id, state: b.dataset.state, text: b.textContent, title: b.title,
+  tone: b.querySelector(".ubar")?.dataset.tone || "", err: !!b.querySelector(".uerr"), stale: b.classList.contains("stale")})));
+
+test("usage meters: one per agent at the footer's left, in config order: normal, near the limit, n/a and failed", async page => {
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());
+  const m = await meters(page);
+  assert.deepEqual(m.map(x => x.id), ["claude", "codex", "opencode", "pi"]);
+  assert.equal(await page.$eval("#foot", f => f.firstElementChild.className), "ums", "the meters lead the footer");
+  assert.match(m[0].text, /^64%3d 7h$/); assert.equal(m[0].tone, "", "64%: the neutral bar");
+  assert.match(m[0].title, /Claude \(Claude Max\)\nWeek: 64% used, resets in 3d 7h\nFable: 15% used/);
+  assert.match(m[1].text, /^92%2h 1\dm$/, "the tightest window (5h), not the first"); assert.equal(m[1].tone, "near", "amber near the limit");
+  assert.equal(m[2].text, "n/a"); assert.match(m[2].title, /no usage API/);
+  assert.equal(m[3].text, "Refresh failed"); assert.match(m[3].title, /refresh failed\ncan't reach the usage API/);
+  assert.equal(await page.$eval("#foot .um[data-id=codex] .ubar i", i => i.style.width), "92%");
+  assert.equal(await page.$eval("#foot .um[data-id=claude] svg", s => s.dataset.icon), "claude");
+  assert.equal(await page.$eval("#foot .um[data-id=codex] svg", s => s.dataset.icon), "openai");
+});
+
+test("usage meters: at the limit is red; a failed refresh keeps its last windows with a warning; old data says its age", async page => {
+  const u = USAGE(); u[0].windows[0].pct = 100; u[1] = {...u[1], state: "failed", note: "rate limited: trying again in 5 minutes", at: NOW_S() - 1200};
+  u[3] = {id: "pi", name: "Pi", state: "ok", at: NOW_S() - 7200, note: "from the last session instead", windows: [{label: "Week", pct: 10, resets: null}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), u);
+  const m = await meters(page);
+  assert.equal(m[0].tone, "full"); assert.match(m[0].text, /^100%/);
+  assert.ok(m[1].err, "the failed one shows the alert glyph"); assert.match(m[1].title, /Refresh failed: rate limited.*These are from 20m ago/s);
+  assert.ok(m[3].stale); assert.match(m[3].title, /As of 2h ago \(from the last session instead\)/); assert.equal(m[3].text, "10%", "no reset time: no countdown");
+  await page.click("#foot .um[data-id=codex]");
+  assert.match(await page.textContent(".urow[data-id=codex] .unote"), /Refresh failed: rate limited.*From 20m ago/);
+  assert.match(await page.textContent(".urow[data-id=pi] .unote"), /As of 2h ago: from the last session instead/);
+});
+
+test("usage meters: a window whose reset has passed reads — (no new reading) and stops being the tightest; Esc elsewhere isn't taken", async page => {
+  const u = USAGE(); u[0] = {...u[0], state: "failed", note: "token expired", at: NOW_S() - 36000,
+    windows: [{label: "5h", pct: 95, resets: NOW_S() - 30000}, {label: "Week", pct: 40, resets: NOW_S() + 86400}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), u);
+  const m = (await meters(page))[0];
+  assert.match(m.text, /^40%1d 0h$/, "the week, not yesterday's 95% 5h"); assert.equal(m.tone, "");
+  assert.match(m.title, /5h: reset since, no new reading\nWeek: 40% used, resets in 1d 0h/);
+  await page.click("#foot .um[data-id=claude]");
+  assert.deepEqual(await page.$$eval("#umpop .urow[data-id=claude] .uwin", ws => ws.map(w => [w.querySelector(".upct").textContent, w.querySelector(".ur").textContent])),
+    [["—", "reset"], ["40%", "in 1d 0h"]]);
+  await page.evaluate(() => { const i = document.createElement("input"); i.id = "elsewhere"; document.body.append(i); i.focus() });
+  const taken = await page.evaluate(() => { const e = new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}); document.activeElement.dispatchEvent(e); return e.defaultPrevented });
+  assert.equal(taken, false, "Esc in another field is that field's"); assert.ok(await page.$("#umpop"), "and the popover stays");
+  await page.focus("#umpop [data-view=compact]"); await page.keyboard.press("Escape");
+  assert.equal(await page.$("#umpop"), null); assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "claude", "focus back on its meter");
+  await page.click("#foot .um[data-id=codex]"); await page.click("#umpop .urow[data-id=codex] b"); await page.keyboard.press("Escape");
+  assert.equal(await page.$("#umpop"), null, "Esc after a click on its text still closes it");
+  const v = USAGE(); v[0] = {...v[0], windows: [{label: "5h", pct: 95, resets: NOW_S() - 60}]}; v[1] = {...v[1], windows: [{label: "5h", pct: 40, resets: null}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), v);
+  const mm = await meters(page);
+  assert.equal(mm[0].text, "—", "every window reset since: a dash, not n/a"); assert.equal(mm[1].text, "40%", "no reset time: the %, no countdown");
+  await page.click("#foot .um[data-id=codex]");
+  assert.deepEqual(await page.$$eval("#umpop .urow[data-id=codex] .uwin", ws => ws.map(w => [w.querySelector(".upct").textContent, w.querySelector(".ur").textContent])), [["40%", ""]]);
+  await page.keyboard.press("Escape");
+  v[0] = {...v[0], state: "failed", note: "timeout", at: NOW_S() - 7200};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), v);
+  const f0 = (await meters(page))[0];
+  assert.equal(f0.text, "—"); assert.ok(f0.err); assert.match(f0.title, /5h: reset since, no new reading\nRefresh failed: timeout\. These are from 2h ago/);
+  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .ut"); await page.evaluate(() => footer());
+  assert.notEqual(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "a redraw doesn't pull focus onto a tab");
+  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /Refresh failed: timeout\. From 2h ago\./);
+  // Compact mode preserves failed-refresh alert icon and "reset" label; <1m avoids "Resets in now"; missing/zero `at` avoids "From ."
+  await page.click("#umpop .useg [data-view=compact]");
+  assert.ok(await page.$("#umpop .urow.c[data-id=claude] .uerr"), "compact mode shows alert icon on failed refresh with kept windows");
+  assert.equal(await page.textContent("#umpop .urow.c[data-id=claude] .ur"), "reset", "compact mode shows reset when all windows reset");
+  await page.keyboard.press("Escape");
+  const w = USAGE(); w[0] = {...w[0], state: "failed", note: "timeout", at: 0, windows: [{label: "5h", pct: 50, resets: NOW_S() + 30}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), w);
+  const fw = (await meters(page))[0];
+  assert.equal(fw.text, "50%<1m");
+  assert.ok(fw.title.includes("resets in <1m") && !fw.title.includes("in now") && !fw.title.includes("From .") && !fw.title.includes("from ."), fw.title);
+  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .useg [data-view=detailed]");
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .urr"), "Resets in <1m");
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .unote"), "Refresh failed: timeout");
+  // Fresh state:"ok" rollout fallback still surfaces its note; umTone rounds with umPctText; stale near-limit keeps amber in Compact
+  const f = USAGE();
+  f[0] = {...f[0], at: NOW_S(), note: "rate limited; from the last session instead", windows: [{label: "5h", pct: 99.6, resets: NOW_S() + 3600}]};
+  f[1] = {...f[1], at: NOW_S() - 7200, windows: [{label: "5h", pct: 79.6, resets: NOW_S() + 3600}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), f);
+  const mf = await meters(page);
+  assert.equal(mf[0].tone, "full", "99.6 rounds to 100% and uses full tone");
+  assert.equal(mf[1].tone, "near", "79.6 rounds to 80% and uses near tone");
+  assert.match(mf[0].title, /from the last session instead/, "fresh ok fallback note shows in tooltip");
+  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /from the last session instead/, "fresh ok fallback note shows in Detailed popover");
+  await page.click("#umpop .useg [data-view=compact]");
+  assert.equal(await page.$eval("#umpop .urow.c[data-id=codex] .upct", e => getComputedStyle(e).color),
+    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "stale near-limit compact row keeps amber color matching footer");
+});
+
+test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());
+  assert.equal(await page.$("#umpop"), null);
+  await page.click("#foot .um[data-id=claude]");
+  assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "true");
+  assert.equal(await page.getAttribute("#foot .um[data-id=codex]", "aria-expanded"), "false", "only the meter it opened from");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["claude", "codex", "opencode", "pi"]);
+  const wins = await page.$$eval("#umpop .urow[data-id=claude] .uwin", ws => ws.map(w => [w.querySelector(".ul").textContent, w.querySelector(".upct").textContent, w.querySelector(".ur").textContent]));
+  assert.deepEqual(wins, [["Week", "64%", "in 3d 7h"], ["Fable", "15%", "in 3d 0h"]]);
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .uplan"), "Claude Max");
+  assert.match(await page.textContent("#umpop .urow[data-id=codex] .urr"), /^Resets in 2h 1\dm$/);
+  assert.equal(await page.$$eval("#umpop .urow[data-id=opencode] .uwin", w => w.length), 0);
+  assert.match(await page.textContent("#umpop .urow[data-id=opencode] .unote"), /^n\/a: OpenCode publishes no usage API/);
+  assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /^Refresh failed: can't reach the usage API$/);
+  const box = await page.$eval("#umpop", p => { const r = p.getBoundingClientRect(), f = document.getElementById("foot").getBoundingClientRect(); return {bottom: r.bottom, foot: f.top, left: r.left} });
+  assert.ok(box.bottom <= box.foot, "above the footer"); assert.ok(box.left >= 8);
+  await page.click("#umpop .useg [data-view=compact]");
+  assert.equal(await page.$$eval("#umpop .urow.c", r => r.length), 4);
+  assert.deepEqual(await page.$$eval("#umpop .urow.c", rs => rs.map(r => r.querySelector(".upct")?.textContent || r.querySelector(".uw").textContent)), ["64%", "92%", "n/a", "Refresh failed"]);
+  assert.equal(await page.evaluate(() => localStorage.getItem("usageView")), "compact");
+  assert.equal(await page.$eval("#umpop .urow.c[data-id=codex] .upct", e => getComputedStyle(e).color),
+    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "compact rows take the amber too");
+  await page.focus("#umpop [data-view=detailed]");
+  await page.evaluate(() => mc.update(JSON.parse(JSON.stringify(ui.raw))));
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "an unchanged update keeps the focus in the popover");
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());  // a fresh snapshot redraws it in place
+  assert.equal(await page.$$eval("#umpop .urow.c", r => r.length), 4);
+  await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
+  assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "false");
+  await page.click("#foot .um[data-id=pi]"); await page.mouse.click(600, 300); assert.equal(await page.$("#umpop"), null, "a click outside closes it");
+  // 1m countdown, focus preserved across footer rebuild, malformed windows guarded, non-identifier id Esc dismissal, narrow viewport clamp
+  const edge = [
+    {id: 'a"b]c', name: "Odd", state: "ok", at: NOW_S(), windows: [null, {label: "5h", pct: NaN, resets: NOW_S() + 65}, {label: "Week", pct: 120, resets: NOW_S() + 65}]},
+    ...USAGE().slice(0, 2),
+  ];
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), edge);
+  const me = await meters(page);
+  assert.equal(me[0].text, "100%1m", "clamps >100%, skips null/NaN windows, and formats 1m countdown");
+  await page.evaluate(() => document.querySelector("#foot .um").focus());
+  await page.evaluate(() => footer());
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), 'a"b]c', "footer rebuild keeps focus on the focused meter");
+  await page.evaluate(() => document.querySelector("#foot .um").click());
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$("#umpop"), null, "Esc closes popover even when id has quotes/brackets");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), 'a"b]c', "Esc restores focus to meter with special id");
+  await page.setViewportSize({width: 300, height: 700});
+  await page.evaluate(() => footer());
+  await page.evaluate(() => document.querySelector("#foot .um").click());
+  const narrow = await page.$eval("#umpop", p => { const r = p.getBoundingClientRect(); return {left: r.left, right: r.right, vw: innerWidth} });
+  assert.ok(narrow.left >= 8 && narrow.right <= narrow.vw - 7, `popover stays within narrow viewport: ${JSON.stringify(narrow)}`);
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({width: 1200, height: 800});
+  await page.evaluate(() => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: []}));
+  assert.equal(await page.$("#foot .ums"), null, "no agent reports: no meters");
+});
+
 // ---------- the agent log view, phases 2-3 (issue 191) ----------
 const LOGNOW = Date.now();
 function paneLog(){  // a Claude Code pane: two prompts, tool calls with output, two failing lines

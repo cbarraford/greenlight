@@ -271,6 +271,32 @@ func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, prim
     } else if let err = pErr ?? sErr {
         out["scan_error"] = err
     }
+    out["usage"] = usageOf(primary, secondary)
+    return out
+}
+
+/// The footer's plan meters (dash.py `usage`) from a merged pair, one per agent: greenlight's host's reading of an agent wins
+/// unless it failed while the Mac has a healthy (or windowed) reading; agents only the Mac reports are added after them. nil when neither host sent any.
+func usageOf(_ primary: [String: Any]?, _ secondary: [String: Any]?) -> [[String: Any]]? {
+    let p = (primary?["usage"] as? [Any])?.compactMap { $0 as? [String: Any] }
+    let s = (secondary?["usage"] as? [Any])?.compactMap { $0 as? [String: Any] }
+    guard p != nil || s != nil else { return nil }
+    let hasWin: ([String: Any]) -> Bool = { !(($0["windows"] as? [Any])?.isEmpty ?? true) }
+    let better: ([String: Any], [String: Any]) -> Bool = { a, b in
+        let sa = a["state"] as? String, sb = b["state"] as? String
+        return (sa == "failed" && sb == "ok") || (sa == "failed" && sb == "failed" && !hasWin(a) && hasWin(b))
+    }
+    var sById = [String: [String: Any]]()
+    for item in s ?? [] { if let id = item["id"] as? String, sById[id] == nil { sById[id] = item } }
+    var seen = Set<String>(), out = [[String: Any]]()
+    for item in p ?? [] {
+        guard let id = item["id"] as? String, seen.insert(id).inserted else { continue }
+        out.append(sById[id].map { better(item, $0) ? $0 : item } ?? item)
+    }
+    for item in s ?? [] {
+        guard let id = item["id"] as? String, seen.insert(id).inserted else { continue }
+        out.append(item)
+    }
     return out
 }
 
@@ -301,7 +327,9 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     }
     var panes = (primary?["panes"] as? [String: Any]) ?? [:]
     for (k, v) in (secondary?["panes"] as? [String: Any]) ?? [:] { panes[k] = v }
-    return ["trees": merged, "panes": panes, "repoHosts": hosts]
+    var out: [String: Any] = ["trees": merged, "panes": panes, "repoHosts": hosts]
+    out["usage"] = usageOf(primary, secondary)
+    return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
 /// a server), but each host's pane states only once, from the fetch that read them. Each fetch publishes on its own, so without

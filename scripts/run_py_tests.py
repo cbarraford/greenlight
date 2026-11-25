@@ -25,6 +25,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+os.environ.setdefault("GREENLIGHT_USAGE", "off")  # usage.py: tests never call the agents' usage APIs with your sign-ins
+
 ROOT = Path(__file__).resolve().parent.parent
 
 

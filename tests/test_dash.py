@@ -1,6 +1,6 @@
 """uv run python test_dash.py: the state table and layout validation (the page trusts both)."""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo", GREENLIGHT_TMUX_SOCKET=f"gl-test-{os.getpid()}")  # before greenlight: never the real ~/.greenlight or glab
+import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo", GREENLIGHT_TMUX_SOCKET=f"gl-test-{os.getpid()}", GREENLIGHT_USAGE="off")  # before greenlight: never the real ~/.greenlight, glab or usage APIs
 import dash
 
 
@@ -999,3 +999,16 @@ with mock.patch.object(dash, "live_agents", return_value={
     _older = dash.transcript("plog", before=_chained["more"])
     assert _older["source"] == "transcript" and any(e["text"] == "hello" for e in _older["entries"])
 print("pane log transcript ok")
+
+# dash.snapshot carries usage even on the first-run scan_error path (no last.json yet)
+with mock.patch.object(dash, "usage_now", return_value=[{"id": "claude", "name": "Claude", "state": "ok", "windows": []}]):
+    _last_bak = (dash.greenlight.STATE / "last.json").read_text()
+    (dash.greenlight.STATE / "last.json").unlink()
+    (dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 100, "msg": "token expired", "fix": "glab auth login"}))
+    try:
+        _first_err = dash.snapshot()
+        assert _first_err["scan_error"]["msg"] == "token expired" and _first_err["usage"][0]["id"] == "claude"
+    finally:
+        (dash.greenlight.STATE / "scan_error.json").unlink(missing_ok=True)
+        (dash.greenlight.STATE / "last.json").write_text(_last_bak)
+print("dash usage integration ok")
