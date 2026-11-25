@@ -194,6 +194,8 @@ ul.board li{padding:var(--ds-space-8) 0;border-top:1px solid var(--line);display
   font:var(--ds-type-caption);font-family:var(--font);color:var(--dim);font-variant-numeric:tabular-nums;background:var(--bg);padding-left:var(--ds-space-8)}
 #hist[hidden]{display:none}
 body.status #hist{bottom:calc(var(--ds-space-32) + var(--ds-space-12))}
+body.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-32))}
+body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-64))}
 #hist button{display:inline-flex;align-items:center;justify-content:center;width:var(--ds-layout-control-height-sm);height:var(--ds-layout-control-height-sm);
   padding:0;border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--dim)}
 #hist button:hover:not(:disabled){background:var(--ds-element-rest);color:var(--text)}
@@ -207,6 +209,9 @@ body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-32) + var(--d
 body.past .options{display:none}
 body.past #s{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* an earlier card steps down, as a held one does */
 body.past #s::before{content:"Earlier";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}
+[data-look=phosphor] body.past #s{--text:var(--faint);--dim:var(--faint)}
+body.past #s iframe{filter:grayscale(1);opacity:.6}
+body.past #s.frame::before{padding:var(--ds-space-8) var(--ds-space-24) 0}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -289,8 +294,10 @@ function toCard(i){
   if (!CARDS.includes(cur)) liveEl = cur;  // the board or Listening: forward from the latest card comes back to it
   if (document.body.dataset.fx) fx.stop();  // the thinking field was behind the wait card: not behind a card
   el.classList.remove("held");  // a streaming card keeps streaming off-screen (streamEl), and shows its progress when you come back
-  el.querySelectorAll(".chip").forEach(c => Object.hasOwn(REFS, c.dataset.ref) ? c.replaceWith(chipFor(c.dataset.ref, REFS[c.dataset.ref])) : c.remove());  // today's status
   if (cur !== el) cur.replaceWith(el);
+  freeze(el);
+  el.querySelectorAll(".chip").forEach(c => Object.hasOwn(REFS, c.dataset.ref) ? c.replaceWith(chipFor(c.dataset.ref, REFS[c.dataset.ref])) : c.remove());  // today's status
+  el.normalize(); chipify([...el.children]);  // a ref the snapshot only now knows gets its chip
   atCard = i; scrollTo(0, 0); histUI();
 }
 function histUI(){
@@ -675,8 +682,9 @@ window.stage = {
   // A turn began (issue 208): a card already up stays, stepped down to muted, as the last answer; with none (or only the
   // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
   hold(line){
+    if (streamEl) { streamEl.classList.remove("streaming"); caret(streamEl, false); streamEl = null; }  // a new turn ends any off-screen stream
     CARDS.concat(document.getElementById("s")).forEach(c => c.querySelectorAll(":scope > .options").forEach(o => o.remove()));  // a new turn: every earlier reply's options are stale
-    const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton)\b/.test(s.className);
+    const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton|board)\b/.test(s.className);
     if (card) { s.classList.remove("streaming"); caret(s, false); s.classList.add("held"); }
     else if (!s.classList.contains("skeleton")) {
       const k = $("div", "skel"); k.setAttribute("aria-hidden", "true");
@@ -799,12 +807,13 @@ window.stage = {
   // The reply's options as buttons under the card (issue 208): each is a link to greenlight-option:N, the index only; the app
   // looks the text up in the list it holds and sends it as if you'd said it. [] takes them away.
   options(list){
-    const s = document.getElementById("s"); CARDS.concat(s).forEach(c => c.querySelectorAll(":scope > .options").forEach(o => o.remove()));  // only one reply's options at a time
+    const s = document.getElementById("s"), host = CARDS.includes(s) ? CARDS[CARDS.length - 1] : s;
+    CARDS.concat(s).forEach(c => c.querySelectorAll(":scope > .options").forEach(o => o.remove()));  // only one reply's options at a time
     const os = arr(list).slice(0, 6).map((t, i) => [str(t).trim(), i]).filter(([t]) => t);  // each keeps its index in the app's list
     if (!os.length) return;
     const row = $("div", "options"); row.setAttribute("role", "group"); row.setAttribute("aria-label", "Options");
     os.forEach(([t, i]) => { const a = $("a", "option", t); a.href = "greenlight-option:" + i; row.append(a); });
-    s.append(row);
+    host.append(row);
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){

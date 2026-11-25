@@ -1777,7 +1777,7 @@ def scan(save=True, _backfill_retries=0):
                 r["goal"] = "" if STATUS_LINE_RE.search(r["comment"]) else r["comment"]
                 if save:
                     prune_candidates.append((r["id"], remembered, (mr or {}).get("iid")))
-            r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft")} | {
+            r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft", "updated_at")} | {
                 "ref": ref(r["forge"], mr["iid"]), "forge": r["forge"],
                 "author": mr["author"].get("login") or mr["author"]["username"], "role": "author" if mr["author"]["username"] == ME else "review",
                 # Basement card byline: forge avatars, username on hover
