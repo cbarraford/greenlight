@@ -105,7 +105,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.textContent(".doc ul li b"), "!4834");
   assert.equal(await p.textContent(".doc ul li code"), "ws_state.py");
   assert.deepEqual(await p.locator(".doc ol li").allTextContents(), ["merge", "deploy"]);
-  assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
+  assert.equal(await p.locator(".doc img, .doc script").count(), 0);  // markup never runs
+  assert.deepEqual(await p.$$eval(".doc a", as => as.map(a => [a.getAttribute("href"), a.textContent, a.attributes.length])),
+    [["https://x/5013", "!5013", 1]]);  // the one web link is a link (issue 208 phase 5): its href and nothing else
   assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
   assert.match(await p.textContent(".doc"), /Latest commit abc1234\.<img src=x onerror=alert\(1\)>/);  // the screen keeps the hash (and the line break)
   // a pipe table becomes the grid, its cells text; numbered steps split by code keep counting
@@ -519,5 +521,24 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark ?? null)), [null]);
   await p.evaluate(() => stage.refs({}));
   assert.equal(await p.locator(".chip").count(), 0);
+  // links and options (issue 208 phase 5): a web link is a real link (nothing else is); a linked ref's chip sits after the link;
+  // the options are buttons that carry only their index; a new turn's hold takes them away; nothing inline, nothing executes
+  await p.evaluate(() => { stage.refs({ "!12": { tone: "ok", label: "CI passed" } }); stage.text({ md: "See [!12](https://gitlab.com/g/p/-/merge_requests/12), [x](javascript:void0), [y](file:///etc/passwd) and [z](mailto:a@b)." }); });
+  assert.deepEqual(await p.$$eval("#s a", as => as.map(a => a.getAttribute("href"))), ["https://gitlab.com/g/p/-/merge_requests/12"]);
+  assert.equal(await p.$eval("#s a", a => a.nextSibling?.classList?.contains("chip")), true);
+  assert.equal(await p.locator("#s a .chip").count(), 0);
+  assert.equal(await p.textContent(".doc p"), "See !12CI passed, x, y and z.");
+  await p.evaluate(() => stage.options(["Merge it", "<b>Wait</b>", "", "Ask Sam"]));
+  assert.deepEqual(await p.$$eval(".options a.option", as => as.map(a => [a.getAttribute("href"), a.textContent])),
+    [["greenlight-option:0", "Merge it"], ["greenlight-option:1", "<b>Wait</b>"], ["greenlight-option:2", "Ask Sam"]]);
+  assert.equal(await p.locator(".options b").count(), 0);
+  assert.ok(await p.evaluate(() => [...document.querySelectorAll(".options a, #s a")].every(a => ![...a.attributes].some(x => x.name.startsWith("on")))));
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).cursor), "default");  // a button, not a link (§10.2)
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).height), "28px");
+  await p.evaluate(() => stage.options(["Only one"])); assert.equal(await p.locator(".options a.option").count(), 1);  // replaced, not added
+  await p.evaluate(() => stage.hold("Thinking")); assert.equal(await p.locator(".options").count(), 0);
+  await p.evaluate(() => { stage.text({ md: "a" }); stage.options([]); }); assert.equal(await p.locator(".options").count(), 0);
+  // a click on a link or an option navigates the page (the app's StageNav decides and cancels it), so the page stays put here
+  await p.evaluate(() => { stage.refs({}); stage.text({ md: "[go](https://example.com)" }); stage.options(["Yes"]); });
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
