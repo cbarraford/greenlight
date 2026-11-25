@@ -1393,6 +1393,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
             if p.isRunning { p.terminate(); return -1 }  // a wedged tmux or rc: fail the check, don't hang the suite
             return p.terminationStatus
         }
+        _ = login("\(sock) kill-server 2>/dev/null"); try? FileManager.default.removeItem(atPath: dir)  // a killed earlier run with this pid
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let prompt = String(repeating: "it's \"q\" $HOME `x` \\ #S #{session_name} → ;\n\t", count: 400)
         let run = "printf %s \(shellQuote(prompt)) > \(shellQuote(out))", mark = "\u{1b}]6973;greenlight-run\u{07}"
@@ -1423,7 +1424,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
                   again.contains(mark) && again.contains(tmuxMark) && !FileManager.default.fileExists(atPath: out) && leftovers() == before)
         }
         _ = login("\(sock) kill-server 2>/dev/null")
-        check("pane: the long-run check's tmux server is gone", login("\(sock) has-session 2>/dev/null") != 0)
+        check("pane: the long-run check's tmux server is gone", [1, 127].contains(login("\(sock) has-session 2>/dev/null")))  // not -1: couldn't ask
         _ = login("rm -f \"${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/gl-unit-run-\(getpid())\"")  // then its socket, which tmux leaves
         try? FileManager.default.removeItem(atPath: dir)
     }
