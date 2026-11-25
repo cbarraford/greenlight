@@ -303,11 +303,11 @@ function blocks(md){
 // flat and slide onto the card's lines, and the card fades in over them. Never under reduced motion, nor with
 // data-motion="off" on the root (Settings ▸ Thinking motion). body[data-fx] says what it is doing: think, reveal, or nothing.
 const fx = (() => {
-  const cv = document.getElementById("fx"), g = cv.getContext("2d"), calm = matchMedia("(prefers-reduced-motion: reduce)");
+  const cv = document.getElementById("fx"), g = cv.getContext("2d");
   const LOCK = 420, LAND = 1000, GONE = 1250;  // ms into a reveal: in step, on the card's lines, faded out
   const clamp = v => v < 0 ? 0 : v > 1 ? 1 : v, ease = p => p < .5 ? 4 * p * p * p : 1 - (2 - 2 * p) ** 3 / 2, mix = (a, b, t) => a + (b - a) * t;
   let mode = "off", n = 0, cols = 1, pit = 20, w = 0, h = 0, ox = 0, oy = 0, th, nx, om, zone, seg, lev, aimAt = null, ink = "", t0 = 0, last = 0, raf = 0, vis = 0, v0 = 1, born = null;
-  const on = () => !calm.matches && document.documentElement.dataset.motion !== "off";
+  const on = () => !matchMedia("(prefers-reduced-motion: reduce)").matches && document.documentElement.dataset.motion !== "off";  // asked afresh: WebKit can leave a kept query stale
   // Every line of text under `root` as a box (a wrapped line is its own), and each bar: where the needles come to rest.
   function lines(root){
     const out = [], add = (r, top) => { if (r.width > 3 && r.height > 3 && r.bottom > 0 && r.top < h && r.right > 0 && r.left < w && out.length < 400) out.push({x: r.left, y: top ? r.top : r.top + r.height / 2, w: r.width, hh: top ? 2 : r.height / 2}); };
