@@ -177,42 +177,61 @@ body.hasdock main{padding-right:var(--dock-w)}
 .live.off::before{background:var(--gray)}
 .live.connecting::before{background:var(--blue)} .live.bad{color:var(--red-ink)} .live.bad::before{background:var(--red)}
 
-/* overview: agents strip on top, workspace honeycomb below */
+/* overview: agents strip on top, workspace honeycomb below; detached: agents owns the full window */
 main.ov{background:var(--canvas)}
+body.nohex main{display:flex;flex-direction:column;overflow:hidden;background:var(--canvas)}
 .agents{padding:var(--sp-3) var(--sp-4);min-height:40px;justify-content:center;background:var(--strip);border-bottom:1px solid var(--hair);display:flex;flex-direction:column;gap:var(--sp-2)}
+.agents.detached{flex:1;min-height:0;padding:0;gap:0;background:var(--canvas);border-bottom:0;justify-content:flex-start}
 .agents h2.sect{margin:0}
 .shead{display:flex;align-items:center;gap:var(--sp-2);min-height:24px;flex-wrap:wrap}
 .shead h2{margin:0;font-size:var(--fs-3);font-weight:600}
 .shead .sp{flex-grow:1}
-.fold{display:flex;align-items:center;gap:var(--sp-1);height:24px;padding:0 6px;border:0;border-radius:var(--r-1);background:none;color:var(--text2);font-size:var(--fs-2);font-weight:500}.fold:hover{background:var(--fill);color:var(--text)}
+.agents.detached>.shead{height:var(--bar-h);min-height:var(--bar-h);flex-shrink:0;flex-wrap:wrap;gap:var(--sp-2) var(--sp-3);padding:0 var(--sp-4);background:var(--bar);border-bottom:1px solid var(--hair)}
+.agents.detached>.shead h2{font:var(--ds-type-title-sm);letter-spacing:var(--ds-type-title-sm-track);white-space:nowrap}
+.agents.detached>.shead .muted{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:640px){.agents.detached>.shead{height:auto;padding:var(--sp-2) var(--sp-3)}}
+.fold{display:flex;align-items:center;gap:var(--sp-1);height:24px;padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:none;color:var(--text2);font-size:var(--fs-2);font-weight:500}.fold:hover{background:var(--fill);color:var(--text)}
 .fold .chev{display:flex;color:var(--text3)}
-.crash{display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;padding:0 var(--sp-2);border-radius:var(--r-full);border:0;background:var(--red-tint);color:var(--red-ink);font-size:var(--fs-1);font-weight:500}
-.crash:hover{box-shadow:inset 0 0 0 1px var(--red-edge)}
+.crash{display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;padding:0 var(--sp-2);border-radius:var(--r-full);border:0;background:var(--red-tint);color:var(--red-ink);font-size:var(--fs-1);font-weight:500;white-space:nowrap;flex-shrink:0}
+.crash:hover,.crash.on{box-shadow:inset 0 0 0 1px var(--red-edge)}
 /* cards keep about one size whatever the window: a wide window gets more columns, not wider cards */
-.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2);max-height:240px;overflow-y:auto;padding:1px 1px var(--sp-3);margin:-1px -1px calc(-1*var(--sp-3))}  /* capped: the board stays in view, the strip scrolls */
-.acard{border-radius:var(--ds-radius-md);background:var(--card);padding:var(--ds-space-12);min-width:0;
-  --edge:var(--ds-elevation-1);box-shadow:var(--lead,0 0 transparent),var(--edge);
-  display:flex;flex-direction:column;gap:var(--ds-space-8);container-type:inline-size;position:relative}
+.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));align-items:stretch;gap:var(--sp-2);max-height:240px;overflow-y:auto;padding:2px 2px var(--sp-3);margin:-2px -2px calc(-1*var(--sp-3))}  /* capped when docked: the board stays in view, the strip scrolls */
+.agents.detached>.acards{flex:1;min-height:0;max-height:none;align-content:start;gap:var(--sp-3);padding:var(--sp-4);margin:0}
+.aempty{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sp-2);padding:var(--sp-6);text-align:center}
+.aempty .aemic{color:var(--faint)}
+.aempty h3{margin:0;font:var(--ds-type-title-sm);letter-spacing:var(--ds-type-title-sm-track);color:var(--text)}
+.aempty p{margin:0;max-width:44ch;font:var(--ds-type-body-copy);color:var(--text3)}
+.aempty .btn{margin-top:var(--sp-2)}
+.acard{border-radius:var(--ds-radius-md);background:var(--card);padding:var(--ds-space-8) var(--ds-space-12);min-width:0;
+  --edge:var(--ds-elevation-1);box-shadow:var(--edge);
+  display:flex;flex-direction:column;gap:var(--ds-space-4);container-type:inline-size;position:relative}
+.agents.detached .acard{padding:var(--ds-space-16);gap:var(--ds-space-12)}
 .acard:hover{--edge:0 0 0 1px var(--ds-border-hover)} .acard.hl{--edge:0 0 0 1px var(--accent)}
-.acard.crashed{--lead:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
+.acard.crashed::before{content:"";position:absolute;left:0;top:var(--ds-space-8);bottom:var(--ds-space-8);width:2px;border-radius:var(--r-full);background:var(--red);pointer-events:none}  /* a crash: crisp leading bar inset clear of the 8px corners */
 .acard:hover,.acard:focus-within{z-index:2}  /* its stage list floats over the next card */
-.atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0} .acard .av{width:20px;height:20px;background:none} .acard>.aline,.acard>.prog,.acard>.ameta{margin-left:28px} .atop .open{min-width:64px}
+.atop{display:flex;align-items:flex-start;gap:var(--sp-2);min-width:0}
+.acard .av{width:20px;height:20px;margin-top:1px;background:none}
+.aright{display:flex;align-items:center;gap:var(--sp-2);flex-shrink:0}
 .av{width:28px;height:28px;flex-shrink:0;border-radius:var(--r-1);display:flex;align-items:center;justify-content:center;background:var(--fill);color:var(--text)}
 .av.claude{color:var(--claude)} .av.codex{color:var(--codex)} .av.agy{color:var(--agy)}
-.at{display:flex;flex-direction:column;min-width:0;flex-grow:1}
+.at{display:flex;flex-direction:column;gap:var(--ds-space-2);min-width:0;flex:1}
 .at b,.at span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.at b{font-size:var(--fs-3);line-height:var(--lh-2);font-weight:600} .at span{font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
-.atop .pill{flex-shrink:0}
-.prog{display:flex;flex-direction:column;gap:6px;position:relative;border-radius:var(--r-0);outline-offset:3px}
+.at b{font:var(--ds-type-strong);letter-spacing:var(--ds-type-strong-track);color:var(--text)}
+.at span{font:var(--ds-type-label);color:var(--text3)}
+.astatus{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);min-width:0}
+.astatus .pill{flex-shrink:0}
+.astep{font:var(--ds-type-caption);color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.astep b{color:var(--text2);font-weight:500}
+.prog{display:flex;flex-direction:column;gap:var(--ds-space-4);position:relative;border-radius:var(--r-0);outline-offset:3px}
 /* the bar's stage list: hover or focus the bar for every step by name */
 .stagepop{display:none;position:absolute;left:-6px;top:calc(100% + 6px);z-index:30;min-width:220px;max-width:min(320px,calc(100vw - 32px));padding:var(--sp-2);
   border-radius:var(--r-2);background:var(--sheet);box-shadow:var(--elev);pointer-events:none;animation:popin var(--t-fast) var(--ease) .15s both}
 .prog.up .stagepop{top:auto;bottom:calc(100% + 6px)}
 .prog:hover .stagepop,.prog:focus-visible .stagepop{display:block} .prog.hush .stagepop{display:none} .prog.steady .stagepop{animation:none}
 @keyframes popin{from{opacity:0;transform:scale(.96)}}
-.stagepop .sph{display:flex;align-items:baseline;gap:var(--sp-2);padding:0 6px 6px;font-size:var(--fs-2);color:var(--text3)} .stagepop .sph b{color:var(--text);font-weight:600}
+.stagepop .sph{display:flex;align-items:baseline;gap:var(--sp-2);padding:0 var(--sp-2) var(--sp-1);font-size:var(--fs-2);color:var(--text3)} .stagepop .sph b{color:var(--text);font-weight:600}
 .stagepop ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
-.stagepop li{display:grid;grid-template-columns:12px minmax(0,1fr) auto;align-items:center;gap:var(--sp-2);padding:var(--sp-1) 6px;border-radius:var(--r-0);font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
+.stagepop li{display:grid;grid-template-columns:12px minmax(0,1fr) auto;align-items:center;gap:var(--sp-2);padding:var(--sp-1) var(--sp-2);border-radius:var(--r-0);font-size:var(--fs-2);line-height:var(--lh-2);color:var(--text3)}
 .stagepop .spm{width:12px;height:12px;border-radius:var(--r-full);border:1.5px solid var(--track);display:flex;align-items:center;justify-content:center;color:var(--ds-fg-on-solid)}
 .stagepop .spt{font-size:var(--fs-1);font-weight:500}
 .stagepop li.done{color:var(--text2)} .stagepop li.done .spm{border:0;background:var(--text3)}
@@ -222,14 +241,23 @@ main.ov{background:var(--canvas)}
 .lbls{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;font-size:var(--fs-1);line-height:var(--lh-1);color:var(--text3)}
 .lbls span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .lbls .done{color:var(--text2)} .lbls .cur{color:var(--blue-ink);font-weight:500;overflow:visible}
 .acard.wait .lbls .cur{color:var(--orange-ink)} .acard.crashed .lbls .cur{color:var(--red-ink)}
-@container (max-width:620px){.lbls span:not(.cur){visibility:hidden}}
-.ameta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-4);font-size:var(--fs-2);color:var(--text3);min-height:24px} .ameta b{color:var(--text2);font-weight:500}
-.ameta .why{flex:1 1 160px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)}
-.el{font-size:var(--fs-1);color:var(--text3);font-variant-numeric:tabular-nums}
-.aline{display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:6px var(--sp-2);border-radius:var(--r-1);background:var(--fill)}
-.aline .mono{font-size:var(--fs-2);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-button.aline{width:100%;border:0;font:inherit;color:inherit;text-align:left} button.aline:hover{background:var(--fill-hover)}
-button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3);opacity:0} button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
+@container (max-width:620px){.lbls{display:none}}
+.ameta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);margin-top:auto;font:var(--ds-type-caption);color:var(--text3);font-variant-numeric:tabular-nums}
+.ameta .asig{display:inline-flex;align-items:center;gap:var(--sp-1);white-space:nowrap}
+.ameta .asig.bad{color:var(--red-ink)} .ameta .asig.run{color:var(--blue-ink)} .ameta .asig.hi{color:var(--text2)}
+.el{font:var(--ds-type-caption);color:var(--text3);font-variant-numeric:tabular-nums}
+.aline{display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:var(--sp-1) var(--sp-2);border-radius:var(--r-0);background:var(--ds-bg-sunken)}
+.agents.detached .aline{padding:var(--sp-2) var(--sp-3)}
+.aline .alic{color:var(--faint);flex-shrink:0}
+.aline.err .alic{color:var(--red-ink)}
+.aline .mono{font:var(--ds-type-code);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.aline .atool{color:var(--text3);font-weight:500}
+button.aline{width:100%;border:0;font:inherit;color:inherit;text-align:left;transition:background-color var(--t-fast) var(--ds-easing-color)}
+button.aline:hover{background:var(--fill-hover)}
+button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3);opacity:0;transition:opacity var(--t-fast) var(--ds-easing-color)}
+button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
+.agents.detached button.aline .aexp{opacity:.45}
+.agents.detached button.aline:hover .aexp,.agents.detached button.aline:focus-visible .aexp{opacity:1}
 /* All output: the agent's recorded log and conversation over the whole window */
 #aout{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:var(--bg);color:var(--text)} #aout [hidden]{display:none !important}
 #aout .aohd,#aout .aoft{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-4);background:var(--bar);flex-shrink:0}
@@ -348,21 +376,20 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .aosep.aolook .aots{color:var(--text3);font-weight:400}
 .aomore{display:flex;justify-content:center;min-height:28px;margin-bottom:var(--sp-3);font-size:var(--fs-2);color:var(--text3)} .aonote{margin:var(--sp-6) 0;text-align:center;font-size:var(--fs-3);color:var(--text3)}
 #aout .aoft .aline{flex:1;min-width:0;background:none;padding:0} #aout .aerr{color:var(--red-ink);font-size:var(--fs-2)}
-.adot{width:12px;height:12px;flex-shrink:0;border-radius:var(--r-full);background:var(--blue);display:flex;align-items:center;justify-content:center}
-.adot::after{content:"";width:36%;height:36%;border-radius:var(--r-full);background:var(--ds-fg-on-solid)}
 /* the lifecycle bar: done steps muted, the current one in its state, the rest a track (DESIGN.md §10.10) */
 .segs{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px}
 .segs span{height:4px;border-radius:var(--r-full);background:var(--track);overflow:hidden}
 .segs i{display:block;height:100%;border-radius:var(--r-full);background:var(--text3)}
 .segs i.cur{background:var(--blue)} .acard.wait .segs i.cur{background:var(--orange)} .acard.crashed .segs i.cur{background:var(--red)}
-.acard .askrow{display:flex;align-items:flex-end;gap:var(--ds-space-8);padding-left:28px}  /* under the title, past the avatar */
-.acard .ask{flex:1;min-width:0;font:var(--ds-type-body);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.acard .el{min-width:40px;text-align:right}
+.acard .askrow{display:flex;flex-direction:column;align-items:flex-start;gap:var(--ds-space-2)}
+.acard .ask{width:100%;min-width:0;font:var(--ds-type-body-copy);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.acard .el{min-width:36px;text-align:right}
 .acard .ask.full{display:block;white-space:pre-wrap;max-height:40vh;overflow:auto}
-.acard .fullq{height:24px;flex-shrink:0;padding:0 var(--ds-space-8);margin:-4px 0;border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--text2);font:var(--ds-type-label)} .acard .fullq:hover{background:var(--ds-element-rest);color:var(--text)}
-.acard .open{flex-shrink:0;height:24px;padding:0 var(--ds-space-8);border-radius:var(--ds-radius-sm);border:0;background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label)}
+.acard .fullq{height:24px;flex-shrink:0;padding:0 var(--ds-space-8);margin-left:calc(-1 * var(--ds-space-8));border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--text2);font:var(--ds-type-label)} .acard .fullq:hover{background:var(--ds-element-rest);color:var(--text)}
+.acard .open{flex-shrink:0;height:var(--ds-layout-control-height-sm);padding:0 var(--ds-space-12);border-radius:var(--ds-radius-sm);border:0;background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);transition:transform var(--t-press) var(--ease)}
+.agents.detached .acard .open{height:var(--ds-layout-control-height-md)}
 .acard .open:hover{background:var(--ds-element-hover)} .acard .open:active{background:var(--ds-element-active);transform:scale(.97)}
-.acards>.acard:first-child .open.ans{background:var(--accent-solid);color:var(--on-accent)} .acards>.acard:first-child .open.ans:hover{background:var(--accent-hover)}  /* one primary per view: the first question */
+.acards>.acard.wait:first-child .open.ans{background:var(--accent-solid);color:var(--on-accent);font-weight:600} .acards>.acard.wait:first-child .open.ans:hover{background:var(--accent-hover)}  /* one primary per view: the first question */
 @keyframes breathe{50%{opacity:.45}}
 .whead{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-4);padding:var(--sp-4) var(--sp-4) 0;font-size:var(--fs-2);color:var(--text3)}
 .whead h2.sect{margin:0}
@@ -432,7 +459,7 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}
 .badge{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);background:color-mix(in srgb,currentColor 14%,transparent);color:var(--hink);
   font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center}  /* a count badge in the hex's own ink (§10.5) */
-@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.hx .halo{transition:none}
+@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.acard .open,button.aline,button.aline .aexp,.hx .halo{transition:none}
   .hx .pulse,.stagepop,.spin,#hcard,#hcard .gl.working,.rescan.on,#hcard .mg .go i{animation:none}}
 
 /* docks: the chat's context (right) and the park (left) */
@@ -1274,24 +1301,36 @@ function unStages(e){  // a real leave forgets it; the 5s re-render's removal bl
   setTimeout(() => { const el = document.getElementById(id); if (!el || !(el === document.activeElement || el.matches(":hover"))) ui.stage = null }, 0);
 }
 // what the agent is doing, as a button: it opens All output over the whole window
-const outLine = (p, act, ...kids) => h("button", {class:"aline", id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
+const outLine = (p, act, cls, ...kids) => h("button", {class:"aline" + (cls ? " " + cls : ""), id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
   onclick: () => openOut(p.name)}, ...kids, h("span", {class:"aexp", "aria-hidden":"true"}, icon("expand", 12)));
-function agentCard(p){  // one size everywhere: who and the action, the steps as a bar, what it's doing now, then the MR's facts
+const CI_GLYPH = {success: ["done", ""], failed: ["crashed", "bad"], running: ["working", "run"], pending: ["queued", ""], canceled: ["queued", ""]};
+function agentCard(p){  // one size everywhere: title + action, status + step bar, current question or tool output, then quiet MR signals
   const a = p.agent, wait = asking(p), ag = agentMeta(a.type), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
   const said = String(a.last || "").split("\n").filter(Boolean).pop() || "";
   const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : short(said || "Working", 160);
   const {n, i} = stepsOf(p), t0 = since(a.since), title = String(mr.title || p.goal || p.name).replace(/^Draft:\s*/i, ""), steps = p.steps || [];
   const q = String(a.last || "").trim().replace(/\n{3,}/g, "\n\n"), full = wait && ui.fullAsk[p.name], long = q.length > 120 || q.includes("\n");  // Full question: blank runs folded to one
-  const ci = CIWORD[mr.pipeline], why = steps.length ? p.action || p.why || "" : "";  // no steps: nothing to say about the lifecycle
-  const fact = (k, v, col) => h("span", {}, k + " ", h("b", {style: col ? `color:${ink(col)}` : null}, v));
+  const ci = CIWORD[mr.pipeline], cig = CI_GLYPH[mr.pipeline];
+  const curKey = steps.length && i < n && p.state !== "done" ? steps[i] : null;
+  const curName = curKey ? (STEP_GOALS[curKey] || STEP_NAMES[curKey] || String(curKey).replace(/_/g, " ")) : "";
+  const sig = (ic, text, cls) => h("span", {class:"asig" + (cls ? " " + cls : "")}, icon(ic, 12, ""), text);
+  const metaItems = [
+    ci && cig ? sig(cig[0], `CI ${ci[0]}`, cig[1]) : null,
+    mr.conflicts ? sig("conflict", "Conflicts", "bad") : null,
+    mr.threads_total ? sig("threads", `${mr.threads || 0}/${mr.threads_total} threads`, mr.threads ? "hi" : "") : null,
+    mr.approvals_required ? sig("review", `${mr.approvals || 0}/${mr.approvals_required} approved`, "") : null,
+  ].filter(Boolean);
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     h("div", {class:"atop"}, agentAv(a.type, 20),
       h("div", {class:"at"}, h("b", {title: a.task || title}, short(title, 160)),
-        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && `goal: ${short(p.goal, 80)}`].filter(Boolean).join(" · "))),  // not when the goal is the title
+        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && short(p.goal, 80)].filter(Boolean).join(" · "))),  // not when the goal is the title
+      h("div", {class:"aright"},
+        h("span", {class:"el", "data-since": t0}, clock(t0)),
+        h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open"))),
+    h("div", {class:"astatus"},
       statusPill(wait ? "wait" : crash ? "red" : "blue", wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || (steps.length && STEP_NAMES[p.step]) || "Working"),
-      h("span", {class:"el", "data-since": t0}, clock(t0)),
-      h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
+      steps.length ? h("span", {class:"astep"}, curName ? [h("b", {}, curName), ` · ${Math.min(i + 1, n)}/${n}`] : `All ${n} steps done`) : null),
     steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? " steady" + (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
         onmouseenter: e => placeStages(e, p.name), onfocus: e => placeStages(e, p.name), onmouseleave: unStages, onblur: unStages,
         onkeydown: e => { if (e.key === "Escape" && !e.currentTarget.classList.contains("hush")) { e.stopPropagation(); e.currentTarget.classList.add("hush"); if (ui.stage) ui.stage.hush = true } }},  // Esc puts the list away; Esc again backs out as usual
@@ -1300,35 +1339,42 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       stageList(p, steps, i, n)) : null,
     wait ? h("div", {class:"askrow"}, h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240)),  // two lines of the question, or all of it
         long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null)
-      : crash ? (said ? outLine(p, said, h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
-      : outLine(p, act, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)),
-    steps.length || ci || mr.conflicts || mr.threads_total || mr.approvals_required ? h("div", {class:"ameta"},
-      steps.length ? fact("Step", `${Math.min(i + 1, n)} of ${n}`) : null,
-      ci ? fact("CI", ci[0], ci[1]) : null,
-      mr.conflicts ? h("b", {style:`color:${ink("--red")}`}, "Conflicts") : null,
-      mr.threads_total ? fact("Threads", `${mr.threads || 0} of ${mr.threads_total} open`) : null,
-      mr.approvals_required ? fact("Approvals", `${mr.approvals || 0} of ${mr.approvals_required}`) : null,
-      why ? h("span", {class:"why", title: why}, why) : null) : null);
+      : crash ? (said ? outLine(p, said, "err", icon("crashed", 12, "alic"), h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
+      : outLine(p, act, "", icon("terminal", 12, "alic"),
+          h("span", {class:"mono", title: act}, a.tool ? [h("b", {class:"atool"}, a.tool), a.input ? `: ${a.input}` : ""] : act)),
+    metaItems.length ? h("div", {class:"ameta"}, ...metaItems) : null);
 }
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
   : p.step === "milestone" ? "Set milestone" : p.state === "crashed" ? "Inspect failure" : p.state === "needs" ? "View request" : "Review MR";  // only an agent asking (a question, or a chat's reply) has one
+const agentRank = p => asking(p) ? 0 : p.state === "crashed" && p.agent.state !== "working" ? 1 : 2;  // urgency order: needs you, crashed, working
 function agentsStrip(docked){  // docked: the overview's strip, where idle crashed workspaces show only in the "N crashed" chip; every live agent shows, whatever its workspace's state
   const busy = p => p.agent.state === "working" || asking(p), all = shown();
-  const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, idle ones show only in the chip); hid: the search hides some
+  const cand = all.filter(p => busy(p) || !docked && p.state === "crashed"), live = cand.filter(matches).sort((a, b) => agentRank(a) - agentRank(b)), hid = live.length < cand.length;  // detached: crashed workspaces show as cards too (docked, idle ones show only in the chip); hid: the search hides some
   const crashed = all.filter(p => p.state === "crashed").length;  // crashed workspaces, as the footer, the hexes and the chip's own filter count them
   const idle = all.filter(p => p.agent.type && !busy(p) && p.state !== "crashed").length;  // as the hover card: an idle agent on a crashed workspace reads "crashed"
   const working = live.filter(p => p.agent.state === "working").length;  // the pills count the cards below them
   const waiting = live.filter(asking).length;
   const pills = [working ? statusPill("blue", `Working ${working}`) : null, waiting ? statusPill("orange", `${waiting} need${waiting === 1 ? "s" : ""} you`, {title:"Agents waiting on your answer"}) : null];  // agents only: waiting-on-others and done sit on the shelf
-  return h("section", {class:"agents"},
-    h("div", {class:"shead"}, h("h2", {}, "Agents"), ...pills, crashed ? h("button", {class:"crash", onclick: () => { ui.q = "Crashed"; render() }}, icon("crashed-fill", 12, ""), `${crashed} crashed`) : null,
+  const detached = !docked && ui.only === "agents";
+  const crashFilter = ui.q.trim().toLowerCase() === "crashed";
+  const emptyBody = detached && !live.length ? h("div", {class:"aempty"},
+    icon(hid ? "search" : "terminal", 20, "aemic"),
+    h("h3", {}, hid ? "No matching agents" : "No agents working"),
+    h("p", {}, hid ? `Clear the filter to see all ${cand.length} agent${cand.length === 1 ? "" : "s"}.`
+      : idle ? `${idle} idle workspace${idle === 1 ? "" : "s"} in Greenlight Center.` : "Start a task in Greenlight Center to see live agents here."),
+    hid ? h("button", {type:"button", class:"btn", onclick: () => { ui.q = ""; renderMain() }}, "Clear filter") : null) : null;
+  const showCrash = crashed && !(detached && !live.length && hid);
+  return h("section", {class:"agents" + (detached ? " detached" : "")},
+    h("div", {class:"shead"}, h("h2", {}, "Agents"), ...pills, showCrash ? h("button", {class:"crash" + (crashFilter ? " on" : ""),
+        onclick: () => { ui.q = crashFilter && detached ? "" : "Crashed"; render() }}, icon("crashed-fill", 12, ""), `${crashed} crashed`) : null,
       live.length || ui.agentsFolded && !ui.only ? null : h("span", {class:"muted", style:"font-size:var(--fs-2)"}, hid ? "No agents match the search" : `No agents working · ${idle} idle`),
-      h("span", {class:"sp"}), ui.only || !live.length ? null : h("button", {class:"fold", "aria-expanded": String(!ui.agentsFolded), title: ui.agentsFolded ? "Show agents" : "Hide agents",
+      h("span", {class:"sp"}),
+      ui.only || !live.length ? null : h("button", {class:"fold", "aria-expanded": String(!ui.agentsFolded), title: ui.agentsFolded ? "Show agents" : "Hide agents",
             onclick: () => { ui.agentsFolded = !ui.agentsFolded; localSet("agentsFolded", ui.agentsFolded ? "1" : ""); renderMain() }},
           ui.agentsFolded ? `Show ${live.length} agent${live.length === 1 ? "" : "s"}` : "Hide", h("span", {class:"chev"},
  icon(ui.agentsFolded ? "chevron-right" : "chevron-down", 12))), popBtn("agents")),
-    live.length && !(ui.agentsFolded && !ui.only) ? h("div", {class:"acards"}, live.map(agentCard)) : null);
+    live.length && !(ui.agentsFolded && !ui.only) ? h("div", {class:"acards"}, live.map(agentCard)) : emptyBody);
 }
 setInterval(() => {
   if (document.hidden) return;
@@ -2814,6 +2860,7 @@ function renderMain(){
   const keep = main.scrollTop, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
   const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
   main.replaceChildren(); main.classList.remove("ov"); ui.dk = {};
+  document.body.classList.toggle("nohex", !shows("hex"));
   if (!ui.snap) { main.classList.add("ov"); const bad = CONN.failed, retrying = !bad && CONN.tries > 0;
     const retry = () => { CONN.tries++; CONN.refocus = true; post({cmd: "ready"}); armConn(); renderMain(); footer(); document.querySelector("#main .empty").focus() };  // the page's own hello again: the app answers with the latest update
     main.append(h("div", {class:"empty" + (bad ? " bad" : ""), role: bad ? "alert" : "status", tabindex: "-1"},  // Retry's focus waits here, and comes back to Retry if this try fails too

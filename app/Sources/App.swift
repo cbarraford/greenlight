@@ -646,7 +646,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func detach(_ v: String) {
         guard let title = App.viewTitles[v] else { return }
         if let w = viewWindows[v] { w.makeKeyAndOrderFront(nil); return }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: v == "agents" ? 900 : 1000, height: v == "agents" ? 420 : 640),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: v == "agents" ? 960 : 1000, height: 640),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = title
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // §10.1: the canvas, never black

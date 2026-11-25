@@ -2431,6 +2431,66 @@ test("Hover card: a hex answers at its outline, the next card swaps in fast, a r
   if (await owner(o.x, o.y) === o.n) await page.waitForSelector(`#hcard[data-name='${o.n}']`, {timeout: 1000});
 });
 
+test("detached Agents window fills the full height (no 240px cap or empty box beneath), sorts by urgency, filters inline, and keeps output lines inside cards", async page => {
+  const det = await page.context().browser().newPage({viewport: {width: 960, height: 860}});
+  await det.addInitScript(() => {
+    window.__posts = [];
+    window.webkit = {messageHandlers: {mc: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}};
+  });
+  const errs = []; det.on("pageerror", e => errs.push(e.message));
+  try {
+    await det.goto(PAGE);
+    const mk = (name, state, agentState, tool = "") => ({
+      ...puck(name, "Task " + name, agentState),
+      state,
+      steps: ["mr_open", "ci_green", "merge"],
+      step_index: 1,
+      step: "ci_green",
+      agent: {...puck(name, "Task " + name, agentState).agent, state: agentState, tool, input: tool ? "app/dashboard.html" : "", last: state === "crashed" ? "boom" : agentState === "waiting" ? "Ship it?" : "Running"},
+    });
+    const pucks = [
+      mk("w-1", "working", "working", "Edit"),
+      mk("w-2", "working", "working", "Bash"),
+      mk("c-1", "crashed", "idle"),
+      mk("n-1", "needs", "waiting"),
+      mk("w-3", "working", "working", "Read"),
+      mk("w-4", "working", "working", "Edit"),
+      mk("w-5", "working", "working", "Bash"),
+      mk("w-6", "working", "working", "Read"),
+    ];
+    await det.evaluate(s => { window.mc.update(s); window.mc.mode({only: "agents", away: []}) }, {...SNAP, pucks});
+    assert.equal(await det.evaluate(() => document.body.classList.contains("nohex")), true);
+    assert.equal(await det.evaluate(() => document.getElementById("bar").style.display), "none");
+    // Urgency order: needs you first, then crashed, then working
+    const order = await det.$$eval(".agents.detached .acard", es => es.map(e => e.dataset.name));
+    assert.deepEqual(order.slice(0, 2), ["n-1", "c-1"], "needs-you then crashed come first: " + order.join(","));
+    // Full-window height: .acards fills the space between the header bar and footer (no 240px cap / gray box beneath)
+    const geom = await det.evaluate(() => {
+      const s = document.querySelector(".agents.detached").getBoundingClientRect();
+      const c = document.querySelector(".agents.detached .acards").getBoundingClientRect();
+      const f = document.getElementById("foot").getBoundingClientRect();
+      const maxH = getComputedStyle(document.querySelector(".agents.detached .acards")).maxHeight;
+      const overflow = [...document.querySelectorAll(".acard")].filter(card => {
+        const line = card.querySelector("button.aline");
+        return line && line.getBoundingClientRect().right > card.getBoundingClientRect().right + 1;
+      }).length;
+      return {sBottom: Math.round(s.bottom), cBottom: Math.round(c.bottom), cHeight: Math.round(c.height), fTop: Math.round(f.top), maxH, overflow};
+    });
+    assert.equal(geom.maxH, "none", "detached cards grid must not cap max-height");
+    assert.ok(geom.cHeight > 600, `detached cards grid should fill the tall window, got ${geom.cHeight}px`);
+    assert.ok(Math.abs(geom.cBottom - geom.fTop) <= 2, `no gray void beneath cards (${geom.cBottom} vs footer ${geom.fTop})`);
+    assert.equal(geom.overflow, 0, "button.aline must stay inside its card");
+    // Detached empty state + Clear filter button when filtered to no matches
+    await det.evaluate(() => { ui.q = "zzz-no-match"; renderMain() });
+    assert.equal(await det.locator(".agents.detached .acard").count(), 0);
+    assert.equal(await det.isVisible(".agents.detached .aempty"), true);
+    assert.equal(await det.locator(".agents.detached .crash").count(), 0, "no stale crashed chip when filter matches nothing");
+    await det.click(".agents.detached .aempty button");
+    assert.equal(await det.locator(".agents.detached .acard").count(), 8, "Clear filter restores all cards");
+    assert.deepEqual(errs, []);
+  } finally { await det.close() }
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
