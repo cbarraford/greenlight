@@ -961,6 +961,7 @@ final class RulesStore: ObservableObject {
     @Published var openStages = Set<String>()  // built-in stages whose long requirement is open in Settings
     @Published var options = [String: String]()
     @Published var rules = ""
+    @Published var checklist = ""  // the lifecycle's ## Checklist: diff-triggered reliability checks every agent brief carries
     @Published var intro = ""
     @Published var source = ""
     @Published var builtins = [String: String]()
@@ -970,12 +971,12 @@ final class RulesStore: ObservableObject {
     @Published var noteText = ""
     @Published var projs = [[String: Any]]()  // the Basement's projects (projects.json), for Settings → Terminal's default folders
     @Published var projNote = ""
-    @Published var review = ""  // your own prompt for repo's kind (review, threads, ci, conflicts); reviewOwn false = the default
+    @Published var review = ""  // your own prompt for repo's kind (review, verify, threads, ci, conflicts); reviewOwn false = the default
     @Published var reviewDefault = ""
     @Published var reviewOwn = false
     @Published var reviewVars = [String]()
     @Published var kind = "review"
-    static let kinds = [("review", "Review"), ("threads", "Resolve threads"), ("ci", "Fix CI"), ("conflicts", "Fix conflicts")]
+    static let kinds = [("review", "Review"), ("verify", "Verify"), ("threads", "Resolve threads"), ("ci", "Fix CI"), ("conflicts", "Fix conflicts")]
     @Published var autoKinds = [(kind: String, when: String, gates: [String])]()  // Auto-run: dash.py's AUTO, and this repo's {kind: gate}
     @Published var autoOn = [String: Int]()
     @Published var repoHostMode = "server"  // Settings → Repositories: server (default) | mac | auto
@@ -1195,7 +1196,8 @@ final class RulesStore: ObservableObject {
             var newOpts = j["options"] as? [String: String] ?? [:]
             if !applyHost { newOpts["host"] = keptHostOpt }
             options = newOpts
-            rules = j["rules"] as? String ?? ""; intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
+            rules = j["rules"] as? String ?? ""; checklist = j["checklist"] as? String ?? ""
+            intro = j["intro"] as? String ?? ""; source = j["source"] as? String ?? ""
             builtins = j["builtins"] as? [String: String] ?? [:]
         }
         if applyHost { applyHostInfo(j["host_info"] as? [String: Any], for: r, clearOnChange: clearOnChange) }
@@ -1214,7 +1216,7 @@ final class RulesStore: ObservableObject {
         }
         let r = repo
         let doc: [String: Any] = ["stages": stages.map { ["key": $0.key, "req": $0.req, "done": $0.done, "run": $0.run, "owner": $0.owner, "phase": $0.phase] },
-                                  "options": options, "rules": rules, "intro": intro]
+                                  "options": options, "rules": rules, "checklist": checklist, "intro": intro]
         let s = String(decoding: (try? JSONSerialization.data(withJSONObject: doc)) ?? Data(), as: UTF8.self)
         let seq = nextHostSeq(for: r)
         call("lifecycle-set", r, s) { [weak self] j in

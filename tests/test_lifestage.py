@@ -182,6 +182,20 @@ def test_define_build_verify_review_land_and_done(lifestage_env):
     assert _life(theirs(_can_approve=False)) == ("4.5", "waiting", "reviewers", None)
 
 
+def test_builtin_verify_step_places_in_verify_author_check(lifestage_env):
+    (greenlight.STATE / "lifecycles/checked.md").write_text("# checked\n\n1. `mr_open` — x\n2. `verify` — x\n3. `merge` — x\n")
+    life = lambda m: _life(m, project="acme/checked")
+    assert life(_mr()) == ("3.4", "yours", "your agent", "Verify !7")  # no receipt: a fresh verifier
+    greenlight.verify_record("acme/checked", 7, "fail", sha="abc", summary="cancel kept state")
+    assert life(_mr()) == ("3.4", "yours", "your agent", "Fix the defects")  # the builder's turn
+    assert life(_mr(sha="def")) == ("3.4", "yours", "your agent", "Verify !7")  # the fix landed: the verifier's again
+    greenlight.verify_record("acme/checked", 7, "uncertain", sha="def", summary="needs a prod key")
+    r = _row(_mr(sha="def"), project="acme/checked")
+    assert (r["life"]["at"], r["life"]["suggestion"]["label"]) == ("3.4", "Look at the verification") and "needs a prod key" in r["life"]["do"]
+    greenlight.verify_record("acme/checked", 7, "pass", sha="def")
+    assert life(_mr(sha="def"))[0] == "5.1"  # passed: on to the merge gate
+
+
 def test_do_descriptions_and_parked_paths(lifestage_env):
     theirs = lambda **kw: _mr(author=_u("alice"), _approved_by=[], **kw)
     assert _do(_mr(), goal="x (hold)") == "!7 is ready to merge, but your goal says hold. Merge it now, or leave the hold in place."

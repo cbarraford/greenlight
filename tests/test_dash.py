@@ -230,6 +230,16 @@ assert opt(c, "--comment") == "Retry stuck outbound txs after a churn." and opt(
 assert not dash.greenlight.ISSUE_GOAL_RE.match(opt(c, "--comment")) and not dash.greenlight.PLAN_RE.match(opt(c, "--comment"))
 p = opt(c, "--prompt")
 assert REQ in p and f"{d}/files: passwd, 2-passwd, hidden-log" in p and "draft MR" in p
+assert str(dash.PROMPTS / "verify.md") in p and "Verification section" in p and "Repo standing rules" not in p  # default lifecycle: no rules
+# the brief carries the repo's rules and checklist, and your own verify prompt when you have one
+(dash.greenlight.STATE / "lifecycles").mkdir(parents=True, exist_ok=True)
+(dash.greenlight.STATE / "lifecycles/widgets.md").write_text("# widgets\n\n1. `merge` — merge\n\n## Rules\n\nNever mock DB.\n\n## Checklist\n\n- `db/`: run migrations\n")
+dash.settings("prompt-set", "widgets/verify", "Custom verify for {mr}")
+_, calls_w = task({"text": "Add index"})
+pw = opt(next(a for a in calls_w if is_create(a)), "--prompt")
+assert "Never mock DB." in pw and "- `db/`: run migrations" in pw and str(dash.own_prompt("widgets", "verify")) in pw, pw
+dash.settings("prompt-set", "widgets/verify", "")
+(dash.greenlight.STATE / "lifecycles/widgets.md").unlink()
 assert ("worktree", "set", "--worktree", "id:w9", "--display-name", out["name"]) in calls
 assert "task started (claude, 3 files)" in dash.greenlight.history_file(out["name"]).read_text()
 out, calls = task({"text": REQ}, ws={"w2": ({"displayName": "retry-stuck-outbound-txs-after-a-churn-2"}, {})})  # dir and workspace taken
@@ -479,11 +489,17 @@ import json
 from pathlib import Path
 dash.MEMORY = Path(tempfile.mkdtemp())
 g = dash.settings("lifecycle-get", "greenlight", "")
-assert g["source"] == "bundled" and "automerge" in g["options"], g
-dash.settings("lifecycle-set", "greenlight", json.dumps({**g, "rules": "Always add a test."}))
+assert g["source"] == "bundled" and "automerge" in g["options"] and g["rules"] and g["checklist"], g
+assert "verify" in g["builtins"]
+dash.settings("lifecycle-set", "greenlight", json.dumps({**g, "rules": "Always add a test.", "checklist": "- `x.py`: check x"}))
 g2 = dash.settings("lifecycle-get", "greenlight", "")
-assert (g2["source"], g2["rules"], g2["intro"]) == ("yours", "Always add a test.", g["intro"])
+assert (g2["source"], g2["rules"], g2["checklist"], g2["intro"]) == ("yours", "Always add a test.", "- `x.py`: check x", g["intro"])
 assert [s["key"] for s in g2["stages"]] == [s["key"] for s in g["stages"]]
+# an older app that doesn't send "checklist" keeps it; an explicit "" clears it
+dash.settings("lifecycle-set", "greenlight", json.dumps({k: v for k, v in g2.items() if k != "checklist"} | {"rules": "Keep checklist."}))
+assert dash.settings("lifecycle-get", "greenlight", "")["checklist"] == "- `x.py`: check x"
+dash.settings("lifecycle-set", "greenlight", json.dumps({**g2, "checklist": ""}))
+assert dash.settings("lifecycle-get", "greenlight", "")["checklist"] == ""
 assert dash.settings("lifecycle-reset", "greenlight", "")["source"] == "bundled"
 assert dash.settings("lifecycle-get", "../x", "")["error"]
 assert dash.settings("instructions-set", "-", "be terse")["text"] == "be terse\n"
@@ -500,6 +516,9 @@ r = {"project": "octo/greenlight", "branch": "b", "path": "/w/b", "next": {"owne
 mv = dash.moves(r)
 assert [m["kind"] for m in mv] == ["review"] and mv[0]["repo"] == "greenlight" and not mv[0]["own"], mv
 assert "abc123" in mv[0]["prompt"] and "none" in mv[0]["prompt"] and "{" not in mv[0]["prompt"].replace("{sha} in a title", "")
+assert "stdlib-only Python" in mv[0]["prompt"] and "`app/dashboard.html`" in mv[0]["prompt"]  # the bundled lifecycle's rules and checklist, filled in
+gv = dash.settings("prompt-get", "greenlight/verify", "")
+assert not gv["own"] and "Drive (at the real user surface)" in gv["default"] and {"rules", "checklist", "goal", "project", "iid"} <= set(gv["vars"]), gv
 assert dash.moves({**r, "next": {"owner": "them", "step": "review"}}) == []
 assert dash.moves({**r, "mr": {**r["mr"], "state": "merged"}}) == []
 dash.settings("prompt-set", "greenlight/review", "Mine for {mr} at {sha}, last {last_review_sha}, {threads}.\n{default}")
@@ -528,8 +547,21 @@ _dr = {**_rv, "next": {"owner": "me", "step": "ready", "action": "goal says keep
 assert [m["kind"] for m in dash.moves(_dr)] == ["ready"] and dash.moves({**_dr, "next": {**_dr["next"], "owner": "greenlight"}}) == []  # greenlight undrafts it itself
 # auto-run: per repo, per kind, with a gate; never on a held/parked goal; merge gets True
 assert dash.settings("autorun-set", "../x", "{}")["error"]
-a = dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "threads": 9, "nope": 0, "merge": 0}))
-assert a["on"] == {"ci": 1, "merge": 0} and [k["kind"] for k in a["kinds"]] == ["ci", "conflicts", "threads", "review", "merge"], a
+a = dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "threads": 9, "nope": 0, "merge": 0, "verify": 1}))
+assert a["on"] == {"ci": 1, "merge": 0, "verify": 1} and [k["kind"] for k in a["kinds"]] == ["ci", "conflicts", "threads", "verify", "review", "merge"], a
+# the Verify move: when the verify step wants a fresh verifier on your MR; not while the builder fixes its defects, nor on a review
+vrow = {**mine, "goal": "Ship feature", "next": {"owner": "agent", "step": "verify", "action": "Verify changes end to end (fresh verifier)"},
+        "mr": {**mine["mr"], "iid": 58, "conflicts": False, "pipeline": "success", "todo_threads": [], "verify": None}}
+vmv = dash.moves(vrow)
+assert [m["kind"] for m in vmv] == ["verify"] and "greenlight.py verify octo/greenlight 58" in vmv[0]["prompt"] and "Ship feature" in vmv[0]["prompt"], vmv
+assert "--sha abc123" in vmv[0]["prompt"] and "{" not in vmv[0]["prompt"].replace("{sha} in a title", ""), vmv[0]["prompt"]  # one pass: the title stays as is
+assert vmv[0]["auto"].startswith(dash.AUTO_HEAD + "Run the verification, save its evidence") and "gate push" not in vmv[0]["auto"]
+assert dash.moves({**vrow, "mr": {**vrow["mr"], "verify": {"verdict": "fail", "phase": "fix", "round": 1, "stale": False}}}) == []
+assert dash.moves({**vrow, "mr": {**vrow["mr"], "role": "review"}}) == []
+assert [m["kind"] for m in dash.moves({**vrow, "mr": {**vrow["mr"], "pipeline": "failed"}})] == ["ci", "verify"]  # a fix first, Verify beside it
+_sp = lambda v: {"state": "queued", "step": "verify", "owner": "agent", "agent": {"state": "idle"}, "mr": {"state": "opened", "verify": v}}
+assert dash.sig(_sp({"verdict": "fail", "stale": False, "round": 1})) != dash.sig(_sp({"verdict": "pass", "stale": False, "round": 0}))  # a verdict redraws the page
+assert dash.sig(_sp(None)) == dash.sig({**_sp(None), "mr": {"state": "opened"}})
 mv = {m["kind"]: m for m in dash.moves(mine)}
 assert mv["ci"]["auto"].startswith(dash.AUTO_HEAD + "You have my OK to push") and mv["ci"]["prompt"] in mv["ci"]["auto"] and mv["ci"]["sha"] == "abc123"
 assert "auto" not in mv["conflicts"] and "auto" not in mv["threads"]

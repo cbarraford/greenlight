@@ -16,3 +16,19 @@ Options: `automerge`
 6. `ready` — Not a draft. Owner: greenlight (`gh pr ready`), unless the goal says to keep it as a draft. Then ask the user.
 7. `threads` — No unresolved review threads. Owner: agent (verify, then fix or reply, and resolve).
 8. `merge` — GitHub reports it mergeable. A PR into `main` is merged by greenlight (`gh pr merge --merge`) once every step above passes; a goal that says "hold" still comes to the user. A PR stacked on another branch waits on that branch's PR to merge first; greenlight never merges it into the side branch.
+
+## Rules
+
+- Keep `scripts/` stdlib-only Python (no third-party runtime dependencies).
+- Every behavioral change needs a test exercising the real code path, not mocks that hide the logic.
+- Verify UI changes through real user interactions (clicks, keyboard shortcuts, file inputs, drag), never by declaring victory from `page.evaluate()` shortcuts alone; list anything that could not be proven in the PR description.
+- When fixing a bug that slipped past earlier verification, add a matching trigger to `## Checklist` so that class of bug is caught upstream from then on.
+
+## Checklist
+
+- `scripts/*.py`: Run `make lint` and `make test-py`.
+- `scripts/greenlight.py` (scan, lifecycle, or `last.json` schema): Check backward compatibility with an existing `~/.greenlight/last.json`, and that `lifecycle_doc` / `lifecycle_md` round-trip.
+- `app/dashboard.html`: Run `node tests/test_dashboard.cjs`; drive changed dialogs, sheets and cards through real user actions and confirm zero `pageerror`s.
+- `app/terminal.html`: Run `node tests/test_terminal.cjs`; check the keyboard shortcuts (`⌘B`, `⌘T`, `⌘W`, `⌘J`), sidebar collapse and restore, and zero `pageerror`s.
+- `app/Sources/*.swift`: Run `make typecheck` and `python3 scripts/dev.py log --wait` (or record it as unproven on Linux), and confirm every `dash.py` JSON key the change reads matches the Swift side (`RulesStore` and the message handlers).
+- `prompts/*.md`, `lifecycles/*.md` or `SKILL.md`: Check that template placeholders match `COMMON` / `KINDS` in `scripts/dash.py` and that no standing rule contradicts `scripts/greenlight.py`.

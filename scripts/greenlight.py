@@ -469,7 +469,8 @@ def lifecycle_file(project):
 
 
 BUILTIN = {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipeline succeeded (or there's no CI).",
-           "no_conflicts": "No merge conflicts.", "review_bot": "The review bot is assignee and reviewer.",
+           "no_conflicts": "No merge conflicts.", "verify": "Verified end to end on the current head commit.",
+           "review_bot": "The review bot is assignee and reviewer.",
            "milestone": "A release milestone is set.", "ready": "Not a draft.", "threads": "No unresolved threads.",
            "approved": "The required approvals are in.", "merge": "The forge reports it mergeable."}
 STAGE_RE = re.compile(r"^\s*\d+\.\s+`(\w+)`[ \t]*(?:—|-)?[ \t]*(.*)$", re.M)
@@ -477,13 +478,15 @@ DONE_RE = re.compile(r"\s*Done:\s*`(signoff|(?:label|check)=[^`]+)`")
 RUN_RE = re.compile(r"\s*Run:\s*`([^`]+)`")  # a signoff step's command: the card's button runs it on the host, then signs it off
 OWNER_RE = re.compile(r"\s*Owner:\s*`(agent|me|reviewers|ci)`")
 PHASE_RE = re.compile(r"\s*Phase:\s*`(define|build|verify|review|land)`")
+SECTION_RE = re.compile(r"^## (Rules|Checklist)[ \t]*$", re.M)  # a lifecycle's standing rules and its diff-triggered checklist, either order
 
 
 def lifecycle_doc(project):
-    """The lifecycle as data: {stages: [{key, req, done, run, owner?, phase?}], options, rules, intro, file, source}.
+    """The lifecycle as data: {stages: [{key, req, done, run, owner?, phase?}], options, rules, checklist, intro, file, source}.
     A custom stage passes on `Done: `signoff``, `Done: `label=x``, or `Done: `check=x``, and may set `Owner:` / `Phase:`."""
     f = lifecycle_file(project)
-    head, _, rules = f.read_text().partition("\n## Rules")
+    parts = SECTION_RE.split(f.read_text())
+    head, sections = parts[0], {parts[i].lower(): parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
     stages = []
     for key, rest in STAGE_RE.findall(head):
         m, run, own, ph = DONE_RE.search(rest), RUN_RE.search(rest), OWNER_RE.search(rest), PHASE_RE.search(rest)
@@ -499,7 +502,7 @@ def lifecycle_doc(project):
     intro = "" if f.name == "default.md" and f.parent == ROOT / "lifecycles" else \
         re.sub(r"^Options:.*$|\A#.*$", "", head[:first.start()] if first else head, flags=re.M).strip()
     return {"stages": stages, "options": dict(re.findall(r"`(\w+)=?([^`]*)`", m[1])) if m else {},
-            "rules": rules.strip(), "intro": intro, "file": str(f),
+            "rules": sections.get("rules", ""), "checklist": sections.get("checklist", ""), "intro": intro, "file": str(f),
             "source": "yours" if f.parent == STATE / "lifecycles" else "default" if f.name == "default.md" else "bundled"}
 
 
@@ -554,6 +557,8 @@ def lifecycle_md(repo, doc):
     out += [_format_stage(i, s) for i, s in enumerate(stages, 1)]
     if doc.get("rules", "").strip():
         out += ["", "## Rules", "", doc["rules"].strip()]
+    if doc.get("checklist", "").strip():
+        out += ["", "## Checklist", "", doc["checklist"].strip()]
     return "\n".join(out) + "\n"
 
 
@@ -715,6 +720,110 @@ def signoffs():
         return json.loads(f.read_text()) if f.exists() else {}
     except (OSError, ValueError):
         return {}
+
+
+VERIFY_MAX_ROUNDS = 3  # verifier fails this many times in a row on an MR: it goes to the user
+
+
+def verifications():
+    """SHA-pinned verification receipts per MR: {"project#iid": {sha, verdict, round, ts, summary, evidence, defects, unproven}}."""
+    f = STATE / "verify.json"
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def verify_phase(verdict, stale, rnd):
+    """Where the builder <-> verifier loop stands: pass, verify (a fresh verifier's turn), fix (the builder's) or escalated (the user's)."""
+    if verdict == "pass":
+        return "verify" if stale else "pass"
+    if verdict == "uncertain":
+        return "verify" if stale and rnd < VERIFY_MAX_ROUNDS else "escalated"
+    if verdict == "fail":
+        return "escalated" if rnd >= VERIFY_MAX_ROUNDS else "verify" if stale else "fix"
+    return "verify"
+
+
+def verify_status(project, iid, head_sha):
+    """The MR's verification at head_sha ({..receipt, stale, phase, max_rounds}), or None if it was never verified.
+    A receipt for an older commit is stale: a pass no longer counts, and a fail's fix has landed for the verifier to check."""
+    rec = verifications().get(f"{project}#{iid}")
+    if not rec:
+        return None
+    sha, rnd = rec.get("sha"), int(rec.get("round") or 0)
+    stale = bool(head_sha and sha and sha != head_sha)
+    return {**rec, "stale": stale, "phase": verify_phase(rec.get("verdict"), stale, rnd), "max_rounds": VERIFY_MAX_ROUNDS}
+
+
+def verify_html(project, iid, rec):
+    """A standalone HTML evidence page for one verification run (its verdict, summary, defects and what it couldn't prove); its path."""
+    e = html.escape
+    out = STATE / "verify" / f"{re.sub(r'[^\w.-]+', '_', f'{project}-{iid}')}.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    v = rec.get("verdict") or "unknown"
+    col = {"pass": "#16a34a", "fail": "#dc2626", "uncertain": "#ea580c"}.get(v, "#64748b")
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec.get("ts") or time.time()))
+    lst = lambda title, xs: f"<section><h2>{title}</h2><ul>{''.join(f'<li>{e(x)}</li>' for x in xs)}</ul></section>" if xs else ""
+    out.write_text(f"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Verification: {e(project)} #{e(str(iid))}</title><style>
+:root{{--bg:#fafaf9;--fg:#1c1917;--mut:#78716c;--line:#e7e5e4;--card:#fff}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0c0a09;--fg:#f5f5f4;--mut:#a8a29e;--line:#292524;--card:#1c1917}}}}
+body{{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif}}
+main{{max-width:820px;margin:auto}}h1{{margin:0 0 6px;font-size:20px}}.meta{{color:var(--mut);margin-bottom:16px}}
+.badge{{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;color:#fff;background:{col};margin-right:8px}}
+section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:12px}}
+h2{{font-size:15px;margin:0 0 8px}}code{{font-size:12px}}ul{{margin:0;padding-left:18px}}
+</style></head><body><main>
+<h1><span class=badge>{e(v.upper())}</span>{e(project)} #{e(str(iid))}</h1>
+<div class=meta>{when} · sha <code>{e((rec.get('sha') or 'none')[:12])}</code> · round {int(rec.get('round') or 0)}/{VERIFY_MAX_ROUNDS}</div>
+<section><h2>Summary</h2><p>{e(rec.get('summary') or '(no summary)')}</p></section>
+{lst("Defects", rec.get("defects"))}{lst("Could not prove", rec.get("unproven"))}
+</main></body></html>""")
+    return str(out)
+
+
+def verify_record(project, iid, verdict, sha="", summary="", evidence="", defects=(), unproven=()):
+    """Record a verifier's verdict on project#iid at sha (reset: forget it). A fail or uncertain after one counts a round; a pass
+    starts over. Without --evidence, an HTML page is written for it. Returns the stored record (None on reset)."""
+    if verdict not in ("pass", "fail", "uncertain", "reset"):
+        raise ValueError(f"bad verdict {verdict!r}: expected pass, fail, uncertain or reset")
+    key, f = f"{project}#{iid}", STATE / "verify.json"
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "verify.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        vs = verifications()
+        prev, rec = vs.pop(key, None) or {}, None
+        if verdict != "reset":
+            rnd = 0 if verdict == "pass" else int(prev.get("round") or 0) + 1 if prev.get("verdict") in ("fail", "uncertain") else 1
+            rec = {"sha": sha or "", "verdict": verdict, "round": rnd, "ts": int(time.time()), "summary": summary.strip(),
+                   "evidence": evidence.strip(), "defects": [d.strip() for d in defects if d and d.strip()],
+                   "unproven": [u.strip() for u in unproven if u and u.strip()]}
+            rec["evidence"] = rec["evidence"] or verify_html(project, iid, rec)
+            vs[key] = rec
+        tmp = f.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp.write_text(json.dumps(vs, indent=1))
+        os.replace(tmp, f)
+    return rec
+
+
+def verify_cli(args):
+    """greenlight.py verify <project> <iid> <pass|fail|uncertain|reset> [--sha S] [--summary T] [--evidence P] [--defect D]... [--unproven U]..."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="greenlight.py verify", description="Record a verifier's verdict on an MR's head commit.")
+    ap.add_argument("project")
+    ap.add_argument("iid")
+    ap.add_argument("verdict", choices=("pass", "fail", "uncertain", "reset"))
+    ap.add_argument("--sha", default="", help="the commit it verified (the MR's head)")
+    ap.add_argument("--summary", default="", help="the verdict in one line")
+    ap.add_argument("--evidence", default="", help="a report of the run (path or URL); default: an HTML page written for it")
+    ap.add_argument("--defect", action="append", default=[], help="a defect found (repeatable)")
+    ap.add_argument("--unproven", action="append", default=[], help="something it could not prove (repeatable)")
+    a = ap.parse_args(args)
+    if a.verdict != "reset" and not a.sha:
+        ap.error("--sha is required: a verdict is pinned to the commit it checked")
+    rec = verify_record(a.project, a.iid, a.verdict, sha=a.sha, summary=a.summary, evidence=a.evidence, defects=a.defect, unproven=a.unproven)
+    print(json.dumps(rec or {"reset": f"{a.project}#{a.iid}"}, indent=1))
 
 
 def release_milestone(project, forge="gitlab"):
@@ -1132,6 +1241,26 @@ def _check_custom(step, mr, ws):
     return own or "me", f"{name}: {req} Sign it off?", ["python3", str(HERE / "greenlight.py"), "signoff", proj, ref_id, step]
 
 
+def _check_verify(proj, mr):
+    """The built-in `verify` step: a fresh verifier's SHA-pinned pass on the head commit. A fail goes back to the builder, then to a
+    fresh verifier once a fix lands, up to VERIFY_MAX_ROUNDS; then (or on uncertain) to the user."""
+    v = verify_status(proj, mr["iid"], mr.get("sha"))
+    if not v:
+        return "agent", "Verify changes end to end (fresh verifier)", None
+    if v["phase"] == "pass":
+        return None
+    why = v.get("summary") or (v.get("defects") or ["see the verification evidence"])[0]
+    if v["phase"] == "escalated":
+        if v["verdict"] == "uncertain":
+            return "me", f"verifier uncertain: {why}", None
+        return "me", f"verification failed {v['round']}/{VERIFY_MAX_ROUNDS} rounds: {why}", None
+    if v["phase"] == "fix":
+        return "agent", f"Fix verification defects (round {v['round']}/{VERIFY_MAX_ROUNDS}): {why}", None
+    if v["verdict"] == "pass":
+        return "agent", f"Re-verify changes (new commits since verified {(v.get('sha') or '')[:7]})", None
+    return "agent", f"Re-verify after fixes (round {v['round'] + 1}/{VERIFY_MAX_ROUNDS})", None
+
+
 def check(step, mr, ws, milestone):
     """-> None when the step passes, else (owner, action, cmd|None)."""
     if step not in BUILTIN:
@@ -1150,6 +1279,8 @@ def check(step, mr, ws, milestone):
         return "agent", f"Fix CI (pipeline {st}: {mr['head_pipeline']['web_url']})", None
     if step == "no_conflicts":
         return ("agent", "Rebase Branch (merge conflicts)", None) if mr["has_conflicts"] else None
+    if step == "verify":
+        return _check_verify(proj, mr)
     if step == "review_bot":
         bot = repo_bot(proj)
         if not bot:
@@ -1656,7 +1787,8 @@ def scan(save=True, _backfill_retries=0):
                 "sha": mr.get("sha"), "reviewed_sha": mr.get("_reviewed_sha"),  # the review prompt's {sha} and {last_review_sha}
                 "todo_threads": [thread_line(d) for d in unresolved(mr) if awaiting_me(d)][:40],
                 "failed_jobs": mr.get("_failed_jobs", [])[:40],  # the Resolve threads / Fix CI prompts' {threads} / {failed_jobs}
-                "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable"))}
+                "threads_total": sum(1 for d in mr.get("_discussions", []) if d["notes"] and d["notes"][0].get("resolvable")),
+                "verify": verify_status(r["project"], mr["iid"], mr.get("sha"))}
             r["branch_gone"] = not mr and upstream_gone(r)
             r["next"] = evaluate(r, mr, milestones.get(r["project"]))
             r["_base_next"] = r["next"].copy()  # agent overlay may append failover instructions to the visible action
@@ -2018,16 +2150,23 @@ def report(res):
         items = "".join(f"<li><b>{e(r['name'])}</b> {e(r['changed'])}</li>" for r in changed)
         items += "".join(f"<li><b>{e(n)}</b> removed</li>" for n in res["gone"])
         sections.append(f"<section><h2>Since last run</h2><ul class=changes>{items}</ul></section>")
+    def vtag(r):  # the verify step's receipt, linked to its evidence
+        v = (r.get("mr") or {}).get("verify")
+        if not v:
+            return ""
+        st = "stale" if v.get("stale") and v.get("verdict") == "pass" else v.get("verdict") or ""
+        ev = f' · <a href="{e(v["evidence"] if "://" in v["evidence"] else "file://" + v["evidence"])}">evidence</a>' if v.get("evidence") else ""
+        return f"<div class=sub>verify: {e(st)}{ev}</div>"
     for o in OWNERS:
         group = [r for r in rows if r["next"]["owner"] == o]
         if not group:
             continue
         trs = "".join(
-            "<tr><td>{n}<div class=sub>{p}</div></td><td>{mr}</td><td><code>{s}</code></td><td>{a}{g}</td><td>{ag}</td></tr>".format(
+            "<tr><td>{n}<div class=sub>{p}</div></td><td>{mr}</td><td><code>{s}</code></td><td>{a}{g}{v}</td><td>{ag}</td></tr>".format(
                 n=e(r["name"]), p=e(r["project"].rsplit("/", 1)[-1] + " · " + r["branch"]),
                 mr=(f'<a href="{e(r["mr"]["web_url"])}">{e(r["mr"].get("ref") or "!" + str(r["mr"]["iid"]))}</a><div class=sub>{e(r["mr"]["role"])}</div>' if r.get("mr") else "—"),
                 s=e(r["next"]["step"]), a=e(r["next"]["action"]),
-                g=f'<div class=sub>goal: {e(r["goal"][:140])}</div>' if r["goal"] else '<div class="sub warn">no goal</div>',
+                g=f'<div class=sub>goal: {e(r["goal"][:140])}</div>' if r["goal"] else '<div class="sub warn">no goal</div>', v=vtag(r),
                 ag=f'{e(r["agent"]["state"])}<div class=sub>{"—" if r["agent"]["idle_h"] is None else f"{r['agent']['idle_h']}h idle"}</div>')
             for r in group)
         sections.append(f'<section><h2><i class="o-{o}"></i>{label[o]} <span class=n>{len(group)}</span></h2>'
@@ -2272,6 +2411,9 @@ def main():
             tmp = (STATE / "signoffs.json").with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
             tmp.write_text(json.dumps(so, indent=1))
             os.replace(tmp, STATE / "signoffs.json")
+        return
+    if cmd == "verify":  # greenlight.py verify <project> <iid> <pass|fail|uncertain|reset> --sha S [--summary T] ...
+        verify_cli(sys.argv[2:])
         return
     if cmd == "history":  # greenlight.py history <workspace>
         f = history_file(sys.argv[2])

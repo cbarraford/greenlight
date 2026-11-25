@@ -660,11 +660,20 @@ print("config ok")
 doc = greenlight.lifecycle_doc("acme/release-train")
 doc = {**doc, "stages": [{"key": "ci_green", "req": "green"}, {"key": "qa", "req": "QA\npassed", "done": "label=qa-ok"},
                          {"key": "security", "req": "Security looked.", "done": "signoff"}, {"key": "merge", "req": ""}],
-       "options": {"solo": "", "milestone": "v"}, "rules": "1. `nope` never a stage.\nNo force-push."}
+       "options": {"solo": "", "milestone": "v"}, "rules": "1. `nope` never a stage.\nNo force-push.",
+       "checklist": "- `app/*.html`: run Playwright\n1. `also_nope` never a stage."}
 (greenlight.STATE / "lifecycles/custom.md").write_text(greenlight.lifecycle_md("custom", doc))
 back = greenlight.lifecycle_doc("acme/custom")
 assert [(s["key"], s["done"]) for s in back["stages"]] == [("ci_green", ""), ("qa", "label=qa-ok"), ("security", "signoff"), ("merge", "")], back
 assert back["stages"][1]["req"] == "QA passed" and back["options"] == doc["options"] and back["rules"] == doc["rules"] and back["source"] == "yours"
+assert back["checklist"] == doc["checklist"], back
+# checklist first, rules second: both sections still parse, and neither leaks a stage
+(greenlight.STATE / "lifecycles/rev.md").write_text("# rev\n\n1. `merge` — merge\n\n## Checklist\n\n- `a.py`: test a\n\n## Rules\n\nBe careful.\n")
+rev = greenlight.lifecycle_doc("acme/rev")
+assert [s["key"] for s in rev["stages"]] == ["merge"] and rev["checklist"] == "- `a.py`: test a" and rev["rules"] == "Be careful.", rev
+gl_doc = greenlight.lifecycle_doc("octo/greenlight")  # the bundled one carries both, with no stray template braces
+assert gl_doc["rules"] and gl_doc["checklist"] and "{" not in gl_doc["rules"] + gl_doc["checklist"], gl_doc
+assert greenlight.lifecycle_doc("acme/release-train")["checklist"] == ""  # a lifecycle with none
 cw = {"project": "acme/custom", "goal": "", "branch": "b"}
 assert greenlight.evaluate(cw, mr(labels=[]), None)["step"] == "qa"
 e = greenlight.evaluate(cw, mr(labels=["qa-ok"]), None)
@@ -779,6 +788,67 @@ greenlight.CONFIG = {**old_cfg, "require_human_approval": False}
 assert greenlight.evaluate({"project": "acme/strict", "goal": "", "branch": "b"}, mr(_approved_by=[]), None)["owner"] == "reviewers"
 greenlight.CONFIG = old_cfg
 print("custom stages ok")
+
+# --- the built-in verify step: SHA-pinned receipts, a 3-round builder <-> verifier loop, escalation, an evidence page
+(greenlight.STATE / "lifecycles/verified.md").write_text("# verified\n\n1. `ci_green` — ci\n2. `verify` — verified\n3. `ready` — ready\n4. `merge` — merge\n")
+assert [s["done"] for s in greenlight.lifecycle_doc("acme/verified")["stages"]] == ["", "", "", ""]  # built in: no Done
+vw = {"project": "acme/verified", "goal": "ship it", "branch": "feat"}
+ev_v = lambda sha, **kw: greenlight.evaluate(vw, mr(sha=sha, draft=True, **kw), None)
+e = ev_v("sha1")  # no receipt yet: a fresh verifier
+assert (e["step"], e["owner"]) == ("verify", "agent") and "fresh verifier" in e["action"], e
+with mock.patch.object(sys, "argv", ["greenlight.py", "verify", "acme/verified", "1", "fail", "--sha", "sha1",
+                                     "--summary", "cancel kept state", "--defect", "Cancel leaves dialog dirty", "--unproven", "Safari"]):
+    greenlight.main()
+st1 = greenlight.verify_status("acme/verified", 1, "sha1")
+assert st1["phase"] == "fix" and st1["round"] == 1 and not st1["stale"] and os.path.exists(st1["evidence"]), st1
+ev_html = greenlight.Path(st1["evidence"]).read_text()
+assert "FAIL" in ev_html and "Cancel leaves dialog dirty" in ev_html and "Safari" in ev_html
+e = ev_v("sha1")  # round 1 failed on sha1: the builder fixes it
+assert (e["step"], e["owner"]) == ("verify", "agent") and "Fix verification defects (round 1/3): cancel kept state" in e["action"], e
+e = ev_v("sha2")  # the fix landed: a fresh verifier, round 2
+assert (e["step"], e["owner"]) == ("verify", "agent") and "Re-verify after fixes (round 2/3)" in e["action"], e
+greenlight.verify_record("acme/verified", 1, "fail", sha="sha2", summary="still broken")
+assert ev_v("sha3")["action"].startswith("Re-verify after fixes (round 3/3)")
+greenlight.verify_record("acme/verified", 1, "fail", sha="sha3", summary="third strike")
+e = ev_v("sha3")  # the third failure: the user's
+assert (e["step"], e["owner"]) == ("verify", "me") and "failed 3/3 rounds" in e["action"], e
+assert ev_v("sha4")["owner"] == "me"  # a push after the third strike still waits on the user
+greenlight.verify_record("acme/verified", 1, "pass", sha="sha4", summary="all flows green")
+assert greenlight.verifications()["acme/verified#1"]["round"] == 0  # a pass starts the count over
+assert ev_v("sha4")["step"] == "ready"
+e = ev_v("sha5")  # a new commit invalidates the pass
+assert (e["step"], e["owner"]) == ("verify", "agent") and "new commits since verified sha4" in e["action"], e
+greenlight.verify_record("acme/verified", 1, "uncertain", sha="sha5", summary="needs prod key")
+e = ev_v("sha5")
+assert (e["step"], e["owner"]) == ("verify", "me") and "verifier uncertain: needs prod key" in e["action"], e
+assert ev_v("sha6")["owner"] == "agent"  # uncertain, then a new commit: try again
+greenlight.verify_record("acme/verified", 1, "reset")
+assert greenlight.verify_status("acme/verified", 1, "sha5") is None and ev_v("sha5")["action"].endswith("(fresh verifier)")
+assert greenlight.verify_record("acme/verified", 2, "pass", sha="s", evidence="https://ci/run/7")["evidence"] == "https://ci/run/7"
+try:
+    greenlight.verify_record("acme/verified", 1, "maybe")
+    raise AssertionError("bad verdict accepted")
+except ValueError:
+    pass
+for bad in (["acme/verified", "1", "pass"], ["acme/verified", "1", "maybe", "--sha", "x"], ["acme/verified", "1", "pass", "--sha", "x", "--nope", "y"]):
+    try:
+        with mock.patch("sys.stderr"):
+            greenlight.verify_cli(bad)  # no --sha, a bad verdict, an unknown flag: usage, nothing recorded
+        raise AssertionError(bad)
+    except SystemExit as x:
+        assert x.code == 2, bad
+assert "acme/verified#1" not in greenlight.verifications()
+vf = greenlight.STATE / "verify.json"
+vf.write_text("{oops")
+assert greenlight.verifications() == {} and greenlight.verify_status("acme/verified", 1, "x") is None  # a torn file reads as none
+vf.unlink()
+rec = greenlight.verify_record("acme/verified", 1, "pass", sha="sha4", summary="ok")  # report() names the verdict and links its evidence
+rep = greenlight.report({"ts": 1, "skipped": 0, "gone": [], "rows": [
+    {"name": "w", "project": "acme/verified", "branch": "feat", "goal": "ship", "agent": {"state": "idle", "idle_h": 1},
+     "mr": {"iid": 1, "ref": "!1", "web_url": "https://x/1", "role": "author", "verify": greenlight.verify_status("acme/verified", 1, "sha4")},
+     "next": {"step": "ready", "owner": "greenlight", "action": "ready"}}]})
+assert f'file://{rec["evidence"]}' in rep and "verify: pass" in rep
+print("verify ok")
 
 
 # Read-only requests get answered, not a workspace (the gpt-live-24h-cost bug; tests/test_chat.py runs it end to end)

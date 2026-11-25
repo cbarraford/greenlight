@@ -1486,7 +1486,7 @@ struct SettingsView: View {
             if !c.s1Note.isEmpty { ruled(note(c.s1Note).padding(DS.Space.s16)) }
         }
         // ponytail: auto-run is loaded per repo, so it's a link, not the design's every-repo table
-        banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
+        banner("bolt", "Auto-run jobs (Fix CI, Resolve threads, Fix conflicts, Verify, Review) are set per repository.") { Button("Open Repositories") { c.settingsTab = "Repositories" } }
     }
 
     // MARK: Autonomy (autonomy.py on the host)
@@ -1733,7 +1733,9 @@ struct SettingsView: View {
         switch rs.rtab {
         case "auto": autoRun
         case "rules":
-            editor($rs.rules, "Rules for \(rs.repo)", height: 260, title: "Rules", aside: "Markdown · every agent on \(rs.repo) follows these")
+            editor($rs.rules, "Rules for \(rs.repo)", height: 220, title: "Rules", aside: "Markdown · every agent on \(rs.repo) follows these")
+            editor($rs.checklist, "Checklist for \(rs.repo)", height: 180, title: "Reliability checklist", aside: "Diff-triggered checks · run only when matching files change",
+                   placeholder: "- `app/*.html`: drive the changed dialogs with real clicks")
             saveRow("Save", rs.save)
         case "prompts": prompts
         default: lifecycle
