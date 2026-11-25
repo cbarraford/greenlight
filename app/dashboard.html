@@ -338,7 +338,9 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .fieldwrap{position:relative;overflow:hidden}
 .fieldwrap>.cell,.fan{transition:opacity var(--t-base) ease}
 .fieldwrap.stackopen>.cell,.fieldwrap.stackopen .fan:not(.open){opacity:.25}
-.cell{position:absolute;cursor:default;border-radius:var(--r-3);outline:none}
+.cell{position:absolute;cursor:default;border-radius:var(--r-3);outline:none;pointer-events:none}
+/* a hex takes the pointer at its outline, not its square box: in the honeycomb the boxes overlap, so a box's corner would pick a neighbour */
+.cell .hx .halo,.fan .hub .hx .halo,.fan.open .fp .hx .halo,.fan.open .backdrop polygon{pointer-events:all}
 .cell.dim{opacity:.35}
 .picking .cell:not(.picked):not(.dim),.picking .hub:not(.picked):not(.dim){opacity:.4;transition:opacity var(--t-base) ease}
 .cell.picked .halo,.hub.picked .halo,.fp.picked .halo{opacity:1;stroke:var(--accent);stroke-width:2}
@@ -380,15 +382,15 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hx .stbadge svg{position:static}
 /* stacks: 3+ in the same situation collapse into one hex; hover fans them out */
 .fan{position:absolute;pointer-events:none;z-index:2}
-.fan.open{pointer-events:auto;z-index:10}
+.fan.open{z-index:10}  /* its backdrop hexagon holds it open, not the square around it */
 .fan .backdrop{position:absolute;left:0;top:0;overflow:visible;opacity:0;transform:scale(.96);transition:opacity var(--t-base) ease,transform var(--t-base) var(--ease)}
 .fan .backdrop polygon{fill:var(--sheet);stroke:var(--hair);stroke-linejoin:round}
 .fan.open .backdrop{opacity:1;transform:none}
 .fan .fp{position:absolute;left:var(--hx);top:var(--hy);opacity:0;pointer-events:none;
   transition:left var(--t-base) var(--ease) var(--d),top var(--t-base) var(--ease) var(--d),opacity var(--t-fast) ease var(--d)}
-.fan.open .fp{left:var(--x);top:var(--y);opacity:1;pointer-events:auto}
+.fan.open .fp{left:var(--x);top:var(--y);opacity:1}
 .fan.open .fp.dim{opacity:.35}
-.fan .hub{position:absolute;left:var(--hx);top:var(--hy);pointer-events:auto;z-index:1;transition:left var(--t-base) var(--ease),top var(--t-base) var(--ease),transform var(--t-base) var(--ease)}
+.fan .hub{position:absolute;left:var(--hx);top:var(--hy);z-index:1;transition:left var(--t-base) var(--ease),top var(--t-base) var(--ease),transform var(--t-base) var(--ease)}
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}
 .badge{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);background:color-mix(in srgb,currentColor 14%,transparent);color:var(--hink);
   font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center}  /* a count badge in the hex's own ink (§10.5) */
@@ -1159,7 +1161,12 @@ function stackFan(st, hx, hy, R, WW, HH){
     document.querySelectorAll(".fan").forEach(f => f.classList.toggle("open", on && f === fan));
     fan.parentNode && fan.parentNode.classList.toggle("stackopen", on);
   };
-  const open = () => ui.openStack === st.name ? clearTimeout(ui.stackT) : set(true);
+  const open = e => {
+    clearTimeout(ui.stackT);
+    if (ui.openStack === st.name) return;
+    if (e.type === "focusin" || ui.openStack) return set(true);  // Tab, or another stack already open: no wait
+    ui.stackT = setTimeout(() => set(true), 90);  // a pointer sweeping across the hive doesn't burst every stack it crosses
+  };
   const close = e => {
     if (e.relatedTarget && fan.contains(e.relatedTarget)) return;
     clearTimeout(ui.stackT); ui.stackT = setTimeout(() => ui.openStack === st.name && set(false), 250);  // grace: crossing a gap doesn't restack
@@ -1196,7 +1203,8 @@ function clock(ms){
   return hh ? `${hh}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
 }
 function hl(name, on){
-  document.querySelectorAll(".cell,.fp,.acard,.lrow").forEach(e => e.dataset.name === name && e.classList.toggle("hl", on));
+  const q = `[data-name="${CSS.escape(name)}"]`;  // its own nodes, not a walk over every hex and row on each enter and leave
+  document.querySelectorAll(`.cell${q},.fp${q},.acard${q},.lrow${q}`).forEach(e => e.classList.toggle("hl", on));
   document.querySelectorAll(".fan").forEach(f => { const hub = f.querySelector(".hub"); if (hub) hub.classList.toggle("hl", !!f.querySelector(".fp.hl")) });
 }
 const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", review_bot:"Adding review bot", milestone:"Setting milestone",
@@ -2867,9 +2875,28 @@ function nextStep(name){
   const sg = ui.sug[name];
   if (sg && sg.prompt) runFor(name, sg.prompt); else { if (sg && sg.error) delete ui.sug[name]; ui.autorun.add(name); suggestCon(name) }
 }
-let hcT;
-function hideCard(){ clearTimeout(hcT); const e = document.getElementById("hcard"); if (e) e.remove() }
-function leaveCard(){ clearTimeout(hcT); hcT = setTimeout(hideCard, 150) }  // time to cross the gap into the card
+// When the card comes and goes. The first one waits for the pointer to settle on a hex (open); once a card is up, or just went, the next hex's
+// swaps in at once (warm). A pointer heading for the open card (inside the triangle from where it left its hex to the card's near edge) may cross
+// other hexes on the way: their card waits until it rests (rest) or turns off course, and the open one holds a little longer (aim). The hex
+// a card already shows never rebuilds it: the refresh that redraws the hive under a still pointer leaves the card alone.
+const HC = {open: 240, warm: 40, warmFor: 450, leave: 140, aim: 450, rest: 110};
+let hcT, hcGone = -1e9, hcFrom = null, hcPt = [0, 0], hcPend = null;  // hcGone: when the last card went; hcFrom: where the pointer left the card's hex; hcPend: a swap held while aiming
+const cardEl = () => document.getElementById("hcard");
+function hideCard(){ clearTimeout(hcT); hcPend = null; hcFrom = null; const e = cardEl(); if (e) { e.remove(); hcGone = performance.now() } }
+function leaveCard(){ clearTimeout(hcT); hcPend = null; hcT = setTimeout(hideCard, aiming() ? HC.aim : HC.leave) }  // time to cross the gap into the card
+function aiming(){
+  const card = hcFrom && cardEl(); if (!card) return false;
+  const r = card.getBoundingClientRect(), [fx, fy] = hcFrom, right = r.left >= fx, ex = right ? r.left : r.right;
+  const a = [fx + (right ? -8 : 8), fy], b = [ex, r.top - 8], c = [ex, r.bottom + 8];  // the apex a little behind the exit: a hand's wobble stays on course
+  const side = (u, v, w) => (u[0] - w[0]) * (v[1] - w[1]) - (v[0] - w[0]) * (u[1] - w[1]);
+  const d1 = side(hcPt, a, b), d2 = side(hcPt, b, c), d3 = side(hcPt, c, a);
+  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+}
+function wantCard(el, p, ms){ clearTimeout(hcT); hcT = setTimeout(() => { hcPend = null; showCard(el, p) }, ms) }
+addEventListener("pointermove", e => {
+  hcPt = [e.clientX, e.clientY];
+  if (hcPend) wantCard(hcPend.el, hcPend.p, aiming() ? HC.rest : (hcPend = null, HC.warm));  // still on course: wait for it to rest; off course: swap now
+}, {passive: true});
 const hexOn = n => document.querySelector(`.cell[data-dock="${CSS.escape(n)}"],.fp[data-dock="${CSS.escape(n)}"]`);  // a workspace's hex in the hive or a fan
 function dropGone(snap){  // a refresh without a workspace (merged, cleaned up): it leaves the selection, here and in the app
   const live = new Set(snap.pucks.map(p => p.name)), gone = [...ui.picked].filter(n => !live.has(n));
@@ -2877,26 +2904,33 @@ function dropGone(snap){  // a refresh without a workspace (merged, cleaned up):
   ui.picked = new Set([...ui.picked].filter(n => live.has(n)));
   post({cmd: "unpick", gone});  // the app forgets just these (not a pick Chief made since), or a reload would light them again
 }
-function orphanCard(){  // after a refresh: a card whose hex is gone (workspace done, parked elsewhere, filtered) goes with it
-  const card = document.getElementById("hcard");
-  if (card && !hexOn(card.dataset.name)) hideCard();
+function orphanCard(){  // after a refresh: a card whose hex is gone (workspace done, parked elsewhere, filtered) goes with it; one whose hex moved follows it
+  const card = cardEl(), el = card && hexOn(card.dataset.name);
+  if (el) placeCard(card, el); else if (card) hideCard();
 }
 document.addEventListener("mouseover", e => {
+  hcPt = [e.clientX, e.clientY];
+  if (e.target.closest("#hcard")) { hcPend = null; hcFrom = null; return clearTimeout(hcT) }
   const el = e.target.closest(".cell[data-dock],.fp[data-dock]"), p = el && ui.dk[el.dataset.dock];
-  if (e.target.closest("#hcard")) return clearTimeout(hcT);
   if (!p || p.members || el.contains(e.relatedTarget)) return;
-  clearTimeout(hcT);
-  hcT = setTimeout(() => showCard(el, p), 300);
+  const card = cardEl();
+  clearTimeout(hcT); hcPend = null;
+  if (card && card.dataset.name === p.name) { hcFrom = null; return }  // back on its own hex, or the hex redrawn under the pointer: keep it as it is
+  if (card && aiming()) { hcPend = {el, p}; return wantCard(el, p, HC.rest) }  // passing through on the way to the card
+  wantCard(el, p, card || performance.now() - hcGone < HC.warmFor ? HC.warm : HC.open);
 });
-function showCard(el, p){
-  if (ui.drag || !el.isConnected) return;
-  hideCard();
-  const card = hoverCard(p), r = el.getBoundingClientRect();
-  card.addEventListener("mouseleave", leaveCard);
-  document.body.append(card);
-  const w = card.offsetWidth, ht = card.offsetHeight;
+function placeCard(card, el){  // beside its hex, right if there's room, else left; inside the window and clear of the footer
+  const r = el.getBoundingClientRect(), w = card.offsetWidth, ht = card.offsetHeight;
   card.style.left = `${Math.max(8, Math.min(r.right + 10 + w < innerWidth - 8 ? r.right + 10 : r.left - 10 - w, innerWidth - w - 8))}px`;
   card.style.top = `${Math.max(8, Math.min(r.top + r.height / 2 - ht / 2, innerHeight - 32 - 8 - ht))}px`;  // clear of the 32px footer
+}
+function showCard(el, p){
+  if (ui.drag || !el.isConnected) return;
+  const old = cardEl(), card = hoverCard(p);
+  card.addEventListener("mouseleave", leaveCard);
+  if (old) { card.style.animation = "none"; old.replaceWith(card) } else document.body.append(card);  // a swap is one card changing, not one fading out and one in
+  clearTimeout(hcT); hcPend = null; hcFrom = null;
+  placeCard(card, el);
 }
 document.addEventListener("focusin", e => {  // a hex reached by Tab shows its card as the pointer would
   const el = e.target.closest && e.target.closest(".cell[data-dock],.fp[data-dock]"), p = el && ui.dk[el.dataset.dock];
@@ -2905,8 +2939,13 @@ document.addEventListener("focusin", e => {  // a hex reached by Tab shows its c
 document.addEventListener("focusout", e => { if (e.target.closest && e.target.closest(".cell[data-dock],.fp[data-dock]") && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("#hcard"))) leaveCard() });
 document.addEventListener("mouseout", e => {
   const el = e.target.closest(".cell[data-dock],.fp[data-dock]");
-  if (el && !el.contains(e.relatedTarget) && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("#hcard"))) leaveCard();
+  if (!el || el.contains(e.relatedTarget) || e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("#hcard")) return;
+  hcPt = [e.clientX, e.clientY];
+  const card = cardEl();
+  if (card && card.dataset.name === el.dataset.dock) hcFrom = hcPt;  // leaving the card's own hex: the aim starts here
+  leaveCard();
 });
+addEventListener("wheel", e => { if (!(e.target.closest && e.target.closest("#hcard"))) hideCard() }, {passive: true});  // the hive scrolls out from under it
 document.addEventListener("pointerdown", e => { if (!e.target.closest("#hcard")) hideCard() }, true);
 document.addEventListener("keydown", e => {
   const card = document.getElementById("hcard"); if (!card) return;
