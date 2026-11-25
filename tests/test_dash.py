@@ -245,6 +245,7 @@ with mock.patch.object(dash.greenlight, "orca", side_effect=lambda *a: {"worktre
         mock.patch.object(dash, "repos", return_value=REPO), mock.patch.object(dash, "live_agents", return_value={}):
     out = dash.task("new", "widgets", json.dumps({"text": "Fix the native one"}))  # native: made, its agent didn't start
 assert "didn't start" in out["error"] and (dash.TASKS / out["name"] / "request.md").exists()  # the brief it points at stays
+assert dash.lifestage._file("preflight", out["name"]).exists() and dash.lifestage._file("preflight", "/w/x").exists()  # its goal passed preflight
 for bad, why in (({"text": " \n "}, "describe"), ({"text": "x", "files": [{"name": "a", "data": "javascript:1"}]}, "didn't come through"),
                  ({"text": "x", "files": [{"name": "a", "data": B64}] * 2 + [{"name": "big", "data": "data:application/octet-stream;base64," + "A" * (21 << 20)}]}, "15 MB")):
     out, calls = task(bad)

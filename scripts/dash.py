@@ -2112,6 +2112,9 @@ def task_new(repo_name, payload):
             if a == agents[-1] or not greenlight.LIMIT_RE.search(str(e)):
                 shutil.rmtree(d, ignore_errors=True)
                 return {"error": f"couldn't start the workspace: {str(e)[:300]}"}
+    lifestage.save("preflight", name, gate["record"])  # the goal passed preflight, whether or not its agent started
+    if path := (res.get("worktree") or {}).get("path"):
+        lifestage.save("preflight", path, gate["record"])
     if res.get("error"):  # the workspace and its goal stand (and the request it points at): its agent didn't start
         _note(name, f"task workspace made, agent didn't start ({a}): {title}")
         return {"error": res["error"], "name": name}
@@ -2121,9 +2124,6 @@ def task_new(repo_name, payload):
             greenlight.orca("worktree", "set", "--worktree", f"id:{wid}", "--display-name", name)
         except RuntimeError:
             pass
-    lifestage.save("preflight", name, gate["record"])
-    if path := (res.get("worktree") or {}).get("path"):
-        lifestage.save("preflight", path, gate["record"])
     _note(name, f"task started ({a}, {len(files)} file{'s' * (len(files) != 1)}): {title} [preflight: {gate['why']}]")
     return {"ok": True, "name": name, "repo": repo["name"]}
 

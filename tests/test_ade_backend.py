@@ -167,9 +167,13 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     bad = ade_basement.create(str(repo), "feat-u", None, "", "no-such-agent", "go")  # harness.py raises ValueError
     assert "didn't start" in bad["error"]
     assert ade_basement.ade_common.goals()[out["worktree"]["path"]] == "Ship Z"
-    monkeypatch.chdir(repo.parent)  # a folder named like the repo here is still not it: only registered names count
+    gadgets = repo.parent / "gadgets"  # a git repo in the cwd, never registered: a bare name is still not it
+    gadgets.mkdir()
+    git("init", "-q", "-b", "main", cwd=gadgets)
+    monkeypatch.chdir(repo.parent)
     with pytest.raises(RuntimeError, match="names no registered repo"):
-        ade_basement.create("no-such-repo", "feat-q")
+        ade_basement.create("gadgets", "feat-q")
+    assert not (repo.parent / "gadgets-feat-q").exists() and str(gadgets.resolve()) not in ade_basement.saved()
     with pytest.raises(RuntimeError, match="not a git checkout"):
         ade_basement.create(str(home / "nowhere"), "feat-q")
     other = home / "b" / "widgets"
