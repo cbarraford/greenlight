@@ -455,6 +455,11 @@ def doctor(quick=False):
             except PermissionError:
                 pass
     add("stale_pids", dead == 0, n=dead)
+    with contextlib.suppress(Exception):  # the workspace backend: a deprecated live driver (cmux, herdr, t3) isn't ok
+        import ade
+        n = ade.name()
+        add("ade", n not in ade.LEGACY, state="deprecated" if n in ade.LEGACY else n,
+            imported=(home() / "imported.json").exists() if n == "native" else None)
     return {"ok": all(c.get("ok") is not False for c in out), "checks": out}
 
 

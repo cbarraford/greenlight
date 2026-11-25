@@ -170,6 +170,9 @@ def agent_worktree(path):
 
 
 def worktrees():
+    if not (HOME / "imported.json").exists():  # first listing on this install: bring the other ADEs' repos and goals in
+        import importers  # here: importers imports this module
+        importers.first_run()
     ps, g = panes(), goals()
     repos = dict.fromkeys([*saved(), *(git_info(p["cwd"])["repoId"] for p in {p["cwd"]: p for p in ps}.values())])
     paths = [l[9:] for repo in filter(None, repos)

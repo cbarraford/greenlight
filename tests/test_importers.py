@@ -56,10 +56,12 @@ def test_folder_scan(home):
         inner.mkdir(mode=0o000)  # a subfolder that can't be opened: named, and the rest still imports
         try:
             got = importers.gather(["folder"], [str(code)])["folder"]
-            assert "can't open" in got["error"] and str(a.resolve()) in got["repos"]
+            assert f"can't open: {inner}" in got["error"] and str(a.resolve()) in got["repos"]  # named, never silently missed
         finally:
             inner.chmod(0o700)
     shut.chmod(0o700)
+    many = importers.gather(["folder"], [str(home / f"no{i}") for i in range(5)] + [str(home / "no0")])["folder"]["error"]
+    assert many.count("not a folder") == 3 and many.endswith("and 2 more")  # capped, each named once
     got = importers.gather(["folder"], [str(code), str(home / "typo")])["folder"]  # one bad folder doesn't drop the rest
     assert str(a.resolve()) in got["repos"] and "not a folder" in got["error"]
 
@@ -163,3 +165,31 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     assert "no op" in ask("frob", {})["error"]
     out = ask("apply", {"from": ["folder"], "paths": [str(home / "code")]})
     assert out["repos"] == ade_basement.saved() == [str((home / "code" / "x").resolve())]
+
+
+def test_first_run_imports_once_on_native(home, monkeypatch):
+    monkeypatch.setattr(ade_basement, "HOME", home / "home")
+    r = git_init(home / "r")
+    monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
+    calls = []
+    monkeypatch.setattr(importers.ade, "get", lambda n: calls.append(n) or fake_backend([{"path": str(r), "repoId": str(r), "comment": "Main goal"}]))
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert importers.first_run() is None and calls == []  # Orca in use: nothing to import into
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    assert importers.first_run() == {"repos": 1, "goals": 1, "sources": {"orca": {"repos": 1, "goals": 1}}}
+    assert calls == ["orca", "orca"] and ade_basement.saved() == [str(r.resolve())] and ade_common.goals() == {str(r): "Main goal"}
+    assert json.loads((home / "home" / importers.FIRST_RUN).read_text())["repos"] == 1
+    assert importers.first_run() is None and calls == ["orca", "orca"]  # once
+    (home / "home" / importers.FIRST_RUN).unlink()
+    monkeypatch.setattr(importers, "gather", lambda *a: 1 / 0)  # a failing import still marks it done, and never raises
+    assert importers.first_run() == {"error": "ZeroDivisionError"} and (home / "home" / importers.FIRST_RUN).exists()
+
+
+def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
+    import diag
+    monkeypatch.setenv("GREENLIGHT_ADE", "herdr")
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
+    assert chk["ok"] is False and chk["state"] == "deprecated"
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
+    assert chk["ok"] is True and chk["state"] == "native"

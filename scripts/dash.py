@@ -802,16 +802,17 @@ ADES = None  # a fixed list in place of ades() (tests)
 
 
 def ades():
-    """The backends dash.py lists worktrees from, first wins a shared path: the other installed ADEs first, so a
-    workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
-    every registered repo's worktrees, whichever ADE made them)."""
+    """The backends dash.py lists worktrees from, first wins a shared path: Orca (and a legacy driver in use) first, so
+    a workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
+    every registered repo's worktrees, whichever ADE or plain git made them)."""
     if ADES:
         return tuple(ADES)
     try:
-        native = ade.is_native()
-    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: list the ones there are
-        native = False
-    return ("orca", "cmux", "herdr", "t3", *(["native"] if native else []))
+        cur = ade.name()
+    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: Orca's, if it's there
+        cur = "orca"
+    # the legacy live drivers are listed only while one is in use: the native engine finds their worktrees through git
+    return ("orca", *([cur] if cur in ade.LEGACY else []), *(["native"] if cur == "native" else []))
 
 
 def ade_call(n):

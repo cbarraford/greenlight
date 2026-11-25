@@ -1646,7 +1646,7 @@ def dispatch_turn(tmp_path, monkeypatch, msg):
     for f in (fake, orca):
         f.chmod(f.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
-    monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # a fake Orca CLI: the test is Orca's (native is the default since #195)
     monkeypatch.setenv("GREENLIGHT_REQUEST", "")  # chat.turn sets it: restored after the test
     events = []
     monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))

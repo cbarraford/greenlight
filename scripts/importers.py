@@ -13,11 +13,13 @@ goal, only where greenlight has none yet: an import never overwrites a goal). No
 an import can run again any time (Settings → Import, `greenlight.py import`), and a source that fails to answer
 is reported and skipped.
 """
+import contextlib
 import json
 import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,7 +116,9 @@ def gather(sources, paths=()):
                         bad.append(str(e)[:200])
             else:
                 repos, goals = from_backend(s)
-            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals, **({"error": "; ".join(bad)} if bad else {})}
+            bad = list(dict.fromkeys(bad))  # overlapping folders name a skipped one once; and only the first few
+            err = "; ".join(bad[:3]) + (f"; and {len(bad) - 3} more" if len(bad) > 3 else "")
+            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals, **({"error": err} if bad else {})}
         except Exception as e:  # noqa: BLE001 - an ADE that isn't running, or changed its CLI: report it, import the rest
             out[s] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             diag.event("import", source=s, err=type(e).__name__, msg_class=diag.classify(str(e)))
@@ -170,6 +174,26 @@ def apply(p):
             goals[path] = g
     diag.event("import", op="apply", n_repos=len(p["repos"]), n_goals=len(goals), n_kept=len(p["kept"]))
     return {**p, "goals": goals}
+
+
+FIRST_RUN = "imported.json"  # in GREENLIGHT_HOME: the one automatic import has happened (what it found)
+
+
+def first_run():
+    """Once per install, the first time the native engine lists workspaces: import every detected ADE (not folders),
+    so someone moving from Orca, T3, cmux or herdr keeps their repos and goals. Never raises; a marker makes it once."""
+    marker = ade_basement.HOME / FIRST_RUN
+    if marker.exists() or not ade.is_native():
+        return None
+    try:
+        p = apply(plan(gather([s for s, ok in detect().items() if ok and s != "folder"])))
+        res = {"repos": len(p["repos"]), "goals": len(p["goals"]), "sources": p["sources"]}
+    except Exception as e:  # noqa: BLE001 - the import is a convenience: listing must go on
+        res = {"error": type(e).__name__}
+    with contextlib.suppress(OSError):
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"ts": int(time.time()), **res}, indent=1))
+    return res
 
 
 def run(argv):

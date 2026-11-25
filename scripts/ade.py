@@ -5,8 +5,9 @@
     dispatch(b, *args)  an `orca …`-shaped call (greenlight.py ade, and every core caller today) answered by b's contract
 
 `native` is greenlight's own engine: git worktrees, the app's tmux server (`tmux -L greenlight`), repos.json and
-goals.json (ade_basement.py; `basement` is its old name). `orca` drives the Orca app. cmux, herdr and t3 are the
-legacy live drivers.
+goals.json (ade_basement.py; `basement` is its old name), and the default. `orca` drives the Orca app (opt-in). cmux,
+herdr and t3 are the deprecated legacy live drivers: they still answer when set, but importers.py brings their repos
+and goals in once, and external.py sees the agents they run, so the native engine needs neither.
 
 The contract (what core code may ask of a backend; rows are in Orca's worktree/terminal shape, the one the scan reads):
 
@@ -29,10 +30,11 @@ from pathlib import Path
 
 import ade_common
 
-DEFAULT = "orca"  # ponytail: #195 flips this to native once the importers and passive coexistence are in
+DEFAULT = "native"  # greenlight's own engine on macOS and Linux (#195); GREENLIGHT_ADE=orca (or "ade": "orca") opts into Orca
 ALIASES = {"basement": "native"}
 MODULES = {"native": "ade_basement", "orca": "ade_orca", "cmux": "ade_cmux", "herdr": "ade_herdr", "t3": "ade_t3"}
 NAMES = tuple(MODULES)
+LEGACY = ("cmux", "herdr", "t3")  # deprecated live drivers: still answer when set, but importers.py + external.py replace them
 
 
 def _config_ade():
@@ -68,6 +70,15 @@ def is_orca():
 
 def is_native():
     return name() == "native"
+
+
+def deprecated():
+    """The legacy live driver in use (cmux, herdr, t3), else None: diag doctor says so."""
+    try:
+        n = name()
+    except RuntimeError:
+        return None
+    return n if n in LEGACY else None
 
 
 def get(n=None):

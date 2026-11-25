@@ -21,19 +21,22 @@ def home(tmp_path, monkeypatch):
 
 
 def test_name_resolution(home, monkeypatch):
-    assert ade.name() == ade.DEFAULT == "orca" and ade.is_orca()
+    assert ade.name() == ade.DEFAULT == "native" and ade.is_native() and not ade.is_orca()  # native by default (#195)
+    (home / "config.json").write_text(json.dumps({"ade": "Orca"}))  # Orca: opt-in
+    assert ade.name() == "orca" and ade.is_orca()
     (home / "config.json").write_text(json.dumps({"ade": "Native"}))
     assert ade.name() == "native" and ade.is_native()
     (home / "config.json").write_text(json.dumps({"ade": "basement"}))  # the old name
     assert ade.name() == "native"
     (home / "config.json").write_text(json.dumps({"ade": "nope"}))  # an unknown config value: the default
-    assert ade.name() == "orca"
+    assert ade.name() == "native"
     (home / "config.json").write_text("{not json")
-    assert ade.name() == "orca"
+    assert ade.name() == "native" and ade.deprecated() is None
     (home / "config.json").write_text(json.dumps({"ade": "native"}))
     monkeypatch.setenv("GREENLIGHT_ADE", "t3")  # the env wins over a valid config
     assert ade.name() == "t3"
-    monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent Orca
+    assert ade.deprecated() == "t3"  # a legacy live driver still answers, flagged
+    monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent default
     with pytest.raises(RuntimeError, match="not one of"):
         ade.name()
 
@@ -216,13 +219,15 @@ def test_cli_ade_native_end_to_end(home, repo):
 
 def test_dash_backend_order(home, monkeypatch):
     import dash
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")  # as before: an ADE's own workspace goes through that ADE
+    assert dash.ades() == ("orca", "native")  # the default: Orca's own workspaces still go through Orca, git finds the rest
     monkeypatch.setenv("GREENLIGHT_ADE", "basement")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3", "native")
+    assert dash.ades() == ("orca", "native")
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert dash.ades() == ("orca",)  # no legacy driver merging any more
     monkeypatch.setenv("GREENLIGHT_ADE", "cmux")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    assert dash.ades() == ("orca", "cmux")  # a deprecated driver in use still lists its own
     monkeypatch.setenv("GREENLIGHT_ADE", "bogus")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    assert dash.ades() == ("orca",)
     monkeypatch.setattr(dash, "ADES", ("orca",))
     assert dash.ades() == ("orca",)
     assert dash.ade_call("orca") is greenlight.orca_cli  # tree_new knows an Orca create by it (placement as the user's pick)

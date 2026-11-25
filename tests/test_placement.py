@@ -19,7 +19,7 @@ def wt(name, host=None, agents=True, **k):
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # placement is Orca's (hosts); native is the default since #195
     monkeypatch.delenv("ORCA_ENVIRONMENT", raising=False)
     monkeypatch.setattr(greenlight, "here", lambda: "devbox")
     placement._MACHINES.update(at=0.0, map={})
