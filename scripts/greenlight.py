@@ -1357,8 +1357,9 @@ def agent_overlay(ws, terminals):
             nxt.update(owner="working", action="the process check failed, so whether an agent runs here outside Greenlight "
                                                "can't be told: greenlight holds off until it can (diag.py errors says why)")
         elif h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
-            nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for {h:.0f}h: once it's done, close "
-                                          "it (or take it over in the Basement) and greenlight carries on")
+            # no hour count in the text: the question's marker is the action, and a changing one re-asks every hour
+            nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for over {EXTERNAL_STALE_H}h: once "
+                                          "it's done, close it (or take it over in the Basement) and greenlight carries on")
         else:
             nxt.update(owner="working", action=f"{who} runs here outside Greenlight: nothing is dispatched or merged until "
                                                "it exits (then take it over in the Basement)")
@@ -1533,7 +1534,9 @@ def scan(save=True, _backfill_retries=0):
             "comment": comment,
             "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
-                      **({"external": True, "since": ag.get("stateStartedAt")} if ag.get("external") else {}),
+                      # any outside agent, even behind our own (an auto-merge must not land under it)
+                      **({"external": True, "since": ext.get("stateStartedAt")}
+                         if (ext := next((a for a in w.get("agents") or [] if a.get("external")), None)) else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},

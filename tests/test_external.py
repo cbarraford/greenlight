@@ -1,5 +1,6 @@
 """external.py: agents outside greenlight's tmux, by worktree, and what the scan, cleanup and native rows do with them (#195)."""
 import os
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -25,8 +26,10 @@ def test_agent_of():
     assert external.agent_of(["env", "-i", "claude"]) == "claude"  # a launcher's flags are skipped
     assert external.agent_of(["env", "FOO=1", "claude"]) == "claude"  # and its VAR=value
     assert external.agent_of(["claude", "-p", "fix the crash in Greenlight.app/Contents/MacOS"]) == "claude"  # a prompt isn't the program
-    assert external.agent_of(["codex", "app-server"]) is None and external.agent_of(["claude", "mcp", "serve"]) is None  # servers
-    assert external.agent_of(["node", "/srv/n/@openai/codex/bin/codex.js", "app-server"]) is None  # through an interpreter too
+    assert external.agent_of(["claude", "mcp", "serve"]) is None  # a server that never edits a folder
+    assert external.agent_of(["codex", "app-server"]) == "codex"  # T3's and VS Code's per-session codex: an agent
+    assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js", "--output-format", "stream-json"]) == "claude"  # T3's Claude
+    assert external.agent_of(["/Applications/T3.app/Contents/MacOS/T3", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js"]) == "claude"  # as node
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-code/cli.js", "mcp", "serve"]) is None
     assert external.agent_of(["codex", "mcp-server"]) is None and external.agent_of(["codex", "exec", "fix it"]) == "codex"
 
@@ -144,7 +147,8 @@ def test_scan_keeps_off_an_external_agent():
     old = greenlight.NOW_MS - (greenlight.EXTERNAL_STALE_H + 1) * 3.6e6
     ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "since": old}}
     greenlight.agent_overlay(ws, {})
-    assert ws["next"]["owner"] == "me" and "running here outside Greenlight for 7h" in ws["next"]["action"]  # idle for hours: yours to close
+    assert ws["next"]["owner"] == "me" and "running here outside Greenlight for over 6h" in ws["next"]["action"]  # yours to close
+    # (no hour count: the action is the question's marker, so it must not change every hour and re-ask)
     ws = {"next": {"owner": "agent", "step": "ci_green", "action": "x"}, "agent": {"state": "working", "type": None, "external": True}}
     greenlight.agent_overlay(ws, {})  # a failed process check (by_worktree_safe's placeholder): held, and says so
     assert ws["next"]["owner"] == "working" and "process check failed" in ws["next"]["action"]
@@ -173,6 +177,12 @@ def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # Orca lists its own agents' terminals: the busy check covers them
     assert cleanup.outside_agent(str(wt)) is None
     assert cleanup.evaluate(w, repo, set()) == ("candidate", "MR !4 merged")
+
+
+def test_orchestrate_rechecks_afresh():
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate.py").read_text()
+    main = src[src.index('diag.install("orchestrate")'):]
+    assert "external.TTL = 0" in main[:300]  # its re-check before a dispatch never reuses the tick's scan
 
 
 def test_basement_delete_warns(monkeypatch):
@@ -250,5 +260,6 @@ def test_failures_fail_closed(monkeypatch):
         external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None)
     # another user's agent (root's, a second account's): skipped, not a failure that holds every worktree
     assert external.scan(procs={8: {"ppid": 1, "argv": ["claude"], "other": True}}, roots=set(), cwd_of=lambda p: None) == []
+    assert external.scan(procs={9: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: "") == []  # lsof listed it, no path (its folder was deleted): seen
     monkeypatch.setattr(external, "_alive", lambda pid: False)  # it exited mid-scan: nothing to find
     assert external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None) == []

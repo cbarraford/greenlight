@@ -28,22 +28,28 @@ _CACHE: dict = {"at": 0.0, "val": None, "failed": 0.0}
 _LOCK = threading.Lock()  # one scan at a time: cleanup's worker threads share it
 
 
-PACKAGES = {"claude": "/@anthropic-ai/claude-code/", "codex": "/@openai/codex/", "gemini": "/@google/gemini-cli/"}
-SERVERS = {"app-server", "mcp-server", "mcp", "serve"}  # `claude mcp serve` too; `claude mcp add` is a one-shot config command
+PACKAGES = {"claude": ("/@anthropic-ai/claude-code/", "/@anthropic-ai/claude-agent-sdk/"),  # the SDK: T3 Code's Claude
+            "codex": ("/@openai/codex/",), "gemini": ("/@google/gemini-cli/",)}
+# servers that never edit a folder: `claude mcp serve` too (`claude mcp add` is a one-shot config command). Not
+# `codex app-server`: T3 and the VS Code extension run one per session in the worktree (an editor's idle one is held
+# until the 6 h hold hands it to the user)
+SERVERS = {"mcp-server", "mcp", "serve"}
 APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron helper, not a CLI agent
 
 
 def agent_of(argv):
     """The agent an argv runs (its program, or the script a node/python/bun runs), else None. A desktop app named
     like one (Claude.app, Codex.app, Antigravity and its helpers) isn't: the CLI agents it starts are counted."""
-    if not argv or APP_RE.search(argv[0]) or any(a.startswith("--type=") for a in argv):
-        return None  # only the program says it's an app: a prompt may name "Greenlight.app/Contents"
+    if not argv or any(a.startswith("--type=") for a in argv):
+        return None
+    if APP_RE.search(argv[0]):  # an app; but one running an agent's package as node (ELECTRON_RUN_AS_NODE) runs that agent
+        return next((k for a in argv[1:3] for k, pkgs in PACKAGES.items() if any(p in a for p in pkgs)), None)
     for i, a in enumerate(argv[:3]):
         if a.startswith("-") or ("=" in a and not a.startswith("/")):
             continue  # a flag, or env's VAR=value
         b = os.path.basename(a).lower().removesuffix(".js").removesuffix(".mjs")
         b = ALIASES.get(b, b)
-        kind = b if b in AGENTS else next((k for k, pkg in PACKAGES.items() if pkg in a), None)
+        kind = b if b in AGENTS else next((k for k, pkgs in PACKAGES.items() if any(p in a for p in pkgs)), None)
         if kind:
             words = [w for w in argv[i + 1:i + 3] if not w.startswith("-")]
             # an editor's or another tool's server, not a session working in this folder
@@ -136,6 +142,7 @@ def _cwds_mac(pids):
     for line in p.stdout.splitlines():
         if line[:1] == "p" and line[1:].isdigit():
             cur = int(line[1:])
+            out[cur] = ""  # listed, but maybe no path (its folder was deleted): seen, not lost
         elif line[:1] == "n" and cur is not None:
             out[cur] = line[1:]
     return out
@@ -187,7 +194,7 @@ def scan(procs=None, roots=None, cwd_of=None):
     if cwd_of is None:
         cwds = _cwds_mac(outside) if mac else {pid: _cwd_linux(pid) for pid in outside}
         cwd_of = cwds.get
-    if mac and (lost := [p for p in outside if not cwd_of(p) and _alive(p)]):  # lsof said nothing about a live agent
+    if mac and (lost := [p for p in outside if cwd_of(p) is None and _alive(p)]):  # lsof said nothing about a live agent
         raise OSError(f"no cwd for {len(lost)} live agent(s)")
     out = []
     for pid in sorted(outside):
