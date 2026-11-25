@@ -2079,17 +2079,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
     /// `run`: a command too long to type (terminal.html `newPane`). One interactive login shell evals it, then becomes a login shell:
-    /// `trap : INT` keeps a ^C (or a stray quote) from ending the pane, and nothing is left to hand the terminal back to. tmux gets it
-    /// through a temp file, as it refuses a command over 16 KB. `runMark`, printed first, tells the page not to send it again.
-    /// Known gap: zsh sets the trap after its rc files, so a ^C while `.zshrc` loads ends the pane (click the move again).
+    /// `trap : INT` keeps a ^C (or a stray quote) from ending the pane, and nothing is left to hand the terminal back to. It's in the
+    /// command once, as `r`. tmux gets it through a temp file, as it refuses a command over 16 KB; a live session (a reconnect that
+    /// raced the mark) ignores it, so none then. No tmux, or no file (`>|`: noclobber), and this shell runs it. `runMark` tells the
+    /// page it's handled, so a reconnect doesn't send it again. Known gap: zsh sets the trap after its rc files, so a ^C while
+    /// `.zshrc` loads ends the pane (click the move again); so does a drop in the instant between the mark and tmux's session.
     static let runMark = "\\033]6973;greenlight-run\\007"
     func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
         let go = { (arg: String) in "exec $SHELL -lic " + shellQuote("trap : INT; eval \"\(arg)\"; exec $SHELL -l") + " greenlight " }
-        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || "
-            + (run.isEmpty ? "exec $SHELL -l; " : "{ printf '\(App.runMark)'; \(go("$1"))\(shellQuote(run)); }; "
-                // a live session (a reconnect that raced the mark) ignores it: no file. Not saved: no mark, so the page keeps it
-                + "if \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=; printf '\(App.runMark)'; "
-                + "elif f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \(shellQuote(run)) > \"$f\"; then printf '\(App.runMark)'; else f=; fi; ")
+        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ")
+            + (run.isEmpty ? "command -v tmux >/dev/null || exec $SHELL -l; "
+                : "r=\(shellQuote(run)); f=; if ! command -v tmux >/dev/null; then :; "
+                + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=live; "
+                + "elif f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
+                + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
             + (run.isEmpty ? "" : " " + shellQuote(go("$(cat \"$1\"; rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
