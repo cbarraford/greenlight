@@ -294,11 +294,13 @@ _SEG = r"[^\s'\"`:,;)\]]"
 _W = r"[^\s/'\"`:,;)\]]"  # a word of a spaced name: no slash
 PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|tmp|private|var|etc|opt|srv|mnt|Volumes|workspaces?)(?!{_SEG.replace('[^', '[^/')})(?:/{_SEG}*)?"
                      rf"|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?![\w.@+-]))[\w.@+-]+/{_SEG}*)"
-                     rf"(?: (?:{_W}+/{_SEG}*|[A-Z]{_W}*(?=(?: [A-Z]{_W}*)*(?:/|['\"`]|$))))*", re.M)  # a home, a known root, or any path with a 2nd slash but the system's own; not
+                     rf"(?: (?:{_W}+/{_SEG}*|[A-Z]{_W}*(?: [A-Z0-9]{_W}*){{0,7}}(?:/{_SEG}*|(?=['\"`;,)]|$))|{_W}+(?: {_W}+){{0,5}}(?=['\"`])))*", re.M)  # a home, a known root, or any path with a 2nd slash but the system's own; not
 # /goal; a spaced part goes with it ("my project/plan.pdf", "Jane Doe"): a relative path after it goes too (privacy first)
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1([ \t]*[=:][ \t]*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
+YAML_LIST_RE = re.compile(r"(?im)^([ \t]*[\w.-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth|credentials?)[\w.-]*:[ \t]*)\n"
+                          r"(?:[ \t]*-[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
 FLAG_RE = re.compile(r"(?i)(--?[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]*)(\s+)(?!-)\S+")  # mysql --password hunter2
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
@@ -353,6 +355,7 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
     text = sub(IP_RE, "[ip]", text)
     text = sub(HOST_RE, "[host]", text)
     text = sub(audit.PHONE_RE, "[phone]", text)
+    text = sub(YAML_LIST_RE, "\\1[secret]\n", text)
     text = sub(ASSIGN_RE, r"\1\2\1\3[secret]", text)  # after URLs: a query's token= is the URL's
     for term in sorted({t for t in terms if t and len(t) >= 3}, key=len, reverse=True):  # the workspace's own name and path
         text = sub(re.compile(re.escape(term), re.I), "[workspace]", text)

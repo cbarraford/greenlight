@@ -7,6 +7,7 @@ import re
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,14 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     for spaced in ("/" + "Users/Jane Doe/Payroll 2025/plan.pdf", "/" + "Users/Jane Doe", "~/My Project", "/tmp/My Project"):
         assert log_view.redact(f"cat {spaced}")[0] == "cat [path]", spaced
     assert log_view.redact("cat /" + "Users/jane/my project/plan.pdf")[0] == "cat [path]", "a lowercase spaced folder goes too"
+    for spaced in ('cd "/' + 'Users/Jane Doe/secret plans"', "/" + "Users/Jane Doe/Acme Payroll 2025", "/" + "Users/Jane Doe; ls"):
+        out = log_view.redact(spaced)[0]
+        assert not re.search(r"Doe|plans|Payroll|2025", out), out
+    out, _ = log_view.redact("password:\n  - hunter2\n  - swordfish\nnext: 1")
+    assert "hunter2" not in out and "swordfish" not in out and out.endswith("next: 1"), out
+    for bad in ("/tmp/x " + "A " * 24999 + "A/", "/tmp/x " + "Ab " * 16666 + "Ab'", "/a/b" + " Ab" * 20000):
+        t = time.time(); log_view.redact(bad)
+        assert time.time() - t < 0.5, len(bad)
     assert log_view.redact("cp /acme/a.txt docs/b.txt")[0] == "cp [path]", "so a relative path after one goes with it: privacy first"
     assert log_view.redact("cat /srv/app/x.py Then I fixed it.")[0] == "cat [path] Then I fixed it.", "a sentence after a path stays"
     assert "def456" not in log_view.redact("API_KEYS=[abc123, def456]")[0]
