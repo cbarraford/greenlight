@@ -279,6 +279,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
   await p.evaluate(() => { stage.html("<p style='color:red'>page</p>"); stage.hold("x"); });  // Chief's own page can't take the colour: dimmed
   assert.equal(await p.$eval("#s.held iframe", e => getComputedStyle(e).opacity), "0.6");
+  assert.ok(await p.evaluate(() => document.body.scrollHeight <= document.body.clientHeight && document.scrollingElement.scrollHeight <= innerHeight), "a held page doesn't overflow the stage");
+  assert.ok(await p.$eval("#s.held", e => parseFloat(getComputedStyle(e, "::before").paddingLeft)) >= 24, "its label keeps the gutter");
   await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
   await p.evaluate(() => stage.hold("Still looking"));  // a second hold keeps the same held card
   assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");

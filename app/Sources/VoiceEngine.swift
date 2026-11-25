@@ -391,7 +391,7 @@ final class Voice: NSObject, ObservableObject {
     /// until Chief draws or speaks, or a quiet-time line takes the strip over. Only for a turn began() saw. Not a draw for the trail.
     func status(_ s: String) {
         guard on, turnAt != nil, !chiefDrew, said == 0, speaking == 0, lines.isEmpty, statusShown.isEmpty, core?.run != nil else { return }
-        statusSeq += 1  // a quiet-time line asked for before this newer one doesn't land over it
+        statusSeq += 1; quietSince = Date()  // a quiet-time line on its way doesn't land over this newer one, nor is one re-asked: it's fresh
         statusUp = true; js("stage.status", [s])
     }
     /// The status line's clock for a turn: from its start, or from voice mode starting partway through it. One clock at a time.

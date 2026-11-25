@@ -945,8 +945,8 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         // issue 208 phase 2: while the turn thinks, its status goes on the strip; once it draws (or speaks) the status stops
         let th = Run("think?"); th.status = "Looking up !12"; c.run = th; v.on = true; v.isLive = false; v.hush(); v.began(th)
         let held = v.statusUp && !v.shown
-        let seqBefore = v.statusSeq
-        v.statusUp = false; v.status("Running the tests"); let lineShown = v.statusUp && v.statusSeq > seqBefore  // a quiet-time line on its way is dropped
+        let seqBefore = v.statusSeq; v.quietSince = .distantPast
+        v.statusUp = false; v.status("Running the tests"); let lineShown = v.statusUp && v.statusSeq > seqBefore && Date().timeIntervalSince(v.quietSince) < 1  // a line on its way is dropped, none re-asked
         v.shown = true; v.statusUp = false; v.status("Reading the log"); let underInstant = v.statusUp  // the instant card: still updating
         v.took(); v.statusUp = false; v.status("Reading the log"); let quietAfterDraw = !v.statusUp; v.chiefDrew = false
         v.shown = false; v.said = 3; v.status("Reading the log"); let quietAfterSpeech = !v.statusUp
