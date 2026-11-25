@@ -271,7 +271,7 @@ def test_check_accents_reads_hues_from_the_spec(spec):
 def test_check_hex_notes(spec):
     text = (ROOT / tokens.SPEC).read_text()
     assert tokens.check_hex_notes(text, spec) == []
-    bad = text.replace("# light sRGB: #FAFEFB", "# light sRGB: #000000", 1)
+    bad = text.replace("# light sRGB: #FFFFFF", "# light sRGB: #000000", 1)
     assert tokens.check_hex_notes(bad, spec)
     amber, blue = (re.search(rf"  {n}:.*?\n    # light sRGB: [^\n]+", text, re.S).group(0).splitlines()[-1]
                    for n in ("amber", "blue"))

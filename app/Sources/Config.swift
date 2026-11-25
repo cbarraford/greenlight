@@ -930,6 +930,7 @@ final class RulesStore: ObservableObject {
     @Published var repos = [String]()
     @Published var repo = ""
     @Published var stages = [Stage]()
+    @Published var openStages = Set<String>()  // built-in stages whose long requirement is open in Settings
     @Published var options = [String: String]()
     @Published var rules = ""
     @Published var intro = ""
