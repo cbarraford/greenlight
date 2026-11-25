@@ -21,10 +21,15 @@ the host: the checkout is `~/.claude/skills/greenlight`.
 **Where it lives**
 - Backend: `$GREENLIGHT_HOME/diag/events.jsonl` (default `~/.greenlight`), rotated at 5 MB to `.1`–`.3`.
 - The Mac app: `~/Library/Logs/Greenlight/app.jsonl`. `diag.py` merges it in when the app runs on the same machine.
-- The app writes `ssh_exit`, `action`, `floor`, `voice`, `app_start`, `js_error` and `prev_crash` (a launch after a crash or a kill),
+- The app writes `ssh_exit`, `action`, `floor`, `voice`, `stage`, `app_start`, `js_error` and `prev_crash` (a launch after a crash or a kill),
   `hang {secs}` (the main thread didn't answer for over 2 s) and, every 5 min, `sample {rss_mb, cpu_pct, up_mins}`.
 - `summary.crashes`: the app's macOS crash reports (`~/Library/Logs/DiagnosticReports/Greenlight*.ips`), exception,
   signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
+- `summary.stage`: the voice stage's draws by who asked (`chief`, `fast` for the Haiku card, `dwim`, `app`) and by draw
+  (`wait`, `text`, `spec`, `chart`, `html`), and per turn p50/p95 seconds to the first card (not a wait card) and to the last draw.
+  Each `stage` event carries `draw`, `by` and `card` (an allowlisted kind or `other`). One drawn for a turn also has `turn` and `at`,
+  and `n` (its place) when it lands in that turn; the fast model's (and the app's fallback for it) and dwim's carry `req_secs`, the fast model's and its fallback's `mid` (a mid-reply card).
+  A card the app draws for a workspace switch is never timed.
 - `summary.usage`: chat turns and automation runs per `harness.model`, with tokens in and out and cost. `chat_turn` and
   `automation` events (and `auto/runs.jsonl`) carry `in_tokens`, `out_tokens` and `cost_cents`; only Claude reports a cost.
   `in_tokens` counts cache reads and sums every request of the turn, so it runs far above `context` (one request's size).

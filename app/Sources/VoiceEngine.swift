@@ -68,6 +68,9 @@ final class Voice: NSObject, ObservableObject {
     var mutes = 0  // each mute bumps it: a GPT-Live hand-off scheduled before one is dropped
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
+    /// The trail's turn (#208): its number, when it began (nil between turns), and how many draws it has had.
+    var turnNo = 0, turnAt: Date?, turnDraws = 0
+    static var turnSeq = 0
     /// The stage's status line (#176): when this turn last said something (or showed a line), the lines it showed, a line on its
     /// way, and whether the strip shows one. statusSeq moves on each clear, so a line asked for before it doesn't land.
     var quietSince = Date(), statusShown = [String](), statusAsking = false, statusUp = false, statusSeq = 0, tickGen = 0
@@ -123,10 +126,24 @@ final class Voice: NSObject, ObservableObject {
         _ = stageWeb
         if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }  // safety-ok: JSONSerialization args + hardcoded look.vars
     }
-    func wait(_ title: String, _ sub: String) { js("stage.wait", [title, sub]) }
+    /// A draw on the stage, and its `stage` event (#208): which draw, who asked for it (chief, fast, dwim, app), the card's kind
+    /// and when in the turn it landed. `mark` is the turn as it was asked for, for a draw that lands later. Tokens and numbers only.
+    func put(_ f: String, _ args: [Any], by: String, mark: (turn: Int, at: Date?)? = nil, extra: [String: Any] = [:]) {
+        js(f, args)
+        let m = mark ?? (turnNo, turnAt)
+        var e: [String: Any] = ["draw": stageDraw(f), "by": by]
+        if let k = stageCardKind(f, args.first) { e["card"] = k }
+        if let at = m.at {  // in a turn: a draw between turns (the app's cards, a watch or check-in turn) belongs to none
+            e["turn"] = m.turn; e["at"] = (Date().timeIntervalSince(at) * 1000).rounded() / 1000
+            if m.turn == turnNo { turnDraws += 1; e["n"] = turnDraws }
+        }
+        Diag.event("stage", e.merging(extra) { a, _ in a })
+    }
+    var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
+    func wait(_ title: String, _ sub: String) { put("stage.wait", [title, sub], by: "app") }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; js("stage.spec", [spec])
+        drawSeq += 1; shown = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
@@ -320,13 +337,13 @@ final class Voice: NSObject, ObservableObject {
     /// replaces the wait card: anything drawn since it was asked for (Chief's own, Haiku's) wins, and it never cancels Haiku's drawing.
     func instant(_ heard: String) {
         guard on, let c = core, !c.pucks.isEmpty else { return }
-        let seq = drawSeq, t0 = Date()
+        let seq = drawSeq, t0 = Date(), mark = turnMark
         let body = (try? JSONSerialization.data(withJSONObject: ["text": heard, "focus": c.focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(c.pucks, c.scope()))])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         var out = ""
         ssh("\(py)/dwim.py stage", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self, self.on, seq == self.drawSeq, !self.shown, !self.chiefDrew,
                   let o = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any], o["kind"] is String else { return }
-            self.shown = true; self.js("stage.spec", [o])
+            self.shown = true; self.put("stage.spec", [o], by: "dwim", mark: mark, extra: ["req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
             NSLog("dwim: stage %@ in %d ms (dwim.py %@ ms)", o["kind"] as? String ?? "", Int(Date().timeIntervalSince(t0) * 1000), "\(o["ms"] ?? "?")")
         })
     }
@@ -351,6 +368,7 @@ final class Voice: NSObject, ObservableObject {
         said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
         drawing = false  // a drawing the last turn's own took over never came back to clear it
         waitWord = waitWords.randomElement()!
+        Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
         wait(waitWord, r.question)
         startStatus(r)
@@ -360,7 +378,7 @@ final class Voice: NSObject, ObservableObject {
             self.say(self.waitWord, filler: true)
         }
     }
-    func status(_ s: String) { if on && !shown { wait(waitWord, s) } }
+    func status(_ s: String) { if on && !shown { js("stage.wait", [waitWord, s]) } }  // the wait card's new line: not a new draw for the trail
     /// The status line's clock for a turn: from its start, or from voice mode starting partway through it. One clock at a time.
     func startStatus(_ r: Run) {
         clearStatus(); statusShown = []; tickGen += 1
@@ -412,7 +430,7 @@ final class Voice: NSObject, ObservableObject {
     /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
     /// With only detail, a short pointer is said, so voice mode never goes silent.
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
-        defer { chiefDrew = false }  // watch/checkIn turns skip began(); clear so the next turn can draw
+        defer { chiefDrew = false; turnAt = nil }  // watch/checkIn turns skip began(); clear so the next turn can draw
         guard on else { return }
         clearStatus()
         if let h = st.stage { stage(h) }
@@ -424,13 +442,14 @@ final class Voice: NSObject, ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in if let self, self.on, self.ending { self.stopAll() } }
         } else if st.end { ending = true; if speaking == 0 && lines.isEmpty { stopAll() } }
         guard !chiefDrew else { return }
-        if let detail { took(); js("stage.text", [["lead": plain(gist), "md": detail]]) } else { draw(plain(spoken), last: true) }
+        if let detail { took(); put("stage.text", [["lead": plain(gist), "md": detail]], by: "chief") } else { draw(plain(spoken), last: true) }
     }
     /// Chief's own drawing (a ```stage block or the [screen] text) takes the stage: Haiku's, even one on its way, doesn't land.
     func took() { chiefDrew = true; shown = true; drawSeq += 1 }
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false
+        defer { turnAt = nil }
         guard on else { return }
         clearStatus()
         said = 0
@@ -442,20 +461,21 @@ final class Voice: NSObject, ObservableObject {
         guard !chiefDrew else { return }
         took()
         let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
-        if let o, isStageChart(o) { js("stage.chart", [o]) }
-        else if let card = stageCard(h) { js("stage.spec", [card]) }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
-        else if let html = stageHTML(h) { js("stage.html", [html]) } else { draw(h, last: true, force: true) }
+        if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
+        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
+        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") } else { draw(h, last: true, force: true) }
     }
     func draw(_ text: String, last: Bool, force: Bool = false) {
         drawSeq += 1
-        let n = drawSeq
+        let n = drawSeq, mark = turnMark, t0 = Date()
         drawing = true
         drawSpec(lastHeard, text) { [weak self] spec in
             guard let self, n == self.drawSeq else { return }  // a newer drawing was asked for
             self.drawing = false
             guard self.on, force || !self.chiefDrew else { return }
-            if let spec { self.shown = true; self.js("stage.spec", [spec]) }
-            else if last { self.shown = true; self.js("stage.spec", [fallbackSpec(text)]) }  // mid-reply, a failure leaves the card up
+            let x: [String: Any] = ["mid": !last, "req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000]
+            if let spec { self.shown = true; self.put("stage.spec", [spec], by: "fast", mark: mark, extra: x) }
+            else if last { self.shown = true; self.put("stage.spec", [fallbackSpec(text)], by: "app", mark: mark, extra: x) }  // mid-reply, a failure leaves the card up
         }
     }
 
