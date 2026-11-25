@@ -250,7 +250,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(tStreamed, await p.$eval("#s", e => e.innerHTML), "a table that gains a column ends as a one-shot draw");
   assert.equal(await p.locator(".caret").count(), 0);
   // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
-  assert.equal(await p.$eval("#s", e => getComputedStyle(e).justifyContent), "flex-start");
+  await p.evaluate(() => stage.spec({ title: "short", kind: "list", items: [] }));  // a short card sits at the top, not centred
+  assert.ok(await p.$eval("#s h1", e => e.getBoundingClientRect().top) < 40, "top-aligned");
   await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "a", live: true }); stage.text({ md: "a\n\nb", live: true }); });
   assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationName), "rise");
   assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationIterationCount), "1");
