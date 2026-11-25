@@ -1091,6 +1091,11 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
         assert r["at"] == int(datetime(2026, 11, 24, 20, tzinfo=UTC).timestamp()) and "last session" in r["note"]
     (_uh / ".codex" / "auth.json").write_text('{"tokens": {"access_')  # torn mid-write
     assert usage.fetch("codex")["src"] == "rollout", "a torn auth.json still falls back to the rollouts"
+    (day / "rollout-a.jsonl").rename(day / "rollout-a.off")
+    assert usage.fetch("codex")["state"] == "failed", "torn and no rollout: a failed read (it keeps its last windows), not a sign-out"
+    (day / "rollout-a.jsonl").write_text(json.dumps({"payload": {"rate_limits": {"primary": {"used_percent": 40, "window_minutes": 300}}}}) + "\n")
+    assert usage.fetch("codex")["windows"][0]["pct"] == 40.0, "a window with no reset time is unknown, not reset"
+    (day / "rollout-a.off").rename(day / "rollout-a.jsonl")
     (_uh / ".codex" / "auth.json").unlink()
     assert usage.fetch("codex")["src"] == "rollout"  # signed in through an API key: the rollouts still say
     # a long session lives under the day it started: found by when it was last written, past newer days without limits
@@ -1112,6 +1117,7 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
             "payload": {"rate_limits": {"primary": {"used_percent": 99.0, "window_minutes": 300, "resets_in_seconds": 300}}}}
     _t = int(datetime(2026, 11, 20, 8, tzinfo=UTC).timestamp())
     assert usage.codex_windows(_old["payload"]["rate_limits"], _t)[0]["resets"] == _t + 300
+    assert usage.codex_windows({"primary": {"used_percent": 5, "window_seconds": 18000}})[0]["label"] == "5h"
     (day / "rollout-a.jsonl").write_text(json.dumps(_old) + "\n")
     assert usage.codex_rollout(_uh / ".codex") is None and usage.fetch("codex")["state"] == "out", "signed out, and its last limits long reset"
     (day / "rollout-a.jsonl").unlink()
@@ -1146,6 +1152,7 @@ with mock.patch.dict(usage.SOURCES, {"claude": mock.Mock(side_effect=TypeError("
     _u = usage.fetch("claude")
     assert _u["state"] == "failed" and _u["next"] > _u["tried"] and "unexpected" in _u["note"]
 assert usage._epoch(float("inf")) is None and usage._win("5h", float("nan"), 0) is None
+assert usage._expired(float("inf")) is False and usage._expired(1000) is True
 
 # _get maps HTTP failures to a reason the footer shows on hover
 for code, want in ((429, "rate_limit"), (401, "auth"), (500, "http")):

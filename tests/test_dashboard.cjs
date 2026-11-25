@@ -1902,21 +1902,23 @@ test("usage meters: at the limit is red; a failed refresh keeps its last windows
   assert.match(await page.textContent(".urow[data-id=pi] .unote"), /As of 2h ago: from the last session instead/);
 });
 
-test("usage meters: a window whose reset has passed reads 0% and stops being the tightest; Esc elsewhere isn't taken", async page => {
+test("usage meters: a window whose reset has passed reads — (no new reading) and stops being the tightest; Esc elsewhere isn't taken", async page => {
   const u = USAGE(); u[0] = {...u[0], state: "failed", note: "token expired", at: NOW_S() - 36000,
     windows: [{label: "5h", pct: 95, resets: NOW_S() - 30000}, {label: "Week", pct: 40, resets: NOW_S() + 86400}]};
   await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), u);
   const m = (await meters(page))[0];
   assert.match(m.text, /^40%1d 0h$/, "the week, not yesterday's 95% 5h"); assert.equal(m.tone, "");
-  assert.match(m.title, /5h: 0% used\nWeek: 40% used, resets in 1d 0h/);
+  assert.match(m.title, /5h: reset since, no new reading\nWeek: 40% used, resets in 1d 0h/);
   await page.click("#foot .um[data-id=claude]");
   assert.deepEqual(await page.$$eval("#umpop .urow[data-id=claude] .uwin", ws => ws.map(w => [w.querySelector(".upct").textContent, w.querySelector(".ur").textContent])),
-    [["0%", ""], ["40%", "in 1d 0h"]]);
+    [["—", "reset"], ["40%", "in 1d 0h"]]);
   await page.evaluate(() => { const i = document.createElement("input"); i.id = "elsewhere"; document.body.append(i); i.focus() });
   const taken = await page.evaluate(() => { const e = new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}); document.activeElement.dispatchEvent(e); return e.defaultPrevented });
   assert.equal(taken, false, "Esc in another field is that field's"); assert.ok(await page.$("#umpop"), "and the popover stays");
   await page.focus("#umpop [data-view=compact]"); await page.keyboard.press("Escape");
   assert.equal(await page.$("#umpop"), null); assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "claude", "focus back on its meter");
+  await page.click("#foot .um[data-id=codex]"); await page.click("#umpop .urow[data-id=codex] b"); await page.keyboard.press("Escape");
+  assert.equal(await page.$("#umpop"), null, "Esc after a click on its text still closes it");
 });
 
 test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {

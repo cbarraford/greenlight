@@ -118,7 +118,8 @@ def _span_label(secs):
 
 
 def _expired(ms):
-    return isinstance(ms, (int, float)) and not isinstance(ms, bool) and _epoch(ms) < time.time()
+    t = _epoch(ms) if isinstance(ms, (int, float)) else None
+    return t is not None and t < time.time()
 
 
 # claude ---------------------------------------------------------------------------------------------------------------
@@ -179,7 +180,7 @@ def codex_windows(rl, at=None):
         w = rl.get(k)
         if not isinstance(w, dict):
             continue
-        secs = w.get("limit_window_seconds") or (w.get("window_minutes") or 0) * 60
+        secs = w.get("limit_window_seconds") or w.get("window_seconds") or (w.get("window_minutes") or 0) * 60
         resets = w.get("reset_at") or w.get("resets_at")
         if resets is None and isinstance(w.get("resets_in_seconds"), (int, float)):
             resets = (at or time.time()) + w["resets_in_seconds"]
@@ -235,7 +236,7 @@ def codex_rollout(root):
             if hit := _rate_limits_in(f):
                 rl, at = hit
                 wins = codex_windows(rl, at)
-                if not any(w["resets"] and w["resets"] > time.time() for w in wins):
+                if not any(not w["resets"] or w["resets"] > time.time() for w in wins):  # no reset time: unknown, not reset
                     return None  # every window it saw has reset since: nothing it says still holds
                 return {"windows": wins, "src": "rollout", "at": at, **_plan(rl.get("plan_type"))}
     return None
@@ -245,8 +246,10 @@ def codex():
     root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     try:
         tok = ((_json(root / "auth.json") or {}).get("tokens") or {})
-    except Failed:  # torn mid-write: the rollouts still say
-        tok = {}
+    except Failed:  # torn mid-write: the rollouts still say; without them it's a failed read, not a sign-out
+        if fall := codex_rollout(root):
+            return fall
+        raise
     if isinstance(tok, dict) and tok.get("access_token"):
         try:
             return _codex_api(tok["access_token"], tok.get("account_id"))
@@ -281,7 +284,8 @@ def pi():
     live = [(p, a) for p, a in plans if not _expired(a.get("expires"))]
     if plans and not live:
         raise Failed("token expired: pi renews it on its next run", "expired")
-    for p, a in live[:1]:
+    if live:
+        p, a = live[0]
         if p == "anthropic":
             return {"windows": _claude_api(a["access"]), "src": "api", "plan": "Claude plan"}
         if p == "openai-codex":
@@ -315,7 +319,7 @@ def fetch(name):
             sp.update(state="failed", reason=e.code)
             return {**base, "state": "failed", "note": e.note, "next": now + e.wait, "wait": e.wait}
         except Exception as e:  # an answer shaped like nothing we know: this provider fails, the others keep their meters
-            sp.update(state="failed", reason="unexpected", **{k: v for k, v in diag.failure(e).items() if k != "ok"})
+            sp.update(state="failed", reason="unexpected", **diag.failure(e))
             return {**base, "state": "failed", "note": "unexpected answer from the usage source", "next": now + TTL}
         sp["state"] = "ok"
     return {**base, "state": "ok", "at": out.pop("at", now), **out, "next": now + TTL}
