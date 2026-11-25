@@ -36,6 +36,7 @@ PACKAGES = {"claude": ("/@anthropic-ai/claude-code/", "/@anthropic-ai/claude-age
 # until the 6 h hold hands it to the user)
 SERVERS = {"mcp-server", "mcp"}  # not `serve`: an ADE may run `opencode serve` per worktree, and it runs the sessions there
 APP_RE = re.compile(r"\.app/Contents/(?:MacOS|Frameworks)/")  # an app's own executable or helpers (an agent CLI it ships in Resources counts)
+PANE_KINDS = ("claude", "codex", "agy")  # the agents ade_basement.agent_type knows in its own panes
 LAUNCHERS = ("node", "bun", "deno", "python", "python3", "env")
 LAUNCHER_ARGS = {"run", "-r", "--require", "--import", "--loader"}  # `bun run x.js`, `node --require hook.js x.js`: not the script
 
@@ -65,7 +66,9 @@ def agent_of(argv):
             words = [w for w in rest if not w.startswith("-")]
             if words[:1] and words[0] in SERVERS or words[:2] == ["mcp", "serve"]:
                 return None  # a server that never edits a folder
-            if words[:1] == ["app-server"] and ("daemon" in words or any(w.startswith("--listen") for w in rest)):
+            listen = next((rest[j + 1] if w == "--listen" and j + 1 < len(rest) else w.partition("=")[2]
+                           for j, w in enumerate(rest) if w.startswith("--listen")), "stdio://")
+            if words[:1] == ["app-server"] and ("daemon" in words or not listen.startswith("stdio")):
                 return None  # codex's machine-wide app-server daemon, not a session's (those talk over stdio)
             return kind
         if b not in LAUNCHERS:
@@ -210,19 +213,23 @@ def scan(procs=None, roots=None, cwd_of=None):
         cwds = _cwds_mac(list(found)) if mac else {pid: _cwd_linux(pid) for pid in found}
         cwd_of = cwds.get
 
-    def inside(c, folder):
-        return bool(c) and (c == folder or c.startswith(folder.rstrip("/") + "/"))
-
-    # ours: under a Greenlight pane and in its folder; one of our agents working in another folder (`cd ../B && codex`)
-    # is an agent there like any other
-    outside = [pid for pid in found if (r := root_of(pid)) is None or (roots[r] and not inside(cwd_of(pid), roots[r]))]
-    if mac and (lost := [p for p in outside if cwd_of(p) is None and _alive(p)]):  # lsof said nothing about a live agent
-        raise OSError(f"no cwd for {len(lost)} live agent(s)")
+    # Under a Greenlight pane, a claude, codex or agy (the kinds ade_basement reads a pane's state for) carries its pane's
+    # folder as `pane`: by_worktree drops it only when it works in the pane's own worktree; one working in another
+    # (`cd ../B && codex`, a nested worktree) counts there. Any other kind typed into a pane (opencode, gemini, pi)
+    # has no pane state, so it keeps its folder busy as an outside one does.
+    rooted = {pid: r for pid in found if (r := root_of(pid)) is not None and found[pid] in PANE_KINDS}
+    pane = {pid: roots[r] for pid, r in rooted.items() if roots[r]}
+    found = {pid: k for pid, k in found.items() if not (pid in rooted and not roots[rooted[pid]])}  # a pane of unknown folder: ours
+    if mac and (lost := [p for p in found if p not in pane and cwd_of(p) is None and _alive(p)]):
+        raise OSError(f"no cwd for {len(lost)} live agent(s)")  # lsof said nothing about a live outside agent
     out = []
-    for pid in sorted(outside):
+    for pid in sorted(found):
         c, parent = cwd_of(pid), procs[pid]["ppid"]
         if c and not (parent in found and cwd_of(parent) == c):
-            out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start")})
+            out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start"),
+                        **({"pane": pane[pid]} if pid in pane else {})})
+        elif not c and pid in pane:
+            continue  # one of ours lsof missed: it's in its pane's folder, nothing to hold
     return out
 
 
@@ -277,10 +284,10 @@ def by_worktree(paths, found=None):
     real = {os.path.realpath(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
     deep = sorted(real, key=len, reverse=True)
     out: dict = {}
+    owner_of = lambda c: next((w for w in deep if c == w or c.startswith(w + "/")), None)  # noqa: E731
     for a in agents() if found is None else found:
-        cwd = os.path.realpath(a["cwd"])
-        owner = next((w for w in deep if cwd == w or cwd.startswith(w + "/")), None)
-        if owner:
+        owner = owner_of(os.path.realpath(a["cwd"]))
+        if owner and not (a.get("pane") and owner_of(os.path.realpath(a["pane"])) == owner):  # ours, in its own pane's worktree
             out.setdefault(real[owner], []).append(a)
     return out
 

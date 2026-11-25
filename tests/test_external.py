@@ -37,6 +37,8 @@ def test_agent_of():
     assert external.agent_of(["codex", "app-server"]) == "codex"  # T3's and VS Code's per-session codex: an agent
     assert external.agent_of(["/srv/.codex/bin/codex", "app-server", "daemon", "pid-update-loop"]) is None  # the machine-wide daemon
     assert external.agent_of(["codex", "app-server", "--listen", "unix://x"]) is None
+    assert external.agent_of(["codex", "app-server", "--listen", "stdio://"]) == "codex"  # a session's, spelled out
+    assert external.agent_of(["codex", "app-server", "--listen=stdio://"]) == "codex"
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js", "--output-format", "stream-json"]) == "claude"  # T3's Claude
     assert external.agent_of(["/Applications/T3.app/Contents/MacOS/T3", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js"]) == "claude"  # as node
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-code/cli.js", "mcp", "serve"]) is None
@@ -72,7 +74,14 @@ def test_scan_finds_only_outside_agents():
     ours = {11: {"ppid": 1, "argv": ["zsh"]}, 12: {"ppid": 11, "argv": ["claude"]}, 13: {"ppid": 12, "argv": ["bash"]},
             14: {"ppid": 13, "argv": ["codex", "exec"]}}
     got = external.scan(procs=ours, roots={11: "/w/mine"}, cwd_of={12: "/w/mine/src", 14: "/w/other"}.get)
-    assert [(a["pid"], a["cwd"]) for a in got] == [(14, "/w/other")]
+    assert [(a["pid"], a.get("pane")) for a in got] == [(12, "/w/mine"), (14, "/w/mine")]
+    owned = external.by_worktree(["/w/mine", "/w/other"], got)
+    assert {k: [a["pid"] for a in v] for k, v in owned.items()} == {"/w/other": [14]}  # ours stays ours; the other counts there
+    nested = external.scan(procs=ours, roots={11: "/w/mine"}, cwd_of={12: "/w/mine", 14: "/w/mine/.wt/b"}.get)
+    owned = external.by_worktree(["/w/mine", "/w/mine/.wt/b"], nested)  # a worktree nested in the pane's folder
+    assert {k: [a["pid"] for a in v] for k, v in owned.items()} == {"/w/mine/.wt/b": [14]}
+    typed = {11: {"ppid": 1, "argv": ["zsh"]}, 15: {"ppid": 11, "argv": ["opencode"]}}  # typed into a Basement pane
+    assert [a["pid"] for a in external.scan(procs=typed, roots={11: "/w/b"}, cwd_of={15: "/w/b"}.get)] == [15]  # no pane state: busy
     assert external.scan(procs={5: {"ppid": 6, "argv": ["claude"]}, 6: {"ppid": 5, "argv": ["sh"]}}, roots=set(),
                          cwd_of=lambda p: "/x") == [{"pid": 5, "agent": "claude", "cwd": "/x", "start": None}]  # a ppid loop ends
 
