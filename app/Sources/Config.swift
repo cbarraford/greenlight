@@ -1018,7 +1018,8 @@ final class RulesStore: ObservableObject {
         call("import-detect", "-") { j in
             self.importFound = (j["sources"] as? [String: Bool]) ?? [:]
             let found = Set(Self.importSources.map(\.0).filter { self.importFound[$0] == true })
-            self.importOn = self.importTouched ? self.importOn.intersection(found) : found
+            let on = self.importTouched ? self.importOn.intersection(found) : found
+            if on != self.importOn { self.importOn = on; self.importPlan = nil }  // Import imports only what was previewed
         }
     }
     /// Preview (apply false: changes nothing) or import what's picked; the answer is the plan either way.

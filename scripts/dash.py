@@ -2357,7 +2357,7 @@ def import_op(verb, stdin):
     picked, paths = o.get("from") or [], o.get("paths") or []
     if not isinstance(picked, list) or not isinstance(paths, list) or any(s not in importers.SOURCES for s in picked):
         return {"error": "bad source"}
-    if any(not isinstance(p, str) or not p.startswith(("/", "~")) or ".." in p.split("/") for p in paths):
+    if any(not isinstance(p, str) or not (p.startswith(("/", "~/")) or p == "~") or ".." in p.split("/") for p in paths):
         return {"error": "a folder is a full path (/… or ~/…)"}
     if not picked:
         return {"error": "pick a source"}

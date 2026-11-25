@@ -37,12 +37,18 @@ def test_folder_scan(home):
     git_init(code / "node_modules" / "x")         # skipped folder
     git_init(code / "1" / "2" / "3" / "deep")     # past MAX_DEPTH
     build = git_init(code / "build")              # a repo named like a skipped folder: still a repo
+    git_init(code / ".nvm")                       # a hidden tool checkout: never
     (code / "wt").mkdir()
     (code / "wt" / ".git").write_text("gitdir: /elsewhere")  # a linked worktree, not a main checkout
     repos = importers.from_folder(str(code))
     assert sorted(repos) == sorted([str(a.resolve()), str(b.resolve()), str(build.resolve())])
     with pytest.raises(RuntimeError, match="not a folder"):
         importers.from_folder(str(home / "missing"))
+    git_init(home / "dots")  # the folder you name is a repo itself (dotfiles in ~): it, and the checkouts below it
+    git_init(home / "dots" / "code" / "app")
+    assert sorted(importers.from_folder(str(home / "dots"))) == sorted([str((home / "dots").resolve()), str((home / "dots" / "code" / "app").resolve())])
+    got = importers.gather(["folder"], [str(code), str(home / "typo")])["folder"]  # one bad folder doesn't drop the rest
+    assert str(a.resolve()) in got["repos"] and "not a folder" in got["error"]
 
 
 def test_from_backend_reads_repos_and_goals(home, monkeypatch):
@@ -58,7 +64,7 @@ def test_from_backend_reads_repos_and_goals(home, monkeypatch):
     other, remote = git_init(home / "no-worktrees"), git_init(home / "remote-here")
     monkeypatch.setattr(importers.ade, "get", lambda n: fake_backend(rows, [str(other), str(remote), "/srv/gone"]))
     monkeypatch.setattr(greenlight, "project_setups", lambda tries=2: [{"path": str(other), "hostId": "local"},
-                                                                        {"path": str(remote), "hostId": "laptop"}])
+                                                                        {"path": str(remote), "hostId": "laptop"}, {"hostId": "local"}])
     repos, goals = importers.from_backend("orca")
     top = os.path.realpath(r)
     assert repos == [top, top, str(other)]  # a remote repo whose path happens to exist here is not this machine's
@@ -79,7 +85,8 @@ def test_plan_is_non_destructive_and_apply_writes_only_new(home, monkeypatch):
     assert p["repos"] == [str(r2.resolve())]
     assert p["goals"] == {"/w/b": "Ship B", "/w/c": "Ship C"}  # the first source wins a path; never over "Mine"
     assert p["kept"] == {"/w/a": {"kept": "Mine", "from": "orca"}}
-    assert p["sources"]["herdr"] == {"error": "FileNotFoundError: herdr"} and p["sources"]["orca"] == {"repos": 3, "goals": 2}
+    assert p["sources"]["herdr"] == {"repos": 0, "goals": 0, "error": "FileNotFoundError: herdr"}
+    assert p["sources"]["orca"] == {"repos": 3, "goals": 2}
     assert ade_basement.saved() == [str(r1.resolve())]  # a plan changes nothing
     ade_common.set_goal("/w/c", "Set meanwhile")  # between preview and apply: it stands
     importers.apply(p)
@@ -99,6 +106,8 @@ def test_apply_reports_what_it_wrote_and_never_replaces_an_unreadable_file(home)
     ade_common.GOALS.write_text("[]")  # parses, but isn't goals
     with pytest.raises(RuntimeError):
         importers.apply({"repos": [], "goals": {}, "kept": {}, "sources": {}})
+    with pytest.raises(RuntimeError, match="goals.json can't be read"):  # the preview refuses too, before reading it as goals
+        importers.plan({"orca": {"repos": [], "goals": {"/w/x": "Goal"}}})
     assert "can't be read" in dash.settings("import-apply", "-", json.dumps({"from": ["folder"], "paths": [str(home)]}))["error"]
 
 
@@ -113,6 +122,7 @@ def test_gather_reports_a_failing_source(home, monkeypatch):
 
 
 def test_run_cli_and_dash_ops(home, monkeypatch):
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # the detect answer's `native` below: never the shell's backend
     git_init(home / "code" / "x")
     monkeypatch.setattr(importers, "detect", lambda: {"orca": False, "t3": False, "cmux": False, "herdr": False, "folder": True})
     assert importers.run(["preview"])["repos"] == []  # folder needs a --path: nothing detected to read
@@ -134,6 +144,7 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     assert "bad source" in ask("preview", {"from": ["rex"]})["error"]
     assert "full path" in ask("preview", {"from": ["folder"], "paths": ["code"]})["error"]
     assert "full path" in ask("preview", {"from": ["folder"], "paths": ["/srv/../etc"]})["error"]
+    assert "full path" in ask("preview", {"from": ["folder"], "paths": ["~root/x"]})["error"]  # another user's home
     assert "pick a source" in ask("preview", {"from": []})["error"]
     assert "needs --path" in ask("preview", {"from": ["folder"]})["error"]
     assert "no op" in ask("frob", {})["error"]

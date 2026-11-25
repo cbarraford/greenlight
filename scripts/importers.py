@@ -69,8 +69,9 @@ def from_backend(name):
     if name == "orca":  # Orca knows repos with no worktree open, too: only those its project setups put on this machine
         import greenlight  # here: greenlight imports ade, which this module imports
         setups = greenlight.project_setups(tries=1)
-        local = {s.get("path") for s in setups or [] if greenlight.is_local(s)}
-        repos += [r["path"] for r in ade.get("orca").repos().get("repos") or [] if r.get("path") in local and os.path.isdir(r["path"])]
+        local = {s["path"] for s in setups or [] if greenlight.is_local(s) and isinstance(s.get("path"), str)}
+        repos += [r["path"] for r in ade.get("orca").repos().get("repos") or []
+                  if isinstance(r, dict) and r.get("path") in local and os.path.isdir(r["path"])]
     return repos, goals
 
 
@@ -83,10 +84,11 @@ def from_folder(root):
         depth = len(Path(here).relative_to(root).parts)
         if (Path(here) / ".git").is_dir():
             out.append(str(Path(here).resolve()))  # a folder brings repos only: plain checkouts carry no goals
-            dirs[:] = []  # a repo's own subfolders aren't other repos (submodules are the repo's)
-            continue
-        dirs[:] = [] if depth >= MAX_DEPTH else [d for d in dirs if (Path(here) / d / ".git").is_dir()  # a repo named build
-                                                 or (not d.startswith(".") and d not in SKIP_DIRS)]
+            if depth:  # a repo's own subfolders aren't other repos (submodules are the repo's); but the folder you
+                dirs[:] = []  # named may be a repo itself (dotfiles in ~) with your checkouts below it
+                continue
+        dirs[:] = [] if depth >= MAX_DEPTH else [d for d in dirs if not d.startswith(".")  # never ~/.nvm, ~/.oh-my-zsh
+                                                 and (d not in SKIP_DIRS or (Path(here) / d / ".git").is_dir())]  # a repo named build
     return out
 
 
@@ -97,12 +99,16 @@ def gather(sources, paths=()):
         try:
             repos: list = []
             goals: dict = {}
+            bad = []
             if s == "folder":
-                for p in paths:
-                    repos += from_folder(p)
+                for p in paths:  # each on its own: a typo in one never drops the others
+                    try:
+                        repos += from_folder(p)
+                    except (OSError, RuntimeError) as e:
+                        bad.append(str(e)[:200])
             else:
                 repos, goals = from_backend(s)
-            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals}
+            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals, **({"error": "; ".join(bad)} if bad else {})}
         except Exception as e:  # noqa: BLE001 - an ADE that isn't running, or changed its CLI: report it, import the rest
             out[s] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             diag.event("import", source=s, err=type(e).__name__, msg_class=diag.classify(str(e)))
@@ -110,7 +116,10 @@ def gather(sources, paths=()):
 
 
 def plan(found):
-    """What an import adds: new repos (by main checkout) and goals for paths with none, plus what it leaves alone."""
+    """What an import adds: new repos (by main checkout) and goals for paths with none, plus what it leaves alone.
+    RuntimeError when repos.json or goals.json exists but can't be read (it would look empty)."""
+    readable(ade_basement.REPOS, list)
+    readable(ade_common.GOALS, dict)
     have_repos, have_goals = set(ade_basement.saved()), ade_common.goals()
     repos, goals, kept = [], {}, {}
     for s, f in found.items():
@@ -125,7 +134,8 @@ def plan(found):
             elif path not in goals:
                 goals[path] = g
     return {"repos": repos, "goals": goals, "kept": kept,
-            "sources": {s: ({"error": f["error"]} if "error" in f else {"repos": len(f["repos"]), "goals": len(f["goals"])})
+            "sources": {s: ({"repos": len(f.get("repos") or []), "goals": len(f.get("goals") or {}),
+                             **({"error": f["error"]} if "error" in f else {})})
                         for s, f in found.items()}}
 
 
