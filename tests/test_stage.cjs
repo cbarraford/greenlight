@@ -530,17 +530,27 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.textContent(".doc p"), "See !12CI passed, x, y and z.");
   await p.evaluate(() => stage.options(["Merge it", "<b>Wait</b>", "", "Ask Sam"]));
   assert.deepEqual(await p.$$eval(".options a.option", as => as.map(a => [a.getAttribute("href"), a.textContent])),
-    [["greenlight-option:0", "Merge it"], ["greenlight-option:1", "<b>Wait</b>"], ["greenlight-option:2", "Ask Sam"]]);
+    [["greenlight-option:0", "Merge it"], ["greenlight-option:1", "<b>Wait</b>"], ["greenlight-option:3", "Ask Sam"]]);  // the app's index, a blank skipped
   assert.equal(await p.locator(".options b").count(), 0);
   assert.ok(await p.evaluate(() => [...document.querySelectorAll(".options a, #s a")].every(a => ![...a.attributes].some(x => x.name.startsWith("on")))));
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).cursor), "default");  // a button, not a link (§10.2)
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).height), "28px");
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).textDecorationLine), "none");  // a button, not an underlined link
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).color), await p.$eval(".doc p", e => getComputedStyle(e).color));
+  await p.evaluate(() => { document.querySelector("#s a:not(.option)")?.remove(); document.activeElement?.blur(); });
+  await p.keyboard.press("Tab");  // keyboard focus shows the §10.2 ring
+  assert.equal(await p.evaluate(() => document.activeElement.className), "option");
+  assert.notEqual(await p.evaluate(() => getComputedStyle(document.activeElement).boxShadow), "none");
   await p.evaluate(() => stage.options(["Only one"])); assert.equal(await p.locator(".options a.option").count(), 1);  // replaced, not added
   await p.evaluate(() => stage.hold("Thinking")); assert.equal(await p.locator(".options").count(), 0);
   await p.evaluate(() => { stage.text({ md: "a" }); stage.options([]); }); assert.equal(await p.locator(".options").count(), 0);
-  // a click on a link or an option navigates the page (the app's StageNav decides and cancels it), so the page stays put here
-  await p.evaluate(() => { stage.refs({}); stage.text({ md: "[go](https://example.com)" }); stage.options(["Yes"]); });
+  // a link naming two known refs: both chips after it; an option naming a ref: no chip in the button; a malformed URL: no link
+  await p.evaluate(() => { stage.refs({ "!12": { tone: "ok", label: "CI passed" }, "!13": { tone: "bad", label: "CI failed" } });
+    stage.text({ md: "[!12 and !13](https://x/12) and [open](https://%)" }); stage.options(["Review !12"]); });
+  assert.deepEqual(await p.$$eval(".doc p .chip", cs => cs.map(c => c.dataset.ref)), ["!12", "!13"]);
+  assert.equal(await p.$eval(".doc p a", a => a.nextSibling.dataset.ref), "!12");
+  assert.equal(await p.locator(".options .chip").count(), 0);
+  assert.deepEqual(await p.$$eval(".doc p a", as => as.map(a => a.getAttribute("href"))), ["https://x/12"]);
+  await p.evaluate(() => stage.refs({}));
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
