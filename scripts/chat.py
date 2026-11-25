@@ -14,6 +14,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bgstop <task_id>           # kill one background shell
 """
 import contextlib, fcntl, glob, hashlib, io, json, os, random, re, signal, subprocess, sys, threading, time, uuid
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import attach  # noqa: E402
@@ -426,7 +427,7 @@ THINK_STATUS = {"Thinking", "Reasoning"}  # claude/pi/opencode thinking, codex's
 IGNORED = re.compile(r"^\s*(no response requested\.?)?\s*$", re.I)  # empty, or the model answering only a notification
 
 
-TURN = {}  # this process's turn, for its diag event: {harness, model, t, norm}
+TURN: dict[str, Any] = {}  # this process's turn, for its diag event: {harness, model, t, norm}
 
 
 def emit(**e):
