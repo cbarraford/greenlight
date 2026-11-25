@@ -249,6 +249,21 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(m => { stage.wait("x", ""); stage.text({ md: m.replace("| one |", "| one ||") }); }, tmd);
   assert.equal(tStreamed, await p.$eval("#s", e => e.innerHTML), "a table that gains a column ends as a one-shot draw");
   assert.equal(await p.locator(".caret").count(), 0);
+  // caret stays out of void <hr> and empty <tbody> while streaming; list items patch markup changes; 4-tick fences stay open over 3-tick lines
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "Intro.\n\n---", live: true }); });
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.id), "s");
+  await p.evaluate(() => stage.text({ md: "Intro.\n\n---\n\nAfter.", live: true }));
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "| PR | CI |", live: true }); });
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "TH");
+  await p.evaluate(() => stage.text({ md: "| PR | CI |\n|---|---|\n| !1 | ok |", live: true }));
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "TD");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "- alpha", live: true }); stage.text({ md: "- **alpha**" }); });
+  assert.equal(await p.$eval(".doc ul li", e => e.innerHTML), "<b>alpha</b>");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "2. second", live: true }); stage.text({ md: "1. first" }); });
+  assert.equal(await p.$eval(".doc ol", e => e.start), 1);
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "````md\n```\n**raw", live: true }); });
+  assert.equal(await p.textContent(".doc pre"), "```\n**raw");
   // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
   await p.evaluate(() => stage.spec({ title: "short", kind: "list", items: [] }));  // a short card sits at the top, not centred
   assert.ok(await p.$eval("#s h1", e => e.getBoundingClientRect().top) < 40, "top-aligned");

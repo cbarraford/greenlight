@@ -334,8 +334,14 @@ function spans(l){
   return [m.join(""), -1];
 }
 function settled(md){
-  const lines = str(md).split("\n"), fence = x => /^\s*`{3,}[^`]*$/.test(x);
-  if (lines.filter(fence).length % 2) { if (/^\s*`{1,2}$/.test(lines[lines.length - 1])) lines.pop(); return lines.join("\n"); }
+  const lines = str(md).split("\n");
+  let openFence = 0;
+  for (const x of lines) {
+    const t = x.trim(), m = !openFence && t.match(/^(`{3,})[^`]*$/);
+    if (m) openFence = m[1].length;
+    else if (openFence && new RegExp("^`{" + openFence + ",}$").test(t)) openFence = 0;
+  }
+  if (openFence) { if (/^\s*`{1,2}$/.test(lines[lines.length - 1])) lines.pop(); return lines.join("\n"); }
   let l = lines.pop(), was;
   do {
     was = l;
@@ -359,12 +365,12 @@ function patch(old, nw){
   if (old.tagName !== nw.tagName || bare(old) !== bare(nw)) { nw.classList.add("fresh"); old.replaceWith(nw); return; }
   if (old.tagName === "UL" || old.tagName === "OL") {
     const a = [...old.children], b = [...nw.children];
-    b.forEach((li, j) => { if (!a[j]) { li.classList.add("fresh"); old.append(li); } else if (a[j].textContent !== li.textContent) a[j].replaceChildren(...li.childNodes); });
+    b.forEach((li, j) => { if (!a[j]) { li.classList.add("fresh"); old.append(li); } else if (a[j].innerHTML !== li.innerHTML) a[j].replaceChildren(...li.childNodes); });
     a.slice(b.length).forEach(li => li.remove());
-    if (nw.start > 1) old.start = nw.start;
+    if (nw.start > 1) old.start = nw.start; else old.removeAttribute("start");
     return;
   }
-  if (old.innerHTML.replace('<span class="caret"></span>', "") !== nw.innerHTML) old.replaceChildren(...nw.childNodes);  // the same structure: untouched
+  if (old.innerHTML !== nw.innerHTML) old.replaceChildren(...nw.childNodes);  // the same structure: untouched
 }
 // The page's blocks (the lead aside) set to `nodes`: settled ones kept, the last patched, new ones appended.
 function patchDoc(s, lead, nodes){
@@ -381,6 +387,8 @@ function caret(s, on){
   if (!on) return;
   let t = s.lastElementChild;
   if (!t) return;
+  if (t.tagName === "HR") { s.append($("span", "caret")); return; }  // void element: keep the caret outside it
+  if (t.tagName === "TABLE" && !t.tBodies[0]?.rows.length) t = t.tHead?.lastElementChild?.lastElementChild || t;
   while (t.lastElementChild && !["CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
   t.append($("span", "caret"));
 }
@@ -555,7 +563,7 @@ window.stage = {
   text(o){
     o = o && typeof o === "object" ? o : {};
     const lead = str(o.lead).trim(), live = o.live === true, md = live ? settled(o.md) : o.md, s = document.getElementById("s");
-    if (s.classList.contains("streaming")) patchDoc(s, lead, blocks(md));
+    if (s.classList.contains("streaming")) { caret(s, false); patchDoc(s, lead, blocks(md)); }
     else {
       if (live) fx.stop();
       show((lead ? [$("p", "lead", lead)] : []).concat(blocks(md)), "doc");
