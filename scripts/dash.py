@@ -651,7 +651,12 @@ def _normalize_row(r):
 
 
 def snapshot(full=False):  # full: the agent's whole last message (pages); the 5s stream keeps the tail
-    snap = json.loads((greenlight.STATE / "last.json").read_text())
+    try:
+        snap = json.loads((greenlight.STATE / "last.json").read_text())
+    except FileNotFoundError:
+        if err := scan_error(0):
+            return {"ts": int(time.time()), "scanned": 0, "scan_started": None, "pucks": [], "trees": [], "scan_error": err}
+        raise
     live = live_agents()
     now = time.time() * 1000
     rows = ws_state.keyed(live_rows(snap["rows"], live), migrate=False)
@@ -731,18 +736,26 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                     for w, ag in live.values() if w["path"] not in have and not w.get("isArchived")),
                    key=lambda x: (not x["main"], x["project"], x["name"]))
     return {"ts": int(time.time()), "scanned": snap["ts"], "scan_started": snap.get("started"), "pucks": pucks, "trees": trees,
-            **({"scan_error": err} if (err := scan_error(snap["ts"])) else {})}
+            **({"scan_error": err} if (err := scan_error(snap["ts"], snap.get("started"))) else {})}
 
 
-def scan_error(scanned):
+def scan_error(scanned, scan_started=None):
     """greenlight.py's note on why its last scan died (the footer says it), when that's newer than the snapshot we have."""
     try:
         e = json.loads((greenlight.STATE / "scan_error.json").read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(e, dict) or not isinstance(e.get("ts"), int) or e["ts"] <= (scanned or 0):
+    if not isinstance(e, dict) or not isinstance(e.get("ts"), int) or isinstance(e.get("ts"), bool):
         return None
-    return {k: str(e.get(k) or "") for k in ("msg", "fix", "class")} | {"ts": e["ts"]}
+    ts, st = e["ts"], e.get("started")
+    if isinstance(st, (int, float)) and not isinstance(st, bool):
+        if st < (scan_started or 0) or ts < (scanned or 0):
+            return None
+        if ts == (scanned or 0) and st <= (scan_started or 0):
+            return None
+    elif ts <= (scanned or 0):
+        return None
+    return {k: str(e.get(k) or "") for k in ("msg", "fix")} | {"ts": ts}
 
 
 ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in

@@ -2026,27 +2026,55 @@ def note(name, text):
         fh.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
-SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca"}
+SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca", "orca-ide": "Orca",
+              "tmux": "tmux", "cmux": "cmux", "herdr": "herdr", "t3": "t3"}
 SCAN_WHY = {"auth": "login expired", "rate_limit": "rate limited", "timeout": "timed out", "network": "unreachable",
             "transient": "server error", "permission": "permission denied"}
-SCAN_FIX = {"glab": "glab auth login --hostname gitlab.com", "gh": "gh auth login"}
+SCAN_FIX_AUTH = {"glab": "run glab auth login --hostname gitlab.com, then ↻", "gh": "run gh auth login, then ↻"}
+SCAN_FIX_CLASS = {"rate_limit": "wait a few minutes, then ↻", "timeout": "try ↻ again",
+                  "transient": "try ↻ again", "network": "check your connection, then ↻"}
 
 
-def scan_failed(e):
-    """Why the last scan died, for the dashboard footer (scan_error.json); a scan that finishes removes it.
+def _scan_error_newer(f, started):
+    """True when scan_error.json already holds a failure from a scan started after `started`."""
+    try:
+        prev = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(prev, dict) and isinstance(prev.get("started"), (int, float)) and not isinstance(prev["started"], bool) and prev["started"] > started
+
+
+def scan_failed(e, started=None):
+    """Why the last scan died, for the dashboard footer (scan_error.json); a newer scan that finishes removes it.
     Only the tool, the error's class and the fix go in it: the message has argv (project paths)."""
     f = STATE / "scan_error.json"
     if e is None:
-        f.unlink(missing_ok=True)
+        if started is not None and _scan_error_newer(f, started):
+            return
+        with contextlib.suppress(OSError):
+            f.unlink(missing_ok=True)
         return
-    text = str(e) if not isinstance(e, subprocess.TimeoutExpired) else "timed out"
-    tool = str(e.cmd[0] if isinstance(e, subprocess.TimeoutExpired) else text.split(" ", 1)[0]).rsplit("/", 1)[-1]
-    tool = tool if tool in SCAN_TOOLS else ""
-    cls = diag.classify(text)
+    if isinstance(e, subprocess.TimeoutExpired):
+        cmd0 = e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd or "").split(" ", 1)[0]
+        cand = str(cmd0).rsplit("/", 1)[-1]
+        tool, cls = cand if cand in SCAN_TOOLS else "", "timeout"
+    else:
+        text = str(e)
+        head, sep, err = text.partition(": ")
+        cand = head.split(" ", 1)[0].rsplit("/", 1)[-1]
+        tool = cand if cand in SCAN_TOOLS else ""
+        # classify stderr only when the message carries argv (same rule as _run): a repo named "token-*" isn't auth
+        cls = diag.classify(err if tool and sep else text)
     why = SCAN_WHY.get(cls, "failed")
-    out = {"ts": int(time.time()), "class": cls, "tool": tool,
-           "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else f"scan {why}" if why != "failed" else "scan crashed",
-           "fix": SCAN_FIX.get(tool, "") if cls == "auth" else ""}
+    fix = (SCAN_FIX_AUTH.get(tool, "") if cls == "auth"
+           else SCAN_FIX_CLASS.get(cls, "") or ("check Orca is running, then ↻" if tool in ("orca", "orca-ide") else ""))
+    now = time.time()
+    st = started if started is not None else now
+    if _scan_error_newer(f, st):
+        return
+    out = {"ts": int(now), "started": st, "class": cls, "tool": tool,
+           "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else why if why != "failed" else "crashed",
+           "fix": fix}
     try:
         STATE.mkdir(parents=True, exist_ok=True)
         tmp = f.with_suffix(f".{os.getpid()}.tmp")
@@ -2095,12 +2123,13 @@ def main():
         print(f.read_text() if f.exists() else "(no history)")
         return
     with diag.span("scan", op=cmd) as d:
+        scan_start = time.time()
         try:
             res = scan(save=cmd != "precheck")
         except Exception as e:
-            scan_failed(e)
+            scan_failed(e, started=scan_start)
             raise
-        scan_failed(None)
+        scan_failed(None, started=scan_start)
         d["rows"] = len(res["rows"])
         for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
             d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None

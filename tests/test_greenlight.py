@@ -243,11 +243,31 @@ def scan_dies(exc):
             pass
     return json.loads((greenlight.STATE / "scan_error.json").read_text())
 e = scan_dies(RuntimeError('glab api projects/acme%2Fsecret/merge_requests?state=opened: ERROR\n  Oauth2: "invalid_grant" "The provided authorization grant is invalid, expired"'))
-assert (e["msg"], e["class"], e["fix"]) == ("GitLab login expired", "auth", "glab auth login --hostname gitlab.com") and "secret" not in json.dumps(e)
-assert scan_dies(RuntimeError("gh api x: HTTP 429 Too Many Requests"))["msg"] == "GitHub rate limited"
+assert (e["msg"], e["class"], e["fix"]) == ("GitLab login expired", "auth", "run glab auth login --hostname gitlab.com, then ↻") and "secret" not in json.dumps(e)
+# argv words like "token" or "login" must not misclassify a non-auth stderr failure as auth
+e = scan_dies(RuntimeError("glab api projects/acme%2Ftoken-login/merge_requests?state=opened: HTTP 502 Bad Gateway"))
+assert (e["msg"], e["class"], e["fix"]) == ("GitLab server error", "transient", "try ↻ again") and "token-login" not in json.dumps(e)
+e = scan_dies(RuntimeError("gh api x: HTTP 429 Too Many Requests"))
+assert (e["msg"], e["fix"]) == ("GitHub rate limited", "wait a few minutes, then ↻")
 e = scan_dies(subprocess.TimeoutExpired(["glab", "api", "x"], 45))
-assert (e["msg"], e["fix"]) == ("GitLab timed out", "")
-assert scan_dies(KeyError("rows"))["msg"] == "scan crashed"
+assert (e["msg"], e["fix"]) == ("GitLab timed out", "try ↻ again")
+e = scan_dies(RuntimeError("/usr/local/bin/orca-ide worktree ps: connection refused"))
+assert (e["msg"], e["class"], e["fix"]) == ("Orca unreachable", "network", "check your connection, then ↻")
+e = scan_dies(RuntimeError("orca-ide worktree ps: daemon not running"))
+assert (e["msg"], e["fix"]) == ("Orca failed", "check Orca is running, then ↻")
+assert scan_dies(KeyError("rows"))["msg"] == "crashed"
+# overlapping scans: an older scan succeeding or failing must not clobber a newer scan's failure
+t0 = greenlight.time.time() + 100
+greenlight.scan_failed(RuntimeError("gh api x: HTTP 429 Too Many Requests"), started=t0)
+greenlight.scan_failed(None, started=t0 - 50)
+assert json.loads((greenlight.STATE / "scan_error.json").read_text())["msg"] == "GitHub rate limited"
+greenlight.scan_failed(KeyError("stale"), started=t0 - 40)
+assert json.loads((greenlight.STATE / "scan_error.json").read_text())["msg"] == "GitHub rate limited"
+# an OSError on unlink during cleanup never crashes a successful scan
+with mock.patch.object(greenlight.Path, "unlink", side_effect=PermissionError("ro")):
+    greenlight.scan_failed(None, started=t0 + 10)
+greenlight.scan_failed(None, started=t0 + 10)
+assert not (greenlight.STATE / "scan_error.json").exists()
 with mock.patch.object(greenlight, "scan", return_value={"rows": []}), mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "scan"]):
     greenlight.main()
 assert not (greenlight.STATE / "scan_error.json").exists()
