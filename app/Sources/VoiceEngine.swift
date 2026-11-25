@@ -141,7 +141,8 @@ final class Voice: NSObject, ObservableObject {
               let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
         let code = "(s => { \(delegate.themeVars()) \(look.vars) \(motionVars) })(document.documentElement.style); \(f)(...\(a))"
         _ = stageWeb
-        if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }  // safety-ok: JSONSerialization args + hardcoded look.vars
+        if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) }  // safety-ok: JSONSerialization args + hardcoded look.vars
+        else { stageNav?.queued = (stageNav?.queued).map { $0 + ";\n" + code } ?? code }  // every call waits for the page, in order: the MR chips' map too (#208)
     }
     /// A draw on the stage, and its `stage` event (#208): which draw, who asked for it (chief, fast, dwim, app), the card's kind
     /// and when in the turn it landed. `mark` is the turn as it was asked for, for a draw that lands later. Tokens and numbers only.
@@ -157,9 +158,22 @@ final class Voice: NSObject, ObservableObject {
         Diag.event("stage", e.merging(extra) { a, _ in a })
     }
     var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
+    /// The MR status chips the stage has (#208): the snapshot's refs as tone and label. The first map goes whole; after that
+    /// only what changed, so a chip on a card already up updates in place with no redraw and no model call.
+    var refsSent: [String: [String: String]]?
+    func refs(_ pucks: [[String: Any]]) {
+        guard on else { refsSent = nil; return }  // the stage gets the whole map again when voice mode next starts
+        let now = refStatus(pucks)
+        if let was = refsSent {
+            let d = refPatch(was, now)
+            if !d.isEmpty { js("stage.patch", [d]) }
+        } else { js("stage.refs", [now]) }
+        refsSent = now
+    }
     func wait(_ title: String, _ sub: String) { instantUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
+        refsSent = nil; if let c = core { refs(c.pucks) }  // a new page (or a new voice mode) starts from the whole map
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
         else { wait("Listening", "Say something, or “goodbye” to stop.") }
     }

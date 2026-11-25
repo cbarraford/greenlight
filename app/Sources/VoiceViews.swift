@@ -983,6 +983,37 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
 }
 
 /// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
+/// Each MR the snapshot knows, by its ref (!12, #34), as the stage's status chip (#208): a tone the page has a glyph for and a
+/// short label. The tone reads as dwim.py's tables do: failed CI, conflicts or a crash are bad, CI on its way is now, merged or
+/// approved with CI passing is ok. Facts only, from the snapshot: no model call.
+func refStatus(_ pucks: [[String: Any]]) -> [String: [String: String]] {
+    var out = [String: [String: String]]()
+    for p in pucks {
+        guard let mr = p["mr"] as? [String: Any], let ref = mr["ref"] as? String, !ref.isEmpty else { continue }
+        let ci = mr["pipeline"] as? String ?? "", state = mr["state"] as? String ?? ""
+        let got = mr["approvals"] as? Int ?? 0, need = mr["approvals_required"] as? Int ?? 0
+        let chip: (String, String)
+        if state == "merged" { chip = ("ok", "Merged") }
+        else if state == "closed" { chip = ("", "Closed") }
+        else if ci == "failed" || p["state"] as? String == "crashed" { chip = ("bad", ci == "failed" ? "CI failed" : "Crashed") }
+        else if mr["conflicts"] as? Bool == true { chip = ("bad", "Conflicts") }
+        else if ["running", "pending", "created", "preparing", "waiting_for_resource", "scheduled"].contains(ci) { chip = ("now", "CI running") }
+        else if ci == "success" && need > 0 && got >= need { chip = ("ok", "Approved") }
+        else if ci == "success" { chip = ("ok", need > 0 ? "CI passed, \(got) of \(need) approvals" : "CI passed") }
+        else if mr["draft"] as? Bool == true { chip = ("", "Draft") }
+        else { continue }  // nothing to say yet
+        out[ref] = ["tone": chip.0, "label": chip.1]
+    }
+    return out
+}
+/// What changed between two maps of chips: the new or different ones, and a removed ref as NSNull (its chip goes).
+func refPatch(_ old: [String: [String: String]], _ new: [String: [String: String]]) -> [String: Any] {
+    var out = [String: Any]()
+    for (k, v) in new where old[k] != v { out[k] = v }
+    for k in old.keys where new[k] == nil { out[k] = NSNull() }
+    return out
+}
+
 func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
     let low = reply.lowercased()
     let has = { (k: String) in low.range(of: "(?<![\\w!#-])" + NSRegularExpression.escapedPattern(for: k.lowercased()) + "(?![\\w-])", options: .regularExpression) != nil }

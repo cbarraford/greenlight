@@ -991,6 +991,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let d = l.data(using: .utf8), let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let pucks = snap["pucks"] as? [[String: Any]] else { return }
         greenlight.pucks = pucks
+        greenlight.voice.refs(pucks)  // the stage's MR chips follow the snapshot (#208)
         if case let a = agentsOf(pucks), a != greenlight.agents { greenlight.agents = a }
         greenlight.watched(pucks)
         greenlight.fed(pucks)

@@ -452,5 +452,33 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => stage.text({ md: "**Needs you:**\n- !12\n\n**Working**\n\nIntro\n**not a heading**\n\n**a *mixed* line**" }));
   assert.deepEqual(await p.locator(".doc h2").allTextContents(), ["Needs you", "Working"]);
   assert.equal(await p.locator(".doc p b").count(), 2);
+  // live MR status (issue 208 phase 4): the snapshot's refs get a glyph-and-label chip beside their first mention (not in code,
+  // a path or the spoken lead); a patch changes a chip in place with nothing else redrawn; a card with the same kind and title
+  // changes only what differs; a chip that goes, goes; a ref the snapshot only now knows gets one
+  await p.evaluate(() => { stage.wait("Listening", ""); stage.refs({ "!12": { tone: "now", label: "CI running" }, "#34": { tone: "bad", label: "CI failed" } }); });
+  await p.evaluate(() => stage.text({ lead: "!12 is close.", md: "- !12 needs a review, see !12 again\n- `!12` in code, scripts/!12 in a path\n- #34 failed, !99 unknown" }));
+  assert.deepEqual(await p.$$eval(".chip", cs => cs.map(c => [c.dataset.ref, c.className, c.textContent, c.querySelector("svg.tone")?.getAttribute("aria-label") ?? ""])),
+    [["!12", "chip now", "CI running", "Now"], ["#34", "chip bad", "CI failed", "Failed"]]);
+  assert.equal(await p.locator(".doc .lead .chip, .doc code .chip").count(), 0);
+  assert.equal(await p.$eval(".chip[data-ref='!12']", c => c.previousSibling.nodeValue.endsWith("!12")), true);  // right after the ref
+  await p.evaluate(() => { document.querySelectorAll(".doc li").forEach((l, i) => l.dataset.mark = "li" + i); stage.patch({ "!12": { tone: "ok", label: "CI passed" }, "#34": null, "!99": { tone: "needs", label: "Needs you" } }); });
+  assert.deepEqual(await p.$$eval(".doc li", ls => ls.map(l => l.dataset.mark)), ["li0", "li1", "li2"]);  // nothing redrawn
+  assert.deepEqual(await p.$$eval(".chip", cs => cs.map(c => c.dataset.ref + ":" + c.textContent)), ["!12:CI passed", "!99:Needs you"]);
+  // a stream with chips: settled blocks keep their nodes while it grows
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "First !12 here.", live: true }); document.querySelector(".doc p").dataset.mark = "p1";
+    stage.text({ md: "First !12 here.\n\n- more", live: true }); stage.text({ md: "First !12 here.\n\n- more\n- and more", live: true }); });
+  assert.equal(await p.getAttribute(".doc p", "data-mark"), "p1");
+  assert.equal(await p.locator(".doc p .chip").count(), 1);
+  // the same card again (the snapshot moved): rows kept, only the changed cell changes
+  const tbl = cells => ({ kind: "table", title: "Board", columns: ["MR", "CI"], rows: cells });
+  await p.evaluate(t => { stage.spec(t); document.querySelectorAll("table.grid tbody tr").forEach((r, i) => r._mark = "r" + i); }, tbl([["!12", "running"], ["!99", "passed"]]));
+  await p.evaluate(t => stage.spec(t), tbl([["!12", "passed"], ["!99", "passed"]]));
+  assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark)), ["r0", "r1"]);  // a mark that isn't an attribute: the same nodes
+  assert.equal(await p.textContent("table.grid tbody tr:nth-child(1) td:nth-child(2)"), "passed");
+  assert.equal(await p.locator("table.grid .chip").count(), 2);
+  await p.evaluate(t => stage.spec(t), { ...tbl([["!12", "passed"]]), title: "Other" });  // another card: drawn fresh
+  assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark ?? null)), [null]);
+  await p.evaluate(() => stage.refs({}));
+  assert.equal(await p.locator(".chip").count(), 0);
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
