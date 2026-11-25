@@ -181,7 +181,7 @@ def worktrees():
         owner = next((w for w in by_len if p["cwd"] == w or p["cwd"].startswith(w + "/")), None)
         if owner is not None:
             owned.setdefault(owner, []).append(p)
-    out, ext = [], external.by_worktree(paths)  # agents another ADE or a plain terminal runs in these worktrees
+    out, ext = [], external.by_worktree_safe(paths)  # agents another ADE or a plain terminal runs in these worktrees
     for path in dict.fromkeys(paths):
         mine = owned.get(path, [])
         ags = []

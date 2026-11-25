@@ -1379,12 +1379,12 @@ const pillHTML = (b, cls = "badge") => `<span class="${cls} k-${b[1]}">${g16(FIL
 function badge(w){
   const m = w.mr?.state === "opened" ? w.mr : {};
   if (w.agent === "waiting") return ["Question", "o", G.needs];
+  if (w.external) return ["Elsewhere", "b", G.run];  // an agent another ADE or terminal runs here (issue 195): greenlight keeps off it
   if (w.state === "crashed") return ["Error", "r", G.bad];
   if (m.pipeline === "failed") return ["CI failed", "r", G.bad];
   if (m.conflicts) return ["Conflicts", "r", G.conflict];
   if (w.state === "needs") return ["Blocking", "o", G.needs];
   if (w.state === "raised") return ["Your move", "y", G.move];
-  if (w.external) return ["Elsewhere", "b", G.run];  // an agent another ADE or terminal runs here (issue 195): greenlight keeps off it
   if (w.agent === "working") return ["Working", "b", G.run];
   if (m.mergeable && !m.draft) return ["Ready", "g", G.ok];
 }

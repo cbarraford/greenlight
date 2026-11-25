@@ -1341,7 +1341,8 @@ def screen(ws, terminals):
     return seen
 
 
-EXTERNAL_STALE_H = 6  # an agent outside Greenlight open this long is the user's to close, not "working"
+EXTERNAL_STALE_H = 6  # an agent outside Greenlight running this long (since its process started: idle can't be seen)
+                      # is the user's to close, not "working"
 SURE = 0.7  # how sure the screen reading must be before it overrides Orca's state or the step's owner
 
 
@@ -1353,8 +1354,8 @@ def agent_overlay(ws, terminals):
     if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
         who, h = ag.get("type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
         if h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
-            nxt.update(owner="me", action=f"{who} has been open here outside Greenlight for {h:.0f}h: close it if it's done "
-                                          "(or take it over in the Basement), then greenlight carries on")
+            nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for {h:.0f}h: once it's done, close "
+                                          "it (or take it over in the Basement) and greenlight carries on")
         else:
             nxt.update(owner="working", action=f"{who} runs here outside Greenlight: nothing is dispatched or merged until "
                                                "it exits (then take it over in the Basement)")

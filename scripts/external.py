@@ -8,6 +8,8 @@ inside the worktree, and it is ours when it descends from a pane of `tmux -L gre
     python3 external.py [--json]     every external agent: worktree-relative facts only (pid, agent, cwd)
 
 Linux reads /proc; macOS asks `ps` and `lsof`. Read-only, stdlib only, cached for a few seconds (a scan asks often).
+A scan that fails fails closed (cleanup: strict; native rows: by_worktree_safe). Known gap: an app that runs its
+agents inside one server process whose cwd isn't the worktree (the Codex desktop app's app-server) isn't seen.
 """
 import json
 import os
@@ -15,13 +17,15 @@ import platform
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 AGENTS = ("claude", "codex", "agy", "gemini", "opencode", "pi")
 ALIASES = {"claude-code": "claude"}  # not "antigravity": that's the editor, open for days in a folder; its CLI is agy
 TTL = 5.0
-_CACHE: dict = {"at": 0.0, "val": None}
+_CACHE: dict = {"at": 0.0, "val": None, "failed": 0.0}
+_LOCK = threading.Lock()  # one scan at a time: cleanup's worker threads share it
 
 
 APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron helper, not a CLI agent
@@ -30,11 +34,14 @@ APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron
 def agent_of(argv):
     """The agent an argv runs (its program, or the script a node/python/bun runs), else None. A desktop app named
     like one (Claude.app, Codex.app, Antigravity and its helpers) isn't: the CLI agents it starts are counted."""
-    if any(APP_RE.search(a) for a in argv):
-        return None
+    if not argv or APP_RE.search(argv[0]) or any(a.startswith("--type=") for a in argv):
+        return None  # only the program says it's an app: a prompt may name "Greenlight.app/Contents"
+    words = [a for a in argv[1:4] if not a.startswith("-")]
+    if words[:1] == ["app-server"] or words[:2] == ["mcp", "serve"]:
+        return None  # an editor's or another tool's server, not a session working in this folder
     for a in argv[:3]:
-        if a.startswith("-"):
-            continue
+        if a.startswith("-") or ("=" in a and not a.startswith("/")):
+            continue  # a flag, or env's VAR=value
         b = os.path.basename(a).lower().removesuffix(".js").removesuffix(".mjs")
         b = ALIASES.get(b, b)
         if b in AGENTS:
@@ -63,11 +70,12 @@ def _proc_linux():
         try:
             raw = (d / "cmdline").read_bytes().split(b"\0")
             stat = (d / "stat").read_text()
-        except OSError:
-            continue
+            f = stat[stat.rindex(")") + 2:].split()  # after "(comm)": state, ppid, …, starttime (ticks since boot) at 19
+            ppid = int(f[1])
+        except (OSError, ValueError, IndexError):
+            continue  # exited mid-read: one odd entry never blanks the table
         argv = [a.decode(errors="replace") for a in raw if a]
-        f = stat[stat.rindex(")") + 2:].split()  # after "(comm)": state, ppid, …, starttime (ticks since boot) at 19
-        out[int(d.name)] = {"ppid": int(f[1]), "argv": argv, "start": boot + int(f[19]) // hz if len(f) > 19 else None}
+        out[int(d.name)] = {"ppid": ppid, "argv": argv, "start": boot + int(f[19]) // hz if len(f) > 19 and f[19].isdigit() else None}
     return out
 
 
@@ -126,13 +134,25 @@ def _cwds_mac(pids):
     return out
 
 
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False  # exited mid-scan: nothing to find
+    except OSError:
+        return True
+    return True
+
+
 def _tmux_roots():
     """The pids of every pane on greenlight's tmux server: what descends from them is ours."""
     sock = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
     try:
         p = subprocess.run(["tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_pid}"], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    except FileNotFoundError:
+        return set()  # no tmux: nothing of ours runs
+    if p.returncode and not re.search(r"no server running|error connecting|No such file", p.stderr):
+        raise OSError(f"tmux list-panes exited {p.returncode}")  # can't tell ours from theirs: the scan failed
     return {int(x) for x in p.stdout.split() if x.isdigit()}
 
 
@@ -159,6 +179,8 @@ def scan(procs=None, roots=None, cwd_of=None):
     if cwd_of is None:
         cwds = _cwds_mac(outside) if mac else {pid: _cwd_linux(pid) for pid in outside}
         cwd_of = cwds.get
+    if mac and (lost := [p for p in outside if not cwd_of(p) and _alive(p)]):  # lsof said nothing about a live agent
+        raise OSError(f"no cwd for {len(lost)} live agent(s)")
     out = []
     for pid in sorted(outside):
         c, parent = cwd_of(pid), procs[pid]["ppid"]
@@ -174,28 +196,45 @@ class Unknown(RuntimeError):
 def agents(fresh=False, strict=False):
     """scan(), cached for TTL seconds. When the process table can't be read: [] (listing and dispatch carry on), or,
     strict, Unknown (cleanup: a deletion must not go ahead on a scan that failed)."""
-    if not fresh and _CACHE["val"] is not None and time.time() - _CACHE["at"] < TTL:
-        return _CACHE["val"]
+    with _LOCK:
+        now = time.time()
+        if not fresh and _CACHE["val"] is not None and now - _CACHE["at"] < TTL:
+            return _CACHE["val"]
+        if not fresh and now - _CACHE["failed"] < TTL:  # it just failed: don't pile on another 10 s ps/lsof per caller
+            if strict:
+                raise Unknown("recent scan failed")
+            return []
+        try:
+            val = scan()
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            _CACHE.update(at=0.0, val=None, failed=time.time())  # never cached as "none"
+            if strict:
+                raise Unknown(f"{type(e).__name__}") from e
+            return []
+        _CACHE.update(at=time.time(), val=val, failed=0.0)
+        return val
+
+
+def by_worktree_safe(paths):
+    """by_worktree, failing closed: when the process table can't be read, every path counts as having an agent of
+    unknown kind (a dispatch waits a tick rather than land in a live session)."""
     try:
-        val = scan()
-    except (OSError, subprocess.SubprocessError, ValueError) as e:
-        _CACHE.update(at=0.0, val=None)
-        if strict:
-            raise Unknown(f"{type(e).__name__}") from e
-        return []
-    _CACHE.update(at=time.time(), val=val)
-    return val
+        return by_worktree(paths, agents(strict=True))
+    except Unknown:
+        return {p.rstrip("/"): [{"pid": None, "agent": None, "cwd": p, "start": None}] for p in paths if p}
 
 
 def by_worktree(paths, found=None):
     """{worktree path: [agent]} for the agents whose cwd is inside one of paths (the deepest one wins: a nested
     worktree owns its own agents)."""
-    deep = sorted({p.rstrip("/") for p in paths if p}, key=len, reverse=True)
+    real = {os.path.realpath(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
+    deep = sorted(real, key=len, reverse=True)
     out: dict = {}
     for a in agents() if found is None else found:
-        owner = next((w for w in deep if a["cwd"] == w or a["cwd"].startswith(w + "/")), None)
+        cwd = os.path.realpath(a["cwd"])
+        owner = next((w for w in deep if cwd == w or cwd.startswith(w + "/")), None)
         if owner:
-            out.setdefault(owner, []).append(a)
+            out.setdefault(real[owner], []).append(a)
     return out
 
 

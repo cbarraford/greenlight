@@ -23,6 +23,9 @@ def test_agent_of():
     assert external.agent_of(["vim", "codex.md"]) is None  # an argument naming an agent isn't one
     assert external.agent_of(["zsh"]) is None and external.agent_of([]) is None
     assert external.agent_of(["env", "-i", "claude"]) == "claude"  # a launcher's flags are skipped
+    assert external.agent_of(["env", "FOO=1", "claude"]) == "claude"  # and its VAR=value
+    assert external.agent_of(["claude", "-p", "fix the crash in Greenlight.app/Contents/MacOS"]) == "claude"  # a prompt isn't the program
+    assert external.agent_of(["codex", "app-server"]) is None and external.agent_of(["claude", "mcp", "serve"]) is None  # servers
 
 
 PROCS = {
@@ -62,7 +65,7 @@ def test_by_worktree_deepest_wins():
 
 
 def test_agents_cache_and_failure(monkeypatch):
-    monkeypatch.setattr(external, "_CACHE", {"at": 0.0, "val": None})
+    monkeypatch.setattr(external, "_CACHE", {"at": 0.0, "val": None, "failed": 0.0})
     calls = []
     monkeypatch.setattr(external, "scan", lambda: calls.append(1) or [{"pid": 1}])
     assert external.agents() == [{"pid": 1}] and external.agents() == [{"pid": 1}] and len(calls) == 1
@@ -77,6 +80,10 @@ def test_agents_cache_and_failure(monkeypatch):
         external.agents(fresh=True, strict=True)  # cleanup must not
     with pytest.raises(external.Unknown):
         external.agents(strict=True)  # a failed scan is never cached as "no agents"
+    monkeypatch.setattr(external, "scan", lambda: calls.append(1) or [{"pid": 2}])
+    n = len(calls)
+    assert external.agents() == [] and len(calls) == n  # right after a failure: no pile-up of scans
+    assert external.agents(fresh=True) == [{"pid": 2}] and len(calls) == n + 1  # a fresh ask always scans
 
 
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="Linux /proc")
@@ -111,7 +118,7 @@ def test_native_rows_carry_external_agents(monkeypatch):
     monkeypatch.setattr(ade_basement, "git", lambda repo, *a: "worktree /srv/w/app\nworktree /srv/w/app-feat\n")
     monkeypatch.setattr(ade_basement, "git_info", lambda p: {"path": p, "branch": "refs/heads/x", "isMainWorktree": p == "/srv/w/app",
                                                              "repoId": "/srv/w/app", "repo": "app", "projectId": None})
-    monkeypatch.setattr(external, "agents", lambda fresh=False: [{"pid": 21, "agent": "claude", "cwd": "/srv/w/app-feat/src", "start": 1700}])
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 21, "agent": "claude", "cwd": "/srv/w/app-feat/src", "start": 1700}])
     rows = {w["path"]: w for w in ade_basement.worktrees()}
     assert rows["/srv/w/app"]["agents"] == []
     (ag,) = rows["/srv/w/app-feat"]["agents"]
@@ -134,7 +141,7 @@ def test_scan_keeps_off_an_external_agent():
     old = greenlight.NOW_MS - (greenlight.EXTERNAL_STALE_H + 1) * 3.6e6
     ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "since": old}}
     greenlight.agent_overlay(ws, {})
-    assert ws["next"]["owner"] == "me" and "open here outside Greenlight for 7h" in ws["next"]["action"]  # idle for hours: yours to close
+    assert ws["next"]["owner"] == "me" and "running here outside Greenlight for 7h" in ws["next"]["action"]  # idle for hours: yours to close
 
 
 def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
@@ -153,6 +160,7 @@ def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
     assert cleanup.evaluate(w, repo, set()) == ("skip", "MR !4 merged, but codex runs in it outside Greenlight")
 
     def unknown(fresh=False, strict=False):
+        assert strict, "cleanup must ask strictly: a lenient scan answers [] on failure"
         raise external.Unknown("TimeoutExpired")
     monkeypatch.setattr(external, "agents", unknown)  # the process check failed: never a candidate
     assert cleanup.evaluate(w, repo, set())[0] == "skip"
@@ -161,13 +169,58 @@ def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
     assert cleanup.evaluate(w, repo, set()) == ("candidate", "MR !4 merged")
 
 
+def test_basement_delete_warns(monkeypatch):
+    import cleanup
+    import dash
+    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False: "codex" if fresh else None)
+    monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
+    monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0})
+    assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first; force deletes anyway
+
+
 def test_dash_marks_rows_any_ade_listed(monkeypatch):
     import dash
-    rows = [{"path": "/srv/w/orca-made", "ade": "orca"}, {"path": "/srv/w/quiet", "ade": "orca"}]
-    monkeypatch.setattr(external, "agents", lambda fresh=False: [{"pid": 3, "agent": "claude", "cwd": "/srv/w/orca-made/src"}])
+    rows = [{"path": "/srv/w/orca-made", "ade": "orca", "agent": "done"}, {"path": "/srv/w/quiet", "ade": "orca", "agent": "done"}]
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 3, "agent": "claude", "cwd": "/srv/w/orca-made/src"}])
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
     dash.mark_external(rows)
     assert not any("external" in r for r in rows)  # Orca in use: Orca's own rows say what runs
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     dash.mark_external(rows)
-    assert rows[0]["external"] and "external" not in rows[1]
+    assert rows[0]["external"] and rows[0]["agent"] == "working" and "external" not in rows[1] and rows[1]["agent"] == "done"
+    mine = [{"path": "/srv/w/orca-made", "ade": "native", "agent": "waiting"}]  # Greenlight's own agent is active: it shows
+    dash.mark_external(mine)
+    assert "external" not in mine[0]
+    assert dash.resume_agent({"state": "working", "agentType": "codex", "external": True}) == {"state": "working"}
+    assert dash.resume_agent(None) is None and dash.resume_agent({"state": "done", "agentType": "claude"})["agentType"] == "claude"
+    # (the page's auto-run, auto-merge and Delete guards key on a working agent)
+
+
+def test_tmux_roots_and_symlinks(monkeypatch, tmp_path):
+    run = lambda rc, out="", err="": monkeypatch.setattr(external.subprocess, "run", lambda *a, **k: mock.Mock(returncode=rc, stdout=out, stderr=err))
+    run(0, "11\n12\n")
+    assert external._tmux_roots() == {11, 12}
+    run(1, err="no server running on /tmp/tmux-1/greenlight")
+    assert external._tmux_roots() == set()  # no server: nothing of ours runs
+    run(1, err="server exited unexpectedly")
+    with pytest.raises(OSError):
+        external._tmux_roots()  # can't tell ours from theirs: never "all of them are outside"
+    real = tmp_path / "real"
+    (real / "src").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real)
+    got = external.by_worktree([str(tmp_path / "link")], [{"pid": 1, "agent": "claude", "cwd": str(real / "src")}])
+    assert list(got) == [str(tmp_path / "link")]  # keyed by the path as given
+
+
+def test_failures_fail_closed(monkeypatch):
+    def unknown(fresh=False, strict=False):
+        raise external.Unknown("OSError")
+    monkeypatch.setattr(external, "agents", unknown)
+    got = external.by_worktree_safe(["/srv/w/a/", "/srv/w/b"])  # dispatch waits a tick instead of landing in a live session
+    assert set(got) == {"/srv/w/a", "/srv/w/b"} and got["/srv/w/a"][0]["agent"] is None
+    monkeypatch.setattr(external.platform, "system", lambda: "Darwin")  # lsof gave no cwd for a live agent: not "none here"
+    monkeypatch.setattr(external, "_alive", lambda pid: True)
+    with pytest.raises(OSError, match="no cwd"):
+        external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None)
+    monkeypatch.setattr(external, "_alive", lambda pid: False)  # it exited mid-scan: nothing to find
+    assert external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None) == []

@@ -730,8 +730,9 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
-    # an agent outside Greenlight has no Basement session: it never replaces the one the button reattaches to
-    add_resume(pucks, [(r["path"], {} if (live[r["id"]][1] or {}).get("external") else live[r["id"]][1]) for r in rows])
+    # an agent outside Greenlight has no Basement session: it never replaces the one the button reattaches to (no
+    # identity), but it keeps the worktree busy, so the button never starts a second agent beside it (its state stays)
+    add_resume(pucks, [(r["path"], resume_agent(live[r["id"]][1])) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -850,8 +851,12 @@ def mark_external(rows):
         return
     ext = external.by_worktree([r["path"] for r in rows])
     for r in rows:
+        if r.get("agent") in ("working", "waiting") and r.get("ade") == "native" and not r.get("external"):
+            continue  # Greenlight's own agent is active here: it shows first (primary_agent)
         if ext.get(r["path"].rstrip("/")):
             r["external"] = True
+            if r.get("agent") not in ("working", "waiting"):
+                r["agent"] = "working"  # every page guard (auto-run, auto-merge, Delete) keys on a working agent
 
 
 BIN_RE = re.compile(r"/[\w./@+-]{1,300}")  # fullmatch  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
@@ -863,6 +868,12 @@ def harness_bin(h):
     c = hs.get(h) if isinstance(hs, dict) else None
     b = c.get("bin") if isinstance(c, dict) else None  # a malformed config.json must not take the snapshot down
     return b if isinstance(b, str) and BIN_RE.fullmatch(b) and ".." not in b else None
+
+
+def resume_agent(ag):
+    """The agent add_resume records: an outside one keeps only its state (busy, so no second agent starts beside it,
+    and no identity, so it never replaces the Basement session the button reattaches to)."""
+    return {"state": ag.get("state")} if ag and ag.get("external") else ag
 
 
 def add_resume(pucks, agents):
@@ -959,6 +970,12 @@ def tree_info(path):
             "added": n("insertion"), "removed": n("deletion")}
 
 
+def outside_agent(path):
+    """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
+    import cleanup
+    return cleanup.outside_agent(path, fresh=True)
+
+
 def tree_rm(path, force=False, teardown=""):
     """Remove the worktree (never its branch). Refuses the main checkout always, and, unless forced, a pinned or dirty
     tree or one with commits no remote has. The repo's teardown runs in it first when the page named it (as tree_new's setup)."""
@@ -968,7 +985,8 @@ def tree_rm(path, force=False, teardown=""):
     info = tree_info(path)
     risks = [*(["it's pinned"] if w.get("isPinned") else []), *([info["error"]] if "error" in info else []),
              *([f"{info['dirty']} uncommitted file{'s' * (info['dirty'] != 1)}"] if info.get("dirty") else []),
-             *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else [])]
+             *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else []),
+             *([f"{ext} runs in it outside Greenlight"] if (ext := outside_agent(path)) else [])]
     if risks and not force:
         return {"risks": risks}
     warn = None
