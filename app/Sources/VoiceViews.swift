@@ -521,7 +521,7 @@ Domino-toppling Jigsawing
 """.split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
 
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
-enum VoiceCmd: Equatable { case bye, stop, cancel, captions(Bool), reset, undo }
+enum VoiceCmd: Equatable { case bye, stop, cancel, captions(Bool), reset, undo, back, forward }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z0-9' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
@@ -537,6 +537,9 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
     case "undo", "undo that", "undo it", "take that back", "put it back", "put them back": return .undo
     case "captions on", "turn on captions", "show captions": return .captions(true)
     case "captions off", "turn off captions", "hide captions": return .captions(false)
+    case "go back", "back", "previous card", "the previous card", "last card", "the last card", "show the last card", "show me the last card",
+         "go back a card", "back one": return .back  // the stage's card history (#208)
+    case "go forward", "forward", "next card", "the next card", "go to the latest", "latest card", "the latest card": return .forward
     default: return nil
     }
 }
@@ -982,6 +985,26 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
     return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
 }
 
+/// The idle board (#208): in place of "Listening", what needs you and what's being worked on, from the snapshot, with no model
+/// call. Each row an MR (or a workspace without one): its ref, what it is, how long since it moved, and one line of why.
+/// Nil when nothing needs you and nothing is being worked on: then the stage just listens.
+func idleBoard(_ pucks: [[String: Any]], now: Date = Date()) -> [String: Any]? {
+    let iso = ISO8601DateFormatter(), isoF = ISO8601DateFormatter(); isoF.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    func row(_ p: [String: Any]) -> [String: String] {
+        let mr = p["mr"] as? [String: Any] ?? [:], life = p["life"] as? [String: Any] ?? [:]
+        let up = (mr["updated_at"] as? String).flatMap { isoF.date(from: $0) ?? iso.date(from: $0) }
+        let why = [life["do"], life["why"], p["why"], p["action"]].compactMap { $0 as? String }.first { !$0.isEmpty } ?? ""
+        let s = Int(now.timeIntervalSince(up ?? now)), age = up == nil ? "" : s < 3600 ? "\(max(1, s / 60))m" : s < 86400 ? "\(s / 3600)h" : "\(s / 86400)d"
+        return ["ref": mr["ref"] as? String ?? (p["name"] as? String).map { String($0.split(separator: "/").last ?? "") } ?? "",
+                "title": unmark(mr["title"] as? String ?? p["goal"] as? String ?? ""), "age": age, "why": unmark(String(why.prefix(140)))]
+    }
+    let live = pucks.filter { $0["hidden"] as? Bool != true }
+    let pile = { (k: String) in live.filter { (($0["life"] as? [String: Any])?["pile"] as? String) == k }.prefix(5).map(row) }
+    let needs = pile("yours"), working = pile("working")
+    guard !needs.isEmpty || !working.isEmpty else { return nil }
+    return ["kind": "board", "title": "",
+            "sections": [["label": "Needs you", "tone": "needs", "rows": needs], ["label": "Working", "tone": "now", "rows": working]].filter { !(($0["rows"] as? [Any])?.isEmpty ?? true) }]
+}
 /// What the stage does with a navigation (#208): the page itself loads; a click you made in the stage's own frame on a web link
 /// opens it in the browser; a click on an option button (greenlight-option:N, the index only) sends that option; anything
 /// else, a click inside Chief's sandboxed page included, is cancelled and does nothing.
