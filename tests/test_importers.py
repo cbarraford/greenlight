@@ -47,6 +47,12 @@ def test_folder_scan(home):
     git_init(home / "dots")  # the folder you name is a repo itself (dotfiles in ~): it, and the checkouts below it
     git_init(home / "dots" / "code" / "app")
     assert sorted(importers.from_folder(str(home / "dots"))) == sorted([str((home / "dots").resolve()), str((home / "dots" / "code" / "app").resolve())])
+    shut = home / "shut"
+    shut.mkdir(mode=0o000)
+    if not os.access(shut, os.R_OK):  # (root can read anything)
+        with pytest.raises(RuntimeError, match="can't open"):
+            importers.from_folder(str(shut))  # unreadable: says so, never "0 repos"
+    shut.chmod(0o700)
     got = importers.gather(["folder"], [str(code), str(home / "typo")])["folder"]  # one bad folder doesn't drop the rest
     assert str(a.resolve()) in got["repos"] and "not a folder" in got["error"]
 

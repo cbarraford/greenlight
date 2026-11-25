@@ -80,6 +80,8 @@ def from_folder(root):
     root, out = Path(root).expanduser(), []
     if not root.is_dir():
         raise RuntimeError(f"not a folder: {root}")
+    if not os.access(root, os.R_OK | os.X_OK):
+        raise RuntimeError(f"can't open: {root}")  # os.walk would quietly find nothing
     for here, dirs, _ in os.walk(root):
         depth = len(Path(here).relative_to(root).parts)
         if (Path(here) / ".git").is_dir():

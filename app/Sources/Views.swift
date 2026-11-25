@@ -1966,9 +1966,11 @@ struct SettingsView: View {
                     Text("\(goals.count)").font(ds(DS.TypeRole.body).monospacedDigit()).foregroundColor(fg)
                 }
             }
-            let failed = ((p["sources"] as? [String: Any]) ?? [:]).compactMap { k, v in ((v as? [String: Any])?["error"] as? String).map { e in  // "RuntimeError: t3 server not running": the why, not the class
-                "\(k) (\(e.split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? e))" } }.sorted()
-            if !failed.isEmpty { note("Couldn't read " + failed.joined(separator: ", ") + ". The rest still imports.") }
+            let errs = ((p["sources"] as? [String: Any]) ?? [:]).compactMap { k, v in ((v as? [String: Any])?["error"] as? String).map { (k, $0) } }
+            // an app: "RuntimeError: t3 server not running" → the why, not the class; folders: each one's own reason, whole
+            let apps = errs.filter { $0.0 != "folder" }.map { k, e in "\(k) (\(e.split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? e))" }.sorted()
+            if !apps.isEmpty { note("Couldn't read " + apps.joined(separator: ", ") + ". The rest still imports.") }
+            if let f = errs.first(where: { $0.0 == "folder" }) { note("Skipped a folder: " + f.1 + ".") }
         }
         if !rs.importDone.isEmpty { note(rs.importDone) }
         if !rs.status.isEmpty { note(rs.status) }
