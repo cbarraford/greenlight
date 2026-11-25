@@ -603,12 +603,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func revealOnPaint(_ w: NSWindow, _ web: WKWebView) {
         guard !uitest, !w.isVisible, !paintedWebs.contains(ObjectIdentifier(web)) else { return }
         w.alphaValue = 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak w] in w?.alphaValue = 1 }  // a page that never says ready still shows
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak w] in if let w, w !== self?.rideTo { w.alphaValue = 1 } }  // a page that never says ready still shows; a ride shows its own level at its end
     }
     func painted(_ web: WKWebView) {
         paintedWebs.insert(ObjectIdentifier(web))
         DispatchQueue.main.async { [weak self] in self?.flushPaintWaits(ObjectIdentifier(web)) }
-        guard let w = web.window, w.alphaValue < 1, !(riding && w === termWins[0]) else { return }  // a ride shows its level itself, at its end
+        guard let w = web.window, w.alphaValue < 1, w !== rideTo else { return }  // the level a ride is bringing in: the ride shows it, at its end
         DispatchQueue.main.async { [weak w] in w?.alphaValue = 1 }  // the next turn of the run loop: the page's first frame is up
     }
     /// `f` once `web` has drawn (now, if it has), or after `within` seconds: a ride's picture of a cold Basement waits for it.
@@ -2455,6 +2455,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     // MARK: Basement ↔ Greenlight Center: one level at a time, the orb rides between them
 
+    var rideTo: NSWindow?  // the level a ride is bringing in (it sets that one's alpha to 1 at its end)
     var upstairs = false, riding = false, termSide = false, rideWin: NSPanel?, keepAt: NSPoint?
     @objc func appGoUp() { if !upstairs { ride(up: true) } else { show() } }
     func ride(up: Bool) {
@@ -2465,7 +2466,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hand(to, from: from)  // before the snapshots: the other level grows into this one's frame
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
         guard greenlight.rideTime > 0 else { stepAside(from); hideFloaters(); return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
-        riding = true
+        riding = true; rideTo = to
         let S = scr.frame, reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
         let orb = CGPoint(x: c.x - S.minX, y: S.maxY - c.y)
@@ -2507,7 +2508,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                     // the backdrop lifts only once the level is in place, so what's behind the app never shows through mid-ride
                     later(reduce ? 0.22 : 0.3) { to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
                     later(reduce ? 0.22 : 0.5) { [self] in
-                        rideWin?.orderOut(nil); rideWin = nil; riding = false
+                        rideWin?.orderOut(nil); rideWin = nil; riding = false; rideTo = nil
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
                     }
                 } }

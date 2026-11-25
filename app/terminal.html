@@ -1874,8 +1874,10 @@ function restore(st){
       tabs.forEach(x => x.r.hidden = x !== tab); mounts.forEach(m => m());
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
-  restored = true; setTimeout(autoRun, 0);  // the cached trees came before the layout: their auto-runs wait for it
-  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; openWs(w, r); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
+  restored = true;
+  // a Basement button's worktree (the app sends it before the layout): the restored layout is what's saved, so its tab saves;
+  // a name that matches nothing (Chief's [console: …]) falls through to the usual first tab
+  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; lastSaved = snap(); openWs(w, r); if (cur) { if (lastPanes) { syncPanes(lastPanes); render() } return } }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length || acct()?.dir ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
