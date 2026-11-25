@@ -1554,7 +1554,7 @@ function toggleSide(cut){
   // Occluded WKWebView windows can suspend Web Animations so onfinish never fires; guarantee cleanup.
   slideTimer = setTimeout(() => { if (sliding === anim) { anim.cancel(); end(); } }, slide * 1000 + 120);
 }
-if (q.get("side") === "1") { document.body.classList.remove("noside"); post({cmd: "side", open: true}) }  // a Basement window opens with it out: no slide in, no refit
+if (q.get("side") === "1") { document.body.classList.remove("noside"); post({cmd: "side", open: true, boot: true}) }  // a Basement window opens with it out: no slide in, no refit
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
 const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});
 // Refresh: busy (after 200ms, for 400ms at least: DESIGN.md §7 spinners) until the trees come back, 15s at most
@@ -1854,7 +1854,7 @@ function build(tab, n, mounts){
 }
 let firstWait = false, pendingWs = null, onScreen = false;
 // the window shows only once its restored layout has drawn (issue 196): the app keeps it at alpha 0 until "painted" (2 s at most)
-function drawn(){ const go = () => { if (!onScreen) { onScreen = true; post({cmd: "painted"}) } }; requestAnimationFrame(() => requestAnimationFrame(go)); setTimeout(go, 80) }
+function drawn(){ const go = () => { if (!onScreen) { onScreen = true; post({cmd: "painted"}) } }; setTimeout(() => requestAnimationFrame(go), 100); setTimeout(go, 250) }  // after refit's 80 ms fit, then its frame; 250 ms if frames are held back
 const firstShell = () => { if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };
 function restore(st){
   drawn();  // after this task: the frame with the restored tabs
@@ -1874,7 +1874,7 @@ function restore(st){
       tabs.forEach(x => x.r.hidden = x !== tab); mounts.forEach(m => m());
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
-  restored = true;
+  restored = true; setTimeout(autoRun, 0);  // the cached trees came before the layout: their auto-runs wait for it
   if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; openWs(w, r); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length || acct()?.dir ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
@@ -2380,7 +2380,7 @@ window.term = {
   picked: d => picked?.(d),
   slide: v => { slide = +v || 0 },
   localName: v => { LOCALNAME = v || "Local"; render() },
-  opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide(!onScreen) },  // Settings → Terminal → App opens to; before the window shows, a cut
+  opens: (v, cut) => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide(cut === true || !onScreen) },  // Settings → Terminal → App opens to; a cut before the window shows (cut: the app has it out of sight)
   ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
   suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },

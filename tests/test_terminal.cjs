@@ -330,7 +330,7 @@ test("a cold window: painted comes once, after the layout is restored (not at re
 test("a Basement window opens with the sidebar out (?side=1): no slide, and the app is told; term.opens before it shows is a cut", async page => {
   const b = page.context().browser(), fresh = await cold(b, "?side=1");
   assert.equal(await fresh.evaluate(() => document.body.classList.contains("noside")), false);
-  assert.deepEqual((await posts(fresh, "side")).pop(), {cmd: "side", open: true});
+  assert.deepEqual((await posts(fresh, "side")).pop(), {cmd: "side", open: true, boot: true}, "boot: not an action you took");
   const pipe = await cold(b);
   await pipe.evaluate(() => term.opens("basement"));
   assert.deepEqual(await pipe.evaluate(() => [document.body.classList.contains("noside"), document.body.classList.contains("sliding")]), [false, false], "out at once, not sliding");
@@ -350,6 +350,15 @@ test("a one-project window with a default folder opens its first shell at once, 
   await bare.evaluate(t => term.workspaces(t), TREES);
   assert.equal((await posts(bare, "open")).length, 1, "the trees come: it opens");
   assert.deepEqual([fresh._errs, bare._errs], [[], []]); await fresh.close(); await bare.close();
+});
+test("the app's order at ready (trees, a Basement button's worktree, then the layout): one tab, the worktree's, no stray first shell", async page => {
+  const fresh = await cold(page.context().browser(), "?only=" + encodeURIComponent('["p1"]'));
+  await fresh.evaluate(p => term.projects(p), PROJ); await fresh.evaluate(t => term.workspaces(t), TREES);
+  await fresh.evaluate(() => term.ws("/w/fix-login", {})); await fresh.evaluate(() => term.restore(null)); await fresh.waitForTimeout(150);
+  assert.deepEqual((await posts(fresh, "open")).map(m => m.ws), ["/w/fix-login"]);
+  await fresh.evaluate(() => term.opens("pipe", true));
+  assert.equal(await fresh.evaluate(() => document.body.classList.contains("sliding")), false, "out of sight (the app says so): a cut, even after painted");
+  assert.deepEqual(fresh._errs, []); await fresh.close();
 });
 test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
