@@ -15,6 +15,8 @@
                                        you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
                                        autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
+    greenlight.py import [detect|preview|apply] [--from orca|t3|cmux|herdr|folder] [--path DIR]  another ADE's repos and
+                                 goals into the native engine, read-only on its side (importers.py; preview changes nothing)
     greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
     greenlight.py ade <orca args>           an `orca`-shaped call answered by the backend in use (ade.py: native|orca|cmux|herdr|t3), JSON out;
                                             `worktree create` stays on this machine (place_here; placement.py lists strays)
@@ -2249,6 +2251,14 @@ def main():
         print(json.dumps(out, indent=1))
         if isinstance(out, dict) and out.get("error"):  # done in part (native: made, but its agent didn't start)
             sys.exit(1)
+        return
+    if cmd == "import":  # greenlight.py import [detect|preview|apply] [--from S]... [--path DIR]...: importers.py
+        import importers
+        try:
+            print(json.dumps(importers.run(sys.argv[2:]), indent=1))
+        except (SystemExit, RuntimeError) as e:
+            print(e, file=sys.stderr)
+            sys.exit(2)
         return
     if cmd == "repos":  # greenlight.py repos [list | add <path>... | rm <path>...]: the native engine's repos.json
         sys.exit(repos_cli(sys.argv[2:]))

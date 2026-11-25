@@ -817,6 +817,7 @@ struct SettingsView: View {
                      ("Projects", "folder", "folders default folder new terminals open"),
                      ("Repositories", "branch", "repo lifecycle stages rules prompts auto-run project solo merge host mac server auto"),
                      ("Instructions", "file-text", "standing rules"),
+                     ("Import", "download", "import orca t3 cmux herdr rex ade repos goals folders onboarding migrate"),
                      ("Memory", "bookmark", "notes learned")]
     static let wide: Set = ["Projects", "Repositories", "Memory"]
 
@@ -895,6 +896,7 @@ struct SettingsView: View {
         case "Automation": return AnyView(automation)
         case "Autonomy": return AnyView(autonomyPane)
         case "Instructions": return AnyView(instructions)
+        case "Import": return AnyView(importPane)
         default: return AnyView(general)
         }
     }
@@ -1930,6 +1932,50 @@ struct SettingsView: View {
         editor($rs.instructions, "Instructions for Greenlight", height: 380, placeholder: "Reply in short sentences.\nNever push to main without asking.")
         saveRow("Save instructions", rs.saveInstructions) { note("Instructions.md on \(hostLabel)") }
     }
+
+    /// Settings → Import (#195): another ADE's repos and goals into Greenlight's own engine. Read-only on the other side,
+    /// a goal you have is never overwritten, and it can run again any time.
+    @ViewBuilder var importPane: some View {
+        heading("Import", "Bring repositories and workspace goals in from another workspace app. Nothing there changes, a goal you already have is kept, and you can run it again any time.")
+            .onAppear { rs.importDetect() }
+        box("From", aside: "On \(hostLabel)") {
+            ForEach(RulesStore.importSources, id: \.0) { s in
+                let found = rs.importFound[s.0] == true
+                toggleRow(s.1, found ? "Found" : "Not found", Binding(get: { rs.importOn.contains(s.0) },
+                                                                    set: { on in if on { rs.importOn.insert(s.0) } else { rs.importOn.remove(s.0) }; rs.importTouched = true; rs.importPlan = nil }))
+                    .disabled(!found)
+            }
+            row("Folders", "Git repos up to three levels down, for an app that keeps plain checkouts (Rex, a terminal). Comma-separated full paths.") {
+                TextField("~/code", text: $rs.importPaths).textFieldStyle(.roundedBorder).font(sys(size: DS.TypeRole.label.size, design: .monospaced))
+                    .frame(width: 240).onChange(of: rs.importPaths) { rs.importPlan = nil }.accessibilityLabel("Folders to scan")
+            }
+        }
+        HStack(spacing: DS.Space.s8) {
+            Button("Preview") { rs.importRun(apply: false) }.disabled(rs.busy)
+            Button("Import") { rs.importRun(apply: true) }.buttonStyle(.borderedProminent).disabled(rs.busy || rs.importPlan == nil)
+            if rs.busy { ProgressView().controlSize(.small) }
+            Spacer(minLength: 0)
+        }
+        if let p = rs.importPlan {
+            let repos = (p["repos"] as? [String]) ?? [], goals = (p["goals"] as? [String: Any]) ?? [:], kept = (p["kept"] as? [String: Any]) ?? [:]
+            box("What it adds") {
+                row("Repositories", repos.isEmpty ? "None new" : repos.prefix(4).map(tildePath).joined(separator: "\n") + (repos.count > 4 ? "\n…and \(repos.count - 4) more" : "")) {
+                    Text("\(repos.count)").font(ds(DS.TypeRole.body).monospacedDigit()).foregroundColor(fg)
+                }
+                row("Goals", kept.isEmpty ? "For workspaces with none yet" : "\(kept.count) you already have stay as they are") {
+                    Text("\(goals.count)").font(ds(DS.TypeRole.body).monospacedDigit()).foregroundColor(fg)
+                }
+            }
+            let errs = ((p["sources"] as? [String: Any]) ?? [:]).compactMap { k, v in ((v as? [String: Any])?["error"] as? String).map { (k, $0) } }
+            // an app: "RuntimeError: t3 server not running" → the why, not the class; folders: each one's own reason, whole
+            let apps = errs.filter { $0.0 != "folder" }.map { k, e in "\(k) (\(e.split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? e))" }.sorted()
+            if !apps.isEmpty { note("Couldn't read " + apps.joined(separator: ", ") + ". The rest still imports.") }
+            if let f = errs.first(where: { $0.0 == "folder" }) { note((f.1.contains("; ") ? "Skipped folders: " : "Skipped a folder: ") + f.1 + ".") }
+        }
+        if !rs.importDone.isEmpty { note(rs.importDone) }
+        if !rs.status.isEmpty { note(rs.status) }
+    }
+    func tildePath(_ p: String) -> String { let h = NSHomeDirectory(); return p.hasPrefix(h + "/") ? "~" + p.dropFirst(h.count) : p }
 
     @ViewBuilder var memory: some View {
         split("Memory", "What Greenlight has learned, one note each. It reads them before every run.",

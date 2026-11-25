@@ -2341,10 +2341,39 @@ def _set_repo_host(arg, mode):
             "options": updated["options"], "source": updated["source"]}
 
 
+def import_op(verb, stdin):
+    """detect | preview | apply, for the app's Settings → Import (and its first-launch offer)."""
+    import importers
+    if verb == "detect":
+        return {"sources": importers.detect(), "native": ade.is_native(), "repos": len(importers.ade_basement.saved())}
+    if verb not in ("preview", "apply"):
+        return {"error": f"no op import-{verb}"}
+    try:
+        o = json.loads(stdin or "{}")
+    except ValueError:
+        return {"error": "bad request"}
+    if not isinstance(o, dict):
+        return {"error": "bad request"}
+    picked, paths = o.get("from") or [], o.get("paths") or []
+    if not isinstance(picked, list) or not isinstance(paths, list) or any(s not in importers.SOURCES for s in picked):
+        return {"error": "bad source"}
+    if any(not isinstance(p, str) or not (p.startswith(("/", "~/")) or p == "~") or ".." in p.split("/") for p in paths):
+        return {"error": "a folder is a full path (/… or ~/…)"}
+    if not picked:
+        return {"error": "pick a source"}
+    try:
+        argv = [verb, *(x for s in picked for x in ("--from", s)), *(x for p in paths for x in ("--path", p))]
+        return importers.run(argv)
+    except (SystemExit, RuntimeError) as e:  # a usage error, or a repos.json/goals.json it won't overwrite
+        return {"error": str(e)}
+
+
 def settings(op, arg, stdin):
     """The app's Settings: a repo's lifecycle, host preference, standing instructions, and memory notes."""
     if op == "repo-hosts":
         return {"hosts": repo_hosts()}
+    if op.startswith("import-"):  # Settings → Import: read-only importers (importers.py); stdin {from: [source], paths: [dir]}
+        return import_op(op.removeprefix("import-"), stdin)
     if op in ("host-get", "host-set"):
         if not _lifecycle_key(arg):
             return {"error": "bad repo"}
