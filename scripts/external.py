@@ -24,6 +24,7 @@ from pathlib import Path
 AGENTS = ("claude", "codex", "agy", "gemini", "opencode", "pi")
 ALIASES = {"claude-code": "claude"}  # not "antigravity": that's the editor, open for days in a folder; its CLI is agy
 TTL = 5.0
+FAIL_BACKOFF = 5.0  # after a failed scan, don't retry for this long (orchestrate sets TTL 0 but keeps this)
 _CACHE: dict = {"at": 0.0, "val": None, "failed": 0.0}
 _LOCK = threading.Lock()  # one scan at a time: cleanup's worker threads share it
 
@@ -33,8 +34,10 @@ PACKAGES = {"claude": ("/@anthropic-ai/claude-code/", "/@anthropic-ai/claude-age
 # servers that never edit a folder: `claude mcp serve` too (`claude mcp add` is a one-shot config command). Not
 # `codex app-server`: T3 and the VS Code extension run one per session in the worktree (an editor's idle one is held
 # until the 6 h hold hands it to the user)
-SERVERS = {"mcp-server", "mcp", "serve"}
-APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron helper, not a CLI agent
+SERVERS = {"mcp-server", "mcp"}  # not `serve`: an ADE may run `opencode serve` per worktree, and it runs the sessions there
+APP_RE = re.compile(r"\.app/Contents/(?:MacOS|Frameworks)/")  # an app's own executable or helpers (an agent CLI it ships in Resources counts)
+LAUNCHERS = ("node", "bun", "deno", "python", "python3", "env")
+LAUNCHER_ARGS = {"run", "-r", "--require", "--import", "--loader"}  # `bun run x.js`, `node --require hook.js x.js`: not the script
 
 
 def agent_of(argv):
@@ -44,18 +47,29 @@ def agent_of(argv):
         return None
     if APP_RE.search(argv[0]):  # an app; but one running an agent's package as node (ELECTRON_RUN_AS_NODE) runs that agent
         return next((k for a in argv[1:3] for k, pkgs in PACKAGES.items() if any(p in a for p in pkgs)), None)
-    for i, a in enumerate(argv[:3]):
+    skip = False
+    for i, a in enumerate(argv[:8]):
+        if skip:
+            skip = False
+            continue  # the value of a launcher's --require
+        if i and a in LAUNCHER_ARGS:
+            skip = a.startswith("-")
+            continue
         if a.startswith("-") or ("=" in a and not a.startswith("/")):
             continue  # a flag, or env's VAR=value
         b = os.path.basename(a).lower().removesuffix(".js").removesuffix(".mjs")
         b = ALIASES.get(b, b)
         kind = b if b in AGENTS else next((k for k, pkgs in PACKAGES.items() if any(p in a for p in pkgs)), None)
         if kind:
-            words = [w for w in argv[i + 1:i + 3] if not w.startswith("-")]
-            # an editor's or another tool's server, not a session working in this folder
-            return None if words[:1] and words[0] in SERVERS or words[:2] == ["mcp", "serve"] else kind
-        if b not in ("node", "bun", "deno", "python", "python3", "env"):
-            return None  # some other program: an argument naming an agent ("vim codex.md") isn't one
+            rest = argv[i + 1:i + 5]
+            words = [w for w in rest if not w.startswith("-")]
+            if words[:1] and words[0] in SERVERS or words[:2] == ["mcp", "serve"]:
+                return None  # a server that never edits a folder
+            if words[:1] == ["app-server"] and ("daemon" in words or any(w.startswith("--listen") for w in rest)):
+                return None  # codex's machine-wide app-server daemon, not a session's (those talk over stdio)
+            return kind
+        if b not in LAUNCHERS:
+            return None  # some other program, or a launcher's script that isn't an agent's ("vim codex.md" isn't one): an argument naming an agent ("vim codex.md") isn't one
     return None
 
 
@@ -159,15 +173,16 @@ def _alive(pid):
 
 
 def _tmux_roots():
-    """The pids of every pane on greenlight's tmux server: what descends from them is ours."""
+    """{pane pid: its folder} for every pane on greenlight's tmux server: what descends from one, in that folder, is ours."""
     sock = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
     try:
-        p = subprocess.run(["tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_pid}"], capture_output=True, text=True, timeout=10)
+        p = subprocess.run(["tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_pid}\t#{pane_current_path}"],
+                           capture_output=True, text=True, timeout=10)
     except FileNotFoundError:
-        return set()  # no tmux: nothing of ours runs
+        return {}  # no tmux: nothing of ours runs
     if p.returncode and not re.search(r"no server running|error connecting|No such file", p.stderr):
         raise OSError(f"tmux list-panes exited {p.returncode}")  # can't tell ours from theirs: the scan failed
-    return {int(x) for x in p.stdout.split() if x.isdigit()}
+    return {int(k): v for k, _, v in (x.partition("\t") for x in p.stdout.splitlines()) if k.isdigit()}
 
 
 def scan(procs=None, roots=None, cwd_of=None):
@@ -178,22 +193,29 @@ def scan(procs=None, roots=None, cwd_of=None):
     if procs is None:
         procs = _proc_mac() if mac else _proc_linux()
     roots = _tmux_roots() if roots is None else roots
+    roots = roots if isinstance(roots, dict) else dict.fromkeys(roots)  # tests: a set, no folders
 
-    def ours(pid):
+    def root_of(pid):
         seen = set()
         while pid and pid not in seen and pid in procs:
             if pid in roots:
-                return True
+                return pid
             seen.add(pid)
             pid = procs[pid]["ppid"]
-        return pid in roots
+        return pid if pid in roots else None
 
     # another user's agents: their cwd is closed to us (lsof, /proc), a known limit; they still count as parents
     found = {pid: a for pid, p in procs.items() if not p.get("other") and (a := agent_of(p["argv"]))}
-    outside = [pid for pid in found if not ours(pid)]
     if cwd_of is None:
-        cwds = _cwds_mac(outside) if mac else {pid: _cwd_linux(pid) for pid in outside}
+        cwds = _cwds_mac(list(found)) if mac else {pid: _cwd_linux(pid) for pid in found}
         cwd_of = cwds.get
+
+    def inside(c, folder):
+        return bool(c) and (c == folder or c.startswith(folder.rstrip("/") + "/"))
+
+    # ours: under a Greenlight pane and in its folder; one of our agents working in another folder (`cd ../B && codex`)
+    # is an agent there like any other
+    outside = [pid for pid in found if (r := root_of(pid)) is None or (roots[r] and not inside(cwd_of(pid), roots[r]))]
     if mac and (lost := [p for p in outside if cwd_of(p) is None and _alive(p)]):  # lsof said nothing about a live agent
         raise OSError(f"no cwd for {len(lost)} live agent(s)")
     out = []
@@ -224,7 +246,7 @@ def agents(fresh=False, strict=False):
         now = time.time()
         if not fresh and _CACHE["val"] is not None and now - _CACHE["at"] < TTL:
             return _CACHE["val"]
-        if not fresh and now - _CACHE["failed"] < TTL:  # it just failed: don't pile on another 10 s ps/lsof per caller
+        if now - _CACHE["failed"] < FAIL_BACKOFF:  # it just failed: don't pile on another 10 s ps/lsof per caller
             if strict:
                 raise Unknown("recent scan failed")
             return []

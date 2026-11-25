@@ -1352,8 +1352,9 @@ def agent_overlay(ws, terminals):
     or a restored session's alert, while the screen shows it working or done)."""
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
     if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
-        who, h = ag.get("type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
-        if not ag.get("type"):  # external.by_worktree_safe: the process check failed, nothing is known to be running
+        # the outside agent's own kind (the shown one may be Greenlight's); none: by_worktree_safe's "the check failed"
+        who, h = ag.get("ext_type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
+        if not ag.get("ext_type"):
             nxt.update(owner="working", action="the process check failed, so whether an agent runs here outside Greenlight "
                                                "can't be told: greenlight holds off until it can (diag.py errors says why)")
         elif h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
@@ -1535,7 +1536,7 @@ def scan(save=True, _backfill_retries=0):
             "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
                       # any outside agent, even behind our own (an auto-merge must not land under it)
-                      **({"external": True, "since": ext.get("stateStartedAt")}
+                      **({"external": True, "since": ext.get("stateStartedAt"), "ext_type": canonical_agent(ext.get("agentType"))}
                          if (ext := next((a for a in w.get("agents") or [] if a.get("external")), None)) else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],

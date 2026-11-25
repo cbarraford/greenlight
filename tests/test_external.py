@@ -25,9 +25,18 @@ def test_agent_of():
     assert external.agent_of(["zsh"]) is None and external.agent_of([]) is None
     assert external.agent_of(["env", "-i", "claude"]) == "claude"  # a launcher's flags are skipped
     assert external.agent_of(["env", "FOO=1", "claude"]) == "claude"  # and its VAR=value
+    assert external.agent_of(["bun", "run", "/srv/n/@anthropic-ai/claude-code/cli.js"]) == "claude"
+    assert external.agent_of(["deno", "run", "-A", "/srv/n/@google/gemini-cli/dist/index.js"]) == "gemini"
+    assert external.agent_of(["node", "--require", "/srv/hook.js", "/srv/n/@anthropic-ai/claude-code/cli.js"]) == "claude"
+    assert external.agent_of(["node", "--a", "--b", "/srv/n/@openai/codex/bin/codex.js"]) == "codex"
+    assert external.agent_of(["/Applications/Foo.app/Contents/Resources/bin/claude", "-p", "x"]) == "claude"  # shipped in an app
+    assert external.agent_of(["node", "/srv/server.js", "claude"]) is None  # a script's argument naming an agent isn't one
     assert external.agent_of(["claude", "-p", "fix the crash in Greenlight.app/Contents/MacOS"]) == "claude"  # a prompt isn't the program
     assert external.agent_of(["claude", "mcp", "serve"]) is None  # a server that never edits a folder
+    assert external.agent_of(["opencode", "serve"]) == "opencode"  # an ADE's per-worktree opencode server runs its sessions
     assert external.agent_of(["codex", "app-server"]) == "codex"  # T3's and VS Code's per-session codex: an agent
+    assert external.agent_of(["/srv/.codex/bin/codex", "app-server", "daemon", "pid-update-loop"]) is None  # the machine-wide daemon
+    assert external.agent_of(["codex", "app-server", "--listen", "unix://x"]) is None
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js", "--output-format", "stream-json"]) == "claude"  # T3's Claude
     assert external.agent_of(["/Applications/T3.app/Contents/MacOS/T3", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js"]) == "claude"  # as node
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-code/cli.js", "mcp", "serve"]) is None
@@ -59,6 +68,11 @@ def test_scan_finds_only_outside_agents():
                    {"pid": 40, "agent": "gemini", "cwd": "/srv/w/elsewhere", "start": 1700000000},
                    {"pid": 50, "agent": "codex", "cwd": "/srv/w/app-other", "start": None}]
     assert external.scan(procs=PROCS, roots=set(), cwd_of=CWD.get)[0]["pid"] == 12  # no greenlight tmux: every agent is external
+    # one of our pane's agents running another in a different worktree (`cd ../B && codex exec`): that one is outside
+    ours = {11: {"ppid": 1, "argv": ["zsh"]}, 12: {"ppid": 11, "argv": ["claude"]}, 13: {"ppid": 12, "argv": ["bash"]},
+            14: {"ppid": 13, "argv": ["codex", "exec"]}}
+    got = external.scan(procs=ours, roots={11: "/w/mine"}, cwd_of={12: "/w/mine/src", 14: "/w/other"}.get)
+    assert [(a["pid"], a["cwd"]) for a in got] == [(14, "/w/other")]
     assert external.scan(procs={5: {"ppid": 6, "argv": ["claude"]}, 6: {"ppid": 5, "argv": ["sh"]}}, roots=set(),
                          cwd_of=lambda p: "/x") == [{"pid": 5, "agent": "claude", "cwd": "/x", "start": None}]  # a ppid loop ends
 
@@ -89,7 +103,9 @@ def test_agents_cache_and_failure(monkeypatch):
     monkeypatch.setattr(external, "scan", lambda: calls.append(1) or [{"pid": 2}])
     n = len(calls)
     assert external.agents() == [] and len(calls) == n  # right after a failure: no pile-up of scans
-    assert external.agents(fresh=True) == [{"pid": 2}] and len(calls) == n + 1  # a fresh ask always scans
+    assert external.agents(fresh=True) == [] and len(calls) == n  # even a fresh ask waits out the failure backoff
+    monkeypatch.setitem(external._CACHE, "failed", 0.0)
+    assert external.agents(fresh=True) == [{"pid": 2}] and len(calls) == n + 1
 
 
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="Linux /proc")
@@ -135,21 +151,21 @@ def test_native_rows_carry_external_agents(monkeypatch):
 
 
 def test_scan_keeps_off_an_external_agent():
-    ws = {"next": {"owner": "agent", "step": "mr_open", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True}}
+    ws = {"next": {"owner": "agent", "step": "mr_open", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "ext_type": "claude"}}
     greenlight.agent_overlay(ws, {})
     assert ws["next"]["owner"] == "working" and "outside Greenlight" in ws["next"]["action"]
-    ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "codex", "external": True}}
+    ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "codex", "external": True, "ext_type": "codex"}}
     greenlight.agent_overlay(ws, {})
     assert ws["next"]["owner"] == "working"  # no merge under it either
     ws = {"next": {"owner": "me", "step": "merge", "action": "sign off"}, "agent": {"state": "working", "external": True}}
     greenlight.agent_overlay(ws, {})
     assert ws["next"]["owner"] == "me" and ws["next"]["action"] == "sign off"  # the user's move stays theirs
     old = greenlight.NOW_MS - (greenlight.EXTERNAL_STALE_H + 1) * 3.6e6
-    ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "since": old}}
+    ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "since": old, "ext_type": "codex"}}
     greenlight.agent_overlay(ws, {})
-    assert ws["next"]["owner"] == "me" and "running here outside Greenlight for over 6h" in ws["next"]["action"]  # yours to close
+    assert ws["next"]["owner"] == "me" and ws["next"]["action"].startswith("codex has been running here outside Greenlight for over 6h")  # yours to close
     # (no hour count: the action is the question's marker, so it must not change every hour and re-ask)
-    ws = {"next": {"owner": "agent", "step": "ci_green", "action": "x"}, "agent": {"state": "working", "type": None, "external": True}}
+    ws = {"next": {"owner": "agent", "step": "ci_green", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "ext_type": None}}
     greenlight.agent_overlay(ws, {})  # a failed process check (by_worktree_safe's placeholder): held, and says so
     assert ws["next"]["owner"] == "working" and "process check failed" in ws["next"]["action"]
 
@@ -221,10 +237,10 @@ def test_dash_marks_rows_any_ade_listed(monkeypatch):
 
 def test_tmux_roots_and_symlinks(monkeypatch, tmp_path):
     run = lambda rc, out="", err="": monkeypatch.setattr(external.subprocess, "run", lambda *a, **k: mock.Mock(returncode=rc, stdout=out, stderr=err))
-    run(0, "11\n12\n")
-    assert external._tmux_roots() == {11, 12}
+    run(0, "11\t/w/a\n12\t/w/b c\n")
+    assert external._tmux_roots() == {11: "/w/a", 12: "/w/b c"}
     run(1, err="no server running on /tmp/tmux-1/greenlight")
-    assert external._tmux_roots() == set()  # no server: nothing of ours runs
+    assert external._tmux_roots() == {}  # no server: nothing of ours runs
     run(1, err="server exited unexpectedly")
     with pytest.raises(OSError):
         external._tmux_roots()  # can't tell ours from theirs: never "all of them are outside"
