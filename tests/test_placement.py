@@ -469,3 +469,5 @@ def test_place_here_drops_host_local_beside_a_repo(monkeypatch):
     assert ["project", "setups"] in calls
     assert greenlight.place_here(["worktree", "create", "--repo", "id:r-there", "--host", "ssh:t1"]) == (
         ["worktree", "create", "--repo", "id:r-there", "--host", "ssh:t1"], None)  # another host stays the user's choice
+    assert greenlight.without_change(["worktree", "create", "--change", "a", "--change=b", "--change", "c", "--name", "x"]) == [
+        "worktree", "create", "--name", "x"]

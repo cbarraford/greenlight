@@ -2418,55 +2418,98 @@ def test_claude_streamed_text_is_still_spoken_as_it_comes():
 def test_denied_calls_become_one_use_approvals(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    denials = [{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},
-               {"tool_name": "Bash", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},  # the same call twice: one
-               {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}},
-               {"tool_name": "Bash", "tool_input": {"command": "  "}}, {"tool_name": "bad name()"}, "junk"]
+    denials = [
+        {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},  # duplicate: one item
+        {"tool_name": "Bash", "tool_input": {"command": "echo ) Bash #"}},  # paren breakout refused
+        {"tool_name": "Bash", "tool_input": {"command": "ls *.py"}},  # wildcard refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi\nrm -rf /"}},  # multiline refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi\\"}},  # trailing backslash refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/a"}},
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/b"}},  # same domain: merged into one item
+        {"tool_name": "WebFetch", "tool_input": {"url": "http://[bad"}},  # malformed IPv6 URL skipped without raising
+        {"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"}},  # never widen filesystem Write
+        {"tool_name": "mcp__demo__ping", "tool_input": {"x": 1}},
+        {"tool_name": "Bash", "tool_input": {"command": "  "}}, {"tool_name": "bad name()"}, "junk",
+    ]
     result = {"type": "result", "result": "Denied.", "is_error": False, "permission_denials": denials}
-    assert [e["e"] for e in Norm().claude(result)] == ["done"]  # an automation (auto.py's Norm) has no one to ask
     n = Norm()
-    n.approvals = True
-    ev = n.claude(result)
-    assert [e["e"] for e in ev] == ["approval", "done"], ev
-    items = ev[0]["items"]
-    assert [(i["tool"], i["what"]) for i in items] == [("Bash", "ORCA_ENVIRONMENT=local orca host list"),
-                                                     ("WebFetch", '{"url": "https://example.com"}')]
+    assert [e["e"] for e in n.claude(result)] == ["done"]  # Norm stays pure: automations never write approvals
+    assert not os.path.exists(chat.approvals_path())
+    items = chat.save_denials(n.denials)
+    assert [i["tool"] for i in items] == ["Bash", "WebFetch", "mcp__demo__ping"], items
+    assert items[0]["what"] == "ORCA_ENVIRONMENT=local orca host list"
+    assert "example.com" in items[1]["what"] and "/a" in items[1]["what"] and "/b" in items[1]["what"]
+    assert "this turn" in items[2]["what"]
     assert stat.S_IMODE(os.stat(chat.approvals_path()).st_mode) == 0o600
-    assert chat.take_approvals([items[0]["id"], "nope"]) == ["Bash(ORCA_ENVIRONMENT=local orca host list)"]
+    # Partial batch failure (one bad id) refuses everything without burning the valid id
+    assert chat.take_approvals([items[0]["id"], "nope"]) == []
+    assert chat.take_approvals([items[0]["id"]]) == ["Bash(ORCA_ENVIRONMENT=local orca host list)"]
     assert chat.take_approvals([items[0]["id"]]) == []  # once only
     with open(chat.approvals_path()) as fh:
         store = json.load(fh)
     store[items[1]["id"]]["at"] -= chat.APPROVAL_TTL + 1
+    store[items[2]["id"]]["at"] = "corrupt"
     with open(chat.approvals_path(), "w") as fh:
         json.dump(store, fh)
     assert chat.take_approvals([items[1]["id"]]) == []  # expired
-    n.claude({"type": "result", "result": "ok", "is_error": False})  # the next turn's result replaces what's left
+    assert chat.take_approvals([items[2]["id"]]) == []  # malformed timestamp handled safely
+    assert chat.save_denials([]) == []  # empty denials clear the file
     with open(chat.approvals_path()) as fh:
         assert json.load(fh) == {}
 
 
-def test_send_approve_runs_the_turn_with_the_call_allowed(tmp_path, monkeypatch, capsys):
+def test_approval_write_errors_do_not_emit_or_replay(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    n = Norm()
-    n.approvals = True
-    aid = n.claude({"type": "result", "result": "x", "is_error": False,
-                    "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]})[0]["items"][0]["id"]
+    items = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])
+    assert len(items) == 1
+    monkeypatch.setattr(chat, "_write_approvals", lambda s: (_ for _ in ()).throw(OSError("disk full")))
+    assert chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]) == []
+    assert chat.take_approvals([items[0]["id"]]) == []
+
+
+def test_send_approve_atomic_reservation_and_guards(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    aid = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    # 1. send_turn forwards approve_ids to turn() without burning them early
     seen = {}
-    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: seen.update(text=text, allow=k.get("allow")))
+    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: seen.update(text=text, approve_ids=k.get("approve_ids")))
     monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
     chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
-    assert seen == {"text": "Approved", "allow": ("Bash(orca host list)",)}
+    assert seen == {"text": "Approved", "approve_ids": (aid,)}
+    # Empty --approve fails without calling turn()
     seen.clear()
     monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
-    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)  # used: no turn, a failed done
+    chat.send_turn(["send", "--approve", " , "], lambda k: " , " if k == "--approve" else None)
     assert seen == {} and '"ok": false' in capsys.readouterr().out
+    # 2. Real turn() rejects busy chat or non-Claude harness WITHOUT burning the approval
+    monkeypatch.undo()
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    # Busy chat (RESETTING present) must not consume aid
+    (tmp_path / chat.RESETTING).write_text("resetting")
+    chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False
+    (tmp_path / chat.RESETTING).unlink()
+    # Non-Claude harness must not consume aid
+    chat.turn("Approved", "codex", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "Claude" in events[-1]["text"]
+    # Approval is still intact and usable once
+    assert chat.take_approvals([aid]) == ["Bash(orca host list)"]
+    assert chat.take_approvals([aid]) == []
 
 
 # A fake `claude -p` that is denied its first call and, run with that call allowed, makes it: the approval round trip.
 FAKE_DENIED = """#!/usr/bin/env python3
 import json, sys
-sys.stdin.read()
+prompt = sys.stdin.read()
+if "(Greenlight's watch" in prompt:
+    print(json.dumps({"type": "result", "session_id": "s1", "result": "(nothing)", "is_error": False, "duration_ms": 1}))
+    sys.exit(0)
 cmd = "ORCA_ENVIRONMENT=local orca host list"
 allowed = sys.argv[sys.argv.index("--allowedTools") + 1:] if "--allowedTools" in sys.argv else []
 ok = "Bash(" + cmd + ")" in allowed
@@ -2490,9 +2533,36 @@ def test_a_denied_call_runs_once_approved(tmp_path, monkeypatch):
     chat.turn("Create the workspace on this machine", "claude-haiku-5-5", None)
     approval = [e for e in events if e["e"] == "approval"]
     assert len(approval) == 1 and approval[0]["items"][0]["what"] == "ORCA_ENVIRONMENT=local orca host list", events
+    # A silent watch turn returning (nothing) must NOT wipe the pending approval on disk
+    events.clear()
+    chat.turn("(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)", "claude-haiku-5-5", None)
+    assert [e["text"] for e in events if e["e"] == "done"] == ["(nothing)"]
     events.clear()
     monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
     aid = approval[0]["items"][0]["id"]
     chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
     assert [e["text"] for e in events if e["e"] == "done"] == ["Ran it."], events
     assert not [e for e in events if e["e"] == "approval"]
+    # Re-using the same approval id fails cleanly
+    events.clear()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
+    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
+    assert events[-1]["ok"] is False and "expired or was already used" in events[-1]["text"]
+
+
+def test_stopped_turn_does_not_emit_or_save_approvals(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    denials = [{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]
+    with chat.scope_lock():
+        gen = chat.generation_unlocked()
+        chat._finalize_turn_unlocked(
+            {"e": "done", "ok": True, "text": "ok", "context": 0, "window": None, "ms": 1},
+            owned=False, had_stale=False, reserved_gen=gen, delivery=str(tmp_path / "del"), token="t1",
+            pending_denials=denials,
+        )
+    assert not any(e["e"] == "approval" for e in events)
+    assert events[-1]["ok"] is False and events[-1]["text"] == "Stopped"
+    assert not os.path.exists(chat.approvals_path())

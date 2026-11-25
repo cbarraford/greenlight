@@ -68,10 +68,17 @@ final class Core: ObservableObject {
     @Published var attached: [Attached] = []
     var unattach: ((String) -> Void)?  // tells the dashboard to empty that dock slot
     @Published var msgs: [Msg] = [Msg(.note, "Ask me anything about your workspaces.")] {  // init reads the transcript
-        didSet {  // ponytail: rewrites the whole file per message; capped at 300 so that stays cheap
-            try? FileManager.default.createDirectory(at: transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcriptFile, options: .atomic)
-        }
+        didSet { saveTranscript() }
+    }
+    private func saveTranscript() {  // ponytail: rewrites the whole file per message; capped at 300 so that stays cheap
+        try? FileManager.default.createDirectory(at: transcriptFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(msgs.suffix(300).map(\.saved)).write(to: transcriptFile, options: .atomic)
+    }
+    var hasPendingApproval: Bool { msgs.contains { $0.decided == nil && !$0.approvals.isEmpty } }
+    private func expireApprovals() {
+        var changed = false
+        for o in msgs where o.decided == nil && !o.approvals.isEmpty { o.decided = "expired"; changed = true }
+        if changed { saveTranscript() }
     }
     @Published var run: Run?
     @Published var queue: [Queued] = []
@@ -170,6 +177,7 @@ final class Core: ObservableObject {
         didSet {
             ud.set(model, forKey: "model")
             if harnessOf(model) != harnessOf(oldValue) {
+                expireApprovals()
                 msgs.append(Msg(.note, isClaude ? "Back to the Claude conversation." : "\(modelName) keeps its own conversation, separate from Claude's."))
                 context = 0; window = 0; run?.meterStale = true  // the meter was the other harness's: tokens only until this one reports
             }
@@ -620,19 +628,22 @@ final class Core: ObservableObject {
 
     /// Approve & run: the next turn runs with exactly the calls this reply was denied allowed (chat.py send --approve), once.
     func approve(_ m: Msg) {
-        guard run == nil, clearing == 0, m.decided == nil, !m.approvals.isEmpty else { return }
+        guard isClaude, run == nil, clearing == 0, m.decided == nil, !m.approvals.isEmpty else { return }
+        active()
         m.decided = "approved"
         let list = m.approvals.map { "`\($0.what)`" }.joined(separator: ", ")
         let shown = "Approved: " + m.approvals.map(\.what).joined(separator: ", ")
         msgs.append(Msg(.you, shown))
-        start(Run(shown, on: chatHost), chatSend + " --approve " + shellQuote(m.approvals.map(\.id).joined(separator: ",")), stdin:
-            "(Greenlight, not typed by the user: they approved what your last turn was denied: \(list). It's allowed for this turn only: run it now as it was, then carry on with what they asked.)")
+        let body = "(Greenlight, not typed by the user: they approved what your last turn was denied: \(list). It's allowed for this turn only: run it now as it was, then carry on with what they asked.)"
+        start(Run(shown, on: chatHost), chatSend + " --approve " + shellQuote(m.approvals.map(\.id).joined(separator: ",")), stdin: voice.on ? voiceNote + body : body)
     }
 
     /// Deny: the calls stay denied; Chief hears it with the next message.
     func deny(_ m: Msg) {
-        guard m.decided == nil else { return }
+        guard run == nil, clearing == 0, m.decided == nil else { return }
+        active()
         m.decided = "denied"
+        saveTranscript()
         keepDone(doneSince + ["Denied: " + m.approvals.map(\.what).joined(separator: ", ")])
     }
 
@@ -829,13 +840,13 @@ final class Core: ObservableObject {
     func active() { lastActive = Date(); checkedIn = false; if session > 0 { delegate.greenlight.active() } }  // the check-in is the main chat's
     func checkIn() {
         let atMac = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 120
-        guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, queue.isEmpty, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
+        guard checkInMins > 0, !checkedIn, run == nil, clearing == 0, queue.isEmpty, !hasPendingApproval, atMac, Date().timeIntervalSince(lastActive) > Double(checkInMins * 60) else { return }
         checkedIn = true
         let activityAt = lastActive
         gate("check-in", text: "Idle check-in after \(checkInMins) minutes without Greenlight activity; ask what workspace to work on next") { [weak self] ok in
             guard let self, ok, self.checkedIn, self.lastActive == activityAt, self.checkInMins > 0,
                   Date().timeIntervalSince(self.lastActive) > Double(self.checkInMins * 60) else { return }
-            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else {
+            guard self.run == nil, self.clearing == 0, self.queue.isEmpty, !self.hasPendingApproval else {
                 self.checkedIn = false  // the timer can retry after the competing work finishes
                 return
             }
@@ -872,7 +883,7 @@ final class Core: ObservableObject {
     }
     func watchTurn() {  // ponytail: one turn per 5 minutes at most, everything new batched; a knob if it nags or lags
         let (ask, hold) = inScope(fresh, pucks, scope())  // another project's waits: the chat speaks for the windows you're in
-        guard watch, !ask.isEmpty, run == nil, clearing == 0, queue.isEmpty, Date().timeIntervalSince(watchedAt) > 300 else { return }
+        guard watch, !ask.isEmpty, run == nil, clearing == 0, queue.isEmpty, !hasPendingApproval, Date().timeIntervalSince(watchedAt) > 300 else { return }
         watchedAt = Date()
         let list = ask.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
         fresh = hold
@@ -887,7 +898,7 @@ final class Core: ObservableObject {
             let (visible, deferred) = inScope(current, self.pucks, self.scope())
             self.fresh = deferred.merging(self.fresh) { $1 }  // a scope change must not consume another project's news
             guard !visible.isEmpty else { return }
-            guard self.run == nil, self.clearing == 0, self.queue.isEmpty else { self.fresh = visible.merging(self.fresh) { $1 }; return }
+            guard self.run == nil, self.clearing == 0, self.queue.isEmpty, !self.hasPendingApproval else { self.fresh = visible.merging(self.fresh) { $1 }; return }
             let liveList = visible.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
             let r = Run("Watching the workspaces", on: chatHost); r.watch = true
             self.start(r, self.chatSend, stdin:
@@ -1166,6 +1177,7 @@ final class Core: ObservableObject {
         m.duration = Date().timeIntervalSince(r.start)
         m.options = options
         m.approvals = r.stopping ? [] : r.approvals
+        if !isClaude && !m.approvals.isEmpty { m.decided = "expired" }
         for o in msgs where o.decided == nil && !o.approvals.isEmpty { o.decided = "expired" }  // chat.py keeps the last turn's only
         m.failed = !ok
         if drawsCanvas(r, ok: ok, voiceOn: voice.on), let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // a typed reply's canvas (#208); voice mode has its stage

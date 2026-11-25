@@ -363,13 +363,14 @@ struct MsgView: View, Looked {
             ForEach(m.approvals) { a in
                 VStack(alignment: .leading, spacing: DS.Space.s4) {
                     Text(a.tool == "Bash" ? "Run this command" : "Use \(a.tool)").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
-                    Text(a.what).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(open ? fg : dim).textSelection(.enabled).lineLimit(open ? 12 : 2)
+                    Text(a.what).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(open ? fg : dim).textSelection(.enabled)
+                        .lineLimit(open ? nil : 2).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if open {
                 HStack(spacing: DS.Space.s8) {
-                    Button { c.approve(m) } label: { chip("Approve & run", true, primary: true) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel("Approve and run")
-                    Button { c.deny(m) } label: { chip("Deny", true, primary: false) }.buttonStyle(.plain).accessibilityLabel("Deny")
+                    Button { c.approve(m) } label: { chip("Approve & run", true, primary: true) }.buttonStyle(.plain).disabled(c.run != nil || !c.isClaude).accessibilityLabel("Approve and run")
+                    Button { c.deny(m) } label: { chip("Deny", true, primary: false) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel("Deny")
                 }
             }
         }.padding(open ? DS.Space.s12 : DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading).background(box(open))
