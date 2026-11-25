@@ -1301,9 +1301,17 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let uNone = mergeTreesPayload(["trees": [[String: Any]]()], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"]
     let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
                               primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
-    check("usage meters: merged snapshots and trees carry each agent once, greenlight's host's first, then agents only the Mac reports",
+    let rescueWin: [[String: Any]] = [["label": "5h", "pct": 20]]
+    let rescueMac: [[String: Any]] = [["id": "claude", "state": "ok", "windows": rescueWin]]
+    let uRescue = mergeSnapshots(["usage": [["id": "claude", "state": "failed"]]], ["usage": rescueMac],
+                                 primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
+    let dirtyUsage: [Any] = [NSNull(), ["id": "claude", "state": "ok"] as [String: Any]]
+    let uDirty = mergeSnapshots(["usage": dirtyUsage], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
+    check("usage meters: merged snapshots and trees carry each agent once, greenlight's host's first (Mac rescues a failed primary), tolerating bad elements",
           uBoth?.compactMap { $0["id"] as? String } == ["claude", "codex"] && uMac?.compactMap { $0["id"] as? String } == ["codex"]
-          && uNone == nil && uDup?.count == 1 && uDup?.first?["state"] as? String == "ok")
+          && uNone == nil && uDup?.count == 1 && uDup?.first?["state"] as? String == "ok"
+          && uRescue?.count == 1 && uRescue?.first?["state"] as? String == "ok"
+          && uDirty?.count == 1 && uDirty?.first?["id"] as? String == "claude")
     check("project host: nativeHost wins on paired Orca dedupe, org/repo fold is deterministic, and savedProjects resolves empty-tree projects",
           mergedPucks.count == 2
           && mergedSnapTrees.count == 1 && mergedSnapTrees[0]["path"] as? String == "/srv/tree"

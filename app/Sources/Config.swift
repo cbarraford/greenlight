@@ -275,13 +275,29 @@ func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, prim
     return out
 }
 
-/// The footer's plan meters (dash.py `usage`) from a merged pair, one per agent: greenlight's host's reading of an agent wins,
-/// and an agent only the Mac reports (signed in there alone) is added after them. nil when neither host sent any.
+/// The footer's plan meters (dash.py `usage`) from a merged pair, one per agent: greenlight's host's reading of an agent wins
+/// unless it failed while the Mac has a healthy (or windowed) reading; agents only the Mac reports are added after them. nil when neither host sent any.
 func usageOf(_ primary: [String: Any]?, _ secondary: [String: Any]?) -> [[String: Any]]? {
-    let p = primary?["usage"] as? [[String: Any]], s = secondary?["usage"] as? [[String: Any]]
+    let p = (primary?["usage"] as? [Any])?.compactMap { $0 as? [String: Any] }
+    let s = (secondary?["usage"] as? [Any])?.compactMap { $0 as? [String: Any] }
     guard p != nil || s != nil else { return nil }
-    let have = Set((p ?? []).compactMap { $0["id"] as? String })
-    return (p ?? []) + (s ?? []).filter { ($0["id"] as? String).map { !have.contains($0) } ?? false }
+    let hasWin: ([String: Any]) -> Bool = { !(($0["windows"] as? [Any])?.isEmpty ?? true) }
+    let better: ([String: Any], [String: Any]) -> Bool = { a, b in
+        let sa = a["state"] as? String, sb = b["state"] as? String
+        return (sa == "failed" && sb == "ok") || (sa == "failed" && sb == "failed" && !hasWin(a) && hasWin(b))
+    }
+    var sById = [String: [String: Any]]()
+    for item in s ?? [] { if let id = item["id"] as? String, sById[id] == nil { sById[id] = item } }
+    var seen = Set<String>(), out = [[String: Any]]()
+    for item in p ?? [] {
+        guard let id = item["id"] as? String, seen.insert(id).inserted else { continue }
+        out.append(sById[id].map { better(item, $0) ? $0 : item } ?? item)
+    }
+    for item in s ?? [] {
+        guard let id = item["id"] as? String, seen.insert(id).inserted else { continue }
+        out.append(item)
+    }
+    return out
 }
 
 /// Merges `dash.py trees` payloads from server and local Mac, deduplicating by path (native host wins) and combining `repoHosts`.

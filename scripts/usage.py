@@ -17,6 +17,7 @@ fetch (the footer's ↻) fetches again. Credentials stay where each CLI keeps th
   others    n/a: no usage source yet
 """
 import contextlib
+import http.client
 import json
 import math
 import os
@@ -26,8 +27,9 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeGuard
 
 import diag
 import harness
@@ -60,12 +62,18 @@ class Failed(Exception):
         self.note, self.code, self.wait = note, code, wait
 
 
+def _num(v: object) -> TypeGuard[int | float]:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def _json(p):
     try:
         with open(p) as f:
             d = json.load(f)
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
+    except OSError as e:
+        raise Failed("couldn't read sign-in file", "permission") from e
     except ValueError as e:
         raise Failed("unreadable sign-in file", "parse") from e
     return d if isinstance(d, dict) else None
@@ -92,7 +100,7 @@ def _get(url, headers):
         if e.code in (401, 403):
             raise Failed("signed out or the token expired", "auth") from e
         raise Failed(f"the usage API answered HTTP {e.code}", "http") from e
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as e:
         raise Failed("can't reach the usage API", "network") from e
     except ValueError as e:
         raise Failed("unreadable answer from the usage API", "parse") from e
@@ -103,46 +111,55 @@ def _get(url, headers):
 
 def _epoch(v):
     """An ISO time or epoch seconds/ms -> epoch seconds (None when it isn't one)."""
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        return int(v / 1000 if v > 1e12 else v) if math.isfinite(v) else None
+    if _num(v):
+        return int(v / 1000 if v > 1e12 else v)
     if isinstance(v, str) and v:
         with contextlib.suppress(ValueError):
-            return int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp())
+            s = v[:-1] + "+00:00" if v.endswith(("Z", "z")) else v
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return int(dt.timestamp())
     return None
 
 
 def _win(label, pct, resets):
-    if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not math.isfinite(pct):
+    if not _num(pct):
         return None
     return {"label": label, "pct": round(max(0.0, min(100.0, float(pct))), 1), "resets": _epoch(resets)}
 
 
 def _span_label(secs):
-    if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not math.isfinite(secs) or secs <= 0:
+    if not _num(secs) or secs <= 0:
         return "Limit"
+    if secs < 3600:
+        return f"{max(1, round(secs / 60))}m"
     if abs(secs - 604800) < 3600:
         return "Week"
     return f"{round(secs / 3600)}h" if secs < 86400 * 2 else f"{round(secs / 86400)}d"
 
 
 def _expired(ms):
-    t = _epoch(ms) if isinstance(ms, (int, float)) else None
-    return t is not None and t < time.time()
+    t = _epoch(ms)
+    return t is not None and t > 0 and t < time.time()
 
 
 # claude ---------------------------------------------------------------------------------------------------------------
 
 def claude_windows(d):
     """oauth/usage's answer -> windows: the 5h and weekly ones, then per-model weekly pools (Fable, Opus, Sonnet)."""
-    out = [_win(label, v.get("utilization"), v.get("resets_at")) for k, label in CLAUDE_KEYS if isinstance(v := d.get(k), dict)]
+    out = [w for k, label in CLAUDE_KEYS
+           if isinstance(v := d.get(k), dict) and (w := _win(label, v.get("utilization"), v.get("resets_at")))]
+    seen = {w["label"] for w in out}
     for lim in d.get("limits") if isinstance(d.get("limits"), list) else []:
-        model = ((lim.get("scope") or {}).get("model") or {}) if isinstance(lim, dict) and isinstance(lim.get("scope"), dict) else {}
+        if not isinstance(lim, dict) or not isinstance(scope := lim.get("scope"), dict):
+            continue
+        model = scope.get("model")
         name = model.get("display_name") if isinstance(model, dict) else None
-        if isinstance(name, str) and name and name not in [w["label"] for w in out if w]:
-            out.append(_win(name, lim.get("percent"), lim.get("resets_at")))
-    return [w for w in out if w]
+        if isinstance(name, str) and name and name not in seen and (w := _win(name, lim.get("percent"), lim.get("resets_at"))):
+            seen.add(name)
+            out.append(w)
+    return out
 
 
 def _keychain():
@@ -170,14 +187,15 @@ def _claude_api(token):
 
 def claude():
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    d = _json(root / ".credentials.json") or _keychain() or {}
-    o = d.get("claudeAiOauth")
+    o = (_json(root / ".credentials.json") or {}).get("claudeAiOauth")
+    if not (isinstance(o, dict) and o.get("accessToken")):
+        o = (_keychain() or {}).get("claudeAiOauth")
     if not (isinstance(o, dict) and o.get("accessToken")):
         raise SignedOut()
-    sub = o.get("subscriptionType")
-    plan = {"plan": f"Claude {sub.title()}"} if isinstance(sub, str) and sub else {}
     if _expired(o.get("expiresAt")):
         raise Failed("token expired: Claude Code renews it on its next run", "expired")
+    sub = o.get("subscriptionType")
+    plan = {"plan": f"Claude {sub.title()}"} if isinstance(sub, str) and sub else {}
     return {"windows": _claude_api(o["accessToken"]), "src": "api", **plan}
 
 
@@ -193,13 +211,16 @@ def codex_windows(rl, at=None):
         if not isinstance(w, dict):
             continue
         wm = w.get("window_minutes")
-        secs = w.get("limit_window_seconds") or w.get("window_seconds") or (wm * 60 if isinstance(wm, (int, float)) and not isinstance(wm, bool) else 0)
+        secs = w.get("limit_window_seconds") or w.get("window_seconds") or (wm * 60 if _num(wm) else 0)
         resets = w.get("reset_at") or w.get("resets_at")
         rin = w.get("resets_in_seconds")
-        if resets is None and isinstance(rin, (int, float)) and not isinstance(rin, bool) and math.isfinite(rin):
+        if rin is None:
+            rin = w.get("reset_after_seconds")
+        if resets is None and _num(rin):
             resets = (at or time.time()) + rin
-        out.append(_win(_span_label(secs), w.get("used_percent"), resets))
-    return [w for w in out if w]
+        if win := _win(_span_label(secs), w.get("used_percent"), resets):
+            out.append(win)
+    return out
 
 
 def _plan(p):
@@ -227,7 +248,7 @@ def _rollouts(root, n=12):
 
 
 def _rate_limits_in(f):
-    """The last rate_limits a rollout recorded, with its time: (rate_limits, epoch) or None."""
+    """The last valid rate_limits a rollout recorded, with its windows and time: (rate_limits, windows, epoch) or None."""
     with open(f, "rb") as fh:
         fh.seek(0, 2)
         fh.seek(max(0, fh.tell() - (512 << 10)))
@@ -239,8 +260,10 @@ def _rate_limits_in(f):
             e = json.loads(line)
             p = e.get("payload") if isinstance(e, dict) else None
             rl = p.get("rate_limits") if isinstance(p, dict) else None
-            if isinstance(rl, dict) and (rl.get("primary") or rl.get("secondary")):
-                return rl, _epoch(e.get("timestamp")) or int(f.stat().st_mtime)
+            if isinstance(rl, dict):
+                at = _epoch(e.get("timestamp")) or int(f.stat().st_mtime)
+                if wins := codex_windows(rl, at):
+                    return rl, wins, at
     return None
 
 
@@ -248,8 +271,7 @@ def codex_rollout(root):
     for f in _rollouts(root):
         with contextlib.suppress(OSError):
             if hit := _rate_limits_in(f):
-                rl, at = hit
-                wins = codex_windows(rl, at)
+                rl, wins, at = hit
                 if not any(not w["resets"] or w["resets"] > time.time() for w in wins):  # no reset time: unknown, not reset
                     continue  # every window it saw has reset since: keep looking in other recent rollouts
                 return {"windows": wins, "src": "rollout", "at": at, **_plan(rl.get("plan_type"))}
@@ -259,17 +281,18 @@ def codex_rollout(root):
 def codex():
     root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     try:
-        tok = ((_json(root / "auth.json") or {}).get("tokens") or {})
-    except Failed:  # torn mid-write: the rollouts still say; without them it's a failed read, not a sign-out
+        tok = (_json(root / "auth.json") or {}).get("tokens")
+    except Failed as e:  # torn mid-write or unreadable: the rollouts still say; without them it's a failed read, not a sign-out
         if fall := codex_rollout(root):
-            return fall
+            return {**fall, "note": f"{e.note}; from the last session instead", "_fail": e.note}
         raise
     if isinstance(tok, dict) and tok.get("access_token"):
         try:
             return _codex_api(tok["access_token"], tok.get("account_id"))
         except Failed as e:
             if fall := codex_rollout(root):
-                return {**fall, "note": f"{e.note}; from the last session instead", **({"wait": e.wait} if e.wait > TTL else {})}
+                return {**fall, "note": f"{e.note}; from the last session instead", "_fail": e.note,
+                        **({"wait": e.wait} if e.wait > TTL else {})}
             raise
     if fall := codex_rollout(root):
         return fall
@@ -292,8 +315,10 @@ def pi():
     auth = _json(root / "auth.json") or {}
     if not auth:
         raise SignedOut()  # signed in to nothing: left out; signed in to a provider with no plan usage: n/a
-    prov = (_json(root / "settings.json") or {}).get("defaultProvider")
-    plans = [(p, a) for p in ([prov] if isinstance(prov, str) and prov else ["anthropic", "openai-codex"])
+    raw_prov = (_json(root / "settings.json") or {}).get("defaultProvider")
+    prov = raw_prov if isinstance(raw_prov, str) and raw_prov else None
+    candidates = [prov] if prov else ["anthropic", "openai-codex"]
+    plans = [(p, a) for p in candidates
              if p in ("anthropic", "openai-codex") and isinstance(a := auth.get(p), dict) and a.get("type") == "oauth" and a.get("access")]
     live = [(p, a) for p, a in plans if not _expired(a.get("expires"))]
     if plans and not live:
@@ -302,9 +327,8 @@ def pi():
         p, a = live[0]
         if p == "anthropic":
             return {"windows": _claude_api(a["access"]), "src": "api", "plan": "Claude plan"}
-        if p == "openai-codex":
-            return {**_codex_api(a["access"], a.get("accountId")), "plan": "ChatGPT plan"}
-    raise Unavailable(f"pi's provider ({prov}) reports no plan usage" if isinstance(prov, str) and prov
+        return {"plan": "ChatGPT plan", **_codex_api(a["access"], a.get("accountId"))}
+    raise Unavailable(f"pi's provider ({prov}) reports no plan usage" if prov
                       else "pi isn't signed in to a Claude or ChatGPT plan")
 
 
@@ -341,18 +365,30 @@ def fetch(name):
 
 
 def merge(old, new):
-    """A failed refresh keeps the last windows it had (shown with their age)."""
-    if new["state"] == "failed" and old and old.get("windows"):
-        return {**new, **{k: old[k] for k in ("windows", "at", "plan", "src") if k in old}}
-    return new
+    """A failed refresh keeps the last windows it had (shown with their age). An older rollout fallback never clobbers a fresher reading."""
+    fail_note = new.get("_fail")
+    clean = {k: v for k, v in new.items() if k != "_fail"}
+    if not (isinstance(old, dict) and old.get("windows")):
+        return clean
+    if clean["state"] == "failed":
+        return {**clean, **{k: old[k] for k in ("windows", "at", "plan", "src") if k in old}}
+    if clean.get("src") == "rollout" and _num(old.get("at")) and _num(clean.get("at")) and old["at"] > clean["at"]:
+        kept = {**clean, **{k: old[k] for k in ("windows", "at", "plan", "src") if k in old}}
+        if fail_note:
+            kept.update(state="failed", note=fail_note)
+        return kept
+    return clean
 
 
 def due(e, since, now):
-    if not e:
+    if not isinstance(e, dict):
         return True
-    if now >= e.get("next", 0):
+    nxt, tried, wait = e.get("next", 0), e.get("tried", 0), e.get("wait", 0)
+    if not (_num(nxt) and _num(tried) and _num(wait)):
         return True
-    return since > e.get("tried", 0) and now - e.get("tried", 0) >= 10 and e.get("wait", 0) <= TTL  # a ↻ scan, not in a backoff
+    if now >= nxt:
+        return True
+    return since > tried and now - tried >= 10 and wait <= TTL  # a ↻ scan, not in a backoff
 
 
 @contextlib.contextmanager
@@ -375,14 +411,18 @@ def _load():
             d = json.load(f)
     except (OSError, ValueError):
         return {}
-    return d if isinstance(d, dict) else {}
+    p = d.get("p") if isinstance(d, dict) else None
+    return p if isinstance(p, dict) else {}
 
 
 def _save(d):
     tmp = STATE / f"usage.json.{os.getpid()}"
-    with open(tmp, "w") as f:
-        json.dump(d, f)
-    os.replace(tmp, STATE / "usage.json")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, STATE / "usage.json")
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def view(e):
@@ -394,12 +434,15 @@ def refresh(entries, names, since=0, force=False):
     todo = [a for a in names if force or due(entries.get(a), since, now)]
     if not todo:
         return False
-    for a in [a for a in todo if not harness.installed(a)]:
-        entries[a] = {"id": a, "state": "out", "tried": now, "next": now + TTL * 5}
-        todo.remove(a)
-    if todo:
-        with ThreadPoolExecutor(max_workers=len(todo)) as ex:
-            for a, new in zip(todo, ex.map(fetch, todo), strict=True):
+    live = []
+    for a in todo:
+        if harness.installed(a):
+            live.append(a)
+        else:
+            entries[a] = {"id": a, "state": "out", "tried": now, "next": now + TTL * 5}
+    if live:
+        with ThreadPoolExecutor(max_workers=len(live)) as ex:
+            for a, new in zip(live, ex.map(fetch, live), strict=True):
                 entries[a] = merge(entries.get(a), new)
     return True
 
@@ -408,17 +451,25 @@ def current(agents=None, refresh_ok=True, since=0, force=False):
     """The footer's providers, in config `agents` order. GREENLIGHT_USAGE=off (the tests) reads nothing."""
     if os.environ.get("GREENLIGHT_USAGE") == "off":
         return []
-    names = list(dict.fromkeys(harness.canonical(a) for a in (agents if agents is not None else CONFIG.get("agents") or ["claude", "codex"])
-                               if isinstance(a, str)))
-    d = _load()
-    entries = d.get("p") if isinstance(d.get("p"), dict) else {}
+    if agents is None:
+        cfg = CONFIG.get("agents")
+        raw = cfg if isinstance(cfg, (list, tuple)) and cfg else ["claude", "codex"]
+    else:
+        raw = agents if isinstance(agents, (list, tuple)) else ["claude", "codex"]
+    names = list(dict.fromkeys(c for a in raw if isinstance(a, str) and (c := harness.canonical(a).strip())))
+    entries = None
     if refresh_ok:
-        with _lock() as mine:
-            if mine:
-                d = _load()
-                entries = d.get("p") if isinstance(d.get("p"), dict) else {}
-                if refresh(entries, names, since or 0, force):
-                    _save({"p": entries})
+        try:
+            with _lock() as mine:
+                if mine:
+                    entries = _load()
+                    if refresh(entries, names, since or 0, force):
+                        with contextlib.suppress(OSError):
+                            _save({"p": entries})
+        except OSError:
+            pass
+    if entries is None:
+        entries = _load()
     return [view(entries[a]) for a in names if isinstance(entries.get(a), dict) and entries[a].get("state") in ("ok", "failed", "na")]
 
 

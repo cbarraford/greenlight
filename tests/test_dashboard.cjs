@@ -1991,6 +1991,28 @@ test("usage popover: Detailed lists every window with its reset, Compact one lin
   await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
   assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "false");
   await page.click("#foot .um[data-id=pi]"); await page.mouse.click(600, 300); assert.equal(await page.$("#umpop"), null, "a click outside closes it");
+  // 1m countdown, focus preserved across footer rebuild, malformed windows guarded, non-identifier id Esc dismissal, narrow viewport clamp
+  const edge = [
+    {id: 'a"b]c', name: "Odd", state: "ok", at: NOW_S(), windows: [null, {label: "5h", pct: NaN, resets: NOW_S() + 65}, {label: "Week", pct: 120, resets: NOW_S() + 65}]},
+    ...USAGE().slice(0, 2),
+  ];
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), edge);
+  const me = await meters(page);
+  assert.equal(me[0].text, "100%1m", "clamps >100%, skips null/NaN windows, and formats 1m countdown");
+  await page.evaluate(() => document.querySelector("#foot .um").focus());
+  await page.evaluate(() => footer());
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), 'a"b]c', "footer rebuild keeps focus on the focused meter");
+  await page.evaluate(() => document.querySelector("#foot .um").click());
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$("#umpop"), null, "Esc closes popover even when id has quotes/brackets");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), 'a"b]c', "Esc restores focus to meter with special id");
+  await page.setViewportSize({width: 300, height: 700});
+  await page.evaluate(() => footer());
+  await page.evaluate(() => document.querySelector("#foot .um").click());
+  const narrow = await page.$eval("#umpop", p => { const r = p.getBoundingClientRect(); return {left: r.left, right: r.right, vw: innerWidth} });
+  assert.ok(narrow.left >= 8 && narrow.right <= narrow.vw - 7, `popover stays within narrow viewport: ${JSON.stringify(narrow)}`);
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({width: 1200, height: 800});
   await page.evaluate(() => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: []}));
   assert.equal(await page.$("#foot .ums"), null, "no agent reports: no meters");
 });

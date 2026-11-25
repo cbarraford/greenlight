@@ -133,6 +133,7 @@ body.hasdock main{padding-right:var(--dock-w)}
 .foot{height:var(--foot-h);flex-shrink:0;display:flex;align-items:center;gap:var(--sp-3);padding:0 var(--sp-4);background:var(--bar);border-top:1px solid var(--hair);
   font-size:var(--fs-1);color:var(--text3);white-space:nowrap;overflow:hidden}
 .foot .ic{width:12px;height:12px;vertical-align:-2px}
+/* usage-meters:start */
 /* usage meters (issue 193): one per configured agent at the footer's left, and their popover (DESIGN.md §10.11, §10.13) */
 .ums{display:inline-flex;align-items:center;gap:var(--ds-space-8);flex-shrink:0}
 .um{display:inline-flex;align-items:center;gap:var(--ds-space-4);height:20px;padding:0 var(--ds-space-4);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
@@ -145,7 +146,7 @@ body.hasdock main{padding-right:var(--dock-w)}
 .ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
 .um .uleft{color:var(--ds-fg-faint)}
 .tight .um .uleft,.tighter .um .ubar{display:none}
-.umpop{box-sizing:border-box;position:fixed;z-index:40;width:320px;max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
+.umpop{box-sizing:border-box;position:fixed;z-index:9;width:320px;max-width:calc(100vw - var(--ds-space-16));max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
   border-radius:var(--ds-radius-lg);background:var(--ds-bg-raised);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-2);font:var(--ds-type-body);letter-spacing:var(--ds-type-body-track);
   font-variant-numeric:tabular-nums;animation:umin var(--ds-duration-fast) var(--ds-easing-out);transform-origin:bottom left}
 @keyframes umin{from{opacity:0;transform:scale(.96)}}
@@ -168,6 +169,8 @@ body.hasdock main{padding-right:var(--dock-w)}
 .urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{display:inline-flex;align-items:center;justify-content:flex-end;gap:var(--ds-space-4)}
 .urow.c .uw{grid-column:3 / span 3;text-align:right;color:var(--ds-fg-faint)} .urow.c[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)}
 .umpop .ufoot{color:var(--ds-fg-faint);font:var(--ds-type-caption)}
+/* usage-meters:end */
+#umpop{z-index:40} .foot.tightest .ums{flex-shrink:1;min-width:0;overflow:hidden}
 .live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:var(--r-full);background:var(--accent);margin-right:6px;vertical-align:1px}
 .live.off::before{background:var(--gray)}
 .live.connecting::before{background:var(--blue)} .live.bad{color:var(--red-ink)} .live.bad::before{background:var(--red)}
@@ -1299,6 +1302,7 @@ function barTail(){  // the bell and the chat toggle, the same in both modes; Se
       icon("panel", 16, ""),
       !ui.chat.open && ui.chat.n ? h("i", {class:"badge"}, String(ui.chat.n)) : null)];
 }
+// usage-meters:start
 // usage meters (issue 193): each configured agent's plan usage (usage.py, through the snapshot or dash.py trees). The footer shows one
 // meter per agent, in config `agents` order: its mark, a bar, % used and the tightest window's reset; a click opens every window.
 const UM = {list: [], pop: null, at: "", hint: "", view: (() => { try { return localStorage.getItem("usageView") === "compact" ? "compact" : "detailed" } catch { return "detailed" } })()};
@@ -1306,25 +1310,32 @@ const UM_STALE = 600;  // seconds: older windows say how old they are
 function umEl(tag, cls, ...kids){ const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids) if (k != null && k !== false) e.append(k); return e }
 const umMark = id => ({claude: "claude", codex: "openai", agy: "agy", gemini: "agy"}[id] || "terminal");
 const umTone = pct => { const r = Math.round(pct); return r >= 100 ? "full" : r >= 80 ? "near" : "" };  // amber near the limit, red at it
+const umWins = p => Array.isArray(p.windows) ? p.windows.filter(w => w && typeof w === "object") : [];
 // a window that has reset since it was read: its old % no longer holds and there is no new reading yet (null: shown as "—")
-const umPct = w => w.resets > 0 && w.resets <= Date.now() / 1000 ? null : w.pct;
-const umPctText = w => umPct(w) == null ? "—" : `${Math.round(umPct(w))}%`;
-const umTight = p => (Array.isArray(p.windows) ? p.windows : []).filter(w => umPct(w) != null).reduce((a, w) => !a || w.pct > a.pct ? w : a, null)
-  || (Array.isArray(p.windows) && p.windows[0]) || null;  // every window reset since: the first, shown as "—"
+function umPct(w){
+  if (!w || typeof w !== "object" || (w.resets > 0 && w.resets <= Date.now() / 1000)) return null;
+  return Number.isFinite(w.pct) ? Math.max(0, Math.min(100, w.pct)) : null;
+}
+const umPctText = pct => pct == null ? "—" : `${Math.round(pct)}%`;
+function umTight(p){
+  const ws = umWins(p); let best = null, bestPct = -1;
+  for (const w of ws) { const pct = umPct(w); if (pct != null && (best == null || pct > bestPct)) { best = w; bestPct = pct } }
+  return best || ws[0] || null;  // every window reset since: the first, shown as "—"
+}
 const umStale = p => p.at > 0 && Date.now() / 1000 - p.at > UM_STALE;
 function umIn(t){  // the time until an epoch, short: 45m, 3h 10m, 2d 4h
   if (!(t > 0)) return "";
-  const s = t - Date.now() / 1000; if (s <= 0) return ""; if (s <= 60) return "<1m";
-  const m = Math.ceil(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  const s = t - Date.now() / 1000; if (s <= 0) return ""; if (s < 60) return "<1m";
+  const m = Math.round(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
   return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
 }
 function umAgo(at){ if (!(at > 0)) return ""; const s = Math.max(0, Date.now() / 1000 - at); return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago` }
-function umBar(pct){ const b = umEl("span", "ubar"), i = umEl("i"); i.style.width = Math.max(0, Math.min(100, pct)) + "%"; b.append(i); if (umTone(pct)) b.dataset.tone = umTone(pct); return b }
+function umBar(pct){ const b = umEl("span", "ubar"), i = umEl("i"), t = umTone(pct); i.style.width = Math.max(0, Math.min(100, pct)) + "%"; b.append(i); if (t) b.dataset.tone = t; return b }
 function umSays(p){  // a meter's words: its tooltip and accessible label
   const w = umTight(p), name = p.name + (p.plan ? ` (${p.plan})` : "");
   if (p.state === "na" || (p.state !== "failed" && !w)) return `${name}: usage n/a` + (p.note ? `\n${p.note}` : "");
   if (p.state === "failed" && !w) return `${name}: refresh failed` + (p.note ? `\n${p.note}` : "");
-  const lines = [name, ...p.windows.map(x => umPct(x) == null ? `${x.label}: reset since, no new reading` : `${x.label}: ${umPctText(x)} used` + (umIn(x.resets) ? `, resets in ${umIn(x.resets)}` : ""))];
+  const lines = [name, ...umWins(p).map(x => { const pct = umPct(x), left = umIn(x.resets); return pct == null ? `${x.label}: reset since, no new reading` : `${x.label}: ${umPctText(pct)} used` + (left ? `, resets in ${left}` : "") })];
   const ago = umAgo(p.at);
   if (p.state === "failed") lines.push(`Refresh failed: ${p.note || "no answer"}.` + (ago ? ` These are from ${ago}.` : ""));
   else if (umStale(p)) lines.push(`As of ${ago}` + (p.note ? ` (${p.note})` : ""));
@@ -1339,24 +1350,25 @@ function umMeter(p){
   if (p.state === "failed" && !w) b.append(umEl("span", "uw", "Refresh failed"));
   else if (!w || p.state === "na") b.append(umEl("span", "uw", "n/a"));
   else {
-    b.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w))); if (umIn(w.resets)) b.append(umEl("span", "uleft", umIn(w.resets)));
+    const pct = umPct(w), left = umIn(w.resets);
+    b.append(umBar(pct ?? 0), umEl("span", "upct", umPctText(pct))); if (left) b.append(umEl("span", "uleft", left));
     if (p.state === "failed") b.append(dsIcon("alert", 12, {cls: "uerr"})); else if (umStale(p)) b.classList.add("stale");
   }
-  b.addEventListener("click", e => { e.stopPropagation(); umToggle(b) });
+  b.addEventListener("click", () => umToggle(b));
   return b;
 }
 function umMeters(list){  // the footer's meters, or null when no agent reports
   UM.list = Array.isArray(list) ? list.filter(p => p && p.id && ["ok", "failed", "na"].includes(p.state)) : [];
+  if (!UM.list.length) { umClose(); return null }
   if (UM.pop) umFill(UM.pop);  // the countdowns move on; umFill keeps the focus where it was
-  if (!UM.list.length) { if (UM.pop) umClose(); return null }
   const s = umEl("span", "ums"); s.setAttribute("role", "group"); s.setAttribute("aria-label", "Plan usage");
   s.append(...UM.list.map(umMeter)); return s;
 }
-function umNote(p){
+function umNote(p, w){
   const ago = umAgo(p.at);
   if (p.state === "na") return umEl("div", "unote", dsIcon("info", 12), `n/a: ${p.note || "this agent reports no plan usage"}`);
-  if (p.state === "failed") return umEl("div", "unote bad", dsIcon("alert", 12), `Refresh failed: ${p.note || "no answer"}` + (umTight(p) && ago ? `. From ${ago}.` : ""));
-  if (!umTight(p)) return umEl("div", "unote", dsIcon("info", 12), "No limit windows reported");
+  if (p.state === "failed") return umEl("div", "unote bad", dsIcon("alert", 12), `Refresh failed: ${p.note || "no answer"}` + (w && ago ? `. From ${ago}.` : ""));
+  if (!w) return umEl("div", "unote", dsIcon("info", 12), "No limit windows reported");
   if (umStale(p)) return umEl("div", "unote", dsIcon("waiting", 12), `As of ${ago}` + (p.note ? `: ${p.note}` : ""));
   if (p.note) return umEl("div", "unote", dsIcon("info", 12), p.note);
   return null;
@@ -1367,16 +1379,21 @@ function umRow(p){
     r.classList.add("c"); r.title = umSays(p);
     if (p.state !== "failed" && umStale(p)) r.classList.add("stale");
     r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
-    if (w && p.state !== "na") r.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w)),
-      umEl("span", "ur", umPct(w) == null ? "reset" : umIn(w.resets), p.state === "failed" ? dsIcon("alert", 12, {cls: "uerr"}) : null));
-    else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
+    if (w && p.state !== "na") {
+      const pct = umPct(w);
+      r.append(umBar(pct ?? 0), umEl("span", "upct", umPctText(pct)),
+        umEl("span", "ur", pct == null ? "reset" : umIn(w.resets), p.state === "failed" ? dsIcon("alert", 12, {cls: "uerr"}) : null));
+    } else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
     return r;
   }
+  const wLeft = w && p.state !== "na" ? umIn(w.resets) : "";
   r.append(umEl("div", "urh", dsIcon(umMark(p.id), 16, {cls: "umk"}), umEl("b", "", p.name), p.plan ? umEl("span", "uplan", p.plan) : null, umEl("span", "sp"),
-    w && umIn(w.resets) && p.state !== "na" ? umEl("span", "urr", `Resets in ${umIn(w.resets)}`) : null));
-  if (p.state !== "na") for (const x of p.windows || [])
-    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(umPct(x) ?? 0), umEl("span", "upct", umPctText(x)), umEl("span", "ur", umPct(x) == null ? "reset" : umIn(x.resets) ? `in ${umIn(x.resets)}` : "")));
-  const n = umNote(p); if (n) r.append(n);
+    wLeft ? umEl("span", "urr", `Resets in ${wLeft}`) : null));
+  if (p.state !== "na") for (const x of umWins(p)) {
+    const pct = umPct(x), left = umIn(x.resets);
+    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(pct ?? 0), umEl("span", "upct", umPctText(pct)), umEl("span", "ur", pct == null ? "reset" : left ? `in ${left}` : "")));
+  }
+  const n = umNote(p, w); if (n) r.append(n);
   return r;
 }
 function umFill(pop, focusView){
@@ -1385,33 +1402,48 @@ function umFill(pop, focusView){
   const seg = umEl("div", "useg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Detail");
   for (const [k, label] of [["detailed", "Detailed"], ["compact", "Compact"]]) {
     const s = umEl("button", "", label); s.type = "button"; s.dataset.view = k; s.setAttribute("role", "tab"); s.setAttribute("aria-selected", String(UM.view === k));
-    s.addEventListener("click", e => { e.stopPropagation(); UM.view = k; try { localStorage.setItem("usageView", k) } catch {} umFill(pop, k) });
+    s.addEventListener("click", () => { UM.view = k; try { localStorage.setItem("usageView", k) } catch {} umFill(pop, k) });
     seg.append(s);
   }
   pop.append(umEl("div", "uh", umEl("span", "ut", "Plan usage"), seg), umEl("div", "urows", ...UM.list.map(umRow)),
     umEl("div", "ufoot", "Every configured agent, in dispatch order. Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
   if (had) pop.querySelector(`.useg [data-view="${had}"]`)?.focus({preventScroll: true});
 }
+const umFind = id => [...document.querySelectorAll(".um")].find(x => x.dataset.id === id);
+const umFocusId = f => f.contains(document.activeElement) && document.activeElement.classList.contains("um") ? document.activeElement.dataset.id : null;
+const umRestoreFocus = (f, id) => { if (id) [...f.querySelectorAll(".um")].find(x => x.dataset.id === id)?.focus({preventScroll: true}) };
 function umSync(){ document.querySelectorAll(".um").forEach(b => b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === b.dataset.id))) }
 function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; umSync() }
+function umPlace(){
+  if (!UM.pop) return;
+  const anchor = umFind(UM.at) || document.querySelector(".um");
+  if (!anchor) return umClose();
+  const r = anchor.getBoundingClientRect();
+  if (!r.width && !r.height) return umClose();
+  UM.pop.style.left = Math.max(8, Math.min(r.left, innerWidth - UM.pop.offsetWidth - 8)) + "px";
+  UM.pop.style.bottom = Math.max(8, innerHeight - r.top + 8) + "px";
+}
 function umToggle(anchor){
   if (UM.pop) return umClose();
   UM.at = anchor.dataset.id; const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Plan usage");
-  pop.addEventListener("click", e => e.stopPropagation());
-  umFill(pop); document.body.append(pop);
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
-  pop.style.bottom = Math.max(8, innerHeight - r.top + 8) + "px";
+  umFill(pop); document.body.append(pop); umPlace();
   umSync(); pop.querySelector(".useg [aria-selected=true]")?.focus({preventScroll: true});
 }
-addEventListener("pointerdown", e => { if (UM.pop && !e.target.closest("#umpop, .um")) umClose() }, true);
+addEventListener("pointerdown", e => { if (UM.pop && !e.target?.closest?.("#umpop, .um")) umClose() }, true);
 // Esc closes it only from inside it or its meter: a terminal or find bar elsewhere keeps its own Esc
-addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop && (UM.pop.contains(document.activeElement) || document.activeElement?.classList.contains("um") || document.activeElement === document.body)) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
+addEventListener("keydown", e => {
+  const ae = document.activeElement;
+  if (e.key !== "Escape" || !UM.pop || !(UM.pop.contains(ae) || ae?.classList.contains("um") || ae === document.body)) return;
+  e.stopPropagation(); e.preventDefault();
+  const at = UM.at; umClose();
+  (umFind(at) || document.querySelector(".um"))?.focus();
+}, true);
+// usage-meters:end
 UM.hint = "↻ in the footer refreshes it with the scan.";
 const FOOT_SHORT = {needs:"need you", raised:"your move", quiet:"waiting"};
 function footer(){
-  const f = document.getElementById("foot"); f.replaceChildren();
-  const um = umMeters((ui.raw || ui.snap || {}).usage); if (um) f.append(um);  // each agent's plan usage, at the left (issue 193)
+  const f = document.getElementById("foot"), fid = umFocusId(f); f.replaceChildren();
+  const um = umMeters(ui.snap?.usage); if (um) { f.append(um); umRestoreFocus(f, fid) }  // each agent's plan usage, at the left (issue 193)
   const age = ui.snap && ui.snap.ts ? Math.round((Date.now() / 1000 - ui.snap.ts)) : NaN;
   const live = ui.snap && age < 45;
   f.append(h("span", {class: "live" + (live ? "" : " off") + (!ui.snap ? CONN.failed ? " bad" : " connecting" : "")}, !ui.snap ? (CONN.failed ? "Update timed out" : "Connecting…") : live ? "Live" : isFinite(age) ? `Last update ${ago(age / 3600)} ago` : "No update time"));
@@ -1444,6 +1476,7 @@ function footer(){
   f.classList.remove("tight", "tighter", "tightest"); if (f.scrollWidth > f.clientWidth) f.classList.add("tight");  // past the width: short words, never bare numbers
   if (f.scrollWidth > f.clientWidth) f.classList.add("tighter");  // still past it: only the counts that need you stay
   if (f.scrollWidth > f.clientWidth) f.classList.add("tightest");  // and last, the scan age
+  umPlace();
 }
 function renderOverview(main){
   const all = shown(), SHELF = ["quiet", "done"];

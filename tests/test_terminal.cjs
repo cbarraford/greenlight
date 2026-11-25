@@ -90,6 +90,15 @@ test("the Basement's footer: the usage meters and their popover; the Pipe has no
   await page.setViewportSize({width: 420, height: 800});
   await page.evaluate(t => term.workspaces(t), {...TREES, usage});
   assert.equal(await page.$eval("#bfoot", f => f.classList.contains("tight")), true, "narrow Basement footer activates tight mode");
+  await page.click("#bfoot .um[data-id=claude]");
+  await page.setViewportSize({width: 300, height: 800});
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const nbox = await page.$eval("#umpop", p => { const r = p.getBoundingClientRect(); return {left: r.left, right: r.right, vw: innerWidth} });
+  assert.ok(nbox.left >= 8 && nbox.right <= nbox.vw - 7, `Basement popover clamps on resize: ${JSON.stringify(nbox)}`);
+  await page.keyboard.press("Escape");
+  await page.focus("#bfoot .um[data-id=codex]");
+  await page.evaluate(t => term.workspaces(t), {...TREES, usage});
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "codex", "Basement footer rebuild keeps focus on meter");
   await page.setViewportSize({width: 1200, height: 800});
   await page.evaluate(t => term.workspaces(t), TREES);
   assert.equal(await page.$eval("#bfoot", f => f.hidden), true);

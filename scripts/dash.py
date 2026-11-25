@@ -658,7 +658,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         snap = json.loads((greenlight.STATE / "last.json").read_text())
     except FileNotFoundError:
         if err := scan_error(0):
-            return {"ts": int(time.time()), "scanned": 0, "scan_started": None, "pucks": [], "trees": [], "scan_error": err}
+            return {"ts": int(time.time()), "scanned": 0, "scan_started": None, "pucks": [], "trees": [], "usage": usage_now(), "scan_error": err}
         raise
     live = live_agents()
     now = time.time() * 1000
