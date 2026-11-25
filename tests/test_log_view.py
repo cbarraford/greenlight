@@ -139,8 +139,12 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     assert out.endswith("KEY=[secret]"), out
     for spaced in ("/" + "Users/Jane Doe/Payroll 2025/plan.pdf", "/" + "Users/Jane Doe", "~/My Project", "/tmp/My Project"):
         assert log_view.redact(f"cat {spaced}")[0] == "cat [path]", spaced
-    assert log_view.redact("cp /acme/a.txt docs/b.txt")[0] == "cp [path] docs/b.txt", "a lowercase argument after a path stays"
+    assert log_view.redact("cat /" + "Users/jane/my project/plan.pdf")[0] == "cat [path]", "a lowercase spaced folder goes too"
+    assert log_view.redact("cp /acme/a.txt docs/b.txt")[0] == "cp [path]", "so a relative path after one goes with it: privacy first"
+    assert log_view.redact("cat /srv/app/x.py Then I fixed it.")[0] == "cat [path] Then I fixed it.", "a sentence after a path stays"
     assert "def456" not in log_view.redact("API_KEYS=[abc123, def456]")[0]
+    for v in ("PASSWORD=[x]hunter2", 'tokens = [["a"],["c","d"]]'):
+        assert "hunter2" not in log_view.redact(v)[0] and '"c"' not in log_view.redact(v)[0], v
     assert log_view.redact("ls /tmp/x\nfoo/bar\t/var/log/syslog\tand/or")[0] == "ls [path]\nfoo/bar\t[path]\tand/or", "a path never runs into the next line"
 
 
