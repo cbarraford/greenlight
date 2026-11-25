@@ -189,28 +189,34 @@ def first_run():
     if not ade.is_native():
         return None
     marker = ade_basement.HOME / FIRST_RUN
-    try:
-        m = json.loads(marker.read_text()) if marker.exists() else None
-    except (OSError, ValueError):
-        m = {}  # unreadable: done (never import twice on a guess)
-    if m is not None:
-        num = lambda k, d: v if isinstance(m, dict) and isinstance(v := m.get(k, d), (int, float)) else d  # noqa: E731
-        pending = m.get("pending") if isinstance(m, dict) and isinstance(m.get("pending"), list) else None
-        if not pending or num("attempts", RETRIES) >= RETRIES or time.time() - num("ts", time.time()) < RETRY_SECS:
-            return None
-        if any(f.exists() and f.stat().st_mtime > marker.stat().st_mtime + 5 for f in (ade_basement.REPOS, ade_common.GOALS)):
-            return None  # the user has worked on native since: a retry would re-add a repo or goal they removed
-        sources = [s for s in pending if s in SOURCES and s != "folder"]
-    elif ade_basement.REPOS.exists():  # already set up on native (repos added or removed by hand): never re-add them
-        sources = []
-    else:
-        sources = [s for s, ok in detect().items() if ok and s != "folder"]
+    if _due(marker) is None:
+        return None  # the cheap answer, most of the time: nothing to do
     with _claimed(marker.with_suffix(".lock")) as mine:
         if not mine:
             return None  # another listing is importing right now
-        if m is None and marker.exists():
-            return None  # it finished just before this one took the claim
-        return _first_import(marker, m, sources)
+        due = _due(marker)  # again, holding the claim: another listing may have just done it
+        return None if due is None else _first_import(marker, *due)
+
+
+def _due(marker):
+    """(marker contents or None, sources to import) when an import or a retry is due now, else None."""
+    try:
+        m = json.loads(marker.read_text()) if marker.exists() else None
+    except (OSError, ValueError):
+        return None  # unreadable: done (never import twice on a guess)
+    if m is None:
+        if ade_basement.REPOS.exists():  # already set up on native (repos added or removed by hand): never re-add them
+            return None, []
+        return None, [s for s, ok in detect().items() if ok and s != "folder"]
+    num = lambda k, d: v if isinstance(m, dict) and isinstance(v := m.get(k, d), (int, float)) else d  # noqa: E731
+    pending = m.get("pending") if isinstance(m, dict) and isinstance(m.get("pending"), list) else None
+    if not pending or num("attempts", RETRIES) >= RETRIES or time.time() - num("ts", time.time()) < RETRY_SECS:
+        return None
+    # the import writes its marker after its files: anything newer is the user's own work on native, which a retry
+    # would undo (re-adding a repo or goal they removed)
+    if any(f.exists() and f.stat().st_mtime > marker.stat().st_mtime for f in (ade_basement.REPOS, ade_common.GOALS)):
+        return None
+    return m, [s for s in pending if s in SOURCES and s != "folder"]
 
 
 @contextlib.contextmanager

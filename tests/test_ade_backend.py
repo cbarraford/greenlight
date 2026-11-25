@@ -21,6 +21,9 @@ def home(tmp_path, monkeypatch):
 
 
 def test_settle_new_and_existing_installs(home):
+    (home / "me.json").write_text('{"me": "x"}')  # importing greenlight writes it on a brand-new install too
+    (home / "state").mkdir()  # and update.py makes this one
+    (home / "auto").mkdir()  # and the timer's first tick this one
     assert ade.name() == "native"  # a new install: native, written once
     assert json.loads((home / "config.json").read_text())["ade"] == "native"
     (home / "last.json").write_text("{}")  # its own scans later never flip it
@@ -31,6 +34,8 @@ def test_settle_new_and_existing_installs(home):
     assert cfg["ade"] == "orca" and cfg["agents"] == ["codex"] and "ade_set_because" in cfg  # its other settings stay
     (home / "config.json").write_text("[1]")  # not settings: decided, nothing written
     assert ade.name() == "orca" and (home / "config.json").read_text() == "[1]"
+    (home / "config.json").write_text(json.dumps({"ade": True}))  # not even a string: decided, never a crash
+    assert ade.name() == "orca"
     (home / "config.json").write_text(json.dumps({"ade": "basment"}))  # a typo stays the user's to fix
     assert ade.name() == "orca" and json.loads((home / "config.json").read_text())["ade"] == "basment"
     (home / "last.json").unlink()
@@ -288,6 +293,10 @@ def test_dash_under_native_writes_goals_and_creates_natively(home, repo, monkeyp
     assert "/srv/remote/x" not in ade_basement.ade_common.goals()  # not this machine's: no local goal
     dash.tree_new("/srv/remote/x", {"name": "feat-r"})
     assert not native and orca_calls[-1][:2] == ("worktree", "create")  # made by Orca on that host, as before
+    here_too = [remote, {"worktreeId": "o4", "hostId": "local"}]  # the same path on another host (listed first) and here
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: (orca, remote, here_too) if every else (orca, remote))
+    dash.tree_goal(str(repo), "Both")
+    assert ade_basement.ade_common.goals()[str(repo)] == "Both"  # this machine has it too: the native scan's file
 
 
 def test_native_refuses_beside_an_outside_agent(home, monkeypatch):

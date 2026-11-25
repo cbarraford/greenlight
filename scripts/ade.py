@@ -70,11 +70,13 @@ def name():
 
 def settle():
     """The backend for an install that never chose one, decided once and written into config.json ("ade") so it never
-    flips later. A new install gets DEFAULT (native). One that already ran greenlight (it has a scan, last.json) ran
-    on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
+    flips later. A new install gets DEFAULT (native). One that already ran greenlight (a scan's last.json, log.jsonl,
+    decisions.jsonl or history/) ran on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
     home = _home()
     # anything greenlight itself leaves behind over time (not diag/, which this very process may have just written)
-    ran = any((home / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history", "auto", "state", "me.json"))
+    # what only a past scan or run leaves: not me.json (importing greenlight writes it), state/ (update.py), auto/ (the
+    # timer's first tick) or diag/: a brand-new install has those before this is first asked
+    ran = any((home / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
     n = "orca" if ran else DEFAULT
     f = home / "config.json"
     why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
@@ -87,8 +89,8 @@ def settle():
                 tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
                 tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
                 os.replace(tmp, f)
-            elif isinstance(cfg, dict):
-                n = canonical(cfg["ade"]) or n  # another process settled it meanwhile
+            elif isinstance(cfg, dict) and isinstance(cfg["ade"], str):
+                n = canonical(cfg["ade"]) or n  # another process settled it meanwhile (or a typo: decided, left alone)
     except (OSError, ValueError):
         pass  # can't write it (or not settings we can add to): the same answer next time, from the same facts
     return n

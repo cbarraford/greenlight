@@ -1055,16 +1055,12 @@ def tree_rm(path, force=False, teardown=""):
 
 
 def tree_goal(path, goal):
-    call, w = tree(path)
+    call, w, twins = tree(path, every=True)
     goal = " ".join(goal.split())[:500]
     call("worktree", "set", "--worktree", f"id:{w.get('worktreeId') or w['id']}", "--comment", goal)
-    if native_in_use() and call is not ade_call("native") and is_local_row(w):  # an Orca-listed row here: the native
-        ade_common.set_goal(path, goal)  # scan reads goals.json (another host's row isn't this machine's)
+    if native_in_use() and call is not ade_call("native") and any(map(greenlight.is_local, twins)):  # an Orca-listed
+        ade_common.set_goal(path, goal)  # row here: the native scan reads goals.json (only another host's isn't ours)
     return {"ok": True}
-
-
-def is_local_row(w):
-    return w.get("hostId") in (None, "", "local")
 
 
 def native_in_use():
@@ -1152,7 +1148,7 @@ def tree_new(path, o):
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
     call, w, twins = tree(path, every=True)
-    if native_in_use() and call is not ade_call("native") and is_local_row(w) and (main := main_of(path)):
+    if native_in_use() and call is not ade_call("native") and any(map(greenlight.is_local, twins)) and (main := main_of(path)):
         call, w = ade_call("native"), {**w, "repoId": main}  # native: a new workspace is Greenlight's own, whoever lists the repo
         # (a repo only on another of Orca's hosts has no checkout here: Orca makes that one, on that host, as before)
     if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host, and shows its first row (w):
