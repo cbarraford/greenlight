@@ -241,7 +241,17 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await fxNow(), "think");
   await p.evaluate(() => { document.documentElement.dataset.motion = "off"; });  // switched off mid-thought: it stops by itself
   await settled();
-  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; });
+  // Off mid-thought, then back on during the fade: still one animation loop, not two (each frame's callbacks share its timestamp)
+  await p.evaluate(() => { const raf = window.requestAnimationFrame; window.fxTicks = [];
+    window.requestAnimationFrame = cb => raf(t => { window.fxTicks.push(t); cb(t); });
+    document.documentElement.dataset.motion = "on"; stage.wait("One minute", "x"); });
+  await p.waitForTimeout(300);
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; });
+  await p.waitForTimeout(60);
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "y"); window.fxTicks = []; });
+  await p.waitForTimeout(300);
+  assert.ok(await p.evaluate(() => { const t = window.fxTicks; return t.length > 3 && new Set(t).size === t.length; }), "one frame loop after a switch-off mid-thought");
+  await p.evaluate(() => { stage.wait("Listening", ""); }); await settled();
   await p.emulateMedia({ reducedMotion: "reduce" });
   await p.evaluate(() => stage.wait("One minute", "x"));
   assert.equal(await fxNow(), undefined);  // Reduce Motion: no loop, and the card fades in as before
@@ -259,6 +269,35 @@ const { launchBrowser } = require("./js_harness.cjs");
   await settled();
   await p.evaluate(() => { stage.wait("One minute", "x"); stage.wait("Listening", "Go on"); });  // your turn ends the thinking
   await settled();
+  const inkWords = () => p.evaluate(() => {  // inked pixels over every line of the wait card's words
+    const c = document.getElementById("fx"), g = c.getContext("2d"), d = c.width / innerWidth, r = document.createRange(), tw = document.createTreeWalker(document.getElementById("s"), NodeFilter.SHOW_TEXT);
+    let n = 0; for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (!t.nodeValue.trim()) continue; r.selectNodeContents(t);
+      for (const b of r.getClientRects()) { const px = g.getImageData(Math.round(b.left * d), Math.round(b.top * d), Math.max(1, Math.round(b.width * d)), Math.max(1, Math.round(b.height * d))).data;
+        for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; } }
+    return n; });
+  for (const height of [360, 450, 522, 603, 693]) {  // the status strip lifts the wait card's words: the needles make way again
+    await p.setViewportSize({ width: 800, height });
+    await p.evaluate(() => stage.wait("One minute", "Reading the diff")); await p.waitForTimeout(500);
+    await p.evaluate(() => stage.status("Running the tests"));
+    let over = 0; for (let k = 0; k < 8; k++) { await p.waitForTimeout(120); over = Math.max(over, await inkWords()); }
+    assert.equal(over, 0, `needles keep clear of the words lifted by the status strip (${height}px)`);
+    await p.evaluate(() => { stage.status(""); stage.wait("Listening", ""); }); await settled();
+  }
+  const needle = () => p.evaluate(() => { const c = document.getElementById("fx"), px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 8) return px[i - 3] + px[i - 2] + px[i - 1]; return -1; });  // one inked pixel's r+g+b
+  await p.emulateMedia({ colorScheme: "light" });
+  await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(500);
+  const lightInk = await needle();
+  await p.emulateMedia({ colorScheme: "dark" }); await p.waitForTimeout(150);  // the window turns dark mid-thought: the needles follow
+  const darkInk = await needle();
+  assert.ok(lightInk >= 0 && lightInk < 300 && darkInk > 400, `needle ink follows the appearance (${lightInk} → ${darkInk})`);
+  await p.emulateMedia({ colorScheme: null });
+  await p.evaluate(() => stage.wait("Listening", ""));  // a resize during your turn's fade, then Chief works again: laid out anew
+  await p.setViewportSize({ width: 1000, height: 600 });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  assert.ok(await p.evaluate(() => Math.abs(document.getElementById("fx").width / innerWidth - Math.min(2, devicePixelRatio)) < .01), "the field fits the new window");
+  await p.evaluate(() => stage.wait("Listening", "")); await settled();
+  await p.setViewportSize({ width: 800, height: 500 });
   for (const o of [{ chart: "bar", title: "Runs", labels: ["a", "b"], series: [{ name: "s", values: [2, 5] }] },  // ledger rows: the needles take the tracks
     { chart: "bar", stacked: true, title: "Runs", labels: ["a", "b"], series: [{ name: "ok", values: [4, 3] }, { name: "failed", values: [1, 2] }] }]) {  // bars: along their tops
     await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(450);

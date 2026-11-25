@@ -36,8 +36,13 @@ final class Voice: NSObject, ObservableObject {
     /// Settings ▸ Thinking motion: the stage's field of needles while Chief works, which lands as the lines of what it shows
     /// (stage.html's fx). On unless turned off; Reduce Motion keeps the stage still either way.
     @Published var thinkingMotion = ud.object(forKey: "thinkingMotion") as? Bool ?? true {
-        didSet { ud.set(thinkingMotion, forKey: "thinkingMotion"); if stageWebLoaded { stageWeb.evaluateJavaScript(motionVars) } }  // safety-ok: a hardcoded on/off
+        didSet {
+            ud.set(thinkingMotion, forKey: "thinkingMotion")
+            // While the page loads, the queued call still carries the old value: correct it there.
+            if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + " " + motionVars }  // safety-ok: a hardcoded on/off
+        }
     }
+    var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
     /// The stage's side of thinkingMotion: data-motion on its root, which it reads as each wait begins (and mid-thought).
     var motionVars: String { thinkingMotion ? "document.documentElement.dataset.motion = 'on';" : "document.documentElement.dataset.motion = 'off';" }
     @Published var transcript = false  // the chat instead of the stage

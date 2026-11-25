@@ -363,8 +363,9 @@ const fx = (() => {
   }
   const land = () => { if (born) { born.classList.remove("born"); born = null; } };  // the card enters as it always has
   function frame(now){
-    raf = 0; if (mode !== "off" && !on()) stop();  // switched off mid-thought
+    raf = 0; if (mode !== "off" && !on()) return stop();  // switched off mid-thought: stop() runs the fade, one loop only
     const dt = Math.min(40, now - (last || now)), e = now - t0, card = mode === "reveal"; last = now;
+    ink = getComputedStyle(document.body).color;  // every frame: the window's appearance can flip mid-thought
     const lock = card ? ease(clamp(e / LOCK)) : 0, q = card ? ease(clamp((e - LOCK * .6) / (LAND - LOCK * .6))) : 0;
     vis = mode === "think" ? Math.min(1, vis + dt / 400) : card ? v0 * (1 - clamp((e - LAND) / (GONE - LAND))) : Math.max(0, vis - dt / 200);
     if (card && e >= LAND) land();
@@ -375,8 +376,8 @@ const fx = (() => {
   function stop(){ land(); if (mode === "reveal") vis = 0; if (mode !== "off") { mode = "off"; kick(); } }  // fades out; a reveal cut short just clears
   function think(){
     if (!on()) return stop();
-    if (mode !== "think") { if (mode === "off" && vis <= 0) size(); land(); mode = "think"; aimAt = null; document.body.dataset.fx = "think"; }
-    ink = getComputedStyle(document.body).color; clear(); kick();
+    if (mode !== "think") { if (mode === "off" && (vis <= 0 || w !== innerWidth || h !== innerHeight)) size(); land(); mode = "think"; aimAt = null; document.body.dataset.fx = "think"; }
+    clear(); kick();
   }
   function reveal(el){
     if (mode === "off" || !on() || (mode === "think" && vis < .3)) return stop();  // nothing (yet) to see: the card just enters
@@ -459,6 +460,7 @@ window.stage = {
   status(line){
     const el = document.getElementById("status"), t = str(line).trim();
     document.body.classList.toggle("status", !!t);
+    if (document.body.dataset.fx === "think") fx.think();  // the strip lifts the wait card's words: the needles make way again
     if (!t) { el.hidden = true; el.replaceChildren(); return; }
     const span = el.querySelector("span");
     if (span && !el.hidden) { span.textContent = t; return; }  // in place: no re-entry for each new line
