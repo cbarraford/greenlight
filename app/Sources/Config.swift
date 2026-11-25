@@ -1043,7 +1043,7 @@ final class RulesStore: ObservableObject {
                 let folder = (srcs["folder"] as? [String: Any])?["error"] as? String
                 self.importDone = "Imported \(n) repo\(n == 1 ? "" : "s") and \(g) goal\(g == 1 ? "" : "s")."
                     + (failed.isEmpty ? "" : " Couldn't read \(failed.joined(separator: ", ")): run it again once \(failed.count == 1 ? "it's" : "they're") up.")
-                    + (folder.map { " Skipped a folder: \($0)." } ?? "")
+                    + (folder.map { " Skipped \($0.contains("; ") ? "folders" : "a folder"): \($0)." } ?? "")
                 self.importPlan = nil
             }
         }

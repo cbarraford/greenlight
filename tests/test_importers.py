@@ -52,6 +52,13 @@ def test_folder_scan(home):
     if not os.access(shut, os.R_OK):  # (root can read anything)
         with pytest.raises(RuntimeError, match="can't open"):
             importers.from_folder(str(shut))  # unreadable: says so, never "0 repos"
+        inner = code / "team"
+        inner.mkdir(mode=0o000)  # a subfolder that can't be opened: named, and the rest still imports
+        try:
+            got = importers.gather(["folder"], [str(code)])["folder"]
+            assert "can't open" in got["error"] and str(a.resolve()) in got["repos"]
+        finally:
+            inner.chmod(0o700)
     shut.chmod(0o700)
     got = importers.gather(["folder"], [str(code), str(home / "typo")])["folder"]  # one bad folder doesn't drop the rest
     assert str(a.resolve()) in got["repos"] and "not a folder" in got["error"]

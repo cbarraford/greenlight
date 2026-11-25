@@ -75,14 +75,18 @@ def from_backend(name):
     return repos, goals
 
 
-def from_folder(root):
+def from_folder(root, skipped=None):
     """The main checkouts under root (a .git directory, not a linked worktree's .git file), MAX_DEPTH deep."""
     root, out = Path(root).expanduser(), []
     if not root.is_dir():
         raise RuntimeError(f"not a folder: {root}")
-    if not os.access(root, os.R_OK | os.X_OK):
-        raise RuntimeError(f"can't open: {root}")  # os.walk would quietly find nothing
-    for here, dirs, _ in os.walk(root):
+    try:  # list it for real: os.access doesn't see macOS privacy (~/Documents without the grant); os.walk would find nothing
+        with os.scandir(root) as it:
+            next(it, None)
+    except OSError as e:
+        raise RuntimeError(f"can't open: {root}") from e
+    # a subfolder that can't be opened is named in skipped (the rest still imports), never silently missed
+    for here, dirs, _ in os.walk(root, onerror=lambda e: skipped is not None and skipped.append(f"can't open: {e.filename}")):
         depth = len(Path(here).relative_to(root).parts)
         if (Path(here) / ".git").is_dir():
             out.append(str(Path(here).resolve()))  # a folder brings repos only: plain checkouts carry no goals
@@ -105,7 +109,7 @@ def gather(sources, paths=()):
             if s == "folder":
                 for p in paths:  # each on its own: a typo in one never drops the others
                     try:
-                        repos += from_folder(p)
+                        repos += from_folder(p, bad)
                     except (OSError, RuntimeError) as e:
                         bad.append(str(e)[:200])
             else:

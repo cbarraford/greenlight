@@ -1970,7 +1970,7 @@ struct SettingsView: View {
             // an app: "RuntimeError: t3 server not running" → the why, not the class; folders: each one's own reason, whole
             let apps = errs.filter { $0.0 != "folder" }.map { k, e in "\(k) (\(e.split(separator: ":", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? e))" }.sorted()
             if !apps.isEmpty { note("Couldn't read " + apps.joined(separator: ", ") + ". The rest still imports.") }
-            if let f = errs.first(where: { $0.0 == "folder" }) { note("Skipped a folder: " + f.1 + ".") }
+            if let f = errs.first(where: { $0.0 == "folder" }) { note((f.1.contains("; ") ? "Skipped folders: " : "Skipped a folder: ") + f.1 + ".") }
         }
         if !rs.importDone.isEmpty { note(rs.importDone) }
         if !rs.status.isEmpty { note(rs.status) }
