@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade  # noqa: E402
 import ade_common  # noqa: E402
+import external  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
@@ -729,7 +730,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
-    add_resume(pucks, [(r["path"], live[r["id"]][1]) for r in rows])
+    # an agent outside Greenlight has no Basement session: it never replaces the one the button reattaches to
+    add_resume(pucks, [(r["path"], {} if (live[r["id"]][1] or {}).get("external") else live[r["id"]][1]) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -834,7 +836,22 @@ def trees():
                     out[-1]["mr"] = {k: mr.get(k) for k in ("ref", "web_url", "title", "state", "draft", "pipeline", "conflicts",
                                                              "rebase", "threads", "mergeable", "by", "assignees",
                                                              "target_branch", "labels", "milestone", "description", "sha")}
+    mark_external(out)
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
+
+
+def mark_external(rows):
+    """On the native engine, `external` on every row with an agent outside Greenlight's tmux, whichever ADE listed it
+    first (Orca's row for an Orca worktree carries no such flag): the sidebar's "Elsewhere"."""
+    try:
+        if not ade.is_native():
+            return
+    except RuntimeError:
+        return
+    ext = external.by_worktree([r["path"] for r in rows])
+    for r in rows:
+        if ext.get(r["path"].rstrip("/")):
+            r["external"] = True
 
 
 BIN_RE = re.compile(r"/[\w./@+-]{1,300}")  # fullmatch  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK

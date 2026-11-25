@@ -268,7 +268,10 @@ def outside_agent(path, fresh=False):
     else None. Orca's own agents are in its terminal list (the busy check)."""
     if not ade.is_native():
         return None
-    found = external.by_worktree([path], external.agents(fresh=fresh)).get(path.rstrip("/"))
+    try:
+        found = external.by_worktree([path], external.agents(fresh=fresh, strict=True)).get(path.rstrip("/"))
+    except external.Unknown:
+        return "an agent (the process check failed, so it can't be ruled out)"
     return found[0]["agent"] if found else None
 
 

@@ -194,9 +194,9 @@ def worktrees():
             if s:
                 ags.append({"state": s, "agentType": kind, "updatedAt": int(p["at"] or 0) * 1000,
                             "stateStartedAt": int(p["at"] or 0) * 1000, "handle": p["handle"]})
-        now = int(time.time() * 1000)
-        ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": now,
-                 "stateStartedAt": None} for e in ext.get(path, [])]  # passive coexistence: busy, not ours to drive
+        # passive coexistence: busy, not ours to drive. updatedAt 0: an agent of ours here that's active still comes first
+        ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
+                 "stateStartedAt": e["start"] * 1000 if e.get("start") else None} for e in ext.get(path, [])]
         out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
                     "isPinned": False, "linkedGitLabMR": None, "agents": ags,
                     "lastOutputAt": max((int(p["at"] or 0) * 1000 for p in mine), default=None)})

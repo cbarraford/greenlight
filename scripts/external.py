@@ -12,19 +12,26 @@ Linux reads /proc; macOS asks `ps` and `lsof`. Read-only, stdlib only, cached fo
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 AGENTS = ("claude", "codex", "agy", "gemini", "opencode", "pi")
-ALIASES = {"antigravity": "agy", "claude-code": "claude"}
+ALIASES = {"claude-code": "claude"}  # not "antigravity": that's the editor, open for days in a folder; its CLI is agy
 TTL = 5.0
 _CACHE: dict = {"at": 0.0, "val": None}
 
 
+APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron helper, not a CLI agent
+
+
 def agent_of(argv):
-    """The agent an argv runs (its program, or the script a node/python/bun runs), else None."""
+    """The agent an argv runs (its program, or the script a node/python/bun runs), else None. A desktop app named
+    like one (Claude.app, Codex.app, Antigravity and its helpers) isn't: the CLI agents it starts are counted."""
+    if any(APP_RE.search(a) for a in argv):
+        return None
     for a in argv[:3]:
         if a.startswith("-"):
             continue
@@ -43,8 +50,13 @@ def agent_of(argv):
     return None
 
 
+def _boot_linux():
+    with open("/proc/stat") as f:
+        return next((int(x.split()[1]) for x in f if x.startswith("btime ")), 0)
+
+
 def _proc_linux():
-    out = {}
+    out, boot, hz = {}, _boot_linux(), os.sysconf("SC_CLK_TCK")
     for d in Path("/proc").iterdir():
         if not d.name.isdigit():
             continue
@@ -54,8 +66,8 @@ def _proc_linux():
         except OSError:
             continue
         argv = [a.decode(errors="replace") for a in raw if a]
-        ppid = int(stat[stat.rindex(")") + 2:].split()[1])  # after "(comm)": state, ppid
-        out[int(d.name)] = {"ppid": ppid, "argv": argv}
+        f = stat[stat.rindex(")") + 2:].split()  # after "(comm)": state, ppid, …, starttime (ticks since boot) at 19
+        out[int(d.name)] = {"ppid": int(f[1]), "argv": argv, "start": boot + int(f[19]) // hz if len(f) > 19 else None}
     return out
 
 
@@ -66,20 +78,44 @@ def _cwd_linux(pid):
         return None
 
 
+def etime_secs(t):
+    """ps's etime ([[dd-]hh:]mm:ss) in seconds, else None."""
+    days, _, rest = t.rpartition("-")
+    try:
+        parts = [int(x) for x in rest.split(":")]
+        return (int(days) if days else 0) * 86400 + sum(v * 60 ** i for i, v in enumerate(reversed(parts)))
+    except ValueError:
+        return None
+
+
+def _ps(fields):
+    p = subprocess.run(["ps", "-axww", "-o", fields], capture_output=True, text=True, timeout=10)
+    if p.returncode:
+        raise OSError(f"ps exited {p.returncode}")
+    return p.stdout.splitlines()
+
+
 def _proc_mac():
-    p = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,args="], capture_output=True, text=True, timeout=10)
-    out = {}
-    for line in p.stdout.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            out[int(parts[0])] = {"ppid": int(parts[1]), "argv": (parts[2] if len(parts) > 2 else "").split()}
+    """ps has no NUL-split argv: the program is `comm` (its whole path, spaces and all: ~/Library/Application Support/…),
+    the arguments are what follows it in `args`."""
+    args = {int(p[0]): p[1] if len(p) > 1 else "" for line in _ps("pid=,args=") if (p := line.strip().split(None, 1)) and p[0].isdigit()}
+    out, now = {}, int(time.time())
+    for line in _ps("pid=,ppid=,etime=,comm="):
+        parts = line.split(None, 3)
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            pid, comm, up = int(parts[0]), parts[3] if len(parts) > 3 else "", etime_secs(parts[2])
+            rest = args.get(pid, "")
+            rest = rest[len(comm):] if comm and rest.startswith(comm) else " ".join(rest.split()[1:])
+            out[pid] = {"ppid": int(parts[1]), "argv": [comm, *rest.split()] if comm else rest.split(),
+                        "start": now - up if up is not None else None}
     return out
 
 
 def _cwds_mac(pids):
     if not pids:
         return {}
-    p = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(map(str, pids))],
+    lsof = "/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else "lsof"  # -b: never block on a hung mount
+    p = subprocess.run([lsof, "-b", "-w", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(map(str, pids))],
                        capture_output=True, text=True, timeout=10)
     out, cur = {}, None
     for line in p.stdout.splitlines():
@@ -101,8 +137,9 @@ def _tmux_roots():
 
 
 def scan(procs=None, roots=None, cwd_of=None):
-    """[{pid, agent, cwd}] for every agent process outside greenlight's tmux, topmost only (a claude's own node
-    children aren't another agent). procs/roots/cwd_of: injected by tests."""
+    """[{pid, agent, cwd, start}] for every agent process outside greenlight's tmux (start: when it began, epoch s). An
+    agent another agent started counts on its own only in another folder (a claude's own children aren't another
+    agent; a codex it runs in another worktree is). procs/roots/cwd_of: injected by tests."""
     mac = platform.system() == "Darwin"
     if procs is None:
         procs = _proc_mac() if mac else _proc_linux()
@@ -118,21 +155,34 @@ def scan(procs=None, roots=None, cwd_of=None):
         return pid in roots
 
     found = {pid: a for pid, p in procs.items() if (a := agent_of(p["argv"]))}
-    top = [pid for pid in found if procs[pid]["ppid"] not in found and not ours(pid)]
+    outside = [pid for pid in found if not ours(pid)]
     if cwd_of is None:
-        cwds = _cwds_mac(top) if mac else {pid: _cwd_linux(pid) for pid in top}
+        cwds = _cwds_mac(outside) if mac else {pid: _cwd_linux(pid) for pid in outside}
         cwd_of = cwds.get
-    return [{"pid": pid, "agent": found[pid], "cwd": c} for pid in sorted(top) if (c := cwd_of(pid))]
+    out = []
+    for pid in sorted(outside):
+        c, parent = cwd_of(pid), procs[pid]["ppid"]
+        if c and not (parent in found and cwd_of(parent) == c):
+            out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start")})
+    return out
 
 
-def agents(fresh=False):
-    """scan(), cached for TTL seconds; [] when the process table can't be read."""
+class Unknown(RuntimeError):
+    """The process table couldn't be read: whether an agent runs anywhere is unknown."""
+
+
+def agents(fresh=False, strict=False):
+    """scan(), cached for TTL seconds. When the process table can't be read: [] (listing and dispatch carry on), or,
+    strict, Unknown (cleanup: a deletion must not go ahead on a scan that failed)."""
     if not fresh and _CACHE["val"] is not None and time.time() - _CACHE["at"] < TTL:
         return _CACHE["val"]
     try:
         val = scan()
-    except (OSError, subprocess.SubprocessError, ValueError):
-        val = []
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        _CACHE.update(at=0.0, val=None)
+        if strict:
+            raise Unknown(f"{type(e).__name__}") from e
+        return []
     _CACHE.update(at=time.time(), val=val)
     return val
 
@@ -147,11 +197,6 @@ def by_worktree(paths, found=None):
         if owner:
             out.setdefault(owner, []).append(a)
     return out
-
-
-def busy(path, found=None):
-    """True when an agent outside greenlight's tmux runs in path (or below it)."""
-    return bool(by_worktree([path], found).get(path.rstrip("/")))
 
 
 if __name__ == "__main__":
