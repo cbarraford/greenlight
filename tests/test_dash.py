@@ -445,7 +445,7 @@ _last = (dash.greenlight.STATE / "last.json").read_text()
 (dash.greenlight.STATE / "last.json").write_text(json.dumps({"ts": 1, "rows": [{"path": "/r/a", "name": "r-a", "project": "r",
     "agent": {"state": "waiting"}, "next": {"step": "ci_green", "owner": "agent", "action": ""}, "life": {"stage_name": "Review", "sub_name": "Respond"},
     "mr": {"ref": "!7", "state": "opened", "pipeline": "failed", "threads": 2, "rebase": True, "author": "x", "by": {"name": "x", "avatar": "u"}}}]}))
-dash.ADES = ("orca", "cmux", "herdr", "t3")  # every ADE listed (a legacy one is now listed only while in use: ades())
+dash.ADES = ("orca", "cmux", "herdr", "t3")  # every ADE listed (as ades() does on Orca; pinned so a native default can't change it)
 _t = dash.trees()
 dash.ADES = None
 (dash.greenlight.STATE / "last.json").write_text(_last)
@@ -473,7 +473,7 @@ def _ade(*a):
     return {"worktrees": [{"path": str(_repo), "worktreeId": "m", "isMainWorktree": True}, {"path": str(_wt_path), "worktreeId": "w1", "isPinned": _pin[0]}]}
 _pin = [False]
 _sys.modules["ade_cmux"] = types.SimpleNamespace(call=_ade)
-dash.ADES = ("orca", "cmux")  # the fake ADE these workspaces are in (a legacy driver is listed only while in use)
+dash.ADES = ("orca", "cmux")  # the fake ADE these workspaces are in (pinned, as above)
 _i = dash.tree_info(str(_wt_path))
 assert _i["dirty"] == 1 and _i["unpushed"] == 1 and _i["untracked"] == 1 and _i["files"] == [["??", "new.txt"]] and _i["commits"][0].endswith(" init"), _i  # the init commit: no remote
 assert isinstance(dash.created(str(_wt_path)), int) and dash.created("/nope") is None

@@ -71,9 +71,11 @@ def name():
 def settle():
     """The backend for an install that never chose one, decided once and written into config.json ("ade") so it never
     flips later. A new install gets DEFAULT (native). One that already ran greenlight (it has a scan, last.json) ran
-    on Orca, the old default, and keeps it: native is then an explicit switch (README: Moving to native)."""
+    on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
     home = _home()
-    n = "orca" if (home / "last.json").exists() else DEFAULT
+    # anything greenlight itself leaves behind over time (not diag/, which this very process may have just written)
+    ran = any((home / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history", "auto", "state", "me.json"))
+    n = "orca" if ran else DEFAULT
     f = home / "config.json"
     why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
     try:
@@ -81,7 +83,7 @@ def settle():
         with open(f.with_suffix(".lock"), "w") as lock:  # decide.set_conf's lock: one writer at a time
             fcntl.flock(lock, fcntl.LOCK_EX)
             cfg = json.loads(f.read_text()) if f.exists() else {}
-            if isinstance(cfg, dict) and not canonical(cfg.get("ade") if isinstance(cfg.get("ade"), str) else None):
+            if isinstance(cfg, dict) and not cfg.get("ade"):  # absent only: a typo stays the user's to fix
                 tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
                 tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
                 os.replace(tmp, f)

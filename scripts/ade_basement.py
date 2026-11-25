@@ -145,13 +145,15 @@ def _save_repos(repos):
 
 
 def remember(repo):
-    if repo not in (have := saved()):
-        _save_repos([*have, repo])
+    with ade_common.locked(REPOS):
+        if repo not in (have := saved()):
+            _save_repos([*have, repo])
 
 
 def forget(repo):
-    if repo in (have := saved()):
-        _save_repos([r for r in have if r != repo])
+    with ade_common.locked(REPOS):
+        if repo in (have := saved()):
+            _save_repos([r for r in have if r != repo])
 
 
 def main_checkout(path):

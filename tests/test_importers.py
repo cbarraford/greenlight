@@ -168,6 +168,8 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
 
 
 def test_first_run_imports_once_on_native(home, monkeypatch):
+    import greenlight
+    monkeypatch.setattr(greenlight, "project_setups", lambda tries=2: None)  # never this machine's real Orca
     monkeypatch.setattr(ade_basement, "HOME", home / "home")
     r = git_init(home / "r")
     monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
@@ -200,10 +202,23 @@ def test_first_run_imports_once_on_native(home, monkeypatch):
     lock.unlink()
     mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": importers.RETRIES}))
     assert importers.first_run() is None  # gave up after a few tries (Settings → Import is still there)
+    mk.write_text(json.dumps({"ts": "x", "pending": ["orca"], "attempts": "y"}))
+    assert importers.first_run() is None  # a hand-mangled marker never raises into a listing
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    os.utime(mk, (1, 1))  # written long ago; the user has edited repos.json since
+    ade_basement.remember("/srv/x")
+    assert importers.first_run() is None  # a retry would re-add a repo or goal they removed: none
 
 
 def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
     import diag
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
+    assert "tmux" in checks and "git" in checks  # native needs both
+    monkeypatch.setattr(diag.shutil, "which", lambda n: None if n == "tmux" else "/usr/bin/" + n)
+    checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
+    assert checks["tmux"]["ok"] is False and checks["tmux"]["state"] == "missing"
+    monkeypatch.undo()
     monkeypatch.setenv("GREENLIGHT_ADE", "herdr")
     chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
     assert chk["ok"] is False and chk["state"] == "deprecated"

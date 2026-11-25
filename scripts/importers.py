@@ -194,9 +194,12 @@ def first_run():
     except (OSError, ValueError):
         m = {}  # unreadable: done (never import twice on a guess)
     if m is not None:
-        pending = m.get("pending") if isinstance(m, dict) else None
-        if not pending or m.get("attempts", 1) >= RETRIES or time.time() - m.get("ts", 0) < RETRY_SECS:
+        num = lambda k, d: v if isinstance(m, dict) and isinstance(v := m.get(k, d), (int, float)) else d  # noqa: E731
+        pending = m.get("pending") if isinstance(m, dict) and isinstance(m.get("pending"), list) else None
+        if not pending or num("attempts", RETRIES) >= RETRIES or time.time() - num("ts", time.time()) < RETRY_SECS:
             return None
+        if any(f.exists() and f.stat().st_mtime > marker.stat().st_mtime + 5 for f in (ade_basement.REPOS, ade_common.GOALS)):
+            return None  # the user has worked on native since: a retry would re-add a repo or goal they removed
         sources = [s for s in pending if s in SOURCES and s != "folder"]
     elif ade_basement.REPOS.exists():  # already set up on native (repos added or removed by hand): never re-add them
         sources = []
@@ -205,6 +208,8 @@ def first_run():
     with _claimed(marker.with_suffix(".lock")) as mine:
         if not mine:
             return None  # another listing is importing right now
+        if m is None and marker.exists():
+            return None  # it finished just before this one took the claim
         return _first_import(marker, m, sources)
 
 
@@ -232,7 +237,8 @@ def _first_import(marker, m, sources):
                "pending": [s for s, v in p["sources"].items() if v.get("error")]}
     except Exception as e:  # noqa: BLE001 - the import is a convenience: listing must go on
         res = {"error": type(e).__name__, "pending": sources}
-    res["attempts"] = m.get("attempts", 0) + 1 if isinstance(m, dict) else 1
+    a = m.get("attempts") if isinstance(m, dict) else None
+    res["attempts"] = (a if isinstance(a, int) else 0) + 1
     with contextlib.suppress(OSError):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"ts": int(time.time()), **res}, indent=1))

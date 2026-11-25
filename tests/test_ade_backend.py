@@ -31,6 +31,12 @@ def test_settle_new_and_existing_installs(home):
     assert cfg["ade"] == "orca" and cfg["agents"] == ["codex"] and "ade_set_because" in cfg  # its other settings stay
     (home / "config.json").write_text("[1]")  # not settings: decided, nothing written
     assert ade.name() == "orca" and (home / "config.json").read_text() == "[1]"
+    (home / "config.json").write_text(json.dumps({"ade": "basment"}))  # a typo stays the user's to fix
+    assert ade.name() == "orca" and json.loads((home / "config.json").read_text())["ade"] == "basment"
+    (home / "last.json").unlink()
+    (home / "config.json").unlink()
+    (home / "history").mkdir()  # no scan ever finished (glab kept failing), but it ran: still an Orca install
+    assert ade.name() == "orca"
 
 
 def test_name_resolution(home, monkeypatch):
@@ -273,16 +279,28 @@ def test_dash_under_native_writes_goals_and_creates_natively(home, repo, monkeyp
     n = len(orca_calls)
     dash.tree_new(str(repo), {"name": "feat-n", "goal": "G"})
     assert native and native[0][:4] == ("worktree", "create", "--repo", f"id:{repo}") and len(orca_calls) == n  # Greenlight's own
+    remote = {"worktreeId": "o2", "repoId": "opaque", "hostId": "laptop"}  # a row Orca lists for another host
+    orca = lambda *a: orca_calls.append(a) or ({"worktree": {"path": "/srv/remote/x-feat-r", "id": "o3"}} if a[1] == "create" else {})  # noqa: E731
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: (orca, remote, [remote]) if every else (orca, remote))
+    monkeypatch.setattr(dash.greenlight, "orca_cli", lambda *a, **k: {})
+    native.clear()
+    dash.tree_goal("/srv/remote/x", "Remote goal")
+    assert "/srv/remote/x" not in ade_basement.ade_common.goals()  # not this machine's: no local goal
+    dash.tree_new("/srv/remote/x", {"name": "feat-r"})
+    assert not native and orca_calls[-1][:2] == ("worktree", "create")  # made by Orca on that host, as before
 
 
 def test_native_refuses_beside_an_outside_agent(home, monkeypatch):
     import cleanup
-    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: "codex")
-    monkeypatch.setattr(ade_basement, "worktrees", lambda: [{"id": "/w/x", "path": "/w/x", "isMainWorktree": False}])
+    asked = []
+    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: asked.append((fresh, paths)) or "codex")
+    monkeypatch.setattr(ade_basement, "worktrees", lambda: [{"id": "/w/x", "path": "/w/x", "isMainWorktree": False},
+                                                            {"id": "/w/x/.wt/b", "path": "/w/x/.wt/b", "isMainWorktree": False}])
     with pytest.raises(RuntimeError, match="codex runs in /w/x outside Greenlight"):
         ade_basement.remove("/w/x")  # `greenlight.py ade worktree rm` never removes under it
     with pytest.raises(RuntimeError, match="no second agent beside it"):
         ade_basement.launch("/w/x", "claude", "go")  # nor starts a second agent beside it
+    assert asked == [(True, ["/w/x", "/w/x/.wt/b"])] * 2  # fresh, against every worktree (nested ones count)
 
 
 def test_native_listing_runs_the_first_run_import(home, monkeypatch):
