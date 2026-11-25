@@ -635,5 +635,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   for (let i = 0; i < 8; i++) await q.evaluate(n => stage.spec({ kind: "list", title: "C" + n, items: [] }), i);  // only the last few are kept
   assert.equal(await q.textContent("#hist .hn"), "6 of 6");
   assert.ok(await q.evaluate(() => ![...document.querySelectorAll("#hist button")].some(b => [...b.attributes].some(a => a.name.startsWith("on")))));
+  // typed chat's canvas (issue 208 phase 7) is the same page: it says no voice hint ("Say go back") there
+  const cv = await b.newPage(); await cv.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
+  await cv.evaluate(() => { document.body.dataset.surface = "canvas"; stage.text({ md: "| a |\n|---|\n| 1 |" }); stage.text({ md: "| b |\n|---|\n| 2 |" }); });
+  assert.ok(await cv.isVisible("#hist")); assert.equal(await cv.isVisible("#hist .hh"), false);
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

@@ -64,6 +64,7 @@ final class Core: ObservableObject {
     }
     lazy var voice: Voice = { let v = Voice(); v.core = self; return v }()
     lazy var canvas: Canvas = { let c = Canvas(); c.core = self; return c }()  // typed chat's canvas (#208)
+    @Published var canvasTick = 0  // the canvas drew, resized or folded: the transcript scrolls to its newest reply
     @Published var attached: [Attached] = []
     var unattach: ((String) -> Void)?  // tells the dashboard to empty that dock slot
     @Published var msgs: [Msg] = [Msg(.note, "Ask me anything about your workspaces.")] {  // init reads the transcript
@@ -890,7 +891,7 @@ final class Core: ObservableObject {
 
     private func resetLocalState(keepQueue: Bool, clearAttached: Bool, note: String) {
         chatEpoch += 1
-        canvas.has = false  // a new conversation starts without the last one's canvas (#208)
+        canvas.reset()  // a new conversation starts without the last one's canvas, its cards included (#208)
         cancelPlans()
         for work in launchWorks.values { work.cancel() }
         launchWorks.removeAll()
@@ -1141,7 +1142,7 @@ final class Core: ObservableObject {
         m.duration = Date().timeIntervalSince(r.start)
         m.options = options
         m.failed = !ok
-        if ok && !voice.on, let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // typed chat's canvas (#208); voice mode has its stage
+        if ok && !r.stopping && !r.watch && !r.checkIn && !voice.on, let call = canvasCall(st) { canvas.draw(call.f, call.arg); m.canvas = true }  // a typed reply's canvas (#208); voice mode has its stage
         msgs.append(m)
         var chatQ: Question?
         if ok && !options.isEmpty { let q = Question(text: body, options: options, ping: false); questions.append(q); chatQ = q }

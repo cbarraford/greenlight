@@ -1109,13 +1109,15 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening and one with something back to the board, a turn or an answer takes it over (issue 208)",
               boardDrawn && emptied && turnEnds && startsListening && boardReturns && answerKept)
         // issue 208 phase 7: what a typed reply puts on the chat's canvas, and the reply marked for it; collapsing is kept
-        let tbl = "Here.\n\n| MR | CI |\n|---|:---:|\n| !12 | passed |\n\nAnd\n\n|a|b|\n|-|-|\n| not | a rule |\n| x |"
+        let tbl = "Here.\n\n| MR | CI |\n|---|:---:|\n| !12 | passed |\n\nAnd\n\n|a|b|\n|-|-|\n| also | one |\n\n| a pipe-led line, | not a table |"
         let tc = canvasCall(staged(tbl))
         check("voice: a typed reply's tables (whole, with their rule) or its stage block go to the chat canvas; prose alone doesn't (issue 208)",
-              tc?.f == "stage.text" && (tc?.arg as? [String: String])?["md"] == "| MR | CI |\n|---|:---:|\n| !12 | passed |"
+              tc?.f == "stage.text" && (tc?.arg as? [String: String])?["md"] == "| MR | CI |\n|---|:---:|\n| !12 | passed |\n\n|a|b|\n|-|-|\n| also | one |"
               && canvasCall(staged("Just prose, and a | pipe.")) == nil
               && canvasCall(staged("Chart.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}\n```"))?.f == "stage.chart"
-              && markdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|").count == 2)
+              && markdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|").count == 2
+              && markdownTables("```md\n| a |\n|---|\n| 1 |\n```").isEmpty  // a table shown as code stays in the reply
+              && markdownTables("|a|b|\n|:-|-:|\n|1|2|") == ["|a|b|\n|:-|-:|\n|1|2|"])  // GFM: any run of dashes
         let cc = Core(session: -9208); cc.voice.on = false
         var replyText = tbl
         let savedSSH = sshOverride
@@ -1131,6 +1133,9 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         sshOverride = savedSSH
         let saved = cc.msgs.first { $0.canvas }.map { Msg($0.saved).canvas } == true && !Msg(cc.msgs.last!.saved).canvas  // it survives the transcript's save
         let before = ud.object(forKey: "canvasCollapsed"); cc.canvas.collapsed = true; let kept = ud.bool(forKey: "canvasCollapsed") && Canvas().collapsed
+        let tick = cc.canvasTick; cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"])
+        let freshWhileFolded = cc.canvas.fresh && cc.canvasTick > tick; cc.canvas.collapsed = false; let seen = !cc.canvas.fresh
+        check("voice: a canvas drawn while folded says so until it's opened, and the transcript is told to keep its newest reply in view (issue 208)", freshWhileFolded && seen)
         cc.canvas.collapsed = false; if let before { ud.set(before, forKey: "canvasCollapsed") } else { ud.removeObject(forKey: "canvasCollapsed") }
         check("voice: a typed reply with a table draws the canvas and is marked for it; prose isn't; collapsing is kept (issue 208)", marked && prose && saved && kept)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too

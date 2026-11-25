@@ -997,10 +997,12 @@ func stageCall(_ h: String, lead: String = "") -> (f: String, arg: Any, by: Stri
 }
 /// A reply's markdown tables, each whole (its header, rule and rows): the transcript draws them as raw pipes.
 func markdownTables(_ s: String) -> [String] {
-    let lines = s.components(separatedBy: "\n"), rule = #"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$"#
-    var out = [String](), i = 0
+    let lines = s.components(separatedBy: "\n"), rule = #"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"#
+    var out = [String](), i = 0, fenced = false
     while i < lines.count {
-        if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
+        let t = lines[i].trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("```") || t.hasPrefix("~~~") { fenced.toggle(); i += 1; continue }  // a table shown as code stays code
+        if !fenced, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
             var j = i + 2
             while j < lines.count, lines[j].trimmingCharacters(in: .whitespaces).hasPrefix("|") { j += 1 }
             out.append(lines[i..<j].map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")); i = j

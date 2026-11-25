@@ -30,6 +30,7 @@ final class Voice: NSObject, ObservableObject {
                 stageWeb.appearance = stageAppearance
                 stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
             }
+            core?.canvas.retheme()  // typed chat's canvas wears the look too (#208)
         }
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
@@ -40,6 +41,7 @@ final class Voice: NSObject, ObservableObject {
             ud.set(thinkingMotion, forKey: "thinkingMotion")
             // While the page loads, the queued call still carries the old value: correct it there.
             if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + ";\n" + motionVars }  // safety-ok: a hardcoded on/off
+            core?.canvas.retheme()  // the chat canvas too (#208)
         }
     }
     var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
@@ -1479,7 +1481,12 @@ final class LivePreview: ObservableObject {
 /// ```stage block or a table (which the transcript can't draw). Collapsing it is remembered.
 final class Canvas: ObservableObject {
     @Published var has = false
-    @Published var collapsed = ud.bool(forKey: "canvasCollapsed") { didSet { ud.set(collapsed, forKey: "canvasCollapsed") } }
+    @Published var collapsed = ud.bool(forKey: "canvasCollapsed") {
+        didSet { ud.set(collapsed, forKey: "canvasCollapsed"); if !collapsed { fresh = false }; core?.canvasTick += 1 }
+    }
+    @Published var fresh = false  // drawn while collapsed: its header says so
+    @Published var height: CGFloat = Canvas.tallest  // the panel's body: its content's height, up to `tallest`
+    static let tallest: CGFloat = 280, shortest: CGFloat = 96
     weak var core: Core?
     private var nav: Voice.StageNav?, pending = [(String, [Any])]()
     var queued: Int { pending.count }  // calls waiting for the page (tests)
@@ -1495,13 +1502,31 @@ final class Canvas: ObservableObject {
         return v
     }()
     func draw(_ f: String, _ arg: Any) {
-        has = true; pending.append((f, [arg]))
+        has = true; pending.append((f, [arg])); if collapsed { fresh = true }
         if nav?.ready == true { flush() } else { _ = web }
+        core?.canvasTick += 1  // the transcript keeps its newest reply in view as the panel changes
+    }
+    /// The look, the app's theme and the motion setting, now: on each draw, and when any of them changes (Voice.look and
+    /// thinkingMotion call it). The page also learns it's the canvas: no voice hints there.
+    func retheme() {
+        guard let c = core, nav?.ready == true else { return }
+        web.appearance = c.voice.stageAppearance
+        web.evaluateJavaScript("(s => { \(delegate.themeVars()) \(c.voice.look.vars) \(c.voice.motionVars) document.body.dataset.surface = 'canvas'; })(document.documentElement.style)")  // safety-ok: the app's own theme statements, as Voice.js() sends them
+    }
+    /// A new conversation: nothing of the last one stays, its cards (the page's history) included, nor a draw still waiting.
+    func reset() {
+        has = false; fresh = false; pending = []
+        if nav?.ready == true, let u = page("stage") { web.loadFileURL(u, allowingReadAccessTo: u) }
     }
     private func flush() {
         guard let c = core, nav?.ready == true else { return }
-        web.appearance = c.voice.stageAppearance
-        web.evaluateJavaScript("(s => { \(delegate.themeVars()) \(c.voice.look.vars) })(document.documentElement.style)")  // safety-ok: the app's own theme statements, as Voice.js() sends them
+        retheme()
+        web.callJS("stage.refs", [refStatus(c.pucks)])  // the snapshot's MRs as chips: a table's refs say their status
         pending.forEach { web.callJS($0.0, $0.1) }; pending = []
+        let fit = "(() => { const s = document.getElementById('s'); return [...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom), 0) + 24 })()"
+        web.evaluateJavaScript(fit) { [weak self] h, _ in  // safety-ok: a constant expression, no data in it
+            guard let self, let h = h as? Double, h > 0 else { return }
+            self.height = min(Canvas.tallest, max(Canvas.shortest, CGFloat(h.rounded(.up)))); self.core?.canvasTick += 1
+        }
     }
 }
