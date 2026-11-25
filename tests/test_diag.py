@@ -65,6 +65,7 @@ def test_salted_hashes_and_permissions(diag_env):
 def test_classify_error_messages():
     assert diag.classify("HTTP 429 Too Many Requests") == "rate_limit"
     assert diag.classify("glab: 401 Unauthorized") == "auth"
+    assert diag.classify('Oauth2: "invalid_grant" expired') == "auth"
     assert diag.classify("ssh: Could not resolve hostname x") == "network"
     assert diag.classify("502 Bad Gateway") == "transient"
     assert diag.classify("weird") == "other"

@@ -437,20 +437,57 @@ test("hover card: the smart button on top replaces the next step; Also runs the 
   assert.equal(await page.textContent(".toast .tmsg span"), "Ran git pull");
 });
 
-test("footer: a scan that died says why (and the fix in its tooltip) until a newer scan lands; not while a rescan runs", async page => {
+test("footer: a scan that died says why and how to fix it until a newer scan lands; not while a rescan runs", async page => {
   const now = Math.floor(Date.now() / 1000), snap = {...JSON.parse(JSON.stringify(SNAP)), ts: now, scanned: now - 7200};
+  const refreshSel = '#foot button[aria-label="Refresh now"]';
   await page.evaluate(s => window.mc.update(s), snap);
   assert.equal(await page.$("#foot .scanerr"), null, "no failure, no line");
-  const se = {msg: "GitLab login expired", fix: "glab auth login --hostname gitlab.com", class: "auth", ts: now - 60};
-  await page.evaluate(s => window.mc.update(s), {...snap, scan_error: se});
-  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired");
-  assert.match(await page.getAttribute("#foot .scanerr", "title"), /Fix: run glab auth login --hostname gitlab\.com, then ↻/);
-  await page.click("#foot .rescan");
+  // fresh failure (< 60s): inline fix + tooltip says "just now" (never "now ago")
+  const seFresh = {msg: "GitLab login expired", fix: "run glab auth login --hostname gitlab.com, then ↻", ts: now - 10};
+  await page.evaluate(s => window.mc.update(s), {...snap, scan_error: seFresh});
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired · run glab auth login --hostname gitlab.com, then ↻");
+  const tipFresh = await page.getAttribute("#foot .scanerr", "title");
+  assert.match(tipFresh, /^The last scan stopped just now, so these facts are from the one before\.\nFix: run glab auth login --hostname gitlab\.com, then ↻\.$/);
+  // older failure (>= 60s) and empty fix
+  await page.evaluate(s => window.mc.update(s), {...snap, scan_error: {msg: "crashed", fix: "", ts: now - 120}});
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: crashed");
+  assert.equal(await page.getAttribute("#foot .scanerr", "title"), "The last scan stopped 2m ago, so these facts are from the one before.");
+  // restore auth failure, click refresh: hidden while rescanning, returns on failure, cleared when snapshot drops it
+  await page.evaluate(s => window.mc.update(s), {...snap, scan_error: seFresh});
+  await page.click(refreshSel);
   assert.equal(await page.$("#foot .scanerr"), null, "a rescan in flight: the old failure isn't this one's");
   await page.evaluate(() => window.mc.rescanned(1));
-  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired", "it failed again: the line is back");
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired · run glab auth login --hostname gitlab.com, then ↻", "it failed again: the line is back");
   await page.evaluate(s => window.mc.update(s), {...snap, scanned: now});
   assert.equal(await page.$("#foot .scanerr"), null, "a good scan: the line goes");
+  // rescanned(1) without a prior scan_error doesn't flash "exit 1" before the stream delivers scan_error.json
+  await page.click(refreshSel);
+  await page.evaluate(() => window.mc.rescanned(1));
+  assert.equal(await page.$("#foot .scanerr"), null, "exit 1 waits for scan_error.json rather than flashing 'exit 1'");
+  // SSH failure (exit 255) shows in footer even over a stale snapshot scan_error, until a newer scan lands
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: now - 300}});
+  await page.click(refreshSel);
+  await page.evaluate(() => window.mc.rescanned(255));
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: host unreachable · check SSH connection, then ↻");
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: now - 300}});
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: host unreachable · check SSH connection, then ↻", "stale snapshot error does not override newer SSH failure");
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now + 60});
+  assert.equal(await page.$("#foot .scanerr"), null, "a later good scan clears the SSH rescan error");
+  // first-scan failure (scanned: 0): shows Not scanned yet + failure with first-scan tooltip, and clicking refresh still enters Refreshing…
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: 0, pucks: [], scan_error: seFresh});
+  assert.equal(await page.textContent("#foot .scan"), "Not scanned yet");
+  assert.match(await page.getAttribute("#foot .scanerr", "title"), /^The scan stopped just now, so no workspaces have been scanned yet\./);
+  await page.click(refreshSel);
+  assert.equal(await page.textContent("#foot .scan"), "Refreshing…");
+  assert.equal(await page.$("#foot .scanerr"), null);
+  // narrow viewport: footer reaches .tightest (hides .scan and .scanfix) instead of crushing .scanerr first
+  await page.setViewportSize({width: 480, height: 640});
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now - 7200, scan_error: seFresh});
+  assert.equal(await page.$eval("#foot", el => el.classList.contains("tightest")), true, "narrow footer activates tightest");
+  assert.equal(await page.$eval("#foot .scanfix", el => getComputedStyle(el).display), "none", "inline fix hides at tightest so error reason stays legible");
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now + 120});
+  assert.equal(await page.$("#foot .scanerr"), null);
 });
 
 test("card actions: the hex leaves on the click, comes back when its state moves or a later scan still has it; a failure restores it", async page => {
