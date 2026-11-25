@@ -14,7 +14,8 @@
                                        you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
                                        autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
-    greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out;
+    greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
+    greenlight.py ade <orca args>           an `orca`-shaped call answered by the backend in use (ade.py: native|orca|cmux|herdr|t3), JSON out;
                                             `worktree create` stays on this machine (place_here; placement.py lists strays)
 
 Read-only: it never changes anything. The greenlight skill acts on `next.cmd` / `next.owner`.
@@ -30,7 +31,6 @@ State and config live in $GREENLIGHT_HOME (default ~/.greenlight). config.json t
 
 import fcntl
 import html
-import importlib
 import json
 import contextlib
 import hashlib
@@ -48,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import ade_common  # noqa: E402
 import diag  # noqa: E402
 import decide  # noqa: E402
@@ -121,6 +122,14 @@ def run(cmd, timeout=120, tries=1):
         return _run(cmd, timeout, tries, d)
 
 
+def _cmd_error(msg, tool="", msg_class=None):
+    """RuntimeError carrying the tool name and stderr class so callers never re-parse argv (keeps type name RuntimeError)."""
+    exc = RuntimeError(msg)
+    exc._gl_tool = tool  # type: ignore[attr-defined]
+    exc._gl_class = msg_class  # type: ignore[attr-defined]
+    return exc
+
+
 def _run(cmd, timeout, tries, d):
     for i in range(tries):
         d["tries"] = i + 1
@@ -135,9 +144,10 @@ def _run(cmd, timeout, tries, d):
             if p.returncode == 0:
                 return p.stdout
             err = (p.stderr or p.stdout).strip()
-            d.update(rc=p.returncode, msg_class=diag.classify(err))  # the class of stderr, not the message (it has argv)
+            cls = diag.classify(err)
+            d.update(rc=p.returncode, msg_class=cls)  # the class of stderr, not the message (it has argv)
             if last or not TRANSIENT_RE.search(err):
-                raise RuntimeError(f"{' '.join(cmd)}: {err[:2000]}")  # orca's JSON error puts its cause last
+                raise _cmd_error(f"{' '.join(cmd)}: {err[:2000]}", tool=Path(cmd[0]).name, msg_class=cls)  # orca's JSON error puts its cause last
         time.sleep(2 * 2 ** i)
 
 
@@ -163,10 +173,16 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 
 def orca(*args, timeout=120):
-    """An Orca CLI call. Any other GREENLIGHT_ADE answers the same calls from another ADE, in Orca's shape (ade_<GREENLIGHT_ADE>.py).
-    A `worktree create` goes through place_here first, so adopt.py's and dash.py's workspaces stay on this machine too."""
-    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
-        return importlib.import_module(f"ade_{os.environ['GREENLIGHT_ADE']}").call(*args)
+    """An `orca …`-shaped call, answered by the backend in use (ade.name(): native, orca, or a legacy driver) through
+    ade.py's contract, in Orca's shape. Under Orca, a `worktree create` goes through place_here first, so adopt.py's
+    and dash.py's workspaces stay on this machine too."""
+    if not ade.is_orca():
+        return ade.call(*args)
+    return orca_placed(*args, timeout=timeout)
+
+
+def orca_placed(*args, timeout=120):
+    """The Orca CLI, with a `worktree create` placed on this machine first (place_here)."""
     args, why = place_here(args)
     if why:
         raise PlacementRefused(why)
@@ -219,7 +235,8 @@ def orca_cli(*args, timeout=120):
     env = ["--environment", os.environ["ORCA_ENVIRONMENT"]] if os.environ.get("ORCA_ENVIRONMENT") else []
     out = json.loads(run([exe, *args, *env, "--json"], timeout=timeout))
     if not out.get("ok"):
-        raise RuntimeError(f"orca {' '.join(args)}: {out.get('error')}")
+        err = str(out.get("error") or "")
+        raise _cmd_error(f"orca {' '.join(args)}: {err}", tool="orca", msg_class=diag.classify(err))
     return out["result"]
 
 
@@ -347,7 +364,7 @@ def local_first(repos):
     """repos (`orca repo list` rows, which carry no host) with this machine's checkouts first, so a pick by name or by
     project (dash.py's New task, adopt.py) lands here when it can (#160). Unchanged under other ADEs (no hosts), and
     when Orca can't say."""
-    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
+    if not ade.is_orca():
         return list(repos)
     here_ = {(s.get("repoId"), s.get("path")) for s in project_setups(tries=1) or [] if is_local(s)}
     return sorted(repos, key=lambda r: (r.get("id"), r.get("path")) not in here_) if here_ else list(repos)
@@ -2026,34 +2043,105 @@ def note(name, text):
         fh.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
-SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca"}
+SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca", "orca-ide": "Orca",
+              "tmux": "tmux", "cmux": "cmux", "herdr": "herdr", "t3": "t3"}
 SCAN_WHY = {"auth": "login expired", "rate_limit": "rate limited", "timeout": "timed out", "network": "unreachable",
             "transient": "server error", "permission": "permission denied"}
-SCAN_FIX = {"glab": "glab auth login --hostname gitlab.com", "gh": "gh auth login"}
+SCAN_FIX_AUTH = {"glab": "run glab auth login --hostname gitlab.com, then ↻", "gh": "run gh auth login, then ↻"}
+SCAN_FIX_CLASS = {"rate_limit": "wait a few minutes, then ↻", "timeout": "try ↻ again",
+                  "transient": "try ↻ again", "network": "check your connection, then ↻"}
 
 
-def scan_failed(e):
-    """Why the last scan died, for the dashboard footer (scan_error.json); a scan that finishes removes it.
+def _scan_error_newer(f, started_ns):
+    """True when scan_error.json already holds a failure from a scan started after `started_ns`."""
+    try:
+        prev = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(prev, dict):
+        return False
+    pns = prev.get("started_ns")
+    if isinstance(pns, int) and not isinstance(pns, bool):
+        return pns > started_ns
+    pst = prev.get("started")
+    return isinstance(pst, (int, float)) and not isinstance(pst, bool) and pst > started_ns / 1_000_000_000
+
+
+def scan_failed(e, started_ns=None):
+    """Why the last scan died, for the dashboard footer (scan_error.json); a newer scan that finishes removes it.
     Only the tool, the error's class and the fix go in it: the message has argv (project paths)."""
     f = STATE / "scan_error.json"
+    st_ns = started_ns if started_ns is not None else time.time_ns()
     if e is None:
-        f.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            STATE.mkdir(parents=True, exist_ok=True)
+            with (STATE / "scan_error.lock").open("a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if started_ns is not None and _scan_error_newer(f, st_ns):
+                    return
+                f.unlink(missing_ok=True)
         return
-    text = str(e) if not isinstance(e, subprocess.TimeoutExpired) else "timed out"
-    tool = str(e.cmd[0] if isinstance(e, subprocess.TimeoutExpired) else text.split(" ", 1)[0]).rsplit("/", 1)[-1]
-    tool = tool if tool in SCAN_TOOLS else ""
-    cls = diag.classify(text)
+    if isinstance(e, subprocess.TimeoutExpired):
+        cmd0 = e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd or "").split(" ", 1)[0]
+        cand = str(cmd0).rsplit("/", 1)[-1]
+        tool, cls = cand if cand in SCAN_TOOLS else "", "timeout"
+    elif getattr(e, "_gl_tool", None) is not None:
+        cand = str(getattr(e, "_gl_tool", "") or "").rsplit("/", 1)[-1]
+        tool = cand if cand in SCAN_TOOLS else ""
+        cls = getattr(e, "_gl_class", None) or "other"
+    else:
+        text = str(e)
+        head, sep, err = text.partition(": ")
+        cand = head.split(" ", 1)[0].rsplit("/", 1)[-1]
+        tool = cand if cand in SCAN_TOOLS else ""
+        # classify stderr only when the message carries argv (same rule as _run): a repo named "token-*" isn't auth
+        cls = diag.classify(err if tool and sep else text)
     why = SCAN_WHY.get(cls, "failed")
-    out = {"ts": int(time.time()), "class": cls, "tool": tool,
-           "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else f"scan {why}" if why != "failed" else "scan crashed",
-           "fix": SCAN_FIX.get(tool, "") if cls == "auth" else ""}
-    try:
+    if cls == "auth":
+        fix = SCAN_FIX_AUTH.get(tool, "")
+    elif tool in ("orca", "orca-ide") and cls in ("network", "timeout", "not_found", "other"):
+        fix = "check Orca is running, then ↻"
+    else:
+        fix = SCAN_FIX_CLASS.get(cls, "")
+    out = {"ts": int(time.time()), "started": st_ns // 1_000_000_000, "started_ns": st_ns, "class": cls, "tool": tool,
+           "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else why if why != "failed" else "crashed",
+           "fix": fix}
+    with contextlib.suppress(OSError):  # the traceback still reaches stderr
         STATE.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(out))
-        os.replace(tmp, f)
-    except OSError:
-        pass  # the traceback still reaches stderr
+        with (STATE / "scan_error.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if _scan_error_newer(f, st_ns):
+                return
+            tmp = f.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(out))
+            os.replace(tmp, f)
+
+
+def repos_cli(argv):
+    """The native engine's repo registry (repos.json): list it, or add/rm repos by any path inside them. Exit code."""
+    import ade_basement
+    op, paths = (argv[0] if argv else "list"), argv[1:]
+    if op == "list":
+        print(json.dumps([{"path": r, "exists": Path(r).is_dir()} for r in ade_basement.saved()], indent=1))
+        return 0
+    if op not in ("add", "rm") or not paths:
+        print("usage: greenlight.py repos [list | add <path>... | rm <path>...]", file=sys.stderr)
+        return 2
+    rc = 0
+    for p in paths:
+        try:
+            if op == "add":
+                print(f"added {ade_basement.register(p)}")
+            else:
+                repo = ade_basement.main_checkout(p) or str(Path(p).expanduser().resolve())
+                if repo not in ade_basement.saved():
+                    raise RuntimeError(f"not registered: {repo}")
+                ade_basement.forget(repo)
+                print(f"removed {repo}")
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            rc = 1
+    return rc
 
 
 def main():
@@ -2078,7 +2166,11 @@ def main():
             print(e, file=sys.stderr)
             sys.exit(3)
         print(json.dumps(out, indent=1))
+        if isinstance(out, dict) and out.get("error"):  # done in part (native: made, but its agent didn't start)
+            sys.exit(1)
         return
+    if cmd == "repos":  # greenlight.py repos [list | add <path>... | rm <path>...]: the native engine's repos.json
+        sys.exit(repos_cli(sys.argv[2:]))
     if cmd == "signoff":  # greenlight.py signoff <project> <iid|@branch> <stage>: the user signed off a custom stage
         STATE.mkdir(parents=True, exist_ok=True)
         with (STATE / "signoffs.lock").open("a+") as lock:
@@ -2095,12 +2187,13 @@ def main():
         print(f.read_text() if f.exists() else "(no history)")
         return
     with diag.span("scan", op=cmd) as d:
+        scan_start_ns = time.time_ns()
         try:
             res = scan(save=cmd != "precheck")
         except Exception as e:
-            scan_failed(e)
+            scan_failed(e, started_ns=scan_start_ns)
             raise
-        scan_failed(None)
+        scan_failed(None, started_ns=scan_start_ns)
         d["rows"] = len(res["rows"])
         for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
             d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None

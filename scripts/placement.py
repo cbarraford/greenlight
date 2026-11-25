@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
 
@@ -32,7 +33,7 @@ MACHINES_TTL = 300  # dash.py's stream asks every few seconds; hosts change when
 def machines(fresh=False):
     """{hostId: machine name} for the ADE in use. Only Orca has hosts; every other ADE runs where greenlight does.
     An Orca that can't say keeps `local` as this machine, or as ORCA_ENVIRONMENT's name when that picks another runtime."""
-    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
+    if not ade.is_orca():
         return {"local": greenlight.here()}
     if not fresh and _MACHINES["map"] and time.time() - _MACHINES["at"] < MACHINES_TTL:
         return _MACHINES["map"]

@@ -305,7 +305,7 @@ final class UITestServer {
                     app.show()
                 } else {
                     app.wantFloor = to
-                    (app.termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [to])
+                    (app.termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [to, !app.termWindow.isVisible])  // as the app's own floor switches
                     app.basement()
                 }
                 done(["ok": true, "upstairs": app.upstairs, "floor": to])

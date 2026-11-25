@@ -241,6 +241,11 @@ out, calls = task({"text": "Fix it"}, fail={lambda a: is_create(a) and "claude" 
 assert "bad repo" in out["error"] and len([a for a in calls if is_create(a)]) == 1
 out, calls = task({"text": "Fix them"}, fail={lambda a: a[:2] == ("worktree", "set"): "busy"})  # the rename is cosmetic
 assert out["ok"]
+with mock.patch.object(dash.greenlight, "orca", side_effect=lambda *a: {"worktree": {"id": "/w/x", "path": "/w/x"}, "error": "claude didn't start: no tmux"}), \
+        mock.patch.object(dash, "repos", return_value=REPO), mock.patch.object(dash, "live_agents", return_value={}):
+    out = dash.task("new", "widgets", json.dumps({"text": "Fix the native one"}))  # native: made, its agent didn't start
+assert "didn't start" in out["error"] and (dash.TASKS / out["name"] / "request.md").exists()  # the brief it points at stays
+assert dash.lifestage._file("preflight", out["name"]).exists() and dash.lifestage._file("preflight", "/w/x").exists()  # its goal passed preflight
 for bad, why in (({"text": " \n "}, "describe"), ({"text": "x", "files": [{"name": "a", "data": "javascript:1"}]}, "didn't come through"),
                  ({"text": "x", "files": [{"name": "a", "data": B64}] * 2 + [{"name": "big", "data": "data:application/octet-stream;base64," + "A" * (21 << 20)}]}, "15 MB")):
     out, calls = task(bad)
@@ -283,9 +288,25 @@ with mock.patch.object(dash, "live_agents", return_value={
 assert _sn["scan_started"] == 1700000000, "the scan's wall-clock start reaches the page (a card action settles on a scan begun after it)"
 # greenlight.py's note on a scan that died reaches the footer, until a scan newer than it lands
 assert "scan_error" not in _sn
-(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 5, "msg": "GitLab login expired", "fix": "glab auth login", "class": "auth", "tool": "glab"}))
-assert dash.scan_error(1) == {"msg": "GitLab login expired", "fix": "glab auth login", "class": "auth", "ts": 5}
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 5, "msg": "GitLab login expired", "fix": "run glab auth login, then ↻", "class": "auth", "tool": "glab"}))
+assert dash.scan_error(1) == {"msg": "GitLab login expired", "fix": "run glab auth login, then ↻", "ts": 5}
 assert dash.scan_error(5) is None and dash.scan_error(9) is None, "a scan that finished after the failure: the footer stops saying it"
+# overlapping & same-second scan ordering via started (and legacy fallback when scan_started is absent)
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 100, "started": 95, "msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻"}))
+assert dash.scan_error(100, 90) == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 100}, "same-second failure started after last good scan shows"
+assert dash.scan_error(130, 90) == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 100}, "newer fast failure stays visible even when older slow scan finishes later"
+assert dash.scan_error(100, 96) is None, "older scan failing late after a newer scan succeeded is suppressed"
+assert dash.scan_error(100, None) is None, "legacy last.json without scan_started falls back to ts <= scanned"
+# snapshot() carries scan_error when newer than last.json, and even when last.json is absent (first-scan failure)
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 2000000000, "started": 1999999990, "msg": "GitLab login expired", "fix": "run glab auth login --hostname gitlab.com, then ↻"}))
+with mock.patch.object(dash, "live_agents", return_value={}):
+    _sn_err = dash.snapshot()
+assert _sn_err["scan_error"]["msg"] == "GitLab login expired"
+_last_bak = (dash.greenlight.STATE / "last.json").read_text()
+(dash.greenlight.STATE / "last.json").unlink()
+_sn_first = dash.snapshot()
+assert _sn_first["scanned"] == 0 and _sn_first["pucks"] == [] and _sn_first["scan_error"]["msg"] == "GitLab login expired"
+(dash.greenlight.STATE / "last.json").write_text(_last_bak)
 (dash.greenlight.STATE / "scan_error.json").write_text("{not json")
 assert dash.scan_error(1) is None
 (dash.greenlight.STATE / "scan_error.json").unlink()

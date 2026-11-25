@@ -45,7 +45,7 @@ milestones, required approvals) is a config change, not a code change.
 - Python 3.10+ (stdlib only).
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
 - At least one coding agent CLI: `claude`, `codex`, `agy` (Antigravity), `opencode`, `pi` or `gemini` (Gemini CLI).
-- One workspace manager (ADE): Orca (default), cmux, herdr, or T3 Code. Pick it with `GREENLIGHT_ADE=orca|cmux|herdr|t3`.
+- One workspace backend: Orca (default for now), Greenlight's own `native` engine (git worktrees + `tmux -L greenlight`; register repos with `greenlight.py repos add <path>`), or the legacy cmux, herdr and T3 Code drivers. Pick it with `GREENLIGHT_ADE=orca|native|cmux|herdr|t3`, or `"ade"` in `config.json` (`scripts/ade.py`). #195 makes `native` the default.
 - The menubar app: macOS with the Command Line Tools (`swiftc`). The backend also runs on Linux.
 
 ## Quick start

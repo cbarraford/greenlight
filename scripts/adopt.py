@@ -36,6 +36,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
@@ -71,7 +72,7 @@ def save(f, data):
 
 
 def orca_ade():
-    return os.environ.get("GREENLIGHT_ADE", "orca") == "orca"
+    return ade.is_orca()
 
 
 # --- project mapping ---------------------------------------------------------------------------

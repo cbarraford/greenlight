@@ -480,7 +480,10 @@ function dsIcon(name, px = 16, opts = {}){
 }
 function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).outerHTML }
 </script><!-- /ds-icons -->
-<script src="ghostty-web.js"></script>
+<script>/* before the first frame (issue 196): the terminal canvas's colour and the window's Light/Dark, so nothing paints in the wrong ones; paint() takes over */
+(() => { try { const l = JSON.parse(new URLSearchParams(location.search).get("look") || "{}"), r = document.documentElement;  // the app always passes a background
+  if (l.background) r.style.setProperty("--term-bg", l.background); if (l.mode === "light" || l.mode === "dark") r.dataset.appearance = l.mode } catch { } })();</script>
+<script src="ghostty-web.js" defer></script>
 </head><body class="noside">
 <nav id="side" aria-label="Workspaces"><div id="shead"><button type="button" class="ttl">Workspaces</button><span class="sp"></span></div>
 <button id="jump" type="button"><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
@@ -1471,7 +1474,7 @@ function renderSide(){
     const n = el("span", "wn"); n.textContent = wsName(ws); l1.append(n);
     if (!bd && w?.state === "quiet" && w.why) { const y = el("span", "wy"); y.textContent = w.why.replace(/^waiting on /, ""); l1.append(y) }
     if (bd) { l1.insertAdjacentHTML("beforeend", pillHTML(bd)); l1.lastChild.title = w.why || bd[0] }
-    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3", basement: "Basement"}[w.ade] || w.ade; l1.append(g) }
+    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3", basement: "Basement", native: "Basement"}[w.ade] || w.ade; l1.append(g) }
     if (wsTabs(ws).some(x => x !== cur && paneOf(x).some(p => p.bell))) l1.insertAdjacentHTML("beforeend", I.bell(12));
     l1.append(iconBtn("ib", I.plus(13), "New set of tabs here", () => newTab(ws, undefined, true)));
     r.append(l1);
@@ -1680,12 +1683,12 @@ setInterval(() => { if (!document.hidden && UM.list.length) basementFoot(UM.list
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
 let slide = .32, sliding, slideTimer;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut. DESIGN.md §7: drawer, 320ms
-function toggleSide(){
+function toggleSide(cut){
   const b = document.body, s = $("side"), st = $("stage"), sw = st.offsetWidth, from = sliding && getComputedStyle(s).marginLeft;  // a re-toggle mid-slide turns back from where it is
   clearTimeout(slideTimer); slideTimer = 0; sliding?.cancel(); sliding = null;
   const open = !b.classList.toggle("noside"); post({cmd: "side", open}); render();
   const end = () => { clearTimeout(slideTimer); slideTimer = 0; sliding = null; b.classList.remove("sliding"); st.style.width = ""; setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
-  if (!(slide > 0) || matchMedia("(prefers-reduced-motion: reduce)").matches) return end();
+  if (cut || !(slide > 0) || matchMedia("(prefers-reduced-motion: reduce)").matches) return end();
   b.classList.add("sliding"); st.style.width = sw + "px";
   const w = "-" + s.offsetWidth + "px";
   const anim = s.animate({marginLeft: [from || (open ? w : "0px"), open ? "0px" : w]}, {duration: slide * 1000, easing: getComputedStyle(document.documentElement).getPropertyValue("--ds-easing-drawer").trim() || "ease-out"});
@@ -1694,6 +1697,7 @@ function toggleSide(){
   // Occluded WKWebView windows can suspend Web Animations so onfinish never fires; guarantee cleanup.
   slideTimer = setTimeout(() => { if (sliding === anim) { anim.cancel(); end(); } }, slide * 1000 + 120);
 }
+if (q.get("side") === "1") { document.body.classList.remove("noside"); post({cmd: "side", open: true, boot: true}) }  // a Basement window opens with it out: no slide in, no refit
 if (HOST !== "local") $("shead").append(el("span", "host", esc(HOST)));
 const waitB = Object.assign(el("button", "wait"), {type: "button", hidden: true, title: "Go to the first agent waiting on you"});
 // Refresh: busy (after 200ms, for 400ms at least: DESIGN.md §7 spinners) until the trees come back, 15s at most
@@ -1991,9 +1995,12 @@ function build(tab, n, mounts){
   a.style.flex = n.flex?.[0] || ""; b.style.flex = n.flex?.[1] || "";
   wrap.append(a, divider(n.col), b); return wrap;
 }
-let firstWait = false, pendingWs = null;
+let firstWait = false, pendingWs = null, onScreen = false;
+// the window shows only once its restored layout has drawn (issue 196): the app keeps it at alpha 0 until "painted" (2 s at most)
+function drawn(){ const go = () => { if (!onScreen) { onScreen = true; post({cmd: "painted"}) } }; setTimeout(() => requestAnimationFrame(go), 100); setTimeout(go, 250) }  // after refit's 80 ms fit, then its frame; 250 ms if frames are held back
 const firstShell = () => { if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };
 function restore(st){
+  drawn();  // after this task: the frame with the restored tabs
   try {
     if (st?.side && st.side !== 240) { sideW = st.side;  // ponytail: 240 was the old default; drop this once saved layouts have moved on
       $("side").style.width = sideW + "px" }
@@ -2011,8 +2018,10 @@ function restore(st){
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
   restored = true;
-  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; openWs(w, r); lastSaved = snap(); if (lastPanes) { syncPanes(lastPanes); render() } return }
-  if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
+  // a Basement button's worktree (the app sends it before the layout): the restored layout is what's saved, so its tab saves;
+  // a name that matches nothing (Chief's [console: …]) falls through to the usual first tab
+  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; lastSaved = snap(); openWs(w, r); if (cur) { if (lastPanes) { syncPanes(lastPanes); render() } return } }
+  if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length || acct()?.dir ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
   if (lastPanes) { syncPanes(lastPanes); render() }
@@ -2076,7 +2085,7 @@ function palActs(){
     ["Basement", "New workspace…", I.plus(16), "", `A git worktree on a new branch: its repo's setup runs, then ${agentLabel(defAgent)} starts on the goal.`, newWsDialog],
     ["Basement", "New tab", I.plus(16), "⌘T", `A shell in ${wsName(curWs)}, in the set of tabs you're in.`, () => newTab()],
     ["Basement", "New set of tabs in this workspace", I.plus(16), "", "A fresh tab strip in the same workspace; the set you're in stays as it is.", () => newTab(curWs, undefined, true)],
-    ["Basement", side ? "Show the sidebar (the Basement)" : "Hide the sidebar (the Pipe)", I.sidebar(16), "⌘B", "Slides the sidebar in or out.", toggleSide],
+    ["Basement", side ? "Show the sidebar (the Basement)" : "Hide the sidebar (the Pipe)", I.sidebar(16), "⌘B", "Slides the sidebar in or out.", () => toggleSide()],
     ["Basement", "Rename this Mac…", I.edit(16), "", `How ${LOCALNAME} shows in Hosts. Empty: its hostname.`, renameLocal],
     ["Go to", "Greenlight Center", up, "", "Rides up to the dashboard and the chat.", () => post({cmd: "up"})],
     ["Go to", "Settings", gear, "⌘,", "Opens Settings over the floor you're on.", () => post({cmd: "settings"})],
@@ -2383,7 +2392,7 @@ function newWsDialog(){
     const w = repo(), c = w?.cfg?.setup, b = br();
     sl.hidden = typeof c !== "string" || !c; none.hidden = !sl.hidden; sc.textContent = c || "";
     name.placeholder = slug(goal.value) || "feat/short-name"; sb.textContent = b;
-    where.hidden = w?.ade !== "basement" || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
+    where.hidden = !["native", "basement"].includes(w?.ade) || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
     foot.innerHTML = b ? `Creates <code>${esc(b)}</code> in <b>${esc(w?.project || "the repo")}</b> from ${esc(base.value.trim() || "the default branch")}` : "Write a goal, or name the branch";
   };
   sel.onchange = goal.oninput = name.oninput = base.oninput = sync; sync();
@@ -2516,7 +2525,7 @@ window.term = {
   picked: d => picked?.(d),
   slide: v => { slide = +v || 0 },
   localName: v => { LOCALNAME = v || "Local"; render() },
-  opens: v => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide() },  // Settings → Terminal → App opens to
+  opens: (v, cut) => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide(cut === true || !onScreen) },  // Settings → Terminal → App opens to; a cut before the window shows (cut: the app has it out of sight)
   ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
   suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
@@ -2593,5 +2602,5 @@ function autoRun(){
   }
 }
 // ready → the app answers with term.restore(saved layout or null)
-(async () => { await GhosttyWeb.init(); ready = true; post({cmd: "ready"}) })();
+addEventListener("DOMContentLoaded", async () => { await GhosttyWeb.init(); ready = true; post({cmd: "ready"}) });  // ghostty-web.js is deferred: it runs just before this
 </script></body></html>
