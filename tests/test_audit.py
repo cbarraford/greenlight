@@ -710,6 +710,15 @@ with mock.patch.object(audit.subprocess, "run") as ran:
     assert audit.push_audited(wt, sha, "feat", force=True, expected="a" * 40, destination="https://github.com/o/x.git") == 0
     assert ran.call_args.args[0] == ["git", "-C", wt, "push", f"--force-with-lease=refs/heads/feat:{'a' * 40}", "--", "https://github.com/o/x.git", f"{sha}:refs/heads/feat"]
 assert audit.push_audited(wt, sha, "feat", force=True) == 4
+# The pre-push hook runs ~130 s: the push timeout comes from config, and a timeout after the remote took the commit is a push.
+with mock.patch.object(audit.subprocess, "run") as ran, mock.patch.object(audit, "remote_branch_sha", return_value=None):
+    ran.return_value.returncode, ran.return_value.stdout = 0, "pushed"
+    assert audit.push_audited(wt, sha, "feat") == 0 and ran.call_args.kwargs["timeout"] == audit.DEF["push_timeout"] >= 600
+timeout = audit.subprocess.TimeoutExpired(["git", "push"], 900)
+with mock.patch.object(audit.subprocess, "run", side_effect=timeout), mock.patch.object(audit, "remote_branch_sha", return_value=sha):
+    assert audit.push_audited(wt, sha, "feat") == 0
+with mock.patch.object(audit.subprocess, "run", side_effect=timeout), mock.patch.object(audit, "remote_branch_sha", return_value="b" * 40):
+    assert audit.push_audited(wt, sha, "feat") == 4
 with mock.patch.object(audit, "row_for", return_value={"path": wt, "goal": "Merge #1", "project": "o/x", "forge": "github",
                                                     "mr": {"iid": 23, "target_branch": "main"}}), \
      mock.patch.object(audit, "forge_refs", return_value=("abc", "main", "stale-target")):
