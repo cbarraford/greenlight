@@ -627,7 +627,6 @@ func stageHTML(_ s: String) -> String? {
     return t.range(of: #"^(?i)[_.:-]?(?:html|svg)\s+(?=<[A-Za-z!?])"#, options: .regularExpression).map { String(t[$0.upperBound...]) }
 }
 
-/// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
 /// The trail's name for a stage call (#208): "stage.spec" → "spec".
 func stageDraw(_ f: String) -> String { f.hasPrefix("stage.") ? String(f.dropFirst(6)) : "other" }
 /// A card's kind for the trail: one the draw knows, else "other" (a model's made-up kind could be any word). Charts by type.
@@ -641,6 +640,7 @@ func stageCardKind(_ f: String, _ arg: Any?) -> String? {
     default: return nil
     }
 }
+/// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
 func isStageChart(_ o: [String: Any]) -> Bool {
     (o["chart"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
 }

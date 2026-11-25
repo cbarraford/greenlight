@@ -143,7 +143,7 @@ final class Voice: NSObject, ObservableObject {
     func wait(_ title: String, _ sub: String) { put("stage.wait", [title, sub], by: "app") }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; put("stage.spec", [spec], by: "app")
+        drawSeq += 1; shown = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?

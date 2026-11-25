@@ -380,6 +380,8 @@ def test_stage_summary(diag_env, monkeypatch):
         {"draw": "spec", "by": "fast", "card": "list", "turn": 2, "n": 2, "at": 4.0, "mid": True, "req_secs": 1.2},
         {"draw": "spec", "by": "fast", "card": "stat", "turn": 2, "n": 3, "at": 6.0, "req_secs": 1.4},
         {"draw": "spec", "by": "app", "card": "list"},  # a workspace card outside any turn: counted, not timed
+        {"draw": "spec", "by": "fast", "card": "list", "turn": 1, "at": 12.0},  # turn 1's late card, after turn 2's rows
+        {"draw": "spec", "by": "app", "card": "list", "turn": 1, "at": 0.5},  # an out-of-order early one: min, not first seen
         {"draw": "wait", "by": "app", "turn": 3, "n": 1, "at": 0.0},  # stopped a second in: only wait cards, never timed
         {"draw": "wait", "by": "app", "turn": 3, "n": 2, "at": 1.0},
     ]
@@ -387,9 +389,9 @@ def test_stage_summary(diag_env, monkeypatch):
                            for i, r in enumerate(rows)))
     s = diag.summary(0)["stage"]
     assert s == {
-        "draws": 9, "by": {"app": 5, "dwim": 1, "chief": 1, "fast": 2}, "draw": {"wait": 4, "spec": 4, "text": 1},
-        "turns": 3, "fast_turns": 1,
-        "first_draw": {"n": 2, "p50": 4.0, "p95": 4.0}, "last_draw": {"n": 2, "p50": 9.0, "p95": 9.0},
+        "draws": 11, "by": {"app": 6, "dwim": 1, "chief": 1, "fast": 3}, "draw": {"wait": 4, "spec": 6, "text": 1},
+        "turns": 3, "fast_turns": 2,
+        "first_draw": {"n": 2, "p50": 4.0, "p95": 4.0}, "last_draw": {"n": 2, "p50": 12.0, "p95": 12.0},
     }, s
     assert "stage" not in diag.summary(0)["spans"]  # `at` isn't a span's `secs`
     # the new string fields pass the privacy filter as tokens; free text under them doesn't
