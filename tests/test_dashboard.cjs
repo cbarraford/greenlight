@@ -1980,6 +1980,11 @@ test("log view: a working agent quiet for 10 min gets a stuck banner; a repeatin
   await page.evaluate(() => mc.transcript({name: "plan-b", before: null, more: null, source: "pane", entries: []}));
   await page.waitForSelector("#aout-warn:not([hidden])");
   assert.match(await page.textContent("#aout-warn"), /No output in the 20m since it started/);
+  // restarted a minute ago after an older session's output: not stuck yet
+  await page.evaluate(() => closeOut(false));
+  await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, since: Date.now() - 60e3}}))}), SNAP);
+  await openLog(page, quiet);
+  assert.equal(await page.isVisible("#aout-warn"), false, "silence counts from this run's start");
   // an agent that isn't working is never stuck
   await page.evaluate(() => closeOut(false));
   await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, state: "idle"}}))}), SNAP);
@@ -2059,6 +2064,8 @@ test("log view: the sessions' cost and tokens in the strip; Files shows what the
     ["dfn:scripts/queue.py", "dh:@@ -1,3 +1,5 @@", "dl: keep", "dl r:-old", "dl a:+new", "dl a:+newer", "dl a:+newest"]);
   await page.click("#aout-files .aofrow:has-text('new_test.py')");
   assert.deepEqual(await page.$$eval("#aout-files .aodiff .dl", ds => ds.map(d => d.textContent)), ["+a", "+b"]);
+  await page.evaluate(r => mc.logextras({...r, files: {...r.files, patch: r.files.patch.replace("+b", "+c")}}), EXTRAS);
+  assert.deepEqual(await page.$$eval("#aout-files .aodiff .dl", ds => ds.map(d => d.textContent)), ["+a", "+c"], "a same-length edit shows");
   assert.match(await page.textContent("#aout-files .aoff"), /since this branch left main/);
   await page.evaluate(r => mc.logextras({...r, files: {error: "not a git checkout"}}), EXTRAS);
   assert.match(await page.textContent("#aout-files"), /Couldn't load the files/);

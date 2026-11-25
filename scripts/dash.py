@@ -1971,8 +1971,10 @@ def log_extras(name):
     path = _ws_path(name)
     if not path:
         return {"error": f"no workspace {name}"}
-    subagents = (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*/subagents/*.jsonl")  # their own usage
-    out = {"usage": log_view.usage(transcript_files(path) + [(f, "claude") for f in subagents])}
+    files = transcript_files(path)
+    proj = Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)
+    subs = [(f, "claude-sub") for x, k in files if k == "claude" for f in (proj / x.stem / "subagents").glob("*.jsonl")]  # the counted sessions' subagents
+    out = {"usage": log_view.usage(files + subs)}
     try:
         d = tree_diff(path, "branch")
         if d.get("error"):  # no trunk to compare with: what's uncommitted

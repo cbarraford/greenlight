@@ -2250,7 +2250,9 @@ function outFold(id, fold){
 function outFoldHere(){  // F: fold or unfold the call (else the turn) you jumped to, or the first one in view
   const o = ui.out, list = document.getElementById("aout-list"), log = document.getElementById("aout-log"); if (!o || !list) return;
   const lr = log.getBoundingClientRect();
-  const at = list.querySelector(":scope > [data-id].aoat:not([hidden])") || [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].find(el => el.getBoundingClientRect().bottom > lr.top + 8);
+  const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > lr.top + 8 && r.top < lr.bottom - 8 };
+  const mark = list.querySelector(":scope > [data-id].aoat:not([hidden])");
+  const at = (mark && inView(mark) ? mark : null) || [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].find(el => el.getBoundingClientRect().bottom > lr.top + 8);
   const f = at && o.info.get(at.dataset.id); if (!f) return;
   const id = [at.dataset.id, f.sec, f.turn].find(x => x && o.heads.has(x) && o.heads.get(x).n); if (!id) return;
   outFold(id); const head = list.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`);
@@ -2407,9 +2409,9 @@ function outLoop(o){  // the last lines are one block of 1–6 lines said again 
 }
 function outWarn(){
   const o = ui.out, el = document.getElementById("aout-warn"); if (!o || !el) return;
-  const p = puckOf(o.name), a = (p && p.agent) || {}, last = outMaxTs(o) || since(a.since), now = Date.now();  // nothing said yet: silent since it started
+  const p = puckOf(o.name), a = (p && p.agent) || {}, out = outMaxTs(o), started = since(a.since), last = Math.max(out || 0, started || 0) || null, now = Date.now();  // silent since its last word, or since this run started
   let w = null;
-  if (o.loaded && a.state === "working" && last && now - last > OUT_STUCK) w = {id: "stuck:" + last, lead: outMaxTs(o) ? `No output for ${ago((now - last) / 3.6e6)}` : `No output in the ${ago((now - last) / 3.6e6)} since it started`,
+  if (o.loaded && a.state === "working" && last && now - last > OUT_STUCK) w = {id: "stuck:" + last, lead: out && out >= (started || 0) ? `No output for ${ago((now - last) / 3.6e6)}` : `No output in the ${ago((now - last) / 3.6e6)} since it started`,
     rest: " while the agent is working. It may be stuck on a prompt or a hung command.", act: p && p.path ? ["Open in Basement", () => toBasement(o.name)] : null};
   else if (o.loaded) { const L = outLoop(o);
     if (L) w = {id: "loop:" + L.first, lead: `The same ${L.k === 1 ? "line" : L.k + " lines"} came back ${L.r} times`,
@@ -2480,7 +2482,7 @@ function splitPatch(patch){  // "diff --git a/x b/y" chunks by the new path
 function outFilesPanel(){
   const o = ui.out, aside = document.getElementById("aout-files"); if (!o || !aside || !o.filesOpen) return;
   const d = o.extras && (o.extras.files || {error: o.extras.error || "no answer about the files"}), files = d && !d.error ? arr(d.files) : null;
-  const key = !o.extras ? "load" : d && d.error ? "err" + d.error : JSON.stringify([files, o.file, d.base, d.cut]) + (d.patch || "").length;
+  const key = !o.extras ? "load" : d && d.error ? "err" + d.error : JSON.stringify([files, d.status, o.file, d.base, d.cut, d.patch || ""]);  // the patch itself: an edit can keep its length
   if (aside.dataset.key === key) return; aside.dataset.key = key;
   const fe = aside.contains(document.activeElement) ? document.activeElement : null;
   const back = fe && (fe.dataset.path ? `.aofrow[data-path="${CSS.escape(fe.dataset.path)}"]` : fe.id ? "#" + CSS.escape(fe.id) : fe.classList.contains("aodiff") ? ".aodiff" : null);

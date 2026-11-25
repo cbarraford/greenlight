@@ -133,6 +133,11 @@ def test_redact_takes_out_any_absolute_path_but_the_systems():
     assert out == "cat [path] [path]; /usr/bin/env python3 -c 1/2; and/or", out
 
 
+def test_redact_leaves_slash_commands_and_endpoints():
+    out, _ = log_view.redact("> /goal fix the build; run /review now; GET /api/v1/users 200; /bin-x/home/alice")
+    assert out.startswith("> /goal fix the build; run /review now; GET [path] 200; [path]"), out
+
+
 def test_redact_takes_a_url_whole_brackets_included():
     out, _ = log_view.redact("see (https://ci.example.com/job/(internal)/artifact?signature=abc123def). Done")
     assert out == "see ([url]). Done", out
@@ -166,6 +171,17 @@ def test_usage_starts_over_on_a_replaced_file_and_prunes_gone_ones(tmp_path, mon
     f.unlink()
     log_view.usage([(g, "claude")])
     assert set(json.loads((tmp_path / "c.json").read_text())) == {str(g)}, "a deleted transcript's entry goes"
+    before = (tmp_path / "c.json").stat().st_mtime_ns
+    log_view.usage([(g, "claude")])
+    assert (tmp_path / "c.json").stat().st_mtime_ns == before, "nothing changed: no write"
+
+
+def test_subagent_transcripts_count_their_tokens_but_not_as_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "c.json")
+    main = _write(tmp_path / "s.jsonl", [_claude_msg("a", "claude-opus-5-5", 10, 1)])
+    sub = _write(tmp_path / "agent-1.jsonl", [_claude_msg("b", "claude-opus-5-5", 5, 1)])
+    u = log_view.usage([(main, "claude"), (sub, "claude-sub")])
+    assert (u["in_tokens"], u["sessions"]) == (15, 1)
 
 
 def test_redact_catches_prompts_env_paths_file_urls_and_windows_homes(monkeypatch):

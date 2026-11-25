@@ -22,6 +22,7 @@ import re
 import socket
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,8 @@ PRICES = (  # the first prefix that matches a model id wins: keep the longer ids
     ("claude-haiku-4", (1.0, 5.0, 0.10)),
 )
 CACHE_WRITE = 1.25
+CACHE_DAYS = 14  # a transcript nobody polled this long leaves the usage cache
+CACHE_TOUCH = 86400  # an unchanged entry's last-seen time is refreshed (and the cache rewritten) at most this often
 TAIL = 512 << 20  # a first read of a transcript past this size starts this far from its end; later reads go on from there
 
 
@@ -103,7 +106,7 @@ def claude_scan(path: Path, st: dict[str, Any] | None = None) -> dict[str, Any]:
         m = d.get("message")
         if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
             continue
-        mid = str(m.get("id") or d.get("uuid") or f"#{len(msgs)}")
+        mid = hashlib.sha256(str(m.get("id") or d.get("uuid") or f"#{len(msgs)}").encode()).hexdigest()[:12]  # compact: the cache keeps one per message
         tin, tout, cr, cw, _ = _contrib("", m["usage"])
         if mid not in msgs or tout >= msgs[mid][2]:
             msgs[mid] = [str(m.get("model") or ""), tin, tout, cr, cw]
@@ -200,7 +203,14 @@ def _session_state(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] 
         st = claude_scan(f, st) if kind == "claude" else codex_scan(f, st)
     except (KeyError, TypeError, AttributeError, ValueError):  # a cache from another shape: start over
         st = claude_scan(f) if kind == "claude" else codex_scan(f)
-    cache[str(f)] = {"kind": kind, "id": ident, "st": st}
+    old = cache.get(str(f))
+    cache[str(f)] = {"kind": kind, "id": ident, "st": st, "at": int(time.time())}
+    if not (isinstance(old, dict) and old.get("st", {}).get("offset") == st.get("offset") and old.get("id") == ident):
+        cache["\0dirty"] = True
+    elif time.time() - (old.get("at") or 0) < CACHE_TOUCH:
+        cache[str(f)]["at"] = old.get("at")  # unchanged and recently seen: no write for it
+    else:
+        cache["\0dirty"] = True
     return st
 
 
@@ -214,13 +224,19 @@ def _load_cache() -> dict[str, Any]:
 
 
 def _save_cache(cache: dict[str, Any]) -> None:
-    """Every workspace's entries, minus transcripts that are gone; written whole and atomically (two polls may race)."""
+    """Every workspace's entries, minus transcripts that are gone or unpolled for CACHE_DAYS; written whole and atomically
+    (two polls may race), and only when something changed."""
+    dirty, now = cache.pop("\0dirty", False), time.time()
+    kept = {k: v for k, v in cache.items() if isinstance(v, dict) and now - (v.get("at") or 0) < CACHE_DAYS * 86400 and Path(k).exists()}
+    if not dirty and len(kept) == len(cache):
+        return
+    cache = kept
     f, tmp = _cache_file(), ""
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=".usage-", suffix=".tmp")
         with os.fdopen(fd, "w") as fh:
-            json.dump({k: v for k, v in cache.items() if Path(k).exists()}, fh)
+            json.dump(cache, fh, separators=(",", ":"))
         os.replace(tmp, f)
     except OSError:
         if tmp:
@@ -235,6 +251,8 @@ def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
     tot: dict[str, Any] = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "sessions": 0, "cost_cents": 0.0, "models": set()}
     cache, seen = _load_cache(), set[str]()
     for f, kind in sorted(files, key=lambda x: _mtime(x[0])):
+        sub = kind == "claude-sub"  # a subagent's transcript: its tokens count, it isn't a session of its own
+        kind = "claude" if sub else kind
         if kind not in ("claude", "codex"):
             if f.exists():
                 tot["cost_cents"] = None  # a session whose tokens it can't read
@@ -243,7 +261,7 @@ def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
         u = None if st is None else _claude_total(st["msgs"], seen) if kind == "claude" else _codex_out(st)
         if not u or not (u["in"] or u["out"]):
             continue
-        tot["sessions"] += 1
+        tot["sessions"] += 0 if sub else 1
         tot["in_tokens"] += u["in"]
         tot["out_tokens"] += u["out"]
         tot["cache_read"] += u["cache_read"]
@@ -271,7 +289,8 @@ SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.
 USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
 HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-PATH_RE = re.compile(r"(?<![\w.~/-])(?:~(?=/)|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?=/|\b))[\w.@+-]+)(?:/[^\s'\"`:,;)\]]*)?")  # any absolute path but the system's own
+PATH_RE = re.compile(r"(?<![\w.~/-])(?:~(?=/)(?:/[^\s'\"`:,;)\]]*)?|/(?:home|Users|root|tmp|private|var|etc|opt|srv|mnt|Volumes|workspaces?)(?![^/\s'\"`:,;)\]])(?:/[^\s'\"`:,;)\]]*)?"
+                     r"|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?![\w.@+-]))[\w.@+-]+/[^\s'\"`:,;)\]]+)")  # a home, a known root, or any 2+ segment path but the system's own; not /goal
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
                        r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?![\s\[])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
