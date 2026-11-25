@@ -228,11 +228,13 @@ def test_orchestrate_rechecks_afresh():
     assert "external.TTL = 0" in main[:300]  # its re-check before a dispatch never reuses the tick's scan
 
 
-def test_basement_delete_warns(monkeypatch):
+def test_basement_delete_warns(monkeypatch, tmp_path):
     import dash
     monkeypatch.setattr(dash, "outside_agent", lambda path: "codex")
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
-    monkeypatch.setattr(dash, "tree_info", lambda p: {"error": "not a git checkout"})  # git status failed: no "outside" in it
+    info = dash.tree_info(str(tmp_path))  # not a git checkout: git status fails
+    assert info["error"] and info["outside"] == "codex"  # the page's dialog (which then forces) still lists the agent
+    monkeypatch.setattr(dash, "tree_info", lambda p: {"error": "not a git checkout"})  # an older answer with no "outside"
     assert dash.tree_rm("/srv/w/x") == {"risks": ["not a git checkout", "codex runs in it outside Greenlight"]}
     monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0, "outside": dash.outside_agent(p)})
     assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")

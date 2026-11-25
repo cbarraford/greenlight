@@ -950,8 +950,8 @@ def tree_info(path):
     """The git facts the sidebar's menu shows and Delete checks: uncommitted files, commits no remote has, last commit."""
     git = lambda *a: subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, timeout=20)
     st = git("status", "--porcelain", "--untracked-files=normal")
-    if st.returncode:
-        return {"error": (st.stderr.strip() or "not a git checkout")[:200]}
+    if st.returncode:  # the page's Delete then forces past every risk: it must list the agent here, from this answer
+        return {"error": (st.stderr.strip() or "not a git checkout")[:200], "outside": outside_agent(path)}
     last = git("log", "-1", "--format=%ct").stdout.strip()
     try:
         lp = ports(path)
