@@ -8,6 +8,9 @@
                                                     hover card's button); cached per state, and snapshots carry it as `suggestion`
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
+    dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
+                                                    (log_view.usage), and the files the branch touched (tree diff branch, else head)
+    dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -1113,7 +1116,8 @@ def tree_diff(path, mode):
                 patch += f"diff --git a/{f} b/{f}\nnew file\n(file exceeds diff size limit)\n"
             else:
                 patch += git("diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", f).stdout
-    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f, "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
+    renamed = lambda f: re.sub(r"\{[^{}]* => ([^{}]*)\}", r"\1", f).split(" => ")[-1].replace("//", "/")  # numstat's dir/{old => new}  # noqa: E731
+    return {"mode": mode, "base": label, "files": files, "status": [kind.get(f) or kind.get(renamed(f), "M") for f, _, _ in files], "patch": patch[:DIFF_CAP], "cut": len(patch) > DIFF_CAP}
 
 
 def listeners(lsof):
@@ -2000,6 +2004,31 @@ def transcript(name, before=None, limit=60):
     return {"entries": page, "more": more, "before": before, "recent": recent, "source": "transcript", "last_output_ts": last_ts}
 
 
+def _ws_path(name):
+    return next((w.get("path") for w, _ in live_agents().values() if w["displayName"] == name), None)
+
+
+def log_extras(name):
+    """All output's side data: the sessions' usage and the files touched (what the branch changes, uncommitted included)."""
+    import log_view  # noqa: PLC0415
+
+    path = _ws_path(name)
+    if not path:
+        return {"error": f"no workspace {name}"}
+    files = transcript_files(path)
+    proj = Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)
+    subs = [(f, "claude-sub") for x, k in files if k == "claude" for f in (proj / x.stem / "subagents").glob("*.jsonl")]  # the counted sessions' subagents
+    out = {"usage": log_view.usage(files + subs)}
+    try:
+        d = tree_diff(path, "branch")
+        if d.get("error"):  # no trunk to compare with: what's uncommitted
+            d = tree_diff(path, "head")
+    except (OSError, subprocess.SubprocessError) as e:
+        d = {"error": str(e)[:200]}
+    out["files"] = d
+    return out
+
+
 # ---------- New task: a request (+ files) becomes a workspace whose agent starts on it at once ----------
 TASKS = greenlight.STATE / "tasks"
 FILE_RE = re.compile(r"^data:[\w.+/-]*(?:;[\w=.-]+)*;base64,([A-Za-z0-9+/=\s]*)$")
@@ -2436,6 +2465,16 @@ def main():
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+    elif a[:1] in (["logextras"], ["logshare"]) and len(a) in (2, 4) and NAME_RE.match(a[1]) and (len(a) == 2 or a[2] == "--req" and a[3].isdigit()):
+        import log_view  # noqa: PLC0415
+
+        req = int(a[3]) if len(a) == 4 else None  # echoed: the page drops an answer to an ask it no longer has
+        try:
+            out = log_extras(a[1]) if a[0] == "logextras" else dict(zip(("text", "removed"), log_view.redact(sys.stdin.read(4 << 20), (a[1], _ws_path(a[1]) or ""))))
+        except Exception as e:
+            oops(a, e)
+            out = {"error": str(e)[:200]}
+        print(json.dumps({"name": a[1], **({"req": req} if req is not None else {}), **out}))
     elif a[:1] == ["board"]:
         print(board())
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
