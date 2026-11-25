@@ -763,8 +763,9 @@ def ades():
 
 
 def ade_call(n):
-    """The `orca …`-shaped call for backend n (Orca's placement only touches a `worktree create`)."""
-    return ade.get(n).call
+    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (tree_new places an Orca create its own
+    way, as the user's pick: `call is greenlight.orca_cli`), else n's dispatch."""
+    return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
 def trees():
@@ -2111,6 +2112,9 @@ def task_new(repo_name, payload):
             if a == agents[-1] or not greenlight.LIMIT_RE.search(str(e)):
                 shutil.rmtree(d, ignore_errors=True)
                 return {"error": f"couldn't start the workspace: {str(e)[:300]}"}
+    if res.get("error"):  # the workspace and its goal stand (and the request it points at): its agent didn't start
+        _note(name, f"task workspace made, agent didn't start ({a}): {title}")
+        return {"error": res["error"], "name": name}
     wid = (res.get("worktree") or {}).get("id")
     if wid:  # keep Orca from prefixing the name; cosmetic, so a failure here doesn't fail the task
         try:

@@ -2112,6 +2112,8 @@ def main():
             print(e, file=sys.stderr)
             sys.exit(3)
         print(json.dumps(out, indent=1))
+        if isinstance(out, dict) and out.get("error"):  # done in part (native: made, but its agent didn't start)
+            sys.exit(1)
         return
     if cmd == "repos":  # greenlight.py repos [list | add <path>... | rm <path>...]: the native engine's repos.json
         sys.exit(repos_cli(sys.argv[2:]))

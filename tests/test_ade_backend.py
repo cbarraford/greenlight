@@ -151,8 +151,11 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     assert ade_basement.ade_common.goals() == {path: "Ship X"}
     with mock.patch.object(ade_basement, "panes", return_value=[]):
         assert path in [w["path"] for w in ade_basement.worktrees()]
+        ade_basement.ade_common.set_goal(str(repo.resolve()), "Main goal")
         with pytest.raises(RuntimeError, match="main checkout"):
             ade_basement.remove(str(repo.resolve()))  # never: and its goal stays
+        assert ade_basement.ade_common.goals()[str(repo.resolve())] == "Main goal"
+        ade_basement.ade_common.set_goal(str(repo.resolve()), "")
         ade_basement.remove(path)
         assert path not in [w["path"] for w in ade_basement.worktrees()]
         with pytest.raises(RuntimeError, match="no native workspace"):
@@ -161,9 +164,14 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     with mock.patch.object(ade_basement, "launch", side_effect=FileNotFoundError("tmux")):
         out = ade_basement.create(str(repo), "feat-z", None, "Ship Z", "claude", "go")  # no tmux: the workspace stays
     assert "didn't start" in out["error"] and "terminal" not in out
+    bad = ade_basement.create(str(repo), "feat-u", None, "", "no-such-agent", "go")  # harness.py raises ValueError
+    assert "didn't start" in bad["error"]
     assert ade_basement.ade_common.goals()[out["worktree"]["path"]] == "Ship Z"
+    monkeypatch.chdir(repo.parent)  # a folder named like the repo here is still not it: only registered names count
+    with pytest.raises(RuntimeError, match="names no registered repo"):
+        ade_basement.create("no-such-repo", "feat-q")
     with pytest.raises(RuntimeError, match="not a git checkout"):
-        ade_basement.create("no-such-repo", "feat-q")  # an unknown relative name is never stored
+        ade_basement.create(str(home / "nowhere"), "feat-q")
     other = home / "b" / "widgets"
     other.mkdir(parents=True)
     git("init", "-q", "-b", "main", cwd=other)
@@ -213,3 +221,5 @@ def test_dash_backend_order(home, monkeypatch):
     assert dash.ades() == ("orca", "cmux", "herdr", "t3")
     monkeypatch.setattr(dash, "ADES", ("orca",))
     assert dash.ades() == ("orca",)
+    assert dash.ade_call("orca") is greenlight.orca_cli  # tree_new knows an Orca create by it (placement as the user's pick)
+    assert dash.ade_call("native") == ade_basement.call

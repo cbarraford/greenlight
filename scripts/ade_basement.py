@@ -273,9 +273,10 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
     workspace and its goal (greenlight dispatches to it later) and says why in `error`."""
     if not Path(repo).is_absolute():
         named = [r for r in saved() if Path(r).name == repo]
-        if len(named) > 1:
-            raise RuntimeError(f"repo {repo!r} names {len(named)} registered repos: pass its path")
-        repo = named[0] if named else repo
+        if len(named) != 1:  # never a folder relative to wherever this runs
+            raise RuntimeError(f"repo {repo!r} names {len(named) or 'no'} registered repo{'s' * (len(named) != 1)}: pass its path"
+                               + (" (greenlight.py repos add <path> registers one)" if not named else ""))
+        repo = named[0]
     if not (main := main_checkout(repo)):
         raise RuntimeError(f"not a git checkout: {repo}")
     path = worktree_add(main, name, base)
@@ -286,7 +287,7 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
     if agent:
         try:
             out["terminal"] = launch(path, agent, prompt)["terminal"]
-        except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as e:  # ValueError: a harness name harness.py lacks
             out["error"] = f"the workspace was made, but {agent} didn't start: {str(e)[:300]}"
     return out
 

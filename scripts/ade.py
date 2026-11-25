@@ -109,7 +109,6 @@ def dispatch(b, *args):
     raise RuntimeError(f"orca {noun} {verb} has no {getattr(b, 'NAME', 'backend')} equivalent")
 
 
-def call(*args, n=None, timeout=120):
-    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole, and a timeout."""
-    b = get(n)
-    return b.call(*args, timeout=timeout) if getattr(b, "NAME", None) == "orca" else b.call(*args)
+def call(*args, n=None):
+    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole."""
+    return get(n).call(*args)
