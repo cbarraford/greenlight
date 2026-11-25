@@ -380,13 +380,15 @@ def test_stage_summary(diag_env, monkeypatch):
         {"draw": "spec", "by": "fast", "card": "list", "turn": 2, "n": 2, "at": 4.0, "mid": True, "req_secs": 1.2},
         {"draw": "spec", "by": "fast", "card": "stat", "turn": 2, "n": 3, "at": 6.0, "req_secs": 1.4},
         {"draw": "spec", "by": "app", "card": "list"},  # a workspace card outside any turn: counted, not timed
+        {"draw": "wait", "by": "app", "turn": 3, "n": 1, "at": 0.0},  # stopped a second in: only wait cards, never timed
+        {"draw": "wait", "by": "app", "turn": 3, "n": 2, "at": 1.0},
     ]
     app.write_text("".join(json.dumps({"ts": 100 + i, "comp": "app", "run": "abcd1234", "kind": "stage", **r}) + "\n"
                            for i, r in enumerate(rows)))
     s = diag.summary(0)["stage"]
     assert s == {
-        "draws": 7, "by": {"app": 3, "dwim": 1, "chief": 1, "fast": 2}, "draw": {"wait": 2, "spec": 4, "text": 1},
-        "turns": 2, "fast_turns": 1,
+        "draws": 9, "by": {"app": 5, "dwim": 1, "chief": 1, "fast": 2}, "draw": {"wait": 4, "spec": 4, "text": 1},
+        "turns": 3, "fast_turns": 1,
         "first_draw": {"n": 2, "p50": 4.0, "p95": 4.0}, "last_draw": {"n": 2, "p50": 9.0, "p95": 9.0},
     }, s
     assert "stage" not in diag.summary(0)["spans"]  # `at` isn't a span's `secs`

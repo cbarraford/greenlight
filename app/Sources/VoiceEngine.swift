@@ -70,6 +70,7 @@ final class Voice: NSObject, ObservableObject {
     var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
     /// The trail's turn (#208): its number, when it began (nil between turns), and how many draws it has had.
     var turnNo = 0, turnAt: Date?, turnDraws = 0
+    static var turnSeq = 0
     /// The stage's status line (#176): when this turn last said something (or showed a line), the lines it showed, a line on its
     /// way, and whether the strip shows one. statusSeq moves on each clear, so a line asked for before it doesn't land.
     var quietSince = Date(), statusShown = [String](), statusAsking = false, statusUp = false, statusSeq = 0, tickGen = 0
@@ -130,10 +131,12 @@ final class Voice: NSObject, ObservableObject {
     func put(_ f: String, _ args: [Any], by: String, mark: (turn: Int, at: Date?)? = nil, extra: [String: Any] = [:]) {
         js(f, args)
         let m = mark ?? (turnNo, turnAt)
-        var e: [String: Any] = ["draw": stageDraw(f), "by": by, "turn": m.turn]
+        var e: [String: Any] = ["draw": stageDraw(f), "by": by]
         if let k = stageCardKind(f, args.first) { e["card"] = k }
-        if let at = m.at { e["at"] = (Date().timeIntervalSince(at) * 1000).rounded() / 1000 }
-        if m.turn == turnNo { turnDraws += 1; e["n"] = turnDraws }
+        if let at = m.at {  // in a turn: a draw between turns (the app's cards, a watch or check-in turn) belongs to none
+            e["turn"] = m.turn; e["at"] = (Date().timeIntervalSince(at) * 1000).rounded() / 1000
+            if m.turn == turnNo { turnDraws += 1; e["n"] = turnDraws }
+        }
         Diag.event("stage", e.merging(extra) { a, _ in a })
     }
     var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
@@ -365,7 +368,7 @@ final class Voice: NSObject, ObservableObject {
         said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false
         drawing = false  // a drawing the last turn's own took over never came back to clear it
         waitWord = waitWords.randomElement()!
-        turnNo += 1; turnAt = Date(); turnDraws = 0
+        Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
         wait(waitWord, r.question)
         startStatus(r)

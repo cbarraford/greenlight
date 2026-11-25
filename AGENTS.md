@@ -27,7 +27,7 @@ the host: the checkout is `~/.claude/skills/greenlight`.
   signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
 - `summary.stage`: the voice stage's draws by who asked (`chief`, `fast` for the Haiku card, `dwim`, `app`) and by draw
   (`wait`, `text`, `spec`, `chart`, `html`), and per turn p50/p95 seconds to the first card (not a wait card) and to the last draw.
-  Each `stage` event carries `draw`, `by`, `card` (an allowlisted kind or `other`), `turn`, `n` (its place in the turn) and `at`.
+  Each `stage` event carries `draw`, `by` and `card` (an allowlisted kind or `other`); one in a turn also `turn`, `n` (its place in it) and `at`.
 - `summary.usage`: chat turns and automation runs per `harness.model`, with tokens in and out and cost. `chat_turn` and
   `automation` events (and `auto/runs.jsonl`) carry `in_tokens`, `out_tokens` and `cost_cents`; only Claude reports a cost.
   `in_tokens` counts cache reads and sums every request of the turn, so it runs far above `context` (one request's size).

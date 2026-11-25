@@ -13,6 +13,7 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           stageDraw("stage.text") == "text" && stageDraw("stage.wait") == "wait" && stageDraw("alert") == "other"
           && stageCardKind("stage.spec", ["kind": "table"]) == "table" && stageCardKind("stage.spec", [String: Any]()) == "list"
           && stageCardKind("stage.spec", ["kind": "Fix login for ACME"]) == "other" && stageCardKind("stage.chart", ["chart": "pie"]) == "pie"
+          && stageCardKind("stage.chart", ["chart": "table"]) == "other" && stageCardKind("stage.spec", ["kind": "pie"]) == "other"
           && stageCardKind("stage.text", ["lead": "x"]) == nil && stageCardKind("stage.wait", "One minute") == nil)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     do {  // the stage's status line (issue 176): one short sentence, never a repeat; the activity Haiku reads; the local fallback
@@ -865,8 +866,8 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
               && turnEvents[0]["n"] as? Int == 1 && turnEvents[1]["draw"] as? String == "text" && turnEvents[1]["by"] as? String == "chief"
               && turnEvents[1]["n"] as? Int == 2 && (turnEvents[1]["at"] as? Double).map { $0 >= 0 && $0 < 5 } == true
               && turnEvents.allSatisfy { $0["card"] == nil && $0["dropped"] == nil } && v.turnAt == nil
-              && trail.contains { $0["by"] as? String == "app" && $0["card"] as? String == "list" })  // v.show's Board card above
-        try? FileManager.default.removeItem(at: Diag.url.deletingLastPathComponent())
+              && trail.contains { $0["by"] as? String == "app" && $0["card"] as? String == "list" && $0["turn"] == nil && $0["n"] == nil })  // v.show's Board card above: between turns
+        try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
         keyLock.lock(); let savedA = keys["anthropic"]; keys["anthropic"] = .some(nil); keyLock.unlock()
