@@ -867,7 +867,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
               && turnEvents[1]["n"] as? Int == 2 && (turnEvents[1]["at"] as? Double).map { $0 >= 0 && $0 < 5 } == true
               && turnEvents.allSatisfy { $0["card"] == nil && $0["dropped"] == nil } && v.turnAt == nil
               && trail.contains { $0["by"] as? String == "app" && $0["card"] as? String == "list" && $0["turn"] == nil && $0["n"] == nil })  // v.show's Board card above: between turns
-        // a late card (Haiku's, dwim's) is timed into the turn it was asked in: after that turn ended, and after the next began
+        // a card asked between turns stays untimed, even when it lands after a turn begins
         let lateMark = v.turnMark
         v.put("stage.spec", [["kind": "table"]], by: "fast", mark: lateMark)
         c.run = tr; v.began(tr); c.run = nil
@@ -875,10 +875,10 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         Diag.q.sync {}
         let late = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["by"] as? String == "fast" }
-        check("voice: a late stage card keeps the turn it was asked in and its time from that turn's start (issue 208)",
+        check("voice: a stage card asked between turns stays untimed, even after a turn begins (issue 208)",
               lateMark.at == nil && late.count == 2  // the turn above had ended: turnAt is cleared, so neither carries a turn
               && late.allSatisfy { $0["turn"] == nil && $0["at"] == nil })
-        let m2 = v.turnMark; v.turnAt = m2.at
+        let m2: (turn: Int, at: Date?) = (v.turnNo, Date() - 10)  // asked 10 s into this turn's clock
         v.put("stage.spec", [["kind": "table"]], by: "fast", mark: m2)  // asked in this turn, which is still running
         c.run = tr; v.began(tr); c.run = nil
         v.put("stage.spec", [["kind": "diff"]], by: "fast", mark: m2)  // lands after the next turn began
@@ -886,7 +886,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         let late2 = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["by"] as? String == "fast" }.suffix(2)
         check("voice: a card asked in one turn and landing in the next stays in its own turn, with no place in the new one (issue 208)",
-              late2.count == 2 && late2.allSatisfy { $0["turn"] as? Int == m2.turn && $0["at"] is Double }
+              late2.count == 2 && late2.allSatisfy { $0["turn"] as? Int == m2.turn && ($0["at"] as? Double ?? 0) >= 10 }
               && late2.first?["n"] != nil && late2.last?["n"] == nil && v.turnNo == m2.turn + 1)
         v.turnAt = nil
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
