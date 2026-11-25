@@ -2,7 +2,9 @@
 
 No ADE app at all: worktrees are git's, terminals are the Greenlight app's own tmux server (`tmux -L greenlight`), and an
 agent is a pane whose title Claude sets (braille spinner = working, ✳ = idle). Repos are the main checkouts of every pane's
-folder plus the ones listed in ~/.greenlight/repos.json (each worktree this makes adds its repo there).
+folder plus the ones listed in ~/.greenlight/repos.json (each worktree this makes adds its repo there). An agent some
+other ADE or terminal runs in a worktree (external.py) is listed too, as working and `external`: never driven, never
+deleted under (#195 passive coexistence).
 """
 import contextlib
 import json
@@ -15,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import external
 import harness
 import last_agent
 import ade
@@ -178,7 +181,7 @@ def worktrees():
         owner = next((w for w in by_len if p["cwd"] == w or p["cwd"].startswith(w + "/")), None)
         if owner is not None:
             owned.setdefault(owner, []).append(p)
-    out = []
+    out, ext = [], external.by_worktree_safe(paths)  # agents another ADE or a plain terminal runs in these worktrees
     for path in dict.fromkeys(paths):
         mine = owned.get(path, [])
         ags = []
@@ -191,6 +194,9 @@ def worktrees():
             if s:
                 ags.append({"state": s, "agentType": kind, "updatedAt": int(p["at"] or 0) * 1000,
                             "stateStartedAt": int(p["at"] or 0) * 1000, "handle": p["handle"]})
+        # passive coexistence: busy, not ours to drive. updatedAt 0: an agent of ours here that's active still comes first
+        ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
+                 "stateStartedAt": e["start"] * 1000 if e.get("start") else None} for e in ext.get(path, [])]
         out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
                     "isPinned": False, "linkedGitLabMR": None, "agents": ags,
                     "lastOutputAt": max((int(p["at"] or 0) * 1000 for p in mine), default=None)})

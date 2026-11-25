@@ -143,7 +143,8 @@ EXAMPLE_VALUES = {'AKIAIOSFODNN7EXAMPLE', 'password = "test-password-123"'}
 LOW = ("local", "fallback", "heuristic", "none", "unavailable")  # providers whose answers are guesses: never block or post on their own
 MAXC = 45000  # context chars per question; a longer diff is asked in parts (every part must pass), up to MAXPARTS
 MAXPARTS = 30  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
-DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True}
+DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True,
+       "push_timeout": 900}  # seconds for the gated git push: the repo's pre-push hook (lint + test-py) runs ~130 s
 CACHE_VERSION = 4  # 3: merge passes scan each commit's added content; 4: identity emails are no longer scanned
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?<!\w)(?:\+?1[-. ]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-. ]?[2-9]\d{2}[-. ]?\d{4}\b")
@@ -617,8 +618,16 @@ def push_audited(path, sha, branch, force=False, expected=None, destination="ori
     lease = [f"--force-with-lease=refs/heads/{branch}:{expected}"] if force else []
     cmd = ["git", "-C", str(path), "push", *lease, "--", destination, f"{sha}:refs/heads/{branch}"]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=float(cfg().get("push_timeout") or DEF["push_timeout"]))
+    except subprocess.TimeoutExpired as e:
+        # The push can land while the hook's tail is still running: trust the remote, not the clock.
+        if remote_branch_sha(path, destination, branch) == sha:
+            print("push complete (git timed out after the remote took the audited commit)")
+            return 0
+        print(f"AUDIT ERROR push failed: TimeoutExpired: {e} (raise config.json audit.push_timeout)")
+        return 4
+    except OSError as e:
         print(f"AUDIT ERROR push failed: {type(e).__name__}: {e}")
         return 4
     print(redact_secrets((p.stdout if p.returncode == 0 else p.stderr).strip()) or ("push complete" if p.returncode == 0 else "push failed"))

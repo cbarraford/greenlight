@@ -9,6 +9,12 @@ import Speech
 /// Deterministic offline voice, audio, WebSocket, and GPT-Live protocol tests.
 func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     runTranscriptTests(check: check)
+    check("voice: the trail names a stage draw and its card kind by token, a made-up kind as other (issue 208)",
+          stageDraw("stage.text") == "text" && stageDraw("stage.wait") == "wait" && stageDraw("alert") == "other"
+          && stageCardKind("stage.spec", ["kind": "table"]) == "table" && stageCardKind("stage.spec", [String: Any]()) == "list"
+          && stageCardKind("stage.spec", ["kind": "Fix login for ACME"]) == "other" && stageCardKind("stage.chart", ["chart": "pie"]) == "pie"
+          && stageCardKind("stage.chart", ["chart": "table"]) == "other" && stageCardKind("stage.spec", ["kind": "pie"]) == "other"
+          && stageCardKind("stage.text", ["lead": "x"]) == nil && stageCardKind("stage.wait", "One minute") == nil)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     do {  // the stage's status line (issue 176): one short sentence, never a repeat; the activity Haiku reads; the local fallback
         check("voice: a status line is one sentence of at most 12 words, markdown off, with a full stop",
@@ -261,6 +267,23 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && voiceTalkLabel(.muted) == "Muted" && voiceTalkLabel(.listening) == "Listening" && mutedHint.contains("unmute")
           && voiceTalkLabel(.thinking, micMuted: true) == "Thinking · muted" && voiceTalkLabel(.speaking, micMuted: true) == "Speaking · muted"
           && voiceTalkLabel(.thinking) == "Thinking" && micMenuTitle(muted: false) == "Mute Microphone" && micMenuTitle(muted: true) == "Unmute Microphone")
+    do {  // Settings ▸ Thinking motion: on by default, stored, and sent to the stage with every call as data-motion
+        let saved = ud.object(forKey: "thinkingMotion"); defer { ud.set(saved, forKey: "thinkingMotion") }
+        ud.removeObject(forKey: "thinkingMotion")
+        let v = Voice(), byDefault = v.thinkingMotion && v.motionVars.contains("dataset.motion = 'on'")
+        v.thinkingMotion = false
+        check("voice: thinking motion is on by default, and turning it off is stored and reaches the stage",
+              byDefault && ud.object(forKey: "thinkingMotion") as? Bool == false && !Voice().thinkingMotion && v.motionVars.contains("dataset.motion = 'off'"))
+    }
+    do {  // turned off while the stage page still loads: the call queued for it ends on the new value
+        let saved = ud.object(forKey: "thinkingMotion"); defer { ud.set(saved, forKey: "thinkingMotion") }
+        let v = Voice(); v.thinkingMotion = true
+        v.wait("One minute", "x")
+        let carried = v.stageQueued?.contains("dataset.motion = 'on'") ?? false  // every stage call carries the setting
+        v.thinkingMotion = false
+        check("voice: every stage call carries thinking motion, and turning it off mid-load corrects the queued one",
+              carried && v.stageQueued.map { $0.hasSuffix("dataset.motion = 'off';") } ?? false)
+    }
     do {  // muting drops the half-heard turn and the recognition request: nothing more reaches the recognizer until unmute
         let v = Voice()
         v.setMicMuted(true)
@@ -848,6 +871,42 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.chiefDrew = true; v.failed("Stopped."); v.hush()
         check("voice: finished and failed clear chiefDrew so subsequent watch/checkIn turns still draw the stage",
               clearedAfterScreen && watchDrewStage && !v.chiefDrew)
+        // issue 208: a turn leaves `stage` events: the wait card (the app's) at its start, then Chief's text, timed from the start
+        let tr = Run("trail?"); c.run = tr; v.on = true; v.isLive = false
+        v.began(tr); v.finished(staged("Two.\n[screen]\n- a"), "Two.", detail: "- a"); c.run = nil
+        Diag.q.sync {}
+        let trail = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["kind"] as? String == "stage" }
+        let turnEvents = trail.filter { $0["turn"] as? Int == v.turnNo }
+        check("voice: a turn's stage draws go to the trail as tokens and numbers: draw, by, turn, n, at (issue 208)",
+              turnEvents.count == 2 && turnEvents[0]["draw"] as? String == "wait" && turnEvents[0]["by"] as? String == "app"
+              && turnEvents[0]["n"] as? Int == 1 && turnEvents[1]["draw"] as? String == "text" && turnEvents[1]["by"] as? String == "chief"
+              && turnEvents[1]["n"] as? Int == 2 && (turnEvents[1]["at"] as? Double).map { $0 >= 0 && $0 < 5 } == true
+              && turnEvents.allSatisfy { $0["card"] == nil && $0["dropped"] == nil } && v.turnAt == nil
+              && trail.contains { $0["by"] as? String == "app" && $0["card"] as? String == "list" && $0["turn"] == nil && $0["n"] == nil })  // v.show's Board card above: between turns
+        // a card asked between turns stays untimed, even when it lands after a turn begins
+        let lateMark = v.turnMark
+        v.put("stage.spec", [["kind": "table"]], by: "fast", mark: lateMark)
+        c.run = tr; v.began(tr); c.run = nil
+        v.put("stage.spec", [["kind": "stat"]], by: "fast", mark: lateMark)
+        Diag.q.sync {}
+        let late = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["by"] as? String == "fast" }
+        check("voice: a stage card asked between turns stays untimed, even after a turn begins (issue 208)",
+              lateMark.at == nil && late.count == 2  // the turn above had ended: turnAt is cleared, so neither carries a turn
+              && late.allSatisfy { $0["turn"] == nil && $0["at"] == nil })
+        let m2: (turn: Int, at: Date?) = (v.turnNo, Date() - 10)  // asked 10 s into this turn's clock
+        v.put("stage.spec", [["kind": "table"]], by: "fast", mark: m2)  // asked in this turn, which is still running
+        c.run = tr; v.began(tr); c.run = nil
+        v.put("stage.spec", [["kind": "diff"]], by: "fast", mark: m2)  // lands after the next turn began
+        Diag.q.sync {}
+        let late2 = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["by"] as? String == "fast" }.suffix(2)
+        check("voice: a card asked in one turn and landing in the next stays in its own turn, with no place in the new one (issue 208)",
+              late2.count == 2 && late2.allSatisfy { $0["turn"] as? Int == m2.turn && ($0["at"] as? Double ?? 0) >= 10 }
+              && late2.first?["n"] != nil && late2.last?["n"] == nil && v.turnNo == m2.turn + 1)
+        v.turnAt = nil
+        try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
         keyLock.lock(); let savedA = keys["anthropic"]; keys["anthropic"] = .some(nil); keyLock.unlock()

@@ -311,7 +311,7 @@ def sheet(icons):
                     f'<figcaption>{n}</figcaption></figure>' for n in sorted(icons))
     css = ("body{margin:0;font:11px -apple-system,system-ui,sans-serif;display:grid;grid-template-columns:1fr 1fr}"
            "section{padding:16px;display:grid;grid-template-columns:repeat(8,1fr);gap:6px;align-content:start}"
-           ".light{background:#FAFEFB;color:#1B1F1C}.dark{background:#0E100F;color:#EAF0EC}"
+           ".light{background:#FFFFFF;color:#1E1E1E}.dark{background:#1E1E1E;color:#EEEEEE}"
            "figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px}"
            "figure div{display:flex;gap:10px;align-items:center}.x2{zoom:2}figcaption{opacity:.7}")
     return (f"<!doctype html><meta charset=utf-8><title>Greenlight icons</title><style>{css}</style>"

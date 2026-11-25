@@ -1547,4 +1547,6 @@ def main():
 
 if __name__ == "__main__":
     diag.install("orchestrate")
+    import external
+    external.TTL = 0  # every live re-check before a dispatch or merge reads the process table afresh
     main()

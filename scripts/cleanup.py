@@ -41,8 +41,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
+import external  # noqa: E402
 import greenlight  # noqa: E402
 
 ACTIVE_MINUTES = 30
@@ -256,7 +258,27 @@ def evaluate(wt, repo, busy):
         return "skip", f"{reason}, but has uncommitted/untracked changes"
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"
+    if (ext := outside_agent(path)):
+        return "skip", f"{reason}, but {ext} runs in it outside Greenlight"
     return "candidate", reason
+
+
+ALL_PATHS: list = []  # every worktree this run listed (scan() fills it)
+
+
+def outside_agent(path, fresh=False, paths=None):
+    """The agent another ADE or a plain terminal runs in path, under the native engine (#195 passive coexistence),
+    else None. Orca's own agents are in its terminal list (the busy check)."""
+    if not ade.is_native():
+        return None
+    try:  # against every worktree: whether one of our agents is in its own pane's worktree depends on the nested ones
+        every, p = [*(ALL_PATHS if paths is None else paths), path], external.real(path).rstrip("/")
+        owned = external.by_worktree(every, external.agents(fresh=fresh, strict=True))
+        # at or under it (resolved: one may be listed through a symlink): removing it removes those nested inside it too
+        found = [a for w, v in owned.items() if (r := external.real(w).rstrip("/")) == p or r.startswith(p + "/") for a in v]
+    except external.Unknown:
+        return "an agent (the process check failed, so it can't be ruled out)"
+    return found[0]["agent"] if found else None
 
 
 def dedupe(wts):
@@ -284,6 +306,7 @@ def dedupe(wts):
 
 def scan():
     wts = dedupe(orca("worktree", "list", "--limit", "10000")["worktrees"])
+    ALL_PATHS[:] = [w["path"] for w in wts if w.get("path")]
     cutoff = time.time() * 1000 - ACTIVE_MINUTES * 60_000
     busy = {t["worktreeId"] for t in orca("terminal", "list", "--limit", "10000")["terminals"]
             if (t.get("lastOutputAt") or 0) > cutoff}
@@ -349,6 +372,8 @@ def main():
                                  if (t.get("lastOutputAt") or 0) > cutoff}
                     if any(i in live_busy for i in r.get("ids") or [r["id"]]):
                         raise RuntimeError("terminal became active since scan")
+                    if outside_agent(r["path"], fresh=True):
+                        raise RuntimeError("an agent outside Greenlight started in it since scan")
                 orca("worktree", "rm", "--worktree", f"id:{r['id']}")
                 r["removed"] = True
             except Exception as e:

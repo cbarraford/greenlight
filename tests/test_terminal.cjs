@@ -1349,6 +1349,32 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
   page._errs.splice(0);  // the rejection is the point
 });
 
+test("a command that fits the TTY's line is typed; a longer one the pane's session runs, again on a reconnect until paneCmd has it", async page => {
+  // macOS keeps 1024 bytes of a line typed before the shell reads it and drops the rest, Enter too: a 1.3 KB brief sat unsent
+  const b64 = s => Buffer.from(s, "utf8").toString("base64");
+  const launch = async prompt => {
+    await page.evaluate(prompt => term.workspaces({agents: ["agy"], trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
+      mr: {ref: "!99", state: "opened", sha: "s1", conflicts: true}, moves: [{kind: "conflicts", prompt}]}]}), prompt);
+    await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"}); await page.click("#card .rv .go");
+    const o = (await posts(page, "open")).pop();
+    return {o, cmd: await page.evaluate(p => agentCmd("agy", p), prompt), typed: (await posts(page, "in")).filter(m => m.id === o.id).map(m => m.d)};
+  };
+  const fit = "x".repeat(1000 - "agy -i $''".length);  // exactly 1000 bytes: typed
+  let r = await launch(fit); assert.equal(Buffer.byteLength(r.cmd), 1000);
+  assert.equal(r.o.run, undefined); assert.deepEqual(r.typed, [r.cmd + "\r"]);
+  r = await launch(fit.slice(2) + "→");  // 999 characters, 1001 bytes: UTF-8 bytes are what the TTY counts
+  assert.equal(Buffer.byteLength(r.cmd), 1001); assert.equal(r.o.run, r.cmd); assert.deepEqual(r.typed, [], "nothing typed into the new pane");
+  const long = "Fix the merge conflicts on #189 → main. Don't push.\n\n" + "Keep both intents; if they can't both hold, stop and ask me.\n".repeat(30);
+  r = await launch(long); const {o} = r; assert.equal(o.run, r.cmd); assert.deepEqual(r.typed, []);
+  const reconnect = async () => { await page.evaluate(id => term.exited(id, 255), o.id); await page.evaluate(() => cur.focus.t.input("x", true)) };
+  const opens = async () => (await posts(page, "open")).filter(x => x.id === o.id);
+  await reconnect(); assert.equal((await opens()).pop().run, o.run, "ssh never connected: the reconnect starts it");
+  await page.evaluate(([id, d]) => term.feed(id, d), [o.id, b64("\x1b]6973;greenlight-run\x07")]);  // paneCmd's runMark
+  await reconnect(); assert.equal((await opens()).pop().run, undefined, "paneCmd has it: a reconnect only reattaches");
+  assert.equal((await opens()).length, 3);
+  assert.deepEqual((await posts(page, "in")).filter(m => m.id === o.id && m.d !== "x"), [], "never typed either");
+});
+
 test("Basement supports Codex and agy: tab icons, configured default agent launch, and diff notes", async page => {
   const b64 = s => Buffer.from(s, "utf8").toString("base64");
   const id = await page.evaluate(() => cur.focus.id);

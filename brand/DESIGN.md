@@ -7,57 +7,59 @@ version: 1
 theme:
   # A theme is these inputs and nothing else. Everything below the primitives is derived from them.
   inputs:
-    neutral_hue: 155      # a faint green-grey: the brand shows in the greys, not only in the accent
-    neutral_chroma: 0.010 # 0 to 0.02. Above about 0.02 the greys turn muddy.
+    neutral_hue: 0        # unused while the chroma is 0
+    neutral_chroma: 0     # true grey, like the system's own windows. 0 to 0.02; above about 0.02 the greys turn muddy.
     accent: signal        # signal | teal | graphite (section 2.3)
     contrast: standard    # standard | increased (it follows the macOS Increase Contrast setting)
   appearance: system      # system | light | dark. The system is the default and the others are an opt-in override.
 
 primitives:
   # Steps 1–12. Measured Radix lightness curves, a chroma peak at steps 9–10, and text chroma below the fill.
+  # Dark steps 1–8 start at the macOS window grey (L 0.235, #1E1E1E) on every scale, so a tint never sits darker than its surface.
   neutral:
-    light: ["0.993 0.005 155", "0.982 0.006 155", "0.962 0.007 155", "0.938 0.008 155", "0.914 0.009 155", "0.889 0.010 155", "0.852 0.010 155", "0.790 0.010 155", "0.640 0.010 155", "0.600 0.010 155", "0.500 0.009 155", "0.235 0.008 155"]
-    # light sRGB: #FAFEFB #F6FAF7 #EFF4F0 #E7ECE8 #DEE4E0 #D5DCD7 #CAD0CB #B6BCB8 #888E89 #7C827E #5F6561 #1B1F1C
-    dark:  ["0.172 0.005 155", "0.205 0.006 155", "0.245 0.007 155", "0.278 0.008 155", "0.310 0.009 155", "0.348 0.010 155", "0.400 0.010 155", "0.490 0.010 155", "0.540 0.010 155", "0.580 0.010 155", "0.780 0.009 155", "0.950 0.008 155"]
-    # dark sRGB:  #0E100F #151816 #1E211F #252A27 #2D322E #363C38 #444945 #5C625E #6A706C #767C78 #B3B9B5 #EAF0EC
+    light: ["1.000 0 0", "0.982 0 0", "0.962 0 0", "0.938 0 0", "0.914 0 0", "0.889 0 0", "0.852 0 0", "0.790 0 0", "0.640 0 0", "0.600 0 0", "0.500 0 0", "0.235 0 0"]
+    # light sRGB: #FFFFFF #F9F9F9 #F2F2F2 #EAEAEA #E2E2E2 #DADADA #CECECE #BABABA #8C8C8C #808080 #636363 #1E1E1E
+    dark:  ["0.235 0 0", "0.277 0 0", "0.310 0 0", "0.340 0 0", "0.370 0 0", "0.405 0 0", "0.450 0 0", "0.530 0 0", "0.580 0 0", "0.620 0 0", "0.800 0 0", "0.950 0 0"]
+    # dark sRGB:  #1E1E1E #282828 #303030 #383838 #404040 #494949 #555555 #6C6C6C #7A7A7A #868686 #BEBEBE #EEEEEE
   signal:   # the brand accent: go-green
     light: ["0.993 0.009 150", "0.982 0.018 150", "0.962 0.037 150", "0.938 0.054 150", "0.914 0.069 150", "0.889 0.084 150", "0.852 0.102 150", "0.790 0.128 150", "0.530 0.146 150", "0.490 0.135 150", "0.500 0.128 150", "0.235 0.057 150"]
     # light sRGB: #F9FFFA #F1FDF3 #E2FAE6 #D2F5D8 #C3F0CB #B3EBBD #9EE2AB #7AD28E #00823A #007433 #177739 #05250F
-    dark:  ["0.172 0.018 150", "0.205 0.024 150", "0.245 0.045 150", "0.278 0.063 150", "0.310 0.075 150", "0.348 0.087 150", "0.400 0.102 150", "0.490 0.123 150", "0.550 0.150 150", "0.590 0.150 150", "0.780 0.105 150", "0.950 0.048 150"]
-    # dark sRGB:  #0A120C #0F1A11 #0F2615 #0C3117 #0B3A1B #0C4620 #0E5628 #197338 #05893E #21954A #85CB94 #D9F8DE
+    dark:  ["0.235 0.018 150", "0.277 0.024 150", "0.310 0.045 150", "0.340 0.063 150", "0.370 0.075 150", "0.405 0.087 150", "0.450 0.102 150", "0.530 0.123 150", "0.550 0.150 150", "0.605 0.150 150", "0.800 0.105 150", "0.950 0.048 150"]
+    # dark sRGB:  #18211A #202C22 #1F3724 #1D4126 #1E4B2A #1F562F #216535 #297F43 #05893E #289A4E #8BD19A #D9F8DE
+    # dark step 10 sits at L 0.605, not 0.590: Phosphor inks its dim text in it on neutral.1, which needs 4.5:1 (4.62)
   amber:    # status: needs you
     light: ["0.993 0.004 62", "0.982 0.010 62", "0.962 0.023 62", "0.938 0.039 62", "0.914 0.056 62", "0.889 0.074 62", "0.852 0.102 62", "0.790 0.145 62", "0.760 0.170 62", "0.720 0.165 62", "0.500 0.114 62", "0.235 0.054 62"]
     # light sRGB: #FFFCFA #FEF8F2 #FEEFE3 #FEE5D1 #FFDBBD #FFD0A9 #FFC088 #FCA34D #FC9417 #EC8904 #905203 #301700
-    dark:  ["0.172 0.020 62", "0.205 0.027 62", "0.245 0.051 62", "0.278 0.064 62", "0.310 0.071 62", "0.348 0.080 62", "0.400 0.092 62", "0.490 0.112 62", "0.780 0.160 62", "0.820 0.127 62", "0.780 0.119 62", "0.950 0.031 62"]
-    # dark sRGB:  #160E07 #20140A #311A03 #3E2000 #492700 #572F00 #6A3A00 #8C4F02 #FF9D36 #FFB169 #EEA563 #FEEADA
+    dark:  ["0.235 0.020 62", "0.277 0.027 62", "0.310 0.051 62", "0.340 0.064 62", "0.370 0.071 62", "0.405 0.080 62", "0.450 0.092 62", "0.530 0.112 62", "0.780 0.160 62", "0.820 0.127 62", "0.800 0.119 62", "0.950 0.031 62"]
+    # dark sRGB:  #251C14 #32251A #432A13 #4F3010 #5A3612 #673E14 #794815 #995B17 #FF9D36 #FFB169 #F5AC6A #FEEADA
   yellow:   # status: your move
     light: ["0.993 0.010 95", "0.982 0.020 95", "0.962 0.041 95", "0.938 0.059 95", "0.914 0.076 95", "0.889 0.092 95", "0.852 0.112 95", "0.790 0.140 95", "0.880 0.165 95", "0.840 0.165 95", "0.500 0.102 95", "0.235 0.048 95"]
     # light sRGB: #FFFDF5 #FDF9EA #FBF3D4 #F7EBBE #F2E3A9 #EDDA94 #E5CE75 #D7B93F #FAD53B #ECC825 #766202 #251D00
-    dark:  ["0.172 0.020 95", "0.205 0.026 95", "0.245 0.050 95", "0.278 0.057 95", "0.310 0.063 95", "0.348 0.071 95", "0.400 0.082 95", "0.490 0.100 95", "0.880 0.165 95", "0.920 0.127 95", "0.780 0.115 95", "0.950 0.053 95"]
-    # dark sRGB:  #131006 #1B1709 #282000 #312800 #3A2F01 #463901 #564700 #725F02 #FAD53B #FFE47D #CEB75B #F9EFC7
+    dark:  ["0.235 0.020 95", "0.277 0.026 95", "0.310 0.050 95", "0.340 0.057 95", "0.370 0.063 95", "0.405 0.071 95", "0.450 0.082 95", "0.530 0.100 95", "0.880 0.165 95", "0.920 0.127 95", "0.800 0.115 95", "0.950 0.053 95"]
+    # dark sRGB:  #211E13 #2C2819 #38300F #413711 #4A3F13 #554815 #645415 #7E6B17 #FAD53B #FFE47D #D5BD62 #F9EFC7
   blue:     # status: working
     light: ["0.993 0.003 252", "0.982 0.008 252", "0.962 0.018 252", "0.938 0.030 252", "0.914 0.042 252", "0.889 0.055 252", "0.852 0.074 252", "0.790 0.109 252", "0.550 0.164 252", "0.510 0.152 252", "0.500 0.149 252", "0.235 0.068 252"]
     # light sRGB: #FBFDFF #F5FAFF #EAF4FF #DDECFF #CFE5FF #C1DEFF #ACD2FE #86BFFF #0172CD #0167B9 #0164B4 #011E3D
-    dark:  ["0.172 0.022 252", "0.205 0.029 252", "0.245 0.054 252", "0.278 0.076 252", "0.310 0.090 252", "0.348 0.104 252", "0.400 0.119 252", "0.490 0.146 252", "0.560 0.167 252", "0.600 0.179 252", "0.780 0.115 252", "0.950 0.024 252"]
-    # dark sRGB:  #091019 #0D1824 #0B2139 #05294C #02315C #003A6E #014885 #0161AF #0275D2 #0281E6 #80BCFF #E3F0FF
+    dark:  ["0.235 0.022 252", "0.277 0.029 252", "0.310 0.054 252", "0.340 0.076 252", "0.370 0.090 252", "0.405 0.104 252", "0.450 0.119 252", "0.530 0.146 252", "0.560 0.167 252", "0.600 0.179 252", "0.800 0.103 252", "0.950 0.024 252"]
+    # dark sRGB:  #171F28 #1E2936 #1B324B #16395E #16416D #154A7F #175795 #186DBD #0275D2 #0281E6 #8CC2FE #E3F0FF
   red:      # status: crashed / failed
     light: ["0.993 0.003 25", "0.982 0.008 25", "0.962 0.018 25", "0.938 0.031 25", "0.914 0.044 25", "0.889 0.058 25", "0.852 0.080 25", "0.790 0.121 25", "0.570 0.200 25", "0.530 0.200 25", "0.500 0.170 25", "0.235 0.076 25"]
     # light sRGB: #FFFCFC #FFF7F6 #FFEEEC #FFE3E0 #FFD8D4 #FFCCC7 #FFBBB4 #FF9B93 #D42F34 #C51D28 #B02A2D #3B0A0A
-    dark:  ["0.172 0.024 25", "0.205 0.032 25", "0.245 0.060 25", "0.278 0.084 25", "0.310 0.100 25", "0.348 0.116 25", "0.400 0.136 25", "0.490 0.164 25", "0.570 0.200 25", "0.610 0.200 25", "0.780 0.128 25", "0.950 0.024 25"]
-    # dark sRGB:  #190C0A #241110 #381311 #4A1212 #581414 #6A1718 #811C1E #AA2A2C #D42F34 #E23F40 #FF958E #FEE9E6
+    dark:  ["0.235 0.024 25", "0.277 0.032 25", "0.310 0.060 25", "0.340 0.084 25", "0.370 0.100 25", "0.405 0.116 25", "0.450 0.136 25", "0.530 0.164 25", "0.570 0.200 25", "0.610 0.200 25", "0.800 0.114 25", "0.950 0.024 25"]
+    # dark sRGB:  #281A18 #362220 #4A2321 #5C2321 #6B2523 #7C2927 #922D2C #B83838 #D42F34 #E23F40 #FFA098 #FEE9E6
   clay:     # the Claude agent mark only (a graphic, so 3:1 is enough). Never used as UI colour.
     light: ["0.993 0.003 40", "0.982 0.008 40", "0.962 0.019 40", "0.938 0.032 40", "0.914 0.045 40", "0.889 0.060 40", "0.852 0.082 40", "0.790 0.102 40", "0.640 0.120 40", "0.600 0.120 40", "0.500 0.102 40", "0.235 0.046 40"]
-    dark:  ["0.172 0.014 40", "0.205 0.019 40", "0.245 0.036 40", "0.278 0.050 40", "0.310 0.060 40", "0.348 0.070 40", "0.400 0.082 40", "0.490 0.098 40", "0.680 0.120 40", "0.720 0.120 40", "0.780 0.084 40", "0.950 0.025 40"]
+    dark:  ["0.235 0.014 40", "0.277 0.019 40", "0.310 0.036 40", "0.340 0.050 40", "0.370 0.060 40", "0.405 0.070 40", "0.450 0.082 40", "0.530 0.098 40", "0.680 0.120 40", "0.720 0.120 40", "0.800 0.084 40", "0.950 0.025 40"]
 
 contrast_checks:   # measured on the values above; tokens.py re-checks them in CI (section 13)
-  step11_on_step2: "APCA Lc 60–65 on every scale, both modes (WCAG 5.3–9.3:1)"
-  step12_on_step2: "APCA Lc 95–100 on every scale, both modes (WCAG ≥ 15:1)"
+  step11_on_step2: "APCA Lc 61–77 on every scale, both modes (WCAG 5.3–8.2:1)"
+  step12_on_step2: "APCA Lc 92–100 on every scale, both modes (WCAG ≥ 12.7:1)"
   on_solid9:
     signal: "white, 4.94:1 light / 4.51:1 dark"
     blue:   "white, 4.90 / 4.69"
     red:    "white, 4.93 / 4.93"
-    amber:  "ink (neutral.light.12), 7.45 / 8.73"
-    yellow: "ink, 11.6 / 12.6"
+    amber:  "ink (neutral.light.12), 7.45 / 8.04"
+    yellow: "ink, 11.6 / 11.6"
 
 semantic:          # name → primitive step. The light and dark columns differ where depth reads differently.
   bg:
@@ -134,15 +136,15 @@ radius:                                  # the "precise" family: tight, concentr
 elevation:   # one light source straight above; layered and translucent; never animated
   "0": none
   "1":       # cards on hover, the dragged item
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .06), 0 1px 2px -1px oklch(0.235 0.008 155 / .08), 0 2px 4px oklch(0.235 0.008 155 / .05)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .06), 0 1px 2px -1px oklch(0.235 0 0 / .08), 0 2px 4px oklch(0.235 0 0 / .05)"
     dark:  "0 0 0 1px oklch(1 0 0 / .06), 0 1px 2px oklch(0 0 0 / .4), inset 0 1px 0 oklch(1 0 0 / .04)"
   "2":       # menus, hover cards, tooltips, toasts
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .07), 0 2px 4px oklch(0.235 0.008 155 / .06), 0 8px 16px -4px oklch(0.235 0.008 155 / .10)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .07), 0 2px 4px oklch(0.235 0 0 / .06), 0 8px 16px -4px oklch(0.235 0 0 / .10)"
     dark:  "0 0 0 1px oklch(1 0 0 / .08), 0 4px 8px oklch(0 0 0 / .35), 0 12px 24px -6px oklch(0 0 0 / .45), inset 0 1px 0 oklch(1 0 0 / .05)"
   "3":       # sheets, dialogs, the palette
-    light: "0 0 0 1px oklch(0.235 0.008 155 / .08), 0 4px 8px oklch(0.235 0.008 155 / .06), 0 24px 48px -12px oklch(0.235 0.008 155 / .18)"
+    light: "0 0 0 1px oklch(0.235 0 0 / .08), 0 4px 8px oklch(0.235 0 0 / .06), 0 24px 48px -12px oklch(0.235 0 0 / .18)"
     dark:  "0 0 0 1px oklch(1 0 0 / .09), 0 8px 16px oklch(0 0 0 / .4), 0 32px 64px -16px oklch(0 0 0 / .6), inset 0 1px 0 oklch(1 0 0 / .06)"
-  scrim: { light: "oklch(0.235 0.008 155 / .24)", dark: "oklch(0 0 0 / .5)" }
+  scrim: { light: "oklch(0.235 0 0 / .24)", dark: "oklch(0 0 0 / .5)" }
 
 motion:
   duration: { instant: 0, press: 120ms, fast: 150ms, base: 200ms, slow: 260ms, drawer: 320ms }
@@ -298,11 +300,12 @@ Only use semantic tokens in UI code: `bg.*`, `element.*`, `border.*`, `fg.*`, `a
 ### 2.2 Light and dark
 - **Follow the system by default.** Settings › Appearance offers System / Light / Dark as an override. This replaces the forced light L1 and dark B1/B2, and the Settings-only light/dark toggle goes away. Floors are told apart by name and glyph, never by appearance.
 - **Dark is its own palette**, not light mode inverted:
-  - surfaces get lighter as they rise (canvas 0.17 → surface 0.21 → raised 0.25 L);
-  - text sits at L 0.95 / 0.78;
+  - surfaces get lighter as they rise (canvas 0.235 → surface 0.277 → raised 0.31 L): the canvas is the macOS window grey `#1E1E1E`, so a web view and the AppKit window beside it are the same colour;
+  - text sits at L 0.95 / 0.80;
   - chrome is never lighter than the canvas;
   - there's no pure black and no pure white text.
-- **Light mode:** the canvas is neutral.2 and cards are neutral.1, so cards lift by being paler, not by a shadow.
+- **Light mode:** the canvas is neutral.2 and cards are neutral.1 (white, the system's content background), so cards lift by being paler, not by a shadow.
+- **The greys are true greys** (chroma 0), as in every system window. The brand is the accent and the light, not a tint in the chrome.
 - **Switching appearance is instant.** Disable transitions for one frame (Paco's trick), then re-enable. Never cross-fade the whole UI.
 - **Increase Contrast** (`contrast: increased`): muted text becomes near-default, borders go up one step, and the focus ring is 3px. Test it under Reduce Transparency too.
 
@@ -422,7 +425,7 @@ Only use semantic tokens in UI code: `bg.*`, `element.*`, `border.*`, `fg.*`, `a
 
 - **Properties:** animate `transform` and `opacity` only, plus colour on hover. Never `transition: all`. Every animation is interruptible.
 - **Loops:**
-  - The only infinite loops allowed are the working spinner (only when it's the focused item; otherwise a static open ring) and the needs pulse.
+  - The only infinite loops allowed are the working spinner (only when it's the focused item; otherwise a static open ring), the needs pulse, and the voice stage's thinking field (§10.18), which runs only while Chief works with nothing else on the stage and can be turned off.
   - The needs pulse runs 3 cycles of 2.4s when a workspace becomes needs-you, then rests on a static halo. No breathing segments, no ambient pulses.
 - **Spinners** wait 200ms before appearing and stay at least 400ms. Updates are optimistic with Undo.
 - **The ride between floors** stays, as the rare moment:
@@ -583,7 +586,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **Gone:** `.go`, `.ans`, `.nact`, `.pri`, `.lbtn.raised` and the hcard tones `.or`/`.pu`/`.rd`/`.bl`. Everything maps to the five variants above.
 
 ### 10.3 Segmented control and tabs-as-filter
-- **Track and segments:** the track is `bg.sunken`, 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
+- **Track and segments:** the track is `bg.sunken` (dark: `element.rest`, since `bg.sunken` is the bar's own colour there), 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
 - **States:**
   - Hover on an unselected segment: `fg.default`.
   - Focus: a ring on the track.
@@ -591,7 +594,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **Motion:** switching is instant. No sliding thumb, because it's frequent.
 
 ### 10.4 Inputs: text, search, textarea
-- **Base:** 28 tall (textarea min 3 lines, using `body-copy`), `bg.sunken` (light) or `element.rest` (dark), 1px `border.default`, radius `sm`.
+- **Base:** 28 tall (textarea min 3 lines, using `body-copy`), `bg.surface` (light: the text background, since grey reads as disabled) or `element.rest` (dark), 1px `border.default` drawn inside, radius `sm`. In a Settings form it is 24, the height of the controls beside it.
 - **States:**
   - H: `border.hover`.
   - F: border `accent.ring` plus the ring.
@@ -628,9 +631,9 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
   - **Rows:**
     1. Avatar (agent mark, 20), title `strong`, elapsed time `caption` tabular figures, right-aligned.
     2. Meta in `label` `fg.muted`: ref · project · goal.
-    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most.
-    4. The lifecycle bar (§10.10).
-  - **Actions:** one action button (primary only when the card is needs-you).
+    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it. The strip is at most 240 tall and scrolls, so the board stays in view.
+    4. The lifecycle bar (§10.10) and the MR's facts, only when there are any.
+  - **Actions:** one action button. Only the first needs-you card's is primary: one primary per view. The others are secondary.
   - **Status:** shown by the status pill, never by tinting the whole card. A crashed card gets a 2px `status.crashed.solid` leading edge as the only tint.
   - **Empty / loading:** while scanning there's one skeleton card per expected agent, the same shape as a real card. With no agents the strip collapses to a single `caption` line, "No agents running".
   - **Error:** a card for an agent that can't be reached keeps its last state, dimmed to 60%, with a `caption` "Lost contact 2m ago".
@@ -638,10 +641,11 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 
 ### 10.8 Rows: list, tree, menu
 - **Row:** 28 (tree, menu) or 32 (list), radius `sm`, inset 4 from the container edge, 8 horizontal padding.
+- **Workspace list row:** flat, never a card. A mini hex, the title in `strong` with a neutral tag, then one `label` line of name · project and what it says; the agent and a secondary `sm` action on the right. The state shows as the hex's colour plus the step word, never colour alone.
 - **States:**
   - H: `element.rest`.
   - P: `element.hover`.
-  - S: `element.active` (or `accent.subtle` in a nav sidebar), text `fg.default`.
+  - S: `element.active`, text `fg.default`. A nav sidebar is the same: the accent stays on the one primary action.
   - F: an inset ring.
   - D: `fg.faint`.
 - **Tree rows** get real keyboard support: `tabindex` with arrow-key handling, ←/→ to fold, Return to open. Row actions (+, close) show on hover, on focus and on the selected row.
@@ -664,6 +668,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   | queued, waiting, done | `bg.surface` | 1.5px `border.subtle` | `fg.muted` |
   | no MR | `bg.surface` | dashed 4 3 | `fg.muted` |
   | needs, crashed with no MR | `status.solid` | dashed 4 3 `border.default` | `on_solid` |
+  | working with no MR | `status.working.bg` | dashed 4 3 `status.working.border` | `status.working.fg` |
 - **Labels inside:** the ref in `strong` tabular figures, the task name in `label` (only when R ≥ 50), and the sub-label in `caption`.
 - **Status glyph:** 12, top centre, so the hex never depends on colour alone.
 - **Progress:** a 2px track around the inside edge in `border.subtle`, with completed segments in `status.fg` (or `fg.muted` when neutral).
@@ -710,6 +715,10 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Sections and rows:** §10.8. A workspace row has two lines:
   1. agent glyph · name `strong` · status pill or "waiting on …" in `fg.muted`;
   2. branch (mono `caption`) · MR ref, CI, threads and conflict glyphs.
+
+  A status shows once: when the pill says what the agent glyph would, the glyph is the quiet ring. A project's workspaces sit 16 in from its header, and only the open terminal's row is selected.
+  A workspace row is one height with a pill or without, and its MR ref ends the line, so the refs make one column. CI that hasn't started is the queued glyph, never the working one.
+- **Hosts:** a host with shells open is a tree row with its shells under it. The idle ones are chips wrapped under those rows, so hosts with nothing running don't take a row each: a small secondary button (§10.2: 24 tall, `element.rest`, radius `sm`, `label`) with the host's dot and name.
 - **Empty, loading, error:**
   - Loading is a skeleton of 3 rows per section.
   - With no workspaces: "No workspaces yet", plus a secondary "New workspace…" button.
@@ -737,7 +746,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   5. Stat tiles in a 4-up grid of `label` and value.
   6. Footer with quiet links.
 - **Sizing:** it never scrolls inside itself. If content overflows, drop the tiles first.
-- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph. Empty state: "Nothing needs you". Escape or clicking outside closes it.
+- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph, never cards; an open item's answers are secondary buttons (§10.2) one step up, on `element.hover`, since `bg.raised` is `element.rest` in dark. Empty state: "No questions waiting" (the bar may still count workspaces that need you). Escape or clicking outside closes it.
 
 ### 10.14 Toast and tooltip
 - **Toast:**
@@ -760,8 +769,9 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - Labels are `label` above the field, help text `caption` `fg.muted`, errors inline (§10.4).
   - Submit stays enabled until the submit starts, then goes to loading.
 - **Palette (⌘K):**
-  - 640 wide (with the preview: 880; the preview drops below 640), at 20% of the window height, `bg.raised`, radius `lg`, elevation 3, light scrim.
-  - The input is 44 tall in `title-sm`. Results are rows (§10.8, 32 tall) with the fuzzy match in `fg.default`, the rest in `fg.muted`, and group headers in `label` `fg.faint`.
+  - 640 wide (with the preview: 880; the preview drops below 640), at 20% of the window height, `bg.raised`, radius `lg`, elevation 3, no scrim: it floats on its shadow, like Spotlight.
+  - The input is 44 tall in `title-sm`. Results are rows (§10.8, 32 tall): titles in `body` `fg.default` with the fuzzy match in weight 600, meta and group headers in `label` `fg.muted`, the selected row `element.active`. The search glyph, row icons and footer share one left edge, and the input and titles another.
+  - A status shows once per row: under "Needs you" there is no pill. The preview sits on the results' plane behind a hairline and shows only what the row lacks: its kind, a few facts (a value wraps to two lines), then the last lines in a `bg.sunken` well that hugs them.
   - **No animation on open:** it's frequent and keyboard-driven, so it appears instantly.
   - Empty state: "No matches for "…"", plus one suggestion.
 - **Ask, New workspace, Projects, Colours, Diff, Delete** are all this recipe.
@@ -777,7 +787,14 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Messages:**
   - The chat pane uses the system tokens. You: right-aligned bubble in `element.rest`, radius `md`, `body-copy`. Greenlight: no bubble, full width, `body-copy`.
   - Tool and status lines are `caption` `fg.muted` with a glyph.
-- **Composer:** a §10.4 textarea with attach (quiet icon), mic, and send. Send is primary only when there's text; otherwise it's disabled.
+  - A turn holds together: 12 between your bubble, the reply and its status line, 24 before the next bubble.
+- **Header:** a bar like the top bar (§10.11): 44 on `bg.chrome` with its hairline, so the band and the line continue across the window.
+  - The name is `title-sm`; where it runs follows in `caption` `fg.muted`. A state shows only while working or offline; idle says nothing.
+  - Its actions are 28 icon buttons on the right: New chat, look, voice, pop-out.
+- **Surface:** the conversation is `bg.surface` in light and `bg.canvas` in dark, where the reading surface is the window's darkest plane and the bubbles and the composer sit on it.
+- **Empty:** the §10.21 empty state, centred in the conversation. Its line names the first action. Once there are sent prompts, a `caption` line under it shows ⌃R as a Kbd; the pane has no key hints elsewhere.
+- **Composer:** a §10.4 textarea with radius `md`, like the bubbles, and no rule over it: the text runs the full width, two lines growing to ten, over a row of controls: attach (quiet icon) on the left, mic and send on the right. The placeholder is `fg.faint`. Send is primary only when there's text; otherwise it's a bare `fg.faint` arrow.
+- **Footer:** a §10.11 footer on the dashboard footer's line: the model on the left margin, the context on the right.
 - **Looks:** the 7 chat looks become token-override sets on the same components, not separate palettes and fonts. Phase one ships **Default** (this spec) and **Phosphor** (a mono, green-on-near-black homage that keeps the terminal's spirit). The other five are parked until someone asks for them back. See §14.
 
 ### 10.18 Voice stage (`stage.html`)
@@ -788,6 +805,11 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Screen text:** Chief's `[screen]` detail, under the spoken gist. The gist is a `title-sm` lead; the detail reads as a page at `layout.measure`, top-aligned: headings `strong`, lists with `fg.muted` markers, inline code `code` on `element.rest`, fenced code on `bg.sunken`. Markdown is read for structure only: everything lands as text, links as their words.
 - **Charts:** follow §10.10 and the dataviz skill. The 8-hex hard-coded `PAL` becomes neutral steps plus the accent.
 - **Motion:** content enters at `base`/`out` with a 4px rise. The listening cursor blinks only while listening and stops under reduced motion.
+- **Thinking field:** while Chief works (the wait card, not your turn), a grid of short needles drifts behind the card. Each is a coupled oscillator (Kuramoto: `dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)` over its four neighbours), so order forms and breaks as the coupling swells and ebbs.
+  - Ink is `fg.default` at 8 alpha steps, brighter when a needle is in step with the field. No accent, no glow. Needles keep clear of the wait card's words.
+  - When a card arrives, the needles lock in step (420ms), lie flat and slide onto the card's lines of text, bar tracks and bar tops (by 1s), then fade (250ms) as the card enters as usual. A card that arrives before the field has shown, or with no wait before it, just enters.
+  - Your turn ("Listening") stops it with a 200ms fade. Reduce Motion: no field at all.
+  - Settings › Voice mode › Thinking motion turns it off (on by default); the app sends it as `data-motion` on the stage's root.
 - **Iframes:** each one gets the theme variables, as today.
 - **Status line:** while Chief works without speaking (about 20 s of quiet), a strip pinned to the stage's foot says what it's doing in one sentence of `label` `fg.muted` (under 12 words, ellipsis on overflow), after the working glyph spinning at the `spinner` period (still under reduced motion). It sits on `--bg` with a `border.subtle` top rule, updates in place, and clears when Chief speaks or the turn ends. It is never spoken. Phosphor drops the glyph for a `$ ` prompt and dashes the rule.
 
@@ -800,10 +822,15 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Orb:** see §8.4. Draggable within its area; hover raises its elevation; pressed is .97; the ride animation is §7.
 
 ### 10.20 Settings
-- **Window:** `NavigationSplitView`. The sidebar (220) uses the system sidebar material, and its items are SF-matched icons from the set plus a `body` label. The selected item is `accent.subtle` with `fg.default`. There are no 22pt coloured icon tiles.
+- **Window:** `NavigationSplitView`. The sidebar (220) uses the system sidebar material, and its items are SF-matched icons from the set plus a `body` label. The selected item is `element.active` with `fg.default` and the heavier icon. There are no 22pt coloured icon tiles.
 - **Header:** the window title plus a search field (§10.4). The Settings-only sun/moon toggle goes away (appearance is a setting now).
-- **Panes:** a max 640-wide form column with grouped sections. Each section has a `title-sm` header with an optional `caption` description, then rows of label (left, `body`) and control (right).
-  - Controls are system SwiftUI controls tinted with the accent.
+- **Panes:** the pane's title is `title-sm` in the title bar's band, at one position on every pane, and the only 15 on the page. Under it, a 640-wide form column, centred, with grouped sections. Each section has a `strong` header with an optional `caption` description under it, then rows of label (left, `body`) and control (right).
+  - Controls are system SwiftUI controls tinted with the accent. Two or three options are a segmented control; four or more are a pop-up button, as wide as its longest option. Every control ends on the row's right edge, one control to a row, and a hint wraps at 420.
+  - A setting that can never be turned on shows its value in `fg.muted` with the lock icon, not a disabled switch.
+  - A row that depends on the one above is indented 16, with no connector. A row's divider runs from its label to its control's edge (16 in at both ends), no stronger than the card's ring.
+  - Text fields follow §10.4: `element.rest` in dark, never darker than the window. A multi-line field is a well under its section header, never inside a card.
+  - A list pane (Projects, Repositories, Memory) with nothing to list is its heading and one §10.21 empty state that carries the create button: no empty list column, and no zero count in the sidebar. With rows but nothing picked, the empty state sits in the detail column. The "+ New" footer is `fg.muted`, not the accent.
+  - A shortcut list is one column: the label left, the keycaps (§10.5) on the right edge.
   - Banners use the §10.21 recipe.
 - **Footer:** gone. Changes apply immediately, the Mac way. The Done button is removed (⌘W closes).
 - **Appearance pane:**
@@ -818,10 +845,12 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Empty state:**
   - Centred in its container: a 20 icon in `fg.faint`, a `title-sm` line, a `body` line in `fg.muted`, and at most one secondary button.
   - The copy says what will appear and how to make it happen ("No workspaces yet. Start one with New workspace…").
+  - In the sidebar it's compact: one `label` line in `fg.muted` at the rows' text edge and a 24 secondary button under it, left-aligned. No icon and no title.
 - **Loading:** skeletons match the final layout exactly, in `element.rest` with no shimmer (reduced-motion-safe by default). The spinner timing rules apply.
 - **Error:** what happened, plus the next action, in plain words. Show the code location or detail behind a "Details" disclosure in `code`.
 - **Banner** (inline notice):
-  - Radius `md`, 12 padding, `status.*.bg` with the glyph and `body` text in `status.*.fg` (neutral for info), plus one quiet action.
+  - Radius `md`, 12 padding, `status.*.bg` with the status glyph in `status.*.fg` (neutral for info), `body` text in `fg.default`, plus one quiet action. A failure is the crashed pair; needs keeps its diamond for "needs you".
+  - It sits 8 under the card it's about, never as a row inside one. One subject gets one banner.
   - Banners stack in this order: crashed, then needs, then info.
 
 ## 11. Voice and content
@@ -869,7 +898,7 @@ Every ban comes with the move to make instead. The critique agent (§13) checks 
 | Shape | Radii outside 4/6/8/12/full; a child rounder than its parent | The radius tokens, concentric (inner = outer − padding) |
 | Shape | Hexagons as decoration | The hex only for the workspace cell and the mark |
 | Motion | Animating frequent or keyboard actions (⌘K, tabs, row selection) | Instant |
-| Motion | Infinite breathing, pulsing or glowing | The needs pulse (3 cycles, then rest) and the spinner on the focused item only |
+| Motion | Infinite breathing, pulsing or glowing | The needs pulse (3 cycles, then rest), the spinner on the focused item, and the stage's thinking field while Chief works (§10.18) only |
 | Motion | `transition: all`, animating layout properties, ease-in, starting from `scale(0)` | `transform` and `opacity` with the `out` curve, from scale .96 |
 | Motion | Ignoring Reduce Motion in any file | A 150ms fade, loops stopped, nothing hidden |
 | Buttons | More than one primary per view; ghost, gradient or shadowed buttons; one-off variants | The five button variants (§10.2), one primary |

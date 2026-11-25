@@ -1394,6 +1394,41 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
           && App.tmuxQuote(#"a"b\c$HOME"#) == #""a\"b\\c\$HOME""#
           && App.tmuxFormatEscape("dir#1/file#2") == "dir##1/file##2")
+    // paneCmd's long run, for real: a login shell, then tmux where it's on PATH (else that shell), evals it byte for byte past tmux's
+    // 16 KB command line, prints runMark and leaves no temp file; onto the live session again it saves nothing. Its own tmux socket.
+    do {
+        let tmp = NSTemporaryDirectory(), dir = tmp + "gl-unit-run-\(getpid())", out = dir + "/got"
+        let sock = "tmux -L \(shellQuote("gl-unit-run-\(getpid())")) -f /dev/null"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let prompt = String(repeating: "it's \"q\" $HOME `x` \\ #S #{session_name} → ;\n\t", count: 400)
+        let run = "printf %s \(shellQuote(prompt)) > \(shellQuote(out))", mark = "\u{1b}]6973;greenlight-run\u{07}"
+        let leftovers = { (try? FileManager.default.contentsOfDirectory(atPath: tmp))?.filter { $0.hasPrefix("greenlight-run.") }.count ?? 0 }
+        let before = leftovers()
+        func launch(until done: @escaping (String) -> Bool) -> String {
+            let p = Pty(); var shown = Data()
+            p.onOutput = { shown.append($0) }
+            p.start(cols: 80, rows: 24, cmd: delegate.paneCmd(session: "gl-unit-run", cwd: dir, on: "local", run: run).replacingOccurrences(of: App.tmux, with: sock))
+            let until = Date() + 15
+            while !done(String(decoding: shown, as: UTF8.self)) && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+            RunLoop.main.run(until: Date() + 0.5)
+            p.stop(); return String(decoding: shown, as: UTF8.self)
+        }
+        let first = launch { _ in FileManager.default.fileExists(atPath: out) }, got = try? String(contentsOfFile: out, encoding: .utf8)
+        let viaTmux = first.contains("\u{1b}]6973;greenlight-tmux\u{07}")
+        check("pane: a long run reaches its shell whole (\(prompt.utf8.count) bytes, \(viaTmux ? "via tmux" : "no tmux")), runMark printed, no temp file left",
+              got == prompt && first.contains(mark) && leftovers() == before)
+        if viaTmux {
+            try? FileManager.default.removeItem(atPath: out)
+            let again = launch { $0.contains(mark) }
+            check("pane: a run onto its live session (a reconnect that raced the mark) is marked, not run again, and saves no file",
+                  again.contains(mark) && !FileManager.default.fileExists(atPath: out) && leftovers() == before)
+        }
+        var killed = false
+        _ = ssh("\(sock) kill-server 2>/dev/null; true", on: "local", onExit: { _ in killed = true })
+        let until = Date() + 5
+        while !killed && Date() < until { RunLoop.main.run(until: Date() + 0.05) }
+        try? FileManager.default.removeItem(atPath: dir)
+    }
 
     // A Mac-side turn that died because greenlight's scripts aren't on the Mac says so; a server drop is still a drop.
     let missing = Core.lostText("local", localBackendMissing, server: "srv")

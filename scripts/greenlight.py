@@ -4,7 +4,8 @@
     greenlight.py scan [--json]   facts + next step per workspace; snapshot saved to ~/.greenlight/last.json. Each row also
                                   carries `life`: its lifecycle stage and sub-stage, who holds it, and the suggested move (lifestage.py)
     greenlight.py report          scan, then write ~/.greenlight/report.html (needs-you first)
-    greenlight.py precheck        Orca automation gate: exit 0 when something is actionable, else 1
+    greenlight.py precheck        automation gate: exit 0 when something is actionable (or cleanup.py has a workspace
+                                  to delete), 1 when nothing is, 2 when the scan itself failed (its cause on stdout)
     greenlight.py note <ws> <text>  append a dated line to ~/.greenlight/history/<ws>.md
     greenlight.py history <ws>      print that workspace's history
     greenlight.py ping [--key <ws>|@k] [--kind <kind>] [--ws <ws>]... [--proactive] <text>  question for the Greenlight menubar app
@@ -194,8 +195,9 @@ class PlacementRefused(RuntimeError):
 
 
 def primary_agent(agents):
-    """The live session to show for a workspace. A completed review may be newer than its still-running parent."""
-    return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"),
+    """The live session to show for a workspace. A completed review may be newer than its still-running parent. An
+    agent outside Greenlight (external.py) shows only when none of its own is active there."""
+    return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"), not a.get("external"),
                                              a.get("updatedAt") or a.get("stateStartedAt") or 0))
 
 
@@ -1339,6 +1341,8 @@ def screen(ws, terminals):
     return seen
 
 
+EXTERNAL_STALE_H = 6  # an agent outside Greenlight running this long (since its process started: idle can't be seen)
+                      # is the user's to close, not "working"
 SURE = 0.7  # how sure the screen reading must be before it overrides Orca's state or the step's owner
 
 
@@ -1347,6 +1351,20 @@ def agent_overlay(ws, terminals):
     which: logged out, out of usage, looping, a draft left in the box, or a stale "waiting" (a background task's
     or a restored session's alert, while the screen shows it working or done)."""
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
+    if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
+        # the outside agent's own kind (the shown one may be Greenlight's); none: by_worktree_safe's "the check failed"
+        who, h = ag.get("ext_type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
+        if not ag.get("ext_type"):
+            nxt.update(owner="working", action="the process check failed, so whether an agent runs here outside Greenlight "
+                                               "can't be told: greenlight holds off until it can (diag.py errors says why)")
+        elif h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
+            # no hour count in the text: the question's marker is the action, and a changing one re-asks every hour
+            nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for over {EXTERNAL_STALE_H}h: once "
+                                          "it's done, close it (or take it over in the Basement) and greenlight carries on")
+        else:
+            nxt.update(owner="working", action=f"{who} runs here outside Greenlight: nothing is dispatched or merged until "
+                                               "it exits (then take it over in the Basement)")
+        return
     if ag["state"] == "waiting":
         seen = screen(ws, terminals)
         if seen and seen["prob"] >= SURE and seen["state"] == "working":  # still at it: nobody acts on the workspace meanwhile
@@ -1517,6 +1535,9 @@ def scan(save=True, _backfill_retries=0):
             "comment": comment,
             "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
+                      # any outside agent, even behind our own (an auto-merge must not land under it)
+                      **({"external": True, "since": ext.get("stateStartedAt"), "ext_type": canonical_agent(ext.get("agentType"))}
+                         if (ext := next((a for a in w.get("agents") or [] if a.get("external")), None)) else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},
@@ -2111,10 +2132,70 @@ def scan_failed(e, started_ns=None):
         with (STATE / "scan_error.lock").open("a+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if _scan_error_newer(f, st_ns):
-                return
+                return out
             tmp = f.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(out))
             os.replace(tmp, f)
+    return out
+
+
+def scan_cause(e, info):
+    """One line for a precheck whose scan died: scan_failed()'s summary and fix, then the error's last line
+    (without run()'s argv prefix: it has project paths, and it pushed the summary out of auto.py's 200 chars)."""
+    text = str(e).partition(": ")[2] if getattr(e, "_gl_tool", None) is not None else str(e)
+    tail = next((ln.strip() for ln in reversed(text.splitlines()) if ln.strip()), type(e).__name__)
+    head = (info or {}).get("msg") or "crashed"
+    fix = (info or {}).get("fix")
+    return f"scan failed ({head}{f'; {fix}' if fix else ''}): {tail[:200]}"
+
+
+def scan_cli(cmd):
+    """main()'s scan, timed in the trail, its failure in scan_error.json. A precheck whose scan dies exits 2 with
+    its cause on stdout: 1 is "nothing to do", and auto.py records a 2 as a failed run, not a skipped one."""
+    info = None
+    try:
+        with diag.span("scan", op=cmd) as d:
+            scan_start_ns = time.time_ns()
+            try:
+                res = scan(save=cmd != "precheck")
+            except Exception as e:
+                info = scan_failed(e, started_ns=scan_start_ns)
+                raise
+            scan_failed(None, started_ns=scan_start_ns)
+            d["rows"] = len(res["rows"])
+            for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
+                d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None
+    except Exception as e:
+        if cmd != "precheck":
+            raise
+        import traceback
+        traceback.print_exc()  # the run's log keeps the whole story
+        print(scan_cause(e, info), flush=True)
+        sys.exit(2)
+    return res
+
+
+def precheck_cli(res):
+    """Exit 0 when a run has work: an actionable row, an MR to adopt, or a workspace cleanup.py would delete.
+    One command for the automation's precheck: a shell `a || b` would turn a's exit 2 into b's verdict."""
+    n = sum(r["next"]["owner"] in ("greenlight", "agent") for r in res["rows"])
+    try:  # MRs with no workspace yet: adopt.py creates them, so a run should follow
+        import adopt
+        n += len(adopt.plan(res["rows"], res.get("ts"))["create"])
+    except Exception as e:
+        print(f"adopt plan failed: {e}", file=sys.stderr)
+    if not n:  # no run follows its scan, so this is the freshest snapshot the dashboard will get
+        keep(res)
+    print(f"{n} actionable workspace(s) or adoption(s)")
+    if not n:
+        try:  # finished workspaces: the run's cleanup.py apply deletes them
+            import cleanup
+            gone = sum(r["verdict"] == "candidate" for r in cleanup.scan())
+            print(f"{gone} workspace(s) to delete")
+            n += gone
+        except Exception as e:
+            print(f"cleanup check failed: {e}", file=sys.stderr)
+    sys.exit(0 if n else 1)
 
 
 def repos_cli(argv):
@@ -2186,28 +2267,9 @@ def main():
         f = history_file(sys.argv[2])
         print(f.read_text() if f.exists() else "(no history)")
         return
-    with diag.span("scan", op=cmd) as d:
-        scan_start_ns = time.time_ns()
-        try:
-            res = scan(save=cmd != "precheck")
-        except Exception as e:
-            scan_failed(e, started_ns=scan_start_ns)
-            raise
-        scan_failed(None, started_ns=scan_start_ns)
-        d["rows"] = len(res["rows"])
-        for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
-            d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None
+    res = scan_cli(cmd)
     if cmd == "precheck":
-        n = sum(r["next"]["owner"] in ("greenlight", "agent") for r in res["rows"])
-        try:  # MRs with no workspace yet: adopt.py creates them, so a run should follow
-            import adopt
-            n += len(adopt.plan(res["rows"], res.get("ts"))["create"])
-        except Exception as e:
-            print(f"adopt plan failed: {e}", file=sys.stderr)
-        if not n:  # no run follows, so this is the freshest snapshot the dashboard will get
-            keep(res)
-        print(f"{n} actionable workspace(s) or adoption(s)")
-        sys.exit(0 if n else 1)
+        precheck_cli(res)
     if cmd == "report":
         out = STATE / "report.html"
         out.write_text(report(res))
