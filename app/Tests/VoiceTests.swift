@@ -8,6 +8,7 @@ import Speech
 
 /// Deterministic offline voice, audio, WebSocket, and GPT-Live protocol tests.
 func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
+    runTranscriptTests(check: check)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     do {  // the stage's status line (issue 176): one short sentence, never a repeat; the activity Haiku reads; the local fallback
         check("voice: a status line is one sentence of at most 12 words, markdown off, with a full stop",
@@ -891,4 +892,35 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
           heardText == "What is status?" && handedOff && awaitingCue && cueCleared
           && startedSpeaking && endedSpeaking && liveErrCount == 1 && fbCount == 1
           && capOff && v.captions && closedStopped && bargedIn && turnRanCmd)
+}
+
+/// Dictation keeps every utterance the Apple recognizer hears in a recording, not just the last (#172). The sequences are the
+/// results it gave on a Mac for `say` recordings with pauses, shortened to a few partials each.
+func runTranscriptTests(check: (String, Bool) -> Void) {
+    func heard(_ results: [(String, Bool, Bool)]) -> String {
+        var t = Transcript()
+        for (s, meta, final) in results { t.add(s, ends: meta || final) }
+        return t.text
+    }
+    check("dictation: partials revise one utterance, even shrinking and changing its first word; the final one is the text",
+          heard([("Grin light check", false, false), ("Greenlight", false, false), ("Greenlight check the", false, false), ("Greenlight, check the pipeline.", false, true)])
+          == "Greenlight, check the pipeline.")
+    check("dictation: a pause ends an utterance (metadata) and the next one is added after it, not in its place (#172)",
+          heard([("I want to check", false, false), ("I want to check the pipeline status", false, false), ("I want to check the pipeline status", true, false),
+                 ("Then", false, false), ("Then merge it when it is green", false, false), ("Then merge it when it is green", true, true)])
+          == "I want to check the pipeline status Then merge it when it is green")
+    check("dictation: a one-word utterance before a pause stays (#172)",
+          heard([("OK", false, false), ("OK", true, false), ("Check", false, false), ("Check the pipeline, please", true, true)]) == "OK Check the pipeline, please")
+    check("dictation: two pauses in one sentence keep all three parts, in order (#172)",
+          heard([("First, I paused", false, false), ("First, I paused", true, false), ("In the middle", false, false), ("In the middle of a sentence", true, false),
+                 ("And then", false, false), ("And then I kept talking", true, true)]) == "First, I paused In the middle of a sentence And then I kept talking")
+    check("dictation: over 60 s of speech, the utterance cut at 60 s stays (#172)",
+          heard([("Sentence one", false, false), ("Sentence one … sentence eleven is about", true, false), ("That are waiting", false, false),
+                 ("That are waiting on review. Sentence eighteen.", true, true)]) == "Sentence one … sentence eleven is about That are waiting on review. Sentence eighteen.")
+    check("dictation: Apple's servers send one growing utterance, ended by the final result: kept once",
+          heard([("OK", false, false), ("OK, check the pipeline", false, false), ("OK, check the pipeline", true, true)]) == "OK, check the pipeline")
+    check("dictation: a spoken repeat stays; an empty or blank final keeps what was heard",
+          heard([("Yes", false, false), ("Yes.", true, false), ("Yes", false, false), ("Yes.", true, true)]) == "Yes. Yes."
+          && heard([("Hello there", false, false), ("", false, true)]) == "Hello there" && heard([("Hello", false, false), (" ", true, false)]) == "Hello")
+    check("dictation: nothing heard is empty", heard([("", false, false), (" ", false, true)]).isEmpty)
 }

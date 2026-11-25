@@ -159,7 +159,23 @@ var keychainOps = KeychainOps()
 var keys: [String: String?] = [:]
 let keyLock = NSLock()
 
+/// The whole of a recording's speech from the Apple recognizer's results (#172). On-device, a pause or 60 s of speech ends an
+/// utterance: its last result carries speechRecognitionMetadata, and every result after it, including the final one, holds only
+/// the next utterance. Each ended utterance is kept and the next added after it, in order. Apple's servers send one utterance
+/// that grows across pauses; its final result ends it, so it is kept once.
+struct Transcript {
+    private var done: [String] = [], current = ""
+    var text: String { (done + [current]).filter { !$0.isEmpty }.joined(separator: " ") }
+
+    mutating func add(_ raw: String, ends: Bool) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { current = t }
+        if ends && !current.isEmpty { done.append(current); current = "" }
+    }
+}
+
 /// Transcribes a recorded file; done(text, error) runs on any thread, exactly once, and removes the recording file afterwards.
+/// Both can be set: what was heard before the engine failed, and why it stopped.
 func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -> Void) {
     let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
     let finish: (String?, String?) -> Void = { text, err in
@@ -211,12 +227,13 @@ func transcribe(_ url: URL, engine: String, done: @escaping (String?, String?) -
                 let req = SFSpeechURLRecognitionRequest(url: url)
                 req.requiresOnDeviceRecognition = r.supportsOnDeviceRecognition
                 req.addsPunctuation = true
-                var fired = false
+                var fired = false, heard = Transcript()
                 r.recognitionTask(with: req) { res, err in
                     DispatchQueue.main.async {
                         guard !fired else { return }
-                        if let res, res.isFinal { fired = true; _ = r; finish(trim(res.bestTranscription.formattedString), nil) }
-                        else if let err { fired = true; _ = r; finish(nil, err.localizedDescription) }
+                        if let res { heard.add(res.bestTranscription.formattedString, ends: res.speechRecognitionMetadata != nil || res.isFinal) }
+                        if res?.isFinal == true { fired = true; _ = r; finish(heard.text, nil) }
+                        else if let err { fired = true; _ = r; finish(heard.text.nilIfEmpty, err.localizedDescription) }  // what was heard, and that it stopped short
                     }
                 }
             }

@@ -672,8 +672,10 @@ final class Core: ObservableObject {
         transcribing = true
         transcribe(voiceFile, engine: engine) { text, err in DispatchQueue.main.async {
             self.transcribing = false
-            if let text, !text.isEmpty { self.input += (self.input.isEmpty ? "" : " ") + text }
-            else { self.msgs.append(Msg(.note, "Voice: \(err ?? "heard nothing").")) }
+            if let text, !text.isEmpty {
+                self.input += (self.input.isEmpty ? "" : " ") + text
+                if let err { self.msgs.append(Msg(.note, "Voice: \(err); kept what it heard.")) }
+            } else { self.msgs.append(Msg(.note, "Voice: \(err ?? "heard nothing").")) }
         }}
     }
 
