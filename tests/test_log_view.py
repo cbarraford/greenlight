@@ -121,6 +121,10 @@ def test_redact_takes_a_private_key_with_or_without_its_end():
     assert "SflKx" not in log_view.redact(f"auth {jwt} ok")[0]
     assert "SflKx" not in log_view.redact('{"t":"' + jwt + 'fwpM-"}')[0], "a signature ending in -"
     assert "SflKx" not in log_view.redact("jwt-" + jwt)[0], "after a hyphen"
+    for v in ("DB_PASSWORD=!Sup3rS3cret\nStarting server on port 80", "API_TOKEN=&Sup3r123\nDone.", "password: !Sup3r\n  more text"):
+        out = log_view.redact(v)[0]
+        assert "Sup3r" not in out, out
+    assert log_view.redact("DB_PASSWORD=!Sup3rS3cret\nStarting server on port 80")[0].endswith("Starting server on port 80")
     assert "beta" not in log_view.redact("  - password: |\n      alpha\n\n      betaSecret")[0]
     two = key + END + "\nmid\n" + key + END
     out = log_view.redact(two)[0]

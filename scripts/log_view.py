@@ -298,11 +298,11 @@ PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|
 # /goal; a spaced part goes with it ("my project/plan.pdf", "Jane Doe"): a relative path after it goes too (privacy first)
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)(?<![A-Z0-9_.-])([A-Z0-9_.-]{0,64}(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*+[=:][ \t]*+(?:[!&]\S*+[ \t]*+)*(?:\r?\n[ \t]*+(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*+)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*+[=:][ \t]*+(?:\r?\n[ \t]*+(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*+)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
 _CRED = r"[\w.-]{0,64}(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_-]?keys?|auth|credentials?)[\w.-]{0,64}"
 # The key's own indent (after a diff's +/-) is \2: list items sit at it or deeper, a block's lines and comments deeper
 YAML_LIST_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?P<item>-[ \t]+)?{_CRED}:[ \t]*)\r?\n(?:(?(1)[+ -])\2(?(item)[ \t]+)(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
-YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?P<item>-[ \t]+)?{_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
+YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?P<item>-[ \t]+)?{_CRED}:[ \t]*)(?:(?:[!&]\S*+[ \t]*+)+(?:[|>][-+0-9]*)?|[|>][-+0-9]*)[ \t]*(?:#[^\n]*)?\r?\n"
                            r"(?:(?:(?(1)(?:[+ -][ \t]*)?|[ \t]*)\r?\n)*(?(1)[+ -])\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
 FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})([ \t]+)(?!-)\S+")  # mysql --password hunter2
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}\b", re.I)  # audit's, bounded
