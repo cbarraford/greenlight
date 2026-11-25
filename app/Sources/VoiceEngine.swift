@@ -39,7 +39,7 @@ final class Voice: NSObject, ObservableObject {
         didSet {
             ud.set(thinkingMotion, forKey: "thinkingMotion")
             // While the page loads, the queued call still carries the old value: correct it there.
-            if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + " " + motionVars }  // safety-ok: a hardcoded on/off
+            if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + ";\n" + motionVars }  // safety-ok: a hardcoded on/off
         }
     }
     var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
@@ -108,9 +108,12 @@ final class Voice: NSObject, ObservableObject {
         let stageURL: URL?
         var ready = false, queued: String?
         init(_ u: URL?) { stageURL = u }
+        var loaded: (() -> Void)?  // a fresh page (the first, or one WebKit reloaded) has none of what was sent to the last
+        func webView(_ w: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { ready = false }
         func webView(_ w: WKWebView, didFinish navigation: WKNavigation!) {
             ready = true
             if let q = queued { queued = nil; w.evaluateJavaScript(q) }  // safety-ok: queued only by Voice.js() with JSONSerialization args
+            loaded?()
         }
         func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let u = a.request.url else { decisionHandler(.cancel); return }
@@ -129,6 +132,7 @@ final class Voice: NSObject, ObservableObject {
         cfg.websiteDataStore = .nonPersistent()
         let u = page("stage")
         let nav = StageNav(u); stageNav = nav
+        nav.loaded = { [weak self] in guard let self else { return }; self.refsSent = nil; if let c = self.core { self.refs(c.pucks) } }  // the chips again (#208)
         let v = WKWebView(frame: .zero, configuration: cfg)
         v.navigationDelegate = nav; v.uiDelegate = nav
         v.setValue(false, forKey: "drawsBackground")

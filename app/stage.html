@@ -147,6 +147,8 @@ ol.life li span{color:var(--dim)}
 [data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
 #s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
 #s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
+#s.held .chip{color:var(--dim)}  /* a held chip steps down with the card (and Phosphor's faint green) */
+#s.held .chip svg.tone{filter:none}  /* inherits the chip's muted/faint colour directly (no grey icon on Phosphor) */
 #s.held iframe{filter:grayscale(1);opacity:.6}
 #s.frame.held::before{padding:var(--ds-space-8) var(--ds-space-24) 0}  /* a frame has no padding: the label keeps the gutter */  /* Chief's own page can't take the muted colour: it's dimmed instead */
 .skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
@@ -154,8 +156,11 @@ ol.life li span{color:var(--dim)}
 .skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-4)}  /* 16 to the first line, as the lead to the body */
 /* An MR's live status beside its ref (issue 208): the tone's glyph and a short label, from the snapshot, updated in place. */
 .chip{display:inline-flex;align-items:center;gap:var(--ds-space-4);margin-left:var(--ds-space-8);font:var(--ds-type-label-sm);font-family:var(--font);
-  color:var(--dim);white-space:nowrap;vertical-align:baseline;font-variant-numeric:tabular-nums;margin-right:var(--ds-space-8)}  /* apart from the words after it too */
+  color:var(--dim);white-space:nowrap;vertical-align:baseline;font-variant-numeric:tabular-nums;margin-right:var(--ds-space-4)}  /* with the space after it, 8 to the next word */
 .chip svg.tone{margin:0}
+table.grid:has(.chip){table-layout:fixed}  /* a chip that changes can't resize its column: nothing else on the card moves */
+table.grid td .chip{max-width:calc(100% - var(--ds-space-12));white-space:normal;align-items:flex-start;overflow-wrap:break-word}  /* a long chip wraps inside its cell instead of bleeding into the next column */
+table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .chip.bad{color:var(--bad)} .chip.now{color:var(--now)} .chip.ok{color:var(--ok)} .chip.needs{color:var(--needs)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
@@ -362,7 +367,8 @@ function settled(md){
     else if (us.length > usClose) cut(us[us.length - 1]);
     else if (link && !/^\[[^\]]*\]\([^)]*\)/.test(link) && !/^\[[^\]]*\][^(]/.test(link)) cut(open);  // [x, [x], [x](u
   } while (l !== was);
-  if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";  // "1" may be a list's number before its dot
+  if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";
+  l = l.replace(/(^|[^\w!#\/-])[!#]\d*$/, "$1");  // a ref still being written (!1 of !12) waits: no other MR's chip flashes  // "1" may be a list's number before its dot
   return lines.concat(l.trimEnd() ? [l] : []).join("\n");
 }
 const bare = e => e.className.replace(/\bfresh\b/, "").trim();
@@ -491,7 +497,7 @@ const fx = (() => {
 })();
 // The snapshot's MR chips by ref ({"!12": {tone, label}}), and where a ref sits in text: not inside a word, a path or code.
 let REFS = {};
-const REF_RE = /(^|[^\w!#\/-])([!#]\d+)(?![\w-])/g;
+const REF_RE = /(^|[^\w!#\/-])([!#]\d+)(?![\w\/-])/g;
 function chipFor(ref, v){
   const c = $("span", "chip" + (Object.hasOwn(TONE, v.tone) ? " " + v.tone : "")); c.dataset.ref = ref;
   if (Object.hasOwn(TONE, v.tone)) c.append(toneGlyph(v.tone));
@@ -559,7 +565,11 @@ window.stage = {
   spec(o){
     o = o && typeof o === "object" ? o : {};
     const key = str(o.kind) + "\u0000" + str(o.title), s = document.getElementById("s"), nodes = chipify(specNodes(o));
-    if (s.dataset.card === key && !s.classList.contains("skeleton")) { morph(s, nodes); s.classList.remove("held"); return; }
+    if (s.dataset.card === key && !s.classList.contains("skeleton")) {
+      morph(s, nodes); s.classList.remove("held");
+      if (document.body.dataset.fx === "think") fx.reveal(s);  // it was held while Chief thought: the field lands on it as on any card
+      return;
+    }
     show(nodes); document.getElementById("s").dataset.card = key;
   },
   // Chief's chart (a ```stage block of JSON): {chart: bar|line|pie, title, sub, labels, series: [{name, values, color}], stacked, note}.
