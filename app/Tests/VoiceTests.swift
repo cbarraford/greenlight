@@ -843,11 +843,10 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         let pendingCancelled = !c.toasts.contains { $0.pending }
         v.starting = true; v.toggle()
         let cancelledStart = !v.starting
-        // Voice.show, look switch after stageWeb load, draw fallback, Speech.warm branches, LiveVoice.why fallback
+        // Voice.show, look switch after stageWeb load, Speech.warm branches, LiveVoice.why fallback
         v.on = true; v.isLive = false
         v.show(["kind": "list", "title": "Board", "items": []])
         v.look = looks[0]; v.look = looks[1]
-        v.draw("summary text", last: true)
         c.run = Run("busy"); v.run(.stop); c.run = nil
         c.toasts = [DwimToast(text: "Done", undo: "u-9")]; v.run(.undo)
         for k in ["live", "eleven", "kokoro", "apple"] {
@@ -973,6 +972,69 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.hush(); v.clearStatus()
         check("voice: a turn holds the stage with its status on the strip until it draws, speaks or ends (issue 208)",
               held && lineShown && underInstant && quietAfterDraw && quietAfterSpeech && quietAfterTurn && haikuOwns && watchQuiet)
+        // issue 208 phase 3: one text path, no second request. The voice note names the whole catalog; a reply without [screen]
+        // streams its gist's whole sentences as the lead and ends on it; the instant card stays over a gist; a ```stage block draws
+        // as soon as it can be read (JSON once it parses, notes as markdown), and broken JSON never shows raw
+        check("voice: the voice note names the catalog (chart, table, timeline, diff, lifecycle, card) and no fast-model card (issue 208)",
+              ["\"chart\":", "\"kind\": \"table\"", "\"kind\": \"timeline\"", "\"kind\": \"diff\"", "\"kind\": \"lifecycle\"", "\"items\": [short lines]"]
+                .allSatisfy { voiceNote.contains($0) } && !voiceNote.contains("fast model") && voiceNote.contains("Only for a picture"))
+        func events(_ t: Int) -> [String] {
+            Diag.q.sync {}
+            return ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+                .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+                .filter { $0["turn"] as? Int == t }.map { "\($0["draw"] ?? "")/\($0["by"] ?? "")" }
+        }
+        let g1 = Run("gist?"); c.run = g1; v.on = true; v.isLive = false; v.hush(); v.began(g1)
+        g1.live = "All three are gre"; v.live(g1); let noHalf = !v.streamed
+        g1.live = "All three are green. The las"; v.live(g1)
+        let gistLead = v.streamed && v.streamNext?["lead"] as? String == "All three are green." && v.streamNext?["md"] as? String == ""
+        RunLoop.main.run(until: Date() + 0.05)
+        v.finished(staged(g1.live + "t merged."), "All three are green. The last merged.")
+        check("voice: a reply with no [screen] part streams its gist as the lead and ends on it, with no second request (issue 208)",
+              noHalf && gistLead && events(v.turnNo) == ["hold/app", "text/chief", "text/chief"])
+        let g2 = Run("instant?"); c.run = g2; v.began(g2); v.shown = true; v.instantUp = true  // the instant card landed
+        g2.live = "It's the one on the left."; v.live(g2); let keptInstant = !v.streamed
+        let seqI = v.drawSeq; v.finished(staged(g2.live), g2.live); let instantStays = v.drawSeq == seqI
+        check("voice: the instant card stays over a gist-only reply (issue 208)", keptInstant && instantStays && events(v.turnNo) == ["hold/app"])
+        let g3 = Run("card?"); c.run = g3; v.began(g3)
+        g3.live = "Here.\n```stage\n{\"kind\": \"table\", \"title\": \"CI\", \"rows\": [[\"!1\", \"ok\"]"; v.live(g3); let waitsForJSON = !v.chiefDrew
+        g3.live += "]}"; v.live(g3); let earlyCard = v.chiefDrew && !v.streamed
+        g3.live += "\n```"; v.live(g3)
+        v.finished(staged(g3.live), "Here.")
+        check("voice: a ```stage JSON card draws as soon as it parses, before its fence closes, once (issue 208)",
+              staged(String(g3.live.dropLast(4))).stageOpen?.hasSuffix("]}") == true && waitsForJSON && earlyCard
+              && events(v.turnNo) == ["hold/app", "spec/chief"])
+        let g4 = Run("notes?"); c.run = g4; v.began(g4)
+        g4.live = "Notes.\n```stage\n- one\n- tw"; v.live(g4); let notesStream = v.streamed && v.streamNext?["md"] as? String == "- one\n- tw"
+        g4.live = "Notes.\n```stage\n- one\n- two\n```"; v.live(g4); let notesDone = !v.streamed && v.chiefDrew
+        let g5 = Run("broken?"); c.run = g5; v.began(g5); v.finished(staged("Hm.\n```stage\n{\"title\": \"Work\", \"items\": [\"a\",\n```"), "Hm.")
+        check("voice: ```stage notes stream as markdown, and broken JSON is drawn as what can be read of it (issue 208)",
+              notesStream && notesDone && events(v.turnNo) == ["hold/app", "spec/app"] && staged("x\n```stage\n<svg").stageOpen == "<svg")
+        let g6 = Run("reset card?"); c.run = g6; v.began(g6)
+        g6.live = "Progress.\n```stage\n{\"title\": \"x\", \"items\": [\"a\"]}"; v.live(g6); let drewEarly = v.chiefDrew
+        v.textReset(); g6.live = "Done: two green. Th"; v.live(g6); let replyDraws = v.streamed && v.chiefDrew && !v.instantUp
+        check("voice: a card a replaced block drew early doesn't stop the reply drawing its own (issue 208)", drewEarly && replyDraws)
+        v.endStream()
+        // a progress note that streamed, then text_reset and a gist-only reply: the reply's gist takes the stage; a watch turn's
+        // gist (no began()) is drawn too; a fence's bare label ("json") never shows; stage notes keep the gist as their lead
+        let g7 = Run("note?"); c.run = g7; v.began(g7); g7.live = "Let me check."; v.live(g7); v.textReset()
+        g7.live = "All green. Th"; v.live(g7); let gistAfterReset = v.streamed
+        v.finished(staged(g7.live), "All green.")
+        let wt2 = Run("watch?"); wt2.watch = true; c.run = wt2; let seqW = v.drawSeq; v.shown = true
+        v.finished(staged("Still green."), "Still green."); let watchGist = v.drawSeq > seqW
+        let g8 = Run("label?"); c.run = g8; v.began(g8); g8.live = "Here.\n```stage json"; v.live(g8); let noLabel = !v.chiefDrew && !v.streamed
+        g8.live = "Here.\n```stage\n- a"; v.live(g8); let notesLead = v.streamNext?["lead"] as? String == "Here."
+        // the instant card survives a replaced gist-only note; a failed turn's Listening card doesn't keep a later watch gist off
+        let g9 = Run("instant reset?"); c.run = g9; v.began(g9); v.shown = true; v.instantUp = true
+        g9.live = "Let me check. Th"; v.live(g9); v.textReset(); g9.live = "It's the left one. Th"; v.live(g9)
+        let seqK = v.drawSeq; v.finished(staged("It's the left one."), "It's the left one."); let instantKept = !v.streamed && v.drawSeq == seqK
+        let g10 = Run("fail?"); c.run = g10; v.began(g10); v.shown = true; v.instantUp = true; v.failed("Stopped.")
+        let wt3 = Run("watch?"); wt3.watch = true; c.run = wt3; let seqF = v.drawSeq
+        v.finished(staged("All green."), "All green."); let watchAfterFail = v.drawSeq > seqF
+        c.run = nil; v.hush()
+        check("voice: after a replaced note, a watch turn, a fence label: the gist still draws, nothing stray shows (issue 208)",
+              gistAfterReset && watchGist && instantKept && watchAfterFail && noLabel && notesLead)
+        c.run = nil; v.hush(); v.endStream()
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

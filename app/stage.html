@@ -314,6 +314,8 @@ function blocks(md){
       if (!list || list.tagName.toLowerCase() !== tag) { list = $(tag); if (tag === "ol" && parseInt(m[1]) > 1) list.start = parseInt(m[1]); out.push(list); }
       const li = $("li"); li.append(...inline(m[2])); list.append(li); continue; }
     if (list && /^\s/.test(l) && list.lastChild) { list.lastChild.append(" ", ...inline(t)); continue; }  // a list item's wrapped line
+    const bold = !para.length && t.match(/^\*\*([^*]+)\*\*:?$/);  // a line that's only bold, opening a paragraph: Chief's heading (issue 208)
+    if (bold) { list = null; const e = $("h2"); e.append(...inline(bold[1].replace(/:\s*$/, ""))); out.push(e); continue; }
     list = null; para.push(t);
   }
   flush();

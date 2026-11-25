@@ -1232,8 +1232,8 @@ struct SettingsView: View {
             row("Shortcut", "Press it in any app to dictate to the chat.") { shortcutEditor }
         }
         box("Voice mode") {
-            row("Anthropic key", "Draws what \(c.name) says on the voice stage. Stored in your Keychain; without it the stage shows a plain list.") {
-                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's stage (Claude Haiku 5.5)") }
+            row("Anthropic key", "Says what \(c.name) is doing on the voice stage when it's been quiet a while. Stored in your Keychain; without it the line names the step.") {
+                Button("Set key…") { delegate.askKey("anthropic", "Anthropic API key", "voice mode's status line (Claude Haiku 5.5)") }
             }
             row("Speaking voice", Speech.shared.status.isEmpty ? (Speech.shared.kind == "live" ? "OpenAI's GPT-Live 1.1 holds the conversation: it hears you, hands each request to \(c.name) and reads its answer. About $0.05 a minute while voice mode is on; if it fails, voice mode stops and says why (no Apple voice standing in)." : "Kokoro runs on this Mac. ElevenLabs is paid and is sent each line. Either falls back to Apple's voice.") : Speech.shared.status) {
                 Picker("Speaking voice", selection: Binding(get: { Speech.shared.kind }, set: { ud.set($0, forKey: "speech"); preview.stop(); Speech.shared.stop(); Speech.shared.warm(); c.voiceTest = ""; c.objectWillChange.send() })) {

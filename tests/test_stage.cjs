@@ -447,5 +447,10 @@ const { launchBrowser } = require("./js_harness.cjs");
     assert.ok(await ink() > 200, "the needles are on their way to the chart");
     await settled();
   }
+  // a line that's only bold, opening a paragraph, is a heading (issue 208 decision 3: the [screen] rule forbids ## headings);
+  // bold inside a paragraph, a bold line under another line, and bold with emphasis in it stay as they were
+  await p.evaluate(() => stage.text({ md: "**Needs you:**\n- !12\n\n**Working**\n\nIntro\n**not a heading**\n\n**a *mixed* line**" }));
+  assert.deepEqual(await p.locator(".doc h2").allTextContents(), ["Needs you", "Working"]);
+  assert.equal(await p.locator(".doc p b").count(), 2);
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

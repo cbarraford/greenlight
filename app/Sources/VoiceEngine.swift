@@ -79,7 +79,9 @@ final class Voice: NSObject, ObservableObject {
     private var voiceOut = false  // speaking > 0 for the mic's tap on the audio thread, under `lock`
     var mutes = 0  // each mute bumps it: a GPT-Live hand-off scheduled before one is dropped
     var said = 0, lastSpoken = "", lastHeard = "", lines = [String](), gen = 0, synthConv: AVAudioConverter?, voiceConv: AVAudioConverter?
-    var drawSeq = 0, drewAt = 0, drawing = false, chiefDrew = false, shown = false
+    var drawSeq = 0, chiefDrew = false, shown = false
+    /// The instant card (or one you picked) is up this turn: a gist alone doesn't replace it, only Chief's own detail (#208).
+    var instantUp = false
     /// The [screen] text streaming to the stage (#208): this turn's stream began, the newest text not yet sent, a send on its way.
     /// streamGen moves on when a stream ends, so a send scheduled for it never lands on a later one.
     var streamed = false, streamNext: [String: Any]?, streamDue = false, streamLast: [String: Any]?, streamGen = 0
@@ -155,7 +157,7 @@ final class Voice: NSObject, ObservableObject {
         Diag.event("stage", e.merging(extra) { a, _ in a })
     }
     var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
-    func wait(_ title: String, _ sub: String) { put("stage.wait", [title, sub], by: "app") }
+    func wait(_ title: String, _ sub: String) { instantUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
@@ -163,7 +165,7 @@ final class Voice: NSObject, ObservableObject {
     }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
+        drawSeq += 1; shown = true; instantUp = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
@@ -354,7 +356,7 @@ final class Voice: NSObject, ObservableObject {
         c.spoken(t)
     }
     /// The instant card (dwim.py stage): a table, timeline, diff or lifecycle drawn from the snapshot while Chief thinks. It only
-    /// replaces the wait card: anything drawn since it was asked for (Chief's own, Haiku's) wins, and it never cancels Haiku's drawing.
+    /// replaces the held card or skeleton: anything drawn since it was asked for (Chief's own) wins.
     func instant(_ heard: String) {
         guard on, let c = core, !c.pucks.isEmpty else { return }
         let seq = drawSeq, t0 = Date(), mark = turnMark
@@ -363,7 +365,7 @@ final class Voice: NSObject, ObservableObject {
         ssh("\(py)/dwim.py stage", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
             guard let self, self.on, seq == self.drawSeq, mark.turn == self.turnNo, !self.shown, !self.chiefDrew,  // this turn's, nothing drawn yet
                   let o = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any], o["kind"] is String else { return }
-            self.shown = true; self.put("stage.spec", [o], by: "dwim", mark: mark, extra: ["req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
+            self.shown = true; self.instantUp = true; self.put("stage.spec", [o], by: "dwim", mark: mark, extra: ["req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
             NSLog("dwim: stage %@ in %d ms (dwim.py %@ ms)", o["kind"] as? String ?? "", Int(Date().timeIntervalSince(t0) * 1000), "\(o["ms"] ?? "?")")
         })
     }
@@ -385,8 +387,7 @@ final class Voice: NSObject, ObservableObject {
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; drewAt = 0; chiefDrew = false; shown = false; muted = false; ending = false; endStream()
-        drawing = false  // a drawing the last turn's own took over never came back to clear it
+        said = 0; chiefDrew = false; shown = false; instantUp = false; muted = false; ending = false; endStream()
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
@@ -447,16 +448,27 @@ final class Voice: NSObject, ObservableObject {
     func live(_ r: Run) {
         guard on else { return }
         let st = staged(r.live), p = spokenSoFar(st.text)  // the gist only: a [screen] part is shown as it streams, never said
-        if let h = st.stage { stage(h) }
+        if let h = st.stage { stage(h, lead: st.text) } else if let o = st.stageOpen { stageEarly(o, lead: st.text) }
         let (ss, to) = sentences(p, from: said)
         said = to
         if !ss.isEmpty || st.screen != nil { clearStatus() }  // the reply is here, said or (after you cut in) not, or its [screen] detail
         ss.forEach { say(forEar($0)) }  // per sentence, so `said` stays an offset into text that only grows
-        if let md = st.screen.map(streamable), !md.isEmpty, st.stage == nil, !chiefDrew || streamed { stream(st.text, md) }
-        if !chiefDrew && !drawing && st.screen == nil && p.count - drewAt > 300 { drewAt = p.count; draw(p, last: false) }
+        guard st.stage == nil, st.stageOpen == nil, !chiefDrew || streamed else { return }
+        // the [screen] text as it's written, under the gist; before it (or with none), the gist's whole sentences as the lead.
+        // The instant card (or a card you picked) stays until Chief's own detail comes: the gist alone says no more than it.
+        let md = st.screen.map(streamable) ?? "", lead = st.screen != nil ? st.text : sentences(p, from: 0).said.joined(separator: " ")
+        if !md.isEmpty || (!lead.isEmpty && !instantUp) { stream(lead, md) }
+    }
+    /// A ```stage block still being written (#208): JSON is drawn as soon as it parses as a chart or a card, plain notes stream
+    /// as markdown, and HTML waits for its fence to close (a half page could show anything).
+    func stageEarly(_ o: String, lead: String) {
+        guard !chiefDrew || streamed, o.range(of: #"^[._:-]?[A-Za-z][A-Za-z0-9_-]*$"#, options: .regularExpression) == nil else { return }  // just its label ("json") so far
+        if let j = stageJSON(o) {
+            if let d = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any], isStageChart(d) || stageCard(o) != nil { stage(o, lead: lead) }
+        } else if stageHTML(o) == nil, !streamable(o).isEmpty { stream(lead, streamable(o)) }
     }
     /// The [screen] text to the stage as it's written (#208), under the gist as its lead. The first part goes at once and takes
-    /// the stage (Haiku's card doesn't land); later ones are sent at most every `streamEvery` seconds, the newest only.
+    /// the stage (the instant card doesn't land on it); later ones are sent at most every `streamEvery` seconds, the newest only.
     func stream(_ gist: String, _ md: String) {
         streamNext = ["lead": plain(splitOptions(gist).0), "md": md, "live": true]; streamLast = streamNext
         let first = !streamed
@@ -474,20 +486,19 @@ final class Voice: NSObject, ObservableObject {
     }
     /// The stream is over (its turn ended, failed or a new one began): a send still on its way doesn't land.
     func endStream() { streamed = false; streamNext = nil; streamLast = nil; streamDue = false; streamGen += 1 }
-    /// The text block streaming was replaced by a later one (Codex's progress note): its stream ends where it got to, caret gone,
-    /// and the turn's own reply draws the stage again at its end, as if it had never streamed.
+    /// The text block was replaced by a later one (Codex's progress note): a stream ends where it got to, caret gone, and the
+    /// turn's own reply draws the stage again, as if the replaced block had drawn nothing.
     func textReset() {
-        guard streamed else { return }
-        if var o = streamLast { o["live"] = false; js("stage.text", [o]) }
-        endStream(); chiefDrew = false
+        if streamed, var o = streamLast { o["live"] = false; js("stage.text", [o]) }
+        endStream(); chiefDrew = false  // what the replaced block drew doesn't stop the reply drawing its own
     }
     /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
     /// With only detail, a short pointer is said, so voice mode never goes silent.
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
-        defer { chiefDrew = false; turnAt = nil }  // watch/checkIn turns skip began(); clear so the next turn can draw
+        defer { chiefDrew = false; instantUp = false; turnAt = nil }  // watch/checkIn turns skip began(); clear so the next turn can draw
         guard on else { return }
         clearStatus()
-        if let h = st.stage { stage(h) }
+        if let h = st.stage { stage(h, lead: gist) } else if let o = st.stageOpen { stage(o, lead: gist) }  // a block never closed: drawn as it stands
         let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = spokenSoFar(spoken) + "\n"  // as live() counted `said`
         sentences(p, from: min(said, p.count)).said.forEach { say(forEar($0)) }
         said = 0
@@ -499,11 +510,11 @@ final class Voice: NSObject, ObservableObject {
         endStream()
         guard !chiefDrew || wasStreaming else { return }
         if let detail { took(); put("stage.text", [["lead": plain(gist), "md": detail]], by: "chief") }  // a stream ends on the whole text, its caret gone
-        else if wasStreaming { put("stage.text", [["lead": plain(gist), "md": ""]], by: "chief") }  // it was only an Options line after all
-        else { draw(plain(spoken), last: true) }
+        else if instantUp { return }  // the instant card (or one you picked) stays: the gist alone says no more
+        else { took(); put("stage.text", [["lead": plain(spoken), "md": ""]], by: "chief") }  // no [screen] part: the gist is the card, no second request
     }
-    /// Chief's own drawing (a ```stage block or the [screen] text) takes the stage: Haiku's, even one on its way, doesn't land.
-    func took() { chiefDrew = true; shown = true; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
+    /// Chief's own drawing (a ```stage block, the [screen] text or the gist) takes the stage: the instant card, even on its way, doesn't land.
+    func took() { chiefDrew = true; shown = true; instantUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false; endStream()
@@ -514,27 +525,17 @@ final class Voice: NSObject, ObservableObject {
         wait("Listening", plain(text))
         say(forEar(text))
     }
-    /// Chief's own ```stage block: HTML as is, notes drawn by Haiku. It outranks Haiku's drawing until the next turn.
-    func stage(_ h: String) {
+    /// Chief's own ```stage block: a chart or a catalog card drawn natively, HTML as is, plain notes as markdown (#208: no second
+    /// request), and JSON that doesn't parse as what can be read of it. It outranks the [screen] text and the instant card.
+    func stage(_ h: String, lead: String = "") {
         guard !chiefDrew || streamed else { return }  // a block that closes after the [screen] text began still outranks it
         endStream(); took()
         let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
         if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
-        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // {title, items}: drawn now, not by Haiku (whose fallback showed the JSON)
-        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") } else { draw(h, last: true, force: true) }
-    }
-    func draw(_ text: String, last: Bool, force: Bool = false) {
-        drawSeq += 1
-        let n = drawSeq, mark = turnMark, t0 = Date()
-        drawing = true
-        drawSpec(lastHeard, text) { [weak self] spec in
-            guard let self, n == self.drawSeq else { return }  // a newer drawing was asked for
-            self.drawing = false
-            guard self.on, force || !self.chiefDrew else { return }
-            let x: [String: Any] = ["mid": !last, "req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000]
-            if let spec { self.shown = true; self.put("stage.spec", [spec], by: "fast", mark: mark, extra: x) }
-            else if last { self.shown = true; self.put("stage.spec", [fallbackSpec(text)], by: "app", mark: mark, extra: x) }  // mid-reply, a failure leaves the card up
-        }
+        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // a catalog card or {title, items}: drawn now
+        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") }
+        else if stageJSON(h) != nil { put("stage.spec", [fallbackSpec(h)], by: "app") }  // broken JSON: never shown raw
+        else { put("stage.text", [["lead": plain(splitOptions(lead).0), "md": h]], by: "chief") }  // notes under the gist, as [screen] text is
     }
 
     // speech
@@ -715,7 +716,7 @@ final class Voice: NSObject, ObservableObject {
     var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
-        hush(); clearStatus(); endStream()  // a send still on its way doesn't land on the next voice mode's stage
+        hush(); clearStatus(); endStream(); instantUp = false  // a send still on its way doesn't land on the next voice mode's stage
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
