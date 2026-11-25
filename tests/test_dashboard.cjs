@@ -398,7 +398,7 @@ test("hover card footer: one glyph for the agent (a live one outranks a crash), 
 });
 
 test("verify: the hover card's Verify move runs its prompt; the page's facts and steps show the verdict and its evidence", async page => {
-  await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle"; p.steps = ["mr_open", "ci_green", "verify", "ready", "merge"]; p.step_index = 2; p.step = "verify";
+  await page.evaluate(() => { const p = puckOf("plan-a"); p.agent.state = "idle"; p.steps = ["mr_open", "ci_green", "verified", "ready", "merge"]; p.step_index = 2; p.step = "verified";
     p.mr = {iid: 12, ref: "!12", state: "opened", title: "x", target_branch: "main", web_url: "https://gl/12",
             verify: {verdict: "fail", phase: "fix", round: 1, max_rounds: 3, summary: "cancel kept state", defects: ["dirty dialog"], unproven: ["Safari"], evidence: "/srv/gl/verify/x-12.html"}};
     p.moves = [{kind: "verify", prompt: "verify prompt", own: false, repo: "widgets"}];

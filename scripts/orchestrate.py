@@ -49,7 +49,7 @@ HERE = Path(__file__).resolve().parent
 OPTS = {"max_dispatch": 5, "max_forge_actions": 5, "min_confidence": 0.75} | (greenlight.CONFIG.get("orchestrator") or {})
 LOG = greenlight.STATE / "log.jsonl"
 TICK_LOCK_FD = None  # inherited by each mutating child so a killed parent cannot release the tick lock early
-FIX_KIND = {"ci_green": "ci", "no_conflicts": "conflicts", "threads": "threads"}  # step → prompts/<kind>.md
+FIX_KIND = {"ci_green": "ci", "no_conflicts": "conflicts", "threads": "threads", "verified": "verify"}  # step → prompts/<kind>.md
 MAX_SAME_STEP = 3  # the third dispatch for one step is a fork, whatever the commit
 FORK = ["dispatch again", "hand it to the next agent", "ask the user"]
 BRIEF = """/goal {goal}
@@ -257,6 +257,11 @@ def brief(r, card, handoff=""):
             doc = {"file": "(unknown)", "rules": "", "stages": []}
         extra = "".join(f"\nFailed job: {j.get('name')} ({j.get('stage')}): {j.get('url')}" for j in (mr.get("failed_jobs") or [])[:10])
         extra += "".join(f"\nThread: {t}" for t in (mr.get("todo_threads") or [])[:10])
+        if (v := mr.get("verify") or {}).get("phase") == "fix":  # the verified step's defects, back to the builder: fix and push, don't record a verdict
+            extra += "".join(f"\nVerification defect: {d}" for d in (v.get("defects") or [])[:10])
+            extra += "".join(f"\nCould not prove: {u}" for u in (v.get("unproven") or [])[:10])
+            extra += f"\nVerification evidence: {v['evidence']}" if v.get("evidence") else ""
+            extra += "\nPush a fix as a new commit; a fresh verifier checks it. Don't record a verdict yourself."
         body = BRIEF.format(goal=r.get("goal") or mr.get("title") or nxt["action"], name=r["name"], project=r.get("project"),
                             lifecycle=doc.get("file") or "(no MR: free-form goal)", custom_hint=_custom_hint(doc),
                             step=nxt["step"], action=nxt["action"], url=mr.get("web_url") or "(none yet)",

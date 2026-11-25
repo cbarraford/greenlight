@@ -329,7 +329,8 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     for (k, v) in (secondary?["panes"] as? [String: Any]) ?? [:] { panes[k] = v }
     var out: [String: Any] = ["trees": merged, "panes": panes, "repoHosts": hosts]
     out["usage"] = usageOf(primary, secondary)
-    for k in ["ts", "scanned", "scan_error"] { out[k] = primary?[k] ?? secondary?[k] }  // the Basement footer's scan facts: greenlight's host's, else the Mac's
+    let scan = primary?["scanned"] != nil ? primary : secondary  // the Basement footer's scan facts, all from one host: greenlight's, else the Mac's
+    for k in ["ts", "scanned", "scan_error"] { out[k] = scan?[k] }
     return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
@@ -970,7 +971,7 @@ final class RulesStore: ObservableObject {
     @Published var notes = [(name: String, text: String)]()
     @Published var note = ""
     @Published var noteText = ""
-    @Published var projs = [[String: Any]]()  // the Basement's projects (projects.json), for Settings → Terminal's default folders
+    @Published var projs = [[String: Any]]()  // the Basement's projects (projects.json): Settings › Projects edits them
     @Published var projNote = ""
     @Published var review = ""  // your own prompt for repo's kind (review, verify, threads, ci, conflicts); reviewOwn false = the default
     @Published var reviewDefault = ""

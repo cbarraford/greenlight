@@ -1107,7 +1107,7 @@ function wsMenu(e, ws, w){
 }
 // the lifecycle (dash.py progress) as a bar that opens into a checklist, and when it's on you what to do (dash.py advice; null: the suggestion's advice line)
 // ponytail: the step names and owner words are dashboard.html's too (STEP_DONE, OWNER_SAY); keep them in step
-const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", verify: "Verified end to end", review_bot: "Review bot assigned", milestone: "Milestone set",
+const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", verified: "Verified end to end", review_bot: "Review bot assigned", milestone: "Milestone set",
   ready: "Ready for review", threads: "Threads resolved", approved: "Approved", merge: "Merged", review: "Your review"};
 const OWNER_SAY = {me: "you", greenlight: "greenlight", agent: "an agent", working: "an agent, working", ci: "CI", reviewers: "reviewers", author: "the author", dependency: "another MR"};
 let stepsOpen = store("stepsOpen") === "1";

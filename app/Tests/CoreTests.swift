@@ -1320,7 +1320,7 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && mergedPucks.first { $0["name"] as? String == "srv-1" }?["_runHost"] as? String == "devbox"
           && mergedTreeList.count == 2
           && mergedTrees?["scanned"] as? Int == 190 && mergedTrees?["ts"] as? Int == 200  // the Basement footer's scan facts: greenlight's host's first
-          && (mergedTrees?["scan_error"] as? [String: Any])?["msg"] as? String == "Orca unreachable"  // else the Mac's
+          && mergedTrees?["scan_error"] == nil  // all from greenlight's host: never the Mac's error beside the server's scan time
           && mergedTreeList.first { $0["path"] as? String == "/srv/a" }?["_runHost"] as? String == "devbox"
           && mergedPanes["mc-srv"] != nil && mergedPanes["mc-mac"] != nil
           && combinedHost?.mode == "auto" && combinedHost?.target == "mac" && combinedHost?.needsMac == true

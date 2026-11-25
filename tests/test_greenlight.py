@@ -790,49 +790,52 @@ greenlight.CONFIG = old_cfg
 print("custom stages ok")
 
 # --- the built-in verify step: SHA-pinned receipts, a 3-round builder <-> verifier loop, escalation, an evidence page
-(greenlight.STATE / "lifecycles/verified.md").write_text("# verified\n\n1. `ci_green` — ci\n2. `verify` — verified\n3. `ready` — ready\n4. `merge` — merge\n")
+(greenlight.STATE / "lifecycles/verified.md").write_text("# verified\n\n1. `ci_green` — ci\n2. `verified` — verified\n3. `ready` — ready\n4. `merge` — merge\n")
 assert [s["done"] for s in greenlight.lifecycle_doc("acme/verified")["stages"]] == ["", "", "", ""]  # built in: no Done
 vw = {"project": "acme/verified", "goal": "ship it", "branch": "feat"}
 ev_v = lambda sha, **kw: greenlight.evaluate(vw, mr(sha=sha, draft=True, **kw), None)
-e = ev_v("sha1")  # no receipt yet: a fresh verifier
-assert (e["step"], e["owner"]) == ("verify", "agent") and "fresh verifier" in e["action"], e
-with mock.patch.object(sys, "argv", ["greenlight.py", "verify", "acme/verified", "1", "fail", "--sha", "sha1",
+e = ev_v("aaaaaa1")  # no receipt yet: a fresh verifier
+assert (e["step"], e["owner"]) == ("verified", "agent") and "fresh verifier" in e["action"], e
+with mock.patch.object(sys, "argv", ["greenlight.py", "verify", "acme/verified", "1", "fail", "--sha", "aaaaaa1",
                                      "--summary", "cancel kept state", "--defect", "Cancel leaves dialog dirty", "--unproven", "Safari"]):
     greenlight.main()
-st1 = greenlight.verify_status("acme/verified", 1, "sha1")
+st1 = greenlight.verify_status("acme/verified", 1, "aaaaaa1")
 assert st1["phase"] == "fix" and st1["round"] == 1 and not st1["stale"] and os.path.exists(st1["evidence"]), st1
 ev_html = greenlight.Path(st1["evidence"]).read_text()
 assert "FAIL" in ev_html and "Cancel leaves dialog dirty" in ev_html and "Safari" in ev_html
-greenlight.verify_record("acme/verified", 1, "fail", sha="sha1", summary="cancel kept state")  # recorded again on the same commit: still round 1
-assert greenlight.verify_status("acme/verified", 1, "sha1")["round"] == 1
-e = ev_v("sha1")  # round 1 failed on sha1: the builder fixes it
-assert (e["step"], e["owner"]) == ("verify", "agent") and "Fix verification defects (round 1/3): cancel kept state" in e["action"], e
-e = ev_v("sha2")  # the fix landed: a fresh verifier, round 2
-assert (e["step"], e["owner"]) == ("verify", "agent") and "Re-verify after fixes (round 2/3)" in e["action"], e
-greenlight.verify_record("acme/verified", 1, "fail", sha="sha2", summary="still broken")
-assert ev_v("sha3")["action"].startswith("Re-verify after fixes (round 3/3)")
-greenlight.verify_record("acme/verified", 1, "fail", sha="sha3", summary="third strike")
-e = ev_v("sha3")  # the third failure: the user's
-assert (e["step"], e["owner"]) == ("verify", "me") and "failed 3/3 rounds" in e["action"], e
-assert ev_v("sha4")["owner"] == "me"  # a push after the third strike still waits on the user
-greenlight.verify_record("acme/verified", 1, "pass", sha="sha4", summary="all flows green")
+greenlight.verify_record("acme/verified", 1, "fail", sha="aaaaaa1", summary="cancel kept state")  # recorded again on the same commit: still round 1
+assert greenlight.verify_status("acme/verified", 1, "aaaaaa1")["round"] == 1
+e = ev_v("aaaaaa1")  # round 1 failed on aaaaaa1: the builder fixes it
+assert (e["step"], e["owner"]) == ("verified", "agent") and "Fix verification defects (round 1/3): cancel kept state" in e["action"], e
+e = ev_v("aaaaaa2")  # the fix landed: a fresh verifier, round 2
+assert (e["step"], e["owner"]) == ("verified", "agent") and "Re-verify after fixes (round 2/3)" in e["action"], e
+greenlight.verify_record("acme/verified", 1, "fail", sha="aaaaaa2", summary="still broken")
+assert ev_v("aaaaaa3")["action"].startswith("Re-verify after fixes (round 3/3)")
+greenlight.verify_record("acme/verified", 1, "fail", sha="aaaaaa3", summary="third strike")
+e = ev_v("aaaaaa3")  # the third failure: the user's
+assert (e["step"], e["owner"]) == ("verified", "me") and "failed 3/3 rounds" in e["action"], e
+assert ev_v("aaaaaa4")["owner"] == "me"  # a push after the third strike still waits on the user
+greenlight.verify_record("acme/verified", 1, "pass", sha="aaaaaa4", summary="all flows green")
 assert greenlight.verifications()["acme/verified#1"]["round"] == 0  # a pass starts the count over
-assert ev_v("sha4")["step"] == "ready"
-e = ev_v("sha5")  # a new commit invalidates the pass
-assert (e["step"], e["owner"]) == ("verify", "agent") and "new commits since verified sha4" in e["action"], e
-greenlight.verify_record("acme/verified", 1, "uncertain", sha="sha5", summary="needs prod key")
-e = ev_v("sha5")
-assert (e["step"], e["owner"]) == ("verify", "me") and "verifier uncertain: needs prod key" in e["action"], e
-assert ev_v("sha6")["owner"] == "agent"  # uncertain, then a new commit: try again
+assert ev_v("aaaaaa4")["step"] == "ready"
+e = ev_v("aaaaaa5")  # a new commit invalidates the pass
+assert (e["step"], e["owner"]) == ("verified", "agent") and "new commits since verified aaaaaa4" in e["action"], e
+greenlight.verify_record("acme/verified", 1, "uncertain", sha="aaaaaa5", summary="needs prod key")
+e = ev_v("aaaaaa5")
+assert (e["step"], e["owner"]) == ("verified", "me") and "verifier uncertain: needs prod key" in e["action"], e
+assert ev_v("aaaaaa6")["owner"] == "agent"  # uncertain, then a new commit: try again
+assert greenlight.verify_status("acme/verified", 1, "aaaaaa5")["phase"] == "escalated"  # sanity: same record
+greenlight.verify_record("acme/verified", 7, "pass", sha="abc1234")  # recorded with a short sha: the head it names isn't "new commits"
+assert greenlight.verify_status("acme/verified", 7, "abc1234deadbeef")["phase"] == "pass" and greenlight.verify_status("acme/verified", 7, "fff0000")["stale"]
 greenlight.verify_record("acme/verified", 1, "reset")
-assert greenlight.verify_status("acme/verified", 1, "sha5") is None and ev_v("sha5")["action"].endswith("(fresh verifier)")
+assert greenlight.verify_status("acme/verified", 1, "aaaaaa5") is None and ev_v("aaaaaa5")["action"].endswith("(fresh verifier)")
 assert greenlight.verify_record("acme/verified", 2, "pass", sha="s", evidence="https://ci/run/7")["evidence"] == "https://ci/run/7"
 try:
     greenlight.verify_record("acme/verified", 1, "maybe")
     raise AssertionError("bad verdict accepted")
 except ValueError:
     pass
-for bad in (["acme/verified", "1", "pass"], ["acme/verified", "1", "maybe", "--sha", "x"], ["acme/verified", "1", "pass", "--sha", "x", "--nope", "y"]):
+for bad in (["acme/verified", "1", "pass"], ["acme/verified", "1", "pass", "--sha", "HEAD"], ["acme/verified", "1", "maybe", "--sha", "x"], ["acme/verified", "1", "pass", "--sha", "x", "--nope", "y"]):
     try:
         with mock.patch("sys.stderr"):
             greenlight.verify_cli(bad)  # no --sha, a bad verdict, an unknown flag: usage, nothing recorded
@@ -841,15 +844,36 @@ for bad in (["acme/verified", "1", "pass"], ["acme/verified", "1", "maybe", "--s
         assert x.code == 2, bad
 assert "acme/verified#1" not in greenlight.verifications()
 vf = greenlight.STATE / "verify.json"
-vf.write_text("{oops")
-assert greenlight.verifications() == {} and greenlight.verify_status("acme/verified", 1, "x") is None  # a torn file reads as none
+for torn in ("{oops", "[]"):
+    vf.write_text(torn)
+    assert greenlight.verifications() == {} and greenlight.verify_status("acme/verified", 1, "x") is None  # a torn file reads as none
+    try:
+        greenlight.verify_record("acme/verified", 9, "pass", sha="s")
+        raise AssertionError("wrote over a file it couldn't read")
+    except ValueError:
+        assert vf.read_text() == torn  # the other MRs' receipts, if any, are still there to recover
 vf.unlink()
-rec = greenlight.verify_record("acme/verified", 1, "pass", sha="sha4", summary="ok")  # report() names the verdict and links its evidence
+rec = greenlight.verify_record("acme/verified", 1, "pass", sha="aaaaaa4", summary="ok")  # report() names the verdict and links its evidence
 rep = greenlight.report({"ts": 1, "skipped": 0, "gone": [], "rows": [
     {"name": "w", "project": "acme/verified", "branch": "feat", "goal": "ship", "agent": {"state": "idle", "idle_h": 1},
-     "mr": {"iid": 1, "ref": "!1", "web_url": "https://x/1", "role": "author", "verify": greenlight.verify_status("acme/verified", 1, "sha4")},
+     "mr": {"iid": 1, "ref": "!1", "web_url": "https://x/1", "role": "author", "verify": greenlight.verify_status("acme/verified", 1, "aaaaaa4")},
      "next": {"step": "ready", "owner": "greenlight", "action": "ready"}}]})
 assert f'file://{rec["evidence"]}' in rep and "verify: pass" in rep
+greenlight.verify_record("acme/verified", 1, "pass", sha="aaaaaa4", evidence="javascript://x%0aalert(1)")
+rep = greenlight.report({"ts": 1, "skipped": 0, "gone": [], "rows": [
+    {"name": "w", "project": "acme/verified", "branch": "feat", "goal": "ship", "agent": {"state": "idle", "idle_h": 1},
+     "mr": {"iid": 1, "ref": "!1", "web_url": "https://x/1", "role": "author", "verify": greenlight.verify_status("acme/verified", 1, "aaaaaa4")},
+     "next": {"step": "ready", "owner": "greenlight", "action": "ready"}}]})
+assert 'href="javascript' not in rep and "evidence javascript://x%0aalert(1)" in rep  # named, never a link
+# `verify` is still a name for your own step: a post-merge sign-off called verify keeps the merged workspace until you sign it off
+(greenlight.STATE / "lifecycles/ownverify.md").write_text("# ownverify\n\n1. `ci_green` — ci\n2. `merge` — merge\n3. `verify` — QA on staging. Done: `signoff`\n")
+e = greenlight.evaluate({"project": "acme/ownverify", "goal": "", "branch": "b"}, mr(state="merged"), None)
+assert (e["step"], e["owner"]) == ("verify", "me") and "signoff" in e["cmd"], e
+assert "## Rules" not in greenlight.lifecycle_md("ownverify", greenlight.lifecycle_doc("acme/ownverify"))  # and it still saves
+# the old partition's loose headings still parse: "## Rules (all agents)", "## Rules:", CRLF; a section given twice keeps both
+(greenlight.STATE / "lifecycles/loose.md").write_text("# loose\r\n\r\n1. `merge` — merge\r\n\r\n## Rules (all agents)\r\n\r\nBe kind.\r\n\r\n## Checklist:\r\n- `a`: b\r\n\r\n## Rules\r\nNo force-push.\r\n")
+lo = greenlight.lifecycle_doc("acme/loose")
+assert [s["key"] for s in lo["stages"]] == ["merge"] and "Be kind." in lo["rules"] and "No force-push." in lo["rules"] and lo["checklist"] == "- `a`: b", lo
 print("verify ok")
 
 

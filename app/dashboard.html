@@ -888,10 +888,10 @@ const STATE = {
 };
 const ORDER = Object.keys(STATE);
 const TONE = {ok:"--green", warn:"--orange", bad:"--red", info:"--blue", idle:"--track"};
-const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No conflicts", verify:"Verified", review_bot:"Review bot", milestone:"Milestone",
+const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No conflicts", verified:"Verified", review_bot:"Review bot", milestone:"Milestone",
   ready:"Out of draft", threads:"Threads", approved:"Approval", merge:"Merge", reviewed:"Reviewed", tried:"Tried out", deploy:"Deployed"};  // the page's step checklist: what each step achieves
 // everywhere else: what the MR still needs, not the step's goal ("No conflicts" read as a status when it meant "has conflicts")
-const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", verify:"Verify", review_bot:"Add review bot", milestone:"Set milestone",
+const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", verified:"Verify", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {view: localGet("view") === "list" ? "list" : "overview",  // a view no longer offered (the old CI view) opens on Overview
   listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, acting: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
@@ -1082,7 +1082,7 @@ function stepsOf(p){
   const n = p.steps && p.steps.length || 9, i = p.state === "done" ? n : p.step_index != null ? p.step_index : Math.round((p.progress || 0) * n);
   return {n, i};
 }
-const HEXSUB = {review:"Review", verify:"Verify", merge:"Merge", milestone:"Milestone", ci_green:"CI", threads:"Threads"};  // the hex has room for one short word
+const HEXSUB = {review:"Review", verified:"Verify", merge:"Merge", milestone:"Milestone", ci_green:"CI", threads:"Threads"};  // the hex has room for one short word
 const mrRef = mr => mr.ref || "!" + mr.iid;  // "!5131" (GitLab MR) or "#23" (GitHub PR)
 const forgeName = mr => mr.forge === "github" ? "GitHub" : "GitLab";
 function hexLabel(p){
@@ -1245,7 +1245,7 @@ function hl(name, on){
   document.querySelectorAll(`.cell${q},.fp${q},.acard${q},.lrow${q}`).forEach(e => e.classList.toggle("hl", on));
   document.querySelectorAll(".fan").forEach(f => { const hub = f.querySelector(".hub"); if (hub) hub.classList.toggle("hl", !!f.querySelector(".fp.hl")) });
 }
-const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", verify:"Verifying", review_bot:"Adding review bot", milestone:"Setting milestone",
+const DOING = {mr_open:"Opening MR", ci_green:"Fixing CI", no_conflicts:"Resolving conflicts", verified:"Verifying", review_bot:"Adding review bot", milestone:"Setting milestone",
   ready:"Undrafting", threads:"Answering threads", approved:"Awaiting approval", merge:"Merging", review:"Reviewing"};
 const CIWORD = {success:["passed", "--green"], failed:["failed", "--red"], running:["running", "--blue"], pending:["pending", "--blue"], canceled:["canceled", "--gray"]};
 const cssId = name => String(name).replace(/[^A-Za-z0-9-]/g, c => `_${c.charCodeAt(0).toString(16)}_`);  // one-to-one: "v1.2" and "v1_2" stay apart
@@ -1704,10 +1704,11 @@ function stepNote(k, i, cur, p, ml){
   switch (k) {
     case "ci_green": return ciSay(ml, mr).slice(0, 2);
     case "no_conflicts": return conflicts ? ["has conflicts", "warn"] : ["clean", null];
-    case "verify": { const v = mr.verify;  // greenlight.py verify's receipt, pinned to a commit
+    case "verified": { const v = mr.verify;  // greenlight.py verify's receipt, pinned to a commit
       if (!v) return ["not verified", null];
       if (v.phase === "pass") return ["verified", "ok"];
       if (v.verdict === "pass" && v.stale) return ["stale (new commits)", "warn"];
+      if (v.phase === "verify") return [`re-verify (round ${(v.round || 0) + 1}/${v.max_rounds || 3})`, "warn"];  // a fix landed: the verifier's turn
       if (v.verdict === "uncertain") return ["uncertain", "warn"];
       return [`failed (${v.round || 1}/${v.max_rounds || 3})`, "bad"]; }
     case "milestone": return [ml.milestone || "not set", null];
@@ -2966,7 +2967,7 @@ function recEl(p){
   return h("div", {class: "rec" + (say ? "" : " wait"), role: "note"}, h("span", {class: "hk"}, "Recommended"), say || "Working one out…");
 }
 // the lifecycle: a bar that opens into a checklist (done, here and who it's on, ahead; steps after merge below a line)
-const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", verify: "Verified end to end", review_bot: "Review bot assigned", milestone: "Milestone set",
+const STEP_DONE = {mr_open: "Implement & open MR", ci_green: "CI green", no_conflicts: "No conflicts", verified: "Verified end to end", review_bot: "Review bot assigned", milestone: "Milestone set",
   ready: "Ready for review", threads: "Threads resolved", approved: "Approved", merge: "Merged", review: "Your review"};
 const OWNER_SAY = {me: "you", greenlight: "greenlight", agent: "an agent", working: "an agent, working", ci: "CI", reviewers: "reviewers", author: "the author", dependency: "another MR"};
 ui.stepsOpen = localGet("stepsOpen") === "1";

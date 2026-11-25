@@ -841,7 +841,7 @@ struct SettingsView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(bg).ignoresSafeArea()  // the header is the title bar
         .tint(accent)
         .onAppear { rs.load(); rs.projs = delegate.savedProjects }
-        .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // the Basement's editor may have changed them
+        .onChange(of: c.settingsTab) { rs.projs = delegate.savedProjects }  // re-read on each pane switch (a project a new window made, say)
         .onChange(of: c.settingsOpen) { rs.projs = delegate.savedProjects; if !c.settingsOpen { preview.stop() } }
     }
 

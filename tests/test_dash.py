@@ -501,7 +501,7 @@ from pathlib import Path
 dash.MEMORY = Path(tempfile.mkdtemp())
 g = dash.settings("lifecycle-get", "greenlight", "")
 assert g["source"] == "bundled" and "automerge" in g["options"] and g["rules"] and g["checklist"], g
-assert "verify" in g["builtins"]
+assert "verified" in g["builtins"] and "verify" not in g["builtins"]  # `verify` stays a name for your own step (deploy, verify)
 dash.settings("lifecycle-set", "greenlight", json.dumps({**g, "rules": "Always add a test.", "checklist": "- `x.py`: check x"}))
 g2 = dash.settings("lifecycle-get", "greenlight", "")
 assert (g2["source"], g2["rules"], g2["checklist"], g2["intro"]) == ("yours", "Always add a test.", "- `x.py`: check x", g["intro"])
@@ -561,7 +561,7 @@ assert dash.settings("autorun-set", "../x", "{}")["error"]
 a = dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "threads": 9, "nope": 0, "merge": 0, "verify": 1}))
 assert a["on"] == {"ci": 1, "merge": 0, "verify": 1} and [k["kind"] for k in a["kinds"]] == ["ci", "conflicts", "threads", "verify", "review", "merge"], a
 # the Verify move: when the verify step wants a fresh verifier on your MR; not while the builder fixes its defects, nor on a review
-vrow = {**mine, "goal": "Ship feature", "next": {"owner": "agent", "step": "verify", "action": "Verify changes end to end (fresh verifier)"},
+vrow = {**mine, "goal": "Ship feature", "next": {"owner": "agent", "step": "verified", "action": "Verify changes end to end (fresh verifier)"},
         "mr": {**mine["mr"], "iid": 58, "conflicts": False, "pipeline": "success", "todo_threads": [], "verify": None}}
 vmv = dash.moves(vrow)
 assert [m["kind"] for m in vmv] == ["verify"] and "greenlight.py verify octo/greenlight 58" in vmv[0]["prompt"] and "Ship feature" in vmv[0]["prompt"], vmv
@@ -570,7 +570,7 @@ assert vmv[0]["auto"].startswith(dash.AUTO_HEAD + "Run the verification, save it
 assert dash.moves({**vrow, "mr": {**vrow["mr"], "verify": {"verdict": "fail", "phase": "fix", "round": 1, "stale": False}}}) == []
 assert dash.moves({**vrow, "mr": {**vrow["mr"], "role": "review"}}) == []
 assert [m["kind"] for m in dash.moves({**vrow, "mr": {**vrow["mr"], "pipeline": "failed"}})] == ["ci", "verify"]  # a fix first, Verify beside it
-_sp = lambda v: {"state": "queued", "step": "verify", "owner": "agent", "agent": {"state": "idle"}, "mr": {"state": "opened", "verify": v}}
+_sp = lambda v: {"state": "queued", "step": "verified", "owner": "agent", "agent": {"state": "idle"}, "mr": {"state": "opened", "verify": v}}
 assert dash.sig(_sp({"verdict": "fail", "stale": False, "round": 1})) != dash.sig(_sp({"verdict": "pass", "stale": False, "round": 0}))  # a verdict redraws the page
 assert dash.sig(_sp(None)) == dash.sig({**_sp(None), "mr": {"state": "opened"}})
 mv = {m["kind"]: m for m in dash.moves(mine)}

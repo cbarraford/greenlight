@@ -183,7 +183,7 @@ def test_define_build_verify_review_land_and_done(lifestage_env):
 
 
 def test_builtin_verify_step_places_in_verify_author_check(lifestage_env):
-    (greenlight.STATE / "lifecycles/checked.md").write_text("# checked\n\n1. `mr_open` — x\n2. `verify` — x\n3. `merge` — x\n")
+    (greenlight.STATE / "lifecycles/checked.md").write_text("# checked\n\n1. `mr_open` — x\n2. `verified` — x\n3. `merge` — x\n")
     life = lambda m: _life(m, project="acme/checked")
     assert life(_mr()) == ("3.4", "yours", "your agent", "Verify !7")  # no receipt: a fresh verifier
     greenlight.verify_record("acme/checked", 7, "fail", sha="abc", summary="cancel kept state")

@@ -469,7 +469,7 @@ def lifecycle_file(project):
 
 
 BUILTIN = {"mr_open": "An MR exists for the branch.", "ci_green": "The head pipeline succeeded (or there's no CI).",
-           "no_conflicts": "No merge conflicts.", "verify": "Verified end to end on the current head commit.",
+           "no_conflicts": "No merge conflicts.", "verified": "A fresh verifier passed it end to end on the current head commit.",
            "review_bot": "The review bot is assignee and reviewer.",
            "milestone": "A release milestone is set.", "ready": "Not a draft.", "threads": "No unresolved threads.",
            "approved": "The required approvals are in.", "merge": "The forge reports it mergeable."}
@@ -478,7 +478,8 @@ DONE_RE = re.compile(r"\s*Done:\s*`(signoff|(?:label|check)=[^`]+)`")
 RUN_RE = re.compile(r"\s*Run:\s*`([^`]+)`")  # a signoff step's command: the card's button runs it on the host, then signs it off
 OWNER_RE = re.compile(r"\s*Owner:\s*`(agent|me|reviewers|ci)`")
 PHASE_RE = re.compile(r"\s*Phase:\s*`(define|build|verify|review|land)`")
-SECTION_RE = re.compile(r"^## (Rules|Checklist)[ \t]*$", re.M)  # a lifecycle's standing rules and its diff-triggered checklist, either order
+# a lifecycle's standing rules and its diff-triggered checklist, either order; "## Rules (all agents)" or "## Rules:" too, as the old partition took them
+SECTION_RE = re.compile(r"^##[ \t]+(Rules|Checklist)\b[^\n]*$", re.M)
 
 
 def lifecycle_doc(project):
@@ -486,7 +487,10 @@ def lifecycle_doc(project):
     A custom stage passes on `Done: `signoff``, `Done: `label=x``, or `Done: `check=x``, and may set `Owner:` / `Phase:`."""
     f = lifecycle_file(project)
     parts = SECTION_RE.split(f.read_text())
-    head, sections = parts[0], {parts[i].lower(): parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
+    head, sections = parts[0], dict[str, str]()
+    for i in range(1, len(parts) - 1, 2):  # a section given twice keeps both
+        k = parts[i].lower()
+        sections[k] = "\n\n".join(x for x in (sections.get(k, ""), parts[i + 1].strip()) if x)
     stages = []
     for key, rest in STAGE_RE.findall(head):
         m, run, own, ph = DONE_RE.search(rest), RUN_RE.search(rest), OWNER_RE.search(rest), PHASE_RE.search(rest)
@@ -729,9 +733,10 @@ def verifications():
     """SHA-pinned verification receipts per MR: {"project#iid": {sha, verdict, round, ts, summary, evidence, defects, unproven}}."""
     f = STATE / "verify.json"
     try:
-        return json.loads(f.read_text()) if f.exists() else {}
+        vs = json.loads(f.read_text()) if f.exists() else {}
     except (OSError, ValueError):
         return {}
+    return vs if isinstance(vs, dict) else {}  # torn or foreign: none, rather than a scan that dies on every MR
 
 
 def verify_phase(verdict, stale, rnd):
@@ -752,7 +757,7 @@ def verify_status(project, iid, head_sha):
     if not rec:
         return None
     sha, rnd = rec.get("sha"), int(rec.get("round") or 0)
-    stale = bool(head_sha and sha and sha != head_sha)
+    stale = bool(head_sha and sha and not (head_sha.startswith(sha) or sha.startswith(head_sha)))  # a short sha names its commit too
     return {**rec, "stale": stale, "phase": verify_phase(rec.get("verdict"), stale, rnd), "max_rounds": VERIFY_MAX_ROUNDS}
 
 
@@ -793,6 +798,8 @@ def verify_record(project, iid, verdict, sha="", summary="", evidence="", defect
     with (STATE / "verify.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         vs = verifications()
+        if f.exists() and not vs and f.read_text().strip() not in ("", "{}"):  # never write over receipts it can't read
+            raise ValueError(f"{f} is unreadable: fix or move it, then record again")
         prev, rec = vs.pop(key, None) or {}, None
         if verdict != "reset":
             last = int(prev.get("round") or 0) if prev.get("verdict") in ("fail", "uncertain") else 0
@@ -821,8 +828,8 @@ def verify_cli(args):
     ap.add_argument("--defect", action="append", default=[], help="a defect found (repeatable)")
     ap.add_argument("--unproven", action="append", default=[], help="something it could not prove (repeatable)")
     a = ap.parse_args(args)
-    if a.verdict != "reset" and not a.sha:
-        ap.error("--sha is required: a verdict is pinned to the commit it checked")
+    if a.verdict != "reset" and not re.fullmatch(r"[0-9a-f]{7,40}", a.sha):
+        ap.error("--sha needs the commit it checked (7-40 hex digits): a verdict is pinned to it")
     rec = verify_record(a.project, a.iid, a.verdict, sha=a.sha, summary=a.summary, evidence=a.evidence, defects=a.defect, unproven=a.unproven)
     print(json.dumps(rec or {"reset": f"{a.project}#{a.iid}"}, indent=1))
 
@@ -1243,7 +1250,7 @@ def _check_custom(step, mr, ws):
 
 
 def _check_verify(proj, mr):
-    """The built-in `verify` step: a fresh verifier's SHA-pinned pass on the head commit. A fail goes back to the builder, then to a
+    """The built-in `verified` step: a fresh verifier's SHA-pinned pass on the head commit. A fail goes back to the builder, then to a
     fresh verifier once a fix lands, up to VERIFY_MAX_ROUNDS; then (or on uncertain) to the user."""
     v = verify_status(proj, mr["iid"], mr.get("sha"))
     if not v:
@@ -1280,7 +1287,7 @@ def check(step, mr, ws, milestone):
         return "agent", f"Fix CI (pipeline {st}: {mr['head_pipeline']['web_url']})", None
     if step == "no_conflicts":
         return ("agent", "Rebase Branch (merge conflicts)", None) if mr["has_conflicts"] else None
-    if step == "verify":
+    if step == "verified":
         return _check_verify(proj, mr)
     if step == "review_bot":
         bot = repo_bot(proj)
@@ -2156,7 +2163,9 @@ def report(res):
         if not v:
             return ""
         st = "stale" if v.get("stale") and v.get("verdict") == "pass" else v.get("verdict") or ""
-        ev = f' · <a href="{e(v["evidence"] if "://" in v["evidence"] else "file://" + v["evidence"])}">evidence</a>' if v.get("evidence") else ""
+        ev = str(v.get("evidence") or "")  # a web page or a file on this host links; anything else (javascript:, a relative path) is named
+        href = ev if re.match(r"https?://", ev) else "file://" + ev if ev.startswith("/") else ""
+        ev = f' · <a href="{e(href)}">evidence</a>' if href else f" · evidence {e(ev)}" if ev else ""
         return f"<div class=sub>verify: {e(st)}{ev}</div>"
     for o in OWNERS:
         group = [r for r in rows if r["next"]["owner"] == o]

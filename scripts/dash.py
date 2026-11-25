@@ -213,9 +213,9 @@ def moves(r, blk=None):
     mine = mr.get("role") == "author"
     sm = _signoff_move(r)
     review = nxt.get("owner") == "me" and not sm and (nxt.get("step") == "review" or "review it" in nxt.get("action", ""))
-    v = mr.get("verify") or {}  # the verify step: a fresh verifier's turn (not while the builder fixes its defects)
+    v = mr.get("verify") or {}  # the verified step: a fresh verifier's turn (not while the builder fixes its defects)
     on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
-          "verify": mine and nxt.get("step") == "verify" and nxt.get("owner") == "agent" and v.get("phase") != "fix",
+          "verify": mine and nxt.get("step") == "verified" and nxt.get("owner") == "agent" and v.get("phase") != "fix",
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]
@@ -2240,7 +2240,8 @@ def task_new(repo_name, payload):
                f"`python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` in the worktree, so the self-test is on record. "
                f"Then run a fresh-eyes verification pass (follow {verify_path}: Setup, Drive, Check; exercise the change at the real user surface "
                "with no JS-eval or mock shortcuts, and run every matching checklist item), and give the draft MR a Verification section: the flows "
-               "you ran at the real surface, concrete evidence, any side-effect defects, and anything you could not prove."
+               "you ran at the real surface, concrete evidence, any side-effect defects, and anything you could not prove. "
+               "Don't record a verdict with greenlight.py verify yourself: that's for a fresh verifier."
               + standing + f"\n\nMy request:\n\n{quoted}{gate['brief']}" + PUSH_RULE)
     for a in agents:
         try:
