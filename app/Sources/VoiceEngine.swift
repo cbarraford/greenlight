@@ -30,6 +30,7 @@ final class Voice: NSObject, ObservableObject {
                 stageWeb.appearance = stageAppearance
                 stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
             }
+            core?.canvas.retheme()  // typed chat's canvas wears the look too (#208)
         }
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
@@ -40,6 +41,7 @@ final class Voice: NSObject, ObservableObject {
             ud.set(thinkingMotion, forKey: "thinkingMotion")
             // While the page loads, the queued call still carries the old value: correct it there.
             if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + ";\n" + motionVars }  // safety-ok: a hardcoded on/off
+            core?.canvas.retheme()  // the chat canvas too (#208)
         }
     }
     var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
@@ -104,7 +106,7 @@ final class Voice: NSObject, ObservableObject {
         return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
     }()
 
-    private final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {  // the chat's canvas (#208) uses it too
         let stageURL: URL?
         var ready = false, queued: String?
         init(_ u: URL?) { stageURL = u }
@@ -185,17 +187,28 @@ final class Voice: NSObject, ObservableObject {
             if !d.isEmpty { js("stage.patch", [d]) }
         } else { js("stage.refs", [now]) }
         refsSent = now
+        board(pucks)
     }
-    func wait(_ title: String, _ sub: String) { instantUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
+    func wait(_ title: String, _ sub: String) { instantUp = false; idleStage = false; boardUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
         refsSent = nil; if let c = core { refs(c.pucks) }  // a new page (or a new voice mode) starts from the whole map
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
-        else { wait("Listening", "Say something, or “goodbye” to stop.") }
+        else { idleStage = true; boardUp = false; board(core?.pucks ?? [], first: true) }  // what needs you, or Listening when nothing does
+    }
+    /// The stage is idle (#208): voice mode's start, before any turn draws. Each snapshot redraws the board in place (the same
+    /// card: only what changed moves), or goes to Listening when nothing's left, and back to the board when something is.
+    var idleStage = false, boardUp = false
+    func board(_ pucks: [[String: Any]], first: Bool = false) {
+        guard on, idleStage, core?.run == nil else { return }
+        let listen: [Any] = ["Listening", "Say something, or “goodbye” to stop."]
+        if let b = idleBoard(pucks) { if boardUp { js("stage.spec", [b]) } else { put("stage.spec", [b], by: "app") }; boardUp = true }  // the trail: when it comes, not each snapshot
+        else if first { put("stage.wait", listen, by: "app") }
+        else if boardUp { boardUp = false; js("stage.idle", listen) }  // behind a card you went back to, if you did
     }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; instantUp = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
+        drawSeq += 1; shown = true; instantUp = true; idleStage = false; boardUp = false; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
@@ -411,13 +424,15 @@ final class Voice: NSObject, ObservableObject {
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
+        case .back: js("stage.back", [])  // the stage's card history, in the page (#208)
+        case .forward: js("stage.forward", [])
         }
     }
 
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; chiefDrew = false; shown = false; instantUp = false; muted = false; ending = false; endStream(); stageOptions = []
+        said = 0; chiefDrew = false; shown = false; instantUp = false; idleStage = false; boardUp = false; muted = false; ending = false; endStream(); stageOptions = []
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
@@ -548,7 +563,7 @@ final class Voice: NSObject, ObservableObject {
         else { took(); put("stage.text", [["lead": plain(spoken), "md": ""]], by: "chief") }  // no [screen] part: the gist is the card, no second request
     }
     /// Chief's own drawing (a ```stage block, the [screen] text or the gist) takes the stage: the instant card, even on its way, doesn't land.
-    func took() { chiefDrew = true; shown = true; instantUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
+    func took() { chiefDrew = true; shown = true; instantUp = false; idleStage = false; boardUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing (a watch turn's too) is the reply: the strip goes, and the board
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false; endStream()
@@ -564,12 +579,7 @@ final class Voice: NSObject, ObservableObject {
     func stage(_ h: String, lead: String = "") {
         guard !chiefDrew || streamed else { return }  // a block that closes after the [screen] text began still outranks it
         endStream(); took()
-        let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
-        if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
-        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // a catalog card or {title, items}: drawn now
-        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") }
-        else if stageJSON(h) != nil { put("stage.spec", [fallbackSpec(h)], by: "app") }  // broken JSON: never shown raw
-        else { put("stage.text", [["lead": plain(splitOptions(lead).0), "md": h]], by: "chief") }  // notes under the gist, as [screen] text is
+        let c = stageCall(h, lead: lead); put(c.f, [c.arg], by: c.by)
     }
 
     // speech
@@ -1463,5 +1473,68 @@ final class LivePreview: ObservableObject {
         live?.close(); live = nil
         node?.stop(); engine?.stop(); node = nil; engine = nil; conv = nil
         closed = true
+    }
+}
+
+
+/// The canvas in typed chat (#208): the stage's own page in a panel above the transcript, drawn when a typed reply has a
+/// ```stage block or a table (which the transcript can't draw). Collapsing it is remembered.
+final class Canvas: ObservableObject {
+    @Published var has = false
+    @Published var collapsed = ud.bool(forKey: "canvasCollapsed") {
+        didSet {
+            ud.set(collapsed, forKey: "canvasCollapsed")
+            if !collapsed { fresh = false; DispatchQueue.main.async { [weak self] in self?.fit() } }  // your place in the transcript stays; refit once shown
+        }
+    }
+    @Published var fresh = false  // drawn while collapsed: its header says so
+    @Published var height: CGFloat = Canvas.tallest  // the panel's body: its content's height, up to `tallest`
+    static let tallest: CGFloat = 280, shortest: CGFloat = 96
+    weak var core: Core?
+    private var nav: Voice.StageNav?, pending = [(String, [Any])]()
+    var queued: Int { pending.count }  // calls waiting for the page (tests)
+    private(set) lazy var web: WKWebView = {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .nonPersistent()
+        let u = page("stage"), n = Voice.StageNav(u); nav = n
+        let v = WKWebView(frame: .zero, configuration: cfg)  // no message handlers: nothing on the canvas can reach the app
+        v.navigationDelegate = n; v.uiDelegate = n
+        v.setValue(false, forKey: "drawsBackground")
+        n.loaded = { [weak self] in self?.flush() }
+        if let u { v.loadFileURL(u, allowingReadAccessTo: u) }
+        return v
+    }()
+    func draw(_ f: String, _ arg: Any) {
+        has = true; pending.append((f, [arg])); if collapsed { fresh = true }
+        if nav?.ready == true { flush() } else { _ = web }
+        core?.canvasTick += 1  // the transcript keeps its newest reply in view as the panel changes
+    }
+    /// The look, the app's theme and the motion setting, now: on each draw, and when any of them changes (Voice.look and
+    /// thinkingMotion call it). The page also learns it's the canvas: no voice hints there.
+    func retheme() {
+        guard let c = core, nav?.ready == true else { return }
+        web.appearance = c.voice.stageAppearance
+        web.evaluateJavaScript("(s => { \(delegate.themeVars()) \(c.voice.look.vars) \(c.voice.motionVars) document.body.dataset.surface = 'canvas'; })(document.documentElement.style)")  // safety-ok: the app's own theme statements, as Voice.js() sends them
+    }
+    /// A new conversation: nothing of the last one stays, its cards (the page's history) included, nor a draw still waiting.
+    func reset() {
+        has = false; fresh = false; pending = []; height = Canvas.tallest
+        if nav?.ready == true, let u = page("stage") { nav?.ready = false; web.loadFileURL(u, allowingReadAccessTo: u) }  // a draw meanwhile waits for the new page
+    }
+    private func fit() {
+        guard nav?.ready == true, has, !collapsed else { return }
+        let js = "(() => { const s = document.getElementById('s'); if (!s) return 0; if (s.classList.contains('frame')) return 280; const t = s.getBoundingClientRect().top, p = parseFloat(getComputedStyle(s).paddingBottom) || 24; return [...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom - t), 0) + p; })()"
+        web.evaluateJavaScript(js) { [weak self] h, _ in  // safety-ok: a constant expression, no data in it
+            guard let self, let h = h as? Double, h > 0 else { return }
+            self.height = min(Canvas.tallest, max(Canvas.shortest, CGFloat(h.rounded(.up)))); self.core?.canvasTick += 1
+        }
+    }
+    private func flush() {
+        guard let c = core, nav?.ready == true else { return }
+        retheme()
+        guard has, !pending.isEmpty else { return }
+        web.callJS("stage.refs", [refStatus(c.pucks)])  // the snapshot's MRs as chips: a table's refs say their status
+        pending.forEach { web.callJS($0.0, $0.1) }; pending = []
+        fit()
     }
 }

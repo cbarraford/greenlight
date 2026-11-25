@@ -55,14 +55,15 @@ final class Msg: ObservableObject, Identifiable {
     var duration: TimeInterval = 0
     var options: [String] = []
     var failed = false
+    var canvas = false  // this reply drew the chat's canvas (#208): "Updated the canvas" under it
     @Published var expanded = false
     init(_ role: Role, _ text: String) { self.role = role; self.text = text }
 
-    struct Saved: Codable { let role: Role, text: String, steps: [Step], duration: TimeInterval, options: [String], failed: Bool }
-    var saved: Saved { Saved(role: role, text: text, steps: steps, duration: duration, options: options, failed: failed) }
+    struct Saved: Codable { let role: Role, text: String, steps: [Step], duration: TimeInterval, options: [String], failed: Bool; var canvas: Bool? = nil }
+    var saved: Saved { Saved(role: role, text: text, steps: steps, duration: duration, options: options, failed: failed, canvas: canvas ? true : nil) }
     convenience init(_ s: Saved) {
         self.init(s.role, s.text)
-        steps = s.steps; duration = s.duration; options = s.options; failed = s.failed
+        steps = s.steps; duration = s.duration; options = s.options; failed = s.failed; canvas = s.canvas ?? false
     }
 }
 

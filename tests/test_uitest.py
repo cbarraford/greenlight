@@ -18,6 +18,7 @@ Proves:
   9. Zero `webErrors`, zero `consoleErrors`, valid non-blank screenshots, and zero leaked tmux servers
      or Greenlight child processes on teardown.
 """
+import json
 import os
 import subprocess
 import sys
@@ -173,6 +174,33 @@ def verify_chat_and_inbox(ui1: uitest.UITestSession, shot_dir: Path) -> None:
     r_shot = ui1.screenshot(s_chat, window="dashboard")
     assert r_shot["ok"], r_shot
     assert_png(s_chat)
+    # the chat canvas (issue 208 phase 7): no canvas for prose; a typed reply with a table draws it above the transcript and says
+    # so under the reply; the header collapses it, and the choice is kept
+    st = ui1.state()
+    assert st["canvasShown"] is False and st["lastChatCanvas"] is False, st
+    assert ui1.action("sendChat", text="Show the MRs as a uitest-table")["ok"]
+    st = wait_state(ui1, lambda s: not s["coreBusy"] and s.get("lastChatCanvas") is True, desc="a reply that draws the canvas", timeout=20.0)
+    assert st["canvasShown"] is True and "| !12 | passed |" in st["lastChatText"], st
+    drawn = None
+    for _ in range(40):  # the canvas page loads, then draws the reply's table (its own web view, the stage's page): read its DOM
+        r = ui1.eval("canvas", "JSON.stringify([...document.querySelectorAll('#s table.grid td')].map(t => t.textContent))")
+        cells = r.get("result") if r.get("ok") else None
+        drawn = json.loads(cells) if isinstance(cells, str) and cells.startswith("[") else cells if isinstance(cells, list) else None
+        if drawn and "!12" in drawn:
+            break
+        time.sleep(0.25)
+    assert drawn and drawn[:4] == ["!12", "passed", "!13", "failed"], (drawn, r)
+    s_canvas = shot_dir / "chat-canvas.png"  # the panel and the marker (a background instance doesn't paint the canvas's page: see above)
+    assert ui1.screenshot(s_canvas, window="dashboard")["ok"]
+    assert_png(s_canvas)
+    was = st["canvasCollapsed"]
+    r_tog = ui1.action("toggleCanvas")
+    assert r_tog["ok"] and r_tog["collapsed"] is (not was), r_tog
+    assert ui1.state()["canvasCollapsed"] is (not was)
+    s_canvas_c = shot_dir / "chat-canvas-collapsed.png"
+    assert ui1.screenshot(s_canvas_c, window="dashboard")["ok"]
+    assert ui1.action("toggleCanvas")["collapsed"] is was
+    print(f"ok  chat canvas: a reply with a table draws it, marked under the reply; collapsing toggles and is kept ({s_canvas.stat().st_size} bytes)")
 
     r_clear = ui1.action("chatClear")
     assert r_clear["ok"], r_clear

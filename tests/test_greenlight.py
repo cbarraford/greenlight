@@ -594,6 +594,7 @@ assert by["ws-issue"]["mr"]["threads"] == 2 and by["ws-issue"]["mr"]["todo_threa
 assert by["ws-branch"]["next"]["owner"] == "dependency" and "#13" in by["ws-branch"]["next"]["action"]  # stacked on plan-view
 assert by["ws-old"]["next"]["step"] == "done" and by["ws-none"]["next"]["step"] == "freeform"
 assert by["ws-issue"]["mr"]["forge"] == "github" and by["ws-issue"]["mr"]["author"] == "octo"
+assert by["ws-issue"]["mr"]["updated_at"] == "2026-11-04T21:09:04Z"  # idle board age (#208 phase 6)
 assert by["ws-issue"]["project"] == "octo/greenlight" and by["ws-issue"]["forge"] == "github"
 page = greenlight.report(res)
 assert ">#23</a>" in page and "Waiting on another MR/PR" in page and "!23" not in page

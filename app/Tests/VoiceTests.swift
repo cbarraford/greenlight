@@ -1080,6 +1080,76 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.pickOption(0); let once = !c.msgs.contains { $0.text == "Merge it" }
         _ = sentBefore; c.stop(); c.run = nil; c.queue.removeAll(); v.hush()
         check("voice: an option button sends that option once; an index the reply didn't offer does nothing (issue 208)", badIndex && picked && once)
+        // issue 208 phase 6: the idle board from the snapshot, redrawn with each one; "go back" and "go forward" reach the page
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000), isoS = { (d: Date) in ISO8601DateFormatter().string(from: d) }
+        let bp: [[String: Any]] = [
+            ["name": "g/auth", "life": ["pile": "yours", "do": "**!5** is ready: review it"], "mr": ["ref": "!5", "title": "decode `fix`", "updated_at": isoS(t0 - 3 * 3600)]],
+            ["name": "g/retry", "life": ["pile": "working", "why": "CI running"], "mr": ["ref": "!7", "title": "retry", "updated_at": isoS(t0 - 90)]],
+            ["name": "g/quiet", "life": ["pile": "waiting"], "mr": ["ref": "!9", "title": "x"]],
+            ["name": "g/hidden", "hidden": true, "life": ["pile": "yours"], "mr": ["ref": "!10", "title": "y"]],
+            ["name": "g/no-mr", "goal": "Tidy the docs", "life": ["pile": "working"]]]
+        let ib = idleBoard(bp, now: t0)
+        let secs = (ib?["sections"] as? [[String: Any]]) ?? []
+        let r0 = (secs.first?["rows"] as? [[String: String]])?.first, w = (secs.last?["rows"] as? [[String: String]]) ?? []
+        check("voice: the idle board is what needs you, then what's working, from the snapshot: ref, title, age, why; hidden and waiting ones left out (issue 208)",
+              ib?["kind"] as? String == "board" && secs.map { $0["label"] as? String ?? "" } == ["Needs you", "Working"]
+              && r0 == ["ref": "!5", "title": "decode fix", "age": "3h", "why": "!5 is ready: review it"]
+              && w.map { $0["ref"]! } == ["!7", "no-mr"] && w.first?["age"] == "1m" && w.last?["title"] == "Tidy the docs"
+              && idleBoard([["name": "q", "life": ["pile": "waiting"]]]) == nil)
+        check("voice: \"go back\" and \"go forward\" step through the stage's cards (issue 208)",
+              voiceCommand("Go back.") == .back && voiceCommand("show me the last card") == .back && voiceCommand("next card") == .forward
+              && voiceCommand("go back to the PR") == nil)
+        c.pucks = bp; c.run = nil; v.on = true; v.hush(); v.listening(); let boardDrawn = v.boardUp && (v.stageQueued ?? "").contains("\"kind\":\"board\"")
+        var bp2 = bp; bp2[0]["life"] = ["pile": "done"]; bp2[1]["life"] = ["pile": "done"]; bp2[4]["life"] = ["pile": "done"]
+        v.refs(bp2); let emptied = !v.boardUp  // nothing left: back to Listening
+        c.pucks = bp; v.listening(); let br = Run("x?"); c.run = br; v.began(br); let turnEnds = !v.boardUp; c.run = nil; v.hush()
+        c.run = nil; c.pucks = []; v.listening(); let startsListening = v.idleStage && !v.boardUp
+        v.refs(bp); let boardReturns = v.boardUp  // something needs you now: the board comes back
+        v.took(); v.refs(bp); let answerKept = !v.idleStage && !v.boardUp; v.chiefDrew = false  // a watch turn's answer isn't drawn over
+        check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening and one with something back to the board, a turn or an answer takes it over (issue 208)",
+              boardDrawn && emptied && turnEnds && startsListening && boardReturns && answerKept)
+        // issue 208 phase 7: what a typed reply puts on the chat's canvas, and the reply marked for it; collapsing is kept
+        let tbl = "Here.\n\n| MR | CI |\n|---|:---:|\n| !12 | passed |\n\nAnd\n\n|a|b|\n|-|-|\n| also | one |\n\n| a pipe-led line, | not a table |"
+        let tc = canvasCall(staged(tbl))
+        check("voice: a typed reply's tables (whole, with their rule) or its stage block go to the chat canvas; prose alone doesn't (issue 208)",
+              tc?.f == "stage.text" && (tc?.arg as? [String: String])?["md"] == "| MR | CI |\n|---|:---:|\n| !12 | passed |\n\n|a|b|\n|-|-|\n| also | one |"
+              && canvasCall(staged("Just prose, and a | pipe.")) == nil
+              && canvasCall(staged("Chart.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}\n```"))?.f == "stage.chart"
+              && markdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|").count == 2
+              && markdownTables("```md\n| a |\n|---|\n| 1 |\n```").isEmpty  // a table shown as code stays in the reply
+              && markdownTables("````md\n```\n| a |\n|---|\n| 1 |\n````").isEmpty
+              && markdownTables("```stage``` blocks draw charts.\n\n| a | b |\n|---|---|\n| 1 | 2 |") == ["| a | b |\n|---|---|\n| 1 | 2 |"]
+              && markdownTables("| pipe text\n---\nmore").isEmpty  // a horizontal rule isn't a table separator
+              && canvasCall(staged("Here.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}"))?.f == "stage.chart"
+              && canvasCall(staged("Here.\n```stage\n```")) == nil
+              && markdownTables("|a|b|\n|:-|-:|\n|1|2|") == ["|a|b|\n|:-|-:|\n|1|2|"])  // GFM: any run of dashes
+        let cc = Core(session: -9208); cc.voice.on = false
+        var replyText = tbl
+        let savedSSH = sshOverride
+        sshOverride = { remote, _, _, onLine, onExit in  // chat.py's reply, as CoreTests stubs it
+            if remote.contains("chat.py send"), let d = try? JSONSerialization.data(withJSONObject: ["e": "done", "ok": true, "text": replyText]) {
+                onLine(String(decoding: d, as: UTF8.self))
+            }
+            onExit(0); return Process()
+        }
+        cc.send("table please")
+        let marked = cc.msgs.last?.canvas == true && cc.canvas.has
+        replyText = "Prose only."; cc.send("prose please"); let prose = cc.msgs.last?.canvas == false
+        sshOverride = savedSSH
+        let saved = cc.msgs.first { $0.canvas }.map { Msg($0.saved).canvas } == true && !Msg(cc.msgs.last!.saved).canvas  // it survives the transcript's save
+        let before = ud.object(forKey: "canvasCollapsed"); cc.canvas.collapsed = true; let kept = ud.bool(forKey: "canvasCollapsed") && Canvas().collapsed
+        let tick = cc.canvasTick; cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"])
+        let freshWhileFolded = cc.canvas.fresh && cc.canvasTick > tick; cc.canvas.collapsed = false; let seen = !cc.canvas.fresh
+        check("voice: a canvas drawn while folded says so until it's opened, and the transcript is told to keep its newest reply in view (issue 208)", freshWhileFolded && seen)
+        let gr = Run("g?"), gs = Run("s?"), gw = Run("w?"), gc = Run("c?"); gs.stopping = true; gw.watch = true; gc.checkIn = true
+        check("voice: only a typed reply that finished draws the canvas: not a stopped turn, a watch or check-in turn, a failure, or in voice mode (issue 208)",
+              drawsCanvas(gr, ok: true, voiceOn: false) && !drawsCanvas(gs, ok: true, voiceOn: false) && !drawsCanvas(gw, ok: true, voiceOn: false)
+              && !drawsCanvas(gc, ok: true, voiceOn: false) && !drawsCanvas(gr, ok: false, voiceOn: false) && !drawsCanvas(gr, ok: true, voiceOn: true))
+        cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"]); cc.canvas.height = 120; cc.canvas.collapsed = true; cc.canvas.draw("stage.text", ["md": "x"]); cc.canvas.reset()
+        check("voice: a new conversation clears the canvas: hidden, not marked updated, nothing waiting to draw, height reset (issue 208)", !cc.canvas.has && !cc.canvas.fresh && cc.canvas.queued == 0 && cc.canvas.height == Canvas.tallest)
+        cc.canvas.collapsed = false
+        cc.canvas.collapsed = false; if let before { ud.set(before, forKey: "canvasCollapsed") } else { ud.removeObject(forKey: "canvasCollapsed") }
+        check("voice: a typed reply with a table draws the canvas and is marked for it; prose isn't; collapsing is kept (issue 208)", marked && prose && saved && kept)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

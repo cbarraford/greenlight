@@ -521,7 +521,7 @@ Domino-toppling Jigsawing
 """.split(whereSeparator: \.isWhitespace).map { String($0) + "…" }
 
 /// What voice mode does itself instead of sending to Chief: only when that's all you said (give or take "ok", "thanks", "chief").
-enum VoiceCmd: Equatable { case bye, stop, cancel, captions(Bool), reset, undo }
+enum VoiceCmd: Equatable { case bye, stop, cancel, captions(Bool), reset, undo, back, forward }
 func voiceCommand(_ heard: String) -> VoiceCmd? {
     let t = heard.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "[^a-z0-9' ]", with: "", options: .regularExpression)
         .replacingOccurrences(of: #"\b(ok|okay|alright|all right|well|so|cool|great|thanks|thank you|chief|greenlight|for now|then|now)\b"#, with: " ", options: .regularExpression)
@@ -537,6 +537,9 @@ func voiceCommand(_ heard: String) -> VoiceCmd? {
     case "undo", "undo that", "undo it", "take that back", "put it back", "put them back": return .undo
     case "captions on", "turn on captions", "show captions": return .captions(true)
     case "captions off", "turn off captions", "hide captions": return .captions(false)
+    case "go back", "back", "previous card", "the previous card", "last card", "the last card", "show the last card", "show me the last card",
+         "go back a card", "back one": return .back  // the stage's card history (#208)
+    case "go forward", "forward", "next card", "the next card", "go to the latest", "latest card", "the latest card": return .forward
     default: return nil
     }
 }
@@ -982,6 +985,69 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
     return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
 }
 
+/// A ```stage block as the stage draws it (#208): a chart or a catalog card natively, HTML as is, JSON that doesn't parse as what
+/// can be read of it (never raw), and plain notes as markdown under the lead. `by` is who the trail says drew it.
+func stageCall(_ h: String, lead: String = "") -> (f: String, arg: Any, by: String) {
+    let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
+    if let o, isStageChart(o) { return ("stage.chart", o, "chief") }
+    if let card = stageCard(h) { return ("stage.spec", card, "chief") }
+    if let html = stageHTML(h) { return ("stage.html", html, "chief") }
+    if stageJSON(h) != nil { return ("stage.spec", fallbackSpec(h), "app") }
+    return ("stage.text", ["lead": plain(splitOptions(lead).0), "md": h], "chief")
+}
+/// A reply's markdown tables, each whole (its header, rule and rows): the transcript draws them as raw pipes.
+func markdownTables(_ s: String) -> [String] {
+    let lines = s.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    let rule = #"^\|\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$"#  // stage.html's pipeTable needs a leading | on every row, the rule included
+    var out = [String](), i = 0, fenceChar: Character? = nil, fenceLen = 0
+    while i < lines.count {
+        let t = lines[i]
+        if let f = fenceChar {
+            if t.count >= fenceLen, t.allSatisfy({ $0 == f }) { fenceChar = nil; fenceLen = 0 }
+            i += 1; continue
+        }
+        if let f = t.first, f == "`" || f == "~" {
+            let n = t.prefix(while: { $0 == f }).count
+            if n >= 3, !t.dropFirst(n).contains(f) { fenceChar = f; fenceLen = n; i += 1; continue }  // inline ```x``` isn't a fence
+        }
+        if t.hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
+            var j = i + 2
+            while j < lines.count, lines[j].hasPrefix("|") { j += 1 }
+            out.append(lines[i..<j].joined(separator: "\n")); i = j
+        } else { i += 1 }
+    }
+    return out
+}
+/// Whether a finished turn may draw the chat's canvas (#208): a typed reply that finished, not a stopped one, a watch or
+/// check-in turn's (the canvas is what you asked for), nor anything while voice mode has its own stage.
+func drawsCanvas(_ r: Run, ok: Bool, voiceOn: Bool) -> Bool { ok && !r.stopping && !r.watch && !r.checkIn && !voiceOn }
+/// What a typed reply puts on the chat's canvas (#208): its ```stage block, else its tables; nil for prose alone.
+func canvasCall(_ st: Staged) -> (f: String, arg: Any)? {
+    if let h = st.stage ?? st.stageOpen, !h.isEmpty { let c = stageCall(h, lead: st.text); return (c.f, c.arg) }
+    let t = markdownTables(st.shown)
+    return t.isEmpty ? nil : ("stage.text", ["lead": "", "md": t.joined(separator: "\n\n")])
+}
+
+/// The idle board (#208): in place of "Listening", what needs you and what's being worked on, from the snapshot, with no model
+/// call. Each row an MR (or a workspace without one): its ref, what it is, how long since it moved, and one line of why.
+/// Nil when nothing needs you and nothing is being worked on: then the stage just listens.
+func idleBoard(_ pucks: [[String: Any]], now: Date = Date()) -> [String: Any]? {
+    let iso = ISO8601DateFormatter(), isoF = ISO8601DateFormatter(); isoF.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    func row(_ p: [String: Any]) -> [String: String] {
+        let mr = p["mr"] as? [String: Any] ?? [:], life = p["life"] as? [String: Any] ?? [:]
+        let up = (mr["updated_at"] as? String).flatMap { isoF.date(from: $0) ?? iso.date(from: $0) }
+        let why = [life["do"], life["why"], p["why"], p["action"]].compactMap { $0 as? String }.first { !$0.isEmpty } ?? ""
+        let s = Int(now.timeIntervalSince(up ?? now)), age = up == nil ? "" : s < 3600 ? "\(max(1, s / 60))m" : s < 86400 ? "\(s / 3600)h" : "\(s / 86400)d"
+        return ["ref": mr["ref"] as? String ?? (p["name"] as? String).map { String($0.split(separator: "/").last ?? "") } ?? "",
+                "title": unmark(mr["title"] as? String ?? p["goal"] as? String ?? ""), "age": age, "why": unmark(String(why.prefix(140)))]
+    }
+    let live = pucks.filter { $0["hidden"] as? Bool != true }
+    let pile = { (k: String) in live.filter { (($0["life"] as? [String: Any])?["pile"] as? String) == k }.prefix(5).map(row) }
+    let needs = pile("yours"), working = pile("working")
+    guard !needs.isEmpty || !working.isEmpty else { return nil }
+    return ["kind": "board", "title": "",
+            "sections": [["label": "Needs you", "tone": "needs", "rows": needs], ["label": "Working", "tone": "now", "rows": working]].filter { !(($0["rows"] as? [Any])?.isEmpty ?? true) }]
+}
 /// What the stage does with a navigation (#208): the page itself loads; a click you made in the stage's own frame on a web link
 /// opens it in the browser; a click on an option button (greenlight-option:N, the index only) sends that option; anything
 /// else, a click inside Chief's sandboxed page included, is cancelled and does nothing.
