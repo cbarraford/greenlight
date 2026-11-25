@@ -286,10 +286,12 @@ assert "scan_error" not in _sn
 (dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 5, "msg": "GitLab login expired", "fix": "run glab auth login, then ↻", "class": "auth", "tool": "glab"}))
 assert dash.scan_error(1) == {"msg": "GitLab login expired", "fix": "run glab auth login, then ↻", "ts": 5}
 assert dash.scan_error(5) is None and dash.scan_error(9) is None, "a scan that finished after the failure: the footer stops saying it"
-# overlapping & same-second scan ordering via started timestamp
-(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 100, "started": 95.5, "msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻"}))
+# overlapping & same-second scan ordering via started (and legacy fallback when scan_started is absent)
+(dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 100, "started": 95, "msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻"}))
 assert dash.scan_error(100, 90) == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 100}, "same-second failure started after last good scan shows"
+assert dash.scan_error(130, 90) == {"msg": "GitHub rate limited", "fix": "wait a few minutes, then ↻", "ts": 100}, "newer fast failure stays visible even when older slow scan finishes later"
 assert dash.scan_error(100, 96) is None, "older scan failing late after a newer scan succeeded is suppressed"
+assert dash.scan_error(100, None) is None, "legacy last.json without scan_started falls back to ts <= scanned"
 # snapshot() carries scan_error when newer than last.json, and even when last.json is absent (first-scan failure)
 (dash.greenlight.STATE / "scan_error.json").write_text(json.dumps({"ts": 2000000000, "started": 1999999990, "msg": "GitLab login expired", "fix": "run glab auth login --hostname gitlab.com, then ↻"}))
 with mock.patch.object(dash, "live_agents", return_value={}):

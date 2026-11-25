@@ -265,8 +265,6 @@ func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, prim
     var out: [String: Any] = ["ts": max(primary?["ts"] as? Int ?? 0, secondary?["ts"] as? Int ?? 0),
                               "scanned": max(primary?["scanned"] as? Int ?? 0, secondary?["scanned"] as? Int ?? 0),
                               "pucks": pucks, "trees": trees]
-    let scanStarted = max(primary?["scan_started"] as? Int ?? 0, secondary?["scan_started"] as? Int ?? 0)
-    if scanStarted > 0 { out["scan_started"] = scanStarted }
     let pErr = primary?["scan_error"] as? [String: Any], sErr = secondary?["scan_error"] as? [String: Any]
     if let pErr, let sErr {
         out["scan_error"] = (sErr["ts"] as? Int ?? 0) > (pErr["ts"] as? Int ?? 0) ? sErr : pErr

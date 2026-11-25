@@ -1251,14 +1251,20 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         ["ts": 12, "scanned": 12, "pucks": [], "trees": []],
         primaryHost: "devbox", secondaryHost: "local"
     )
+    let mergedSnapSecondaryErr = mergeSnapshots(
+        ["ts": 10, "scanned": 10, "pucks": [], "trees": []],
+        ["ts": 12, "scanned": 12, "scan_error": ["ts": 18, "msg": "Orca unreachable", "fix": "check Orca is running, then ↻"], "pucks": [], "trees": []],
+        primaryHost: "devbox", secondaryHost: "local"
+    )
     let mergedSnapBothErr = mergeSnapshots(
         ["ts": 10, "scanned": 10, "scan_error": ["ts": 15, "msg": "GitLab login expired", "fix": ""], "pucks": [], "trees": []],
         ["ts": 12, "scanned": 12, "scan_error": ["ts": 20, "msg": "GitHub rate limited", "fix": ""], "pucks": [], "trees": []],
         primaryHost: "devbox", secondaryHost: "local"
     )
-    check("mergeSnapshots preserves scan_error and scan_started across dual-host merges and picks the newer error",
+    check("mergeSnapshots preserves scan_error across dual-host merges, picks the newer error, and omits scan_started",
           (mergedSnapPrimaryErr?["scan_error"] as? [String: Any])?["msg"] as? String == "GitLab login expired"
-          && mergedSnapPrimaryErr?["scan_started"] as? Int == 8
+          && mergedSnapPrimaryErr?["scan_started"] == nil
+          && (mergedSnapSecondaryErr?["scan_error"] as? [String: Any])?["msg"] as? String == "Orca unreachable"
           && (mergedSnapBothErr?["scan_error"] as? [String: Any])?["msg"] as? String == "GitHub rate limited")
     let mergedPucks = (mergedSnap?["pucks"] as? [[String: Any]]) ?? []
     let mergedSnapTrees = (mergedSnap?["trees"] as? [[String: Any]]) ?? []

@@ -460,19 +460,32 @@ test("footer: a scan that died says why and how to fix it until a newer scan lan
   assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: GitLab login expired · run glab auth login --hostname gitlab.com, then ↻", "it failed again: the line is back");
   await page.evaluate(s => window.mc.update(s), {...snap, scanned: now});
   assert.equal(await page.$("#foot .scanerr"), null, "a good scan: the line goes");
-  // SSH failure (exit 255) without scan_error.json still shows in footer until a newer scan lands
+  // rescanned(1) without a prior scan_error doesn't flash "exit 1" before the stream delivers scan_error.json
+  await page.click(refreshSel);
+  await page.evaluate(() => window.mc.rescanned(1));
+  assert.equal(await page.$("#foot .scanerr"), null, "exit 1 waits for scan_error.json rather than flashing 'exit 1'");
+  // SSH failure (exit 255) shows in footer even over a stale snapshot scan_error, until a newer scan lands
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: now - 300}});
   await page.click(refreshSel);
   await page.evaluate(() => window.mc.rescanned(255));
   assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: host unreachable · check SSH connection, then ↻");
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now, scan_error: {msg: "GitLab login expired", fix: "run glab auth login, then ↻", ts: now - 300}});
+  assert.equal(await page.textContent("#foot .scanerr"), "Scan failed: host unreachable · check SSH connection, then ↻", "stale snapshot error does not override newer SSH failure");
   await page.evaluate(s => window.mc.update(s), {...snap, scanned: now + 60});
   assert.equal(await page.$("#foot .scanerr"), null, "a later good scan clears the SSH rescan error");
-  // first-scan failure (scanned: 0): shows Not scanned yet + failure, and clicking refresh still enters Refreshing…
+  // first-scan failure (scanned: 0): shows Not scanned yet + failure with first-scan tooltip, and clicking refresh still enters Refreshing…
   await page.evaluate(s => window.mc.update(s), {...snap, scanned: 0, pucks: [], scan_error: seFresh});
   assert.equal(await page.textContent("#foot .scan"), "Not scanned yet");
-  assert.match(await page.textContent("#foot .scanerr"), /GitLab login expired/);
+  assert.match(await page.getAttribute("#foot .scanerr", "title"), /^The scan stopped just now, so no workspaces have been scanned yet\./);
   await page.click(refreshSel);
   assert.equal(await page.textContent("#foot .scan"), "Refreshing…");
   assert.equal(await page.$("#foot .scanerr"), null);
+  // narrow viewport: footer reaches .tightest (hides .scan and .scanfix) instead of crushing .scanerr first
+  await page.setViewportSize({width: 480, height: 640});
+  await page.evaluate(s => window.mc.update(s), {...snap, scanned: now - 7200, scan_error: seFresh});
+  assert.equal(await page.$eval("#foot", el => el.classList.contains("tightest")), true, "narrow footer activates tightest");
+  assert.equal(await page.$eval("#foot .scanfix", el => getComputedStyle(el).display), "none", "inline fix hides at tightest so error reason stays legible");
+  await page.setViewportSize({width: 1280, height: 800});
   await page.evaluate(s => window.mc.update(s), {...snap, scanned: now + 120});
   assert.equal(await page.$("#foot .scanerr"), null);
 });

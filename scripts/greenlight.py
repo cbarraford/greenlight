@@ -121,6 +121,14 @@ def run(cmd, timeout=120, tries=1):
         return _run(cmd, timeout, tries, d)
 
 
+def _cmd_error(msg, tool="", msg_class=None):
+    """RuntimeError carrying the tool name and stderr class so callers never re-parse argv (keeps type name RuntimeError)."""
+    exc = RuntimeError(msg)
+    exc._gl_tool = tool  # type: ignore[attr-defined]
+    exc._gl_class = msg_class  # type: ignore[attr-defined]
+    return exc
+
+
 def _run(cmd, timeout, tries, d):
     for i in range(tries):
         d["tries"] = i + 1
@@ -135,9 +143,10 @@ def _run(cmd, timeout, tries, d):
             if p.returncode == 0:
                 return p.stdout
             err = (p.stderr or p.stdout).strip()
-            d.update(rc=p.returncode, msg_class=diag.classify(err))  # the class of stderr, not the message (it has argv)
+            cls = diag.classify(err)
+            d.update(rc=p.returncode, msg_class=cls)  # the class of stderr, not the message (it has argv)
             if last or not TRANSIENT_RE.search(err):
-                raise RuntimeError(f"{' '.join(cmd)}: {err[:2000]}")  # orca's JSON error puts its cause last
+                raise _cmd_error(f"{' '.join(cmd)}: {err[:2000]}", tool=Path(cmd[0]).name, msg_class=cls)  # orca's JSON error puts its cause last
         time.sleep(2 * 2 ** i)
 
 
@@ -219,7 +228,8 @@ def orca_cli(*args, timeout=120):
     env = ["--environment", os.environ["ORCA_ENVIRONMENT"]] if os.environ.get("ORCA_ENVIRONMENT") else []
     out = json.loads(run([exe, *args, *env, "--json"], timeout=timeout))
     if not out.get("ok"):
-        raise RuntimeError(f"orca {' '.join(args)}: {out.get('error')}")
+        err = str(out.get("error") or "")
+        raise _cmd_error(f"orca {' '.join(args)}: {err}", tool="orca", msg_class=diag.classify(err))
     return out["result"]
 
 
@@ -2035,29 +2045,43 @@ SCAN_FIX_CLASS = {"rate_limit": "wait a few minutes, then ↻", "timeout": "try 
                   "transient": "try ↻ again", "network": "check your connection, then ↻"}
 
 
-def _scan_error_newer(f, started):
-    """True when scan_error.json already holds a failure from a scan started after `started`."""
+def _scan_error_newer(f, started_ns):
+    """True when scan_error.json already holds a failure from a scan started after `started_ns`."""
     try:
         prev = json.loads(f.read_text())
     except (OSError, ValueError):
         return False
-    return isinstance(prev, dict) and isinstance(prev.get("started"), (int, float)) and not isinstance(prev["started"], bool) and prev["started"] > started
+    if not isinstance(prev, dict):
+        return False
+    pns = prev.get("started_ns")
+    if isinstance(pns, int) and not isinstance(pns, bool):
+        return pns > started_ns
+    pst = prev.get("started")
+    return isinstance(pst, (int, float)) and not isinstance(pst, bool) and pst > started_ns / 1_000_000_000
 
 
-def scan_failed(e, started=None):
+def scan_failed(e, started_ns=None):
     """Why the last scan died, for the dashboard footer (scan_error.json); a newer scan that finishes removes it.
     Only the tool, the error's class and the fix go in it: the message has argv (project paths)."""
     f = STATE / "scan_error.json"
+    st_ns = started_ns if started_ns is not None else time.time_ns()
     if e is None:
-        if started is not None and _scan_error_newer(f, started):
-            return
         with contextlib.suppress(OSError):
-            f.unlink(missing_ok=True)
+            STATE.mkdir(parents=True, exist_ok=True)
+            with (STATE / "scan_error.lock").open("a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if started_ns is not None and _scan_error_newer(f, st_ns):
+                    return
+                f.unlink(missing_ok=True)
         return
     if isinstance(e, subprocess.TimeoutExpired):
         cmd0 = e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd or "").split(" ", 1)[0]
         cand = str(cmd0).rsplit("/", 1)[-1]
         tool, cls = cand if cand in SCAN_TOOLS else "", "timeout"
+    elif getattr(e, "_gl_tool", None) is not None:
+        cand = str(getattr(e, "_gl_tool", "") or "").rsplit("/", 1)[-1]
+        tool = cand if cand in SCAN_TOOLS else ""
+        cls = getattr(e, "_gl_class", None) or "other"
     else:
         text = str(e)
         head, sep, err = text.partition(": ")
@@ -2066,22 +2090,24 @@ def scan_failed(e, started=None):
         # classify stderr only when the message carries argv (same rule as _run): a repo named "token-*" isn't auth
         cls = diag.classify(err if tool and sep else text)
     why = SCAN_WHY.get(cls, "failed")
-    fix = (SCAN_FIX_AUTH.get(tool, "") if cls == "auth"
-           else SCAN_FIX_CLASS.get(cls, "") or ("check Orca is running, then ↻" if tool in ("orca", "orca-ide") else ""))
-    now = time.time()
-    st = started if started is not None else now
-    if _scan_error_newer(f, st):
-        return
-    out = {"ts": int(now), "started": st, "class": cls, "tool": tool,
+    if cls == "auth":
+        fix = SCAN_FIX_AUTH.get(tool, "")
+    elif tool in ("orca", "orca-ide") and cls in ("network", "timeout", "other"):
+        fix = "check Orca is running, then ↻"
+    else:
+        fix = SCAN_FIX_CLASS.get(cls, "")
+    out = {"ts": int(time.time()), "started": st_ns // 1_000_000_000, "started_ns": st_ns, "class": cls, "tool": tool,
            "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else why if why != "failed" else "crashed",
            "fix": fix}
-    try:
+    with contextlib.suppress(OSError):  # the traceback still reaches stderr
         STATE.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(out))
-        os.replace(tmp, f)
-    except OSError:
-        pass  # the traceback still reaches stderr
+        with (STATE / "scan_error.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if _scan_error_newer(f, st_ns):
+                return
+            tmp = f.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(out))
+            os.replace(tmp, f)
 
 
 def main():
@@ -2123,13 +2149,13 @@ def main():
         print(f.read_text() if f.exists() else "(no history)")
         return
     with diag.span("scan", op=cmd) as d:
-        scan_start = time.time()
+        scan_start_ns = time.time_ns()
         try:
             res = scan(save=cmd != "precheck")
         except Exception as e:
-            scan_failed(e, started=scan_start)
+            scan_failed(e, started_ns=scan_start_ns)
             raise
-        scan_failed(None, started=scan_start)
+        scan_failed(None, started_ns=scan_start_ns)
         d["rows"] = len(res["rows"])
         for o in OWNERS:  # how many rows each owner holds: the shape of the queue, no names
             d[f"n_{o}"] = sum(r["next"]["owner"] == o for r in res["rows"]) or None

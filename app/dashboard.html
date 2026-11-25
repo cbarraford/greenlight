@@ -128,7 +128,7 @@ body.hasdock main{padding-right:var(--dock-w)}
 
 /* footer: status only */
 .foot .fst{display:inline-flex;align-items:center;gap:var(--sp-1);white-space:pre} .foot .fst .sh,.foot.tight .fst .lbl{display:none} .foot.tight .fst .sh{display:inline} .foot.tighter .fst:not(.ask),.foot.tightest .scan,.foot.tightest .scanerr .scanfix{display:none}
-.foot .scanerr{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--red-ink)}
+.foot .scanerr{flex-shrink:0;color:var(--red-ink)} .foot.tightest .scanerr{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .foot .fscope{color:var(--text3)} .foot.tighter .fscope .w{display:none}
 .foot{height:var(--foot-h);flex-shrink:0;display:flex;align-items:center;gap:var(--sp-3);padding:0 var(--sp-4);background:var(--bar);border-top:1px solid var(--hair);
   font-size:var(--fs-1);color:var(--text3);white-space:nowrap;overflow:hidden}
@@ -1281,11 +1281,12 @@ function footer(){
       ui.rescan ? "Refreshing…" : !isFinite(hrs) ? "Not scanned yet" : hrs < 1 / 60 ? "Scanned just now" : `Scanned ${ago(hrs)} ago`),
       h("button", {class: "rescan" + (ui.rescan ? " on" : ""), title: "Refresh now (~40s)", "aria-label": "Refresh now", disabled: !!ui.rescan,
         onclick: () => { ui.rescanFail = 0; ui.rescanErr = null; rescanFor(); footer() }}, icon("refresh", 13)));
-    const se = ui.snap.scan_error || ui.rescanErr;  // the newest scan died (greenlight.py's scan_error.json, or SSH/rescan exit): say why and how to fix it
+    const sErr = ui.snap.scan_error, rErr = ui.rescanErr;  // the newest scan died (greenlight.py's scan_error.json, or SSH exit 255): pick whichever is newer
+    const se = sErr && rErr ? (rErr.ts > sErr.ts ? rErr : sErr) : (sErr || rErr);
     if (se && !ui.rescan) {
       const sa = ago((Date.now() / 1000 - se.ts) / 3600), when = sa === "now" ? "just now" : `${sa} ago`;
-      f.append(h("span", {class: "scanerr", tabindex: "0",
-        title: `The last scan stopped ${when}, so these facts are from the one before.` + (se.fix ? `\nFix: ${se.fix}.` : "")},
+      const lead = ui.snap.scanned ? `The last scan stopped ${when}, so these facts are from the one before.` : `The scan stopped ${when}, so no workspaces have been scanned yet.`;
+      f.append(h("span", {class: "scanerr", role: "status", title: lead + (se.fix ? `\nFix: ${se.fix}.` : "")},
         `Scan failed: ${se.msg || "unknown error"}`, se.fix ? h("span", {class: "scanfix"}, ` · ${se.fix}`) : null));
     }
   }
@@ -2828,8 +2829,8 @@ window.mc = {
   rescanned(code){
     if (code) {
       ui.rescan = 0; ui.rescanFail = Date.now();
-      ui.rescanErr = {msg: code === 255 ? "host unreachable" : `exit ${code}`,
-        fix: code === 255 ? "check SSH connection, then ↻" : "try ↻ again",
+      // only SSH failure (255) gets a local fallback: a script exit (1) writes scan_error.json for the next stream tick
+      if (code === 255) ui.rescanErr = {msg: "host unreachable", fix: "check SSH connection, then ↻",
         ts: Math.floor(Date.now() / 1000), prevScanned: ui.snap ? ui.snap.scanned : 0};
       console.log("dash: rescan failed, exit " + code);
     } else ui.rescanErr = null;
@@ -2846,7 +2847,7 @@ window.mc = {
     }
     for (const p of snap.pucks) if (ui.parking[p.name] === !!p.hidden) delete ui.parking[p.name];  // the snapshot caught up
     if (ui.rescan && snap.scanned !== ui.rescan && !(ui.rescan === -1 && !snap.scanned)) ui.rescan = 0;  // the new scan landed
-    if (snap.scan_error || (ui.rescanErr && snap.scanned > ui.rescanErr.prevScanned)) ui.rescanErr = null;
+    if (ui.rescanErr && ((snap.scan_error && snap.scan_error.ts >= ui.rescanErr.ts) || snap.scanned > ui.rescanErr.prevScanned)) ui.rescanErr = null;
     settle(snap);
     if (ui.page) {
       const sg = sigOf(snap.pucks.find(x => x.name === ui.page.name));

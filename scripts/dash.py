@@ -740,7 +740,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
 
 
 def scan_error(scanned, scan_started=None):
-    """greenlight.py's note on why its last scan died (the footer says it), when that's newer than the snapshot we have."""
+    """greenlight.py's note on why its last scan died (the footer says it), when it's newer than the snapshot we have."""
     try:
         e = json.loads((greenlight.STATE / "scan_error.json").read_text())
     except (OSError, ValueError):
@@ -748,10 +748,9 @@ def scan_error(scanned, scan_started=None):
     if not isinstance(e, dict) or not isinstance(e.get("ts"), int) or isinstance(e.get("ts"), bool):
         return None
     ts, st = e["ts"], e.get("started")
-    if isinstance(st, (int, float)) and not isinstance(st, bool):
-        if st < (scan_started or 0) or ts < (scanned or 0):
-            return None
-        if ts == (scanned or 0) and st <= (scan_started or 0):
+    if (isinstance(st, (int, float)) and not isinstance(st, bool)
+            and isinstance(scan_started, (int, float)) and not isinstance(scan_started, bool)):
+        if st < scan_started or (st == scan_started and ts <= (scanned or 0)):
             return None
     elif ts <= (scanned or 0):
         return None
