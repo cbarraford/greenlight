@@ -316,7 +316,7 @@ def fetch(name):
             sp["state"] = "na"
             return {**base, "state": "na", "note": e.note, **({"plan": e.plan} if e.plan else {}), "next": now + TTL * 5}
         except Failed as e:
-            sp.update(state="failed", reason=e.code)
+            sp.update(state="failed", reason=e.code, ok=False, err="Failed")  # a failed read, counted by `diag.py errors`
             return {**base, "state": "failed", "note": e.note, "next": now + e.wait, "wait": e.wait}
         except Exception as e:  # an answer shaped like nothing we know: this provider fails, the others keep their meters
             sp.update(state="failed", reason="unexpected", **diag.failure(e))

@@ -1919,6 +1919,20 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   assert.equal(await page.$("#umpop"), null); assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "claude", "focus back on its meter");
   await page.click("#foot .um[data-id=codex]"); await page.click("#umpop .urow[data-id=codex] b"); await page.keyboard.press("Escape");
   assert.equal(await page.$("#umpop"), null, "Esc after a click on its text still closes it");
+  const v = USAGE(); v[0] = {...v[0], windows: [{label: "5h", pct: 95, resets: NOW_S() - 60}]}; v[1] = {...v[1], windows: [{label: "5h", pct: 40, resets: null}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), v);
+  const mm = await meters(page);
+  assert.equal(mm[0].text, "—", "every window reset since: a dash, not n/a"); assert.equal(mm[1].text, "40%", "no reset time: the %, no countdown");
+  await page.click("#foot .um[data-id=codex]");
+  assert.deepEqual(await page.$$eval("#umpop .urow[data-id=codex] .uwin", ws => ws.map(w => [w.querySelector(".upct").textContent, w.querySelector(".ur").textContent])), [["40%", ""]]);
+  await page.keyboard.press("Escape");
+  v[0] = {...v[0], state: "failed", note: "timeout", at: NOW_S() - 7200};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), v);
+  const f0 = (await meters(page))[0];
+  assert.equal(f0.text, "—"); assert.ok(f0.err); assert.match(f0.title, /5h: reset since, no new reading\nRefresh failed: timeout\. These are from 2h ago/);
+  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .ut"); await page.evaluate(() => footer());
+  assert.notEqual(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "a redraw doesn't pull focus onto a tab");
+  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /Refresh failed: timeout\. From 2h ago\./);
 });
 
 test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {

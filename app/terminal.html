@@ -158,7 +158,6 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .umpop{box-sizing:border-box;position:fixed;z-index:60;width:320px;max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
   border-radius:var(--ds-radius-lg);background:var(--ds-bg-raised);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-2);font:var(--ds-type-body);letter-spacing:var(--ds-type-body-track);
   font-variant-numeric:tabular-nums;animation:umin var(--ds-duration-fast) var(--ds-easing-out);transform-origin:bottom left}
-.umpop:focus{outline:none}
 @keyframes umin{from{opacity:0;transform:scale(.96)}}
 @media (prefers-reduced-motion: reduce){.umpop{animation:none}}
 .umpop .uh{display:flex;align-items:center;gap:var(--ds-space-8)} .umpop .ut{flex:1;font:var(--ds-type-strong)}
@@ -1585,7 +1584,8 @@ const umTone = pct => pct >= 100 ? "full" : pct >= 80 ? "near" : "";  // amber n
 // a window that has reset since it was read: its old % no longer holds and there is no new reading yet (null: shown as "—")
 const umPct = w => w.resets > 0 && w.resets <= Date.now() / 1000 ? null : w.pct;
 const umPctText = w => umPct(w) == null ? "—" : `${Math.round(umPct(w))}%`;
-const umTight = p => (Array.isArray(p.windows) ? p.windows : []).filter(w => umPct(w) != null).reduce((a, w) => !a || w.pct > a.pct ? w : a, null);
+const umTight = p => (Array.isArray(p.windows) ? p.windows : []).filter(w => umPct(w) != null).reduce((a, w) => !a || w.pct > a.pct ? w : a, null)
+  || (Array.isArray(p.windows) && p.windows[0]) || null;  // every window reset since: the first, shown as "—"
 const umStale = p => p.at > 0 && Date.now() / 1000 - p.at > UM_STALE;
 function umIn(t){  // the time until an epoch, short: 45m, 3h 10m, 2d 4h
   if (!(t > 0)) return "";
@@ -1612,7 +1612,7 @@ function umMeter(p){
   if (p.state === "failed" && !w) b.append(umEl("span", "uw", "Refresh failed"));
   else if (!w || p.state === "na") b.append(umEl("span", "uw", "n/a"));
   else {
-    b.append(umBar(w.pct), umEl("span", "upct", umPctText(w))); if (umIn(w.resets)) b.append(umEl("span", "uleft", umIn(w.resets)));
+    b.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w))); if (umIn(w.resets)) b.append(umEl("span", "uleft", umIn(w.resets)));
     if (p.state === "failed") b.append(dsIcon("alert", 12, {cls: "uerr"})); else if (umStale(p)) b.classList.add("stale");
   }
   b.addEventListener("click", e => { e.stopPropagation(); umToggle(b) });
@@ -1637,19 +1637,19 @@ function umRow(p){
   if (UM.view === "compact") {
     r.classList.add("c"); r.title = umSays(p);
     r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
-    if (w && p.state !== "na") r.append(umBar(w.pct), umEl("span", "upct", umPctText(w)), umEl("span", "ur", umIn(w.resets)));
+    if (w && p.state !== "na") r.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w)), umEl("span", "ur", umIn(w.resets)));
     else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
     return r;
   }
   r.append(umEl("div", "urh", dsIcon(umMark(p.id), 16, {cls: "umk"}), umEl("b", "", p.name), p.plan ? umEl("span", "uplan", p.plan) : null, umEl("span", "sp"),
     w && umIn(w.resets) && p.state !== "na" ? umEl("span", "urr", `Resets in ${umIn(w.resets)}`) : null));
   if (p.state !== "na") for (const x of p.windows || [])
-    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(umPct(x) ?? 0), umEl("span", "upct", umPctText(x)), umEl("span", "ur", umIn(x.resets) ? `in ${umIn(x.resets)}` : "reset")));
+    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(umPct(x) ?? 0), umEl("span", "upct", umPctText(x)), umEl("span", "ur", umPct(x) == null ? "reset" : umIn(x.resets) ? `in ${umIn(x.resets)}` : "")));
   const n = umNote(p); if (n) r.append(n);
   return r;
 }
 function umFill(pop){
-  const had = pop.contains(document.activeElement) ? document.activeElement.dataset.view || "" : null;  // focus inside it stays on the same control across the rebuild
+  const had = pop.contains(document.activeElement) && document.activeElement.dataset.view;  // focus on a tab stays on it across the rebuild
   pop.classList.toggle("compact", UM.view === "compact"); pop.replaceChildren();
   const seg = umEl("div", "useg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Detail");
   for (const [k, label] of [["detailed", "Detailed"], ["compact", "Compact"]]) {
@@ -1659,14 +1659,13 @@ function umFill(pop){
   }
   pop.append(umEl("div", "uh", umEl("span", "ut", "Plan usage"), seg), umEl("div", "urows", ...UM.list.map(umRow)),
     umEl("div", "ufoot", "Every configured agent, in dispatch order. Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
-  if (had != null) (pop.querySelector(`.useg [data-view="${had}"]`) || pop.querySelector(".useg [aria-selected=true]"))?.focus({preventScroll: true});
+  if (had) pop.querySelector(`.useg [data-view="${had}"]`)?.focus({preventScroll: true});
 }
 function umSync(){ document.querySelectorAll(".um").forEach(b => b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === b.dataset.id))) }
 function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; umSync() }
 function umToggle(anchor){
   if (UM.pop) return umClose();
-  UM.at = anchor.dataset.id; const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.tabIndex = -1; pop.setAttribute("role", "dialog");  // a click inside focuses it, so Esc still reaches it
-  pop.setAttribute("aria-label", "Plan usage");
+  UM.at = anchor.dataset.id; const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Plan usage");
   pop.addEventListener("click", e => e.stopPropagation());
   umFill(pop); document.body.append(pop);
   const r = anchor.getBoundingClientRect();
@@ -1676,7 +1675,7 @@ function umToggle(anchor){
 }
 addEventListener("click", () => umClose());
 // Esc closes it only from inside it or its meter: a terminal or find bar elsewhere keeps its own Esc
-addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop && (UM.pop.contains(document.activeElement) || document.activeElement?.classList.contains("um") || !document.activeElement || document.activeElement === document.body)) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
+addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop && (UM.pop.contains(document.activeElement) || document.activeElement?.classList.contains("um") || document.activeElement === document.body)) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
 function basementFoot(list){  // the Basement's footer: shown once an agent reports, and the terminals refit to the room left
   const f = $("bfoot"), um = umMeters(list), was = f.hidden;
   f.replaceChildren(...(um ? [um] : [])); f.hidden = !um;
