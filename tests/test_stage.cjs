@@ -635,9 +635,15 @@ const { launchBrowser } = require("./js_harness.cjs");
   for (let i = 0; i < 8; i++) await q.evaluate(n => stage.spec({ kind: "list", title: "C" + n, items: [] }), i);  // only the last few are kept
   assert.equal(await q.textContent("#hist .hn"), "6 of 6");
   assert.ok(await q.evaluate(() => ![...document.querySelectorAll("#hist button")].some(b => [...b.attributes].some(a => a.name.startsWith("on")))));
-  // typed chat's canvas (issue 208 phase 7) is the same page: it says no voice hint ("Say go back") there
-  const cv = await b.newPage(); await cv.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
-  await cv.evaluate(() => { document.body.dataset.surface = "canvas"; stage.text({ md: "| a |\n|---|\n| 1 |" }); stage.text({ md: "| b |\n|---|\n| 2 |" }); });
+  // typed chat's canvas (issue 208 phase 7) is the same page: no voice hint, and #hist never overlaps card content
+  const cv = await b.newPage(); await cv.setViewportSize({ width: 340, height: 280 });
+  await cv.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
+  await cv.evaluate(() => { document.body.dataset.surface = "canvas"; stage.text({ md: "| a |\n|---|\n| 1 |" }); stage.text({ md: "| MR | Status | Action |\n|---|---|---|\n| !12 | ok | Merge now |\n| !13 | red | Fix lint failure |" }); });
   assert.ok(await cv.isVisible("#hist")); assert.equal(await cv.isVisible("#hist .hh"), false);
+  const cvFit = await cv.evaluate(() => { const s = document.getElementById("s"), t = s.getBoundingClientRect().top, p = parseFloat(getComputedStyle(s).paddingBottom) || 24;
+    return Math.min(280, Math.max(96, Math.ceil([...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom - t), 0) + p))); });
+  await cv.setViewportSize({ width: 340, height: cvFit });
+  assert.ok(await cv.evaluate(() => { const h = document.getElementById("hist").getBoundingClientRect();
+    return [...document.querySelectorAll("#s td")].every(td => td.getBoundingClientRect().bottom <= h.top); }), "history bar clears the last table row on the canvas");
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1117,6 +1117,11 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
               && canvasCall(staged("Chart.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}\n```"))?.f == "stage.chart"
               && markdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|").count == 2
               && markdownTables("```md\n| a |\n|---|\n| 1 |\n```").isEmpty  // a table shown as code stays in the reply
+              && markdownTables("````md\n```\n| a |\n|---|\n| 1 |\n````").isEmpty
+              && markdownTables("```stage``` blocks draw charts.\n\n| a | b |\n|---|---|\n| 1 | 2 |") == ["| a | b |\n|---|---|\n| 1 | 2 |"]
+              && markdownTables("| pipe text\n---\nmore").isEmpty  // a horizontal rule isn't a table separator
+              && canvasCall(staged("Here.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}"))?.f == "stage.chart"
+              && canvasCall(staged("Here.\n```stage\n```")) == nil
               && markdownTables("|a|b|\n|:-|-:|\n|1|2|") == ["|a|b|\n|:-|-:|\n|1|2|"])  // GFM: any run of dashes
         let cc = Core(session: -9208); cc.voice.on = false
         var replyText = tbl
@@ -1140,8 +1145,8 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: only a typed reply that finished draws the canvas: not a stopped turn, a watch or check-in turn, a failure, or in voice mode (issue 208)",
               drawsCanvas(gr, ok: true, voiceOn: false) && !drawsCanvas(gs, ok: true, voiceOn: false) && !drawsCanvas(gw, ok: true, voiceOn: false)
               && !drawsCanvas(gc, ok: true, voiceOn: false) && !drawsCanvas(gr, ok: false, voiceOn: false) && !drawsCanvas(gr, ok: true, voiceOn: true))
-        cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"]); cc.canvas.collapsed = true; cc.canvas.draw("stage.text", ["md": "x"]); cc.canvas.reset()
-        check("voice: a new conversation clears the canvas: hidden, not marked updated, nothing waiting to draw (issue 208)", !cc.canvas.has && !cc.canvas.fresh && cc.canvas.queued == 0)
+        cc.canvas.draw("stage.text", ["md": "| a |\n|---|\n| 1 |"]); cc.canvas.height = 120; cc.canvas.collapsed = true; cc.canvas.draw("stage.text", ["md": "x"]); cc.canvas.reset()
+        check("voice: a new conversation clears the canvas: hidden, not marked updated, nothing waiting to draw, height reset (issue 208)", !cc.canvas.has && !cc.canvas.fresh && cc.canvas.queued == 0 && cc.canvas.height == Canvas.tallest)
         cc.canvas.collapsed = false
         cc.canvas.collapsed = false; if let before { ud.set(before, forKey: "canvasCollapsed") } else { ud.removeObject(forKey: "canvasCollapsed") }
         check("voice: a typed reply with a table draws the canvas and is marked for it; prose isn't; collapsing is kept (issue 208)", marked && prose && saved && kept)

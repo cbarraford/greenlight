@@ -997,15 +997,23 @@ func stageCall(_ h: String, lead: String = "") -> (f: String, arg: Any, by: Stri
 }
 /// A reply's markdown tables, each whole (its header, rule and rows): the transcript draws them as raw pipes.
 func markdownTables(_ s: String) -> [String] {
-    let lines = s.components(separatedBy: "\n"), rule = #"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"#
-    var out = [String](), i = 0, fenced = false
+    let lines = s.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    let rule = #"^\|\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$"#  // stage.html's pipeTable needs a leading | on every row, the rule included
+    var out = [String](), i = 0, fenceChar: Character? = nil, fenceLen = 0
     while i < lines.count {
-        let t = lines[i].trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("```") || t.hasPrefix("~~~") { fenced.toggle(); i += 1; continue }  // a table shown as code stays code
-        if !fenced, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
+        let t = lines[i]
+        if let f = fenceChar {
+            if t.count >= fenceLen, t.allSatisfy({ $0 == f }) { fenceChar = nil; fenceLen = 0 }
+            i += 1; continue
+        }
+        if let f = t.first, f == "`" || f == "~" {
+            let n = t.prefix(while: { $0 == f }).count
+            if n >= 3, !t.dropFirst(n).contains(f) { fenceChar = f; fenceLen = n; i += 1; continue }  // inline ```x``` isn't a fence
+        }
+        if t.hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
             var j = i + 2
-            while j < lines.count, lines[j].trimmingCharacters(in: .whitespaces).hasPrefix("|") { j += 1 }
-            out.append(lines[i..<j].map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")); i = j
+            while j < lines.count, lines[j].hasPrefix("|") { j += 1 }
+            out.append(lines[i..<j].joined(separator: "\n")); i = j
         } else { i += 1 }
     }
     return out
@@ -1015,7 +1023,7 @@ func markdownTables(_ s: String) -> [String] {
 func drawsCanvas(_ r: Run, ok: Bool, voiceOn: Bool) -> Bool { ok && !r.stopping && !r.watch && !r.checkIn && !voiceOn }
 /// What a typed reply puts on the chat's canvas (#208): its ```stage block, else its tables; nil for prose alone.
 func canvasCall(_ st: Staged) -> (f: String, arg: Any)? {
-    if let h = st.stage { let c = stageCall(h, lead: st.text); return (c.f, c.arg) }
+    if let h = st.stage ?? st.stageOpen, !h.isEmpty { let c = stageCall(h, lead: st.text); return (c.f, c.arg) }
     let t = markdownTables(st.shown)
     return t.isEmpty ? nil : ("stage.text", ["lead": "", "md": t.joined(separator: "\n\n")])
 }

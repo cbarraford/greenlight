@@ -202,6 +202,8 @@ body.status #hist{bottom:calc(var(--ds-space-32) + var(--ds-space-12))}
 #hist .hh{margin-right:var(--ds-space-8)}
 #hist .hh[hidden]{display:none}
 body[data-surface=canvas] #hist .hh{display:none}  /* typed chat's canvas: no voice there to say it */
+body.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-24))}  /* room under the card for the history bar */
+body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-32) + var(--ds-space-48))}
 body.past .options{display:none}
 body.past #s{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* an earlier card steps down, as a held one does */
 body.past #s::before{content:"Earlier";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}
@@ -295,6 +297,7 @@ function histUI(){
   const h = document.getElementById("hist"), cur = document.getElementById("s"), on = CARDS.includes(cur);
   document.body.classList.toggle("past", on && atCard < CARDS.length - 1);  // an older card's options are the past's: hidden
   h.hidden = !on || (CARDS.length < 2 && !liveEl);  // one card and the board behind it: forward still goes back to it
+  document.body.classList.toggle("hist", !h.hidden);
   if (h.hidden) return;
   h.querySelector(".hn").textContent = `${atCard + 1} of ${CARDS.length}`;
   h.querySelector("[data-go=back]").disabled = atCard <= 0;

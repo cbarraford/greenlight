@@ -1482,7 +1482,10 @@ final class LivePreview: ObservableObject {
 final class Canvas: ObservableObject {
     @Published var has = false
     @Published var collapsed = ud.bool(forKey: "canvasCollapsed") {
-        didSet { ud.set(collapsed, forKey: "canvasCollapsed"); if !collapsed { fresh = false } }  // your place in the transcript stays
+        didSet {
+            ud.set(collapsed, forKey: "canvasCollapsed")
+            if !collapsed { fresh = false; DispatchQueue.main.async { [weak self] in self?.fit() } }  // your place in the transcript stays; refit once shown
+        }
     }
     @Published var fresh = false  // drawn while collapsed: its header says so
     @Published var height: CGFloat = Canvas.tallest  // the panel's body: its content's height, up to `tallest`
@@ -1515,18 +1518,23 @@ final class Canvas: ObservableObject {
     }
     /// A new conversation: nothing of the last one stays, its cards (the page's history) included, nor a draw still waiting.
     func reset() {
-        has = false; fresh = false; pending = []
+        has = false; fresh = false; pending = []; height = Canvas.tallest
         if nav?.ready == true, let u = page("stage") { nav?.ready = false; web.loadFileURL(u, allowingReadAccessTo: u) }  // a draw meanwhile waits for the new page
+    }
+    private func fit() {
+        guard nav?.ready == true, has, !collapsed else { return }
+        let js = "(() => { const s = document.getElementById('s'); if (!s) return 0; if (s.classList.contains('frame')) return 280; const t = s.getBoundingClientRect().top, p = parseFloat(getComputedStyle(s).paddingBottom) || 24; return [...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom - t), 0) + p; })()"
+        web.evaluateJavaScript(js) { [weak self] h, _ in  // safety-ok: a constant expression, no data in it
+            guard let self, let h = h as? Double, h > 0 else { return }
+            self.height = min(Canvas.tallest, max(Canvas.shortest, CGFloat(h.rounded(.up)))); self.core?.canvasTick += 1
+        }
     }
     private func flush() {
         guard let c = core, nav?.ready == true else { return }
         retheme()
+        guard has, !pending.isEmpty else { return }
         web.callJS("stage.refs", [refStatus(c.pucks)])  // the snapshot's MRs as chips: a table's refs say their status
         pending.forEach { web.callJS($0.0, $0.1) }; pending = []
-        let fit = "(() => { const s = document.getElementById('s'); return [...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom), 0) + 24 })()"
-        web.evaluateJavaScript(fit) { [weak self] h, _ in  // safety-ok: a constant expression, no data in it
-            guard let self, let h = h as? Double, h > 0 else { return }
-            self.height = min(Canvas.tallest, max(Canvas.shortest, CGFloat(h.rounded(.up)))); self.core?.canvasTick += 1
-        }
+        fit()
     }
 }
