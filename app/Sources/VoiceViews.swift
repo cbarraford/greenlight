@@ -628,6 +628,20 @@ func stageHTML(_ s: String) -> String? {
 }
 
 /// True when a parsed JSON stage object declares a chart (non-empty string, never null/false/empty).
+/// The trail's name for a stage call (#208): "stage.spec" → "spec".
+func stageDraw(_ f: String) -> String { f.hasPrefix("stage.") ? String(f.dropFirst(6)) : "other" }
+/// A card's kind for the trail: one the page knows, else "other" (a model's made-up kind could be any word). Charts by type.
+let stageKinds: Set<String> = ["table", "timeline", "diff", "lifecycle", "list", "steps", "stat", "flow", "compare", "quote", "bar", "line", "pie"]
+func stageCardKind(_ f: String, _ arg: Any?) -> String? {
+    let o = arg as? [String: Any]
+    let k: String
+    switch f {
+    case "stage.chart": k = o?["chart"] as? String ?? "bar"
+    case "stage.spec": k = o?["kind"] as? String ?? "list"  // the page draws a card with no kind as a list
+    default: return nil
+    }
+    return stageKinds.contains(k) ? k : "other"
+}
 func isStageChart(_ o: [String: Any]) -> Bool {
     (o["chart"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
 }

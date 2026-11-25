@@ -366,3 +366,32 @@ def test_review_fixes_and_cmd_retry_span(diag_env, monkeypatch):
     assert out.strip() == "fine"
     last = [e for e in diag.read() if e.get("kind") == "cmd"][-1]
     assert last.get("ok") is True and last["tries"] == 2 and "rc" not in last and "msg_class" not in last, last
+
+
+def test_stage_summary(diag_env, monkeypatch):
+    # #208 phase 0: the app's stage draws roll up by source and draw, with per-turn times to the first card and the last draw
+    app = diag_env / "app.jsonl"
+    monkeypatch.setattr(diag, "app_path", lambda: app)
+    rows = [
+        {"draw": "wait", "by": "app", "turn": 1, "n": 1, "at": 0.01},  # the wait card isn't the first card
+        {"draw": "spec", "by": "dwim", "card": "table", "turn": 1, "n": 2, "at": 1.5},
+        {"draw": "text", "by": "chief", "turn": 1, "n": 3, "at": 9.0},
+        {"draw": "wait", "by": "app", "turn": 2, "n": 1, "at": 0.0},
+        {"draw": "spec", "by": "fast", "card": "list", "turn": 2, "n": 2, "at": 4.0, "mid": True, "req_secs": 1.2},
+        {"draw": "spec", "by": "fast", "card": "stat", "turn": 2, "n": 3, "at": 6.0, "req_secs": 1.4},
+        {"draw": "spec", "by": "app", "card": "list"},  # a workspace card outside any turn: counted, not timed
+    ]
+    app.write_text("".join(json.dumps({"ts": 100 + i, "comp": "app", "run": "abcd1234", "kind": "stage", **r}) + "\n"
+                           for i, r in enumerate(rows)))
+    s = diag.summary(0)["stage"]
+    assert s == {
+        "draws": 7, "by": {"app": 3, "dwim": 1, "chief": 1, "fast": 2}, "draw": {"wait": 2, "spec": 4, "text": 1},
+        "turns": 2, "fast_turns": 1,
+        "first_draw": {"n": 2, "p50": 4.0, "p95": 4.0}, "last_draw": {"n": 2, "p50": 9.0, "p95": 9.0},
+    }, s
+    assert "stage" not in diag.summary(0)["spans"]  # `at` isn't a span's `secs`
+    # the new string fields pass the privacy filter as tokens; free text under them doesn't
+    assert diag.clean({"draw": "text", "by": "chief", "card": "table"}) == {"draw": "text", "by": "chief", "card": "table"}
+    assert diag.clean({"card": "Fix login for ACME users"}) == {"dropped": 1}
+    assert diag.stage([]) == {"draws": 0, "by": {}, "draw": {}, "turns": 0, "fast_turns": 0,
+                              "first_draw": {"n": 0}, "last_draw": {"n": 0}}

@@ -9,6 +9,11 @@ import Speech
 /// Deterministic offline voice, audio, WebSocket, and GPT-Live protocol tests.
 func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
     runTranscriptTests(check: check)
+    check("voice: the trail names a stage draw and its card kind by token, a made-up kind as other (issue 208)",
+          stageDraw("stage.text") == "text" && stageDraw("stage.wait") == "wait" && stageDraw("alert") == "other"
+          && stageCardKind("stage.spec", ["kind": "table"]) == "table" && stageCardKind("stage.spec", [String: Any]()) == "list"
+          && stageCardKind("stage.spec", ["kind": "Fix login for ACME"]) == "other" && stageCardKind("stage.chart", ["chart": "pie"]) == "pie"
+          && stageCardKind("stage.text", ["lead": "x"]) == nil && stageCardKind("stage.wait", "One minute") == nil)
     let st = staged("Three MRs.\n```stage\n<b>hi</b>\n```\n[stage: full]\nDone."), open = staged("Here.\n```stage\n<ul><li>half")
     do {  // the stage's status line (issue 176): one short sentence, never a repeat; the activity Haiku reads; the local fallback
         check("voice: a status line is one sentence of at most 12 words, markdown off, with a full stop",
@@ -848,6 +853,20 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.chiefDrew = true; v.failed("Stopped."); v.hush()
         check("voice: finished and failed clear chiefDrew so subsequent watch/checkIn turns still draw the stage",
               clearedAfterScreen && watchDrewStage && !v.chiefDrew)
+        // issue 208: a turn leaves `stage` events: the wait card (the app's) at its start, then Chief's text, timed from the start
+        let tr = Run("trail?"); c.run = tr; v.on = true; v.isLive = false
+        v.began(tr); v.finished(staged("Two.\n[screen]\n- a"), "Two.", detail: "- a"); c.run = nil
+        Diag.q.sync {}
+        let trail = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["kind"] as? String == "stage" }
+        let turnEvents = trail.filter { $0["turn"] as? Int == v.turnNo }
+        check("voice: a turn's stage draws go to the trail as tokens and numbers: draw, by, turn, n, at (issue 208)",
+              turnEvents.count == 2 && turnEvents[0]["draw"] as? String == "wait" && turnEvents[0]["by"] as? String == "app"
+              && turnEvents[0]["n"] as? Int == 1 && turnEvents[1]["draw"] as? String == "text" && turnEvents[1]["by"] as? String == "chief"
+              && turnEvents[1]["n"] as? Int == 2 && (turnEvents[1]["at"] as? Double).map { $0 >= 0 && $0 < 5 } == true
+              && turnEvents.allSatisfy { $0["card"] == nil && $0["dropped"] == nil } && v.turnAt == nil
+              && trail.contains { $0["by"] as? String == "app" && $0["card"] as? String == "list" })  // v.show's Board card above
+        try? FileManager.default.removeItem(at: Diag.url.deletingLastPathComponent())
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
         keyLock.lock(); let savedA = keys["anthropic"]; keys["anthropic"] = .some(nil); keyLock.unlock()
