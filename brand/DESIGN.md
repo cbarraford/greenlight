@@ -668,6 +668,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   | queued, waiting, done | `bg.surface` | 1.5px `border.subtle` | `fg.muted` |
   | no MR | `bg.surface` | dashed 4 3 | `fg.muted` |
   | needs, crashed with no MR | `status.solid` | dashed 4 3 `border.default` | `on_solid` |
+  | working with no MR | `status.working.bg` | dashed 4 3 `status.working.border` | `status.working.fg` |
 - **Labels inside:** the ref in `strong` tabular figures, the task name in `label` (only when R ≥ 50), and the sub-label in `caption`.
 - **Status glyph:** 12, top centre, so the hex never depends on colour alone.
 - **Progress:** a 2px track around the inside edge in `border.subtle`, with completed segments in `status.fg` (or `fg.muted` when neutral).
