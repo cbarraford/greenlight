@@ -1238,8 +1238,14 @@ struct SettingsView: View {
                     }
                 }
             } }
-            row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
-                Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+            row("Echo cancellation", "Keeps \(c.name)'s voice out of the mic. Off for a screen recording: with it on, macOS can turn your mic down in other apps and leave \(c.name)'s voice out of the recording. Applies when voice mode next starts.") {
+                // a new engine: the old one's output is still wired for voice processing
+                Toggle("Echo cancellation", isOn: Binding(get: { c.voice.echoCancel }, set: { ud.set($0, forKey: "voiceEcho"); c.voice.staleEngine = true; c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+            }
+            dependent(off: !c.voice.echoCancel) {
+                row("Interrupt by talking", "Talk over \(c.name) to cut it off. Off: it finishes each answer first (for speakers that echo).") {
+                    Toggle("Interrupt by talking", isOn: Binding(get: { c.voice.bargeIn }, set: { ud.set($0, forKey: "voiceBargeIn"); c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+                }
             }
         }
         HStack(spacing: DS.Space.s4) {

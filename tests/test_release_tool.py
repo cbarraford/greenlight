@@ -38,7 +38,7 @@ def test_ed25519_matches_rfc8032(sk, pk, msg, sig):
 
 
 def sh(root: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "tag.gpgsign=false", *args],  # a global tag.gpgsign wants a tag message
                           capture_output=True, text=True, check=True).stdout.strip()
 
 

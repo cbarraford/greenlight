@@ -1284,12 +1284,15 @@ func voiceTalkLabel(_ t: Talk, micMuted: Bool = false) -> String {
 func micMenuTitle(muted: Bool) -> String { muted ? "Unmute Microphone" : "Mute Microphone" }
 /// Every look's hint line while the mic is muted, whoever has the floor.
 let mutedHint = "mic muted · ⇧⌘M unmutes"
+/// Whether talking over the voice cuts it off: only with echo cancellation (else the mic hears the voice itself), and GPT-Live
+/// takes turns on its own whatever "Interrupt by talking" says.
+func voiceInterruptible(live: Bool, vp: Bool, bargeIn: Bool) -> Bool { vp && (live || bargeIn) }
 /// What every look shows, from Voice and Core.
 struct Live {
     let v: Voice, c: Core
     var talk: Talk { voiceTalk(speaking: v.speaking > 0, thinking: c.run != nil, micMuted: v.micMuted) }
     var label: String { voiceTalkLabel(talk, micMuted: v.micMuted) }
-    var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : v.isLive || v.vp && v.bargeIn ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "say “goodbye” to end voice mode" }
+    var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : voiceInterruptible(live: v.isLive, vp: v.vp, bargeIn: v.bargeIn) ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "say “goodbye” to end voice mode" }
     var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
