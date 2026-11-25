@@ -69,6 +69,8 @@ Greenlight can run on another machine (a dev box that's always on): put the chec
 
 **Verbose activity** (Settings › Chat & voice, off by default) adds a live log above the chat's message box: Chief's every command with its output and thinking, each workspace agent's state, and every move Greenlight makes.
 
+**Thinking motion** (Settings › Chat & voice › Voice mode, on by default): while Chief works in voice mode, a field of needles drifts on the stage and falls into step as the answer arrives, landing as the lines of what it shows. Turn it off for a still stage; Reduce Motion keeps it still either way.
+
 ## Configuration
 
 State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.json` there overrides these defaults; each key replaces the default whole.

@@ -267,6 +267,23 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
           && voiceTalkLabel(.muted) == "Muted" && voiceTalkLabel(.listening) == "Listening" && mutedHint.contains("unmute")
           && voiceTalkLabel(.thinking, micMuted: true) == "Thinking · muted" && voiceTalkLabel(.speaking, micMuted: true) == "Speaking · muted"
           && voiceTalkLabel(.thinking) == "Thinking" && micMenuTitle(muted: false) == "Mute Microphone" && micMenuTitle(muted: true) == "Unmute Microphone")
+    do {  // Settings ▸ Thinking motion: on by default, stored, and sent to the stage with every call as data-motion
+        let saved = ud.object(forKey: "thinkingMotion"); defer { ud.set(saved, forKey: "thinkingMotion") }
+        ud.removeObject(forKey: "thinkingMotion")
+        let v = Voice(), byDefault = v.thinkingMotion && v.motionVars.contains("dataset.motion = 'on'")
+        v.thinkingMotion = false
+        check("voice: thinking motion is on by default, and turning it off is stored and reaches the stage",
+              byDefault && ud.object(forKey: "thinkingMotion") as? Bool == false && !Voice().thinkingMotion && v.motionVars.contains("dataset.motion = 'off'"))
+    }
+    do {  // turned off while the stage page still loads: the call queued for it ends on the new value
+        let saved = ud.object(forKey: "thinkingMotion"); defer { ud.set(saved, forKey: "thinkingMotion") }
+        let v = Voice(); v.thinkingMotion = true
+        v.wait("One minute", "x")
+        let carried = v.stageQueued?.contains("dataset.motion = 'on'") ?? false  // every stage call carries the setting
+        v.thinkingMotion = false
+        check("voice: every stage call carries thinking motion, and turning it off mid-load corrects the queued one",
+              carried && v.stageQueued.map { $0.hasSuffix("dataset.motion = 'off';") } ?? false)
+    }
     do {  // muting drops the half-heard turn and the recognition request: nothing more reaches the recognizer until unmute
         let v = Voice()
         v.setMicMuted(true)

@@ -167,8 +167,13 @@ body.status #s.frame,[data-look] body.status #s.frame{height:calc(100% - var(--d
 @media (prefers-reduced-motion: reduce){ #status{animation:fade var(--ds-duration-fast) linear} #status svg.tone{animation:none} }
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
+/* The thinking field (DESIGN.md §10.18): needles drift behind the wait card while Chief works, then lie down as the lines of
+   what it shows. The card waits unseen (.born) until they land, then enters as it always has. */
+#fx{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
+#s.born{animation:none;opacity:0}
+@media (prefers-reduced-motion: reduce){ #fx{display:none} }
 </style></head>
-<body><div id="s"></div><div id="status" hidden></div>
+<body><canvas id="fx" aria-hidden="true"></canvas><div id="s"></div><div id="status" hidden></div>
 <script>
 const $ = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const vars = () => { const cs = getComputedStyle(document.documentElement);  // the theme, resolved, for Chief's own page
@@ -179,7 +184,8 @@ const TONE = {needs: ["M8 1.75 14.25 8 8 14.25 1.75 8z", "M8 5.25v3.25M8 10.75h.
 const TONE_SAY = {needs: "Needs you", bad: "Failed", now: "Now", ok: "Done"};
 function toneGlyph(t){ const NS = "http://www.w3.org/2000/svg", g = document.createElementNS(NS, "svg"); g.setAttribute("viewBox", "0 0 16 16"); g.setAttribute("class", "tone");
   g.setAttribute("role", "img"); g.setAttribute("aria-label", TONE_SAY[t]); for (const d of TONE[t]) { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); g.append(p); } return g; }
-function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0); }
+function show(node, cls){ const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0);
+  if (cls === "wait") fx.think(); else if (cls === "wait listening") fx.stop(); else fx.reveal(s); }  // working, your turn, or a card to show
 const head = o => (o.eyebrow ? [$("div", "eyebrow", String(o.eyebrow))] : []).concat([$("h1", null, String(o.title ?? ""))]);
 const str = v => v == null ? "" : String(v), int = v => Math.max(0, Math.round(+v) || 0), arr = v => Array.isArray(v) ? v : [];
 // The native templates: a spec with one of these kinds draws from facts (dwim.py stage fills them from the snapshot, ~150 ms),
@@ -293,6 +299,96 @@ function blocks(md){
   flush();
   return out;
 }
+// The thinking field (brand/DESIGN.md §10.18). A grid of needles, each an oscillator pulled toward its four neighbours' phase
+// (Kuramoto: dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)), drifts in and out of step while Chief works. When a card arrives they lock, lie
+// flat and slide onto the card's lines, and the card fades in over them. Never under reduced motion, nor with
+// data-motion="off" on the root (Settings ▸ Thinking motion). body[data-fx] says what it is doing: think, reveal, or nothing.
+const fx = (() => {
+  const cv = document.getElementById("fx"), g = cv.getContext("2d");
+  const LOCK = 420, LAND = 1000, GONE = 1250;  // ms into a reveal: in step, on the card's lines, faded out
+  const clamp = v => v < 0 ? 0 : v > 1 ? 1 : v, ease = p => p < .5 ? 4 * p * p * p : 1 - (2 - 2 * p) ** 3 / 2, mix = (a, b, t) => a + (b - a) * t;
+  let mode = "off", n = 0, cols = 1, pit = 20, w = 0, h = 0, ox = 0, oy = 0, th, nx, om, zone, seg, lev, aimAt = null, ink = "", t0 = 0, last = 0, raf = 0, vis = 0, v0 = 1, born = null;
+  const on = () => !matchMedia("(prefers-reduced-motion: reduce)").matches && document.documentElement.dataset.motion !== "off";  // asked afresh: WebKit can leave a kept query stale
+  // Every line of text under `root` as a box (a wrapped line is its own), and each bar: where the needles come to rest.
+  function lines(root){
+    const out = [], add = (r, top) => { if (r.width > 3 && r.height > 3 && r.bottom > 0 && r.top < h && r.right > 0 && r.left < w && out.length < 400) out.push({x: r.left, y: top ? r.top : r.top + r.height / 2, w: r.width, hh: top ? 2 : r.height / 2}); };
+    const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), range = document.createRange();
+    for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (!t.nodeValue.trim()) continue; range.selectNodeContents(t); for (const r of range.getClientRects()) add(r); }
+    root.querySelectorAll(".track, .diff .m").forEach(e => add(e.getBoundingClientRect()));
+    root.querySelectorAll("svg.chart rect").forEach(e => add(e.getBoundingClientRect(), true));  // a bar: along its top
+    return out.sort((a, b) => a.y - b.y || a.x - b.x);
+  }
+  function size(){
+    w = innerWidth; h = innerHeight; const d = Math.min(2, devicePixelRatio || 1);
+    cv.width = Math.round(w * d); cv.height = Math.round(h * d); g.setTransform(d, 0, 0, d, 0, 0);
+    pit = Math.max(20, Math.sqrt(w * h / 1600)); cols = Math.max(1, Math.floor(w / pit)); const rows = Math.floor(h / pit); n = cols * rows;  // 1600 needles at most
+    ox = (w - (cols - 1) * pit) / 2; oy = (h - (rows - 1) * pit) / 2;
+    th = new Float32Array(n); nx = new Float32Array(n); om = new Float32Array(n); zone = new Float32Array(n).fill(1); seg = new Float32Array(n * 4); lev = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { th[i] = Math.random() * 2 * Math.PI; om[i] = .4 + Math.random() * 1.6; }  // each its own pace
+  }
+  // While Chief works the needles keep clear of the wait card's words.
+  function clear(){
+    const ls = lines(document.getElementById("s"));
+    for (let i = 0; i < n; i++) { const x = ox + (i % cols) * pit, y = oy + Math.floor(i / cols) * pit; let d = 1e9;
+      for (const l of ls) d = Math.min(d, Math.hypot(Math.max(l.x - x, 0, x - l.x - l.w), Math.max(Math.abs(y - l.y) - l.hh, 0)));
+      zone[i] = clamp((d - 10) / 30); }
+  }
+  // Each line gets needles in proportion to its width, laid end to end; the rest fade out where they stand.
+  function aim(ls){
+    const total = ls.reduce((s, l) => s + l.w, 0), spots = [];
+    for (const l of ls) { const c = Math.max(1, Math.min(Math.round(l.w / 4), Math.round(n * l.w / total))), each = l.w / c;
+      for (let j = 0; j < c && spots.length < n * 3; j++) spots.push(l.x + each * (j + .5), l.y, each); }
+    aimAt = new Float32Array(n * 3).fill(-1); const m = spots.length / 3;
+    for (let j = 0; j < m; j++) { const i = Math.floor(j * n / m) * 3; aimAt[i] = spots[j * 3]; aimAt[i + 1] = spots[j * 3 + 1]; aimAt[i + 2] = spots[j * 3 + 2]; }
+  }
+  function step(dt, lock, now){  // the coupling swells and ebbs while thinking; a reveal turns it up and pulls every phase to zero
+    const K = mix(1.1 + .7 * Math.sin(now * .0009), 6, lock), k = dt * .0009;
+    for (let s = 0; s < 2; s++) {
+      for (let i = 0; i < n; i++) { const a = th[i], x = i % cols; let c = 0;
+        if (x) c += Math.sin(th[i - 1] - a); if (x < cols - 1) c += Math.sin(th[i + 1] - a); if (i >= cols) c += Math.sin(th[i - cols] - a); if (i + cols < n) c += Math.sin(th[i + cols] - a);
+        nx[i] = a + k * (om[i] * (1 - lock) + K * c - 9 * lock * Math.sin(a)); }
+      const z = th; th = nx; nx = z;
+    }
+  }
+  function draw(lock, q){  // a needle in step with the field is brighter: order shows as it forms
+    let sx = 0, sy = 0; for (let i = 0; i < n; i++) { sx += Math.cos(th[i]); sy += Math.sin(th[i]); }
+    const psi = Math.atan2(sy, sx);
+    for (let i = 0; i < n; i++) { const a = th[i], k = i * 3, j = i * 4, to = !!aimAt && aimAt[k + 2] >= 0, m = to ? q : 0;
+      const x = mix(ox + (i % cols) * pit, to ? aimAt[k] : 0, m), y = mix(oy + Math.floor(i / cols) * pit, to ? aimAt[k + 1] : 0, m), half = mix(pit * .29, to ? aimAt[k + 2] / 2 + .3 : 0, m);
+      const ux = mix(Math.cos(a), 1, q) * half, uy = Math.sin(a) * half * (1 - q); seg[j] = x - ux; seg[j + 1] = y - uy; seg[j + 2] = x + ux; seg[j + 3] = y + uy;
+      lev[i] = Math.round(8 * vis * mix(.08 + .2 * (1 + Math.cos(a - psi)), .7, q) * mix(zone[i], 1, lock) * (aimAt && !to ? 1 - q : 1)); }
+    g.clearRect(0, 0, w, h); g.lineCap = "round"; g.lineWidth = mix(1.4, 3, q); g.strokeStyle = ink;
+    for (let l = 1; l <= 8; l++) { g.globalAlpha = l / 8; g.beginPath();
+      for (let i = 0; i < n; i++) if (lev[i] === l) { const j = i * 4; g.moveTo(seg[j], seg[j + 1]); g.lineTo(seg[j + 2], seg[j + 3]); }
+      g.stroke(); }
+  }
+  const land = () => { if (born) { born.classList.remove("born"); born = null; } };  // the card enters as it always has
+  function frame(now){
+    raf = 0; if (mode !== "off" && !on()) return stop();  // switched off mid-thought: stop() runs the fade, one loop only
+    const dt = Math.min(40, now - (last || now)), e = now - t0, card = mode === "reveal"; last = now;
+    ink = getComputedStyle(document.body).color;  // every frame: the window's appearance can flip mid-thought
+    const lock = card ? ease(clamp(e / LOCK)) : 0, q = card ? ease(clamp((e - LOCK * .6) / (LAND - LOCK * .6))) : 0;
+    vis = mode === "think" ? Math.min(1, vis + dt / 400) : card ? v0 * (1 - clamp((e - LAND) / (GONE - LAND))) : Math.max(0, vis - dt / 200);
+    if (card && e >= LAND) land();
+    if ((card && e >= GONE) || (mode === "off" && vis <= 0)) { mode = "off"; vis = 0; aimAt = null; g.clearRect(0, 0, w, h); delete document.body.dataset.fx; return; }
+    step(dt, lock, now); draw(lock, q); raf = requestAnimationFrame(frame);
+  }
+  const kick = () => { if (!raf) { last = 0; raf = requestAnimationFrame(frame); } };
+  function stop(){ land(); if (mode === "reveal") vis = 0; if (mode !== "off") { mode = "off"; kick(); } }  // fades out; a reveal cut short just clears
+  function think(){
+    if (!on()) return stop();
+    if (mode !== "think") { if (mode === "off" && (vis <= 0 || w !== innerWidth || h !== innerHeight)) size(); land(); mode = "think"; aimAt = null; document.body.dataset.fx = "think"; }
+    clear(); kick();
+  }
+  function reveal(el){
+    if (mode === "off" || !on() || (mode === "think" && vis < .3)) return stop();  // nothing (yet) to see: the card just enters
+    if (mode === "think") { mode = "reveal"; t0 = performance.now(); v0 = vis; document.body.dataset.fx = "reveal"; }
+    if (performance.now() - t0 < LAND) { land(); born = el; el.classList.add("born"); }  // a newer card mid-reveal takes the needles over
+    aim(lines(el)); kick();
+  }
+  addEventListener("resize", () => { if (mode === "think") { size(); clear(); } else if (mode === "reveal") stop(); });
+  return {think, reveal, stop};
+})();
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
@@ -365,6 +461,7 @@ window.stage = {
   status(line){
     const el = document.getElementById("status"), t = str(line).trim();
     document.body.classList.toggle("status", !!t);
+    if (document.body.dataset.fx === "think") fx.think();  // the strip lifts the wait card's words: the needles make way again
     if (!t) { el.hidden = true; el.replaceChildren(); return; }
     const span = el.querySelector("span");
     if (span && !el.hidden) { span.textContent = t; return; }  // in place: no re-entry for each new line

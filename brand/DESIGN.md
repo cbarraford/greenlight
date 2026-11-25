@@ -425,7 +425,7 @@ Only use semantic tokens in UI code: `bg.*`, `element.*`, `border.*`, `fg.*`, `a
 
 - **Properties:** animate `transform` and `opacity` only, plus colour on hover. Never `transition: all`. Every animation is interruptible.
 - **Loops:**
-  - The only infinite loops allowed are the working spinner (only when it's the focused item; otherwise a static open ring) and the needs pulse.
+  - The only infinite loops allowed are the working spinner (only when it's the focused item; otherwise a static open ring), the needs pulse, and the voice stage's thinking field (§10.18), which runs only while Chief works with nothing else on the stage and can be turned off.
   - The needs pulse runs 3 cycles of 2.4s when a workspace becomes needs-you, then rests on a static halo. No breathing segments, no ambient pulses.
 - **Spinners** wait 200ms before appearing and stay at least 400ms. Updates are optimistic with Undo.
 - **The ride between floors** stays, as the rare moment:
@@ -805,6 +805,11 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Screen text:** Chief's `[screen]` detail, under the spoken gist. The gist is a `title-sm` lead; the detail reads as a page at `layout.measure`, top-aligned: headings `strong`, lists with `fg.muted` markers, inline code `code` on `element.rest`, fenced code on `bg.sunken`. Markdown is read for structure only: everything lands as text, links as their words.
 - **Charts:** follow §10.10 and the dataviz skill. The 8-hex hard-coded `PAL` becomes neutral steps plus the accent.
 - **Motion:** content enters at `base`/`out` with a 4px rise. The listening cursor blinks only while listening and stops under reduced motion.
+- **Thinking field:** while Chief works (the wait card, not your turn), a grid of short needles drifts behind the card. Each is a coupled oscillator (Kuramoto: `dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)` over its four neighbours), so order forms and breaks as the coupling swells and ebbs.
+  - Ink is `fg.default` at 8 alpha steps, brighter when a needle is in step with the field. No accent, no glow. Needles keep clear of the wait card's words.
+  - When a card arrives, the needles lock in step (420ms), lie flat and slide onto the card's lines of text, bar tracks and bar tops (by 1s), then fade (250ms) as the card enters as usual. A card that arrives before the field has shown, or with no wait before it, just enters.
+  - Your turn ("Listening") stops it with a 200ms fade. Reduce Motion: no field at all.
+  - Settings › Voice mode › Thinking motion turns it off (on by default); the app sends it as `data-motion` on the stage's root.
 - **Iframes:** each one gets the theme variables, as today.
 - **Status line:** while Chief works without speaking (about 20 s of quiet), a strip pinned to the stage's foot says what it's doing in one sentence of `label` `fg.muted` (under 12 words, ellipsis on overflow), after the working glyph spinning at the `spinner` period (still under reduced motion). It sits on `--bg` with a `border.subtle` top rule, updates in place, and clears when Chief speaks or the turn ends. It is never spoken. Phosphor drops the glyph for a `$ ` prompt and dashes the rule.
 
@@ -893,7 +898,7 @@ Every ban comes with the move to make instead. The critique agent (§13) checks 
 | Shape | Radii outside 4/6/8/12/full; a child rounder than its parent | The radius tokens, concentric (inner = outer − padding) |
 | Shape | Hexagons as decoration | The hex only for the workspace cell and the mark |
 | Motion | Animating frequent or keyboard actions (⌘K, tabs, row selection) | Instant |
-| Motion | Infinite breathing, pulsing or glowing | The needs pulse (3 cycles, then rest) and the spinner on the focused item only |
+| Motion | Infinite breathing, pulsing or glowing | The needs pulse (3 cycles, then rest), the spinner on the focused item, and the stage's thinking field while Chief works (§10.18) only |
 | Motion | `transition: all`, animating layout properties, ease-in, starting from `scale(0)` | `transform` and `opacity` with the `out` curve, from scale .96 |
 | Motion | Ignoring Reduce Motion in any file | A 150ms fade, loops stopped, nothing hidden |
 | Buttons | More than one primary per view; ghost, gradient or shadowed buttons; one-off variants | The five button variants (§10.2), one primary |

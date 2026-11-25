@@ -1274,6 +1274,9 @@ struct SettingsView: View {
                     }
                 }
             } }
+            row("Thinking motion", "While \(c.name) works, a field of needles drifts on the stage and falls into step as the answer arrives. Off: the stage stays still. Reduce Motion keeps it still either way.") {
+                Toggle("Thinking motion", isOn: Binding(get: { c.voice.thinkingMotion }, set: { c.voice.thinkingMotion = $0; c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)
+            }
             row("Echo cancellation", "Keeps \(c.name)'s voice out of the mic. Off for a screen recording: with it on, macOS can turn your mic down in other apps and leave \(c.name)'s voice out of the recording. Applies when voice mode next starts.") {
                 // a new engine: the old one's output is still wired for voice processing
                 Toggle("Echo cancellation", isOn: Binding(get: { c.voice.echoCancel }, set: { ud.set($0, forKey: "voiceEcho"); c.voice.staleEngine = true; c.objectWillChange.send() })).labelsHidden().toggleStyle(.switch)

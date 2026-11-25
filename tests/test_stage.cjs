@@ -198,5 +198,114 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
   await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
   assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
+  // The thinking field (DESIGN.md §10.18): needles while Chief works, clear of the wait card's words; the card that follows waits
+  // for them to land, then enters as ever. Your turn, Reduce Motion and Settings ▸ Thinking motion off all leave the stage still.
+  await p.setViewportSize({ width: 800, height: 500 });
+  const fxNow = () => p.evaluate(() => document.body.dataset.fx), born = () => p.$eval("#s", e => e.classList.contains("born"));
+  const settled = () => p.waitForFunction(() => !document.body.dataset.fx && !document.getElementById("s").classList.contains("born"));
+  const ink = title => p.evaluate(title => {  // how many pixels the field has inked: over the stage, or just over the wait card's title
+    const c = document.getElementById("fx"), d = c.width / innerWidth; let box = { left: 0, top: 0, width: innerWidth, height: innerHeight };
+    if (title) { const r = document.createRange(); r.selectNodeContents(document.querySelector("h1").firstChild); box = r.getBoundingClientRect(); }
+    const px = c.getContext("2d").getImageData(Math.round(box.left * d), Math.round(box.top * d), Math.max(1, Math.round(box.width * d)), Math.max(1, Math.round(box.height * d))).data;
+    let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; return n; }, title);
+  await p.evaluate(() => stage.wait("Listening", "")); await settled();
+  assert.equal(await ink(), 0);  // your turn: nothing moves
+  await p.evaluate(() => stage.wait("One minute", "Reading the diff"));
+  assert.equal(await fxNow(), "think");
+  await p.waitForTimeout(700);
+  assert.ok(await ink() > 2000, "needles are drawn while Chief works");
+  assert.equal(await ink(true), 0, "and keep clear of the wait card's words");
+  assert.equal(await p.$eval("#fx", e => getComputedStyle(e).pointerEvents + e.getAttribute("aria-hidden")), "nonetrue");  // decoration: not in the way, not read out
+  await p.evaluate(() => stage.wait("One minute", "Still reading"));  // a new status line: the field carries on
+  assert.equal(await fxNow(), "think");
+  await p.evaluate(() => stage.spec({ title: "Three workspaces need you", kind: "list", items: [{ label: "one", detail: "review is in" }, { label: "two", detail: "ready to merge" }] }));
+  assert.equal(await fxNow(), "reveal");
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).opacity), "0", "the card waits for the needles to land");
+  await p.evaluate(() => stage.spec({ title: "Four workspaces need you", kind: "list", items: [{ label: "one" }] }));  // a newer card mid-reveal takes over
+  assert.ok(await born());
+  await p.waitForFunction(() => !document.getElementById("s").classList.contains("born"));
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).animationName), "in");  // then it enters as it always has
+  assert.match(await p.textContent("h1"), /Four/);
+  await settled();
+  assert.equal(await ink(), 0, "and the field is gone");
+  await p.evaluate(() => stage.spec({ title: "No thinking first", items: [{ label: "a" }] }));  // a card with no wait before it just enters
+  assert.ok(!(await born()) && (await fxNow()) === undefined);
+  await p.evaluate(() => { stage.wait("One minute", "x"); stage.spec({ title: "Fast answer", items: [{ label: "a" }] }); });  // nor one before the needles show
+  assert.ok(!(await born()));
+  await settled();
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("One minute", "x"); });  // Settings ▸ Thinking motion, off
+  assert.equal(await fxNow(), undefined);
+  await p.evaluate(() => stage.spec({ title: "t", items: [{ label: "a" }] }));
+  assert.ok(!(await born()));
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "x"); });
+  assert.equal(await fxNow(), "think");
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; });  // switched off mid-thought: it stops by itself
+  await settled();
+  // Off mid-thought, then back on during the fade: still one animation loop, not two (each frame's callbacks share its timestamp)
+  await p.evaluate(() => { const raf = window.requestAnimationFrame; window.fxTicks = [];
+    window.requestAnimationFrame = cb => raf(t => { window.fxTicks.push(t); cb(t); });
+    document.documentElement.dataset.motion = "on"; stage.wait("One minute", "x"); });
+  await p.waitForTimeout(300);
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; });
+  await p.waitForTimeout(60);
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "y"); window.fxTicks = []; });
+  await p.waitForTimeout(300);
+  assert.ok(await p.evaluate(() => { const t = window.fxTicks; return t.length > 3 && new Set(t).size === t.length; }), "one frame loop after a switch-off mid-thought");
+  await p.evaluate(() => { stage.wait("Listening", ""); }); await settled();
+  await p.emulateMedia({ reducedMotion: "reduce" });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  assert.equal(await fxNow(), undefined);  // Reduce Motion: no loop, and the card fades in as before
+  assert.equal(await p.$eval("#fx", e => getComputedStyle(e).display), "none");
+  await p.evaluate(() => stage.spec({ title: "t", items: [{ label: "a" }] }));
+  assert.ok(!(await born()));
+  await p.emulateMedia({ reducedMotion: "no-preference" });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  await p.setViewportSize({ width: 640, height: 400 });  // the window changes size mid-thought: the field is laid out again
+  await p.waitForTimeout(300);
+  assert.ok((await fxNow()) === "think" && (await ink()) > 1000 && await p.evaluate(() => Math.abs(document.getElementById("fx").width / innerWidth - Math.min(2, devicePixelRatio)) < .01));
+  await p.evaluate(() => stage.html("<p>page</p>"));  // Chief's own page has no lines to land on: the needles fall into step and fade
+  assert.ok((await fxNow()) === "reveal" && await born());
+  await p.setViewportSize({ width: 800, height: 500 });  // a resize mid-reveal shows the card at once
+  await settled();
+  await p.evaluate(() => { stage.wait("One minute", "x"); stage.wait("Listening", "Go on"); });  // your turn ends the thinking
+  await settled();
+  const inkWords = () => p.evaluate(() => {  // inked pixels over every line of the wait card's words
+    const c = document.getElementById("fx"), g = c.getContext("2d"), d = c.width / innerWidth, r = document.createRange(), tw = document.createTreeWalker(document.getElementById("s"), NodeFilter.SHOW_TEXT);
+    let n = 0; for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (!t.nodeValue.trim()) continue; r.selectNodeContents(t);
+      for (const b of r.getClientRects()) { const px = g.getImageData(Math.round(b.left * d), Math.round(b.top * d), Math.max(1, Math.round(b.width * d)), Math.max(1, Math.round(b.height * d))).data;
+        for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; } }
+    return n; });
+  for (const height of [360, 450, 522, 603, 693]) {  // the status strip lifts the wait card's words: the needles make way again
+    await p.setViewportSize({ width: 800, height });
+    await p.evaluate(() => stage.wait("One minute", "Reading the diff")); await p.waitForTimeout(500);
+    await p.evaluate(() => stage.status("Running the tests"));
+    let over = 0; for (let k = 0; k < 8; k++) { await p.waitForTimeout(120); over = Math.max(over, await inkWords()); }
+    assert.equal(over, 0, `needles keep clear of the words lifted by the status strip (${height}px)`);
+    await p.evaluate(() => { stage.status(""); stage.wait("Listening", ""); }); await settled();
+  }
+  const needle = () => p.evaluate(() => { const c = document.getElementById("fx"), px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 8) return px[i - 3] + px[i - 2] + px[i - 1]; return -1; });  // one inked pixel's r+g+b
+  await p.emulateMedia({ colorScheme: "light" });
+  await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(500);
+  const lightInk = await needle();
+  await p.emulateMedia({ colorScheme: "dark" }); await p.waitForTimeout(150);  // the window turns dark mid-thought: the needles follow
+  const darkInk = await needle();
+  assert.ok(lightInk >= 0 && lightInk < 300 && darkInk > 400, `needle ink follows the appearance (${lightInk} → ${darkInk})`);
+  await p.emulateMedia({ colorScheme: null });
+  await p.evaluate(() => stage.wait("Listening", ""));  // a resize during your turn's fade, then Chief works again: laid out anew
+  await p.setViewportSize({ width: 1000, height: 600 });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  assert.ok(await p.evaluate(() => Math.abs(document.getElementById("fx").width / innerWidth - Math.min(2, devicePixelRatio)) < .01), "the field fits the new window");
+  await p.evaluate(() => stage.wait("Listening", "")); await settled();
+  await p.setViewportSize({ width: 800, height: 500 });
+  for (const o of [{ chart: "bar", title: "Runs", labels: ["a", "b"], series: [{ name: "s", values: [2, 5] }] },  // ledger rows: the needles take the tracks
+    { chart: "bar", stacked: true, title: "Runs", labels: ["a", "b"], series: [{ name: "ok", values: [4, 3] }, { name: "failed", values: [1, 2] }] }]) {  // bars: along their tops
+    await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(450);
+    await p.evaluate(o => stage.chart(o), o);
+    assert.equal(await fxNow(), "reveal");
+    await p.waitForTimeout(500);
+    assert.ok(await ink() > 200, "the needles are on their way to the chart");
+    await settled();
+  }
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
