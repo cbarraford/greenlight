@@ -1179,7 +1179,8 @@ final class RulesStore: ObservableObject {
 /// The app's half of scripts/diag.py's trail (~/Library/Logs/Greenlight/app.jsonl, which diag.py reads when it's on
 /// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
 enum Diag {
-    static let url = URL(fileURLWithPath: uitest ? (greenlightHome + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
+    static let url = URL(fileURLWithPath: unittest ? (NSTemporaryDirectory() + "greenlight-unittest-\(getpid())/app.jsonl")  // never the real trail
+                         : uitest ? (greenlightHome + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
     static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
     static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     static let q = DispatchQueue(label: "greenlight.diag")

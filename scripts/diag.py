@@ -48,7 +48,7 @@ HASH = re.compile(r"[0-9a-f]{10}")
 # string-valued keys. An identifier (a workspace, repo, MR or automation) goes under a key ending in _h, from h().
 KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "name", "gate", "verdict", "provider",
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
-        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome"}
+        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome", "draw", "by", "card"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey|invalid_grant|\boauth"),
@@ -471,6 +471,35 @@ def usage(events):
     return out
 
 
+def stage(events):
+    """The voice stage (#208): draws by who asked (chief, fast, dwim, app) and by draw, and per turn the seconds from its start
+    to its first card and to its last (a wait card is neither; a turn with only wait cards isn't timed). `fast_turns` is how many turns the fast model drew in."""
+    by: dict[str, int] = {}
+    draws: dict[str, int] = {}
+    turns: dict[tuple, dict[str, Any]] = {}
+    n = 0
+    for e in events:
+        if e.get("kind") != "stage":
+            continue
+        n += 1
+        by[str(e.get("by"))] = by.get(str(e.get("by")), 0) + 1
+        draws[str(e.get("draw"))] = draws.get(str(e.get("draw")), 0) + 1
+        at = e.get("at")
+        if "turn" not in e or not isinstance(at, (int, float)) or isinstance(at, bool):
+            continue
+        t = turns.setdefault((e.get("run"), e.get("turn")), {"first": None, "last": None, "fast": False})
+        if e.get("draw") != "wait":  # a wait card (the turn's start, or "Listening" after a stop) isn't the answer
+            t["first"] = at if t["first"] is None else min(t["first"], at)
+            t["last"] = at if t["last"] is None else max(t["last"], at)
+        t["fast"] = t["fast"] or e.get("by") == "fast"
+    out: dict[str, Any] = {"draws": n, "by": by, "draw": draws, "turns": len(turns),
+                           "fast_turns": sum(t["fast"] for t in turns.values())}
+    for name, xs in (("first_draw", [t["first"] for t in turns.values() if t["first"] is not None]),
+                     ("last_draw", [t["last"] for t in turns.values() if t["last"] is not None])):
+        out[name] = {"n": len(xs), "p50": pct(xs, .5), "p95": pct(xs, .95)} if xs else {"n": 0}
+    return out
+
+
 def ade_name():
     """The workspace backend in use (ade.py), or "invalid" when GREENLIGHT_ADE names none."""
     try:
@@ -495,6 +524,7 @@ def summary(after, events=None):
         "top_errors": errors(events)[:10],
         "spans": spans(events),
         "usage": usage(events),
+        "stage": stage(events),
         "automations": automations(),
         "crashes": crashes(after),
     }

@@ -602,8 +602,12 @@ function newPane(tab, cmd, session = sid()){
       if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
     t.onData(d => { if (!p.dead) { if (p.hist) { p.hist = false; d = HIST_EXIT + d } return post({cmd: "in", id, d}) } reconnect(p); render() });
     t.onResize(({cols, rows}) => post({cmd: "size", id, cols, rows}));
-    post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
-    if (cmd) post({cmd: "in", id, d: cmd + "\r"});
+    // cmd is typed, as you would, when it fits the TTY's line: typed before the shell reads it, a line waits in a buffer that on
+    // macOS holds 1024 bytes and drops the rest, Enter too. Longer (an agent's brief): the pane's session runs it (paneCmd's run),
+    // sent again by a reconnect until paneCmd says it has it (RUN_MARK).
+    if (cmd && new TextEncoder().encode(cmd).length > 1000) p.run = cmd;
+    post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows, ...p.run ? {run: p.run} : {}});
+    if (cmd && !p.run) post({cmd: "in", id, d: cmd + "\r"});
   }};
 }
 // The wheel: ghostty-web only ever scrolls its own scrollback (arrow keys on the alternate screen) and never reports the
@@ -614,6 +618,7 @@ function newPane(tab, cmd, session = sid()){
 // so ⌃⌥⇧ wheel events never come from a hand: App.tmuxOpts binds them, down to leave copy-mode, up to clear tmux's history.
 const HIST_EXIT = "\x1b[<93;1;1M", HIST_CLEAR = "\x1b[<92;1;1M";  // SGR ⌃⌥⇧-wheel down / up; outside copy-mode the exit is a no-op
 const TMUX_MARK = "\x1b]6973;greenlight-tmux\x07";  // App.tmuxMark
+const RUN_MARK = "\x1b]6973;greenlight-run\x07";  // App.runMark: paneCmd has the pane's run
 const tmuxMouse = p => !!p.tmux && p.t.getMode(1006) && [1000, 1002, 1003].some(m => p.t.getMode(m));
 function wheel(p, e, host){
   const t = p.t, side = e.shiftKey && !e.deltaY;  // macOS turns ⇧ and a mouse's wheel sideways; ghostty-web reads deltaY only
@@ -689,7 +694,7 @@ $("lnkOpen").onclick = () => { post({cmd: "url", url: $("lnk")._url}); $("lnk").
 $("lnkCopy").onclick = () => { post({cmd: "copy", text: $("lnk")._url}); $("lnkCopy").textContent = "Copied"; cur?.focus.t.focus() };
 // a pane whose ssh dropped (exit 255): the tmux session lives on remotely, so open it again
 function reconnect(p){ p.dead = p.tmux = p.hist = false; p.t.write("\r\n");  // the new connection may have no tmux: no history mode until it prints the mark
-  post({cmd: "open", id: p.id, session: p.session, ws: p.tab.ws, cols: p.t.cols, rows: p.t.rows}) }
+  post({cmd: "open", id: p.id, session: p.session, ws: p.tab.ws, cols: p.t.cols, rows: p.t.rows, ...p.run ? {run: p.run} : {}}) }
 function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // session: attach to one already running (a Basement-made agent)  // a project window's home tab: its default folder. fresh: its own set of tabs (the sidebar's +)
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
@@ -785,6 +790,7 @@ function sniff(p, s){
   const tail = s.match(/(?:\x1b\][^\x07\x1b]*\x1b?|\x1b)$/);  // carry an OSC sequence split across PTY read chunks
   if (tail && tail[0].length <= 512) { p.oscBuf = tail[0]; s = s.slice(0, -tail[0].length) }
   if (s.includes(TMUX_MARK)) p.tmux = true;  // paneCmd: tmux runs here, so the wheel goes to it
+  if (s.includes(RUN_MARK)) p.run = undefined;  // paneCmd has its command: a reconnect only reattaches
   let changed = false;
   for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
   for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { let d = v; try { d = decodeURIComponent(v) } catch {} if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
