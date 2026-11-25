@@ -1353,7 +1353,10 @@ def agent_overlay(ws, terminals):
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
     if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
         who, h = ag.get("type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
-        if h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
+        if not ag.get("type"):  # external.by_worktree_safe: the process check failed, nothing is known to be running
+            nxt.update(owner="working", action="the process check failed, so whether an agent runs here outside Greenlight "
+                                               "can't be told: greenlight holds off until it can (diag.py errors says why)")
+        elif h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
             nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for {h:.0f}h: once it's done, close "
                                           "it (or take it over in the Basement) and greenlight carries on")
         else:

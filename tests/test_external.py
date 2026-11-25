@@ -26,6 +26,9 @@ def test_agent_of():
     assert external.agent_of(["env", "FOO=1", "claude"]) == "claude"  # and its VAR=value
     assert external.agent_of(["claude", "-p", "fix the crash in Greenlight.app/Contents/MacOS"]) == "claude"  # a prompt isn't the program
     assert external.agent_of(["codex", "app-server"]) is None and external.agent_of(["claude", "mcp", "serve"]) is None  # servers
+    assert external.agent_of(["node", "/srv/n/@openai/codex/bin/codex.js", "app-server"]) is None  # through an interpreter too
+    assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-code/cli.js", "mcp", "serve"]) is None
+    assert external.agent_of(["codex", "mcp-server"]) is None and external.agent_of(["codex", "exec", "fix it"]) == "codex"
 
 
 PROCS = {
@@ -97,12 +100,12 @@ def test_mac_parsers(monkeypatch):
     monkeypatch.setattr(external.time, "time", lambda: 1000000)
     sup = "/opt/Application Support/x/claude"  # spaces in the path (as under ~/Library): whitespace-split args lose it
     out = {"pid=,args=": f" 101 {sup} --resume\n 102 node x\n",
-           "pid=,ppid=,etime=,comm=": f" 101  1   01:02:03 {sup}\n 102 101 2-00:00:05 node\nbad line\n",
+           "pid=,ppid=,etime=,uid=,comm=": f" 101  1   01:02:03 {os.getuid()} {sup}\n 102 101 2-00:00:05 0 node\nbad line\n",
            "lsof": "p101\nfcwd\nn/srv/w/app\np102\nn/srv/w/b\n"}
     monkeypatch.setattr(external.subprocess, "run",
                         lambda cmd, **k: mock.Mock(stdout=out["lsof" if "lsof" in cmd[0] else cmd[-1]], returncode=0))
-    assert external._proc_mac() == {101: {"ppid": 1, "argv": [sup, "--resume"], "start": 1000000 - 3723},
-                                    102: {"ppid": 101, "argv": ["node", "x"], "start": 1000000 - 172805}}
+    assert external._proc_mac() == {101: {"ppid": 1, "argv": [sup, "--resume"], "start": 1000000 - 3723, "other": False},
+                                    102: {"ppid": 101, "argv": ["node", "x"], "start": 1000000 - 172805, "other": True}}
     assert external.agent_of(external._proc_mac()[101]["argv"]) == "claude"
     assert external._cwds_mac([101, 102]) == {101: "/srv/w/app", 102: "/srv/w/b"} and external._cwds_mac([]) == {}
 
@@ -142,6 +145,9 @@ def test_scan_keeps_off_an_external_agent():
     ws = {"next": {"owner": "greenlight", "step": "merge", "action": "x"}, "agent": {"state": "working", "type": "claude", "external": True, "since": old}}
     greenlight.agent_overlay(ws, {})
     assert ws["next"]["owner"] == "me" and "running here outside Greenlight for 7h" in ws["next"]["action"]  # idle for hours: yours to close
+    ws = {"next": {"owner": "agent", "step": "ci_green", "action": "x"}, "agent": {"state": "working", "type": None, "external": True}}
+    greenlight.agent_overlay(ws, {})  # a failed process check (by_worktree_safe's placeholder): held, and says so
+    assert ws["next"]["owner"] == "working" and "process check failed" in ws["next"]["action"]
 
 
 def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
@@ -175,12 +181,19 @@ def test_basement_delete_warns(monkeypatch):
     monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False: "codex" if fresh else None)
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
     monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0})
-    assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first; force deletes anyway
+    assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")
 
 
 def test_dash_marks_rows_any_ade_listed(monkeypatch):
     import dash
     rows = [{"path": "/srv/w/orca-made", "ade": "orca", "agent": "done"}, {"path": "/srv/w/quiet", "ade": "orca", "agent": "done"}]
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 3, "agent": "claude", "cwd": "/srv/w/orca-made/src"}])
+    failed = [{"path": "/srv/w/a", "ade": "orca", "agent": "done"}]
+    monkeypatch.setattr(external, "by_worktree_safe", lambda paths: {"/srv/w/a": [{"agent": None}]})
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    dash.mark_external(failed)
+    assert failed[0]["agent"] == "working"  # a failed scan: every row busy, so the page starts nothing beside an agent
+    monkeypatch.undo()
     monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 3, "agent": "claude", "cwd": "/srv/w/orca-made/src"}])
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
     dash.mark_external(rows)
@@ -188,7 +201,7 @@ def test_dash_marks_rows_any_ade_listed(monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     dash.mark_external(rows)
     assert rows[0]["external"] and rows[0]["agent"] == "working" and "external" not in rows[1] and rows[1]["agent"] == "done"
-    mine = [{"path": "/srv/w/orca-made", "ade": "native", "agent": "waiting"}]  # Greenlight's own agent is active: it shows
+    mine = [{"path": "/srv/w/orca-made", "ade": "native", "agent": "waiting"}]  # a native row already says (primary_agent)
     dash.mark_external(mine)
     assert "external" not in mine[0]
     assert dash.resume_agent({"state": "working", "agentType": "codex", "external": True}) == {"state": "working"}
@@ -212,6 +225,19 @@ def test_tmux_roots_and_symlinks(monkeypatch, tmp_path):
     assert list(got) == [str(tmp_path / "link")]  # keyed by the path as given
 
 
+def test_linux_cwd_unreadable(monkeypatch):
+    def denied(path):
+        raise PermissionError(path)
+    monkeypatch.setattr(external.os, "readlink", denied)
+    monkeypatch.setattr(external.os, "stat", lambda p: mock.Mock(st_uid=os.getuid()))
+    with pytest.raises(PermissionError):
+        external._cwd_linux(1)  # ours and unreadable: the scan fails (closed), never "no agent here"
+    monkeypatch.setattr(external.os, "stat", lambda p: mock.Mock(st_uid=os.getuid() + 1))
+    assert external._cwd_linux(1) is None  # another user's: skipped (a known limit)
+    monkeypatch.setattr(external.os, "readlink", lambda p: (_ for _ in ()).throw(FileNotFoundError(p)))
+    assert external._cwd_linux(1) is None  # exited
+
+
 def test_failures_fail_closed(monkeypatch):
     def unknown(fresh=False, strict=False):
         raise external.Unknown("OSError")
@@ -222,5 +248,7 @@ def test_failures_fail_closed(monkeypatch):
     monkeypatch.setattr(external, "_alive", lambda pid: True)
     with pytest.raises(OSError, match="no cwd"):
         external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None)
+    # another user's agent (root's, a second account's): skipped, not a failure that holds every worktree
+    assert external.scan(procs={8: {"ppid": 1, "argv": ["claude"], "other": True}}, roots=set(), cwd_of=lambda p: None) == []
     monkeypatch.setattr(external, "_alive", lambda pid: False)  # it exited mid-scan: nothing to find
     assert external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None) == []

@@ -28,6 +28,8 @@ _CACHE: dict = {"at": 0.0, "val": None, "failed": 0.0}
 _LOCK = threading.Lock()  # one scan at a time: cleanup's worker threads share it
 
 
+PACKAGES = {"claude": "/@anthropic-ai/claude-code/", "codex": "/@openai/codex/", "gemini": "/@google/gemini-cli/"}
+SERVERS = {"app-server", "mcp-server", "mcp", "serve"}  # `claude mcp serve` too; `claude mcp add` is a one-shot config command
 APP_RE = re.compile(r"\.app/Contents/|^--type=")  # a desktop app or an Electron helper, not a CLI agent
 
 
@@ -36,22 +38,16 @@ def agent_of(argv):
     like one (Claude.app, Codex.app, Antigravity and its helpers) isn't: the CLI agents it starts are counted."""
     if not argv or APP_RE.search(argv[0]) or any(a.startswith("--type=") for a in argv):
         return None  # only the program says it's an app: a prompt may name "Greenlight.app/Contents"
-    words = [a for a in argv[1:4] if not a.startswith("-")]
-    if words[:1] == ["app-server"] or words[:2] == ["mcp", "serve"]:
-        return None  # an editor's or another tool's server, not a session working in this folder
-    for a in argv[:3]:
+    for i, a in enumerate(argv[:3]):
         if a.startswith("-") or ("=" in a and not a.startswith("/")):
             continue  # a flag, or env's VAR=value
         b = os.path.basename(a).lower().removesuffix(".js").removesuffix(".mjs")
         b = ALIASES.get(b, b)
-        if b in AGENTS:
-            return b
-        if "/@anthropic-ai/claude-code/" in a:
-            return "claude"
-        if "/@openai/codex/" in a:
-            return "codex"
-        if "/@google/gemini-cli/" in a:
-            return "gemini"
+        kind = b if b in AGENTS else next((k for k, pkg in PACKAGES.items() if pkg in a), None)
+        if kind:
+            words = [w for w in argv[i + 1:i + 3] if not w.startswith("-")]
+            # an editor's or another tool's server, not a session working in this folder
+            return None if words[:1] and words[0] in SERVERS or words[:2] == ["mcp", "serve"] else kind
         if b not in ("node", "bun", "deno", "python", "python3", "env"):
             return None  # some other program: an argument naming an agent ("vim codex.md") isn't one
     return None
@@ -80,9 +76,19 @@ def _proc_linux():
 
 
 def _cwd_linux(pid):
+    """The agent's cwd; None when it exited, or when it's another user's (their /proc cwd is closed to us: a known
+    limit). Our own agent's cwd we can't read is a failed scan, never "nothing here"."""
     try:
         return os.readlink(f"/proc/{pid}/cwd")
+    except FileNotFoundError:
+        return None
     except OSError:
+        try:
+            mine = os.stat(f"/proc/{pid}").st_uid == os.getuid()
+        except OSError:
+            return None  # gone
+        if mine:
+            raise
         return None
 
 
@@ -97,7 +103,7 @@ def etime_secs(t):
 
 
 def _ps(fields):
-    p = subprocess.run(["ps", "-axww", "-o", fields], capture_output=True, text=True, timeout=10)
+    p = subprocess.run(["ps", "-axww", "-o", fields], capture_output=True, text=True, errors="replace", timeout=10)
     if p.returncode:
         raise OSError(f"ps exited {p.returncode}")
     return p.stdout.splitlines()
@@ -108,14 +114,15 @@ def _proc_mac():
     the arguments are what follows it in `args`."""
     args = {int(p[0]): p[1] if len(p) > 1 else "" for line in _ps("pid=,args=") if (p := line.strip().split(None, 1)) and p[0].isdigit()}
     out, now = {}, int(time.time())
-    for line in _ps("pid=,ppid=,etime=,comm="):
-        parts = line.split(None, 3)
-        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-            pid, comm, up = int(parts[0]), parts[3] if len(parts) > 3 else "", etime_secs(parts[2])
+    me = str(os.getuid())
+    for line in _ps("pid=,ppid=,etime=,uid=,comm="):
+        parts = line.split(None, 4)
+        if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit():
+            pid, comm, up = int(parts[0]), parts[4] if len(parts) > 4 else "", etime_secs(parts[2])
             rest = args.get(pid, "")
             rest = rest[len(comm):] if comm and rest.startswith(comm) else " ".join(rest.split()[1:])
             out[pid] = {"ppid": int(parts[1]), "argv": [comm, *rest.split()] if comm else rest.split(),
-                        "start": now - up if up is not None else None}
+                        "start": now - up if up is not None else None, "other": parts[3] != me}
     return out
 
 
@@ -124,7 +131,7 @@ def _cwds_mac(pids):
         return {}
     lsof = "/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else "lsof"  # -b: never block on a hung mount
     p = subprocess.run([lsof, "-b", "-w", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(map(str, pids))],
-                       capture_output=True, text=True, timeout=10)
+                       capture_output=True, text=True, errors="replace", timeout=10)
     out, cur = {}, None
     for line in p.stdout.splitlines():
         if line[:1] == "p" and line[1:].isdigit():
@@ -174,7 +181,8 @@ def scan(procs=None, roots=None, cwd_of=None):
             pid = procs[pid]["ppid"]
         return pid in roots
 
-    found = {pid: a for pid, p in procs.items() if (a := agent_of(p["argv"]))}
+    # another user's agents: their cwd is closed to us (lsof, /proc), a known limit; they still count as parents
+    found = {pid: a for pid, p in procs.items() if not p.get("other") and (a := agent_of(p["argv"]))}
     outside = [pid for pid in found if not ours(pid)]
     if cwd_of is None:
         cwds = _cwds_mac(outside) if mac else {pid: _cwd_linux(pid) for pid in outside}
@@ -187,6 +195,15 @@ def scan(procs=None, roots=None, cwd_of=None):
         if c and not (parent in found and cwd_of(parent) == c):
             out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start")})
     return out
+
+
+def _diag_failed(e):
+    """A failed scan holds every worktree: say why in the trail (diag.py errors), once per failure."""
+    try:
+        import diag
+        diag.event("external", op="scan", err=type(e).__name__, msg_class=diag.classify(str(e)))
+    except Exception:  # noqa: BLE001 - the trail must never break the scan's fallback
+        pass
 
 
 class Unknown(RuntimeError):
@@ -208,6 +225,7 @@ def agents(fresh=False, strict=False):
             val = scan()
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             _CACHE.update(at=0.0, val=None, failed=time.time())  # never cached as "none"
+            _diag_failed(e)
             if strict:
                 raise Unknown(f"{type(e).__name__}") from e
             return []

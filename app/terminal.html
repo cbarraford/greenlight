@@ -1202,10 +1202,11 @@ let delAsk = null;  // the workspace whose Delete waits on that info
 function delWs(ws){ delAsk = ws; post({cmd: "tree", op: "info", path: ws}) }
 function delDialog(o){
   delAsk = null; const ws = o.path, w = wsInfo(ws) || {}, m = w.mr || {}, td = o.teardown && o.teardown === teardown(ws) ? o.teardown : "";
-  const clean = !o.error && !o.dirty && !o.unpushed, rm = force => post({cmd: "tree", op: "rm", path: ws, ...force && {force: true}, ...td && {text: td}});
+  const clean = !o.error && !o.dirty && !o.unpushed && !o.outside, rm = force => post({cmd: "tree", op: "rm", path: ws, ...force && {force: true}, ...td && {text: td}});
   if (clean && noAskDel) return rm(false);
   const pl = (n, s) => `${n} ${s}${n === 1 ? "" : "s"}`, fs = o.files || [], tracked = (o.dirty | 0) - (o.untracked | 0);
   const lost = [o.error && ["r", "Couldn't read its git state", o.error],
+    o.outside && ["r", `${o.outside} runs in it outside Greenlight`, "Its session loses the folder it's working in"],
     tracked > 0 && ["r", pl(tracked, "uncommitted change"), fs.filter(f => f[0] !== "??").map(f => f[1]).join("\n")],
     o.untracked && ["r", pl(o.untracked, "untracked file"), fs.filter(f => f[0] === "??").map(f => f[1]).join("\n")],
     o.unpushed && ["o", pl(o.unpushed, "unpushed commit") + ": the branch keeps them", (o.commits || []).join("\n")]].filter(Boolean);
@@ -2457,7 +2458,7 @@ function autoRun(){
       }
     }
     const key = x => `${w.path}|${x.kind}|${x.sha}`, x = mv.find(x => x.auto && !autoDone.includes(key(x)));  // the most urgent not yet tried on this head
-    if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working") continue;
+    if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working" || w.external) continue;
     autoDone = [...autoDone, key(x)].slice(-300); save();
     if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "auto-merge", path: w.path}); continue }
     const was = cur; newTab(w.path, agentCmd(defAgent, x.auto));

@@ -849,10 +849,10 @@ def mark_external(rows):
             return
     except RuntimeError:
         return
-    ext = external.by_worktree([r["path"] for r in rows])
+    ext = external.by_worktree_safe([r["path"] for r in rows])  # a failed scan marks every row: the page's guards hold
     for r in rows:
-        if r.get("agent") in ("working", "waiting") and r.get("ade") == "native" and not r.get("external"):
-            continue  # Greenlight's own agent is active here: it shows first (primary_agent)
+        if r.get("ade") == "native":
+            continue  # its own row already says (primary_agent: Greenlight's own active agent first, then an outside one)
         if ext.get(r["path"].rstrip("/")):
             r["external"] = True
             if r.get("agent") not in ("working", "waiting"):
@@ -966,7 +966,7 @@ def tree_info(path):
     # ports/dirty/unpushed as before; the rest is what Delete lists (first 20 files, 10 commits) and the port rows' process names
     return {"dirty": len(lines), "unpushed": len(ahead), "commit": int(last) * 1000 if last.isdigit() else None, "ports": [p for p, _ in lp],
             "procs": {str(p): c for p, c in lp}, "untracked": sum(l[:2] == "??" for l in lines), "files": [[l[:2].strip(), l[3:]] for l in lines[:20]],
-            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "",
+            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "", "outside": outside_agent(path),
             "added": n("insertion"), "removed": n("deletion")}
 
 
