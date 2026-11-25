@@ -192,6 +192,7 @@ def _session_state(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] 
     if ident is None:
         return None
     hit = cache.get(str(f))
+    was = hit.get("st", {}).get("offset") if isinstance(hit, dict) and isinstance(hit.get("st"), dict) else None  # before the scan moves it
     st = hit.get("st") if isinstance(hit, dict) and hit.get("kind") == kind and hit.get("id") == ident and isinstance(hit.get("st"), dict) else None
     try:
         size = f.stat().st_size
@@ -205,7 +206,7 @@ def _session_state(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] 
         st = claude_scan(f) if kind == "claude" else codex_scan(f)
     old = cache.get(str(f))
     cache[str(f)] = {"kind": kind, "id": ident, "st": st, "at": int(time.time())}
-    if not (isinstance(old, dict) and old.get("st", {}).get("offset") == st.get("offset") and old.get("id") == ident):
+    if not (isinstance(old, dict) and was == st.get("offset") and old.get("id") == ident):
         cache["\0dirty"] = True
     elif time.time() - (old.get("at") or 0) < CACHE_TOUCH:
         cache[str(f)]["at"] = old.get("at")  # unchanged and recently seen: no write for it
@@ -289,11 +290,13 @@ SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.
 USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
 HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-PATH_RE = re.compile(r"(?<![\w.~/-])(?:~(?=/)(?:/[^\s'\"`:,;)\]]*)?|/(?:home|Users|root|tmp|private|var|etc|opt|srv|mnt|Volumes|workspaces?)(?![^/\s'\"`:,;)\]])(?:/[^\s'\"`:,;)\]]*)?"
-                     r"|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?![\w.@+-]))[\w.@+-]+/[^\s'\"`:,;)\]]+)")  # a home, a known root, or any 2+ segment path but the system's own; not /goal
+_SEG = r"[^\s'\"`:,;)\]]"
+PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|tmp|private|var|etc|opt|srv|mnt|Volumes|workspaces?)(?!{_SEG.replace('[^', '[^/')})(?:/{_SEG}*)?"
+                     rf"|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?![\w.@+-]))[\w.@+-]+/{_SEG}*)"
+                     rf"(?:\s[^\s/'\"`:,;)\]]+/{_SEG}*)*")  # a home, a known root, or any path with a 2nd slash but the system's own; not /goal; "Jane Doe/x" goes too
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?![\s\[])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
 FLAG_RE = re.compile(r"(?i)(--?[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]*)(\s+)(?!-)\S+")  # mysql --password hunter2
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")

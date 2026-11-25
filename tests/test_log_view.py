@@ -133,6 +133,23 @@ def test_redact_takes_out_any_absolute_path_but_the_systems():
     assert out == "cat [path] [path]; /usr/bin/env python3 -c 1/2; and/or", out
 
 
+def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets():
+    out, _ = log_view.redact("cat /" + "Users/Jane Doe/Payroll 2025/plan.pdf; ls /acme-internal/ ; TOKEN=[abc123]; KEY=[secret]")
+    assert "Doe" not in out and "Payroll" not in out and "acme-internal" not in out and "abc123" not in out, out
+    assert out.endswith("KEY=[secret]"), out
+
+
+def test_usage_cache_saves_a_growing_sessions_offset(tmp_path, monkeypatch):
+    monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "c.json")
+    f = _write(tmp_path / "s.jsonl", [_claude_msg("a", "claude-opus-5-5", 10, 1)])
+    log_view.usage([(f, "claude")])
+    with f.open("a") as fh:
+        fh.write(json.dumps(_claude_msg("b", "claude-opus-5-5", 5, 1)) + "\n")
+    log_view.usage([(f, "claude")])
+    saved = json.loads((tmp_path / "c.json").read_text())[str(f)]["st"]["offset"]
+    assert saved == f.stat().st_size, "the new offset is saved, so the next poll doesn't re-read the growth"
+
+
 def test_redact_leaves_slash_commands_and_endpoints():
     out, _ = log_view.redact(f"> /goal fix the build; run /review now; GET /api/v1/users 200; /bin-x{HOME}/alice")
     assert out.startswith("> /goal fix the build; run /review now; GET [path] 200; [path]"), out
