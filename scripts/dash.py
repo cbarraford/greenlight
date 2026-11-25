@@ -2352,6 +2352,8 @@ def import_op(verb, stdin):
         o = json.loads(stdin or "{}")
     except ValueError:
         return {"error": "bad request"}
+    if not isinstance(o, dict):
+        return {"error": "bad request"}
     picked, paths = o.get("from") or [], o.get("paths") or []
     if not isinstance(picked, list) or not isinstance(paths, list) or any(s not in importers.SOURCES for s in picked):
         return {"error": "bad source"}
@@ -2362,7 +2364,7 @@ def import_op(verb, stdin):
     try:
         argv = [verb, *(x for s in picked for x in ("--from", s)), *(x for p in paths for x in ("--path", p))]
         return importers.run(argv)
-    except SystemExit as e:  # a usage error: --from folder with no folder
+    except (SystemExit, RuntimeError) as e:  # a usage error, or a repos.json/goals.json it won't overwrite
         return {"error": str(e)}
 
 

@@ -473,7 +473,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         Diag.launched(host: host)
-        if !uitest { offerImport() }
+        if !uitest && !selftest { offerImport() }  // a self-test must never use up the real one-time offer
         if !uitest {
             let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             s.button?.imagePosition = .imageLeading

@@ -5,7 +5,7 @@
     python3 importers.py apply   [--from S]... [--path DIR]...   do it, JSON summary
 
 Sources: orca, t3, cmux, herdr (each read through its own read-only listing: the same `worktrees()` the old live
-drivers used, never a write), and `folder`, the git repos under --path (any ADE that keeps plain checkouts, Rex
+drivers used, never a write; goals come from Orca's comments and cmux's descriptions: T3 and herdr have none of their own), and `folder`, the git repos under --path (any ADE that keeps plain checkouts, Rex
 and the terminals included). With no --from, every detected source.
 
 What an import writes, and only there: repos.json (each repo's main checkout, once) and goals.json (a workspace's
@@ -51,18 +51,26 @@ def detect():
 def from_backend(name):
     """(repos, goals) an ADE lists: each worktree's repo, and its goal (Orca's comment, cmux's description, …)."""
     rows = ade.get(name).worktrees()
-    repos, goals = [], {}
+    repos: list = []
+    goals: dict = {}
     for w in rows:
         path = w.get("path") or ""
+        if w.get("hostId") not in (None, "", "local"):
+            continue  # another paired machine's: the same path here is something else
         if not path or not os.path.isdir(path) or w.get("isArchived"):
-            continue  # another host's, or gone
-        if w.get("repoId") and os.path.isdir(w["repoId"]):
-            repos.append(w["repoId"])
+            continue  # gone
+        top = ade_common.git(path, "rev-parse", "--show-toplevel")
+        if not top:
+            continue  # not a git checkout (a cmux workspace sitting in ~): no workspace would ever show its goal
+        repos.append(top)  # plan() keeps its main checkout (an ADE's repoId may be an opaque id)
         goal = (w.get("comment") or "").strip()
         if goal and not STATUS_LINE_RE.search(goal):
-            goals[path] = goal
-    if name == "orca":  # Orca knows repos with no worktree open, too
-        repos += [r["path"] for r in ade.get("orca").repos().get("repos") or [] if r.get("path") and os.path.isdir(r["path"])]
+            goals.setdefault(os.path.realpath(top), goal)  # keyed as the native engine keys it: the worktree's root
+    if name == "orca":  # Orca knows repos with no worktree open, too: only those its project setups put on this machine
+        import greenlight  # here: greenlight imports ade, which this module imports
+        setups = greenlight.project_setups(tries=1)
+        local = {s.get("path") for s in setups or [] if greenlight.is_local(s)}
+        repos += [r["path"] for r in ade.get("orca").repos().get("repos") or [] if r.get("path") in local and os.path.isdir(r["path"])]
     return repos, goals
 
 
@@ -74,11 +82,12 @@ def from_folder(root):
     for here, dirs, _ in os.walk(root):
         depth = len(Path(here).relative_to(root).parts)
         if (Path(here) / ".git").is_dir():
-            out.append(str(Path(here).resolve()))
+            out.append(str(Path(here).resolve()))  # a folder brings repos only: plain checkouts carry no goals
             dirs[:] = []  # a repo's own subfolders aren't other repos (submodules are the repo's)
             continue
-        dirs[:] = [] if depth >= MAX_DEPTH else [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
-    return out, {}
+        dirs[:] = [] if depth >= MAX_DEPTH else [d for d in dirs if (Path(here) / d / ".git").is_dir()  # a repo named build
+                                                 or (not d.startswith(".") and d not in SKIP_DIRS)]
+    return out
 
 
 def gather(sources, paths=()):
@@ -90,9 +99,7 @@ def gather(sources, paths=()):
             goals: dict = {}
             if s == "folder":
                 for p in paths:
-                    r, g = from_folder(p)
-                    repos += r
-                    goals |= g
+                    repos += from_folder(p)
             else:
                 repos, goals = from_backend(s)
             out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals}
@@ -122,18 +129,37 @@ def plan(found):
                         for s, f in found.items()}}
 
 
+def readable(f, kind):
+    """Raise when f exists but isn't a JSON kind: its reader would see it as empty, and a write would replace it."""
+    try:
+        ok = isinstance(json.loads(f.read_text()), kind)
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        raise RuntimeError(f"{f.name} can't be read: fix it or move it aside before importing (nothing was written)")
+
+
 def apply(p):
+    """Write the plan; what was written (a goal set since the preview stands and isn't counted)."""
+    readable(ade_basement.REPOS, list)
+    readable(ade_common.GOALS, dict)
     for r in p["repos"]:
         ade_basement.remember(r)
+    goals = {}
     for path, g in p["goals"].items():
         if not ade_common.goals().get(path):  # re-checked: a goal set since the preview stands
             ade_common.set_goal(path, g)
-    diag.event("import", op="apply", n_repos=len(p["repos"]), n_goals=len(p["goals"]), n_kept=len(p["kept"]))
-    return p
+            goals[path] = g
+    diag.event("import", op="apply", n_repos=len(p["repos"]), n_goals=len(goals), n_kept=len(p["kept"]))
+    return {**p, "goals": goals}
 
 
 def run(argv):
-    op = argv[0] if argv else "preview"
+    op = argv[0] if argv and not argv[0].startswith("-") else "preview"  # the verb is optional
+    if argv and argv[0] == op:
+        argv = argv[1:]
     if op == "detect":
         return detect()
     if op not in ("preview", "apply"):

@@ -2256,7 +2256,7 @@ def main():
         import importers
         try:
             print(json.dumps(importers.run(sys.argv[2:]), indent=1))
-        except SystemExit as e:
+        except (SystemExit, RuntimeError) as e:
             print(e, file=sys.stderr)
             sys.exit(2)
         return

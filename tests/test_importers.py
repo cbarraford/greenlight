@@ -1,5 +1,6 @@
 """importers.py: read-only one-shot imports of another ADE's repos and goals into the native engine (#195)."""
 import json
+import os
 import subprocess
 import types
 
@@ -35,28 +36,36 @@ def test_folder_scan(home):
     git_init(code / "group" / "b" / "vendored")  # inside a repo: the repo's, not another
     git_init(code / "node_modules" / "x")         # skipped folder
     git_init(code / "1" / "2" / "3" / "deep")     # past MAX_DEPTH
+    build = git_init(code / "build")              # a repo named like a skipped folder: still a repo
     (code / "wt").mkdir()
     (code / "wt" / ".git").write_text("gitdir: /elsewhere")  # a linked worktree, not a main checkout
-    repos, goals = importers.from_folder(str(code))
-    assert sorted(repos) == sorted([str(a.resolve()), str(b.resolve())]) and goals == {}
+    repos = importers.from_folder(str(code))
+    assert sorted(repos) == sorted([str(a.resolve()), str(b.resolve()), str(build.resolve())])
     with pytest.raises(RuntimeError, match="not a folder"):
         importers.from_folder(str(home / "missing"))
 
 
 def test_from_backend_reads_repos_and_goals(home, monkeypatch):
+    import greenlight
     r = git_init(home / "r")
-    w = home / "r-feat"
-    w.mkdir()
-    rows = [{"path": str(w), "repoId": str(r), "comment": "Merge !4: ship it"},
-            {"path": str(r), "repoId": str(r), "comment": "Rebase !1 — dispatched 2026-01-13"},  # a status line, not a goal
-            {"path": "/srv/other-host/x", "repoId": "/srv/other-host", "comment": "elsewhere"},     # not on this machine
-            {"path": str(w), "repoId": str(r), "comment": "  ", "isArchived": True}]
-    other = git_init(home / "no-worktrees")
-    monkeypatch.setattr(importers.ade, "get", lambda n: fake_backend(rows, [str(other), "/srv/gone"]))
+    sub = r / "src"
+    sub.mkdir()
+    rows = [{"path": str(sub), "repoId": "a9075331-opaque", "comment": "Merge !4: ship it"},  # cmux: a subfolder; Orca: an id
+            {"path": str(r), "repoId": "x", "comment": "Rebase !1 — dispatched 2026-01-13"},  # a status line, not a goal
+            {"path": str(r), "hostId": "laptop", "comment": "the laptop's"},                  # another paired machine's
+            {"path": str(home), "comment": "in a folder that isn't a checkout"},               # cmux in ~: no workspace shows it
+            {"path": str(r), "comment": "  ", "isArchived": True}]
+    other, remote = git_init(home / "no-worktrees"), git_init(home / "remote-here")
+    monkeypatch.setattr(importers.ade, "get", lambda n: fake_backend(rows, [str(other), str(remote), "/srv/gone"]))
+    monkeypatch.setattr(greenlight, "project_setups", lambda tries=2: [{"path": str(other), "hostId": "local"},
+                                                                        {"path": str(remote), "hostId": "laptop"}])
     repos, goals = importers.from_backend("orca")
-    assert repos == [str(r), str(r), str(other)] and goals == {str(w): "Merge !4: ship it"}
-    repos, _ = importers.from_backend("cmux")  # only Orca lists repos with no worktree
-    assert str(other) not in repos
+    top = os.path.realpath(r)
+    assert repos == [top, top, str(other)]  # a remote repo whose path happens to exist here is not this machine's
+    assert goals == {top: "Merge !4: ship it"}  # keyed by the worktree's root, as the native engine reads it
+    monkeypatch.setattr(greenlight, "project_setups", lambda tries=2: None)  # Orca can't say: no repos beyond its worktrees
+    assert importers.from_backend("orca")[0] == [top, top]
+    assert str(other) not in importers.from_backend("cmux")[0]  # only Orca lists repos with no worktree
 
 
 def test_plan_is_non_destructive_and_apply_writes_only_new(home, monkeypatch):
@@ -79,6 +88,20 @@ def test_plan_is_non_destructive_and_apply_writes_only_new(home, monkeypatch):
     assert importers.plan(found)["repos"] == [] and importers.plan(found)["goals"] == {}  # run again: nothing new
 
 
+def test_apply_reports_what_it_wrote_and_never_replaces_an_unreadable_file(home):
+    ade_common.set_goal("/w/c", "Set meanwhile")
+    p = {"repos": [], "goals": {"/w/b": "Ship B", "/w/c": "Theirs"}, "kept": {}, "sources": {}}
+    assert importers.apply(p)["goals"] == {"/w/b": "Ship B"}  # the goal set since the preview isn't counted
+    ade_common.GOALS.write_text("{half written")
+    with pytest.raises(RuntimeError, match="goals.json can't be read"):
+        importers.apply({"repos": [], "goals": {"/w/d": "x"}, "kept": {}, "sources": {}})
+    assert ade_common.GOALS.read_text() == "{half written"  # left for the user to fix
+    ade_common.GOALS.write_text("[]")  # parses, but isn't goals
+    with pytest.raises(RuntimeError):
+        importers.apply({"repos": [], "goals": {}, "kept": {}, "sources": {}})
+    assert "can't be read" in dash.settings("import-apply", "-", json.dumps({"from": ["folder"], "paths": [str(home)]}))["error"]
+
+
 def test_gather_reports_a_failing_source(home, monkeypatch):
     def get(n):
         if n == "t3":
@@ -93,6 +116,7 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     git_init(home / "code" / "x")
     monkeypatch.setattr(importers, "detect", lambda: {"orca": False, "t3": False, "cmux": False, "herdr": False, "folder": True})
     assert importers.run(["preview"])["repos"] == []  # folder needs a --path: nothing detected to read
+    assert importers.run(["--path", str(home / "code")])["repos"]  # the verb is optional: preview
     with pytest.raises(SystemExit, match="unknown source"):
         importers.run(["preview", "--from", "rex"])
     with pytest.raises(SystemExit, match="needs --path"):
@@ -100,7 +124,13 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     p = importers.run(["preview", "--path", str(home / "code")])
     assert p["repos"] == [str((home / "code" / "x").resolve())] and ade_basement.saved() == []
     ask = lambda verb, o: dash.settings(f"import-{verb}", "-", json.dumps(o))
-    assert ask("detect", {})["sources"]["folder"] is True
+    d = ask("detect", {})
+    assert d["sources"]["folder"] is True and d["native"] is False and d["repos"] == 0  # the first-launch offer's gate
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    ade_basement.remember(str((home / "code" / "x").resolve()))
+    assert ask("detect", {})["native"] is True and ask("detect", {})["repos"] == 1
+    ade_basement.forget(str((home / "code" / "x").resolve()))
+    assert dash.settings("import-preview", "-", "[]")["error"] == "bad request"  # not an object
     assert "bad source" in ask("preview", {"from": ["rex"]})["error"]
     assert "full path" in ask("preview", {"from": ["folder"], "paths": ["code"]})["error"]
     assert "full path" in ask("preview", {"from": ["folder"], "paths": ["/srv/../etc"]})["error"]

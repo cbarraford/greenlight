@@ -997,6 +997,7 @@ final class RulesStore: ObservableObject {
     // Settings → Import (#195): which ADEs are on the host, the ones picked, folders to scan, and the last preview
     @Published var importFound = [String: Bool]()
     @Published var importOn = Set<String>()
+    var importTouched = false  // the user picked sources: a later detect keeps their picks (minus any gone)
     @Published var importPaths = ""
     @Published var importPlan: [String: Any]?
     @Published var importDone = ""
@@ -1013,9 +1014,11 @@ final class RulesStore: ObservableObject {
 
     /// Settings → Import: the ADEs dash.py finds on the host, each picked by default.
     func importDetect() {
+        status = ""
         call("import-detect", "-") { j in
             self.importFound = (j["sources"] as? [String: Bool]) ?? [:]
-            if self.importOn.isEmpty { self.importOn = Set(Self.importSources.map(\.0).filter { self.importFound[$0] == true }) }
+            let found = Set(Self.importSources.map(\.0).filter { self.importFound[$0] == true })
+            self.importOn = self.importTouched ? self.importOn.intersection(found) : found
         }
     }
     /// Preview (apply false: changes nothing) or import what's picked; the answer is the plan either way.
@@ -1023,11 +1026,16 @@ final class RulesStore: ObservableObject {
         let paths = importPaths.split(whereSeparator: { $0 == "," || $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let from = Self.importSources.map(\.0).filter(importOn.contains) + (paths.isEmpty ? [] : ["folder"])
         let body = (try? JSONSerialization.data(withJSONObject: ["from": from, "paths": paths])).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        importDone = ""
+        importDone = ""; status = ""
         call(apply ? "import-apply" : "import-preview", "-", body) { j in
             self.importPlan = j
             let n = (j["repos"] as? [Any])?.count ?? 0, g = (j["goals"] as? [String: Any])?.count ?? 0
-            if apply { self.importDone = "Imported \(n) repo\(n == 1 ? "" : "s") and \(g) goal\(g == 1 ? "" : "s")."; self.importPlan = nil }
+            if apply {  // the preview goes; a source that failed during the import itself still says so
+                let failed = ((j["sources"] as? [String: Any]) ?? [:]).compactMap { k, v in (v as? [String: Any])?["error"] != nil ? k : nil }.sorted()
+                self.importDone = "Imported \(n) repo\(n == 1 ? "" : "s") and \(g) goal\(g == 1 ? "" : "s")."
+                    + (failed.isEmpty ? "" : " Couldn't read \(failed.joined(separator: ", ")): run it again once \(failed.count == 1 ? "it's" : "they're") up.")
+                self.importPlan = nil
+            }
         }
     }
 

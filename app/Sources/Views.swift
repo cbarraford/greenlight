@@ -1942,7 +1942,7 @@ struct SettingsView: View {
             ForEach(RulesStore.importSources, id: \.0) { s in
                 let found = rs.importFound[s.0] == true
                 toggleRow(s.1, found ? "Found" : "Not found", Binding(get: { rs.importOn.contains(s.0) },
-                                                                    set: { on in if on { rs.importOn.insert(s.0) } else { rs.importOn.remove(s.0) }; rs.importPlan = nil }))
+                                                                    set: { on in if on { rs.importOn.insert(s.0) } else { rs.importOn.remove(s.0) }; rs.importTouched = true; rs.importPlan = nil }))
                     .disabled(!found)
             }
             row("Folders", "Git repos up to three levels down, for an app that keeps plain checkouts (Rex, a terminal). Comma-separated full paths.") {
