@@ -14,7 +14,13 @@ fetch (the footer's ↻) fetches again. Credentials stay where each CLI keeps th
             session rollout's rate_limits (no network)
   opencode  n/a: OpenCode publishes no usage API (OpenCode Go shows it only in its web console)
   pi        its default provider's plan: anthropic OAuth -> claude's endpoint, openai-codex OAuth -> codex's; else n/a
+  agy       POST daily-cloudcode-pa.googleapis.com/v1internal (the host agy itself calls; prod answers an unused plan) with
+            ~/.gemini/antigravity-cli/antigravity-oauth-token: retrieveUserQuotaSummary's grouped 5h and weekly windows
+            (Claude and GPT models), retrieveUserQuota's per-model pools for the rest (Gemini), loadCodeAssist's tier as the plan
+  gemini    the same methods on cloudcode-pa.googleapis.com with Gemini CLI's ~/.gemini/oauth_creds.json: one window per
+            model pool; an API-key or Vertex sign-in is n/a (billed, no plan quota)
   others    n/a: no usage source yet
+Google's API answers only the client a token belongs to, by User-Agent: each request names agy or Gemini CLI.
 """
 import contextlib
 import http.client
@@ -89,8 +95,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect())
 
 
-def _get(url, headers):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "greenlight-usage", **headers})  # noqa: S310 - fixed https URLs
+def _get(url, headers, body=None):
+    """GET url, or POST body as JSON when it's given (Google's v1internal methods): its JSON object, or Failed."""
+    data = None if body is None else json.dumps(body).encode()
+    hdrs = {"Accept": "application/json", "User-Agent": "greenlight-usage", **({"Content-Type": "application/json"} if data else {}), **headers}
+    req = urllib.request.Request(url, data=data, headers=hdrs)  # noqa: S310 - fixed https URLs
     try:
         with _OPENER.open(req, timeout=TIMEOUT) as r:
             d = json.loads(r.read())
@@ -332,7 +341,131 @@ def pi():
                       else "pi isn't signed in to a Claude or ChatGPT plan")
 
 
-SOURCES = {"claude": claude, "codex": codex, "opencode": opencode, "pi": pi}
+# agy, gemini (Google) -------------------------------------------------------------------------------------------------
+
+AGY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+GEMINI_URL = "https://cloudcode-pa.googleapis.com/v1internal:"
+GOOGLE_SPANS = {"5h": "5h", "weekly": "Week", "daily": "Day"}
+GOOGLE_META = {"ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}
+OTHERS = ("Claude", "GPT")  # model families that aren't Gemini
+
+
+def _family(model):
+    m = model.lower()
+    for k, name in (("claude", "Claude"), ("gpt", "GPT"), ("flash-lite", "Lite"), ("flash", "Flash"), ("pro", "Pro")):
+        if k in m:
+            return name
+    return "Gemini"
+
+
+def _pool_label(fams):
+    if len(fams) == 1:
+        return next(iter(fams))
+    if not fams & set(OTHERS):
+        return "Gemini"
+    return "Claude" if fams <= set(OTHERS) else "Models"
+
+
+def google_pools(buckets, covered=frozenset()):
+    """retrieveUserQuota's per-model buckets -> one window per pool (the models sharing a quota report the same fraction and
+    reset), leaving out the families in `covered` (a summary group already shows them) and the editor's tab models."""
+    pools: dict[tuple[float, object], dict[str, set[str]]] = {}
+    for b in buckets if isinstance(buckets, list) else []:
+        mid = b.get("modelId") if isinstance(b, dict) else None
+        if not isinstance(mid, str) or mid.startswith("tab_") or mid.endswith("_vertex") or not _num(f := b.get("remainingFraction")):
+            continue
+        fam = _family(mid)
+        if fam in covered or (fam not in OTHERS and "Gemini" in covered):
+            continue
+        pool = pools.setdefault((round(float(f), 4), b.get("resetTime")), {"fams": set(), "ids": set()})
+        pool["fams"].add(fam)
+        pool["ids"].add(mid)
+    out = [(w, p) for (f, reset), p in pools.items() if (w := _win(_pool_label(p["fams"]), (1 - f) * 100, reset))]
+    labels = [w["label"] for w, _ in out]
+    for w, p in out:  # two pools of one family (Gemini CLI's per-model quotas): name each by its model
+        if labels.count(w["label"]) > 1:
+            w["label"] = min(p["ids"], key=len).removeprefix("gemini-")[:10]
+    return sorted((w for w, _ in out), key=lambda w: w["label"])
+
+
+def _summary_wins(g, prefix):
+    order = list(GOOGLE_SPANS)
+    bs = [(str(b.get("window")), b) for b in g.get("buckets") or [] if isinstance(b, dict) and _num(b.get("remainingFraction"))]
+    bs.sort(key=lambda kb: order.index(kb[0]) if kb[0] in order else len(order))
+    return [w for k, b in bs if (w := _win(prefix + GOOGLE_SPANS.get(k, "Limit"), (1 - b["remainingFraction"]) * 100, b.get("resetTime")))]
+
+
+def google_summary(d):
+    """retrieveUserQuotaSummary's groups -> (windows, the model families they cover, a note naming what they count).
+    One group's windows are 5h and Week; with several, each is prefixed with its group's first word."""
+    groups = [g for g in d.get("groups") if isinstance(g, dict)] if isinstance(d.get("groups"), list) else []
+    wins, covered, names = [], set(), []
+    for g in groups:
+        name = str(g.get("displayName") or "")
+        if got := _summary_wins(g, f"{name.split()[0]} " if len(groups) > 1 and name.strip() else ""):
+            wins += got
+            names.append(name)
+            text = f"{name} {g.get('description') or ''}".lower()
+            covered |= {fam for fam in (*OTHERS, "Gemini") if fam.lower() in text}
+    note = f"{' and '.join(w['label'] for w in wins)}: {names[0]}" if len(names) == 1 and names[0] else None
+    return wins, covered, note
+
+
+def _google_plan(lca):
+    tier = next((t for k in ("paidTier", "currentTier") if isinstance(t := lca.get(k), dict) and isinstance(t.get("name"), str) and t["name"]), None)
+    return {"plan": tier["name"]} if tier else {}
+
+
+def _google_try(fn):
+    try:
+        return fn(), None
+    except Failed as e:
+        return None, e
+
+
+def agy():
+    t = (_json(Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token") or {}).get("token")
+    if not (isinstance(t, dict) and isinstance(t.get("access_token"), str) and t["access_token"]):
+        raise SignedOut()
+    if _expired(t.get("expiry")):
+        raise Failed("token expired: agy renews it on its next run", "expired")
+    hdr = {"Authorization": f"Bearer {t['access_token']}", "User-Agent": "antigravity (greenlight-usage)"}
+    summary, e1 = _google_try(lambda: google_summary(_get(AGY_URL + "retrieveUserQuotaSummary", hdr, {})))
+    quota, e2 = _google_try(lambda: _get(AGY_URL + "retrieveUserQuota", hdr, {}))
+    if summary is None and quota is None:
+        raise e1 or e2 or Failed("no answer from the usage API")
+    wins, covered, note = summary or ([], frozenset(), None)
+    pools = google_pools(quota.get("buckets"), covered) if quota else []
+    lca, _ = _google_try(lambda: _get(AGY_URL + "loadCodeAssist", hdr, {"metadata": {**GOOGLE_META, "ideType": "ANTIGRAVITY"}}))
+    note = note if pools else None  # the note says which models the 5h and weekly windows count when other pools sit beside them
+    return {"windows": wins + pools, "src": "api", **_google_plan(lca or {}), **({"note": note} if note else {})}
+
+
+def _gemini_auth(root):
+    sec = (_json(root / "settings.json") or {}).get("security")
+    auth = sec.get("auth") if isinstance(sec, dict) else None
+    return auth.get("selectedType") if isinstance(auth, dict) else None
+
+
+def gemini():
+    root = Path.home() / ".gemini"
+    if _gemini_auth(root) in ("gemini-api-key", "vertex-ai"):
+        raise Unavailable("Gemini CLI signs in with an API key: that's billed per use, with no plan quota")
+    c = _json(root / "oauth_creds.json") or {}
+    if not (isinstance(c.get("access_token"), str) and c["access_token"]):
+        raise SignedOut()
+    if _expired(c.get("expiry_date")):
+        raise Failed("token expired: Gemini CLI renews it on its next run", "expired")
+    hdr = {"Authorization": f"Bearer {c['access_token']}", "User-Agent": f"GeminiCLI/greenlight-usage ({sys.platform})"}
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or None
+    lca = _get(GEMINI_URL + "loadCodeAssist", hdr, {"cloudaicompanionProject": env_proj, "metadata": {**GOOGLE_META, "duetProject": env_proj}})
+    proj = lca.get("cloudaicompanionProject")
+    proj = proj.get("id") if isinstance(proj, dict) else proj
+    q = _get(GEMINI_URL + "retrieveUserQuota", hdr, {"project": proj} if isinstance(proj, str) and proj else {})
+    return {"windows": google_pools(q.get("buckets")), "src": "api", **_google_plan(lca)}
+
+
+SOURCES = {"claude": claude, "codex": codex, "opencode": opencode, "pi": pi, "agy": agy, "gemini": gemini}
 
 
 # the cache ------------------------------------------------------------------------------------------------------------
