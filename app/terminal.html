@@ -142,7 +142,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 /* ---- panes (§10.12): each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal.
    Split: every pane gets a 24-tall header; the focused one is framed by a 1px accent ring, the rest dim ---- */
 #stage{position:relative;flex:1;min-height:0;background:var(--term-bg)}
-/* the Basement's footer (§10.11), as Greenlight Center's: live, greenlight's last scan (↻ runs one) and why it failed, this window's workspaces by state, after each agent's plan usage (#203). Not in the Pipe */
+/* the Basement's footer (§10.11), as Greenlight Center's: live, greenlight's last scan (↻ runs one) and why it failed, this window's workspaces by state, after each agent's plan usage (issue 193). Not in the Pipe */
 #bfoot{box-sizing:border-box;flex-shrink:0;display:flex;align-items:center;gap:var(--ds-space-12);height:var(--ds-layout-footer-height);padding:0 var(--ds-space-12);background:var(--ds-bg-chrome);border-top:1px solid var(--ds-border-subtle);
   color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;-webkit-user-select:none;user-select:none} body.noside:not(.sliding) #bfoot{display:none}
 /* usage-meters:start */
@@ -1723,7 +1723,7 @@ function basementFit(){  // past the width: short words (and the meters' reset t
   f.classList.remove("tight", "tighter", "tightest");
   for (const c of ["tight", "tighter", "tightest"]) if (f.scrollWidth > f.clientWidth) f.classList.add(c);
 }
-const basementFoot = list => foot(list);  // the trees' usage: each agent's meter, at the footer's left (foot, below, draws the rest)
+const basementFoot = list => foot(list || []);  // the trees' usage (none: no meters): each agent's meter, at the footer's left (foot, below, draws the rest)
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
 let slide = .32, sliding, slideTimer;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut. DESIGN.md §7: drawer, 320ms
