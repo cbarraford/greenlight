@@ -202,7 +202,7 @@ final class Voice: NSObject, ObservableObject {
         let listen: [Any] = ["Listening", "Say something, or “goodbye” to stop."]
         if let b = idleBoard(pucks) { if boardUp { js("stage.spec", [b]) } else { put("stage.spec", [b], by: "app") }; boardUp = true }  // the trail: when it comes, not each snapshot
         else if first { put("stage.wait", listen, by: "app") }
-        else if boardUp { boardUp = false; put("stage.wait", listen, by: "app") }
+        else if boardUp { boardUp = false; js("stage.idle", listen) }  // behind a card you went back to, if you did
     }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
