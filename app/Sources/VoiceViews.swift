@@ -982,6 +982,19 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
     return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
 }
 
+/// What the stage does with a navigation (#208): the page itself loads; a click you made in the stage's own frame on a web link
+/// opens it in the browser; a click on an option button (greenlight-option:N, the index only) sends that option; anything
+/// else, a click inside Chief's sandboxed page included, is cancelled and does nothing.
+enum StageNavDecision: Equatable { case allow, cancel, open(URL), option(Int) }
+let stageOptionScheme = "greenlight-option"
+func stageNavDecision(_ u: URL?, stagePath: String?, clicked: Bool, mainFrame: Bool) -> StageNavDecision {
+    guard let u else { return .cancel }
+    if u.scheme == "about" || (u.scheme == "file" && u.path == stagePath) { return .allow }
+    guard clicked, mainFrame else { return .cancel }
+    if ["http", "https"].contains(u.scheme?.lowercased() ?? ""), u.host?.isEmpty == false { return .open(u) }
+    if u.scheme == stageOptionScheme, let i = Int(u.absoluteString.dropFirst(stageOptionScheme.count + 1)), (0..<6).contains(i) { return .option(i) }
+    return .cancel
+}
 /// Each MR the snapshot knows, by its ref (!12, #34), as the stage's status chip (#208): a tone the page has a glyph for and a
 /// short label. The tone reads as dwim.py's tables do: failed CI, conflicts or a crash are bad, CI on its way is now, merged or
 /// approved with CI passing is ok. Facts only, from the snapshot: no model call.

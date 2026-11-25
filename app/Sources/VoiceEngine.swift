@@ -115,10 +115,14 @@ final class Voice: NSObject, ObservableObject {
             if let q = queued { queued = nil; w.evaluateJavaScript(q) }  // safety-ok: queued only by Voice.js() with JSONSerialization args
             loaded?()
         }
+        var option: ((Int) -> Void)?  // an option button you clicked (#208)
         func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            guard let u = a.request.url else { decisionHandler(.cancel); return }
-            let ok = u.scheme == "about" || (u.scheme == "file" && u.path == stageURL?.path)
-            decisionHandler(ok ? .allow : .cancel)
+            switch stageNavDecision(a.request.url, stagePath: stageURL?.path, clicked: a.navigationType == .linkActivated, mainFrame: a.sourceFrame.isMainFrame) {
+            case .allow: decisionHandler(.allow)
+            case .cancel: decisionHandler(.cancel)
+            case .open(let u): decisionHandler(.cancel); NSWorkspace.shared.open(u)  // in the browser, never in the stage
+            case .option(let i): decisionHandler(.cancel); option?(i)
+            }
         }
         func webView(_ w: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
     }
@@ -132,6 +136,7 @@ final class Voice: NSObject, ObservableObject {
         cfg.websiteDataStore = .nonPersistent()
         let u = page("stage")
         let nav = StageNav(u); stageNav = nav
+        nav.option = { [weak self] i in self?.pickOption(i) }
         nav.loaded = { [weak self] in guard let self else { return }; self.refsSent = nil; if let c = self.core { self.refs(c.pucks) } }  // the chips again (#208)
         let v = WKWebView(frame: .zero, configuration: cfg)
         v.navigationDelegate = nav; v.uiDelegate = nav
@@ -165,6 +170,13 @@ final class Voice: NSObject, ObservableObject {
     /// The MR status chips the stage has (#208): the snapshot's refs as tone and label. The first map goes whole; after that
     /// only what changed, so a chip on a card already up updates in place with no redraw and no model call.
     var refsSent: [String: [String: String]]?
+    /// The options the last reply offered, as the stage shows them (#208): a click names only an index; this is where its text is.
+    var stageOptions = [String]()
+    func pickOption(_ i: Int) {
+        guard on, stageOptions.indices.contains(i), let c = core else { return }
+        let o = stageOptions[i]; stageOptions = []; js("stage.options", [[String]()])
+        if let m = c.msgs.last(where: { !$0.options.isEmpty }), m.options.contains(o) { c.choose(m, o) } else { c.send(o) }  // as if you'd said it
+    }
     func refs(_ pucks: [[String: Any]]) {
         guard on else { refsSent = nil; return }  // the stage gets the whole map again when voice mode next starts
         let now = refStatus(pucks)
@@ -405,7 +417,7 @@ final class Voice: NSObject, ObservableObject {
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; chiefDrew = false; shown = false; instantUp = false; muted = false; ending = false; endStream()
+        said = 0; chiefDrew = false; shown = false; instantUp = false; muted = false; ending = false; endStream(); stageOptions = []
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
@@ -515,6 +527,10 @@ final class Voice: NSObject, ObservableObject {
     func finished(_ st: Staged, _ gist: String, detail: String? = nil) {
         defer { chiefDrew = false; instantUp = false; turnAt = nil }  // watch/checkIn turns skip began(); clear so the next turn can draw
         guard on else { return }
+        defer {  // after whichever card this turn ends on: the reply's options as buttons under it (#208)
+            stageOptions = st.parts.options
+            js("stage.options", [stageOptions])  // [] too: no earlier row can outlive this turn
+        }
         clearStatus()
         if let h = st.stage { stage(h, lead: gist) } else if let o = st.stageOpen { stage(o, lead: gist) }  // a block never closed: drawn as it stands
         let spoken = gist.isEmpty && detail != nil ? "It's on your screen." : gist, p = spokenSoFar(spoken) + "\n"  // as live() counted `said`

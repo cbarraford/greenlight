@@ -105,7 +105,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.textContent(".doc ul li b"), "!4834");
   assert.equal(await p.textContent(".doc ul li code"), "ws_state.py");
   assert.deepEqual(await p.locator(".doc ol li").allTextContents(), ["merge", "deploy"]);
-  assert.equal(await p.locator(".doc a, .doc img, .doc script").count(), 0);  // links as text; markup never runs
+  assert.equal(await p.locator(".doc img, .doc script").count(), 0);  // markup never runs
+  assert.deepEqual(await p.$$eval(".doc a", as => as.map(a => [a.getAttribute("href"), a.textContent, a.attributes.length])),
+    [["https://x/5013", "!5013", 1]]);  // the one web link is a link (issue 208 phase 5): its href and nothing else
   assert.equal(await p.textContent(".doc pre"), "<script>x</script>");
   assert.match(await p.textContent(".doc"), /Latest commit abc1234\.<img src=x onerror=alert\(1\)>/);  // the screen keeps the hash (and the line break)
   // a pipe table becomes the grid, its cells text; numbered steps split by code keep counting
@@ -519,5 +521,54 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark ?? null)), [null]);
   await p.evaluate(() => stage.refs({}));
   assert.equal(await p.locator(".chip").count(), 0);
+  // links and options (issue 208 phase 5): a web link is a real link (nothing else is); a linked ref's chip sits after the link;
+  // the options are buttons that carry only their index; a new turn's hold takes them away; nothing inline, nothing executes
+  await p.evaluate(() => { stage.refs({ "!12": { tone: "ok", label: "CI passed" } }); stage.text({ md: "See [!12](https://gitlab.com/g/p/-/merge_requests/12), [x](javascript:void0), [y](file:///etc/passwd) and [z](mailto:a@b)." }); });
+  assert.deepEqual(await p.$$eval("#s a", as => as.map(a => a.getAttribute("href"))), ["https://gitlab.com/g/p/-/merge_requests/12"]);
+  assert.equal(await p.$eval("#s a", a => a.nextSibling?.classList?.contains("chip")), true);
+  assert.equal(await p.locator("#s a .chip").count(), 0);
+  assert.equal(await p.textContent(".doc p"), "See !12CI passed, x, y and z.");
+  await p.evaluate(() => stage.options(["Merge it", "<b>Wait</b>", "", "Ask Sam"]));
+  assert.deepEqual(await p.$$eval(".options a.option", as => as.map(a => [a.getAttribute("href"), a.textContent])),
+    [["greenlight-option:0", "Merge it"], ["greenlight-option:1", "<b>Wait</b>"], ["greenlight-option:3", "Ask Sam"]]);  // the app's index, a blank skipped
+  assert.equal(await p.locator(".options b").count(), 0);
+  assert.ok(await p.evaluate(() => [...document.querySelectorAll(".options a, #s a")].every(a => ![...a.attributes].some(x => x.name.startsWith("on")))));
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).cursor), "default");  // a button, not a link (§10.2)
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).height), "28px");
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).textDecorationLine), "none");  // a button, not an underlined link
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).color), await p.$eval(".doc p", e => getComputedStyle(e).color));
+  await p.evaluate(() => { document.querySelector("#s a:not(.option)")?.remove(); document.activeElement?.blur(); });
+  await p.keyboard.press("Tab");  // keyboard focus shows the §10.2 ring
+  assert.equal(await p.evaluate(() => document.activeElement.className), "option");
+  assert.notEqual(await p.evaluate(() => getComputedStyle(document.activeElement).boxShadow), "none");
+  await p.evaluate(() => stage.options(["Only one"])); assert.equal(await p.locator(".options a.option").count(), 1);  // replaced, not added
+  await p.evaluate(() => stage.hold("Thinking")); assert.equal(await p.locator(".options").count(), 0);
+  await p.evaluate(() => { stage.text({ md: "a" }); stage.options([]); }); assert.equal(await p.locator(".options").count(), 0);
+  // a link naming two known refs: both chips after it; an option naming a ref: no chip in the button; a malformed URL: no link
+  await p.evaluate(() => { stage.refs({ "!12": { tone: "ok", label: "CI passed" }, "!13": { tone: "bad", label: "CI failed" } });
+    stage.text({ md: "[!12 and !13](https://x/12) and [open](https://%)" }); stage.options(["Review !12"]); });
+  assert.deepEqual(await p.$$eval(".doc p .chip", cs => cs.map(c => c.dataset.ref)), ["!12", "!13"]);
+  assert.equal(await p.$eval(".doc p a", a => a.nextSibling.dataset.ref), "!12");
+  assert.equal(await p.locator(".options .chip").count(), 0);
+  assert.deepEqual(await p.$$eval(".doc p a", as => as.map(a => a.getAttribute("href"))), ["https://x/12"]);
+  // streaming caret stays outside links (even with trailing text); held links mute; html()+options() keeps gutter;
+  // narrow wrapped options grow instead of clipping; Phosphor options respond on hover
+  await p.evaluate(() => { stage.refs({}); stage.wait("One minute", ""); stage.text({ md: "See [docs](https://x/docs) and more", live: true }); });
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
+  await p.evaluate(() => stage.text({ md: "See [docs](https://x/docs)", live: true }));
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
+  await p.evaluate(() => { stage.text({ md: "See [docs](https://x/docs)." }); stage.hold("Thinking"); });
+  assert.equal(await p.$eval("#s a", a => getComputedStyle(a).color), await p.$eval("#s", e => getComputedStyle(e).color));
+  await p.evaluate(() => { stage.status(""); stage.html("<p>custom</p>"); stage.options(["Approve", "Skip"]); });
+  assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 20 && a.getBoundingClientRect().bottom <= innerHeight - 20));
+  await p.setViewportSize({ width: 340, height: 520 });
+  await p.evaluate(() => { stage.text({ md: "Pick" }); stage.options(["Merge it now and delete the stale branch afterwards once CI is green"]); });
+  assert.ok(await p.$eval(".options a.option", a => a.scrollHeight <= a.clientHeight + 2 && a.getBoundingClientRect().height > 28));
+  await p.setViewportSize({ width: 640, height: 720 });
+  await p.evaluate(() => { document.documentElement.dataset.look = "phosphor"; stage.text({ md: "Pick" }); stage.options(["Merge"]); });
+  const phRest = await p.$eval(".options a.option", a => getComputedStyle(a).backgroundColor);
+  await p.hover(".options a.option");
+  assert.notEqual(await p.$eval(".options a.option", a => getComputedStyle(a).backgroundColor), phRest);
+  await p.evaluate(() => { delete document.documentElement.dataset.look; stage.refs({}); });
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
