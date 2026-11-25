@@ -50,6 +50,21 @@ def test_execute_precheck_skip_and_claude_fallback(gl_home, monkeypatch):
     assert not auto.alive("x")
 
 
+def test_execute_precheck_failure_is_failed_not_skipped(gl_home, monkeypatch):
+    # exit 1 is "nothing to do"; any other code means the precheck broke (greenlight.py precheck's 2: its scan died)
+    pings = []
+    monkeypatch.setattr(auto, "ping", lambda text, **kw: pings.append((text, kw)))
+    monkeypatch.setattr(auto, "agent", lambda *a: (_ for _ in ()).throw(AssertionError("no agent after a failed precheck")))
+    auto.save({"x": {"schedule": "* * * * *", "prompt": "hi", "precheck": "echo 'scan failed (GitLab login expired): invalid_grant'; exit 2"}})
+    auto.execute("x")
+    auto.save({"x": {"schedule": "* * * * *", "prompt": "hi", "precheck": "exit 3"}})
+    auto.execute("x")
+    runs = [json.loads(line) for line in (auto.DIR / "runs.jsonl").read_text().splitlines()]
+    assert [(r["status"], r["summary"]) for r in runs] == [
+        ("failed", "scan failed (GitLab login expired): invalid_grant"), ("failed", "precheck exited 3")]
+    assert len(pings) == 2 and "invalid_grant" in pings[0][0] and pings[0][1] == {"kind": "automation-failed"}
+
+
 def test_kill_process_tree_and_process_start(gl_home):
     root, phase = 12345, 12346
     (auto.STATE / f"orchestrator-phase-{root}.pid").write_text(str(phase))
