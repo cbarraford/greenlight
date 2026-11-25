@@ -977,10 +977,10 @@ def outside_agent(path):
     paths = []
     if not ade.is_native():
         return None
-    p = path.rstrip("/")
+    p = external.real(path).rstrip("/")  # resolved, as the agents' folders are (a worktree may be listed through a symlink)
     try:  # nothing in or under it, of anyone's: no need for the worktree list (it costs git calls per worktree)
         near = [a for a in external.agents(fresh=True, strict=True)
-                if any(x == p or x.startswith(p + "/") for x in (a["cwd"], a.get("pane") or ""))]
+                if any(x and (x == p or x.startswith(p + "/")) for x in (external.real(a["cwd"]), a.get("pane") and external.real(a["pane"])))]
     except external.Unknown:
         return "an agent (the process check failed, so it can't be ruled out)"
     if not near:
@@ -990,7 +990,7 @@ def outside_agent(path):
             paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
         except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
             return "an agent (the worktree list failed, so it can't be ruled out)"
-    return cleanup.outside_agent(path, fresh=True, paths=paths)
+    return cleanup.outside_agent(path, fresh=False, paths=paths)  # the scan just above is fresh
 
 
 def tree_rm(path, force=False, teardown=""):
@@ -1003,7 +1003,7 @@ def tree_rm(path, force=False, teardown=""):
     risks = [*(["it's pinned"] if w.get("isPinned") else []), *([info["error"]] if "error" in info else []),
              *([f"{info['dirty']} uncommitted file{'s' * (info['dirty'] != 1)}"] if info.get("dirty") else []),
              *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else []),
-             *([f"{ext} runs in it outside Greenlight"] if (ext := outside_agent(path)) else [])]
+             *([f"{ext} runs in it outside Greenlight"] if (ext := info.get("outside")) else [])]  # tree_info's fresh check
     if risks and not force:
         return {"risks": risks}
     warn = None

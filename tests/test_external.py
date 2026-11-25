@@ -229,14 +229,12 @@ def test_orchestrate_rechecks_afresh():
 
 
 def test_basement_delete_warns(monkeypatch):
-    import cleanup
     import dash
     monkeypatch.setattr(dash, "outside_agent", lambda path: "codex")
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
-    monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0})
+    monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0, "outside": dash.outside_agent(p)})
     assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")
     monkeypatch.undo()
-    assert cleanup  # dash.outside_agent goes through cleanup.outside_agent: exercised for real below
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     ab = dash.importlib.import_module("ade_basement")
     monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 14, "agent": "codex", "cwd": "/srv/w/x", "pane": "/srv/w/x/.wt/b"}])
@@ -272,6 +270,19 @@ def test_dash_marks_rows_any_ade_listed(monkeypatch):
     assert dash.resume_agent({"state": "working", "agentType": "codex", "external": True}) == {"state": "working"}
     assert dash.resume_agent(None) is None and dash.resume_agent({"state": "done", "agentType": "claude"})["agentType"] == "claude"
     # (the page's auto-run, auto-merge and Delete guards key on a working agent)
+
+
+def test_symlinked_listings(monkeypatch, tmp_path):
+    import dash
+    tree = tmp_path / "tree"
+    (tree / ".wt" / "child").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(tree)
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [{"pid": 9, "agent": "claude", "cwd": str(tree / ".wt" / "child")}])
+    link, child = str(tmp_path / "link"), str(tree / ".wt" / "child")
+    assert cleanup.outside_agent(link, paths=[link, child]) == "claude"  # the parent listed through a symlink, the child not
+    monkeypatch.setattr(dash.importlib.import_module("ade_basement"), "worktrees", lambda: [{"path": link}, {"path": child}])
+    assert dash.outside_agent(link) == "claude"  # the Delete check's "anything near it?" resolves too
 
 
 def test_tmux_roots_and_symlinks(monkeypatch, tmp_path):

@@ -282,21 +282,21 @@ def by_worktree_safe(paths):
 
 
 @functools.lru_cache(maxsize=4096)
-def _real(p):
+def real(p):
     return os.path.realpath(p)  # cleanup asks once per candidate, over every worktree: resolve each path once
 
 
 def by_worktree(paths, found=None):
     """{worktree path: [agent]} for the agents whose cwd is inside one of paths (the deepest one wins: a nested
     worktree owns its own agents)."""
-    real = {_real(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
-    deep = sorted(real, key=len, reverse=True)
+    given = {real(p).rstrip("/") or "/": p.rstrip("/") for p in paths if p}  # an ADE's path may go through a symlink
+    deep = sorted(given, key=len, reverse=True)
     out: dict = {}
     owner_of = lambda c: next((w for w in deep if c == w or c.startswith(w + "/")), None)  # noqa: E731
     for a in agents() if found is None else found:
-        owner = owner_of(_real(a["cwd"]))
-        if owner and not (a.get("pane") and owner_of(_real(a["pane"])) == owner):  # ours, in its own pane's worktree
-            out.setdefault(real[owner], []).append(a)
+        owner = owner_of(real(a["cwd"]))
+        if owner and not (a.get("pane") and owner_of(real(a["pane"])) == owner):  # ours, in its own pane's worktree
+            out.setdefault(given[owner], []).append(a)
     return out
 
 
