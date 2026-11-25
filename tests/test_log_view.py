@@ -125,6 +125,7 @@ def test_redact_takes_out_credential_assignments_whatever_the_value():
     assert out.startswith('{"password": [secret], "user": "x"}')
     out, _ = log_view.redact("curl -H 'Authorization: Bearer q9Zx7LmP2vR8wq' x")
     assert "q9Zx7" not in out
+    assert log_view.redact("--token\nhello\nBearer\nabcdefghijk")[0] == "--token\nhello\nBearer\nabcdefghijk", "never across a line"
     out, _ = log_view.redact("mysql --password hunter2 -u root; gh --token abc --verbose")
     assert out == "mysql --password [secret] -u root; gh --token [secret] --verbose", out
 

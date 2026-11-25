@@ -304,10 +304,10 @@ _CRED = r"[\w.-]{0,64}(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_
 YAML_LIST_RE = re.compile(rf"(?im)^([+-]?)([ \t]*)({_CRED}:[ \t]*)\r?\n(?:\1?\2(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
 YAML_BLOCK_RE = re.compile(rf"(?im)^([+-]?)([ \t]*)({_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
                            r"(?:(?:[+-]?[ \t]*\r?\n)*\1?\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
-FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})(\s+)(?!-)\S+")  # mysql --password hunter2
+FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})([ \t]+)(?!-)\S+")  # mysql --password hunter2
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}\b", re.I)  # audit's, bounded
 LONG_LINE_RE = re.compile(r"[^\n]{8000}(?=[^\n])")
-BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
+BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)[ \t]+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
 
