@@ -30,7 +30,8 @@ def test_name_resolution(home, monkeypatch):
     assert ade.name() == "orca"
     (home / "config.json").write_text("{not json")
     assert ade.name() == "orca"
-    monkeypatch.setenv("GREENLIGHT_ADE", "t3")  # the env wins over config
+    (home / "config.json").write_text(json.dumps({"ade": "native"}))
+    monkeypatch.setenv("GREENLIGHT_ADE", "t3")  # the env wins over a valid config
     assert ade.name() == "t3"
     monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent Orca
     with pytest.raises(RuntimeError, match="not one of"):
@@ -150,11 +151,26 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     assert ade_basement.ade_common.goals() == {path: "Ship X"}
     with mock.patch.object(ade_basement, "panes", return_value=[]):
         assert path in [w["path"] for w in ade_basement.worktrees()]
+        with pytest.raises(RuntimeError, match="main checkout"):
+            ade_basement.remove(str(repo.resolve()))  # never: and its goal stays
         ade_basement.remove(path)
         assert path not in [w["path"] for w in ade_basement.worktrees()]
         with pytest.raises(RuntimeError, match="no native workspace"):
             ade_basement.remove(path)
     assert ade_basement.ade_common.goals() == {}  # its goal goes with it
+    with mock.patch.object(ade_basement, "launch", side_effect=FileNotFoundError("tmux")):
+        out = ade_basement.create(str(repo), "feat-z", None, "Ship Z", "claude", "go")  # no tmux: the workspace stays
+    assert "didn't start" in out["error"] and "terminal" not in out
+    assert ade_basement.ade_common.goals()[out["worktree"]["path"]] == "Ship Z"
+    with pytest.raises(RuntimeError, match="not a git checkout"):
+        ade_basement.create("no-such-repo", "feat-q")  # an unknown relative name is never stored
+    other = home / "b" / "widgets"
+    other.mkdir(parents=True)
+    git("init", "-q", "-b", "main", cwd=other)
+    ade_basement.register(str(other))
+    with pytest.raises(RuntimeError, match="names 2 registered repos"):
+        ade_basement.create("widgets", "feat-w")
+    ade_basement.forget(str(other.resolve()))
     ade_basement.forget(str(repo.resolve()))
     assert ade_basement.saved() == []
 
@@ -176,9 +192,24 @@ def test_cli_ade_native_end_to_end(home, repo):
            "GREENLIGHT_ME": "tester", "PATH": "/usr/bin:/bin", "HOME": str(home)}
     run = lambda *a: subprocess.run([sys.executable, "scripts/greenlight.py", *a], capture_output=True, text=True, env=env, timeout=60)
     assert run("repos", "add", str(repo)).returncode == 0
+    # --change: greenlight's own flag, the create's reason (a read-only GREENLIGHT_REQUEST would refuse it otherwise)
     made = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-y", "--comment", "Goal Y", "--change", "test")
     assert made.returncode == 0, made.stderr
     path = json.loads(made.stdout)["worktree"]["path"]
     ps = json.loads(run("ade", "worktree", "ps").stdout)["worktrees"]
     assert {w["path"]: w["comment"] for w in ps}[path] == "Goal Y"
     assert json.loads(run("ade", "worktree", "rm", "--worktree", f"id:{path}").stdout) == {"removed": path}
+    assert json.loads((home / "goals.json").read_text()) == {}  # its goal went with it
+
+
+def test_dash_backend_order(home, monkeypatch):
+    import dash
+    assert dash.ades() == ("orca", "cmux", "herdr", "t3")  # as before: an ADE's own workspace goes through that ADE
+    monkeypatch.setenv("GREENLIGHT_ADE", "basement")
+    assert dash.ades() == ("orca", "cmux", "herdr", "t3", "native")
+    monkeypatch.setenv("GREENLIGHT_ADE", "cmux")
+    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    monkeypatch.setenv("GREENLIGHT_ADE", "bogus")
+    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    monkeypatch.setattr(dash, "ADES", ("orca",))
+    assert dash.ades() == ("orca",)

@@ -169,6 +169,11 @@ def orca(*args, timeout=120):
     and dash.py's workspaces stay on this machine too."""
     if not ade.is_orca():
         return ade.call(*args)
+    return orca_placed(*args, timeout=timeout)
+
+
+def orca_placed(*args, timeout=120):
+    """The Orca CLI, with a `worktree create` placed on this machine first (place_here)."""
     args, why = place_here(args)
     if why:
         raise PlacementRefused(why)

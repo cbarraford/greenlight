@@ -109,7 +109,7 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
               *(["--description", comment] if comment else []))
     ws_id = ws.get("workspace_id") or ws.get("id")
     if agent:
-        launch(ws_id, agent, prompt or "")
+        launch(ws_id, agent, prompt)
     return {"worktree": {"id": ws_id, "path": path}}
 
 

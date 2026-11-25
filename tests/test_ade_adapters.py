@@ -273,6 +273,7 @@ def test_basement_full_lifecycle(tmp_path):
         mock.patch.object(ade_basement, "git", return_value="worktree /w/widgets\nworktree /w/feat-1\n"),
         mock.patch.object(ade_basement, "git_info", side_effect=_fake_git_info),
         mock.patch.object(ade_basement, "worktree_add", return_value="/w/new-wt"),
+        mock.patch.object(ade_basement, "main_checkout", side_effect=lambda r: r),  # /r/widgets is a fake repo
         mock.patch.object(ade_basement, "worktree_remove") as m_rm,
         mock.patch.object(ade_basement.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0, stdout="", stderr="")),
         mock.patch.object(ade_basement.time, "sleep"),

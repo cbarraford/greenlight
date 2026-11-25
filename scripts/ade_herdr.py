@@ -109,7 +109,7 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
     if comment:
         ade_common.set_goal(path, comment)
     if agent:
-        launch(ws, agent, prompt or "", r["root_pane"]["pane_id"])
+        launch(ws, agent, prompt, r["root_pane"]["pane_id"])
     return {"worktree": {"id": ws, "path": path}}
 
 

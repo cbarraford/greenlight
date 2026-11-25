@@ -126,19 +126,21 @@ def saved():
         return []
 
 
+def _save_repos(repos):
+    REPOS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(repos, indent=1))
+    os.replace(tmp, REPOS)
+
+
 def remember(repo):
     if repo not in (have := saved()):
-        REPOS.parent.mkdir(parents=True, exist_ok=True)
-        tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps([*have, repo], indent=1))
-        os.replace(tmp, REPOS)
+        _save_repos([*have, repo])
 
 
 def forget(repo):
     if repo in (have := saved()):
-        tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps([r for r in have if r != repo], indent=1))
-        os.replace(tmp, REPOS)
+        _save_repos([r for r in have if r != repo])
 
 
 def main_checkout(path):
@@ -259,22 +261,33 @@ def remove(worktree_id, force=False):
     ws = next((w for w in worktrees() if w["id"] == worktree_id), None)
     if ws is None:
         raise RuntimeError(f"no native workspace {worktree_id}")
+    if ws["isMainWorktree"]:
+        raise RuntimeError(f"{worktree_id} is a repo's main checkout: it is never removed")
     worktree_remove(ws, force=force)
     ade_common.set_goal(ws["path"], "")
 
 
 def create(repo, name, base=None, comment="", agent=None, prompt=""):
     """A new worktree of repo (its path, or a known repo's folder name) on branch name; its goal; and, when agent is
-    named (as Orca's `worktree create --agent`), that agent launched in it on prompt."""
-    known = {Path(r).name: r for r in saved()}
-    repo = repo if Path(repo).is_absolute() else known.get(repo, repo)
-    path = worktree_add(repo, name, base)
-    remember(repo)
+    named (as Orca's `worktree create --agent`), that agent launched in it on prompt. A launch that fails leaves the
+    workspace and its goal (greenlight dispatches to it later) and says why in `error`."""
+    if not Path(repo).is_absolute():
+        named = [r for r in saved() if Path(r).name == repo]
+        if len(named) > 1:
+            raise RuntimeError(f"repo {repo!r} names {len(named)} registered repos: pass its path")
+        repo = named[0] if named else repo
+    if not (main := main_checkout(repo)):
+        raise RuntimeError(f"not a git checkout: {repo}")
+    path = worktree_add(main, name, base)
+    remember(main)
     if comment:
         ade_common.set_goal(path, comment)
-    out = {"worktree": {"id": path, "path": path}}
+    out: dict = {"worktree": {"id": path, "path": path}}
     if agent:
-        out["terminal"] = launch(path, agent, prompt)["terminal"]
+        try:
+            out["terminal"] = launch(path, agent, prompt)["terminal"]
+        except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+            out["error"] = f"the workspace was made, but {agent} didn't start: {str(e)[:300]}"
     return out
 
 

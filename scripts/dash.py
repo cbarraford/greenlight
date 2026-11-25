@@ -750,21 +750,21 @@ ADES = None  # a fixed list in place of ades() (tests)
 
 
 def ades():
-    """The backends dash.py lists worktrees from, first wins a shared path: the one in use first, then the other ADEs
-    installed here (native only when it's in use: it lists every repo's worktrees, any ADE's)."""
+    """The backends dash.py lists worktrees from, first wins a shared path: the other installed ADEs first, so a
+    workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
+    every registered repo's worktrees, whichever ADE made them)."""
     if ADES:
         return tuple(ADES)
     try:
-        cur = ade.name()
+        native = ade.is_native()
     except RuntimeError:  # a GREENLIGHT_ADE naming no backend: list the ones there are
-        cur = None
-    rest = [n for n in ("orca", "cmux", "herdr", "t3") if n != cur]
-    return tuple([cur] if cur else []) + tuple(rest)
+        native = False
+    return ("orca", "cmux", "herdr", "t3", *(["native"] if native else []))
 
 
 def ade_call(n):
-    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (no placement on a listing), else n's dispatch."""
-    return greenlight.orca_cli if n == "orca" else ade.get(n).call
+    """The `orca …`-shaped call for backend n (Orca's placement only touches a `worktree create`)."""
+    return ade.get(n).call
 
 
 def trees():

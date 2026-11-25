@@ -20,18 +20,19 @@ The contract (what core code may ask of a backend; rows are in Orca's worktree/t
     create(repo, name, base=None, comment="", agent=None, prompt="")  {"worktree": {id, path}}
     repos()                             {"repos": [repo row]}
 
-Stdlib only; no greenlight import at module level (greenlight imports this).
+Stdlib only; no greenlight import at module level (greenlight imports this; ade_orca imports greenlight lazily).
 """
 import importlib
 import json
 import os
 from pathlib import Path
 
+import ade_common
+
 DEFAULT = "orca"  # ponytail: #195 flips this to native once the importers and passive coexistence are in
 ALIASES = {"basement": "native"}
 MODULES = {"native": "ade_basement", "orca": "ade_orca", "cmux": "ade_cmux", "herdr": "ade_herdr", "t3": "ade_t3"}
 NAMES = tuple(MODULES)
-LEGACY = ("cmux", "herdr", "t3")  # live two-way drivers #195 sunsets in favour of read-only importers
 
 
 def _config_ade():
@@ -77,14 +78,9 @@ def get(n=None):
     return importlib.import_module(MODULES[c])
 
 
-def flags(args):
-    import ade_common  # the parser lives with the helpers the legacy drivers still import
-    return ade_common.flags(args)
-
-
 def dispatch(b, *args):
     """An `orca <noun> <verb> --flag v …` call answered through backend b's contract, in Orca's JSON shape."""
-    noun, verb, f = *args[:2], flags(args[2:])
+    noun, verb, f = *args[:2], ade_common.flags(args[2:])
     wid = str(f.get("worktree", "")).removeprefix("id:")
     if noun == "worktree" and verb in ("ps", "list"):
         return {"worktrees": b.worktrees()}
@@ -96,7 +92,6 @@ def dispatch(b, *args):
         b.send(f["terminal"], f.get("text", ""), "enter" in f)
         return {}
     if noun == "agent" and verb == "launch":
-        import ade_common
         return b.launch(wid, f.get("agent") or ade_common.default_agent(), f.get("prompt", ""))
     if noun == "worktree" and verb == "set":  # board status and MR links are Orca-only
         if "comment" in f:
@@ -114,6 +109,7 @@ def dispatch(b, *args):
     raise RuntimeError(f"orca {noun} {verb} has no {getattr(b, 'NAME', 'backend')} equivalent")
 
 
-def call(*args, n=None):
-    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole."""
-    return get(n).call(*args)
+def call(*args, n=None, timeout=120):
+    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole, and a timeout."""
+    b = get(n)
+    return b.call(*args, timeout=timeout) if getattr(b, "NAME", None) == "orca" else b.call(*args)

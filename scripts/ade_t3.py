@@ -102,7 +102,7 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
     if comment:
         ade_common.set_goal(path, comment)
     if agent:
-        launch(pid, agent, prompt or "")
+        launch(pid, agent, prompt)
     return {"worktree": {"id": pid, "path": path}}
 
 

@@ -13,11 +13,7 @@ def _gl():
 
 
 def call(*args, timeout=120):
-    gl = _gl()
-    args, why = gl.place_here(args)
-    if why:
-        raise gl.PlacementRefused(why)
-    return gl.orca_cli(*args, timeout=timeout)
+    return _gl().orca_placed(*args, timeout=timeout)
 
 
 def worktrees():
