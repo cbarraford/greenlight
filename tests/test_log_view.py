@@ -119,6 +119,9 @@ def test_redact_takes_a_private_key_with_or_without_its_end():
     key = BEGIN + "\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
     jwt = "eyJ" + "hbGciOiJIUzI1" + ".eyJ" + "zdWIiOiIxMjM0" + ".SflKxwRJSMeKKF2QT4"
     assert "SflKx" not in log_view.redact(f"auth {jwt} ok")[0]
+    assert "SflKx" not in log_view.redact('{"t":"' + jwt + 'fwpM-"}')[0], "a signature ending in -"
+    assert "SflKx" not in log_view.redact("jwt-" + jwt)[0], "after a hyphen"
+    assert "beta" not in log_view.redact("  - password: |\n      alpha\n\n      betaSecret")[0]
     two = key + END + "\nmid\n" + key + END
     out = log_view.redact(two)[0]
     assert "MIIEv" not in out and "mid" in out, out
@@ -174,6 +177,9 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     for item in ("- token: |\n  hunter2\n- name: x", "items:\n  - password: |\n      hunter2", "+- token: |\n+  hunter2", "  - api_keys:\n      - hunter2"):
         assert "hunter2" not in log_view.redact(item)[0], item
     assert log_view.redact("- token: |\n  hunter2\n- name: x")[0].endswith("- name: x")
+    for v in ("  credentials: |\n    line1\n\n    hunter2\n  next: 1", " token: |\n   a\n\n   hunter2\n other: 1"):
+        assert "hunter2" not in log_view.redact(v)[0], v
+    assert log_view.redact("items:\n  - api_keys:\n    - hunter2\n  - name: keep")[0].endswith("  - name: keep"), "a sibling item stays"
     out, _ = log_view.redact("x" * 7988 + " PASSWORD=hunter2-and-more")
     assert "nter2" not in out, "a long line isn't cut through a secret"
     out = log_view.redact("db:\n  password: |\n    hunter2\n  port: 5432\nother: z")[0]
@@ -181,7 +187,8 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     assert "# Next steps" in log_view.redact("Auth:\n- fixed login\n# Next steps\n- write docs\n")[0], "a heading ends a list"
     for slow in ("token" * 20000 + ":", "a_token" * 14000 + "x\n", "x.token" * 14000 + ": |", "a.b" * 30000, "a@b" + ".c" * 40000,
                  "-KEY" * 25000, "--api-key-" * 10000, (BEGIN + "\n") * 3600, "eyJ-" * 25000,
-                 BEGIN * 3700 + "-" * 5 + "END ", "password: |\n" + " \n" * 40, " password: |\n" + " \n" * 40 + " next: 1\n"):
+                 BEGIN * 3700 + "-" * 5 + "END ", "password: |\n" + " \n" * 40, " password: |\n" + " \n" * 40 + " next: 1\n",
+                 "password:" + " " * 100000, "Authorization:" + " " * 100000 + "\n", "http://" + ")" * 99990):
         t = time.time(); log_view.redact(slow)
         assert time.time() - t < 1.5, slow[:20]  # bounded patterns: a pathological 100 KB line, about a second
     for kept in ("DB_PASSWORD=\nAPI_URL=x", "password:\nnext: 1", "$ export TOKEN=\n$ ls"):

@@ -298,16 +298,16 @@ PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|
 # /goal; a spaced part goes with it ("my project/plan.pdf", "Jane Doe"): a relative path after it goes too (privacy first)
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)(?<![A-Z0-9_.-])([A-Z0-9_.-]{0,64}(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*[=:][ \t]*(?:[!&]\S*[ \t]*)*(?:\r?\n[ \t]*(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*+[=:][ \t]*+(?:[!&]\S*+[ \t]*+)*(?:\r?\n[ \t]*+(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*+)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
 _CRED = r"[\w.-]{0,64}(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_-]?keys?|auth|credentials?)[\w.-]{0,64}"
 # The key's own indent (after a diff's +/-) is \2: list items sit at it or deeper, a block's lines and comments deeper
-YAML_LIST_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?:-[ \t]+)?{_CRED}:[ \t]*)\r?\n(?:(?(1)[+ -])\2(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
-YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?:-[ \t]+)?{_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
-                           r"(?:(?:(?(1)[+ -])[ \t]*\r?\n)*(?(1)[+ -])\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
+YAML_LIST_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?P<item>-[ \t]+)?{_CRED}:[ \t]*)\r?\n(?:(?(1)[+ -])\2(?(item)[ \t]+)(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
+YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?P<item>-[ \t]+)?{_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
+                           r"(?:(?:(?(1)(?:[+ -][ \t]*)?|[ \t]*)\r?\n)*(?(1)[+ -])\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
 FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})([ \t]+)(?!-)\S+")  # mysql --password hunter2
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}\b", re.I)  # audit's, bounded
 KEY_BLOCK_RE = re.compile(r"-----BEGIN (?P<label>(?:[A-Z ]+ )?PRIVATE KEY)-----(?:(?!-----BEGIN ).)*?-----END (?P=label)-----", re.S)
-JWT_RE = re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}+\.eyJ[A-Za-z0-9_-]{8,}+\.[A-Za-z0-9_-]{8,}+\b")
+JWT_RE = re.compile(r"(?<![A-Za-z0-9_])eyJ[A-Za-z0-9_-]{8,2048}+\.eyJ[A-Za-z0-9_-]{8,}+\.[A-Za-z0-9_-]{8,}+")
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)[ \t]+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
@@ -329,10 +329,15 @@ def _hosts() -> list[str]:
 
 def _url(m: re.Match[str]) -> str:
     """[url], keeping only the punctuation after it that isn't the URL's: a closing bracket it never opened, a full stop."""
-    u, tail = m.group(0), ""
-    while u and (u[-1] in ".,;:!?" or u[-1] in ")]}" and u.count(u[-1]) > u.count({")": "(", "]": "[", "}": "{"}[u[-1]])):
-        u, tail = u[:-1], u[-1] + tail
-    return "[url]" + tail
+    u = m.group(0)
+    pairs = {")": "(", "]": "[", "}": "{"}
+    extra = {c: u.count(c) - u.count(o) for c, o in pairs.items()}  # counted once: closers it never opened
+    end = len(u)
+    while end and (u[end - 1] in ".,;:!?" or u[end - 1] in pairs and extra[u[end - 1]] > 0):
+        if u[end - 1] in pairs:
+            extra[u[end - 1]] -= 1
+        end -= 1
+    return "[url]" + u[end:]
 
 
 def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
