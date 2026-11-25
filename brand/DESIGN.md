@@ -718,7 +718,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 
   A status shows once: when the pill says what the agent glyph would, the glyph is the quiet ring. A project's workspaces sit 16 in from its header, and only the open terminal's row is selected.
   A workspace row is one height with a pill or without, and its MR ref ends the line, so the refs make one column. CI that hasn't started is the queued glyph, never the working one.
-- **Hosts:** every host is a tree row: one with shells open reads `fg.default` with its shells under it, the rest `fg.muted`. Never chips.
+- **Hosts:** a host with shells open is a tree row with its shells under it. The idle ones are chips wrapped under those rows, so hosts with nothing running don't take a row each: a small secondary button (§10.2: 24 tall, `element.rest`, radius `sm`, `label`) with the host's dot and name.
 - **Empty, loading, error:**
   - Loading is a skeleton of 3 rows per section.
   - With no workspaces: "No workspaces yet", plus a secondary "New workspace…" button.

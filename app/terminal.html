@@ -104,14 +104,14 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .ws .ib,.grp .ib{width:24px;height:24px;display:none} .ws .ib{margin:-4px -4px -4px 0}
 .ws:hover .ib,.ws:focus-within .ib,.ws:focus .ib,.ws.on .ib,.grp:hover .ib,.grp:focus .ib{display:flex}
 .tm .ib{width:24px;height:24px;margin-left:auto;display:none} .tm:hover .ib,.tm:focus .ib,.tm:focus-within .ib,.tm.on .ib{display:flex}
-/* Hosts: every host is a row; one with shells open is a group (its shells, Close all, +); most used first */
+/* Hosts: a host with shells open is a group (its shells, Close all, +); the idle ones are chips under them; most used first */
 .hc{margin:0;padding:0} .hc .ws .wn{font-weight:400}
 .hc .tm{padding-left:24px}
 .ca{display:none;height:24px;margin:-4px 0;padding:0 8px;border:0;border-radius:var(--r-sm);background:none;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
 .ws:hover .ca,.ws:focus-within .ca,.ws:focus .ca{display:block} .ca:hover{background:var(--fill-h);color:var(--fg)}
-.hchips{display:flex;flex-direction:column}
-.hchip{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:none;color:var(--dim);font:inherit;text-align:left}
-.hchip:hover{background:var(--fill);color:var(--fg)} .hchip.on{background:var(--fill-a);color:var(--fg)}
+.hchips{display:flex;flex-wrap:wrap;gap:4px;padding:4px 4px 0}
+.hchip{display:flex;align-items:center;gap:4px;height:24px;padding:0 8px 0 6px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
+.hchip:hover{background:var(--fill-h);color:var(--fg)} .hchip.on{background:var(--fill-a);color:var(--fg)}
 /* a host that can't be reached: a crashed caption and Retry on its row (§10.12) */
 .lost{display:flex;align-items:center;gap:4px;padding-left:20px;color:var(--r);font:400 var(--fs-cap)/14px var(--font)} .lost span{flex:1}
 .lost button{height:24px;padding:0 8px;border:0;border-radius:var(--r-sm);background:none;color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} .lost button:hover{background:var(--fill-h)}
