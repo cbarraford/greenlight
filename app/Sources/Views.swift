@@ -1994,7 +1994,7 @@ struct ChatView: View, Looked {
                 .onChange(of: c.run?.steps.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
-            }.overlay { if shown.isEmpty && c.run == nil && c.queue.isEmpty { emptyState } }
+            }.overlay { if !shown.contains(where: { $0.role != .note }) && c.run == nil && c.queue.isEmpty { emptyState } }  // a note alone (New chat's) is still empty
             if c.verbose { rule; FeedPanel(f: c.feed, c: c) }
             footer  // the composer's own border is its edge: no rule over it
             rule
@@ -2007,7 +2007,7 @@ struct ChatView: View, Looked {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(bg)
+        .background(lk.dark ? chrome : bg)  // dark: the reading surface is the window's darkest plane, so bubbles and the composer sit on it
         .foregroundColor(fg)
         .environment(\.colorScheme, lk.dark ? .dark : .light)  // the look's: Default follows the app, Phosphor is always dark
         .font(ui(DS.TypeRole.body))
@@ -2019,12 +2019,15 @@ struct ChatView: View, Looked {
     var busy: Bool { c.run != nil }
     /// The conversation without the transcript's greeting note: the empty state says it.
     var shown: [Msg] { c.msgs.filter { !($0.role == .note && $0.text.hasPrefix("Ask me anything")) } }
-    /// §10.21: centred, a 20 icon, a title-sm line and a body line.
+    /// §10.21: centred, a 20 icon, a title-sm line and a body line that names the first action; ⌃R once there's history.
     var emptyState: some View {
         VStack(spacing: DS.Space.s8) {
             Image(ds: "chat-text", size: 20).foregroundColor(faint).accessibilityHidden(true)
             Text("Ask about your workspaces").font(ui(DS.TypeRole.titleSm))
-            Text("\(c.name) answers here. ⌃R searches the prompts you've sent.").foregroundColor(dim).multilineTextAlignment(.center)
+            Text("Ask a question, or drag a workspace to Context.").foregroundColor(dim).multilineTextAlignment(.center)
+            if !c.sent.isEmpty {
+                HStack(spacing: DS.Space.s4) { kbd("⌃R"); Text("searches the prompts you've sent") }.font(ui(DS.TypeRole.caption)).foregroundColor(faint)
+            }
         }.padding(DS.Space.s24)
     }
     var chrome: Color { mono ? bg : Color(DS.Palette.bgChrome, dark: lk.dark) }
@@ -2258,7 +2261,7 @@ struct ChatView: View, Looked {
             if c.hp >= 0 {
                 Text("History \(c.hp + 1) of \(c.walk.count)\(c.hsaved.isEmpty ? "" : " starting “\(c.hsaved.prefix(32))”") · ↑ older · ↓ newer\(c.vim ? "" : " · esc back to your draft")").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
             }
-        }.padding(.horizontal, inset).padding(.top, DS.Space.s12).padding(.bottom, DS.Space.s12)
+        }.padding(.horizontal, inset).padding(.top, DS.Space.s12).padding(.bottom, inset)  // the box sits as far from the footer as from the sides
     }
 
     /// The pane's footer (§10.11): the model on the left margin, the context on the right, on the dashboard footer's line.

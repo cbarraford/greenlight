@@ -791,7 +791,8 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 - **Header:** a bar like the top bar (§10.11): 44 on `bg.chrome` with its hairline, so the band and the line continue across the window.
   - The name is `title-sm`; where it runs follows in `caption` `fg.muted`. A state shows only while working or offline; idle says nothing.
   - Its actions are 28 icon buttons on the right: New chat, look, voice, pop-out.
-- **Empty:** the §10.21 empty state, centred in the conversation. It names ⌃R; the pane has no key hints elsewhere.
+- **Surface:** the conversation is `bg.surface` in light and `bg.canvas` in dark, where the reading surface is the window's darkest plane and the bubbles and the composer sit on it.
+- **Empty:** the §10.21 empty state, centred in the conversation. Its line names the first action. Once there are sent prompts, a `caption` line under it shows ⌃R as a Kbd; the pane has no key hints elsewhere.
 - **Composer:** a §10.4 textarea with radius `md`, like the bubbles, and no rule over it: the text runs the full width, two lines growing to ten, over a row of controls: attach (quiet icon) on the left, mic and send on the right. The placeholder is `fg.faint`. Send is primary only when there's text; otherwise it's a bare `fg.faint` arrow.
 - **Footer:** a §10.11 footer on the dashboard footer's line: the model on the left margin, the context on the right.
 - **Looks:** the 7 chat looks become token-override sets on the same components, not separate palettes and fonts. Phase one ships **Default** (this spec) and **Phosphor** (a mono, green-on-near-black homage that keeps the terminal's spirit). The other five are parked until someone asks for them back. See §14.
