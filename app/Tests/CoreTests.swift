@@ -1275,6 +1275,12 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
         savedProjects: [["id": "pempty", "name": "Empty", "repos": ["acme/ios-app"], "dirs": [String]()]],
         repoHosts: foldedMap, defaultHost: "devbox"
     )
+    let srvUsage: [[String: Any]] = [["id": "claude", "state": "ok"]], macUsage: [[String: Any]] = [["id": "codex", "state": "na"]]
+    let uBoth = mergeSnapshots(["usage": srvUsage], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
+    let uMac = mergeTreesPayload(["usage": [[String: Any]]()], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
+    let uNone = mergeTreesPayload(["trees": [[String: Any]]()], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"]
+    check("usage meters: merged snapshots and trees carry greenlight's host's usage, else the Mac's",
+          uBoth?.first?["id"] as? String == "claude" && uMac?.first?["id"] as? String == "codex" && uNone == nil)
     check("project host: nativeHost wins on paired Orca dedupe, org/repo fold is deterministic, and savedProjects resolves empty-tree projects",
           mergedPucks.count == 2
           && mergedSnapTrees.count == 1 && mergedSnapTrees[0]["path"] as? String == "/srv/tree"

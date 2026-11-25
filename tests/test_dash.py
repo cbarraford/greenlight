@@ -978,3 +978,164 @@ with mock.patch.object(dash, "live_agents", return_value={
     _older = dash.transcript("plog", before=_chained["more"])
     assert _older["source"] == "transcript" and any(e["text"] == "hello" for e in _older["entries"])
 print("pane log transcript ok")
+
+# usage.py: the footer's plan meters (#193), from recorded answers (trimmed, ids removed); never the network or your sign-ins
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+import usage  # noqa: E402
+
+CLAUDE_REC = {"five_hour": None, "seven_day": {"utilization": 64.0, "resets_at": "2026-11-28T07:00:00.418281+00:00"},
+              "seven_day_opus": None, "seven_day_sonnet": None, "extra_usage": {"is_enabled": False, "utilization": 0.0},
+              "limits": [{"kind": "weekly_all", "group": "weekly", "percent": 64, "resets_at": "2026-11-28T07:00:00.418281+00:00", "scope": None},
+                         {"kind": "weekly_scoped", "group": "weekly", "percent": 15, "resets_at": "2026-11-28T07:00:00.418439+00:00",
+                          "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}}]}
+CLAUDE_NEAR = {"five_hour": {"utilization": 92.0, "resets_at": "2026-11-24T23:00:00+00:00"},
+               "seven_day": {"utilization": 100.0, "resets_at": "2026-11-28T07:00:00+00:00"}}
+CODEX_REC = {"plan_type": "pro", "rate_limit": {"allowed": True, "limit_reached": False,
+             "primary_window": {"used_percent": 46, "limit_window_seconds": 604800, "reset_after_seconds": 175882, "reset_at": 1795739864},
+             "secondary_window": None}, "additional_rate_limits": None}
+CODEX_5H = {"plan_type": "plus", "rate_limit": {"primary_window": {"used_percent": 81, "limit_window_seconds": 18000, "reset_at": 1795570000},
+                                                "secondary_window": {"used_percent": 30, "limit_window_seconds": 604800, "reset_at": 1795739864}}}
+ROLLOUT_LINE = {"timestamp": "2026-11-24T20:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+    "limit_id": "codex", "primary": {"used_percent": 46.0, "window_minutes": 10080, "resets_at": 1795739864}, "secondary": None, "plan_type": "pro"}}}
+
+
+def _usage_home():
+    root = Path(tempfile.mkdtemp())
+    env = {"HOME": str(root), "CLAUDE_CONFIG_DIR": str(root / ".claude"), "CODEX_HOME": str(root / ".codex"),
+           "XDG_DATA_HOME": str(root / "share"), "PI_CODING_AGENT_DIR": str(root / "pi")}
+    for d in (".claude", ".codex", "share/opencode", "pi"):
+        (root / d).mkdir(parents=True)
+    return root, env
+
+
+def _answers(by_url):
+    """usage._get with recorded answers by URL (an exception instance is raised), and the calls it got."""
+    calls = []
+
+    def get(url, headers):
+        calls.append((url, headers))
+        a = by_url[url]
+        if isinstance(a, Exception):
+            raise a
+        return a
+    return get, calls
+
+
+_FUTURE_MS = int((time.time() + 3600) * 1000)
+_uh, _uenv = _usage_home()
+(_uh / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok-c", "expiresAt": _FUTURE_MS, "subscriptionType": "max"}}))
+(_uh / ".codex" / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"access_token": "tok-x", "account_id": "acct-1"}}))
+(_uh / "share" / "opencode" / "auth.json").write_text(json.dumps({"opencode-go": {"type": "api", "key": "k"}}))
+with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform", "linux"):
+    _get, _calls = _answers({usage.CLAUDE_URL: CLAUDE_REC, usage.CODEX_URL: CODEX_REC})
+    with mock.patch.object(usage, "_get", _get):
+        c = usage.fetch("claude")
+        assert c["state"] == "ok" and c["plan"] == "Claude Max" and c["src"] == "api", c
+        assert [(w["label"], w["pct"]) for w in c["windows"]] == [("Week", 64.0), ("Fable", 15.0)], c["windows"]  # Fable's pool from `limits`
+        assert c["windows"][0]["resets"] == int(datetime(2026, 11, 28, 7, 0, 0, 418281, tzinfo=UTC).timestamp())
+        assert _calls[-1][1]["Authorization"] == "Bearer tok-c" and _calls[-1][1]["anthropic-beta"]
+        x = usage.fetch("codex")
+        assert x["state"] == "ok" and x["plan"] == "ChatGPT Pro" and [(w["label"], w["pct"], w["resets"]) for w in x["windows"]] == [("Week", 46.0, 1795739864)]
+        assert _calls[-1][1]["ChatGPT-Account-Id"] == "acct-1"
+        o = usage.fetch("opencode")
+        assert o["state"] == "na" and o["plan"] == "OpenCode Go" and "no usage API" in o["note"], o
+        assert usage.fetch("agy")["state"] == "na"  # no source yet: shown n/a, not hidden
+        p = usage.fetch("pi")
+        assert p["state"] == "na" and "isn't signed in" in p["note"]  # pi without a plan sign-in: n/a, not hidden
+    # near the limit: 5h first, values clamped; the codex API's 5h + weekly windows
+    with mock.patch.object(usage, "_get", _answers({usage.CLAUDE_URL: CLAUDE_NEAR, usage.CODEX_URL: CODEX_5H})[0]):
+        assert [(w["label"], w["pct"]) for w in usage.fetch("claude")["windows"]] == [("5h", 92.0), ("Week", 100.0)]
+        assert [(w["label"], w["pct"]) for w in usage.fetch("codex")["windows"]] == [("5h", 81.0), ("Week", 30.0)]
+    # failures: rate limited backs off 5 minutes and keeps the last windows; an expired token never calls the API
+    with mock.patch.object(usage, "_get", _answers({usage.CLAUDE_URL: usage.Failed("rate limited", "rate_limit", usage.RATE_WAIT)})[0]):
+        f = usage.fetch("claude")
+        assert f["state"] == "failed" and f["next"] - f["tried"] == usage.RATE_WAIT
+        kept = usage.merge(c, f)
+        assert kept["state"] == "failed" and kept["windows"] == c["windows"] and kept["at"] == c["at"] and kept["note"] == "rate limited"
+        assert usage.view(kept)["state"] == "failed" and "next" not in usage.view(kept)
+    (_uh / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok-c", "expiresAt": 1000}}))
+    _get, _calls = _answers({})
+    with mock.patch.object(usage, "_get", _get):
+        e = usage.fetch("claude")
+        assert e["state"] == "failed" and "expired" in e["note"] and not _calls
+    # codex: the API fails, the newest rollout's rate_limits stand in (no network); no sign-in and no rollout: left out
+    day = _uh / ".codex" / "sessions" / "2026" / "11" / "24"
+    day.mkdir(parents=True)
+    (day / "rollout-a.jsonl").write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(ROLLOUT_LINE) + "\n" + json.dumps({"type": "x"}) + "\n")
+    with mock.patch.object(usage, "_get", _answers({usage.CODEX_URL: usage.Failed("signed out or the token expired", "auth")})[0]):
+        r = usage.fetch("codex")
+        assert r["state"] == "ok" and r["src"] == "rollout" and r["windows"][0]["label"] == "Week" and r["windows"][0]["pct"] == 46.0
+        assert r["at"] == int(datetime(2026, 11, 24, 20, tzinfo=UTC).timestamp()) and "last session" in r["note"]
+    (_uh / ".codex" / "auth.json").unlink()
+    assert usage.fetch("codex")["src"] == "rollout"  # signed in through an API key: the rollouts still say
+    (day / "rollout-a.jsonl").unlink()
+    assert usage.fetch("codex")["state"] == "out"
+    (_uh / "share" / "opencode" / "auth.json").unlink()
+    assert usage.fetch("opencode")["state"] == "out"
+    # pi: its default provider's plan; anthropic OAuth reads Claude's endpoint with pi's own token
+    (_uh / "pi" / "auth.json").write_text(json.dumps({"anthropic": {"type": "oauth", "access": "tok-p", "expires": _FUTURE_MS}}))
+    _get, _calls = _answers({usage.CLAUDE_URL: CLAUDE_REC})
+    with mock.patch.object(usage, "_get", _get):
+        p = usage.fetch("pi")
+        assert p["state"] == "ok" and p["windows"][0]["pct"] == 64.0 and _calls[-1][1]["Authorization"] == "Bearer tok-p"
+    (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "openrouter"}))
+    p = usage.fetch("pi")
+    assert p["state"] == "na" and "openrouter" in p["note"]
+    (_uh / "pi" / "auth.json").write_text(json.dumps({"openai-codex": {"type": "oauth", "access": "tok-q", "accountId": "acct-2", "expires": _FUTURE_MS}}))
+    (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "openai-codex"}))
+    _get, _calls = _answers({usage.CODEX_URL: CODEX_REC})
+    with mock.patch.object(usage, "_get", _get):
+        assert usage.fetch("pi")["windows"][0]["pct"] == 46.0 and _calls[-1][1]["ChatGPT-Account-Id"] == "acct-2"
+
+# _get maps HTTP failures to a reason the footer shows on hover
+for code, want in ((429, "rate_limit"), (401, "auth"), (500, "http")):
+    with mock.patch.object(usage.urllib.request, "urlopen", side_effect=urllib.error.HTTPError("u", code, "x", {}, None)):
+        try:
+            usage._get(usage.CLAUDE_URL, {})
+        except usage.Failed as err:
+            assert err.code == want and (err.wait == usage.RATE_WAIT) == (code == 429), (code, err.code)
+        else:
+            raise AssertionError("no Failed")
+with mock.patch.object(usage.urllib.request, "urlopen", side_effect=urllib.error.URLError("down")):
+    try:
+        usage._get(usage.CLAUDE_URL, {})
+    except usage.Failed as err:
+        assert err.code == "network"
+
+# current(): config order, installed and signed-in only, cached for a minute, a later scan (↻) fetches again, off in tests
+_fetched = []
+
+
+def _fake_fetch(name):
+    _fetched.append(name)
+    if name == "codex":
+        return {"id": name, "name": "Codex", "state": "out", "tried": int(time.time()), "next": int(time.time()) + 300}
+    return {"id": name, "name": name.title(), "state": "ok", "tried": int(time.time()), "at": int(time.time()), "windows": [], "next": int(time.time()) + 60}
+
+
+with mock.patch.dict(os.environ, {"GREENLIGHT_USAGE": ""}), mock.patch.object(usage, "fetch", _fake_fetch), \
+        mock.patch.object(usage.harness, "installed", lambda n: n != "gemini"):
+    (usage.STATE / "usage.json").unlink(missing_ok=True)
+    assert [p["id"] for p in usage.current(["pi", "codex", "claude", "gemini", "claude"])] == ["pi", "claude"]
+    assert sorted(_fetched) == ["claude", "codex", "pi"]  # gemini isn't installed: never fetched
+    _fetched.clear()
+    assert [p["id"] for p in usage.current(["pi", "claude"])] == ["pi", "claude"] and not _fetched  # cached
+    usage.current(["pi", "claude"], since=time.time() + 30)  # a scan started after the fetch... but within 10 s of it: no
+    assert not _fetched
+    _e = json.loads((usage.STATE / "usage.json").read_text())
+    for v in _e["p"].values():
+        v["tried"] -= 20
+    (usage.STATE / "usage.json").write_text(json.dumps(_e))
+    usage.current(["pi", "claude"], since=time.time())
+    assert sorted(_fetched) == ["claude", "pi"]
+    _fetched.clear()
+    usage.current(["claude"], force=True)
+    assert _fetched == ["claude"]
+    assert usage.current(["claude"], refresh_ok=False)[0]["state"] == "ok"
+with mock.patch.dict(os.environ, {"GREENLIGHT_USAGE": "off"}):
+    assert usage.current(["claude"]) == []
+# a backoff (rate limit, Keychain) isn't cut short by a scan
+assert not usage.due({"tried": 100, "next": 400, "wait": 300}, 200, 150) and usage.due({"tried": 100, "next": 160}, 200, 150)
+print("usage ok")

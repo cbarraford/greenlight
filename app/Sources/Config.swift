@@ -262,9 +262,18 @@ func mergeSnapshots(_ primary: [String: Any]?, _ secondary: [String: Any]?, prim
     let trees = dedupe(tag(primary?["trees"] as? [[String: Any]] ?? [], primaryHost),
                        tag(secondary?["trees"] as? [[String: Any]] ?? [], secondaryHost))
         .filter { ($0["path"] as? String).map { !puckPaths.contains($0) } ?? true }
-    return ["ts": max(primary?["ts"] as? Int ?? 0, secondary?["ts"] as? Int ?? 0),
-            "scanned": max(primary?["scanned"] as? Int ?? 0, secondary?["scanned"] as? Int ?? 0),
-            "pucks": pucks, "trees": trees]
+    var out: [String: Any] = ["ts": max(primary?["ts"] as? Int ?? 0, secondary?["ts"] as? Int ?? 0),
+                              "scanned": max(primary?["scanned"] as? Int ?? 0, secondary?["scanned"] as? Int ?? 0),
+                              "pucks": pucks, "trees": trees]
+    out["usage"] = usageOf(primary, secondary)
+    return out
+}
+
+/// The footer's plan meters (dash.py `usage`) from a merged pair: greenlight's host's, else the Mac's. The agents' sign-ins live
+/// where they run, so the two aren't summed.
+func usageOf(_ primary: [String: Any]?, _ secondary: [String: Any]?) -> [[String: Any]]? {
+    let p = primary?["usage"] as? [[String: Any]], s = secondary?["usage"] as? [[String: Any]]
+    return p?.isEmpty == false ? p : s ?? p
 }
 
 /// Merges `dash.py trees` payloads from server and local Mac, deduplicating by path (native host wins) and combining `repoHosts`.
@@ -294,7 +303,9 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     }
     var panes = (primary?["panes"] as? [String: Any]) ?? [:]
     for (k, v) in (secondary?["panes"] as? [String: Any]) ?? [:] { panes[k] = v }
-    return ["trees": merged, "panes": panes, "repoHosts": hosts]
+    var out: [String: Any] = ["trees": merged, "panes": panes, "repoHosts": hosts]
+    out["usage"] = usageOf(primary, secondary)
+    return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
 /// a server), but each host's pane states only once, from the fetch that read them. Each fetch publishes on its own, so without

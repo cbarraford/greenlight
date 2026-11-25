@@ -32,6 +32,7 @@ os.environ["GREENLIGHT_DEV_HOME"] = str(_BOOT_DEV_HOME)
 os.environ.setdefault("GREENLIGHT_ME", "octo")
 os.environ["GREENLIGHT_TMUX_SOCKET"] = f"gl-pytest-{os.getpid()}"  # dash.snapshot lists the app's tmux panes: never the real Basement's
 os.environ.pop("GREENLIGHT_RUN", None)
+os.environ["GREENLIGHT_USAGE"] = "off"  # usage.py: never the agents' usage APIs with your real sign-ins
 
 
 def _patch_loaded_modules(monkeypatch, home: Path) -> None:

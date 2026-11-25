@@ -61,6 +61,31 @@ test("a workspace's + starts its own set of tabs; ⌘T adds to the set you're in
   await again.close(); await page.close();
 });
 
+test("the Basement's footer: the usage meters and their popover; the Pipe has none, and no agent reporting hides it", async page => {
+  page = await boot(page.context().browser());
+  const now = Math.floor(Date.now() / 1000);
+  const usage = [{id: "claude", name: "Claude", state: "ok", at: now, windows: [{label: "5h", pct: 81, resets: now + 3600}, {label: "Week", pct: 40, resets: now + 86400 * 2}]},
+    {id: "codex", name: "Codex", state: "ok", at: now, windows: [{label: "Week", pct: 100, resets: now + 86400}]},
+    {id: "opencode", name: "OpenCode", state: "na", note: "no usage API"}, {id: "pi", name: "Pi", state: "failed", note: "signed out or the token expired"}];
+  assert.equal(await page.$eval("#bfoot", f => f.hidden), true, "nothing reported yet: no footer");
+  await page.evaluate(t => term.workspaces(t), {...TREES, usage});
+  const m = () => page.$$eval("#bfoot .um", bs => bs.map(b => [b.dataset.id, b.textContent, b.querySelector(".ubar")?.dataset.tone || ""]));
+  assert.deepEqual(await m(), [["claude", "81%1h 0m", "near"], ["codex", "100%1d 0h", "full"], ["opencode", "n/a", ""], ["pi", "Refresh failed", ""]]);
+  assert.equal(await page.$eval("#bfoot", f => getComputedStyle(f).display), "flex");
+  const stage = await page.$eval("#stage", s => s.getBoundingClientRect().bottom), foot = await page.$eval("#bfoot", f => f.getBoundingClientRect());
+  assert.ok(Math.abs(stage - foot.top) < 1 && foot.height === 28, "under the terminals, 28 tall");
+  await page.click("#bfoot .um[data-id=claude]");
+  assert.deepEqual(await page.$$eval("#umpop .urow[data-id=claude] .uwin .ul", l => l.map(x => x.textContent)), ["5h", "Week"]);
+  assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /signed out/);
+  await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
+  await page.evaluate(() => toggleSide()); await page.waitForTimeout(450);
+  assert.equal(await page.$eval("#bfoot", f => getComputedStyle(f).display), "none", "the Pipe: no footer");
+  await page.evaluate(() => toggleSide()); await page.waitForTimeout(450);
+  await page.evaluate(t => term.workspaces(t), TREES);
+  assert.equal(await page.$eval("#bfoot", f => f.hidden), true);
+  assert.deepEqual(page._errs, []); await page.close();
+});
+
 test("this Mac shows by its hostname; Rename tells the app, and the app's answer renames it", async page => {
   page = await boot(page.context().browser(), null, "?localname=cb-mbp");
   const names = () => page.$$eval("#tree .hchip, #tree .hc .ws .wn", e => e.map(x => x.textContent));

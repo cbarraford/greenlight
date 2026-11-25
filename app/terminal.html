@@ -141,6 +141,44 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 /* ---- panes (§10.12): each tab is a tree of two-child splits joined by draggable dividers. One pane: just the terminal.
    Split: every pane gets a 24-tall header; the focused one is framed by a 1px accent ring, the rest dim ---- */
 #stage{position:relative;flex:1;min-height:0;background:var(--term-bg)}
+/* the Basement's footer (not the Pipe's): the usage meters, as Greenlight Center's footer has them (DESIGN.md §10.11) */
+#bfoot{box-sizing:border-box;flex-shrink:0;display:flex;align-items:center;gap:var(--ds-space-12);height:var(--ds-layout-footer-height);padding:0 var(--ds-space-12);background:var(--ds-bg-chrome);border-top:1px solid var(--ds-border-subtle);overflow:hidden;white-space:nowrap} #bfoot[hidden],body.noside #bfoot{display:none}
+/* usage meters (issue 193): one per configured agent at the footer's left, and their popover (DESIGN.md §10.11, §10.13) */
+.ums{display:inline-flex;align-items:center;gap:var(--ds-space-8);flex-shrink:0}
+.um{display:inline-flex;align-items:center;gap:var(--ds-space-4);height:20px;padding:0 var(--ds-space-4);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
+.um:hover,.um[aria-expanded="true"]{background:var(--ds-element-hover);color:var(--ds-fg-default)} .um:focus-visible{outline:none;box-shadow:var(--ds-ring)}
+.um .umk{flex-shrink:0} .um[data-id="claude"] .umk,.urow[data-id="claude"] .umk{color:var(--ds-clay-9)} .um[data-id="agy"] .umk,.urow[data-id="agy"] .umk{color:var(--ds-blue-9)}
+.um .uerr{color:var(--ds-status-crashed-fg)} .um[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)} .um[data-state="na"] .uw,.um.stale .upct{color:var(--ds-fg-faint)}
+.ubar{position:relative;display:inline-block;flex-shrink:0;width:28px;height:4px;border-radius:var(--ds-radius-full);background:var(--ds-element-active);overflow:hidden}
+.ubar i{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--ds-fg-muted)}
+.ubar[data-tone="near"] i{background:var(--ds-status-needs-solid)} .ubar[data-tone="full"] i{background:var(--ds-status-crashed-solid)}
+.um .ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .um .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
+.um .uleft{color:var(--ds-fg-faint)}
+.tight .um .uleft,.tighter .um .ubar{display:none}
+.umpop{box-sizing:border-box;position:fixed;z-index:60;width:320px;max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
+  border-radius:var(--ds-radius-lg);background:var(--ds-bg-raised);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-2);font:var(--ds-type-body);letter-spacing:var(--ds-type-body-track);
+  font-variant-numeric:tabular-nums;animation:umin var(--ds-duration-fast) var(--ds-easing-out);transform-origin:bottom left}
+@keyframes umin{from{opacity:0;transform:scale(.96)}}
+@media (prefers-reduced-motion: reduce){.umpop{animation:none}}
+.umpop .uh{display:flex;align-items:center;gap:var(--ds-space-8)} .umpop .ut{flex:1;font:var(--ds-type-strong)}
+.umpop .useg{display:inline-flex;gap:0;padding:var(--ds-space-2);border-radius:var(--ds-radius-sm);background:var(--ds-bg-sunken)}
+.umpop .useg button{height:20px;padding:0 var(--ds-space-8);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-label-sm)}
+.umpop .useg button:hover{color:var(--ds-fg-default)} .umpop .useg button[aria-selected="true"]{background:var(--ds-bg-surface);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-1)}
+.umpop .useg button:focus-visible{outline:none;box-shadow:var(--ds-ring)}
+.umpop .urows{display:flex;flex-direction:column;gap:var(--ds-space-12)} .umpop.compact .urows{gap:var(--ds-space-8)}
+.urow{display:flex;flex-direction:column;gap:var(--ds-space-4)}
+.urow .urh{display:flex;align-items:center;gap:var(--ds-space-8);min-width:0} .urow .urh b{font:var(--ds-type-strong)}
+.urow .uplan{color:var(--ds-fg-muted);font:var(--ds-type-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow .sp{flex:1}
+.urow .urr,.urow .ur{color:var(--ds-fg-muted);font:var(--ds-type-caption);white-space:nowrap}
+.urow .uwin{display:grid;grid-template-columns:56px 1fr 36px 64px;align-items:center;gap:var(--ds-space-8);padding-left:24px;font:var(--ds-type-caption)}
+.urow .uwin .ubar{width:100%} .urow .uwin .upct{text-align:right;color:var(--ds-fg-default)} .urow .uwin .ur{text-align:right}
+.urow .uwin .ubar[data-tone="near"]~.upct{color:var(--ds-status-needs-fg)} .urow .uwin .ubar[data-tone="full"]~.upct{color:var(--ds-status-crashed-fg)}
+.urow .unote{display:flex;gap:var(--ds-space-4);align-items:flex-start;padding-left:24px;color:var(--ds-fg-muted);font:var(--ds-type-caption)}
+.urow .unote.bad{color:var(--ds-status-crashed-fg)} .urow .unote .dsi{flex-shrink:0;margin-top:1px}
+.urow.c{display:grid;grid-template-columns:16px 1fr 40px 36px 56px;align-items:center;gap:var(--ds-space-8);font:var(--ds-type-caption)}
+.urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{text-align:right}
+.urow.c .uw{grid-column:3 / span 3;text-align:right;color:var(--ds-fg-faint)} .urow.c[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)}
+.umpop .ufoot{color:var(--ds-fg-faint);font:var(--ds-type-caption)}
 .root{position:absolute;inset:0;display:flex} .root[hidden]{display:none}
 .root.zoom .pane:not(.on),.root.zoom .dv,.root.zoom .split:not(:has(.pane.on)){display:none}  /* ⌘⇧↵: the focused pane fills the tab */
 #find{position:absolute;top:8px;right:16px;z-index:6;display:flex;align-items:center;gap:2px;padding:4px;border-radius:var(--r-md);background:var(--raised);color:var(--fg);box-shadow:var(--e2);font:400 var(--fs-lbl)/16px var(--font)}
@@ -449,7 +487,7 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 <button id="jump" type="button"><span>Jump to workspace or terminal</span><kbd>⌘J</kbd></button>
 <div id="tree" role="tree"></div></nav><div id="lnk" role="toolbar" aria-label="Link" hidden><button type="button" id="lnkOpen">Open ↗</button><button type="button" id="lnkCopy">Copy</button></div><div id="sdv" role="separator" aria-orientation="vertical"></div>
 <div id="main"><div id="bar"><div id="tabs" role="tablist"></div><div class="tools" id="tools"></div></div>
-<div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div></div>
+<div id="stage"><div id="drop" aria-hidden="true"></div><div id="find" role="search" hidden><input id="fq" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off"><span id="fn"></span><button type="button" id="fprev" title="Newer  ⇧↵" aria-label="Newer match">↑</button><button type="button" id="fnext" title="Older  ↵" aria-label="Older match">↓</button><button type="button" id="fx" title="Close  esc" aria-label="Close find">✕</button></div></div><div id="bfoot" role="contentinfo" aria-label="Plan usage" hidden></div></div>
 <div id="adopt" role="dialog" aria-label="Adopt this repo's colors" hidden></div><div id="toast" role="status" hidden><span class="tx"><b></b><small></small></span><button type="button">Undo</button></div><div id="card" role="dialog" hidden></div><div id="menu" role="menu" hidden></div><div id="dlg" hidden></div>
 <div id="pal" hidden><div class="pbox" role="dialog" aria-label="Jump"><div class="hd"><span id="pmode" class="mode" hidden>Actions</span><input id="pq" aria-label="Jump to" role="combobox" aria-controls="pres" aria-expanded="true" autocomplete="off" spellcheck="false"><div id="pscope" class="scope" role="tablist" aria-label="Scope"></div><span id="phint" class="hint" hidden>⌫ back to Jump</span></div><div class="bd"><div id="pres" role="listbox" aria-label="Results"></div><div id="pv"></div></div><div id="pft" class="ft"></div></div></div>
 <script>
@@ -1534,6 +1572,107 @@ $("tree").addEventListener("keydown", e => {
   else return;
   e.preventDefault(); e.stopPropagation();
 });
+// usage meters (issue 193): each configured agent's plan usage (usage.py, through the snapshot or dash.py trees). The footer shows one
+// meter per agent, in config `agents` order: its mark, a bar, % used and the tightest window's reset; a click opens every window.
+const UM = {list: [], pop: null, at: "", hint: "", view: (() => { try { return localStorage.getItem("usageView") === "compact" ? "compact" : "detailed" } catch { return "detailed" } })()};
+const UM_STALE = 600;  // seconds: older windows say how old they are
+function umEl(tag, cls, ...kids){ const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids) if (k != null && k !== false) e.append(k); return e }
+const umMark = id => ({claude: "claude", codex: "openai", agy: "agy", gemini: "agy"}[id] || "terminal");
+const umTone = pct => pct >= 100 ? "full" : pct >= 80 ? "near" : "";  // amber near the limit, red at it
+const umTight = p => (Array.isArray(p.windows) ? p.windows : []).reduce((a, w) => !a || w.pct > a.pct ? w : a, null);
+const umStale = p => p.at > 0 && Date.now() / 1000 - p.at > UM_STALE;
+function umIn(t){  // the time until an epoch, short: 45m, 3h 10m, 2d 4h
+  if (!(t > 0)) return "";
+  const s = t - Date.now() / 1000; if (s <= 60) return "now";
+  const m = Math.ceil(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
+}
+function umAgo(at){ const s = Date.now() / 1000 - at; return !(s >= 0) ? "" : s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago` }
+function umBar(pct){ const b = umEl("span", "ubar"), i = umEl("i"); i.style.width = Math.max(0, Math.min(100, pct)) + "%"; b.append(i); if (umTone(pct)) b.dataset.tone = umTone(pct); return b }
+function umSays(p){  // a meter's words: its tooltip and accessible label
+  const w = umTight(p), name = p.name + (p.plan ? ` (${p.plan})` : "");
+  if (p.state === "na" || (p.state !== "failed" && !w)) return `${name}: usage n/a` + (p.note ? `\n${p.note}` : "");
+  if (p.state === "failed" && !w) return `${name}: refresh failed` + (p.note ? `\n${p.note}` : "");
+  const lines = [name, ...p.windows.map(x => `${x.label}: ${Math.round(x.pct)}% used` + (x.resets ? `, resets in ${umIn(x.resets)}` : ""))];
+  if (p.state === "failed") lines.push(`Refresh failed: ${p.note || "no answer"}. These are from ${umAgo(p.at)}.`);
+  else if (umStale(p)) lines.push(`As of ${umAgo(p.at)}` + (p.note ? ` (${p.note})` : ""));
+  return lines.join("\n");
+}
+function umMeter(p){
+  const w = umTight(p), b = umEl("button", "um"), says = umSays(p);
+  Object.assign(b, {type: "button", title: says}); b.dataset.id = p.id; b.dataset.state = p.state;
+  b.setAttribute("aria-label", says.replace(/\n/g, ". ")); b.setAttribute("aria-haspopup", "dialog"); b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === p.id));
+  b.append(dsIcon(umMark(p.id), 12, {cls: "umk"}));
+  if (p.state === "failed" && !w) b.append(umEl("span", "uw", "Refresh failed"));
+  else if (!w || p.state === "na") b.append(umEl("span", "uw", "n/a"));
+  else {
+    b.append(umBar(w.pct), umEl("span", "upct", `${Math.round(w.pct)}%`)); if (w.resets) b.append(umEl("span", "uleft", umIn(w.resets)));
+    if (p.state === "failed") b.append(dsIcon("alert", 12, {cls: "uerr"})); else if (umStale(p)) b.classList.add("stale");
+  }
+  b.addEventListener("click", e => { e.stopPropagation(); umToggle(b) });
+  return b;
+}
+function umMeters(list){  // the footer's meters, or null when no agent reports
+  UM.list = Array.isArray(list) ? list.filter(p => p && p.id && ["ok", "failed", "na"].includes(p.state)) : [];
+  if (UM.pop) umFill(UM.pop);
+  if (!UM.list.length) { if (UM.pop) umClose(); return null }
+  const s = umEl("span", "ums"); s.setAttribute("role", "group"); s.setAttribute("aria-label", "Plan usage");
+  s.append(...UM.list.map(umMeter)); return s;
+}
+function umNote(p){
+  if (p.state === "na") return umEl("div", "unote", dsIcon("info", 12), `n/a: ${p.note || "this agent reports no plan usage"}`);
+  if (p.state === "failed") return umEl("div", "unote bad", dsIcon("alert", 12), `Refresh failed: ${p.note || "no answer"}` + (umTight(p) ? `. From ${umAgo(p.at)}.` : ""));
+  if (umStale(p)) return umEl("div", "unote", dsIcon("waiting", 12), `As of ${umAgo(p.at)}` + (p.note ? `: ${p.note}` : ""));
+  if (!umTight(p)) return umEl("div", "unote", dsIcon("info", 12), "No limit windows reported");
+  return null;
+}
+function umRow(p){
+  const w = umTight(p), r = umEl("div", "urow"); r.dataset.id = p.id; r.dataset.state = p.state;
+  if (UM.view === "compact") {
+    r.classList.add("c"); r.title = umSays(p);
+    r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
+    if (w && p.state !== "na") r.append(umBar(w.pct), umEl("span", "upct", `${Math.round(w.pct)}%`), umEl("span", "ur", w.resets ? umIn(w.resets) : ""));
+    else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
+    return r;
+  }
+  r.append(umEl("div", "urh", dsIcon(umMark(p.id), 16, {cls: "umk"}), umEl("b", "", p.name), p.plan ? umEl("span", "uplan", p.plan) : null, umEl("span", "sp"),
+    w && w.resets && p.state !== "na" ? umEl("span", "urr", `Resets in ${umIn(w.resets)}`) : null));
+  if (p.state !== "na") for (const x of p.windows || [])
+    r.append(umEl("div", "uwin", umEl("span", "ul", x.label), umBar(x.pct), umEl("span", "upct", `${Math.round(x.pct)}%`), umEl("span", "ur", x.resets ? `in ${umIn(x.resets)}` : "")));
+  const n = umNote(p); if (n) r.append(n);
+  return r;
+}
+function umFill(pop){
+  pop.classList.toggle("compact", UM.view === "compact"); pop.replaceChildren();
+  const seg = umEl("div", "useg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Detail");
+  for (const [k, label] of [["detailed", "Detailed"], ["compact", "Compact"]]) {
+    const s = umEl("button", "", label); s.type = "button"; s.dataset.view = k; s.setAttribute("role", "tab"); s.setAttribute("aria-selected", String(UM.view === k));
+    s.addEventListener("click", e => { e.stopPropagation(); UM.view = k; try { localStorage.setItem("usageView", k) } catch {} umFill(pop) });
+    seg.append(s);
+  }
+  pop.append(umEl("div", "uh", umEl("span", "ut", "Plan usage"), seg), umEl("div", "urows", ...UM.list.map(umRow)),
+    umEl("div", "ufoot", "Every configured agent, in dispatch order. Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
+}
+function umSync(){ document.querySelectorAll(".um").forEach(b => b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === b.dataset.id))) }
+function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; umSync() }
+function umToggle(anchor){
+  if (UM.pop) return umClose();
+  UM.at = anchor.dataset.id; const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Plan usage");
+  pop.addEventListener("click", e => e.stopPropagation());
+  umFill(pop); document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + "px";
+  pop.style.bottom = Math.max(8, innerHeight - r.top + 8) + "px";
+  umSync(); pop.querySelector(".useg [aria-selected=true]")?.focus({preventScroll: true});
+}
+addEventListener("click", () => umClose());
+addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
+function basementFoot(list){  // the Basement's footer: shown once an agent reports, and the terminals refit to the room left
+  const f = $("bfoot"), um = umMeters(list), was = f.hidden;
+  f.replaceChildren(...(um ? [um] : [])); f.hidden = !um;
+  if (was !== f.hidden) setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0);
+}
+setInterval(() => { if (!document.hidden && UM.list.length) basementFoot(UM.list) }, 30000);  // the reset countdowns
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
 let slide = .32, sliding, slideTimer;  // seconds: Settings → General → Sidebar slide (term.slide); 0 or Reduce Motion: a cut. DESIGN.md §7: drawer, 320ms
@@ -2409,7 +2548,7 @@ window.term = {
   closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; return out },
-  workspaces: o => { trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false); const was = JSON.stringify(acctCfg); merge(); firstShell();
+  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false); const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     syncPanes(o?.panes);
