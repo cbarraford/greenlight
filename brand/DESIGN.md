@@ -786,6 +786,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - Items are rows. Tables use tabular figures with tone shown by a glyph (bad / now / ok), not by row tint.
 - **Eyebrow:** a `label` in `fg.muted`, sentence case. No uppercase, no tracking.
 - **Screen text:** Chief's `[screen]` detail, under the spoken gist. The gist is a `title-sm` lead; the detail reads as a page at `layout.measure`, top-aligned: headings `strong`, lists with `fg.muted` markers, inline code `code` on `element.rest`, fenced code on `bg.sunken`. Markdown is read for structure only: everything lands as text, links as their words.
+- **Streaming** (#208): the screen text draws while Chief is still speaking. Settled blocks never re-flow; the last one updates in place and new ones append, with no scroll reset. A 2×13px caret in `accent.solid` sits on the block being written and goes when the turn ends. A half-written marker (`**`, a backtick, a link) waits for its close. A new block or list item rises in once (opacity and a 4px rise at `fast`/`out`), with no motion under reduced motion. Every card is top-aligned. The voice window shows no "said" caption under the stage: Chief's words are on it.
 - **Charts:** follow §10.10 and the dataviz skill. The 8-hex hard-coded `PAL` becomes neutral steps plus the accent.
 - **Motion:** content enters at `base`/`out` with a 4px rise. The listening cursor blinks only while listening and stops under reduced motion.
 - **Iframes:** each one gets the theme variables, as today.

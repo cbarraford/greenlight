@@ -42,7 +42,7 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:var(--ds-type-body-copy);font-family:var(--font);letter-spacing:var(--ds-type-body-copy-track);-webkit-font-smoothing:antialiased;overflow:auto}
-#s{min-height:100%;padding:var(--ds-space-24);display:flex;flex-direction:column;justify-content:center;gap:var(--ds-space-8);
+#s{min-height:100%;padding:var(--ds-space-24);display:flex;flex-direction:column;justify-content:flex-start;gap:var(--ds-space-8);  /* top-aligned (issue 208): text grows down, never jumps */
   animation:in var(--ds-duration-base) var(--ds-easing-out)}
 @keyframes in{from{opacity:0;transform:translateY(4px)}}
 .eyebrow{font:var(--ds-type-label);font-family:var(--font);color:var(--dim)}
@@ -134,6 +134,10 @@ ol.life li span{color:var(--dim)}
 .doc b{font-weight:600}
 .doc p.quote{border-left:2px solid var(--line);padding-left:var(--ds-space-12);color:var(--dim)}
 .doc hr{width:100%;border:0;border-top:1px solid var(--line);margin:var(--ds-space-4) 0}
+/* Streaming (issue 208): a block or list item that just arrived rises in once; the caret sits on the one being written. */
+.doc .fresh{animation:rise var(--ds-duration-fast) var(--ds-easing-out)}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}}
+.caret{display:inline-block;width:2px;height:13px;margin-left:var(--ds-space-2);vertical-align:-2px;background:var(--accent)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -147,6 +151,7 @@ ol.life li span{color:var(--dim)}
 }
 @media (prefers-reduced-motion: reduce){
   #s{animation:fade var(--ds-duration-fast) linear}
+  .doc .fresh{animation:none}
   .listening .cursor{animation:none}
 }
 @keyframes fade{from{opacity:0}}
@@ -292,6 +297,51 @@ function blocks(md){
   flush();
   return out;
 }
+// The stream's markdown with a trailing unclosed marker held back (issue 208): a lone ** or backtick, or a link still being
+// written, waits for its close, so raw markdown never flashes. Inside an open code fence everything shows as it comes.
+function settled(md){
+  const lines = str(md).split("\n");
+  if (lines.filter(l => /^\s*`{3,}/.test(l)).length % 2) return lines.join("\n");
+  let l = lines.pop();
+  const cut = i => { if (i >= 0) l = l.slice(0, i); };
+  if ((l.match(/`/g) || []).length % 2) cut(l.lastIndexOf("`"));
+  if ((l.match(/\*\*/g) || []).length % 2) cut(l.lastIndexOf("**"));
+  const open = l.lastIndexOf("[");
+  if (open >= 0 && !/^\[[^\]]*\]\([^)]*\)/.test(l.slice(open)) && !/^\[[^\]]*\][^(]/.test(l.slice(open))) cut(open);  // [x, [x], [x](u
+  return lines.concat(l.trimEnd() ? [l] : []).join("\n");
+}
+const bare = e => e.className.replace(/\bfresh\b/, "").trim();
+// One block of the page brought up to date in place: the same element keeps its place, so nothing above it moves; a list keeps
+// its items and adds the new ones (which rise in). Another kind of block takes its place.
+function patch(old, nw){
+  if (old.tagName !== nw.tagName || bare(old) !== bare(nw)) { nw.classList.add("fresh"); old.replaceWith(nw); return; }
+  if (old.tagName === "UL" || old.tagName === "OL") {
+    const a = [...old.children], b = [...nw.children];
+    b.forEach((li, j) => { if (!a[j]) { li.classList.add("fresh"); old.append(li); } else if (a[j].textContent !== li.textContent) a[j].replaceChildren(...li.childNodes); });
+    a.slice(b.length).forEach(li => li.remove());
+    if (nw.start > 1) old.start = nw.start;
+    return;
+  }
+  if (old.textContent !== nw.textContent || old.childElementCount !== nw.childElementCount) old.replaceChildren(...nw.childNodes);
+}
+// The page's blocks (the lead aside) set to `nodes`: settled ones kept, the last patched, new ones appended.
+function patchDoc(s, lead, nodes){
+  let le = s.querySelector(":scope > .lead");
+  if (lead && !le) { le = $("p", "lead fresh"); s.prepend(le); }
+  if (le && !lead) le.remove(); else if (le && le.textContent !== lead) le.textContent = lead;
+  const kids = [...s.children].filter(e => !e.classList.contains("lead"));
+  nodes.forEach((n, i) => { if (!kids[i]) { n.classList.add("fresh"); s.append(n); } else patch(kids[i], n); });
+  kids.slice(nodes.length).forEach(e => e.remove());
+}
+// The caret on the block being written: the last one, down to its last item or cell. None once the stream ends.
+function caret(s, on){
+  s.querySelectorAll(".caret").forEach(c => c.remove());
+  if (!on) return;
+  let t = s.lastElementChild;
+  if (!t) return;
+  while (t.lastElementChild && !["CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
+  t.append($("span", "caret"));
+}
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
@@ -354,11 +404,17 @@ window.stage = {
     const lg = $("div", "legend"); if (ser.length > 1 || kind === "pie") legend.forEach(([c, t]) => { const d = $("span", null, t), i = $("i"); i.style.background = c; d.prepend(i); lg.append(d) });
     show((o.sub ? [$("div", "eyebrow", str(o.sub))] : []).concat([$("h1", null, str(o.title)), g], lg.children.length ? [lg] : [], o.note ? [$("div", "foot", str(o.note))] : []));
   },
-  // Chief's [screen] text under the spoken gist: {lead, md}. Markdown is read for its structure; everything lands as text.
+  // Chief's [screen] text under the spoken gist: {lead, md, live}. Markdown is read for its structure; everything lands as text.
+  // live (issue 208): the reply is still being written. The first such call draws the page; each later one keeps the settled
+  // blocks, patches the last in place and appends new ones, with no reset of the scroll. A call without live ends the stream.
   text(o){
     o = o && typeof o === "object" ? o : {};
-    const lead = str(o.lead).trim(), body = blocks(o.md);
-    show((lead ? [$("p", "lead", lead)] : []).concat(body), "doc");
+    const lead = str(o.lead).trim(), live = o.live === true, md = live ? settled(o.md) : o.md, s = document.getElementById("s");
+    if (s.classList.contains("streaming")) patchDoc(s, lead, blocks(md));
+    else show((lead ? [$("p", "lead", lead)] : []).concat(blocks(md)), "doc");
+    const now = document.getElementById("s");
+    now.classList.toggle("streaming", live);
+    caret(now, live);
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){

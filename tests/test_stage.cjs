@@ -198,5 +198,56 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
   await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
   assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
+  // streaming (issue 208): the [screen] text drawn as it's written. Settled blocks keep their nodes, the last is patched in
+  // place, new ones are appended and rise in; the scroll stays; a caret on the block being written; half-written markdown waits.
+  await p.setViewportSize({ width: 640, height: 720 });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First para", live: true }));
+  assert.equal(await p.locator("#s.doc.streaming").count(), 1);
+  assert.equal(await p.locator(".doc .caret").count(), 1);
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
+  await p.evaluate(() => { document.querySelector(".doc .lead").dataset.mark = "lead"; document.querySelector(".doc p:not(.lead)").dataset.mark = "p1"; });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First paragraph.\n\n- one\n- tw", live: true }));
+  assert.equal(await p.getAttribute(".doc .lead", "data-mark"), "lead");
+  assert.equal(await p.getAttribute(".doc p:not(.lead)", "data-mark"), "p1");  // patched in place, not redrawn
+  assert.equal(await p.textContent(".doc p:not(.lead)"), "First paragraph.");
+  assert.equal(await p.locator(".doc p.fresh:not(.lead)").count(), 0);  // the patched block doesn't rise again
+  assert.equal(await p.locator(".doc ul.fresh").count(), 1);  // the new list rises in
+  assert.equal(await p.$eval(".doc .caret", c => c.parentElement.textContent), "tw");  // on the item being written
+  await p.evaluate(() => { document.querySelector(".doc li").dataset.mark = "li1"; });
+  await p.evaluate(() => stage.text({ lead: "Two reviews need you.", md: "First paragraph.\n\n- one\n- two\n- three **bo", live: true }));
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "li1");  // earlier items keep their nodes
+  assert.deepEqual(await p.locator(".doc li").allTextContents(), ["one", "two", "three"]);  // the unclosed ** waits
+  assert.equal(await p.locator(".doc li.fresh").count(), 1);
+  for (const [md, want] of [["see `scr", "see"], ["open [!12](https://x/1", "open"], ["open [!12", "open"], ["a [!12](u) b", "a !12 b"],
+                            ["**done** and `x`", "done and x"], ["```\nmake **", "make **"]]) {
+    await p.evaluate(m => stage.text({ md: "", live: false }) || stage.text({ md: m, live: true }), md);
+    assert.equal((await p.textContent("#s")).trim(), want, md);
+  }
+  // a long stream keeps its scroll: no jump back to the top while it grows
+  await p.evaluate(() => stage.text({ lead: "Long.", md: Array.from({ length: 40 }, (_, i) => `- item ${i}`).join("\n"), live: true }));
+  await p.evaluate(() => { document.body.scrollTop = 200; window.scrollTo(0, 200); });
+  const before = await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop));
+  await p.evaluate(() => stage.text({ lead: "Long.", md: Array.from({ length: 44 }, (_, i) => `- item ${i}`).join("\n"), live: true }));
+  assert.ok(before > 0 && await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop)) === before, "streaming keeps the scroll");
+  // the end: same page as a one-shot draw of the whole text, the caret gone, the stream closed
+  const md = "Intro.\n\n## Next\n\n1. **merge** !12\n2. rebase `main`\n\n| a | b |\n|---|---|\n| 1 | 2 |";
+  await p.evaluate(m => { stage.wait("One minute", ""); for (let i = 1; i <= m.length; i += 7) stage.text({ lead: "Gist.", md: m.slice(0, i), live: true });
+                          stage.text({ lead: "Gist.", md: m }); }, md);
+  const streamed = await p.$eval("#s", e => [e.className, e.innerHTML.replace(/ class="fresh"| fresh/g, "")]);
+  await p.evaluate(m => { stage.wait("One minute", ""); stage.text({ lead: "Gist.", md: m }); }, md);
+  const oneShot = await p.$eval("#s", e => [e.className, e.innerHTML]);
+  assert.deepEqual(streamed, oneShot, "a finished stream leaves the card a one-shot draw does");
+  assert.equal(await p.locator(".caret").count(), 0);
+  // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).justifyContent), "flex-start");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "a", live: true }); stage.text({ md: "a\n\nb", live: true }); });
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationName), "rise");
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationIterationCount), "1");
+  await p.emulateMedia({ reducedMotion: "reduce" });
+  assert.equal(await p.$eval(".doc p.fresh", e => getComputedStyle(e).animationName), "none");
+  await p.emulateMedia({ reducedMotion: "no-preference" });
+  // markup in a streamed reply is text, as in a one-shot draw
+  await p.evaluate(() => stage.text({ md: "<img src=x onerror=alert(1)> and **<b>x</b>**", live: true }));
+  assert.equal(await p.locator(".doc img, .doc p > b > b").count(), 0);
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

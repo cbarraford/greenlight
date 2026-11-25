@@ -889,6 +889,36 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
               late2.count == 2 && late2.allSatisfy { $0["turn"] as? Int == m2.turn && ($0["at"] as? Double ?? 0) >= 10 }
               && late2.first?["n"] != nil && late2.last?["n"] == nil && v.turnNo == m2.turn + 1)
         v.turnAt = nil
+        // issue 208 phase 1: the [screen] text streams to the stage while it's written: its first part at once (Chief's, so Haiku's
+        // card doesn't land, and once in the trail), later parts coalesced to the newest; the turn's end closes the stream
+        let sm = Run("stream?"); c.run = sm; v.on = true; v.isLive = false; v.began(sm)
+        sm.live = "Two need you.\n[screen]\n- one"; v.live(sm)
+        let firstOut = v.streamed && v.chiefDrew && v.streamDue
+        RunLoop.main.run(until: Date() + 0.05)
+        sm.live = "Two need you.\n[screen]\n- one\n- two"; v.live(sm)
+        sm.live = "Two need you.\n[screen]\n- one\n- two\n- three\nOpt"; v.live(sm)
+        let coalesced = (v.streamNext?["md"] as? String) == "- one\n- two\n- three" && v.streamNext?["live"] as? Bool == true
+            && v.streamNext?["lead"] as? String == "Two need you."
+        RunLoop.main.run(until: Date() + 0.25)
+        let sent = v.streamNext == nil && !v.streamDue
+        v.finished(staged(sm.live + "ions: merge | wait"), "Two need you.", detail: "- one\n- two\n- three"); c.run = nil
+        Diag.q.sync {}
+        let streamEvents = ((try? String(contentsOf: Diag.url, encoding: .utf8)) ?? "").split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["turn"] as? Int == v.turnNo }
+        check("voice: the [screen] text streams to the stage as it's written, coalesced, then the turn's end closes it (issue 208)",
+              firstOut && coalesced && sent && !v.streamed
+              && streamEvents.map { "\($0["draw"] ?? "")/\($0["live"] ?? false)" } == ["wait/false", "text/1", "text/false"])
+        // a ```stage block outranks the stream: no [screen] text is streamed over it, and a stopped turn's send doesn't land
+        let sb = Run("block?"); c.run = sb; v.began(sb)
+        sb.live = "Here.\n```stage\n{\"title\":\"x\",\"items\":[\"a\"]}\n```\n[screen]\n- a"; v.live(sb)
+        let blockWins = !v.streamed && v.chiefDrew
+        let sf = Run("fail?"); c.run = sf; v.began(sf); sf.live = "Hi.\n[screen]\n- a"; v.live(sf)
+        v.live(sf); v.failed("Stopped."); let stopped = !v.streamed && v.streamNext == nil
+        c.run = nil; v.hush()
+        check("voice: a stage block outranks the streamed text, and a failed turn ends its stream (issue 208)", blockWins && stopped)
+        check("voice: a streaming [screen] text holds back its Options line and a line that may yet become one (issue 208)",
+              streamable("- a\nOptions: x | y") == "- a" && streamable("- a\nOp") == "- a" && streamable("- a\n`options:") == "- a"
+              && streamable("- a\nOpen it") == "- a\nOpen it" && streamable("Options:") == "" && streamable("- a\n\n") == "- a")
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
