@@ -1103,7 +1103,11 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         var bp2 = bp; bp2[0]["life"] = ["pile": "done"]; bp2[1]["life"] = ["pile": "done"]; bp2[4]["life"] = ["pile": "done"]
         v.refs(bp2); let emptied = !v.boardUp  // nothing left: back to Listening
         c.pucks = bp; v.listening(); let br = Run("x?"); c.run = br; v.began(br); let turnEnds = !v.boardUp; c.run = nil; v.hush()
-        check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening, a turn takes it over (issue 208)", boardDrawn && emptied && turnEnds)
+        c.run = nil; c.pucks = []; v.listening(); let startsListening = v.idleStage && !v.boardUp
+        v.refs(bp); let boardReturns = v.boardUp  // something needs you now: the board comes back
+        v.took(); v.refs(bp); let answerKept = !v.idleStage && !v.boardUp; v.chiefDrew = false  // a watch turn's answer isn't drawn over
+        check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening and one with something back to the board, a turn or an answer takes it over (issue 208)",
+              boardDrawn && emptied && turnEnds && startsListening && boardReturns && answerKept)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

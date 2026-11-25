@@ -187,23 +187,26 @@ final class Voice: NSObject, ObservableObject {
         refsSent = now
         board(pucks)
     }
-    func wait(_ title: String, _ sub: String) { instantUp = false; boardUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
+    func wait(_ title: String, _ sub: String) { instantUp = false; idleStage = false; boardUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
         refsSent = nil; if let c = core { refs(c.pucks) }  // a new page (or a new voice mode) starts from the whole map
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
-        else if let b = core.flatMap({ idleBoard($0.pucks) }) { put("stage.spec", [b], by: "app"); boardUp = true }  // what needs you, not a bare Listening
-        else { wait("Listening", "Say something, or “goodbye” to stop.") }
+        else { idleStage = true; boardUp = false; board(core?.pucks ?? [], first: true) }  // what needs you, or Listening when nothing does
     }
-    /// The idle board is what the stage shows (#208): each snapshot redraws it in place (the same card: only what changed moves).
-    var boardUp = false
-    func board(_ pucks: [[String: Any]]) {
-        guard on, boardUp, core?.run == nil else { return }
-        if let b = idleBoard(pucks) { js("stage.spec", [b]) } else { wait("Listening", "Say something, or “goodbye” to stop.") }
+    /// The stage is idle (#208): voice mode's start, before any turn draws. Each snapshot redraws the board in place (the same
+    /// card: only what changed moves), or goes to Listening when nothing's left, and back to the board when something is.
+    var idleStage = false, boardUp = false
+    func board(_ pucks: [[String: Any]], first: Bool = false) {
+        guard on, idleStage, core?.run == nil else { return }
+        let listen: [Any] = ["Listening", "Say something, or “goodbye” to stop."]
+        if let b = idleBoard(pucks) { if boardUp { js("stage.spec", [b]) } else { put("stage.spec", [b], by: "app") }; boardUp = true }  // the trail: when it comes, not each snapshot
+        else if first { put("stage.wait", listen, by: "app") }
+        else if boardUp { boardUp = false; put("stage.wait", listen, by: "app") }
     }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; instantUp = true; boardUp = false; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
+        drawSeq += 1; shown = true; instantUp = true; idleStage = false; boardUp = false; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
@@ -427,7 +430,7 @@ final class Voice: NSObject, ObservableObject {
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; chiefDrew = false; shown = false; instantUp = false; boardUp = false; muted = false; ending = false; endStream(); stageOptions = []
+        said = 0; chiefDrew = false; shown = false; instantUp = false; idleStage = false; boardUp = false; muted = false; ending = false; endStream(); stageOptions = []
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
@@ -558,7 +561,7 @@ final class Voice: NSObject, ObservableObject {
         else { took(); put("stage.text", [["lead": plain(spoken), "md": ""]], by: "chief") }  // no [screen] part: the gist is the card, no second request
     }
     /// Chief's own drawing (a ```stage block, the [screen] text or the gist) takes the stage: the instant card, even on its way, doesn't land.
-    func took() { chiefDrew = true; shown = true; instantUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
+    func took() { chiefDrew = true; shown = true; instantUp = false; idleStage = false; boardUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing (a watch turn's too) is the reply: the strip goes, and the board
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false; endStream()
