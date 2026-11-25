@@ -264,6 +264,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.$eval(".doc ol", e => e.start), 1);
   await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "````md\n```\n**raw", live: true }); });
   assert.equal(await p.textContent(".doc pre"), "```\n**raw");
+  await p.evaluate(() => { stage.wait("x", ""); stage.text({ md: "````md\ncode\n```", live: true }); });
+  assert.equal(await p.textContent(".doc pre"), "code");
   // cards are top-aligned, and new lines rise in once (opacity and transform), with no motion under reduced motion
   await p.evaluate(() => stage.spec({ title: "short", kind: "list", items: [] }));  // a short card sits at the top, not centred
   assert.ok(await p.$eval("#s h1", e => e.getBoundingClientRect().top) < 40, "top-aligned");

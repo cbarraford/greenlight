@@ -339,9 +339,9 @@ function settled(md){
   for (const x of lines) {
     const t = x.trim(), m = !openFence && t.match(/^(`{3,})[^`]*$/);
     if (m) openFence = m[1].length;
-    else if (openFence && new RegExp("^`{" + openFence + ",}$").test(t)) openFence = 0;
+    else if (openFence && /^`+$/.test(t) && t.length >= openFence) openFence = 0;
   }
-  if (openFence) { if (/^\s*`{1,2}$/.test(lines[lines.length - 1])) lines.pop(); return lines.join("\n"); }
+  if (openFence) { const last = lines[lines.length - 1].trimStart(); if (/^`+$/.test(last) && last.length < openFence) lines.pop(); return lines.join("\n"); }
   let l = lines.pop(), was;
   do {
     was = l;
