@@ -895,6 +895,17 @@ func statusLine(_ raw: String, shown: [String]) -> String? {
 
 /// The reply's [screen] detail is on its way: the block streaming now has one and no step has started since its text (else it was
 /// commentary before more work, and the quiet that follows still gets lines).
+/// How often a streaming [screen] text is sent to the stage at most (#208): the page isn't called per token.
+let streamEvery = 0.1
+/// The [screen] text as far as it can be shown while it streams: its Options line (the buttons, never on the stage) and a last
+/// line that may yet become one ("Opt…") held back, as is a fence that may yet open a ```stage block (never on the page as code);
+/// the page holds back half-written markdown itself.
+func streamable(_ md: String) -> String {
+    var lines = md.components(separatedBy: "\n")
+    let raw = lines.last?.trimmingCharacters(in: .whitespaces).lowercased() ?? "", l = raw.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+    if (!l.isEmpty && (l.hasPrefix("options:") || "options:".hasPrefix(l))) || (raw.hasPrefix("```") && "```stage".hasPrefix(raw)) { lines.removeLast() }  // or a fence that may open a ```stage block
+    return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+}
 func screenStreaming(_ r: Run) -> Bool {
     staged(r.live).screen != nil && !(r.steps.last.map { $0.start > r.textAt } ?? false)
 }
@@ -1306,7 +1317,6 @@ struct Live {
     var talk: Talk { voiceTalk(speaking: v.speaking > 0, thinking: c.run != nil, micMuted: v.micMuted) }
     var label: String { voiceTalkLabel(talk, micMuted: v.micMuted) }
     var hint: String { v.micMuted ? mutedHint : talk == .speaking ? (!v.fallback.isEmpty && !v.isLive ? "Apple's voice: \(v.fallback)" : voiceInterruptible(live: v.isLive, vp: v.vp, bargeIn: v.bargeIn) ? "talk to interrupt" : "speaking") : talk == .thinking ? "say “stop” to cancel" : "say “goodbye” to end voice mode" }
-    var said: String { v.captions ? v.caption : "" }
     var heard: String { v.captions ? v.heard : "" }
     var frac: Double { c.ctxFull }
     var pct: Int { Int((frac * 100).rounded()) }
@@ -1456,15 +1466,10 @@ struct DefaultLook: View {
                 Text(s.hint).font(ds(DS.TypeRole.caption)).foregroundColor(muted).lineLimit(1)
             }
             s.stage(l, r: DS.Radius.md, pad: DS.Space.s8, border: hx(l.line))
-            if !s.said.isEmpty || !s.heard.isEmpty {
-                VStack(alignment: .leading, spacing: DS.Space.s8) {
-                    if !s.heard.isEmpty {
-                        HStack { Spacer(minLength: DS.Space.s48)
-                            Text(s.heard).font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(hx(l.text)).lineLimit(4)
-                                .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(hx(l.card))) }
-                    }
-                    if !s.said.isEmpty { Text(s.said).font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(hx(l.text)).lineLimit(4).frame(maxWidth: .infinity, alignment: .leading) }
-                }
+            if !s.heard.isEmpty {  // your words; Chief's are on the stage (#208: no "said" caption under it)
+                HStack { Spacer(minLength: DS.Space.s48)
+                    Text(s.heard).font(ds(DS.TypeRole.bodyCopy, face: chatFont)).foregroundColor(hx(l.text)).lineLimit(4)
+                        .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8).background(RoundedRectangle(cornerRadius: DS.Radius.md).fill(hx(l.card))) }
             }
             s.activity(l)
             HStack(spacing: DS.Space.s12) {
@@ -1499,7 +1504,6 @@ struct PhosphorLook: View {
                 Text("$ stage --live").foregroundColor(faint)
                 s.stage(l, r: 0, pad: 0)
                 if !s.heard.isEmpty { Text("\(Text("you> ").foregroundColor(faint))\(Text(s.heard).foregroundColor(hx(l.you)))") }
-                if !s.said.isEmpty { Text("\(Text("\(s.name.lowercased())> ").foregroundColor(faint))\(s.said)\(s.talk == .speaking ? " █" : "")") }
                 s.activity(l, accent: ink, size: DS.TypeRole.code.size)
             }.lineLimit(4).padding(DS.Space.s16)
             HStack(spacing: DS.Space.s12) { Text(s.talk == .speaking ? s.name.lowercased() : s.talk == .listening ? "you" : s.talk == .muted ? "muted" : "wait").foregroundColor(faint); Glyphs(m: s.v.meter, talk: s.talk) }

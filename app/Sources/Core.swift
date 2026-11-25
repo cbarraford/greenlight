@@ -1086,7 +1086,7 @@ final class Core: ObservableObject {
             if !r.stopping { voice.status(byline(r, now: Date(), lead: true)) }
             if n > 0 { log(.chief, name, .status, "plan: \(k) of \(n) done" + (t.isEmpty ? "" : " · \(t)")) }
         case "think": log(.chief, name, .think, j["delta"] as? String ?? "")
-        case "text_reset": r.open = r.open ?? staged(r.live).open; r.live = ""; voice.said = 0  // an [open: …] in a block the next one replaces still counts
+        case "text_reset": r.open = r.open ?? staged(r.live).open; r.live = ""; voice.said = 0; voice.textReset()  // an [open: …] in a block the next one replaces still counts
         case "text":  // a whole message (codex, opencode) shows but isn't spoken yet: it may be a progress note the reply restates;
             r.live += j["delta"] as? String ?? ""; r.textAt = Date()  // finished() speaks the reply (from said = 0) at done
             if !r.watch && !r.checkIn && j["whole"] as? Bool != true { voice.live(r) }

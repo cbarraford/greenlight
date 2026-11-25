@@ -473,7 +473,7 @@ def usage(events):
 
 def stage(events):
     """The voice stage (#208): draws by who asked (chief, fast, dwim, app) and by draw, and per turn the seconds from its start
-    to its first card and to its last (a wait card is neither; a turn with only wait cards isn't timed). `fast_turns` is how many turns the fast model drew in."""
+    to its first card and to its last (a wait card or the turn's held card is neither; a turn with only those isn't timed). `fast_turns` is how many turns the fast model drew in."""
     by: dict[str, int] = {}
     draws: dict[str, int] = {}
     turns: dict[tuple, dict[str, Any]] = {}
@@ -488,7 +488,7 @@ def stage(events):
         if "turn" not in e or not isinstance(at, (int, float)) or isinstance(at, bool):
             continue
         t = turns.setdefault((e.get("run"), e.get("turn")), {"first": None, "last": None, "fast": False})
-        if e.get("draw") != "wait":  # a wait card (the turn's start, or "Listening" after a stop) isn't the answer
+        if e.get("draw") not in ("wait", "hold"):  # a wait card ("Listening" after a stop) or the held card isn't the answer
             t["first"] = at if t["first"] is None else min(t["first"], at)
             t["last"] = at if t["last"] is None else max(t["last"], at)
         t["fast"] = t["fast"] or e.get("by") == "fast"
