@@ -137,6 +137,11 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     out, _ = log_view.redact("cat /" + "Users/Jane Doe/Payroll 2025/plan.pdf; ls /acme-internal/ ; TOKEN=[abc123]; KEY=[secret]")
     assert "Doe" not in out and "Payroll" not in out and "acme-internal" not in out and "abc123" not in out, out
     assert out.endswith("KEY=[secret]"), out
+    for spaced in ("/" + "Users/Jane Doe/Payroll 2025/plan.pdf", "/" + "Users/Jane Doe", "~/My Project", "/tmp/My Project"):
+        assert log_view.redact(f"cat {spaced}")[0] == "cat [path]", spaced
+    assert log_view.redact("cp /acme/a.txt docs/b.txt")[0] == "cp [path] docs/b.txt", "a lowercase argument after a path stays"
+    assert "def456" not in log_view.redact("API_KEYS=[abc123, def456]")[0]
+    assert log_view.redact("ls /tmp/x\nfoo/bar\t/var/log/syslog\tand/or")[0] == "ls [path]\nfoo/bar\t[path]\tand/or", "a path never runs into the next line"
 
 
 def test_usage_cache_saves_a_growing_sessions_offset(tmp_path, monkeypatch):
@@ -152,7 +157,7 @@ def test_usage_cache_saves_a_growing_sessions_offset(tmp_path, monkeypatch):
 
 def test_redact_leaves_slash_commands_and_endpoints():
     out, _ = log_view.redact(f"> /goal fix the build; run /review now; GET /api/v1/users 200; /bin-x{HOME}/alice")
-    assert out.startswith("> /goal fix the build; run /review now; GET [path] 200; [path]"), out
+    assert out.startswith("> /goal fix the build; run /review now; GET [path] 200; [path]"), out  # a status code isn't a name
 
 
 def test_redact_takes_a_url_whole_brackets_included():

@@ -293,10 +293,11 @@ IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SEG = r"[^\s'\"`:,;)\]]"
 PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|tmp|private|var|etc|opt|srv|mnt|Volumes|workspaces?)(?!{_SEG.replace('[^', '[^/')})(?:/{_SEG}*)?"
                      rf"|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?![\w.@+-]))[\w.@+-]+/{_SEG}*)"
-                     rf"(?:\s[^\s/'\"`:,;)\]]+/{_SEG}*)*")  # a home, a known root, or any path with a 2nd slash but the system's own; not /goal; "Jane Doe/x" goes too
+                     rf"(?: (?:[A-Z][^\s/'\"`:,;)\]]*(?:/{_SEG}*)?|[0-9][^\s/'\"`:,;)\]]*/{_SEG}*))*")  # a home, a known root, or any path with a 2nd slash but the system's own; not
+# /goal; a spaced name goes with it ("Jane Doe/Payroll 2025", "My Project") but a lowercase argument after it stays (docs/b.txt)
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[[^\]\n]*\]|[^\n,;}]+))")  # the whole value: quoted, or to the line's end
 FLAG_RE = re.compile(r"(?i)(--?[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]*)(\s+)(?!-)\S+")  # mysql --password hunter2
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
