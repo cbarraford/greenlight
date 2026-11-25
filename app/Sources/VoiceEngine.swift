@@ -157,7 +157,7 @@ final class Voice: NSObject, ObservableObject {
         Diag.event("stage", e.merging(extra) { a, _ in a })
     }
     var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
-    func wait(_ title: String, _ sub: String) { put("stage.wait", [title, sub], by: "app") }
+    func wait(_ title: String, _ sub: String) { instantUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
@@ -490,7 +490,7 @@ final class Voice: NSObject, ObservableObject {
     /// turn's own reply draws the stage again, as if the replaced block had drawn nothing.
     func textReset() {
         if streamed, var o = streamLast { o["live"] = false; js("stage.text", [o]) }
-        endStream(); chiefDrew = false; instantUp = false  // what the replaced block drew doesn't stop the reply drawing its own
+        endStream(); chiefDrew = false  // what the replaced block drew doesn't stop the reply drawing its own
     }
     /// The turn's end: say the rest of the gist (the reply before any [screen] line), and show the detail.
     /// With only detail, a short pointer is said, so voice mode never goes silent.
@@ -514,7 +514,7 @@ final class Voice: NSObject, ObservableObject {
         else { took(); put("stage.text", [["lead": plain(spoken), "md": ""]], by: "chief") }  // no [screen] part: the gist is the card, no second request
     }
     /// Chief's own drawing (a ```stage block, the [screen] text or the gist) takes the stage: the instant card, even on its way, doesn't land.
-    func took() { chiefDrew = true; shown = true; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
+    func took() { chiefDrew = true; shown = true; instantUp = false; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false; endStream()
@@ -716,7 +716,7 @@ final class Voice: NSObject, ObservableObject {
     var idle: Bool { !on && !starting && !ending && !vp && !engine.isRunning }
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
-        hush(); clearStatus(); endStream()  // a send still on its way doesn't land on the next voice mode's stage
+        hush(); clearStatus(); endStream(); instantUp = false  // a send still on its way doesn't land on the next voice mode's stage
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil

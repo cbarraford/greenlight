@@ -1024,8 +1024,16 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.finished(staged("Still green."), "Still green."); let watchGist = v.drawSeq > seqW
         let g8 = Run("label?"); c.run = g8; v.began(g8); g8.live = "Here.\n```stage json"; v.live(g8); let noLabel = !v.chiefDrew && !v.streamed
         g8.live = "Here.\n```stage\n- a"; v.live(g8); let notesLead = v.streamNext?["lead"] as? String == "Here."
+        // the instant card survives a replaced gist-only note; a failed turn's Listening card doesn't keep a later watch gist off
+        let g9 = Run("instant reset?"); c.run = g9; v.began(g9); v.shown = true; v.instantUp = true
+        g9.live = "Let me check. Th"; v.live(g9); v.textReset(); g9.live = "It's the left one. Th"; v.live(g9)
+        let seqK = v.drawSeq; v.finished(staged("It's the left one."), "It's the left one."); let instantKept = !v.streamed && v.drawSeq == seqK
+        let g10 = Run("fail?"); c.run = g10; v.began(g10); v.shown = true; v.instantUp = true; v.failed("Stopped.")
+        let wt3 = Run("watch?"); wt3.watch = true; c.run = wt3; let seqF = v.drawSeq
+        v.finished(staged("All green."), "All green."); let watchAfterFail = v.drawSeq > seqF
+        c.run = nil; v.hush()
         check("voice: after a replaced note, a watch turn, a fence label: the gist still draws, nothing stray shows (issue 208)",
-              gistAfterReset && watchGist && noLabel && notesLead)
+              gistAfterReset && watchGist && instantKept && watchAfterFail && noLabel && notesLead)
         c.run = nil; v.hush(); v.endStream()
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
