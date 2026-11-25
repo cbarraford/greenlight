@@ -985,6 +985,36 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
     return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
 }
 
+/// A ```stage block as the stage draws it (#208): a chart or a catalog card natively, HTML as is, JSON that doesn't parse as what
+/// can be read of it (never raw), and plain notes as markdown under the lead. `by` is who the trail says drew it.
+func stageCall(_ h: String, lead: String = "") -> (f: String, arg: Any, by: String) {
+    let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
+    if let o, isStageChart(o) { return ("stage.chart", o, "chief") }
+    if let card = stageCard(h) { return ("stage.spec", card, "chief") }
+    if let html = stageHTML(h) { return ("stage.html", html, "chief") }
+    if stageJSON(h) != nil { return ("stage.spec", fallbackSpec(h), "app") }
+    return ("stage.text", ["lead": plain(splitOptions(lead).0), "md": h], "chief")
+}
+/// A reply's markdown tables, each whole (its header, rule and rows): the transcript draws them as raw pipes.
+func markdownTables(_ s: String) -> [String] {
+    let lines = s.components(separatedBy: "\n"), rule = #"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$"#
+    var out = [String](), i = 0
+    while i < lines.count {
+        if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|"), i + 1 < lines.count, lines[i + 1].range(of: rule, options: .regularExpression) != nil {
+            var j = i + 2
+            while j < lines.count, lines[j].trimmingCharacters(in: .whitespaces).hasPrefix("|") { j += 1 }
+            out.append(lines[i..<j].map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")); i = j
+        } else { i += 1 }
+    }
+    return out
+}
+/// What a typed reply puts on the chat's canvas (#208): its ```stage block, else its tables; nil for prose alone.
+func canvasCall(_ st: Staged) -> (f: String, arg: Any)? {
+    if let h = st.stage { let c = stageCall(h, lead: st.text); return (c.f, c.arg) }
+    let t = markdownTables(st.shown)
+    return t.isEmpty ? nil : ("stage.text", ["lead": "", "md": t.joined(separator: "\n\n")])
+}
+
 /// The idle board (#208): in place of "Listening", what needs you and what's being worked on, from the snapshot, with no model
 /// call. Each row an MR (or a workspace without one): its ref, what it is, how long since it moved, and one line of why.
 /// Nil when nothing needs you and nothing is being worked on: then the stage just listens.

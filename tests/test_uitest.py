@@ -173,6 +173,24 @@ def verify_chat_and_inbox(ui1: uitest.UITestSession, shot_dir: Path) -> None:
     r_shot = ui1.screenshot(s_chat, window="dashboard")
     assert r_shot["ok"], r_shot
     assert_png(s_chat)
+    # the chat canvas (issue 208 phase 7): no canvas for prose; a typed reply with a table draws it above the transcript and says
+    # so under the reply; the header collapses it, and the choice is kept
+    st = ui1.state()
+    assert st["canvasShown"] is False and st["lastChatCanvas"] is False, st
+    assert ui1.action("sendChat", text="Show the MRs as a uitest-table")["ok"]
+    st = wait_state(ui1, lambda s: not s["coreBusy"] and s.get("lastChatCanvas") is True, desc="a reply that draws the canvas", timeout=20.0)
+    assert st["canvasShown"] is True and "| !12 | passed |" in st["lastChatText"], st
+    s_canvas = shot_dir / "chat-canvas.png"
+    assert ui1.screenshot(s_canvas, window="dashboard")["ok"]
+    assert_png(s_canvas)
+    was = st["canvasCollapsed"]
+    r_tog = ui1.action("toggleCanvas")
+    assert r_tog["ok"] and r_tog["collapsed"] is (not was), r_tog
+    assert ui1.state()["canvasCollapsed"] is (not was)
+    s_canvas_c = shot_dir / "chat-canvas-collapsed.png"
+    assert ui1.screenshot(s_canvas_c, window="dashboard")["ok"]
+    assert ui1.action("toggleCanvas")["collapsed"] is was
+    print(f"ok  chat canvas: a reply with a table draws it, marked under the reply; collapsing toggles and is kept ({s_canvas.stat().st_size} bytes)")
 
     r_clear = ui1.action("chatClear")
     assert r_clear["ok"], r_clear

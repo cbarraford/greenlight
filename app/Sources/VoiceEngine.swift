@@ -104,7 +104,7 @@ final class Voice: NSObject, ObservableObject {
         return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
     }()
 
-    private final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {  // the chat's canvas (#208) uses it too
         let stageURL: URL?
         var ready = false, queued: String?
         init(_ u: URL?) { stageURL = u }
@@ -577,12 +577,7 @@ final class Voice: NSObject, ObservableObject {
     func stage(_ h: String, lead: String = "") {
         guard !chiefDrew || streamed else { return }  // a block that closes after the [screen] text began still outranks it
         endStream(); took()
-        let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
-        if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
-        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // a catalog card or {title, items}: drawn now
-        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") }
-        else if stageJSON(h) != nil { put("stage.spec", [fallbackSpec(h)], by: "app") }  // broken JSON: never shown raw
-        else { put("stage.text", [["lead": plain(splitOptions(lead).0), "md": h]], by: "chief") }  // notes under the gist, as [screen] text is
+        let c = stageCall(h, lead: lead); put(c.f, [c.arg], by: c.by)
     }
 
     // speech
@@ -1476,5 +1471,37 @@ final class LivePreview: ObservableObject {
         live?.close(); live = nil
         node?.stop(); engine?.stop(); node = nil; engine = nil; conv = nil
         closed = true
+    }
+}
+
+
+/// The canvas in typed chat (#208): the stage's own page in a panel above the transcript, drawn when a typed reply has a
+/// ```stage block or a table (which the transcript can't draw). Collapsing it is remembered.
+final class Canvas: ObservableObject {
+    @Published var has = false
+    @Published var collapsed = ud.bool(forKey: "canvasCollapsed") { didSet { ud.set(collapsed, forKey: "canvasCollapsed") } }
+    weak var core: Core?
+    private var nav: Voice.StageNav?, pending = [(String, [Any])]()
+    var queued: Int { pending.count }  // calls waiting for the page (tests)
+    private(set) lazy var web: WKWebView = {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .nonPersistent()
+        let u = page("stage"), n = Voice.StageNav(u); nav = n
+        let v = WKWebView(frame: .zero, configuration: cfg)  // no message handlers: nothing on the canvas can reach the app
+        v.navigationDelegate = n; v.uiDelegate = n
+        v.setValue(false, forKey: "drawsBackground")
+        n.loaded = { [weak self] in self?.flush() }
+        if let u { v.loadFileURL(u, allowingReadAccessTo: u) }
+        return v
+    }()
+    func draw(_ f: String, _ arg: Any) {
+        has = true; pending.append((f, [arg]))
+        if nav?.ready == true { flush() } else { _ = web }
+    }
+    private func flush() {
+        guard let c = core, nav?.ready == true else { return }
+        web.appearance = c.voice.stageAppearance
+        web.evaluateJavaScript("(s => { \(delegate.themeVars()) \(c.voice.look.vars) })(document.documentElement.style)")  // safety-ok: the app's own theme statements, as Voice.js() sends them
+        pending.forEach { web.callJS($0.0, $0.1) }; pending = []
     }
 }

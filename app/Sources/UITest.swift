@@ -257,6 +257,8 @@ final class UITestServer {
                     "lastChatText": app.greenlight.msgs.last?.text ?? "",
                     "lastChatRole": app.greenlight.msgs.last?.role.rawValue ?? "",
                     "lastChatFailed": app.greenlight.msgs.last?.failed ?? false,
+                    "lastChatCanvas": app.greenlight.msgs.last?.canvas ?? false,
+                    "canvasShown": app.greenlight.canvas.has, "canvasCollapsed": app.greenlight.canvas.collapsed,
                     "inboxOpen": app.greenlight.inboxOpen,
                     "inboxConfirm": app.greenlight.inboxConfirm,
                     "waitingCount": app.greenlight.waiting.count,
@@ -348,6 +350,9 @@ final class UITestServer {
                 }
                 app.greenlight.send(text)
                 done(["ok": true])
+            case "toggleCanvas":  // the chat canvas's header (#208): collapse or show it
+                app.greenlight.canvas.collapsed.toggle()
+                done(["ok": true, "collapsed": app.greenlight.canvas.collapsed])
             case "openPalette":
                 app.basement()
                 (app.termWindow.contentView as? WKWebView)?.callJS("window.term && term.palette", [true])

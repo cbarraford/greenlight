@@ -1108,6 +1108,31 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.took(); v.refs(bp); let answerKept = !v.idleStage && !v.boardUp; v.chiefDrew = false  // a watch turn's answer isn't drawn over
         check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening and one with something back to the board, a turn or an answer takes it over (issue 208)",
               boardDrawn && emptied && turnEnds && startsListening && boardReturns && answerKept)
+        // issue 208 phase 7: what a typed reply puts on the chat's canvas, and the reply marked for it; collapsing is kept
+        let tbl = "Here.\n\n| MR | CI |\n|---|:---:|\n| !12 | passed |\n\nAnd\n\n|a|b|\n|-|-|\n| not | a rule |\n| x |"
+        let tc = canvasCall(staged(tbl))
+        check("voice: a typed reply's tables (whole, with their rule) or its stage block go to the chat canvas; prose alone doesn't (issue 208)",
+              tc?.f == "stage.text" && (tc?.arg as? [String: String])?["md"] == "| MR | CI |\n|---|:---:|\n| !12 | passed |"
+              && canvasCall(staged("Just prose, and a | pipe.")) == nil
+              && canvasCall(staged("Chart.\n```stage\n{\"chart\": \"bar\", \"labels\": [\"a\"], \"series\": [{\"values\": [1]}]}\n```"))?.f == "stage.chart"
+              && markdownTables("| a |\n|---|\n| 1 |\n\n| b |\n|---|").count == 2)
+        let cc = Core(session: -9208); cc.voice.on = false
+        var replyText = tbl
+        let savedSSH = sshOverride
+        sshOverride = { remote, _, _, onLine, onExit in  // chat.py's reply, as CoreTests stubs it
+            if remote.contains("chat.py send"), let d = try? JSONSerialization.data(withJSONObject: ["e": "done", "ok": true, "text": replyText]) {
+                onLine(String(decoding: d, as: UTF8.self))
+            }
+            onExit(0); return Process()
+        }
+        cc.send("table please")
+        let marked = cc.msgs.last?.canvas == true && cc.canvas.has
+        replyText = "Prose only."; cc.send("prose please"); let prose = cc.msgs.last?.canvas == false
+        sshOverride = savedSSH
+        let saved = cc.msgs.first { $0.canvas }.map { Msg($0.saved).canvas } == true && !Msg(cc.msgs.last!.saved).canvas  // it survives the transcript's save
+        let before = ud.object(forKey: "canvasCollapsed"); cc.canvas.collapsed = true; let kept = ud.bool(forKey: "canvasCollapsed") && Canvas().collapsed
+        cc.canvas.collapsed = false; if let before { ud.set(before, forKey: "canvasCollapsed") } else { ud.removeObject(forKey: "canvasCollapsed") }
+        check("voice: a typed reply with a table draws the canvas and is marked for it; prose isn't; collapsing is kept (issue 208)", marked && prose && saved && kept)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
