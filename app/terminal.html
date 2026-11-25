@@ -148,7 +148,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .um{display:inline-flex;align-items:center;gap:var(--ds-space-4);height:20px;padding:0 var(--ds-space-4);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
 .um:hover,.um[aria-expanded="true"]{background:var(--ds-element-hover);color:var(--ds-fg-default)} .um:focus-visible{outline:none;box-shadow:var(--ds-ring)}
 .um .umk{flex-shrink:0} .um[data-id="claude"] .umk,.urow[data-id="claude"] .umk{color:var(--ds-clay-9)} .um[data-id="agy"] .umk,.urow[data-id="agy"] .umk{color:var(--ds-blue-9)}
-.um .uerr{color:var(--ds-status-crashed-fg)} .um[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)} .um[data-state="na"] .uw,.um.stale .upct{color:var(--ds-fg-faint)}
+.um .uerr,.urow .uerr{color:var(--ds-status-crashed-fg)} .um[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)} .um[data-state="na"] .uw,.um.stale .upct,.urow.c.stale .upct{color:var(--ds-fg-faint)}
 .ubar{position:relative;display:inline-block;flex-shrink:0;width:28px;height:4px;border-radius:var(--ds-radius-full);background:var(--ds-element-active);overflow:hidden}
 .ubar i{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--ds-fg-muted)}
 .ubar[data-tone="near"] i{background:var(--ds-status-needs-solid)} .ubar[data-tone="full"] i{background:var(--ds-status-crashed-solid)}
@@ -175,7 +175,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .urow .unote{display:flex;gap:var(--ds-space-4);align-items:flex-start;padding-left:var(--ds-space-24);color:var(--ds-fg-muted);font:var(--ds-type-caption)}
 .urow .unote.bad{color:var(--ds-status-crashed-fg)} .urow .unote .dsi{flex-shrink:0;margin-top:1px}
 .urow.c{display:grid;grid-template-columns:16px 1fr 40px 36px 56px;align-items:center;gap:var(--ds-space-8);font:var(--ds-type-caption)}
-.urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{text-align:right}
+.urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{display:inline-flex;align-items:center;justify-content:flex-end;gap:var(--ds-space-4)}
 .urow.c .uw{grid-column:3 / span 3;text-align:right;color:var(--ds-fg-faint)} .urow.c[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)}
 .umpop .ufoot{color:var(--ds-fg-faint);font:var(--ds-type-caption)}
 .root{position:absolute;inset:0;display:flex} .root[hidden]{display:none}
@@ -1589,19 +1589,20 @@ const umTight = p => (Array.isArray(p.windows) ? p.windows : []).filter(w => umP
 const umStale = p => p.at > 0 && Date.now() / 1000 - p.at > UM_STALE;
 function umIn(t){  // the time until an epoch, short: 45m, 3h 10m, 2d 4h
   if (!(t > 0)) return "";
-  const s = t - Date.now() / 1000; if (s <= 0) return ""; if (s <= 60) return "now";
+  const s = t - Date.now() / 1000; if (s <= 0) return ""; if (s <= 60) return "<1m";
   const m = Math.ceil(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
   return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m`;
 }
-function umAgo(at){ const s = Date.now() / 1000 - at; return !(s >= 0) ? "" : s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago` }
+function umAgo(at){ if (!(at > 0)) return ""; const s = Math.max(0, Date.now() / 1000 - at); return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago` }
 function umBar(pct){ const b = umEl("span", "ubar"), i = umEl("i"); i.style.width = Math.max(0, Math.min(100, pct)) + "%"; b.append(i); if (umTone(pct)) b.dataset.tone = umTone(pct); return b }
 function umSays(p){  // a meter's words: its tooltip and accessible label
   const w = umTight(p), name = p.name + (p.plan ? ` (${p.plan})` : "");
   if (p.state === "na" || (p.state !== "failed" && !w)) return `${name}: usage n/a` + (p.note ? `\n${p.note}` : "");
   if (p.state === "failed" && !w) return `${name}: refresh failed` + (p.note ? `\n${p.note}` : "");
   const lines = [name, ...p.windows.map(x => umPct(x) == null ? `${x.label}: reset since, no new reading` : `${x.label}: ${umPctText(x)} used` + (umIn(x.resets) ? `, resets in ${umIn(x.resets)}` : ""))];
-  if (p.state === "failed") lines.push(`Refresh failed: ${p.note || "no answer"}. These are from ${umAgo(p.at)}.`);
-  else if (umStale(p)) lines.push(`As of ${umAgo(p.at)}` + (p.note ? ` (${p.note})` : ""));
+  const ago = umAgo(p.at);
+  if (p.state === "failed") lines.push(`Refresh failed: ${p.note || "no answer"}.` + (ago ? ` These are from ${ago}.` : ""));
+  else if (umStale(p)) lines.push(`As of ${ago}` + (p.note ? ` (${p.note})` : ""));
   return lines.join("\n");
 }
 function umMeter(p){
@@ -1626,9 +1627,10 @@ function umMeters(list){  // the footer's meters, or null when no agent reports
   s.append(...UM.list.map(umMeter)); return s;
 }
 function umNote(p){
+  const ago = umAgo(p.at);
   if (p.state === "na") return umEl("div", "unote", dsIcon("info", 12), `n/a: ${p.note || "this agent reports no plan usage"}`);
-  if (p.state === "failed") return umEl("div", "unote bad", dsIcon("alert", 12), `Refresh failed: ${p.note || "no answer"}` + (umTight(p) ? `. From ${umAgo(p.at)}.` : ""));
-  if (umStale(p)) return umEl("div", "unote", dsIcon("waiting", 12), `As of ${umAgo(p.at)}` + (p.note ? `: ${p.note}` : ""));
+  if (p.state === "failed") return umEl("div", "unote bad", dsIcon("alert", 12), `Refresh failed: ${p.note || "no answer"}` + (umTight(p) && ago ? `. From ${ago}.` : ""));
+  if (umStale(p)) return umEl("div", "unote", dsIcon("waiting", 12), `As of ${ago}` + (p.note ? `: ${p.note}` : ""));
   if (!umTight(p)) return umEl("div", "unote", dsIcon("info", 12), "No limit windows reported");
   return null;
 }
@@ -1636,8 +1638,10 @@ function umRow(p){
   const w = umTight(p), r = umEl("div", "urow"); r.dataset.id = p.id; r.dataset.state = p.state;
   if (UM.view === "compact") {
     r.classList.add("c"); r.title = umSays(p);
+    if (p.state !== "failed" && umStale(p)) r.classList.add("stale");
     r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
-    if (w && p.state !== "na") r.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w)), umEl("span", "ur", umIn(w.resets)));
+    if (w && p.state !== "na") r.append(umBar(umPct(w) ?? 0), umEl("span", "upct", umPctText(w)),
+      umEl("span", "ur", umPct(w) == null ? "reset" : umIn(w.resets), p.state === "failed" ? dsIcon("alert", 12, {cls: "uerr"}) : null));
     else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
     return r;
   }
@@ -1676,11 +1680,18 @@ function umToggle(anchor){
 addEventListener("click", () => umClose());
 // Esc closes it only from inside it or its meter: a terminal or find bar elsewhere keeps its own Esc
 addEventListener("keydown", e => { if (e.key === "Escape" && UM.pop && (UM.pop.contains(document.activeElement) || document.activeElement?.classList.contains("um") || document.activeElement === document.body)) { e.stopPropagation(); e.preventDefault(); const b = document.querySelector(`.um[data-id="${UM.at}"]`) || document.querySelector(".um"); umClose(); b && b.focus() } }, true);
+function basementFit(){
+  const f = $("bfoot");
+  f.classList.remove("tight", "tighter");
+  if (!f.hidden && f.scrollWidth > f.clientWidth) f.classList.add("tight");
+  if (!f.hidden && f.scrollWidth > f.clientWidth) f.classList.add("tighter");
+}
 function basementFoot(list){  // the Basement's footer: shown once an agent reports, and the terminals refit to the room left
   const f = $("bfoot"), um = umMeters(list), was = f.hidden;
-  f.replaceChildren(...(um ? [um] : [])); f.hidden = !um;
+  f.replaceChildren(...(um ? [um] : [])); f.hidden = !um; basementFit();
   if (was !== f.hidden) setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 60);  // past the fit addon's 50 ms debounce
 }
+addEventListener("resize", () => { if (UM.list.length) basementFit() });
 setInterval(() => { if (!document.hidden && UM.list.length) basementFoot(UM.list) }, 30000);  // the reset countdowns
 // Pipe (just the terminals) ⇄ Basement (the sidebar): ⌘B, or the window bar's floor indicator (the app's, term.opens)
 // The sidebar slides in from the left edge, or back out, at its own width; the terminals hold theirs and refit once, at the end.
@@ -1688,8 +1699,9 @@ let slide = .32, sliding, slideTimer;  // seconds: Settings → General → Side
 function toggleSide(cut){
   const b = document.body, s = $("side"), st = $("stage"), sw = st.offsetWidth, from = sliding && getComputedStyle(s).marginLeft;  // a re-toggle mid-slide turns back from where it is
   clearTimeout(slideTimer); slideTimer = 0; sliding?.cancel(); sliding = null;
+  umClose();
   const open = !b.classList.toggle("noside"); post({cmd: "side", open}); render();
-  const end = () => { clearTimeout(slideTimer); slideTimer = 0; sliding = null; b.classList.remove("sliding"); st.style.width = ""; setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
+  const end = () => { clearTimeout(slideTimer); slideTimer = 0; sliding = null; b.classList.remove("sliding"); st.style.width = ""; basementFit(); setTimeout(() => cur && paneOf(cur).forEach(p => p.fit.fit()), 0) };
   if (cut || !(slide > 0) || matchMedia("(prefers-reduced-motion: reduce)").matches) return end();
   b.classList.add("sliding"); st.style.width = sw + "px";
   const w = "-" + s.offsetWidth + "px";

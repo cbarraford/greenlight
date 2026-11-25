@@ -63,11 +63,13 @@ def _patch_loaded_modules(monkeypatch, home: Path) -> None:
         "dwim": {"STATE": home, "DWIM": home / "dwim"},
         "last_agent": {"HOME": home, "FILE": home / "last_agent.json"},
         "lifestage": {"STATE": home, "CHECKS": home / "checks"},
+        "usage": {"STATE": home},
         "ws_state": {"STATE": home, "DIR": home / "state", "MEMORY": home / "memory"},
     }
     if cfg is not None:
         bindings["auto"]["CONFIG"] = cfg
         bindings["harness"] = {"CONFIG": cfg}
+        bindings["usage"]["CONFIG"] = cfg
 
     for mod_name, attrs in bindings.items():
         mod = sys.modules.get(mod_name)

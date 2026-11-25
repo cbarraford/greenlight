@@ -78,9 +78,15 @@ test("the Basement's footer: the usage meters and their popover; the Pipe has no
   assert.deepEqual(await page.$$eval("#umpop .urow[data-id=claude] .uwin .ul", l => l.map(x => x.textContent)), ["5h", "Week"]);
   assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /signed out/);
   await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
+  await page.click("#bfoot .um[data-id=claude]");
   await page.evaluate(() => toggleSide()); await page.waitForTimeout(450);
+  assert.equal(await page.$("#umpop"), null, "switching to the Pipe closes an open popover");
   assert.equal(await page.$eval("#bfoot", f => getComputedStyle(f).display), "none", "the Pipe: no footer");
   await page.evaluate(() => toggleSide()); await page.waitForTimeout(450);
+  await page.setViewportSize({width: 420, height: 800});
+  await page.evaluate(t => term.workspaces(t), {...TREES, usage});
+  assert.equal(await page.$eval("#bfoot", f => f.classList.contains("tight")), true, "narrow Basement footer activates tight mode");
+  await page.setViewportSize({width: 1200, height: 800});
   await page.evaluate(t => term.workspaces(t), TREES);
   assert.equal(await page.$eval("#bfoot", f => f.hidden), true);
   assert.deepEqual(page._errs, []); await page.close();

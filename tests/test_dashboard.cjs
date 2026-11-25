@@ -1933,6 +1933,19 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .ut"); await page.evaluate(() => footer());
   assert.notEqual(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "a redraw doesn't pull focus onto a tab");
   assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /Refresh failed: timeout\. From 2h ago\./);
+  // Compact mode preserves failed-refresh alert icon and "reset" label; <1m avoids "Resets in now"; missing/zero `at` avoids "From ."
+  await page.click("#umpop .useg [data-view=compact]");
+  assert.ok(await page.$("#umpop .urow.c[data-id=claude] .uerr"), "compact mode shows alert icon on failed refresh with kept windows");
+  assert.equal(await page.textContent("#umpop .urow.c[data-id=claude] .ur"), "reset", "compact mode shows reset when all windows reset");
+  await page.keyboard.press("Escape");
+  const w = USAGE(); w[0] = {...w[0], state: "failed", note: "timeout", at: 0, windows: [{label: "5h", pct: 50, resets: NOW_S() + 30}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), w);
+  const fw = (await meters(page))[0];
+  assert.equal(fw.text, "50%<1m");
+  assert.ok(fw.title.includes("resets in <1m") && !fw.title.includes("in now") && !fw.title.includes("From .") && !fw.title.includes("from ."), fw.title);
+  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .useg [data-view=detailed]");
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .urr"), "Resets in <1m");
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .unote"), "Refresh failed: timeout");
 });
 
 test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {

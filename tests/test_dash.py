@@ -1,6 +1,6 @@
 """uv run python test_dash.py: the state table and layout validation (the page trusts both)."""
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo", GREENLIGHT_TMUX_SOCKET=f"gl-test-{os.getpid()}")  # before greenlight: never the real ~/.greenlight or glab
+import os, tempfile; os.environ.update(GREENLIGHT_HOME=tempfile.mkdtemp(), GREENLIGHT_ME="octo", GREENLIGHT_TMUX_SOCKET=f"gl-test-{os.getpid()}", GREENLIGHT_USAGE="off")  # before greenlight: never the real ~/.greenlight, glab or usage APIs
 import dash
 
 
@@ -1019,8 +1019,9 @@ CODEX_REC = {"plan_type": "pro", "rate_limit": {"allowed": True, "limit_reached"
              "secondary_window": None}, "additional_rate_limits": None}
 CODEX_5H = {"plan_type": "plus", "rate_limit": {"primary_window": {"used_percent": 81, "limit_window_seconds": 18000, "reset_at": 1795570000},
                                                 "secondary_window": {"used_percent": 30, "limit_window_seconds": 604800, "reset_at": 1795739864}}}
+_FUTURE_S = int(time.time()) + 86400
 ROLLOUT_LINE = {"timestamp": "2026-11-24T20:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
-    "limit_id": "codex", "primary": {"used_percent": 46.0, "window_minutes": 10080, "resets_at": 1795739864}, "secondary": None, "plan_type": "pro"}}}
+    "limit_id": "codex", "primary": {"used_percent": 46.0, "window_minutes": 10080, "resets_at": _FUTURE_S}, "secondary": None, "plan_type": "pro"}}}
 
 
 def _usage_home():
@@ -1089,6 +1090,10 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
         r = usage.fetch("codex")
         assert r["state"] == "ok" and r["src"] == "rollout" and r["windows"][0]["label"] == "Week" and r["windows"][0]["pct"] == 46.0
         assert r["at"] == int(datetime(2026, 11, 24, 20, tzinfo=UTC).timestamp()) and "last session" in r["note"]
+    with mock.patch.object(usage, "_get", _answers({usage.CODEX_URL: usage.Failed("rate limited: trying again in 5 minutes", "rate_limit", usage.RATE_WAIT)})[0]):
+        r429 = usage.fetch("codex")
+        assert r429["state"] == "ok" and r429["src"] == "rollout" and r429["next"] - r429["tried"] == usage.RATE_WAIT and r429["wait"] == usage.RATE_WAIT
+        assert not usage.due(r429, r429["tried"] + 20, r429["tried"] + 20) and "wait" not in usage.view(r429)
     (_uh / ".codex" / "auth.json").write_text('{"tokens": {"access_')  # torn mid-write
     assert usage.fetch("codex")["src"] == "rollout", "a torn auth.json still falls back to the rollouts"
     (day / "rollout-a.jsonl").rename(day / "rollout-a.off")
@@ -1120,8 +1125,22 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
     assert usage.codex_windows({"primary": {"used_percent": 5, "window_seconds": 18000}})[0]["label"] == "5h"
     (day / "rollout-a.jsonl").write_text(json.dumps(_old) + "\n")
     assert usage.codex_rollout(_uh / ".codex") is None and usage.fetch("codex")["state"] == "out", "signed out, and its last limits long reset"
+    # a newer-mtime rollout whose limits already reset doesn't hide an older rollout with live limits
+    (day / "rollout-live.jsonl").write_text(json.dumps(ROLLOUT_LINE) + "\n")
+    os.utime(day / "rollout-live.jsonl", (time.time() - 600, time.time() - 600))
+    os.utime(day / "rollout-a.jsonl", (time.time(), time.time()))
+    assert usage.codex_rollout(_uh / ".codex")["windows"][0]["pct"] == 46.0
+    (day / "rollout-live.jsonl").unlink()
     (day / "rollout-a.jsonl").unlink()
     assert usage.fetch("codex")["state"] == "out"
+    # macOS Keychain: exit 44 (not found) is SignedOut; Deny/locked (e.g. 128) is Failed with 6h KEYCHAIN_WAIT backoff
+    (_uh / ".claude" / ".credentials.json").unlink()
+    with mock.patch.object(usage.sys, "platform", "darwin"):
+        with mock.patch.object(usage.subprocess, "run", return_value=mock.Mock(returncode=44, stdout="")):
+            assert usage.fetch("claude")["state"] == "out"
+        with mock.patch.object(usage.subprocess, "run", return_value=mock.Mock(returncode=128, stdout="")):
+            kd = usage.fetch("claude")
+            assert kd["state"] == "failed" and kd["wait"] == usage.KEYCHAIN_WAIT and kd["next"] - kd["tried"] == usage.KEYCHAIN_WAIT
     (_uh / "share" / "opencode" / "auth.json").unlink()
     assert usage.fetch("opencode")["state"] == "out"
     # pi: its default provider's plan; anthropic OAuth reads Claude's endpoint with pi's own token
@@ -1133,6 +1152,9 @@ with mock.patch.dict(os.environ, _uenv), mock.patch.object(usage.sys, "platform"
     (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "openrouter"}))
     p = usage.fetch("pi")
     assert p["state"] == "na" and "openrouter" in p["note"]  # signed in, but to a provider with no plan usage: n/a, not hidden
+    (_uh / "pi" / "auth.json").write_text(json.dumps({"github-copilot": {"type": "oauth", "access": "old", "expires": 1000}}))
+    (_uh / "pi" / "settings.json").write_text(json.dumps({"defaultProvider": "github-copilot"}))
+    assert usage.fetch("pi")["state"] == "na", "unsupported defaultProvider with expired OAuth stays n/a, not failed"
     (_uh / "pi" / "settings.json").unlink()
     (_uh / "pi" / "auth.json").write_text(json.dumps({"anthropic": {"type": "oauth", "access": "old", "expires": 1000},
                                                        "openai-codex": {"type": "oauth", "access": "tok-r", "expires": _FUTURE_MS}}))
@@ -1153,17 +1175,27 @@ with mock.patch.dict(usage.SOURCES, {"claude": mock.Mock(side_effect=TypeError("
     assert _u["state"] == "failed" and _u["next"] > _u["tried"] and "unexpected" in _u["note"]
 assert usage._epoch(float("inf")) is None and usage._win("5h", float("nan"), 0) is None
 assert usage._expired(float("inf")) is False and usage._expired(1000) is True
+assert usage._span_label(True) == "Limit" and usage._span_label(float("nan")) == "Limit" and usage._span_label(float("inf")) == "Limit"
+assert usage.codex_windows({"primary": {"used_percent": 12, "window_minutes": {"bad": 1}, "resets_in_seconds": False}}) == [{"label": "Limit", "pct": 12.0, "resets": None}]
 
-# _get maps HTTP failures to a reason the footer shows on hover
-for code, want in ((429, "rate_limit"), (401, "auth"), (500, "http")):
-    with mock.patch.object(usage.urllib.request, "urlopen", side_effect=urllib.error.HTTPError("u", code, "x", {}, None)):
+# _get maps HTTP failures to a reason the footer shows on hover, and refuses 3xx redirects so OAuth tokens never leak
+for code, want in ((429, "rate_limit"), (401, "auth"), (500, "http"), (302, "http")):
+    with mock.patch.object(usage._OPENER, "open", side_effect=urllib.error.HTTPError("u", code, "x", {}, None)):
         try:
             usage._get(usage.CLAUDE_URL, {})
         except usage.Failed as err:
             assert err.code == want and (err.wait == usage.RATE_WAIT) == (code == 429), (code, err.code)
         else:
             raise AssertionError("no Failed")
-with mock.patch.object(usage.urllib.request, "urlopen", side_effect=urllib.error.URLError("down")):
+_rreq = urllib.request.Request(usage.CLAUDE_URL, headers={"Authorization": "Bearer secret"})
+assert usage._NoRedirect().redirect_request(_rreq, None, 302, "Found", {}, "https://evil.example/") is None
+try:
+    usage._OPENER.error("http", _rreq, None, 302, "Found", {"Location": "https://evil.example/"})
+except urllib.error.HTTPError as err:
+    assert err.code == 302
+else:
+    raise AssertionError("redirect was not rejected")
+with mock.patch.object(usage._OPENER, "open", side_effect=urllib.error.URLError("down")):
     try:
         usage._get(usage.CLAUDE_URL, {})
     except usage.Failed as err:
@@ -1199,6 +1231,20 @@ with mock.patch.dict(os.environ, {"GREENLIGHT_USAGE": ""}), mock.patch.object(us
     usage.current(["claude"], force=True)
     assert _fetched == ["claude"]
     assert usage.current(["claude"], refresh_ok=False)[0]["state"] == "ok"
+    # TOCTOU: another process writing usage.json before we acquire _lock() is seen after reloading inside the lock
+    _fetched.clear()
+    (usage.STATE / "usage.json").unlink(missing_ok=True)
+    _orig_lock = usage._lock
+
+    @usage.contextlib.contextmanager
+    def _racing_lock():
+        with _orig_lock() as mine:
+            (usage.STATE / "usage.json").write_text(json.dumps({"p": {"claude": {"id": "claude", "name": "Claude", "state": "ok",
+                                                                                 "tried": int(time.time()), "at": int(time.time()), "windows": [], "next": int(time.time()) + 60}}}))
+            yield mine
+
+    with mock.patch.object(usage, "_lock", _racing_lock):
+        assert usage.current(["claude"])[0]["state"] == "ok" and not _fetched
 with mock.patch.dict(os.environ, {"GREENLIGHT_USAGE": "off"}):
     assert usage.current(["claude"]) == []
 # a backoff (rate limit, Keychain) isn't cut short by a scan

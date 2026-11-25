@@ -71,10 +71,20 @@ def _json(p):
     return d if isinstance(d, dict) else None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward OAuth Bearer tokens across HTTP 3xx redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _get(url, headers):
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "greenlight-usage", **headers})  # noqa: S310 - fixed https URLs
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # noqa: S310 - fixed https URLs
+        with _OPENER.open(req, timeout=TIMEOUT) as r:
             d = json.loads(r.read())
     except urllib.error.HTTPError as e:
         if e.code == 429:
@@ -110,7 +120,7 @@ def _win(label, pct, resets):
 
 
 def _span_label(secs):
-    if not isinstance(secs, (int, float)) or secs <= 0:
+    if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not math.isfinite(secs) or secs <= 0:
         return "Limit"
     if abs(secs - 604800) < 3600:
         return "Week"
@@ -143,8 +153,10 @@ def _keychain():
                            capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError) as e:
         raise Failed("couldn't read Claude Code's Keychain item", "keychain", KEYCHAIN_WAIT) from e
-    if p.returncode:
+    if p.returncode == 44:  # errSecItemNotFound: no Keychain item
         return None
+    if p.returncode:  # Deny (128), locked/non-interactive (36), auth failed (51): back off 6h so it can't nag
+        raise Failed("couldn't read Claude Code's Keychain item", "keychain", KEYCHAIN_WAIT)
     try:
         d = json.loads(p.stdout)
     except ValueError as e:
@@ -180,10 +192,12 @@ def codex_windows(rl, at=None):
         w = rl.get(k)
         if not isinstance(w, dict):
             continue
-        secs = w.get("limit_window_seconds") or w.get("window_seconds") or (w.get("window_minutes") or 0) * 60
+        wm = w.get("window_minutes")
+        secs = w.get("limit_window_seconds") or w.get("window_seconds") or (wm * 60 if isinstance(wm, (int, float)) and not isinstance(wm, bool) else 0)
         resets = w.get("reset_at") or w.get("resets_at")
-        if resets is None and isinstance(w.get("resets_in_seconds"), (int, float)):
-            resets = (at or time.time()) + w["resets_in_seconds"]
+        rin = w.get("resets_in_seconds")
+        if resets is None and isinstance(rin, (int, float)) and not isinstance(rin, bool) and math.isfinite(rin):
+            resets = (at or time.time()) + rin
         out.append(_win(_span_label(secs), w.get("used_percent"), resets))
     return [w for w in out if w]
 
@@ -237,7 +251,7 @@ def codex_rollout(root):
                 rl, at = hit
                 wins = codex_windows(rl, at)
                 if not any(not w["resets"] or w["resets"] > time.time() for w in wins):  # no reset time: unknown, not reset
-                    return None  # every window it saw has reset since: nothing it says still holds
+                    continue  # every window it saw has reset since: keep looking in other recent rollouts
                 return {"windows": wins, "src": "rollout", "at": at, **_plan(rl.get("plan_type"))}
     return None
 
@@ -255,7 +269,7 @@ def codex():
             return _codex_api(tok["access_token"], tok.get("account_id"))
         except Failed as e:
             if fall := codex_rollout(root):
-                return {**fall, "note": f"{e.note}; from the last session instead"}
+                return {**fall, "note": f"{e.note}; from the last session instead", **({"wait": e.wait} if e.wait > TTL else {})}
             raise
     if fall := codex_rollout(root):
         return fall
@@ -280,7 +294,7 @@ def pi():
         raise SignedOut()  # signed in to nothing: left out; signed in to a provider with no plan usage: n/a
     prov = (_json(root / "settings.json") or {}).get("defaultProvider")
     plans = [(p, a) for p in ([prov] if isinstance(prov, str) and prov else ["anthropic", "openai-codex"])
-             if isinstance(a := auth.get(p), dict) and a.get("type") == "oauth" and a.get("access")]
+             if p in ("anthropic", "openai-codex") and isinstance(a := auth.get(p), dict) and a.get("type") == "oauth" and a.get("access")]
     live = [(p, a) for p, a in plans if not _expired(a.get("expires"))]
     if plans and not live:
         raise Failed("token expired: pi renews it on its next run", "expired")
@@ -322,7 +336,8 @@ def fetch(name):
             sp.update(state="failed", reason="unexpected", **diag.failure(e))
             return {**base, "state": "failed", "note": "unexpected answer from the usage source", "next": now + TTL}
         sp["state"] = "ok"
-    return {**base, "state": "ok", "at": out.pop("at", now), **out, "next": now + TTL}
+    wait = out.pop("wait", TTL)
+    return {**base, "state": "ok", "at": out.pop("at", now), **out, "next": now + wait, **({"wait": wait} if wait > TTL else {})}
 
 
 def merge(old, new):
@@ -399,8 +414,11 @@ def current(agents=None, refresh_ok=True, since=0, force=False):
     entries = d.get("p") if isinstance(d.get("p"), dict) else {}
     if refresh_ok:
         with _lock() as mine:
-            if mine and refresh(entries, names, since or 0, force):
-                _save({"p": entries})
+            if mine:
+                d = _load()
+                entries = d.get("p") if isinstance(d.get("p"), dict) else {}
+                if refresh(entries, names, since or 0, force):
+                    _save({"p": entries})
     return [view(entries[a]) for a in names if isinstance(entries.get(a), dict) and entries[a].get("state") in ("ok", "failed", "na")]
 
 
