@@ -807,6 +807,7 @@ def trees():
             out.append({"ade": name, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
+                        **({"external": True} if ag.get("external") else {}),
                         "goal": w.get("comment") or "", "pinned": bool(w.get("isPinned")), "active": w.get("lastOutputAt"),
                         "since": ag.get("stateStartedAt"), "created": None if w.get("isMainWorktree") else created(w["path"]),
                         **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})})

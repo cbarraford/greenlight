@@ -1348,6 +1348,10 @@ def agent_overlay(ws, terminals):
     which: logged out, out of usage, looping, a draft left in the box, or a stale "waiting" (a background task's
     or a restored session's alert, while the screen shows it working or done)."""
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
+    if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
+        nxt.update(owner="working", action=f"{ag.get('type') or 'an agent'} runs here outside Greenlight: "
+                                           "nothing is dispatched or merged until it exits (then take it over in the Basement)")
+        return
     if ag["state"] == "waiting":
         seen = screen(ws, terminals)
         if seen and seen["prob"] >= SURE and seen["state"] == "working":  # still at it: nobody acts on the workspace meanwhile
@@ -1518,6 +1522,7 @@ def scan(save=True, _backfill_retries=0):
             "comment": comment,
             "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
+                      **({"external": True} if ag.get("external") else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},

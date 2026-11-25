@@ -41,8 +41,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
+import external  # noqa: E402
 import greenlight  # noqa: E402
 
 ACTIVE_MINUTES = 30
@@ -256,7 +258,18 @@ def evaluate(wt, repo, busy):
         return "skip", f"{reason}, but has uncommitted/untracked changes"
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"
+    if (ext := outside_agent(path)):
+        return "skip", f"{reason}, but {ext} runs in it outside Greenlight"
     return "candidate", reason
+
+
+def outside_agent(path, fresh=False):
+    """The agent another ADE or a plain terminal runs in path, under the native engine (#195 passive coexistence),
+    else None. Orca's own agents are in its terminal list (the busy check)."""
+    if not ade.is_native():
+        return None
+    found = external.by_worktree([path], external.agents(fresh=fresh)).get(path.rstrip("/"))
+    return found[0]["agent"] if found else None
 
 
 def dedupe(wts):
@@ -349,6 +362,8 @@ def main():
                                  if (t.get("lastOutputAt") or 0) > cutoff}
                     if any(i in live_busy for i in r.get("ids") or [r["id"]]):
                         raise RuntimeError("terminal became active since scan")
+                    if outside_agent(r["path"], fresh=True):
+                        raise RuntimeError("an agent outside Greenlight started in it since scan")
                 orca("worktree", "rm", "--worktree", f"id:{r['id']}")
                 r["removed"] = True
             except Exception as e:

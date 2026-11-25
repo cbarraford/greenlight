@@ -1384,6 +1384,7 @@ function badge(w){
   if (m.conflicts) return ["Conflicts", "r", G.conflict];
   if (w.state === "needs") return ["Blocking", "o", G.needs];
   if (w.state === "raised") return ["Your move", "y", G.move];
+  if (w.external) return ["Elsewhere", "b", G.run];  // an agent another ADE or terminal runs here (issue 195): greenlight keeps off it
   if (w.agent === "working") return ["Working", "b", G.run];
   if (m.mergeable && !m.draft) return ["Ready", "g", G.ok];
 }
@@ -2233,7 +2234,7 @@ function newWsAsk(o){
 }
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
-  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
+  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or, with the native engine, once you register it (greenlight.py repos add <path>) or a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
   const sel = fld("Repo", el("select"), two);
