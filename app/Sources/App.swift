@@ -473,6 +473,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         Diag.launched(host: host)
+        if !uitest { offerImport() }
         if !uitest {
             let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             s.button?.imagePosition = .imageLeading
@@ -1384,6 +1385,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         frontMain(); l1Pick(here: false)  // Settings, the inbox…: Greenlight Center's, in front
     }
     @objc func appSettings() { greenlight.settingsOpen = true; greenlight.inboxOpen = false }
+
+    /// First launch on the native engine (#195): another ADE on the host and no repos yet opens Settings → Import, once.
+    var importProbe: RulesStore?
+    func offerImport() {
+        guard !ud.bool(forKey: "importOffered") else { return }
+        let rs = RulesStore(); importProbe = rs
+        rs.call("import-detect", "-", onError: { [weak self] in self?.importProbe = nil }) { [weak self] j in
+            guard let self else { return }
+            self.importProbe = nil
+            let found = (j["sources"] as? [String: Bool]) ?? [:]
+            guard j["native"] as? Bool == true else { return }  // Orca's own users: nothing to import into yet
+            ud.set(true, forKey: "importOffered")
+            guard (j["repos"] as? Int ?? 0) == 0, RulesStore.importSources.contains(where: { found[$0.0] == true }) else { return }
+            self.greenlight.settingsTab = "Import"; self.appSettings()
+        }
+    }
     @objc func appReload() { loadFluid(l1s.values.first { $0.w.isKeyWindow }?.web) }
 
     /// Help › Report a Bug…: a title and description, then the full issue diag.py would file (its trail, re-checked for
