@@ -854,7 +854,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.chiefDrew = true; v.failed("Stopped."); v.hush()
         check("voice: finished and failed clear chiefDrew so subsequent watch/checkIn turns still draw the stage",
               clearedAfterScreen && watchDrewStage && !v.chiefDrew)
-        // issue 208: a turn leaves `stage` events: the wait card (the app's) at its start, then Chief's text, timed from the start
+        // issue 208: a turn leaves `stage` events: the held card or skeleton (the app's) at its start, then Chief's text, timed from the start
         let tr = Run("trail?"); c.run = tr; v.on = true; v.isLive = false
         v.began(tr); v.finished(staged("Two.\n[screen]\n- a"), "Two.", detail: "- a"); c.run = nil
         Diag.q.sync {}
@@ -862,7 +862,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["kind"] as? String == "stage" }
         let turnEvents = trail.filter { $0["turn"] as? Int == v.turnNo }
         check("voice: a turn's stage draws go to the trail as tokens and numbers: draw, by, turn, n, at (issue 208)",
-              turnEvents.count == 2 && turnEvents[0]["draw"] as? String == "wait" && turnEvents[0]["by"] as? String == "app"
+              turnEvents.count == 2 && turnEvents[0]["draw"] as? String == "hold" && turnEvents[0]["by"] as? String == "app"
               && turnEvents[0]["n"] as? Int == 1 && turnEvents[1]["draw"] as? String == "text" && turnEvents[1]["by"] as? String == "chief"
               && turnEvents[1]["n"] as? Int == 2 && (turnEvents[1]["at"] as? Double).map { $0 >= 0 && $0 < 5 } == true
               && turnEvents.allSatisfy { $0["card"] == nil && $0["dropped"] == nil } && v.turnAt == nil
@@ -907,7 +907,7 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.filter { $0["turn"] as? Int == v.turnNo }
         check("voice: the [screen] text streams to the stage as it's written, coalesced, then the turn's end closes it (issue 208)",
               firstOut && coalesced && sent && !v.streamed
-              && streamEvents.map { "\($0["draw"] ?? "")/\($0["live"] ?? false)" } == ["wait/false", "text/1", "text/false"])
+              && streamEvents.map { "\($0["draw"] ?? "")/\($0["live"] ?? false)" } == ["hold/false", "text/1", "text/false"])
         // a ```stage block outranks the stream: no [screen] text is streamed over it, and a stopped turn's send doesn't land
         let sb = Run("block?"); c.run = sb; v.began(sb)
         sb.live = "Here.\n```stage\n{\"title\":\"x\",\"items\":[\"a\"]}\n```\n[screen]\n- a"; v.live(sb)
@@ -942,6 +942,16 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
               streamable("- a\nOptions: x | y") == "- a" && streamable("- a\nOp") == "- a" && streamable("- a\n`options:") == "- a"
               && streamable("- a\nOpen it") == "- a\nOpen it" && streamable("Options:") == "" && streamable("- a\n\n") == "- a"
               && streamable("- a\n```") == "- a" && streamable("- a\n```sta") == "- a" && streamable("- a\n```js") == "- a\n```js")
+        // issue 208 phase 2: while the turn thinks, its status goes on the strip; once it draws (or speaks) the status stops
+        let th = Run("think?"); th.status = "Looking up !12"; c.run = th; v.on = true; v.isLive = false; v.hush(); v.began(th)
+        let held = v.statusUp && !v.shown
+        v.statusUp = false; v.status("Running the tests"); let lineShown = v.statusUp
+        v.shown = true; v.statusUp = false; v.status("Reading the log"); let quietAfterDraw = !v.statusUp
+        v.shown = false; v.said = 3; v.status("Reading the log"); let quietAfterSpeech = !v.statusUp
+        v.said = 0; c.run = nil; v.status("Reading the log"); let quietAfterTurn = !v.statusUp
+        v.hush(); v.clearStatus()
+        check("voice: a turn holds the stage with its status on the strip until it draws, speaks or ends (issue 208)",
+              held && lineShown && quietAfterDraw && quietAfterSpeech && quietAfterTurn)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

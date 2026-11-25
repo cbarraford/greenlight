@@ -373,15 +373,21 @@ final class Voice: NSObject, ObservableObject {
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
-        wait(waitWord, r.question)
         startStatus(r)
+        put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app")  // the last card, muted, or a skeleton; never an empty stage
+        statusUp = true
         if r.spoken { instant(r.question) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
             self.say(self.waitWord, filler: true)
         }
     }
-    func status(_ s: String) { if on && !shown { js("stage.wait", [waitWord, s]) } }  // the wait card's new line: not a new draw for the trail
+    /// What the turn is doing (its newest step, its plan), on the strip under the held card or skeleton until the turn draws
+    /// something of its own or speaks. Not a draw for the trail.
+    func status(_ s: String) {
+        guard on, !shown, said == 0, speaking == 0, lines.isEmpty, core?.run != nil else { return }
+        statusUp = true; js("stage.status", [s])
+    }
     /// The status line's clock for a turn: from its start, or from voice mode starting partway through it. One clock at a time.
     func startStatus(_ r: Run) {
         clearStatus(); statusShown = []; tickGen += 1

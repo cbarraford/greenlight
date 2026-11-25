@@ -139,6 +139,12 @@ ol.life li span{color:var(--dim)}
 @keyframes rise{from{opacity:0;transform:translateY(4px)}}
 .caret{display:inline-block;width:2px;height:13px;margin-left:var(--ds-space-2);vertical-align:-2px;background:var(--accent)}
 .doc code+.caret{margin-left:0}  /* the chip's own padding is the gap */
+/* While Chief thinks (issue 208): the last card stays, stepped down to muted; with none, a still skeleton of the answer. */
+#s.held{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
+#s.held .caret{display:none}
+.skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
+.skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--card)}
+.skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-8)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -161,6 +167,7 @@ ol.life li span{color:var(--dim)}
   background:var(--bg);border-top:1px solid var(--line);font:var(--ds-type-label);font-family:var(--font);color:var(--dim);
   animation:in var(--ds-duration-base) var(--ds-easing-out)}
 #status[hidden]{display:none}
+#status span{color:var(--now)}  /* what Chief is doing, in the working colour after its glyph (issue 208) */
 #status span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #status svg.tone{flex:none;margin:0;color:var(--now);animation:spin .9s linear infinite}  /* the spinner period: the one thing in progress here */
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -169,6 +176,7 @@ body.status #s.frame,[data-look] body.status #s.frame{height:calc(100% - var(--d
 [data-look=phosphor] #status{border-top-style:dashed}
 [data-look=phosphor] #status svg.tone{display:none}
 [data-look=phosphor] #status span::before{content:"$ ";color:var(--faint)}
+[data-look=phosphor] #status span{color:inherit}
 @media (prefers-reduced-motion: reduce){ #status{animation:fade var(--ds-duration-fast) linear} #status svg.tone{animation:none} }
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
@@ -366,6 +374,18 @@ function caret(s, on){
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
+  // A turn began (issue 208): a card already up stays, stepped down to muted, as the last answer; with none (or only the
+  // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
+  hold(line){
+    const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton)\b/.test(s.className);
+    if (card) s.classList.add("held");
+    else if (!s.classList.contains("skeleton")) {
+      const k = $("div", "skel"); k.setAttribute("aria-hidden", "true");
+      [["lead", 58], [null, 92], [null, 84], [null, 88], [null, 46]].forEach(([c, w]) => { const i = $("i", c); i.style.width = w + "%"; k.append(i); });
+      show(k, "skeleton");
+    }
+    if (line != null) stage.status(line);
+  },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   spec(o){
     o = o && typeof o === "object" ? o : {};

@@ -261,5 +261,40 @@ const { launchBrowser } = require("./js_harness.cjs");
   // markup in a streamed reply is text, as in a one-shot draw
   await p.evaluate(() => stage.text({ md: "<img src=x onerror=alert(1)> and **<b>x</b>**", live: true }));
   assert.equal(await p.locator(".doc img, .doc p > b > b").count(), 0);
+  // thinking (issue 208 phase 2): a card already up stays, muted, its nodes untouched; with none, a still skeleton; the status
+  // strip says what the turn is doing, in the working colour after its glyph; the next drawing replaces either
+  await p.evaluate(() => { stage.status(""); stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
+  assert.equal(await p.locator("#s.doc.held").count(), 1);
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
+  const muted = await p.evaluate(() => { const c = getComputedStyle(document.documentElement).getPropertyValue("--ds-fg-muted").trim(), t = document.createElement("i");
+    t.style.color = c; document.body.append(t); const want = getComputedStyle(t).color; t.remove(); return [getComputedStyle(document.querySelector(".doc .lead")).color, want]; });
+  assert.equal(muted[0], muted[1], "the held card is muted");
+  assert.equal(await p.textContent("#status span"), "Looking up !12");
+  assert.equal(await p.getAttribute("#status svg.tone", "aria-label"), "Now");  // the glyph with the colour
+  const nowCol = await p.evaluate(() => { const t = document.createElement("i"); t.style.color = "var(--now)"; document.body.append(t); const c = getComputedStyle(t).color; t.remove(); return c; });
+  assert.equal(await p.$eval("#status span", e => getComputedStyle(e).color), nowCol);
+  await p.evaluate(() => stage.hold("Still looking"));  // a second hold keeps the same held card
+  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
+  await p.evaluate(() => stage.spec({ kind: "table", title: "Board", columns: ["MR"], rows: [["!12"]] }));  // the instant card wins
+  assert.equal(await p.locator("#s.held").count(), 0);
+  assert.ok(await p.isVisible("#status"));  // the strip stays until Chief speaks
+  for (const before of [() => stage.wait("Listening", "Say something."), () => stage.status("")]) {
+    await p.evaluate(before); await p.evaluate(() => { stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
+    assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
+    assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
+    assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
+    assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
+    assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
+    assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
+  }
+  await p.evaluate(() => stage.hold(null));
+  assert.equal(await p.locator("#s.skeleton").count(), 1);
+  await p.evaluate(() => stage.text({ lead: "Gist.", md: "- a", live: true }));  // the stream replaces the skeleton
+  assert.equal(await p.locator("#s.skeleton, .skel").count(), 0);
+  for (const scheme of ["light", "dark"]) {  // the skeleton's bars show on the stage in both themes
+    await p.emulateMedia({ colorScheme: scheme }); await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("x"); });
+    assert.notEqual(await p.$eval(".skel i", e => getComputedStyle(e).backgroundColor), await p.$eval("body", e => getComputedStyle(e).backgroundColor), scheme);
+  }
+  await p.emulateMedia({ colorScheme: "light" }); await p.evaluate(() => stage.status(""));
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
