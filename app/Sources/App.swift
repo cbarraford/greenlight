@@ -2103,8 +2103,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
     /// `run`: a command too long to type (terminal.html `newPane`). One interactive login shell evals it, then becomes a login shell:
     /// `trap : INT` keeps a ^C (or a stray quote) from ending the pane, and nothing is left to hand the terminal back to. It's in the
-    /// command once, as `r`. tmux gets it through a temp file, as it refuses a command over 16 KB; a live session (a reconnect that
-    /// raced the mark) ignores it, so none then. No tmux, or no file (`>|`: noclobber), and this shell runs it. `runMark` tells the
+    /// command once, as `r`. tmux gets it through a temp file in $TMPDIR (BSD `mktemp -t` ignores it), as it refuses a command over 16 KB; a live session (a reconnect that
+    /// raced the mark) ignores it, so none then (`/dev/null/live`: never a file). `command`: the rc's aliases are loaded. No tmux, or no file (`>|`: noclobber), and this shell runs it. `runMark` tells the
     /// page it's handled, so a reconnect doesn't send it again. Known gap: zsh sets the trap after its rc files, so a ^C while
     /// `.zshrc` loads ends the pane (click the move again); so does a drop in the instant between the mark and tmux's session.
     static let runMark = "\\033]6973;greenlight-run\\007"
@@ -2113,12 +2113,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ")
             + (run.isEmpty ? "command -v tmux >/dev/null || exec $SHELL -l; "
                 : "r=\(shellQuote(run)); f=; if ! command -v tmux >/dev/null; then :; "
-                + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=live; "
-                + "elif f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
+                + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=/dev/null/live; "
+                + "elif f=$(mktemp \"${TMPDIR:-/tmp}/greenlight-run.XXXXXX\") && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
                 + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
-            + (run.isEmpty ? "" : " " + shellQuote(go("$(cat \"$1\"; rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
+            + (run.isEmpty ? "" : " " + shellQuote(go("$(command cat \"$1\" 2>/dev/null && command rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
