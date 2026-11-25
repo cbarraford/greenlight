@@ -1873,6 +1873,12 @@ test("log view: search marks every match, steps through them, finds them inside 
   await page.click("#aout-qprev");
   assert.equal(await page.textContent("#aout-qn"), "35 of 36");
   assert.equal(await page.$eval("#aout-list mark.cur", m => m.textContent), "passed");
+  // new output that matches joins the count; the current match stays the current one
+  const more = paneLog(); more.push({id: "mc-s1.g0:99", role: "line", text: "  ⎿  2 passed", ts: Date.now(), kind: "pane"});
+  await nextPoll(page, 2);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", last_output_ts: Date.now(), entries: more});
+  assert.equal(await page.textContent("#aout-qn"), "35 of 37", "a refresh's matches are counted, the current one kept");
+  assert.equal(await page.locator("#aout-list mark").count(), 37);
   await page.fill("#aout-q", "nothing like it"); await page.waitForFunction(() => /No matches/.test(document.getElementById("aout-qn").textContent));
   await page.focus("#aout-q");
   await page.keyboard.press("Escape");
@@ -1939,8 +1945,8 @@ test("log view: a working agent quiet for 10 min gets a stuck banner; a repeatin
   // looping: the same two lines, nine times (digits don't count)
   await page.evaluate(() => closeOut(false));
   const loop = paneLog(); let n = 100;
-  for (let r = 0; r < 9; r++) loop.push({id: `mc-s1.g0:${n++}`, role: "line", text: `⏺ Bash(curl localhost:80${r})`, ts: Date.now() - (9 - r) * 40e3, kind: "pane"},
-    {id: `mc-s1.g0:${n++}`, role: "line", text: "  ⎿  connection refused", ts: Date.now() - (9 - r) * 40e3 + 1000, kind: "pane"});
+  for (let r = 0; r < 9; r++) loop.push({id: `mc-s1.g0:${n++}`, role: "line", text: "⏺ Bash(curl localhost:8080)", ts: Date.now() - (9 - r) * 40e3, kind: "pane"},
+    {id: `mc-s1.g0:${n++}`, role: "line", text: `  ⎿  connection refused after ${r + 1}.0s`, ts: Date.now() - (9 - r) * 40e3 + 1000, kind: "pane"});
   await openLog(page, loop, {last_output_ts: Date.now()});
   await page.waitForSelector("#aout-warn:not([hidden])");
   assert.match(await page.textContent("#aout-warn"), /The same 2 lines came back 9 times in 5m\. The agent may be looping\./);
@@ -1954,8 +1960,32 @@ test("log view: a working agent quiet for 10 min gets a stuck banner; a repeatin
   assert.equal(await page.isVisible("#aout-warn"), false);
 });
 
+test("log view: parametrized tests aren't a loop; Previous jumps skip folded rows; a session's sections survive another one's lines in between", async page => {
+  const tests = paneLog(); let n = 200;
+  for (let r = 0; r < 12; r++) tests.push({id: `mc-s1.g0:${n++}`, role: "line", text: `  test_retry[${r}] PASSED`, ts: Date.now() - 1000, kind: "pane"});
+  await openLog(page, tests, {last_output_ts: Date.now()});
+  assert.equal(await page.isVisible("#aout-warn"), false, "test_x[0], test_x[1]… are different lines");
+  // ⇧E from the bottom: the visible FAILED lines, never a hidden row, and nothing else unfolds on the way
+  await page.click("#aout-list > .sec >> nth=0 >> .aofold");  // open the long call...
+  await page.click("#aout-list > .sec >> nth=0 >> .aofold");  // ...and fold it again by hand
+  const folded = await page.evaluate(() => [...ui.out.folds]);
+  await page.focus("#aout-log"); await page.keyboard.press("End"); await page.$eval("#aout-log", e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event("scroll")) });
+  await page.keyboard.press("Shift+E");
+  assert.match(await page.textContent("#aout-list > .aoat"), /1 failed/);
+  assert.equal(await page.$eval("#aout-list > .aoat", e => e.hidden), false);
+  await page.keyboard.press("Shift+E");
+  assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/);
+  assert.deepEqual(await page.evaluate(() => [...ui.out.folds]), folded, "no fold opened that it didn't land in");
+  // two sessions writing at once
+  await page.evaluate(() => closeOut(false));
+  const A = (k, t) => ({id: `mc-a.g0:${k}`, role: "line", text: t, ts: Date.now(), kind: "pane"}), B = (k, t) => ({id: `mc-b.g0:${k}`, role: "line", text: t, ts: Date.now(), kind: "pane"});
+  await openLog(page, [A(0, "> go"), A(1, "⏺ Bash(make test)"), B(0, "⏺ Read(x)"), A(2, "  ⎿  ok 1"), B(1, "  ⎿  Read 3 lines"), A(3, "  ⎿  ok 2")]);
+  assert.match(await page.textContent("#aout-list > [data-id='mc-a.g0:1']"), /2 lines/, "session A's call keeps its lines");
+  assert.match(await page.textContent("#aout-list > [data-id='mc-a.g0:0']"), /1 tool call/);
+});
+
 const EXTRAS = {name: "plan-b", usage: {in_tokens: 1820400, out_tokens: 41200, cache_read: 1700000, sessions: 2, cost_cents: 142.3, models: ["claude-opus-5-5"], estimated: true},
-  files: {mode: "branch", base: "main", files: [["scripts/queue.py", "3", "1"], ["tests/new_test.py", "2", "0"], ["logo.png", "-", "-"]], status: ["M", "U", "A"], cut: false,
+  files: {mode: "branch", base: "main", files: [["scripts/queue.py", "3", "1"], ["tests/{old_test.py => new_test.py}", "2", "0"], ["logo.png", "-", "-"]], status: ["M", "R", "A"], cut: false,
     patch: "diff --git a/scripts/queue.py b/scripts/queue.py\nindex 1..2\n--- a/scripts/queue.py\n+++ b/scripts/queue.py\n@@ -1,3 +1,5 @@\n keep\n-old\n+new\n+newer\n+newest\ndiff --git a/tests/new_test.py b/tests/new_test.py\nnew file\n@@ -0,0 +1,2 @@\n+a\n+b\n"}};
 
 test("log view: the sessions' cost and tokens in the strip; Files shows what the branch changes, with each file's diff", async page => {
@@ -1970,7 +2000,7 @@ test("log view: the sessions' cost and tokens in the strip; Files shows what the
   assert.equal(await page.textContent("#aout-files-n"), "3");
   await page.click("#aout-files-btn");
   assert.equal(await page.getAttribute("#aout-files-btn", "aria-pressed"), "true");
-  assert.deepEqual(await page.$$eval("#aout-files .aofrow", rs => rs.map(r => r.textContent)), ["Mscripts/queue.py+3 −1", "Utests/new_test.py+2 ", "Alogo.pngbinary"]);
+  assert.deepEqual(await page.$$eval("#aout-files .aofrow", rs => rs.map(r => r.textContent)), ["Mscripts/queue.py+3 −1", "Rtests/{old_test.py => new_test.py}+2 ", "Alogo.pngbinary"]);
   assert.deepEqual(await page.$$eval("#aout-files .aodiff > *", ds => ds.map(d => d.className + ":" + d.textContent)),
     ["dfn:scripts/queue.py", "dh:@@ -1,3 +1,5 @@", "dl: keep", "dl r:-old", "dl a:+new", "dl a:+newer", "dl a:+newest"]);
   await page.click("#aout-files .aofrow:has-text('new_test.py')");
@@ -1981,6 +2011,9 @@ test("log view: the sessions' cost and tokens in the strip; Files shows what the
   const before = (await posts(page, "logextras")).length;
   await page.click("#aout-files button:has-text('Retry')");
   assert.equal((await posts(page, "logextras")).length, before + 1, "Retry asks again");
+  await page.evaluate(() => mc.logextras({name: "plan-b", error: "the host didn't answer (exit 255)"}));  // the whole request failed
+  assert.match(await page.textContent("#aout-files"), /Couldn't load the files.*the host didn't answer/);
+  assert.equal(await page.$("#aout-strip .aos-cost"), null, "and no cost from a failed answer");
   await page.evaluate(r => mc.logextras({...r, files: {...r.files, files: [], status: [], patch: ""}}), EXTRAS);
   assert.match(await page.textContent("#aout-files"), /No files changed yet/);
   await page.click("#aout-files [aria-label='Close files']");
@@ -2000,18 +2033,24 @@ test("log view: Share log… sends nothing until the host has taken private deta
   assert.equal(ask.name, "plan-b");
   assert.match(ask.text, /^\d\d:\d\d:\d\d {2}> Fix the flaky retry test$/m, "times and lines, oldest first");
   assert.equal(ask.text.split("\n").length, 46);
-  await page.evaluate(() => mc.logshared({name: "plan-b", text: "12:00:00  ls [path]", removed: 4}));
+  await page.evaluate(req => mc.logshared({name: "plan-b", req: req - 1, text: "stale", removed: 0}), ask.req);
+  assert.equal(await page.isDisabled("#aout-share-copy"), true, "an answer to another ask is dropped");
+  await page.evaluate(req => mc.logshared({name: "plan-b", req, text: "12:00:00  ls [path]", removed: 4}), ask.req);
   assert.match(await page.textContent("#aout-share"), /Private details are taken out: 4 removed/);
   assert.equal(await page.textContent("#aout-share .aopv"), "12:00:00  ls [path]");
   await page.click("#aout-share-copy");
   assert.deepEqual((await posts(page, "copyText")).pop(), {cmd: "copyText", text: "12:00:00  ls [path]"}, "Copy sends the redacted text only");
   assert.match(await page.textContent("#aout-share-copy"), /Copied/);
   await page.click("#aout-share-save");
-  assert.deepEqual((await posts(page, "saveText")).pop(), {cmd: "saveText", text: "12:00:00  ls [path]", filename: "agent-log-plan-b.txt"});
+  assert.deepEqual((await posts(page, "saveText")).pop(), {cmd: "saveText", text: "12:00:00  ls [path]", filename: `agent-log-${new Date().toISOString().slice(0, 10)}.txt`}, "named by the date, never the workspace");
+  await page.evaluate(() => mc.saved({ok: false, error: "disk full"}));
+  assert.match(await page.textContent("#aout-share"), /Couldn't save it: disk full/);
+  await page.evaluate(() => mc.saved({ok: true}));
+  assert.match(await page.textContent("#aout-share"), /Saved/);
   // another range asks again; an error is a dead end, not a leak
   await page.click("#aout-r-looked").catch(() => {});  // no last look in this boot: the option may be absent
   await page.evaluate(() => { ui.out.share.range = "all"; outShareAsk(); outShareRender() });
-  await page.evaluate(() => mc.logshared({name: "plan-b", error: "leak.re: bad pattern"}));
+  await page.evaluate(() => mc.logshared({name: "plan-b", req: ui.out.share.req, error: "leak.re: bad pattern"}));
   assert.match(await page.textContent("#aout-share"), /Couldn't check it for private details/);
   assert.match(await page.textContent("#aout-share"), /So nothing is shared: leak\.re: bad pattern/);
   assert.equal(await page.isDisabled("#aout-share-copy"), true);
@@ -2028,7 +2067,7 @@ test("log view: Share log… sends nothing until the host has taken private deta
   assert.match(await page.textContent("#aout-share fieldset"), /What the filter shows: Errors2 lines/);
   await page.click("#aout-r-view");
   const asked = (await posts(page, "logshare")).length;
-  await page.evaluate(() => mc.logshared({name: "plan-b", text: "the whole log", removed: 0}));  // the answer for the range it had asked about
+  await page.evaluate(() => mc.logshared({name: "plan-b", req: ui.out.share.req, text: "the whole log", removed: 0}));  // the answer for the range it had asked about
   assert.equal((await posts(page, "logshare")).length, asked + 1, "a range changed mid-check is asked again, not shown stale");
   assert.equal(await page.isDisabled("#aout-share-copy"), true);
   const v = (await posts(page, "logshare")).pop();

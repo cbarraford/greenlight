@@ -16,6 +16,7 @@ from __future__ import annotations
 import getpass
 import json
 import re
+import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,16 +117,61 @@ def codex_usage(path: Path) -> dict[str, Any]:
             last = info["total_token_usage"]
     if not last:
         return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost_cents": None, "models": {model} - {""}}
-    return {"in": _num(last.get("input_tokens")), "out": _num(last.get("output_tokens")) + _num(last.get("reasoning_output_tokens")),
+    return {"in": _num(last.get("input_tokens")), "out": _num(last.get("output_tokens")),  # reasoning is part of output already
             "cache_read": _num(last.get("cached_input_tokens")), "cache_write": 0, "cost_cents": None, "models": {model} - {""}}
+
+
+def _cache_file() -> Path:
+    return diag.home() / "dash" / "usage-cache.json"
+
+
+def _session_usage(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] | None:
+    """One session's usage, from the cache while its transcript's size and mtime haven't changed (the view polls)."""
+    if kind not in ("claude", "codex"):
+        return None
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    sig = [st.st_size, st.st_mtime_ns]
+    hit = cache.get(str(f))
+    if isinstance(hit, dict) and hit.get("sig") == sig and isinstance(hit.get("u"), dict):
+        u = dict(hit["u"])
+        u["models"] = set(u.get("models") or [])
+        return u
+    u = claude_usage(f) if kind == "claude" else codex_usage(f)
+    cache[str(f)] = {"sig": sig, "u": {**u, "models": sorted(u["models"])}}
+    return u
+
+
+def _load_cache() -> dict[str, Any]:
+    try:
+        with _cache_file().open() as fh:
+            c = json.load(fh)
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_cache(cache: dict[str, Any], keep: set[str]) -> None:
+    f = _cache_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        with tmp.open("w") as fh:
+            json.dump({k: v for k, v in cache.items() if k in keep}, fh)
+        tmp.replace(f)
+    except OSError:
+        pass
 
 
 def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
     """The sessions' totals. cost_cents is None when any session with tokens has no price (Codex, an unknown model):
     a partial sum would read as the whole cost."""
     tot: dict[str, Any] = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "sessions": 0, "cost_cents": 0.0, "models": set()}
+    cache = _load_cache()
     for f, kind in files:
-        u = claude_usage(f) if kind == "claude" else codex_usage(f) if kind == "codex" else None
+        u = _session_usage(f, kind, cache)
         if not u or not (u["in"] or u["out"]):
             continue
         tot["sessions"] += 1
@@ -138,15 +184,21 @@ def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
         tot["cost_cents"] = round(tot["cost_cents"], 2) if tot["sessions"] else None
     tot["models"] = sorted(tot["models"])[:6]
     tot["estimated"] = tot["cost_cents"] is not None
+    if files:  # other workspaces' entries stay: the cache is shared
+        _save_cache(cache, set(cache) - {str(f) for f, _ in files if not f.exists()})
     return tot
 
 
 # ---------- sharing: a privacy-safe copy of the log ----------
-URL_RE = re.compile(r"\b(?:https?|ssh|git|wss?)://[^\s'\"<>)\]]+", re.I)
+URL_RE = re.compile(r"\b(?:https?|ssh|git|wss?|file|ftp)://[^\s'\"<>)\]]+", re.I)
 SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.git
+USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
 HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-PATH_RE = re.compile(r"(?<![\w.:/])(?:~(?=/)|/(?:home|Users|root|tmp|private|var|opt|srv|mnt|Volumes))(?:/[^\s'\"`:,;)\]]*)?")
+PATH_RE = re.compile(r"(?<![\w.])(?:~(?=/)|/(?:home|Users|root|tmp|private|var|opt|srv|mnt|Volumes))(?:/[^\s'\"`:,;)\]]*)?")
+# NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
+ASSIGN_RE = re.compile(r"(?i)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?|AUTH)"
+                       r"[A-Z0-9_.-]*)(\s*[=:]\s*)(?![\s\[])([\"']?)[^\s\"']+\3")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
 
@@ -155,6 +207,14 @@ def _user() -> str:
         return getpass.getuser()
     except (KeyError, OSError):
         return ""
+
+
+def _hosts() -> list[str]:
+    try:
+        full = socket.gethostname()
+    except OSError:
+        return []
+    return sorted({full, full.split(".")[0]} - {"", "localhost"}, key=len, reverse=True)
 
 
 def redact(text: str) -> tuple[str, int]:
@@ -171,15 +231,19 @@ def redact(text: str) -> tuple[str, int]:
     text = audit.redact_secrets(text)
     n += sum(1 for rx, _ in audit.SECRET_RES for _ in rx.finditer(before))
     text = sub(TOKENISH_RE, "[token]", text)
+    text = sub(ASSIGN_RE, r"\1\2[secret]", text)
     text = sub(URL_RE, "[url]", text)
     text = sub(SCP_RE, "[repo]", text)
     text = sub(audit.EMAIL_RE, "[email]", text)
+    text = sub(USERHOST_RE, "[user@host]", text)
     text = sub(PATH_RE, "[path]", text)
+    text = sub(audit.HOME_RE, "[path]", text)  # a Windows home, or one PATH_RE's lookbehind left
     text = sub(IP_RE, "[ip]", text)
     text = sub(HOST_RE, "[host]", text)
     text = sub(audit.PHONE_RE, "[phone]", text)
-    if len(user := _user()) >= 3:  # this account's name outside a path too: a branch, a repo owner, a prompt
-        text = sub(re.compile(rf"(?<![\w-]){re.escape(user)}(?![\w-])", re.I), "[user]", text)
+    for name, mark in ((_user(), "[user]"), *((h, "[host]") for h in _hosts())):
+        if len(name) >= 3:  # this account's and this machine's names outside a path too: a branch, a prompt, a ssh line
+            text = sub(re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])", re.I), mark, text)
     if (rx := diag.leak(strict=True)) is not None:
         text = sub(rx, "[private]", text)
     return text, n

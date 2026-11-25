@@ -10,7 +10,7 @@
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
     dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
-    dash.py logshare <ws> < text                    one JSON line: {text, removed}: the log text with private details taken out
+    dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -2414,15 +2414,16 @@ def main():
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
-    elif a[:1] in (["logextras"], ["logshare"]) and len(a) == 2 and NAME_RE.match(a[1]):
+    elif a[:1] in (["logextras"], ["logshare"]) and len(a) in (2, 4) and NAME_RE.match(a[1]) and (len(a) == 2 or a[2] == "--req" and a[3].isdigit()):
         import log_view  # noqa: PLC0415
 
+        req = int(a[3]) if len(a) == 4 else None  # echoed: the page drops an answer to an ask it no longer has
         try:
             out = log_extras(a[1]) if a[0] == "logextras" else dict(zip(("text", "removed"), log_view.redact(sys.stdin.read(4 << 20))))
         except Exception as e:
             oops(a, e)
             out = {"error": str(e)[:200]}
-        print(json.dumps({"name": a[1], **out}))
+        print(json.dumps({"name": a[1], **({"req": req} if req is not None else {}), **out}))
     elif a[:1] == ["board"]:
         print(board())
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):

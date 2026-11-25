@@ -1152,9 +1152,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let text = String((b["text"] as? String ?? "").prefix(4 << 20)), cb = cmd == "logextras" ? "mc.logextras" : "mc.logshared"
             guard isWsName(name) else { from.callJS("window.mc && \(cb)", [["name": name, "error": badNameErr]]); return }
             var out = ""
-            let h = workspaceHost(name: name, fallback: winHost)
-            ssh("\(pyCmd(on: h))/dash.py \(cmd) '\(name)'", on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
-                let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
+            let h = workspaceHost(name: name, fallback: winHost), req = max(0, min(b["req"] as? Int ?? 0, 1_000_000_000))  // a share's answer names its ask
+            ssh("\(pyCmd(on: h))/dash.py \(cmd) '\(name)' --req \(req)", on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
+                let js = safeJSON(out, fallback: ["name": name, "req": req, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("window.mc && \(cb)(\(js))")  // safety-ok: safeJSON is a JSON literal
             })
         }
@@ -1166,7 +1166,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let s = NSSavePanel()
             let n = (b["filename"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "-", options: .regularExpression)
             s.nameFieldStringValue = n.isEmpty ? "agent-log.txt" : String(n.prefix(80))
-            if s.runModal() == .OK, let u = s.url { try? String(text.prefix(4 << 20)).write(to: u, atomically: true, encoding: .utf8) }
+            guard s.runModal() == .OK, let u = s.url else { return }
+            do { try String(text.prefix(4 << 20)).write(to: u, atomically: true, encoding: .utf8); from.callJS("window.mc && mc.saved", [["ok": true]]) }
+            catch { from.callJS("window.mc && mc.saved", [["ok": false, "error": error.localizedDescription]]) }
         }
         // A waiting agent's question (ask) and your reply to it (answer), from the Answer button or the page.
         if cmd == "ask" || cmd == "answer", let name = b["name"] as? String {

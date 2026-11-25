@@ -70,7 +70,7 @@ def test_codex_usage_takes_the_last_running_total_and_no_cost(tmp_path):
                                                                                                "output_tokens": 30, "reasoning_output_tokens": 5}}}},
     ])
     u = log_view.codex_usage(f)
-    assert (u["in"], u["out"], u["cache_read"], u["cost_cents"]) == (900, 35, 400, None)
+    assert (u["in"], u["out"], u["cache_read"], u["cost_cents"]) == (900, 30, 400, None), "reasoning is counted in output already"
     assert log_view.codex_usage(_write(tmp_path / "empty.jsonl", [{"payload": {"type": "other"}}]))["in"] == 0
 
 
@@ -113,8 +113,41 @@ def test_redact_takes_out_private_details():
     assert n >= 7
 
 
+def test_redact_takes_out_credential_assignments_whatever_the_value():
+    pw = "correct-horse-" + "battery-staple"
+    out, n = log_view.redact(f"DATABASE_PASSWORD={pw}\nexport GH_TOKEN='{pw}'\napi_key: {pw}\nauth = [secret]\ntokens used: 40")
+    assert pw not in out and n == 3
+    assert "DATABASE_PASSWORD=[secret]" in out and "GH_TOKEN=[secret]" in out and "api_key: [secret]" in out
+    assert out.endswith("tokens used: 40"), "a word that merely contains one isn't a credential"
+
+
+def test_redact_catches_prompts_env_paths_file_urls_and_windows_homes(monkeypatch):
+    monkeypatch.setattr(log_view, "_hosts", lambda: ["devbox.example.org", "devbox"])
+    lines = [f"alice{AT}mini:~/orca/workspaces/x$ ls", f"PATH=/usr/bin:{HOME}/alice/bin", "open file:///" + "Users/alice/x.txt",
+             f"ssh alice{AT}buildbox", "C:\\" + "Users\\alice\\x", "ping devbox", "react@18 and lodash"]
+    out, _ = log_view.redact("\n".join(lines))
+    for gone in ("alice", "mini:", "buildbox", "devbox"):
+        assert gone not in out, (gone, out)
+    assert "react@18" in out, "a package version isn't a user@host"
+
+
+def test_usage_is_cached_until_the_transcript_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "cache" / "usage.json")
+    f = _write(tmp_path / "s.jsonl", [_claude_msg("a", "claude-opus-5-5", 10, 1)])
+    calls = []
+    real = log_view.claude_usage
+    monkeypatch.setattr(log_view, "claude_usage", lambda p: calls.append(p) or real(p))
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 10
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 10 and len(calls) == 1, "unchanged: read from the cache"
+    _write(f, [_claude_msg("a", "claude-opus-5-5", 10, 1), _claude_msg("b", "claude-opus-5-5", 5, 1)])
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 15 and len(calls) == 2, "changed: read again"
+    (tmp_path / "cache" / "usage.json").write_text("not json")
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 15, "a broken cache is only a miss"
+
+
 def test_redact_takes_out_this_accounts_name_but_not_inside_other_words(monkeypatch):
     monkeypatch.setattr(log_view, "_user", lambda: "pat")
+    monkeypatch.setattr(log_view, "_hosts", list)
     out, n = log_view.redact("git push origin pat/fix-retry; Pat said ok; compatible patterns")
     assert out == "git push origin [user]/fix-retry; [user] said ok; compatible patterns" and n == 2
     monkeypatch.setattr(log_view, "_user", lambda: "ci")  # too short to be told from ordinary text
@@ -160,10 +193,10 @@ def test_dash_logextras_and_logshare(tmp_path, monkeypatch, capsys):
     out = dash.log_extras("ws1")
     assert out["usage"]["sessions"] == 1 and out["files"] == {"mode": "head", "files": []} and calls == ["branch", "head"]
     assert dash.log_extras("nope") == {"error": "no workspace nope"}
-    monkeypatch.setattr(sys, "argv", ["dash.py", "logshare", "ws1"])
+    monkeypatch.setattr(sys, "argv", ["dash.py", "logshare", "ws1", "--req", "7"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"cat {HOME}/dave/notes"))
     dash.main()
-    assert json.loads(capsys.readouterr().out) == {"name": "ws1", "text": "cat [path]", "removed": 1}
+    assert json.loads(capsys.readouterr().out) == {"name": "ws1", "req": 7, "text": "cat [path]", "removed": 1}
     monkeypatch.setattr(sys, "argv", ["dash.py", "logextras", "ws1"])
     dash.main()
     assert json.loads(capsys.readouterr().out)["usage"]["in_tokens"] == 1000

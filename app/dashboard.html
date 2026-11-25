@@ -297,7 +297,7 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .aosafe b{font-weight:500} .aosafe p{margin:2px 0 0;font:var(--ds-type-caption);color:var(--text3)}
 .aopv{margin:0;min-height:72px;max-height:220px;overflow:auto;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--ds-bg-sunken);font:var(--ds-type-code);white-space:pre;outline:0;-webkit-user-select:text;user-select:text}
 .aopv:focus-visible{box-shadow:var(--ring)} .aopv .spin{width:12px;height:12px;display:inline-block}
-.aosf{display:flex;justify-content:flex-end;gap:var(--sp-2)}
+.aosf{display:flex;justify-content:flex-end;gap:var(--sp-2)} .aocut{margin:0;font:var(--ds-type-caption);color:var(--text3)}
 #aout .aofiles[hidden],#aout .aowarn[hidden]{display:none}
 @media (max-width:900px){#aout .aofiles{width:280px} #aout .aoq{width:220px}}
 @media (max-width:720px){#aout .aohd .lbl{display:none}}
@@ -2026,12 +2026,13 @@ function outEntry(e, other){  // other: a line of another session running alongs
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
   if (e.role === "line") return h("div", {class:"aoe line", "data-id": e.id},
     stamp || h("span", {class:"aots", "aria-hidden":"true"}), h("span", {class:"aog"}), h("span", {class:"aotx"}, e.text || " "), h("span", {class:"aomt"}));
-  if (e.role === "tool" && other) e = {...e, text: e.text + "  (another session)"};
+  const sfx = e.role === "tool" && other ? "  (another session)" : "";
+  if (sfx) e = {...e, text: e.text + sfx};
   if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open");
       ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
       outScrolled({currentTarget: document.getElementById("aout-log")}) };  // it grew under you: you're no longer at the bottom  // no longer a key stop: the log takes the keyboard
     const box = stamp ? h("span", {class:"aotool"}, e.text) : null;
-    const el = h("div", {class:"aoe tool" + (stamp ? " hasts" : ""), "data-id": e.id, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
+    const el = h("div", {class:"aoe tool" + (stamp ? " hasts" : ""), "data-id": e.id, "data-sfx": sfx || null, ...(long ? {tabindex:"0", role:"button", "aria-expanded":"false", title:"Show all of it"} : {}),  // a long one is a key stop too
       onclick: ev => { if (!String(getSelection())) open(ev.currentTarget) },  // not while selecting text in it
       onkeydown: ev => { if ((ev.key === "Enter" || ev.key === " ") && ev.currentTarget.getAttribute("role")) { ev.preventDefault(); open(ev.currentTarget) } }},
       ...(stamp ? [stamp, box] : [e.text]));
@@ -2134,7 +2135,7 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
    the sessions' cost, the files the branch touched, and a copy of the log to share with private details taken out.
    The log stays one flat list (what a refresh appends to): outRefine() works out each entry's kind and section and only
    toggles classes and `hidden`, so a refresh, a page of earlier output or a fold never rebuilds what you're reading. */
-const OUT_STUCK = 10 * 60e3, OUT_EXTRAS = 30000, OUT_FOLD = 30;  // working with no output this long: stuck; extras refresh; a call longer than this folds once it's done
+const OUT_STUCK = 10 * 60e3, OUT_EXTRAS = 60000, OUT_FOLD = 30, OUT_SHARE_MAX = 2e6;  // working with no output this long: stuck; extras refresh; a call longer than this folds once it's done
 const TOOL_LINE = /^\s*[●⏺•▸▹▶*]\s*(?:Bash|Read|Edit|Write|MultiEdit|Update|Grep|Glob|Search|WebFetch|Fetch|WebSearch|Agent|Task|NotebookEdit|TodoWrite|Skill)\s*\(|^\s*[•●]\s*(?:Ran|Running|Explored|Edited|Exploring)\s+\S/;
 const PROMPT_LINE = /^\s*[>›❯]\s+\S/;  // Claude Code and Codex echo your prompt this way
 const SAID_LINE = /^\s*[⏺●•]\s+\S/;  // the agent talking (not a tool call): it ends the call before it
@@ -2156,23 +2157,24 @@ function outKind(e){
 }
 function outAll(o){ return o.tail ? o.entries.concat(o.tail) : o.entries }
 function outSections(o){  // id → {k, turn, sec}; header id → {k, n, tools}. Pane logs fold by tool call too; transcripts by turn only
-  const info = new Map(), heads = new Map();
-  let turn = null, sec = null, stem = null;
+  const info = new Map(), heads = new Map(), at = new Map();  // at: each session's open turn and call (another session's lines may come between)
   for (const e of outAll(o)) {
     const k = outKind(e), st = stemOf(e);
-    if (st !== stem) { stem = st; turn = sec = null }  // a new session starts its own sections
-    if (k === "sep") { turn = sec = null; info.set(e.id, {k}); continue }
-    if (k === "prompt") { turn = e.id; sec = null; heads.set(e.id, {k, n: 0, tools: 0}); info.set(e.id, {k}); continue }
+    if (!at.has(st)) at.set(st, {turn: null, sec: null});
+    const cur = at.get(st); let {turn, sec} = cur;
+    const done = () => { cur.turn = turn; cur.sec = sec };
+    if (k === "sep") { turn = sec = null; done(); info.set(e.id, {k}); continue }
+    if (k === "prompt") { turn = e.id; sec = null; done(); heads.set(e.id, {k, n: 0, tools: 0}); info.set(e.id, {k}); continue }
     if (turn) heads.get(turn).n++;
     if (k === "tool") {
       if (turn) heads.get(turn).tools++;
       sec = o.source === "pane" ? e.id : null;
       if (sec) heads.set(e.id, {k, n: 0});
-      info.set(e.id, {k, turn}); continue;
+      done(); info.set(e.id, {k, turn}); continue;
     }
     if (k === "said") sec = null;
     if (sec) heads.get(sec).n++;
-    info.set(e.id, {k, turn, sec});
+    done(); info.set(e.id, {k, turn, sec});
   }
   return {info, heads};
 }
@@ -2182,9 +2184,17 @@ function outVisible(o, id, f){
   if (f.turn && o.folds.has(f.turn)) return false;
   return !(f.sec && o.folds.has(f.sec));
 }
+function outHits(o){  // the loaded entries that match, oldest first; the current match stays current as output comes and goes
+  const cur = o.hits[o.hit];
+  o.hits = o.q ? outAll(o).filter(e => e.role !== "sep" && String(e.text || "").toLowerCase().includes(o.q)).map(e => e.id) : [];
+  o.hitSet = o.q ? new Set(o.hits) : null;
+  const k = cur == null ? -1 : o.hits.indexOf(cur);
+  o.hit = k >= 0 ? k : o.hits.length ? o.hits.length - 1 : -1;
+}
 function outRefine(){
   const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
   const {info, heads} = outSections(o); o.info = info; o.heads = heads;
+  if (o.q) { outHits(o); outSearchUI(o) }
   const calls = [...heads].filter(([, x]) => x.k === "tool"), newest = calls.length ? calls[calls.length - 1][0] : null;
   if (o.follow) for (const [id, x] of calls) if (x.n > OUT_FOLD && id !== newest && !o.unfolds.has(id)) o.folds.add(id);  // a long call folds once the next one starts (never under you)
   let shown = 0;
@@ -2193,8 +2203,12 @@ function outRefine(){
     if (el.dataset.k !== f.k) {
       el.dataset.k = f.k;
       el.classList.toggle("err", f.k === "err"); el.classList.toggle("sec", heads.has(id) && f.k === "tool"); el.classList.toggle("turn", f.k === "prompt");
-      const g = el.querySelector(".aog"); if (g && f.k === "err") g.replaceChildren(icon("crashed-fill", 12));
+      const g = el.querySelector(".aog"); if (g) g.replaceChildren(...(f.k === "err" ? [icon("crashed-fill", 12)] : []));  // a rewritten line can change kind
+      delete el.dataset.hk;
     }
+    if (!heads.has(id) && (el.querySelector(".aofold") || el.querySelector(".aomt")?.textContent)) {  // no longer a header
+      el.querySelector(".aofold")?.remove(); const mt = el.querySelector(".aomt"); if (mt) mt.textContent = "";
+      const w = el.querySelector(".aow"); if (w) delete w.dataset.meta; delete el.dataset.hk }
     el.classList.toggle("in", !!f.sec);
     if (heads.has(id)) outHeadRow(el, id, heads.get(id), o);
     const vis = outVisible(o, id, f);
@@ -2274,9 +2288,7 @@ function outSearch(q, keepFocus){
   const o = ui.out; if (!o) return;
   q = String(q || ""); o.q = q.trim().toLowerCase();
   const input = document.getElementById("aout-q"); if (input && input.value !== q && !keepFocus) input.value = q;
-  o.hits = o.q ? outAll(o).filter(e => e.role !== "sep" && String(e.text || "").toLowerCase().includes(o.q)).map(e => e.id) : [];
-  o.hitSet = o.q ? new Set(o.hits) : null;
-  o.hit = o.hits.length ? o.hits.length - 1 : -1;  // the newest match first: a log is read from the bottom
+  o.hits = []; o.hit = -1; outHits(o);  // a new query starts at the newest match: a log is read from the bottom
   outRefine();
   if (!o.q) outMarks();
   outSearchUI(o); if (o.hit >= 0) outShowHit(o);
@@ -2299,7 +2311,7 @@ function outShowHit(o){
 }
 function outMarkEl(el, e){
   const o = ui.out, tx = el && (el.querySelector(".aotx") || (el.classList.contains("tool") ? el.querySelector(".aotool") || el : null)); if (!o || !tx) return;
-  const text = e.role === "tool" && !el.querySelector(".aotool") ? e.text : (e.text || " ");
+  const text = (e.role === "tool" ? e.text : (e.text || " ")) + (el.dataset.sfx || "");  // "(another session)" is the row's, not the entry's
   const q = o.q, cur = o.hits[o.hit] === e.id;
   if (!q || !o.hitSet || !o.hitSet.has(e.id)) { if (tx.querySelector("mark")) tx.textContent = text; return }
   const parts = [], low = text.toLowerCase(); let i = 0, first = true;
@@ -2331,18 +2343,27 @@ function outJumpMenu(open){
   setTimeout(() => document.addEventListener("pointerdown", function away(ev){ if (!menu.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) { menu.remove(); btn.setAttribute("aria-expanded", "false") }
     document.removeEventListener("pointerdown", away) }), 0);
 }
-function outJump(kind, dir = 1){
+function outJump(kind, dir = 1){  // from the last jump while it's in view, else from the edge of what you see; only the target's folds open
   const o = ui.out, log = document.getElementById("aout-log"), list = document.getElementById("aout-list"); if (!o || !log) return;
+  const row = id => list.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`);
   let target = null;
   if (kind === "looked") target = document.getElementById("aout-looked");
   else {
     if (o.filter !== "all" && o.filter !== kind) outFilter("all");
-    const lr = log.getBoundingClientRect(), at = list.querySelector(":scope > .aoat:not([hidden])"), ar = at && at.getBoundingClientRect();
-    const ids = [...o.info].filter(([, f]) => f.k === kind).map(([id]) => id), top = ar && ar.bottom > lr.top && ar.top < lr.bottom ? ar.top : lr.top + 8;  // from the last jump while it's in view: the end of the log can't scroll it to the top
-    const els = ids.map(id => list.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`)).filter(Boolean);
-    const pos = el => { const f = o.info.get(el.dataset.id); if (el.hidden) { if (f.sec) outFold(f.sec, false); if (f.turn && o.folds.has(f.turn)) outFold(f.turn, false) } return el.getBoundingClientRect().top };
-    target = dir > 0 ? els.find(el => !el.hidden && el.getBoundingClientRect().top > top + 2 || el.hidden && (pos(el) > top + 2))
-      : [...els].reverse().find(el => el.getBoundingClientRect().top < top - 2 || el.hidden && pos(el) < top - 2);
+    const order = new Map([...o.info.keys()].map((id, i) => [id, i])), lr = log.getBoundingClientRect();
+    const at = list.querySelector(":scope > .aoat:not([hidden])"), ar = at && at.getBoundingClientRect();
+    let ref;
+    if (ar && ar.bottom > lr.top && ar.top < lr.bottom) ref = order.get(at.dataset.id);
+    else {  // next: from the first row in view; previous: from the last one
+      const rows = [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > lr.top + 8 && r.top < lr.bottom - 8 });
+      const edge = dir > 0 ? rows[0] : rows[rows.length - 1];
+      ref = edge ? order.get(edge.dataset.id) + (dir > 0 ? -0.5 : 0.5) : dir > 0 ? -0.5 : order.size }
+    const ids = [...o.info].filter(([, f]) => f.k === kind).map(([id]) => id).filter(id => dir > 0 ? order.get(id) > ref : order.get(id) < ref);
+    const id = dir > 0 ? ids[0] : ids[ids.length - 1];
+    if (id) { const f = o.info.get(id);
+      if (f.turn && f.turn !== id && o.folds.has(f.turn)) outFold(f.turn, false);
+      if (f.sec && o.folds.has(f.sec)) outFold(f.sec, false);
+      target = row(id) }
   }
   const note = document.getElementById("aout-note");
   if (!target) { note.textContent = kind === "looked" ? "Nothing new since you last looked" : `No ${dir > 0 ? "later" : "earlier"} ${{err: "error", tool: "tool call", prompt: "prompt"}[kind]}`;
@@ -2353,9 +2374,9 @@ function outJump(kind, dir = 1){
   outScrolled({currentTarget: log});
 }
 /* stuck and looping: a banner under the strip, only while it's true; dismissed, it stays away until things change */
-function outLoop(o){  // the last lines are one block of 1–6 lines said again and again (digits don't count: timers, counters)
+function outLoop(o){  // the last lines are one block of 1–6 lines said again and again
   const es = o.entries.filter(e => (e.role === "line" || e.role === "tool") && /[A-Za-z]/.test(e.text || "")).slice(-90);
-  const norm = es.map(e => e.text.replace(/\d+/g, "#").trim()), n = norm.length;
+  const norm = es.map(e => e.text.replace(/\b\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds?|m|min|minutes?|h)\b|\b\d{1,2}:\d\d(?::\d\d)?\b/g, "#").trim()), n = norm.length;  // a timer or a clock doesn't count; a test id does
   for (let k = 1; k <= 6; k++) {
     let r = 1;
     for (; (r + 1) * k <= n; r++) { let same = true; for (let i = 0; i < k; i++) if (norm[n - 1 - i] !== norm[n - 1 - r * k - i]) { same = false; break } if (!same) break }
@@ -2426,7 +2447,7 @@ function splitPatch(patch){  // "diff --git a/x b/y" chunks by the new path
 }
 function outFilesPanel(){
   const o = ui.out, aside = document.getElementById("aout-files"); if (!o || !aside || !o.filesOpen) return;
-  const d = o.extras && o.extras.files, files = d && !d.error ? arr(d.files) : null;
+  const d = o.extras && (o.extras.files || {error: o.extras.error || "no answer about the files"}), files = d && !d.error ? arr(d.files) : null;
   const key = !o.extras ? "load" : d && d.error ? "err" + d.error : JSON.stringify([files, o.file, d.base, d.cut]) + (d.patch || "").length;
   if (aside.dataset.key === key) return; aside.dataset.key = key;
   const add = files ? files.reduce((s, f) => s + (Number(f[1]) || 0), 0) : 0, rem = files ? files.reduce((s, f) => s + (Number(f[2]) || 0), 0) : 0;
@@ -2438,12 +2459,13 @@ function outFilesPanel(){
     h("button", {class:"btn sm", onclick: () => { o.extras = null; aside.dataset.key = ""; outFilesPanel(); pollExtras() }}, "Retry")));
   if (!files.length) return aside.replaceChildren(head, h("div", {class:"aofe"}, h("b", {}, "No files changed yet"), h("span", {}, "Files the agent edits show here, with their diff.")));
   if (!o.file || !files.some(f => f[0] === o.file)) o.file = files[0][0];
+  const newPath = p => String(p).replace(/\{[^{}]* => ([^{}]*)\}/, "$1").replace(/^.* => /, "").replace(/\/\//g, "/");  // git's rename form: dir/{old => new}.py
   const st = arr(d.status), chunks = splitPatch(d.patch), STN = {M: "Modified", A: "Added", D: "Deleted", R: "Renamed", U: "New, not committed", C: "Copied"};
   const rows = files.map(([path, a, r], i) => { const slash = path.lastIndexOf("/") + 1, k = (st[i] || "M")[0];
     return h("button", {class:"aofrow" + (path === o.file ? " sel" : ""), "aria-pressed": String(path === o.file), title: path, onclick: () => { o.file = path; outFilesPanel() }},
       h("span", {class:"aost", title: STN[k] || k}, k), h("span", {class:"aop"}, h("span", {}, path.slice(0, slash)), path.slice(slash)),
       h("span", {class:"aofn"}, a === "-" ? "binary" : [h("span", {class:"add"}, Number(a) ? `+${a}` : ""), " ", h("span", {class:"rem"}, Number(r) ? `−${r}` : "")])) });
-  const lines = chunks[o.file] || [], shownLines = lines.slice(0, 400);
+  const lines = chunks[o.file] || chunks[newPath(o.file)] || [], shownLines = lines.slice(0, 400);
   const diff = h("div", {class:"aodiff", tabindex:"0", role:"region", "aria-label":`Diff of ${o.file}`},
     h("div", {class:"dfn"}, o.file),
     ...(lines.length ? shownLines.map(l => l.startsWith("@@") ? h("div", {class:"dh"}, l) : h("div", {class:"dl" + (l[0] === "+" ? " a" : l[0] === "-" ? " r" : "")},
@@ -2455,19 +2477,23 @@ function outFilesPanel(){
 /* Share log…: the text is put together here, then the host takes out private details (dash.py logshare); nothing leaves
    this window until that answer comes back, and a failed check shares nothing */
 function outShareText(o, range){
-  const list = document.getElementById("aout-list"), p = puckOf(o.name), dflt = p && p.agent.type;
+  const p = puckOf(o.name), dflt = p && p.agent.type;
   let es = outAll(o).filter(e => e.role !== "sep" || range === "all");
   if (range === "looked" && o.lastLooked != null) es = es.filter(e => typeof e.ts === "number" && e.ts > o.lastLooked);
-  if (range === "view") es = es.filter(e => { const el = list.querySelector(`:scope > [data-id="${CSS.escape(e.id)}"]`); return el && !el.hidden && (!o.hitSet || o.hitSet.has(e.id)) });
+  if (range === "view") es = es.filter(e => { const f = o.info.get(e.id); return f && outVisible(o, e.id, f) && (!o.hitSet || o.hitSet.has(e.id)) });
   const stamp = ts => typeof ts === "number" && isFinite(ts) ? new Date(ts).toLocaleTimeString([], {hour12: false}) : "".padEnd(8);
   const tag = e => e.role === "user" ? "Prompt: " : e.role === "said" ? `${agentMeta(e.kind || dflt).name}: ` : e.role === "tool" ? "› " : e.role === "sep" ? "── " : "";
-  return {n: es.length, text: es.map(e => `${stamp(e.ts)}  ${tag(e)}${e.text || ""}`).join("\n")};
+  const lines = es.map(e => `${stamp(e.ts)}  ${tag(e)}${e.text || ""}`);
+  let size = 0, from = lines.length;  // too much for one answer: the newest lines, whole, and it says so
+  while (from > 0 && size + lines[from - 1].length + 1 <= OUT_SHARE_MAX) size += lines[--from].length + 1;
+  return {n: es.length, kept: lines.length - from, text: lines.slice(from).join("\n")};
 }
 function outShare(open){
   const o = ui.out; if (!o) return;
   document.getElementById("aout-share")?.remove();
   if (!open) { o.share = null; document.getElementById("aout-share-btn")?.focus(); return }
-  o.share = {range: "all", status: "checking", sent: null, text: "", removed: 0, err: null, copied: false};
+  o.share = {range: "all", status: "checking", sent: null, text: "", removed: 0, err: null, copied: false, saved: null,
+    counts: Object.fromEntries(["all", "looked", "view"].map(k => [k, outShareText(o, k)]).map(([k, t]) => [k, {n: t.n, kept: t.kept}]))};  // once: the sheet redraws often
   document.getElementById("aout").append(h("div", {class:"sheetbg", id:"aout-share", onclick: e => e.target === e.currentTarget && outShare(false)},
     h("div", {class:"sheet aoshare", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-share-t"})));
   outShareAsk(); outShareRender(true);
@@ -2475,12 +2501,12 @@ function outShare(open){
 function outShareAsk(){
   const o = ui.out, sh = o && o.share; if (!sh) return;
   const {text} = outShareText(o, sh.range);
-  sh.status = "checking"; sh.sent = sh.range; sh.copied = false; sh.req = (sh.req || 0) + 1;
-  const req = sh.req; setTimeout(() => { if (ui.out === o && o.share === sh && sh.req === req && sh.status === "checking") gotShare({name: o.name, error: "no answer from the host"}) }, OUT_WAIT);
-  post({cmd: "logshare", name: o.name, text});
+  sh.status = "checking"; sh.sent = sh.range; sh.copied = false; sh.saved = null; sh.req = outShareAsk.seq = (outShareAsk.seq || 0) + 1;  // one count for every sheet: a reply names its ask
+  const req = sh.req; setTimeout(() => { if (ui.out === o && o.share === sh && sh.req === req && sh.status === "checking") gotShare({name: o.name, req, error: "no answer from the host"}) }, OUT_WAIT);
+  post({cmd: "logshare", name: o.name, text, req});
 }
 function gotShare(r){
-  const o = ui.out, sh = o && o.share; if (!sh || r.name !== o.name || sh.status !== "checking") return;
+  const o = ui.out, sh = o && o.share; if (!sh || r.name !== o.name || sh.status !== "checking" || r.req !== sh.req) return;  // an older ask's answer
   if (sh.sent !== sh.range) { outShareAsk(); outShareRender(); return }  // the range changed while it was checking: ask again
   if (r.error || typeof r.text !== "string") { sh.status = "error"; sh.err = r.error || "no text came back" }
   else { sh.status = "ready"; sh.text = r.text; sh.removed = Number(r.removed) || 0 }
@@ -2490,16 +2516,19 @@ function outShareRender(first){
   const o = ui.out, sh = o && o.share, box = document.querySelector("#aout-share .sheet"); if (!sh || !box) return;
   const ranges = [["all", "The whole log", "loaded here"], ...(o.lastLooked != null ? [["looked", "Since you last looked", ""]] : []),
     ...(o.filter !== "all" || o.q ? [["view", o.q ? `What the search finds: “${short(o.q, 30)}”` : `What the filter shows: ${OUT_FILTERS.find(f => f[0] === o.filter)[1]}`, ""]] : [])];
-  const ready = sh.status === "ready", fname = `agent-log-${o.name.replace(/[^\w.-]+/g, "-")}.txt`;
+  const ready = sh.status === "ready", fname = `agent-log-${new Date().toISOString().slice(0, 10)}.txt`;  // not the workspace's name: it may be private
+  const cut = sh.counts[sh.range] && sh.counts[sh.range].kept < sh.counts[sh.range].n ? sh.counts[sh.range].kept : 0;
   const had = box.contains(document.activeElement) && document.activeElement.id;
   box.replaceChildren(
     h("div", {class:"shd"}, h("h2", {id:"aout-share-t", style:"flex-grow:1"}, "Share this log"), h("button", {class:"btn ico", "aria-label":"Close", onclick: () => outShare(false)}, icon("close", 14))),
-    h("fieldset", {class:"aorange"}, h("legend", {}, "What to include"), ...ranges.map(([k, label, note]) => { const n = outShareText(o, k).n;
+    h("fieldset", {class:"aorange"}, h("legend", {}, "What to include"), ...ranges.map(([k, label, note]) => { const n = sh.counts[k].n;
       return h("label", {class:"aoopt"}, h("input", {type:"radio", name:"aout-range", id:`aout-r-${k}`, value: k, checked: sh.range === k, onchange: () => { sh.range = k; if (sh.status !== "checking") outShareAsk(); outShareRender() }}),
         label, h("span", {class:"aooptn"}, `${n.toLocaleString()} line${n === 1 ? "" : "s"}${note ? " " + note : ""}`)) })),
     h("div", {class:"aosafe"}, icon("lock", 16), h("div", {},
       h("b", {}, sh.status === "checking" ? "Taking out private details…" : sh.status === "error" ? "Couldn't check it for private details" : `Private details are taken out: ${sh.removed} removed`),
       h("p", {}, sh.status === "error" ? `So nothing is shared: ${short(sh.err, 160)}.` : "Paths, hosts, URLs, emails, keys and tokens, and your private terms, become placeholders like [path]. Read the preview before you send it."))),
+    cut ? h("p", {class:"aocut"}, `Too long to share whole: the newest ${cut.toLocaleString()} lines`) : null,
+    sh.saved ? h("p", {class:"aocut", role:"status"}, sh.saved.ok ? "Saved" : `Couldn't save it: ${short(sh.saved.error || "unknown error", 140)}`) : null,
     h("pre", {class:"aopv", tabindex:"0", "aria-label":"Preview"}, ready ? (sh.text.split("\n").slice(0, 14).join("\n") || "Nothing to share in this range") : sh.status === "checking" ? h("span", {class:"spin"}) : ""),
     h("div", {class:"aosf"},
       sh.status === "error" ? h("button", {class:"btn", id:"aout-share-retry", onclick: () => { outShareAsk(); outShareRender() }}, "Try again") : null,
@@ -3334,6 +3363,7 @@ window.mc = {
   transcript(r){ gotOut(r) },  // All output's pages
   logextras(r){ gotExtras(r) },  // All output's cost and files touched
   logshared(r){ gotShare(r) },  // Share log…'s redacted text
+  saved(r){ const sh = ui.out && ui.out.share; if (sh && r) { sh.saved = {ok: !!r.ok, error: r.error}; outShareRender() } },  // Save as file…'s outcome
   page(resp){
     if (!ui.page || resp.name !== ui.page.name) return;
     ui.page.loading = false;
