@@ -48,7 +48,8 @@ HASH = re.compile(r"[0-9a-f]{10}")
 # string-valued keys. An identifier (a workspace, repo, MR or automation) goes under a key ending in _h, from h().
 KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "name", "gate", "verdict", "provider",
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
-        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome", "draw", "by", "card"}
+        "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome", "draw", "by", "card",
+        "source"}
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey|invalid_grant|\boauth"),

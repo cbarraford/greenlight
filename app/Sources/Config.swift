@@ -994,6 +994,14 @@ final class RulesStore: ObservableObject {
     @Published var draftRepo = ""
     @Published var draftProj = ""
     @Published var draftDir = ""
+    // Settings → Import (#195): which ADEs are on the host, the ones picked, folders to scan, and the last preview
+    @Published var importFound = [String: Bool]()
+    @Published var importOn = Set<String>()
+    var importTouched = false  // the user picked sources: a later detect keeps their picks (minus any gone)
+    @Published var importPaths = ""
+    @Published var importPlan: [String: Any]?
+    @Published var importDone = ""
+    static let importSources = [("orca", "Orca"), ("t3", "T3 Code"), ("cmux", "cmux"), ("herdr", "herdr")]
     var loaded = false
     private var pending = 0
     private var hostSeqByRepo = [String: Int]()
@@ -1002,6 +1010,43 @@ final class RulesStore: ObservableObject {
         let s = (hostSeqByRepo[r] ?? 0) + 1
         hostSeqByRepo[r] = s
         return s
+    }
+
+    /// Settings → Import: the ADEs dash.py finds on the host, each picked by default.
+    func importDetect() {
+        status = ""
+        call("import-detect", "-") { j in
+            self.importFound = (j["sources"] as? [String: Bool]) ?? [:]
+            let found = Set(Self.importSources.map(\.0).filter { self.importFound[$0] == true })
+            let on = self.importTouched ? self.importOn.intersection(found) : found
+            if on != self.importOn { self.importOn = on; self.importPlan = nil }  // Import imports only what was previewed
+        }
+    }
+    /// Preview (apply false: changes nothing) or import what's picked; the answer is the plan either way.
+    /// The request for what the pane has picked: the sources on, and the folders typed.
+    var importBody: String {
+        let paths = importPaths.split(whereSeparator: { $0 == "," || $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let from = Self.importSources.map(\.0).filter(importOn.contains) + (paths.isEmpty ? [] : ["folder"])
+        return (try? JSONSerialization.data(withJSONObject: ["from": from, "paths": paths], options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+    func importRun(apply: Bool) {
+        let body = importBody
+        importDone = ""; status = ""
+        call(apply ? "import-apply" : "import-preview", "-", body) { j in
+            // a preview answered after the picks changed is for something else: Import must only follow its own preview
+            if !apply && body != self.importBody { return }
+            self.importPlan = j
+            let n = (j["repos"] as? [Any])?.count ?? 0, g = (j["goals"] as? [String: Any])?.count ?? 0
+            if apply {  // the preview goes; a source that failed during the import itself still says so
+                let srcs = (j["sources"] as? [String: Any]) ?? [:]
+                let failed = srcs.compactMap { k, v in k != "folder" && (v as? [String: Any])?["error"] != nil ? k : nil }.sorted()
+                let folder = (srcs["folder"] as? [String: Any])?["error"] as? String
+                self.importDone = "Imported \(n) repo\(n == 1 ? "" : "s") and \(g) goal\(g == 1 ? "" : "s")."
+                    + (failed.isEmpty ? "" : " Couldn't read \(failed.joined(separator: ", ")): run it again once \(failed.count == 1 ? "it's" : "they're") up.")
+                    + (folder.map { " Skipped \($0.contains("; ") ? "folders" : "a folder"): \($0)." } ?? "")
+                self.importPlan = nil
+            }
+        }
     }
 
     func call(_ op: String, _ arg: String, _ stdin: String = "", onError: (() -> Void)? = nil, _ done: @escaping ([String: Any]) -> Void) {
